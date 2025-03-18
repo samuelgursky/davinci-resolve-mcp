@@ -1,0 +1,3 @@
+"""
+DaVinci Resolve MCP package.
+""" 

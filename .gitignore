@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+.env
+.venv
+env/
+env.bak/
+venv.bak/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# DaVinci Resolve specific
+output/
+*.drp
+*.drx
+
+# Local configuration/secrets
+config.local.py
+secrets.py
+.env
+
+# Log files
+*.log
+log/
+logs/
+
+# Testing and development artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Specific project files that might contain sensitive data
+output/
+test_data/ 
