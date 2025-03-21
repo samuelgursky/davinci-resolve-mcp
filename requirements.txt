@@ -1,1 +1,2 @@
-git+https://github.com/modelcontextprotocol/python-sdk.git 
+mcp-sdk>=0.3.2
+pytest>=7.0.0 

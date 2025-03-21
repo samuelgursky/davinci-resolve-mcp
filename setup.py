@@ -25,7 +25,8 @@ setup(
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     install_requires=[
-        "mcp @ git+https://github.com/modelcontextprotocol/python-sdk.git"
+        "mcp-sdk>=0.3.2",
+        "pytest>=7.0.0"
     ],
     python_requires=">=3.6",
     entry_points={
