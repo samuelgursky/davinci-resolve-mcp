@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Lint](https://github.com/samuelgursky/davinci-resolve-mcp/actions/workflows/python-lint.yml/badge.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/actions/workflows/python-lint.yml)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/samuelgursky/davinci-resolve-mcp)
+[![Version](https://img.shields.io/badge/version-1.0.7-blue)](https://github.com/samuelgursky/davinci-resolve-mcp)
 
 A Python extension that enhances the DaVinci Resolve API integration with Claude through the MCP (Model Context Protocol).
 
