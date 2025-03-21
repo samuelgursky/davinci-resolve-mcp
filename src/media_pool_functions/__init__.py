@@ -20,7 +20,6 @@ from .advanced_media_pool import (
     delete_smart_bin,
     bulk_set_clip_property,
     import_files_to_folder,
-    
     # MCP interface functions
     mcp_get_folder_hierarchy,
     mcp_get_folder_by_path,
@@ -32,8 +31,8 @@ from .advanced_media_pool import (
     mcp_get_smart_bins,
     mcp_delete_smart_bin,
     mcp_bulk_set_clip_property,
-    mcp_import_files_to_folder
+    mcp_import_files_to_folder,
 )
 
 # Package version
-__version__ = "1.0.0" 
+__version__ = "1.0.0"

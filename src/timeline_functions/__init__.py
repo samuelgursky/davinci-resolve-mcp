@@ -16,8 +16,8 @@ from .marker_functions import (
     mcp_add_timeline_marker,
     mcp_update_marker,
     mcp_delete_marker,
-    mcp_delete_markers_by_color
+    mcp_delete_markers_by_color,
 )
 
 # Package version
-__version__ = "1.0.0" 
+__version__ = "1.0.0"

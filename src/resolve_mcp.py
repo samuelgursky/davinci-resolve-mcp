@@ -969,7 +969,7 @@ try:
     # Timecode functions module
     try:
         from integrate_timecode_functions import register_timecode_functions
-        
+
         # Register timecode functions
         register_timecode_functions(mcp)
         print("Successfully registered timecode functions")

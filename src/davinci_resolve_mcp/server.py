@@ -1053,7 +1053,7 @@ def create_server():
     def get_source_timecode_report() -> dict:
         """
         Generate a comprehensive report of all clips in the timeline with their source timecode information.
-        
+
         Returns:
             A dictionary with the timeline name and a list of clips with source timecodes
         """
@@ -1063,16 +1063,16 @@ def create_server():
     def export_source_timecode_report(
         export_path: str,
         format: str = "csv",  # Options: csv, json, edl
-        video_tracks_only: bool = False
+        video_tracks_only: bool = False,
     ) -> dict:
         """
         Export a report of all timeline clips with their source timecodes.
-        
+
         Args:
             export_path: Path where the report should be saved
             format: Report format (csv, json, or edl)
             video_tracks_only: If True, only include video tracks in the report
-        
+
         Returns:
             Status of the export operation
         """

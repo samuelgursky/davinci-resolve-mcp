@@ -28,10 +28,11 @@ except ImportError:
 def register_timecode_functions(mcp):
     """
     Register timecode functions with the MCP server.
-    
+
     Args:
         mcp: MCP server instance
     """
+
     @mcp.tool()
     def get_clip_source_timecode(
         track_type: str = "video", track_index: int = 1, clip_index: int = 0
@@ -53,7 +54,7 @@ def register_timecode_functions(mcp):
     def get_source_timecode_report() -> Dict[str, Any]:
         """
         Generate a comprehensive report of all clips in the timeline with their source timecode information.
-        
+
         Returns:
             A dictionary with the timeline name and a list of clips with source timecodes
         """
@@ -63,16 +64,16 @@ def register_timecode_functions(mcp):
     def export_source_timecode_report(
         export_path: str,
         format: str = "csv",  # Options: csv, json, edl
-        video_tracks_only: bool = False
+        video_tracks_only: bool = False,
     ) -> Dict[str, Any]:
         """
         Export a report of all timeline clips with their source timecodes.
-        
+
         Args:
             export_path: Path where the report should be saved
             format: Report format (csv, json, or edl)
             video_tracks_only: If True, only include video tracks in the report
-        
+
         Returns:
             Status of the export operation
         """
@@ -82,4 +83,4 @@ def register_timecode_functions(mcp):
 # If this script is run directly, print a message
 if __name__ == "__main__":
     print("This module is intended to be imported, not run directly.")
-    print("To use these functions, import them through the main MCP module.") 
+    print("To use these functions, import them through the main MCP module.")
