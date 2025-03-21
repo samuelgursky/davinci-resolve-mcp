@@ -25,7 +25,7 @@ setup(
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     install_requires=[
-        "mcp-sdk>=0.3.2",
+        "mcp>=1.0.0",
         "pytest>=7.0.0"
     ],
     python_requires=">=3.6",
