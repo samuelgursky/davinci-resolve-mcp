@@ -25,7 +25,7 @@ setup(
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     install_requires=[
-        "mcp>=1.0.0",
+        # "mcp>=1.0.0",  # Commented out as package is not available on PyPI
         "pytest>=7.0.0"
     ],
     python_requires=">=3.6",
