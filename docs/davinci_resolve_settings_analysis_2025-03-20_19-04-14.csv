@@ -1,0 +1,32 @@
+setting_category,setting_name,setting_type,timeline_name,can_get,can_set,original_value,test_value,final_value,get_error,set_error,get_time,set_time,notes
+Project,timelineFrameRate,numeric,,True,False,24.0,29.97,24.0,None,Failed to update setting 'timelineFrameRate',0.0018198490142822266,0.001920938491821289,Failed to change value
+Project,timelineResolutionWidth,numeric,,True,True,1920,1280,1280,None,None,0.026242971420288086,0.0055811405181884766,Value changed successfully
+Project,timelineResolutionHeight,numeric,,True,True,1080,720,720,None,None,0.030286073684692383,0.002023935317993164,Value changed successfully
+Project,timelineUseCustomSettings,boolean,,True,False,,1,,None,Failed to update setting 'timelineUseCustomSettings',0.029593944549560547,0.002541065216064453,Failed to change value
+Project,colorScienceMode,enum,,True,True,davinciYRGB,davinciYRGB,davinciYRGB,None,None,0.02934122085571289,0.0033690929412841797,Value changed successfully
+Project,inputColorSpace,enum,,True,False,,Rec.709,,None,Failed to update setting 'inputColorSpace',0.025396108627319336,0.002530813217163086,Failed to change value
+Project,outputColorSpace,enum,,True,False,,Rec.709,,None,Failed to update setting 'outputColorSpace',0.03273200988769531,0.0024347305297851562,Failed to change value
+Project,timelineOutputSizing,enum,,True,False,,outputSizingFormatCentered,,None,Failed to update setting 'timelineOutputSizing',0.03372597694396973,0.0023550987243652344,Failed to change value
+Project,videoMonitorWidth,numeric,,True,False,,1920,,None,Failed to update setting 'videoMonitorWidth',0.03441882133483887,0.002428770065307617,Failed to change value
+Project,videoMonitorHeight,numeric,,True,False,,1080,,None,Failed to update setting 'videoMonitorHeight',0.0339961051940918,0.0025451183319091797,Failed to change value
+Project,videoMonitorBitDepth,numeric,,True,True,10,8,8,None,None,0.030424118041992188,0.0024271011352539062,Value changed successfully
+Project,videoMonitorUseRec709A,boolean,,True,False,,1,,None,Failed to update setting 'videoMonitorUseRec709A',0.030031919479370117,0.0018019676208496094,Failed to change value
+Project,videoMonitorUseColorspaceOverride,boolean,,True,False,,1,,None,Failed to update setting 'videoMonitorUseColorspaceOverride',0.03299903869628906,0.0023641586303710938,Failed to change value
+Project,audioSampleRate,numeric,,True,False,,48000,,None,Failed to update setting 'audioSampleRate',0.033455848693847656,0.0019562244415283203,Failed to change value
+Project,superScale,numeric,,True,False,1,2,1,None,Failed to update setting 'superScale',0.03519725799560547,0.0026056766510009766,Failed to change value
+Project,superScaleQuality,boolean,,True,False,,1,,None,Failed to update setting 'superScaleQuality',0.03451108932495117,0.0034952163696289062,Failed to change value
+Project,autoClipColors,boolean,,True,False,,1,,None,Failed to update setting 'autoClipColors',0.030770301818847656,0.0024611949920654297,Failed to change value
+Timeline,frameRate,numeric,All_Material_Timeline,True,False,,24,,None,Failed to update setting 'frameRate' for timeline 'All_Material_Timeline',0.035063743591308594,0.00392603874206543,Failed to change value
+Timeline,width,numeric,All_Material_Timeline,True,False,,1280,,None,Failed to update setting 'width' for timeline 'All_Material_Timeline',0.03054189682006836,0.005360841751098633,Failed to change value
+Timeline,height,numeric,All_Material_Timeline,True,False,,720,,None,Failed to update setting 'height' for timeline 'All_Material_Timeline',0.027970075607299805,0.0036542415618896484,Failed to change value
+Timeline,useRollingShutter,boolean,All_Material_Timeline,True,False,,1,,None,Failed to update setting 'useRollingShutter' for timeline 'All_Material_Timeline',0.028620004653930664,0.00513005256652832,Failed to change value
+Timeline,useSmoothOpticalFlow,boolean,All_Material_Timeline,True,False,,1,,None,Failed to update setting 'useSmoothOpticalFlow' for timeline 'All_Material_Timeline',0.027562856674194336,0.003951311111450195,Failed to change value
+Timeline,useDynamicZoomEase,boolean,All_Material_Timeline,True,False,,1,,None,Failed to update setting 'useDynamicZoomEase' for timeline 'All_Material_Timeline',0.028851032257080078,0.003779172897338867,Failed to change value
+Timeline,useSmartcache,boolean,All_Material_Timeline,True,False,,1,,None,Failed to update setting 'useSmartcache' for timeline 'All_Material_Timeline',0.029366016387939453,0.005068778991699219,Failed to change value
+Timeline,usePerfectResizeNE,boolean,All_Material_Timeline,True,False,,1,,None,Failed to update setting 'usePerfectResizeNE' for timeline 'All_Material_Timeline',0.028247833251953125,0.00615382194519043,Failed to change value
+Timeline,createStereoVersion,boolean,All_Material_Timeline,True,False,,1,,None,Failed to update setting 'createStereoVersion' for timeline 'All_Material_Timeline',0.02319169044494629,0.0035676956176757812,Failed to change value
+Timeline,superscaleMethod,enum,All_Material_Timeline,True,False,,Sharp,,None,Failed to update setting 'superscaleMethod' for timeline 'All_Material_Timeline',0.03169703483581543,0.0036339759826660156,Failed to change value
+Timeline,motionEstimation,enum,All_Material_Timeline,True,False,,Normal,,None,Failed to update setting 'motionEstimation' for timeline 'All_Material_Timeline',0.030992984771728516,0.004791975021362305,Failed to change value
+Timeline,resizeFilter,enum,All_Material_Timeline,True,False,,Sharper,,None,Failed to update setting 'resizeFilter' for timeline 'All_Material_Timeline',0.02828216552734375,0.0038459300994873047,Failed to change value
+Timeline,audioSampleRate,numeric,All_Material_Timeline,True,False,,48000,,None,Failed to update setting 'audioSampleRate' for timeline 'All_Material_Timeline',0.031968116760253906,0.0039010047912597656,Failed to change value
+Timeline,audioFrameRate,numeric,All_Material_Timeline,True,False,,24,,None,Failed to update setting 'audioFrameRate' for timeline 'All_Material_Timeline',0.030877113342285156,0.004019975662231445,Failed to change value

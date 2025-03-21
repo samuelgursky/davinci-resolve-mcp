@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "name": "Update master documentation date",
+      "description": "Updates the last updated date in the master documentation file whenever it's modified",
+      "events": ["save"],
+      "patterns": ["MASTER_DAVINCI_RESOLVE_MCP.md"],
+      "commands": [
+        {
+          "command": "updateLastUpdatedDate",
+          "args": {
+            "file": "MASTER_DAVINCI_RESOLVE_MCP.md",
+            "pattern": "This document was last updated on: \\*\\*.*\\*\\*",
+            "replacement": "This document was last updated on: **{{dateFormat \"YYYY-MM-DD\"}}**"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sync feature status from code",
+      "description": "Updates feature status in master doc based on code comments",
+      "events": ["save"],
+      "patterns": ["src/*.py"],
+      "commands": [
+        {
+          "command": "extractMcpFunctions",
+          "args": {
+            "sourceFile": "{{file}}",
+            "targetFile": "MASTER_DAVINCI_RESOLVE_MCP.md",
+            "functionPattern": "def mcp_([a-zA-Z0-9_]+)\\(",
+            "statusPattern": "# STATUS: ([✅⚠️❌🔄📝🧪].*)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cross-reference test coverage",
+      "description": "Updates testing status in master doc when test files are saved",
+      "events": ["save"],
+      "patterns": ["test_*.py", "tests/*.py"],
+      "commands": [
+        {
+          "command": "updateTestStatus",
+          "args": {
+            "sourceFile": "{{file}}",
+            "targetFile": "MASTER_DAVINCI_RESOLVE_MCP.md",
+            "testPattern": "test_mcp_([a-zA-Z0-9_]+)",
+            "resultPattern": "# TEST RESULT: ([✅⚠️❌].*)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Remind to update master doc on README changes",
+      "description": "Reminds the user to update the master documentation when README is changed",
+      "events": ["save"],
+      "patterns": ["README.md"],
+      "commands": [
+        {
+          "command": "showNotification",
+          "args": {
+            "message": "Remember to update MASTER_DAVINCI_RESOLVE_MCP.md if you've added or changed features in the README."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Generate TOC for master doc",
+      "description": "Automatically generates a table of contents for the master documentation",
+      "events": ["save"],
+      "patterns": ["MASTER_DAVINCI_RESOLVE_MCP.md"],
+      "commands": [
+        {
+          "command": "generateTOC",
+          "args": {
+            "file": "MASTER_DAVINCI_RESOLVE_MCP.md",
+            "startMarker": "<!-- TOC START -->",
+            "endMarker": "<!-- TOC END -->",
+            "maxDepth": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "Generate API reference",
+      "description": "Generate API reference documentation from source code",
+      "events": ["manual"],
+      "patterns": ["src/*.py"],
+      "commands": [
+        {
+          "command": "generateAPIReference",
+          "args": {
+            "sourcePattern": "src/*.py",
+            "outputFile": "API_REFERENCE.md",
+            "functionPattern": "def mcp_([a-zA-Z0-9_]+)\\(([^\\)]*)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Guide for test scripts creation",
+      "description": "Reminds to create test scripts in the tests directory",
+      "events": ["create"],
+      "patterns": ["test_*.py"],
+      "commands": [
+        {
+          "command": "moveFileSuggestion",
+          "args": {
+            "targetDir": "tests/",
+            "message": "Test scripts should be created in the tests/ directory. Consider moving this file there."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Guide for example scripts creation",
+      "description": "Suggests creating example scripts in the examples directory",
+      "events": ["create"],
+      "patterns": ["*.py"],
+      "exclude_patterns": ["src/*.py", "tests/*.py", "scripts/*.py", "test_*.py", "setup.py"],
+      "commands": [
+        {
+          "command": "fileTypeSuggestion",
+          "args": {
+            "message": "New Python scripts should be placed in appropriate directories:\n- Core implementation: src/\n- Tests: tests/\n- Examples: examples/\n- Utility scripts: scripts/\nPlease consider moving this file to the correct directory."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Guide for documentation creation",
+      "description": "Suggests creating documentation in the docs directory",
+      "events": ["create"],
+      "patterns": ["*.md"],
+      "exclude_patterns": ["README.md", "MASTER_DAVINCI_RESOLVE_MCP.md", "docs/*.md"],
+      "commands": [
+        {
+          "command": "moveFileSuggestion",
+          "args": {
+            "targetDir": "docs/",
+            "message": "Documentation files should be created in the docs/ directory. Consider moving this file there."
+          }
+        }
+      ]
+    }
+  ],
+  "customCommands": {
+    "updateLastUpdatedDate": "scripts/update_date.py",
+    "extractMcpFunctions": "scripts/extract_functions.py",
+    "updateTestStatus": "scripts/update_test_status.py",
+    "generateTOC": "scripts/generate_toc.py",
+    "generateAPIReference": "scripts/generate_api_ref.py",
+    "moveFileSuggestion": "scripts/move_file_suggestion.py",
+    "fileTypeSuggestion": "scripts/file_type_suggestion.py"
+  }
+} 

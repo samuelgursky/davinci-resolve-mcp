@@ -1,198 +1,91 @@
-# DaVinci Resolve MCP Integration
+# DaVinci Resolve MCP Extension
 
-This project implements a Model Context Protocol (MCP) server for DaVinci Resolve. It allows LLM applications (like Claude, GPT, etc.) to interact directly with DaVinci Resolve projects, enabling AI-assisted video editing capabilities.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python Lint](https://github.com/samuelgursky/davinci-resolve-mcp/actions/workflows/python-lint.yml/badge.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/actions/workflows/python-lint.yml)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/samuelgursky/davinci-resolve-mcp)
 
-## What is MCP?
+A Python extension that enhances the DaVinci Resolve API integration with Claude through the MCP (Multi-Call Protocol).
 
-The Model Context Protocol (MCP) is an open protocol that standardizes how applications provide context to LLMs (Large Language Models). It allows AI models to interact with various data sources and tools in a standardized way, similar to how USB-C provides a standardized way to connect devices.
+## Quick Start
 
-## Features
+### Requirements
 
-- Seamless integration between AI assistants and DaVinci Resolve
-- Access to timeline, media, and project information
-- Ability to manipulate edits and automate workflows
-- Cross-platform support for macOS, Windows, and Linux
-- WebSocket-based API for real-time communication
-
-## Server Information
-
-```json
-{
-  "mcp_version": "0.1.0",
-  "name": "DaVinci Resolve MCP",
-  "version": "0.1.0",
-  "display_name": "DaVinci Resolve MCP",
-  "description": "MCP server for DaVinci Resolve integration",
-  "categories": ["video-editing", "creativity"],
-  "authentication": {
-    "type": "api_key",
-    "api_key_location": "header",
-    "api_key_name": "X-API-Key"
-  },
-  "capabilities": {
-    "read_projects": true,
-    "modify_projects": true,
-    "read_timeline": true,
-    "modify_timeline": true,
-    "read_media": true,
-    "render_export": true,
-    "color_grading": true
-  }
-}
-```
-
-## Supported Operations
-
-The MCP server supports the following operations:
-
-```json
-{
-  "operations": [
-    "get_projects",
-    "get_project_info",
-    "get_timeline_info",
-    "get_media_pool_items",
-    "get_timeline_clips",
-    "create_project",
-    "open_project",
-    "add_clip_to_timeline",
-    "export_timeline",
-    "apply_lut",
-    "render_project",
-    "get_api_capabilities",
-    "select_clips_by_name"
-  ]
-}
-```
-
-### Operation Examples
-
-- **Get Projects**: `{"operation": "get_projects", "data": {}}`
-- **Get Project Info**: `{"operation": "get_project_info", "data": {}}`
-- **Open Project**: `{"operation": "open_project", "data": {"name": "My Project"}}`
-- **Get Media Pool Items**: `{"operation": "get_media_pool_items", "data": {}}`
-- **Add Clip to Timeline**: `{"operation": "add_clip_to_timeline", "data": {"clip_name": "My Clip"}}`
-- **Select Clips by Name**: `{"operation": "select_clips_by_name", "data": {"clip_name": "interview"}}`
-
-## Prerequisites
-
-- DaVinci Resolve Studio (18.0 or later recommended)
+- DaVinci Resolve Studio (Free version has limited scripting support)
 - Python 3.6+ (64-bit)
-- DaVinci Resolve Scripting API access (included with DaVinci Resolve Studio)
 
-## Installation
+### Environment Setup
 
-1. Clone this repository:
-   ```
-   git clone https://github.com/yourusername/davinci-resolve-mcp.git
-   cd davinci-resolve-mcp
-   ```
+**Mac OS X:**
+```
+RESOLVE_SCRIPT_API="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
+RESOLVE_SCRIPT_LIB="/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
+PYTHONPATH="$PYTHONPATH:$RESOLVE_SCRIPT_API/Modules/"
+```
 
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
+**Windows:**
+```
+RESOLVE_SCRIPT_API="%PROGRAMDATA%\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
+RESOLVE_SCRIPT_LIB="C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+PYTHONPATH="%PYTHONPATH%;%RESOLVE_SCRIPT_API%\Modules\"
+```
 
-3. Create your environment configuration:
-   ```
-   cp .env.example .env
-   ```
+**Linux:**
+```
+RESOLVE_SCRIPT_API=`/opt/resolve/Developer/Scripting`
+RESOLVE_SCRIPT_LIB=`/opt/resolve/libs/Fusion/fusionscript.so`
+PYTHONPATH="$PYTHONPATH:$RESOLVE_SCRIPT_API/Modules/"
+```
 
-4. Edit the `.env` file to set:
-   - Uncomment your OS-specific environment variables
-   - Set a unique API key for security
-   - Configure allowed origins if needed
+### Installation
 
-## Running the Server
+```
+pip install -e .
+```
 
-1. Start DaVinci Resolve and open a project
-2. Run the MCP server:
-   ```
-   python scripts/run_server.py
-   ```
+## Core Features
 
-The server will start on `ws://localhost:8765/mcp` by default.
+- **Project Management**: Get project info, list projects, switch projects
+- **Timeline Operations**: Create/delete timelines, control playback, manage clips
+- **Media Management**: Browse media pool, import files, organize content
+- **Project Settings**: Get/set project and timeline settings
+- **Rendering**: Manage render jobs and monitor status
 
-## Connecting to LLMs
+## Basic Usage
 
-### Claude
-1. Configure an MCP connection in Claude settings
-2. Use the endpoint: `ws://localhost:8765/mcp`
-3. Enter your API key from the `.env` file
+```python
+# Get current project information
+response = mcp_get_project_info()
 
-### Other LLMs
-For other LLMs that support MCP, follow their specific documentation for connecting external tools and use the same endpoint and API key.
+# Create a new timeline
+response = mcp_create_timeline("My New Timeline", {"width": "1920", "height": "1080"}, 24.0)
+
+# Add a clip to the timeline
+response = mcp_add_clip_to_timeline("My Clip", 1, "video", 0)
+```
 
 ## Project Structure
 
-- `src/mcp_server/`: Main server code for the MCP implementation
-- `src/resolve_integration/`: DaVinci Resolve API integration code
-- `scripts/`: Utility scripts for running the server and setup
+- `src/`: Core implementation files
+- `tests/`: Test scripts for verification
+- `examples/`: Example usage scripts
 - `docs/`: Documentation files
+- `scripts/`: Utility scripts for project maintenance
 
-## Error Handling and API Capabilities
+## Detailed Documentation
 
-The server includes automatic detection of available DaVinci Resolve API features and gracefully handles missing functionality by providing alternatives or informative error messages. This ensures compatibility across different DaVinci Resolve versions and configurations.
+For complete documentation on all available functions, implementation status, and limitations, see:
 
-## Security
+- [Master Feature Tracking Document](MASTER_DAVINCI_RESOLVE_MCP.md): Comprehensive overview of all features
+- [Project Settings Limitations](docs/project_settings_limitations.md): Details on project settings limitations
 
-The server includes authentication via API key and can be configured to restrict access to specific origins. Make sure to set a strong API key in your `.env` file before deploying.
+## Testing
+
+```
+python -m tests.test_timeline_functions
+python -m tests.test_project_settings
+python -m tests.test_playback_functions
+```
 
 ## License
 
-MIT
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Example MCP Client Usage
-
-```python
-import asyncio
-from src.mcp_client_example import MCPClient
-
-async def main():
-    client = MCPClient("ws://localhost:8765/mcp")
-    
-    # Connect to the server
-    await client.connect()
-    
-    # Get list of projects
-    projects = await client.send_request("get_projects", {})
-    print(f"Available projects: {projects}")
-    
-    # Get current project info
-    project_info = await client.send_request("get_project_info", {})
-    print(f"Current project: {project_info}")
-    
-    # Disconnect
-    await client.disconnect()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-## Example Tasks You Can Try
-
-1. **Get project information**: Ask the LLM to tell you about your current project
-   ```
-   "What projects do I have open in DaVinci Resolve right now?"
-   ```
-
-2. **Analyze timeline**: Have the LLM analyze your timeline structure
-   ```
-   "Analyze my current timeline in DaVinci Resolve and give me statistics about it"
-   ```
-
-3. **Control editing**: Have the LLM perform editing operations
-   ```
-   "Open my project named 'Test' in DaVinci Resolve"
-   ```
-
-## Troubleshooting
-
-- Ensure DaVinci Resolve is running before starting the server
-- Check that your API environment variables are correctly set for your OS
-- See server logs for detailed error information
-- Make sure you're using DaVinci Resolve Studio, as the free version has limited API support
+This project is licensed under the MIT License. 

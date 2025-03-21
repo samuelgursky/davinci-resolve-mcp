@@ -1,3 +1,0 @@
-"""
-DaVinci Resolve integration module.
-""" 

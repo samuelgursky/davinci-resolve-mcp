@@ -1,0 +1,427 @@
+{
+  "mcpServers": {
+    "davinci-resolve-mcp": {
+      "command": "python",
+      "args": [
+        "src/resolve_mcp.py"
+      ],
+      "description": "DaVinci Resolve MCP Server with comprehensive tools for accessing and controlling DaVinci Resolve",
+      "autostart": true,
+      "tools": {
+        "mcp_get_project_info": {
+          "description": "Get information about the current project in DaVinci Resolve"
+        },
+        "mcp_get_project_list": {
+          "description": "Get a list of all projects in the current database"
+        },
+        "mcp_switch_to_project": {
+          "description": "Switch to a different project",
+          "parameters": {
+            "project_name": {
+              "description": "The name of the project to switch to",
+              "type": "string"
+            }
+          }
+        },
+        "mcp_get_current_timeline_name": {
+          "description": "Get the name of the current timeline"
+        },
+        "mcp_get_timeline_info": {
+          "description": "Get detailed information about the current timeline"
+        },
+        "mcp_get_project_timelines": {
+          "description": "Get a list of all timelines in the current project"
+        },
+        "mcp_get_timeline_clip_names": {
+          "description": "Get the names of all clips in the current timeline"
+        },
+        "mcp_get_clip_details": {
+          "description": "Get detailed information about a specific clip in the timeline",
+          "parameters": {
+            "track_type": {
+              "description": "The type of track ('video' or 'audio')",
+              "type": "string",
+              "default": "video"
+            },
+            "track_index": {
+              "description": "The index of the track (1-based)",
+              "type": "integer",
+              "default": 1
+            },
+            "clip_index": {
+              "description": "The index of the clip in the track (0-based)",
+              "type": "integer",
+              "default": 0
+            }
+          }
+        },
+        "mcp_get_timeline_markers": {
+          "description": "Get all markers in the current timeline"
+        },
+        "mcp_get_playhead_position": {
+          "description": "Get the current playhead position in the timeline"
+        },
+        "mcp_control_playback": {
+          "description": "Control the playback of the timeline",
+          "parameters": {
+            "command": {
+              "description": "The playback command to execute. Options: play, stop, pause, forward, reverse, next_frame, prev_frame, next_clip, prev_clip, to_in, to_out, toggle_play",
+              "type": "string",
+              "default": "play"
+            }
+          }
+        },
+        "mcp_get_selected_clips": {
+          "description": "Get information about the currently selected clips in the timeline"
+        },
+        "mcp_get_media_pool_items": {
+          "description": "Get a list of all items in the media pool"
+        },
+        "mcp_get_media_pool_structure": {
+          "description": "Get the folder structure of the media pool"
+        },
+        "mcp_get_active_track_info": {
+          "description": "Get information about the currently active track in the timeline"
+        },
+        "mcp_add_clip_to_timeline": {
+          "description": "Add a clip from the media pool to the timeline",
+          "parameters": {
+            "media_pool_item_name": {
+              "description": "The name of the media pool item to add",
+              "type": "string",
+              "default": ""
+            },
+            "track_index": {
+              "description": "The index of the track to add the clip to (1-based)",
+              "type": "integer",
+              "default": 1
+            },
+            "track_type": {
+              "description": "The type of track ('video' or 'audio')",
+              "type": "string",
+              "default": "video"
+            },
+            "frame_position": {
+              "description": "The frame position to add the clip (or -1 for current position)",
+              "type": "integer",
+              "default": -1
+            }
+          }
+        },
+        
+        "mcp_get_project_setting": {
+          "description": "Get a specific project setting or all settings if no name is provided",
+          "parameters": {
+            "setting_name": {
+              "description": "The name of the setting to retrieve (optional)",
+              "type": "string",
+              "default": null
+            }
+          }
+        },
+        "mcp_set_project_setting": {
+          "description": "Set a specified project setting",
+          "parameters": {
+            "setting_name": {
+              "description": "The name of the setting to set",
+              "type": "string"
+            },
+            "setting_value": {
+              "description": "The value to set for the setting",
+              "type": "any"
+            }
+          }
+        },
+        "mcp_get_timeline_setting": {
+          "description": "Get a specific timeline setting or all settings",
+          "parameters": {
+            "timeline_name": {
+              "description": "The name of the timeline (optional, uses current if not provided)",
+              "type": "string",
+              "default": null
+            },
+            "setting_name": {
+              "description": "The name of the setting to retrieve (optional)",
+              "type": "string",
+              "default": null
+            }
+          }
+        },
+        "mcp_set_timeline_setting": {
+          "description": "Set a specified timeline setting",
+          "parameters": {
+            "setting_name": {
+              "description": "The name of the setting to set",
+              "type": "string"
+            },
+            "setting_value": {
+              "description": "The value to set for the setting",
+              "type": "any"
+            },
+            "timeline_name": {
+              "description": "The name of the timeline (optional, uses current if not provided)",
+              "type": "string",
+              "default": null
+            }
+          }
+        },
+        
+        "mcp_create_timeline": {
+          "description": "Create a new empty timeline",
+          "parameters": {
+            "timeline_name": {
+              "description": "The name for the new timeline",
+              "type": "string"
+            },
+            "resolution": {
+              "description": "Optional resolution for the timeline as a dictionary with width and height",
+              "type": "object",
+              "default": null
+            },
+            "frame_rate": {
+              "description": "Optional frame rate for the timeline",
+              "type": "number",
+              "default": null
+            }
+          }
+        },
+        "mcp_delete_timeline": {
+          "description": "Delete a specified timeline from the current project",
+          "parameters": {
+            "timeline_name": {
+              "description": "The name of the timeline to delete",
+              "type": "string"
+            }
+          }
+        },
+        "mcp_duplicate_timeline": {
+          "description": "Duplicate an existing timeline",
+          "parameters": {
+            "timeline_name": {
+              "description": "The name of the timeline to duplicate",
+              "type": "string"
+            },
+            "new_name": {
+              "description": "The name for the duplicated timeline",
+              "type": "string"
+            }
+          }
+        },
+        "mcp_set_current_timeline": {
+          "description": "Set a specified timeline as the current timeline",
+          "parameters": {
+            "timeline_name": {
+              "description": "The name of the timeline to set as current",
+              "type": "string"
+            }
+          }
+        },
+        "mcp_add_timeline_marker": {
+          "description": "Add a marker to the current timeline at a specified frame position",
+          "parameters": {
+            "frame_position": {
+              "description": "The frame position to add the marker",
+              "type": "integer"
+            },
+            "color": {
+              "description": "The color of the marker",
+              "type": "string",
+              "default": "Blue"
+            },
+            "name": {
+              "description": "The name of the marker",
+              "type": "string",
+              "default": ""
+            },
+            "note": {
+              "description": "The note text for the marker",
+              "type": "string",
+              "default": ""
+            },
+            "duration": {
+              "description": "The duration of the marker in frames",
+              "type": "integer",
+              "default": 1
+            }
+          }
+        },
+        "mcp_delete_timeline_marker": {
+          "description": "Delete a marker from the current timeline using its ID",
+          "parameters": {
+            "marker_id": {
+              "description": "The ID of the marker to delete",
+              "type": "string"
+            }
+          }
+        },
+        "mcp_export_timeline": {
+          "description": "Export the timeline to a specified file path and format",
+          "parameters": {
+            "timeline_name": {
+              "description": "The name of the timeline to export (optional)",
+              "type": "string",
+              "default": null
+            },
+            "file_path": {
+              "description": "The file path to export to",
+              "type": "string",
+              "default": ""
+            },
+            "export_type": {
+              "description": "The format to export (fcpxml, aaf, drt)",
+              "type": "string",
+              "default": "fcpxml"
+            }
+          }
+        },
+        
+        "mcp_get_media_pool_root_folder": {
+          "description": "Get information about the Media Pool root folder"
+        },
+        "mcp_get_media_pool_folder": {
+          "description": "Get information about a specific Media Pool folder by name",
+          "parameters": {
+            "folder_name": {
+              "description": "The name of the folder to retrieve",
+              "type": "string"
+            }
+          }
+        },
+        "mcp_create_media_pool_folder": {
+          "description": "Create a new folder in the Media Pool",
+          "parameters": {
+            "folder_name": {
+              "description": "The name for the new folder",
+              "type": "string"
+            },
+            "parent_folder_name": {
+              "description": "The name of the parent folder (optional)",
+              "type": "string",
+              "default": null
+            }
+          }
+        },
+        "mcp_import_media": {
+          "description": "Import media files into the Media Pool",
+          "parameters": {
+            "file_paths": {
+              "description": "List of file paths to import",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "folder_name": {
+              "description": "The target folder name (optional)",
+              "type": "string",
+              "default": null
+            }
+          }
+        },
+        "mcp_get_clip_info": {
+          "description": "Get information about a specific clip in the Media Pool",
+          "parameters": {
+            "clip_name": {
+              "description": "The name of the clip",
+              "type": "string"
+            }
+          }
+        },
+        "mcp_set_clip_property": {
+          "description": "Set a property for a clip in the Media Pool",
+          "parameters": {
+            "clip_name": {
+              "description": "The name of the clip",
+              "type": "string"
+            },
+            "property_name": {
+              "description": "The name of the property to set",
+              "type": "string"
+            },
+            "property_value": {
+              "description": "The value to set for the property",
+              "type": "any"
+            }
+          }
+        },
+        
+        "mcp_get_render_presets": {
+          "description": "Get a list of all available render presets"
+        },
+        "mcp_get_render_formats": {
+          "description": "Get a list of all available render formats"
+        },
+        "mcp_get_render_codecs": {
+          "description": "Get a list of all available render codecs for a specific format",
+          "parameters": {
+            "format_name": {
+              "description": "The format name to get codecs for",
+              "type": "string"
+            }
+          }
+        },
+        "mcp_get_render_jobs": {
+          "description": "Get a list of all render jobs in the current project"
+        },
+        "mcp_add_render_job": {
+          "description": "Add a new render job to the render queue",
+          "parameters": {
+            "preset_name": {
+              "description": "The name of the render preset to use",
+              "type": "string",
+              "default": null
+            },
+            "output_directory": {
+              "description": "The directory to output the rendered file",
+              "type": "string",
+              "default": null
+            },
+            "custom_name": {
+              "description": "Custom name for the render job",
+              "type": "string",
+              "default": null
+            }
+          }
+        },
+        "mcp_delete_render_job": {
+          "description": "Delete a render job from the render queue",
+          "parameters": {
+            "job_id": {
+              "description": "The ID of the render job to delete",
+              "type": "string"
+            }
+          }
+        },
+        "mcp_start_rendering": {
+          "description": "Start rendering the specified jobs or all jobs",
+          "parameters": {
+            "job_ids": {
+              "description": "List of job IDs to render (optional)",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": null
+            },
+            "interactive": {
+              "description": "Whether to show the render dialog",
+              "type": "boolean"
+            }
+          }
+        },
+        "mcp_stop_rendering": {
+          "description": "Stop the current rendering process"
+        },
+        "mcp_get_render_job_status": {
+          "description": "Get the status of a specific render job",
+          "parameters": {
+            "job_id": {
+              "description": "The ID of the render job",
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+} 

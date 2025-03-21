@@ -1,0 +1,8 @@
+{
+  "features": {
+    "mcp": {
+      "enabled": true,
+      "autostart": true
+    }
+  }
+} 
