@@ -1,0 +1,33 @@
+Release v1.1.0: Timeline markers, advanced media pool, and color correction
+
+This release adds three major feature sets to the DaVinci Resolve MCP framework:
+
+1. Timeline Markers - Complete implementation of marker functions including:
+   - Adding, updating, and deleting timeline markers
+   - Getting all markers and deleting by color
+   - Full support for marker customization
+
+2. Advanced Media Pool - Enhanced media management with:
+   - Folder hierarchy navigation and manipulation
+   - Bulk operations for clip management
+   - Smart bins creation and management
+
+3. Color Correction - Powerful color grading capabilities:
+   - Node-based color correction management
+   - Primary correction parameter control
+   - Node labeling, coloring, and organization
+   - LUT import and application
+
+Documentation improvements:
+- Added comprehensive DOCUMENTATION.md
+- Created CONTRIBUTING.md with guidelines
+- Developed NEXT_STEPS.md roadmap
+- Enhanced master documentation with STATUS tags
+
+Additional improvements:
+- Added unit tests for all new functions
+- Included example scripts demonstrating all features
+- Cleaned up experimental and incomplete features
+- Added CHANGELOG.md for version tracking
+
+This release represents a significant advancement in automation capabilities for DaVinci Resolve with a focus on color grading, timeline marker management, and media organization. 

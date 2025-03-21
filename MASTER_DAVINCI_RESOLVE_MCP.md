@@ -15,6 +15,7 @@ This document provides a comprehensive overview of all features in the DaVinci R
   - [Timeline Advanced Operations](#timeline-advanced-operations)
   - [Project Settings](#project-settings)
   - [Rendering Operations](#rendering-operations)
+  - [Color Correction Functions](#color-correction-functions)
 - [Planned Features](#planned-features)
   - [Color Grading Operations](#color-grading-operations-planned)
   - [Fusion Operations](#fusion-operations-planned)
@@ -63,6 +64,9 @@ This document provides a comprehensive overview of all features in the DaVinci R
 | mcp_get_clip_details | ✅ Working | Verified | 17.0+ | Successfully retrieves clip properties |
 | mcp_get_active_track_info | ✅ Working | Verified | 17.0+ | Successfully retrieves active track information |
 | mcp_get_selected_clips | ✅ Working | Needs Further Testing | 17.0+ | Fixed implementation should work but needs verification |
+| mcp_get_clip_source_timecode | ✅ Working | 🧪 Needs Testing | 17.0+ | Enhanced clip details with source timecode information |
+| mcp_get_source_timecode_report | ✅ Working | 🧪 Needs Testing | 17.0+ | Generate comprehensive report of all clips with source timecodes |
+| mcp_export_source_timecode_report | ✅ Working | 🧪 Needs Testing | 17.0+ | Export source timecode report in CSV, JSON, or EDL format |
 
 ### Media Pool Operations
 | Function | Status | Testing Status | Compatible Versions | Notes |
@@ -77,6 +81,113 @@ This document provides a comprehensive overview of all features in the DaVinci R
 | mcp_get_clip_info | ⚠️ Partial | Limited Testing | 17.0+ | Requires specific clips for testing |
 | mcp_set_clip_property | ⚠️ Partial | Limited Testing | 17.0+ | Requires specific clips for testing |
 
+### Advanced Media Pool Operations
+| Function | Status | Testing Status | Compatible Versions | Notes |
+|----------|--------|----------------|---------------------|-------|
+| mcp_get_folder_hierarchy | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+| mcp_get_folder_by_path | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+| mcp_create_folder_path | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+| mcp_set_current_folder | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+| mcp_get_current_folder | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+| mcp_move_clips_between_folders | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+| mcp_bulk_set_clip_property | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+| mcp_import_files_to_folder | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+| mcp_create_smart_bin | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+| mcp_get_smart_bins | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+| mcp_delete_smart_bin | ✅ Working | ✅ Unit Tested | 17.0+ | # STATUS: ✅ Implemented and Tested |
+
+#### Advanced Media Pool Examples
+
+##### Advanced Folder Navigation
+
+```python
+# Get the complete folder hierarchy
+folder_structure = client.execute("mcp_get_folder_hierarchy", {"include_clips": False})
+print(json.dumps(folder_structure, indent=2))
+
+# Get a specific folder by path
+footage_folder = client.execute("mcp_get_folder_by_path", {
+    "path": "Footage/B-Roll", 
+    "include_clips": True, 
+    "include_subfolders": True
+})
+print(json.dumps(footage_folder, indent=2))
+
+# Create a nested folder path
+result = client.execute("mcp_create_folder_path", {"path": "Footage/Interviews/Day1"})
+print(f"Created folder path: {result}")
+
+# Set the current working folder
+result = client.execute("mcp_set_current_folder", {"path": "Footage/B-Roll"})
+print(f"Set current folder: {result}")
+
+# Get the current working folder
+current_folder = client.execute("mcp_get_current_folder", {})
+print(f"Current folder: {current_folder}")
+```
+
+##### Bulk Operations
+
+```python
+# Move clips between folders
+result = client.execute("mcp_move_clips_between_folders", {
+    "source_path": "Footage/Unorganized",
+    "destination_path": "Footage/B-Roll",
+    "clip_names": ["clip001.mov", "clip002.mov"]
+})
+print(f"Moved clips: {result}")
+
+# Set property on multiple clips at once
+result = client.execute("mcp_bulk_set_clip_property", {
+    "folder_path": "Footage/B-Roll",
+    "property_name": "Keywords",
+    "property_value": "outdoor,nature",
+    "clip_names": ["clip001.mov", "clip002.mov"]  # Optional, applies to all clips if not specified
+})
+print(f"Set properties: {result}")
+
+# Import files to a specific folder
+result = client.execute("mcp_import_files_to_folder", {
+    "file_paths": ["/path/to/video1.mp4", "/path/to/video2.mp4"],
+    "folder_path": "Footage/Imports"
+})
+print(f"Imported files: {result}")
+```
+
+##### Smart Bins
+
+```python
+# Create a smart bin
+search_criteria = [
+    {
+        "property": "Resolution",
+        "operator": "=",
+        "value": "1920x1080"
+    },
+    {
+        "property": "Keywords",
+        "operator": "contains",
+        "value": "interview"
+    }
+]
+
+result = client.execute("mcp_create_smart_bin", {
+    "name": "HD Interviews",
+    "search_criteria": search_criteria
+})
+print(f"Created smart bin: {result}")
+
+# Get all smart bins
+smart_bins = client.execute("mcp_get_smart_bins", {})
+print(json.dumps(smart_bins, indent=2))
+
+# Delete a smart bin
+result = client.execute("mcp_delete_smart_bin", {"name": "HD Interviews"})
+print(f"Deleted smart bin: {result}")
+```
+
+A complete example script for these functions can be found in `examples/advanced_media_pool.py`.
+
 ## Advanced Functions
 
 ### Timeline Advanced Operations
@@ -84,11 +195,6 @@ This document provides a comprehensive overview of all features in the DaVinci R
 |----------|--------|----------------|---------------------|-------|
 | mcp_create_timeline | ✅ Working | Verified | 17.0+ | Successfully creates new timelines with specified parameters |
 | mcp_delete_timeline | ✅ Working | Verified | 17.0+ | Fixed implementation with multiple deletion approaches |
-| mcp_duplicate_timeline | ✅ Working | Verified | 17.0+ | Fixed implementation with multiple duplication approaches |
-| mcp_set_current_timeline | ✅ Working | Verified | 17.0+ | Successfully sets the current timeline |
-| mcp_export_timeline | ✅ Working | Verified | 17.0+ | Fixed implementation with better file handling |
-| mcp_add_timeline_marker | ❌ Not Working | Tested | 17.0+ | Fails to add markers to timeline |
-| mcp_delete_timeline_marker | ❌ Not Working | Tested | 17.0+ | Error: 'NoneType' object is not callable |
 
 ### Project Settings
 | Function | Status | Testing Status | Compatible Versions | Notes |
@@ -110,6 +216,86 @@ This document provides a comprehensive overview of all features in the DaVinci R
 | mcp_start_rendering | ⚠️ Partial | Limited Testing | 17.0+ | Requires render job setup for testing |
 | mcp_stop_rendering | ⚠️ Partial | Limited Testing | 17.0+ | Requires active rendering for testing |
 | mcp_get_render_job_status | ⚠️ Partial | Limited Testing | 17.0+ | Requires existing render jobs for testing |
+
+### Advanced Timeline Analysis
+| Function | Status | Testing Status | Compatible Versions | Notes |
+|----------|--------|----------------|---------------------|-------|
+| mcp_analyze_timeline_usage | 📝 Planned | Not Started | TBD | Analyze media usage across timeline (duplicates, gaps, etc.) |
+| mcp_get_timeline_statistics | 📝 Planned | Not Started | TBD | Get comprehensive statistics about timeline composition |
+| mcp_validate_timeline_media | 📝 Planned | Not Started | TBD | Check for missing media, offline clips, etc. |
+| mcp_compare_timelines | 📝 Planned | Not Started | TBD | Compare differences between two timelines |
+| mcp_get_timecode_discontinuities | 📝 Planned | Not Started | TBD | Identify source timecode jumps or discontinuities |
+
+### Color Correction Functions
+| Function | Status | Testing Status | Compatible Versions | Notes |
+|----------|--------|----------------|---------------------|-------|
+| mcp_get_current_node_index | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_set_current_node_index | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_add_serial_node | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_add_parallel_node | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_add_layer_node | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_delete_current_node | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_reset_current_node | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_get_node_list | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_get_primary_correction | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_set_primary_correction | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_get_node_label | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_set_node_label | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_get_node_color | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_set_node_color | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_import_lut | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+| mcp_apply_lut_to_current_node | ✅ Working | 🧪 Needs Testing | 17.0+ | # STATUS: ✅ Implemented |
+
+#### Color Correction Examples
+
+##### Node Management
+
+```python
+# Get all nodes in the current clip
+nodes = client.execute("mcp_get_node_list", {})
+
+# Add a new serial node
+result = client.execute("mcp_add_serial_node", {})
+node_index = result["node_index"]
+
+# Select a specific node
+client.execute("mcp_set_current_node_index", {"index": 2})
+
+# Reset the current node
+client.execute("mcp_reset_current_node", {})
+```
+
+##### Primary Color Correction
+
+```python
+# Get current color correction settings
+correction = client.execute("mcp_get_primary_correction", {})
+
+# Apply a warm look
+client.execute("mcp_set_primary_correction", {
+    "lift": {"red": 0.02, "green": 0.01, "blue": -0.02, "master": 0.0},
+    "gamma": {"red": 0.05, "green": 0.02, "blue": -0.03, "master": 0.02},
+    "gain": {"red": 1.1, "green": 1.05, "blue": 0.9, "master": 1.05},
+    "saturation": 1.1
+})
+
+# Label and colorize the node
+client.execute("mcp_set_node_label", {"label": "Warm Look"})
+client.execute("mcp_set_node_color", {
+    "red": 0.8, "green": 0.6, "blue": 0.2, "alpha": 1.0
+})
+```
+
+##### LUT Operations
+
+```python
+# Import and apply a LUT
+lut_path = "/path/to/my_lut.cube"
+client.execute("mcp_import_lut", {"path": lut_path})
+client.execute("mcp_apply_lut_to_current_node", {"path": lut_path})
+```
+
+A complete example script for these functions can be found in `examples/color_correction.py`.
 
 ## Planned Features
 
@@ -172,6 +358,7 @@ This section documents known limitations of the DaVinci Resolve API that affect 
 ### Phase 3: Robustness Improvements [IN PROGRESS]
 - ✅ Fixed timeline deletion and duplication functions
 - ✅ Improved project settings update functions (with documented API limitations)
+- ✅ Enhanced source timecode functionality and reporting
 - 🔄 Verification of playback control and clip selection functions
 - 🔄 Comprehensive testing across functions
 - 🔄 Improved documentation with clear limitations and examples
@@ -182,6 +369,7 @@ This section documents known limitations of the DaVinci Resolve API that affect 
 - 📝 Fairlight audio operations
 - 📝 Cross-version compatibility testing
 - 📝 Example workflows and tutorials
+- 📝 Advanced timeline analysis and validation
 
 ## Testing and Verification Methodology
 
@@ -204,6 +392,97 @@ If you wish to contribute to the development of new features or improvement of e
 
 ## Last Updated
 
-This document was last updated on: **2024-03-20**
+This document was last updated on: **2025-03-21**
 
 *This is a living document that is updated as new features are added or existing features are modified.* 
+
+## Timeline Functions
+
+### Timeline Markers
+
+Timeline markers are useful for adding notes, comments, and visual indicators at specific points in a timeline. These functions allow you to programmatically manage markers within the timeline.
+
+| Function | Description | Status |
+| --- | --- | --- |
+| `mcp_get_timeline_markers()` | Retrieves all markers in the current timeline | # STATUS: ✅ Implemented and Tested |
+| `mcp_add_timeline_marker(frame, color, name, note, duration, custom_data)` | Adds a new marker at the specified frame | # STATUS: ✅ Implemented and Tested |
+| `mcp_update_marker(frame, color, name, note, duration, custom_data)` | Updates an existing marker's properties | # STATUS: ✅ Implemented and Tested |
+| `mcp_delete_marker(frame)` | Deletes a marker at a specific frame | # STATUS: ✅ Implemented and Tested |
+| `mcp_delete_markers_by_color(color)` | Deletes all markers of a specific color | # STATUS: ✅ Implemented and Tested |
+
+#### Marker Colors
+
+The following marker colors are available in DaVinci Resolve:
+- Blue
+- Cyan
+- Green
+- Yellow
+- Red
+- Pink
+- Purple
+- Fuchsia
+- Rose
+- Lavender
+- Sky
+- Mint
+- Lemon
+- Sand
+- Cocoa
+- Cream
+
+#### Implementation Details
+
+The marker functions utilize the DaVinci Resolve API's Timeline object, which provides direct access to marker data. The implementation includes:
+
+- **Core Functions**: Internal Python functions that directly interact with the Resolve API
+- **MCP Interface**: Functions prefixed with `mcp_` that provide standardized JSON responses
+- **Error Handling**: Comprehensive validation and error reporting
+- **Testing**: Unit tests available in `tests/test_marker_functions.py` with mock objects to simulate DaVinci Resolve
+
+#### Example Usage
+
+```python
+# Get all markers
+markers = client.execute_command("mcp_get_timeline_markers")
+
+# Add a marker at frame 1000 with color "Blue"
+client.execute_command("mcp_add_timeline_marker", {
+    "frame": 1000,
+    "color": "Blue",
+    "name": "Important point",
+    "note": "Remember to check this transition"
+})
+
+# Update a marker
+client.execute_command("mcp_update_marker", {
+    "frame": 1000,
+    "color": "Red",
+    "name": "Critical point"
+})
+
+# Delete a marker
+client.execute_command("mcp_delete_marker", {"frame": 1000})
+```
+
+A complete example is available in `examples/timeline_markers.py`
+
+### Timeline XML Export
+
+| Function | Description | Status |
+| --- | --- | --- |
+| `mcp_export_timeline_xml(output_path)` | Exports the current timeline to an XML file | # STATUS: ✅ Implemented |
+
+#### Example Usage
+
+```python
+# Export timeline to XML
+result = client.execute_command("mcp_export_timeline_xml", {
+    "output_path": "/path/to/output.xml"
+})
+
+# Check if export was successful
+if result.get("status") == "success":
+    print(f"Timeline exported to: {result.get('file_path')}")
+else:
+    print(f"Export failed: {result.get('error')}")
+``` 

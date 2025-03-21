@@ -966,6 +966,16 @@ try:
     mcp.tool()(mcp_stop_rendering)
     mcp.tool()(mcp_get_render_job_status)
 
+    # Timecode functions module
+    try:
+        from integrate_timecode_functions import register_timecode_functions
+        
+        # Register timecode functions
+        register_timecode_functions(mcp)
+        print("Successfully registered timecode functions")
+    except Exception as e:
+        print(f"Warning: Could not register timecode functions: {e}")
+
     print("Successfully registered all phase 2 features")
 except Exception as e:
     print(f"Warning: Could not register some phase 2 features: {e}")

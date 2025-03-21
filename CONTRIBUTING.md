@@ -1,89 +1,173 @@
-# Contributing to DaVinci Resolve MCP Extension
+# Contributing to DaVinci Resolve MCP
 
-Thank you for considering contributing to the DaVinci Resolve MCP Extension! This document provides guidelines and instructions for contributing to this project.
+Thank you for your interest in contributing to the DaVinci Resolve Media Control Protocol (MCP) framework! This document outlines the process for contributing to this project and helps ensure a smooth collaboration.
+
+## Table of Contents
+
+- [Code of Conduct](#code-of-conduct)
+- [Getting Started](#getting-started)
+- [Development Workflow](#development-workflow)
+- [Pull Request Process](#pull-request-process)
+- [Coding Standards](#coding-standards)
+- [Testing Requirements](#testing-requirements)
+- [Documentation Guidelines](#documentation-guidelines)
+- [Feature Requests](#feature-requests)
+- [Bug Reports](#bug-reports)
 
 ## Code of Conduct
 
-Please be respectful and considerate of others when contributing to this project. We aim to foster an inclusive and welcoming community.
+This project and everyone participating in it is governed by our Code of Conduct. By participating, you are expected to uphold this code. Please report unacceptable behavior to the project maintainers.
 
 ## Getting Started
 
-1. Fork the repository
-2. Clone your fork: `git clone https://github.com/your-username/davinci-resolve-mcp.git`
-3. Create a branch for your changes: `git checkout -b your-feature-branch`
-
-## Development Environment Setup
-
-1. Ensure you have Python 3.6+ installed
-2. Set up the DaVinci Resolve scripting environment as described in the README.md
-3. Install the project in development mode:
+1. **Fork the repository** on GitHub
+2. **Clone your fork** to your local machine
+3. **Set up the development environment**:
+   ```bash
+   git clone https://github.com/YOUR-USERNAME/davinci-resolve-mcp.git
+   cd davinci-resolve-mcp
+   pip install -e ".[dev]"
    ```
-   pip install -e .
-   ```
-
-## Project Structure
-
-- `src/`: Core implementation files
-- `tests/`: Test scripts for verification
-- `examples/`: Example usage scripts
-- `docs/`: Documentation files
-- `scripts/`: Utility scripts for project maintenance
-
-## Coding Style Guidelines
-
-We follow these guidelines:
-
-- Use PEP 8 style guide for Python code
-- Use descriptive variable names
-- Write docstrings for all functions, classes, and modules
-- Include type hints where appropriate
-- Use 4 spaces for indentation (not tabs)
-
-## Testing
-
-Before submitting a pull request, please:
-
-1. Run the existing tests to ensure they still pass:
-   ```
-   python -m tests.test_timeline_functions
-   python -m tests.test_project_settings
-   python -m tests.test_playback_functions
+4. **Create a new branch** for your changes:
+   ```bash
+   git checkout -b feature/your-feature-name
    ```
 
-2. Add tests for any new functionality
+## Development Workflow
 
-3. Verify that your changes work with both recent versions of DaVinci Resolve
-
-## Documentation
-
-When adding new features or changing existing ones:
-
-1. Update docstrings and comments in the code
-2. Update the [Master Feature Tracking Document](MASTER_DAVINCI_RESOLVE_MCP.md) with status information
-3. Add examples for new functionality in the `examples/` directory
+1. **Make changes** to the codebase
+2. **Add tests** for any new functionality
+3. **Ensure all tests pass**:
+   ```bash
+   pytest
+   ```
+4. **Update documentation** as needed
+5. **Commit your changes** with clear, descriptive messages:
+   ```bash
+   git commit -m "Add feature X that does Y"
+   ```
+6. **Push your branch** to your fork:
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+7. **Create a pull request** from your fork to the main repository
 
 ## Pull Request Process
 
-1. Update the README.md and documentation with details of your changes
-2. Update the [Master Feature Tracking Document](MASTER_DAVINCI_RESOLVE_MCP.md) with appropriate status indicators
-3. Make sure all tests pass
-4. Create a pull request against the `main` branch
+1. Ensure your PR includes **appropriate tests** for any new functionality
+2. Update the **documentation** with details of changes
+3. The PR should work on **Python 3.6+**
+4. Include a clear **description of the changes** in your PR
+5. Link any related **issues** in the PR description
+6. PRs require approval from at least one maintainer before merging
 
-## Feature Requests and Bug Reports
+## Coding Standards
 
-Please use the GitHub issue templates for feature requests and bug reports.
+We follow standard Python conventions with a few specific requirements:
 
-## Status Indicators
+1. **Style**: We use [PEP 8](https://www.python.org/dev/peps/pep-0008/) style guidelines
+2. **Linting**: Run `flake8` before submitting code
+3. **Type hints**: Use Python type hints for function parameters and return values
+4. **Docstrings**: Use Google style docstrings
+5. **Function naming**:
+   - All MCP functions should be prefixed with `mcp_`
+   - Use clear, descriptive names
 
-When implementing or modifying features, use these status indicators in the code and documentation:
+Example:
 
-- ✅ Working - Feature is implemented and tested successfully
-- ⚠️ Partial - Feature is implemented but has limitations or edge cases
-- ❌ Not Working - Feature is implemented but not functioning correctly
-- 🔄 In Progress - Feature is currently being worked on
-- 📝 Planned - Feature is planned for future implementation
-- 🧪 Needs Testing - Feature is implemented but needs testing
+```python
+def mcp_get_timeline_markers() -> Dict[str, Any]:
+    """
+    Get all markers in the current timeline.
+    
+    Returns:
+        Dict[str, Any]: A dictionary containing all timeline markers.
+            Format: {
+                "markers": [
+                    {
+                        "frame": int,
+                        "color": str,
+                        "name": str,
+                        "note": str,
+                        "duration": int
+                    },
+                    ...
+                ]
+            }
+    """
+    # Implementation
+```
 
-## License
+## Testing Requirements
 
-By contributing to this project, you agree that your contributions will be licensed under the project's MIT License. 
+1. **Unit tests** are required for all new functionality
+2. **Min coverage**: Aim for at least 80% test coverage for new code
+3. **Test organization**: 
+   - Place tests in the `tests/` directory
+   - Name test files with `test_` prefix
+   - Name test functions with `test_` prefix
+4. **Mock DaVinci Resolve**: Use mocking to test without requiring Resolve
+
+Example test:
+
+```python
+def test_mcp_get_timeline_markers():
+    # Setup mock
+    mock_timeline = MagicMock()
+    mock_timeline.GetMarkers.return_value = {
+        "1000": {
+            "color": "Blue",
+            "name": "Test Marker",
+            "note": "Test Note",
+            "duration": 0
+        }
+    }
+    
+    # Test function with mock
+    with patch('module.get_resolve', return_value=mock_resolve):
+        result = mcp_get_timeline_markers()
+    
+    # Assertions
+    assert len(result["markers"]) == 1
+    assert result["markers"][0]["frame"] == 1000
+    assert result["markers"][0]["color"] == "Blue"
+```
+
+## Documentation Guidelines
+
+1. **Function documentation**:
+   - Update `MASTER_DAVINCI_RESOLVE_MCP.md` with new functions
+   - Include STATUS tags for implementation status
+   - Document parameters, return values, and examples
+   
+2. **Example scripts**:
+   - Add example scripts in the `examples/` directory
+   - Make examples executable
+   - Include comprehensive comments
+   
+3. **README updates**:
+   - Keep the README.md updated with new features
+   - Ensure the feature list is current
+
+## Feature Requests
+
+1. Check existing issues to see if the feature has been requested
+2. Use the feature request template when opening a new issue
+3. Clearly describe the proposed functionality
+4. Explain why this feature would be useful
+5. If possible, outline how it might be implemented
+
+## Bug Reports
+
+1. Check existing issues to see if the bug has been reported
+2. Use the bug report template when opening a new issue
+3. Include:
+   - DaVinci Resolve version
+   - Python version
+   - OS version
+   - Clear steps to reproduce
+   - Expected vs. actual behavior
+   - Screenshots if applicable
+   - Any error messages or logs
+
+Thank you for contributing to DaVinci Resolve MCP! 
