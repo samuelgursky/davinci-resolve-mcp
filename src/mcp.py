@@ -1,4 +1,5 @@
 # First, I need to search for the existing implementations in the mcp.py file to replace them
+from typing import Dict, Any
 
 # ... existing code ...
 

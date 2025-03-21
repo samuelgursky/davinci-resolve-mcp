@@ -3,6 +3,7 @@ import sys
 import os
 import json
 from typing import List, Dict, Any, Union, Optional
+from .fixed_timeline_functions import get_resolve_instance
 
 # Add DaVinci Resolve script module paths based on OS
 def add_resolve_module_path():
