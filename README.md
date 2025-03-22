@@ -4,7 +4,7 @@
 [![Python Lint](https://github.com/samuelgursky/davinci-resolve-mcp/actions/workflows/python-lint.yml/badge.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/actions/workflows/python-lint.yml)
 [![Version](https://img.shields.io/badge/version-1.1.0-blue)](https://github.com/samuelgursky/davinci-resolve-mcp)
 
-A Python extension that enhances the DaVinci Resolve API integration with Claude through the MCP (Multi-Call Protocol).
+A Python extension that enhances the DaVinci Resolve API integration with Claude through the MCP (Model Context Protocol).
 
 ## Quick Start
 
