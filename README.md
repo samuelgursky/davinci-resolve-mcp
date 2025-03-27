@@ -72,7 +72,7 @@ Make the script executable and run:
 
 ## Configuration
 
-For configuration of DaVinci Resolve MCP with different AI assistant clients like Cursor or Claude, see [config-templates]()
+For configuration of DaVinci Resolve MCP with different AI assistant clients like Cursor or Claude, see the [config-templates](config-templates) directory.
 
 ## Troubleshooting
 
