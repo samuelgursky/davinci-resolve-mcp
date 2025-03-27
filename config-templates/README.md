@@ -37,9 +37,10 @@ Example (macOS):
 
 To use this template:
 
-1. Copy the template to your Claude Desktop configuration directory (location varies by installation)
-2. Rename it to `claude_desktop_config.json`
-3. Replace the placeholders with your actual paths:
+- Copy the template to your Claude Desktop configuration directory (location varies by installation)
+  - Windows - %appdata%\Claude\claude_desktop_config.json
+- Rename it to `claude_desktop_config.json`
+- Replace the placeholders with your actual paths:
    - `${YOUR_PYTHON_PATH}` - Path to your Python interpreter
    - `${YOUR_REPO_PATH}` - Path to the DaVinci Resolve MCP repository
 

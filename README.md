@@ -1,10 +1,10 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-1.3.2-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-1.3.3-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.6+-green.svg)](https://www.python.org/downloads/)
 [![macOS](https://img.shields.io/badge/macOS-stable-brightgreen.svg)](https://www.apple.com/macos/)
-[![Windows](https://img.shields.io/badge/Windows-experimental-yellow.svg)](https://www.microsoft.com/windows)
+[![Windows](https://img.shields.io/badge/Windows-stable-brightgreen.svg)](https://www.microsoft.com/windows)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 A Model Context Protocol (MCP) server that connects AI coding assistants (Cursor, Claude Desktop) to DaVinci Resolve, enabling them to query and control DaVinci Resolve through natural language.
@@ -16,45 +16,34 @@ A Model Context Protocol (MCP) server that connects AI coding assistants (Cursor
 - **Timeline Operations**: Create timelines, switch between them, add markers
 - **Media Management**: Import media, create bins, list clips
 - **Multi-Client Support**: Works with both Cursor and Claude Desktop
-- **Cross-Platform**: Full support for macOS with experimental Windows support
+- **Cross-Platform**: Full support for both macOS and Windows
 
 ## Requirements
 
-- **macOS** or **Windows** with DaVinci Resolve installed (macOS recommended for stable operation)
+- **macOS** or **Windows** with DaVinci Resolve installed
 - **Python 3.6+**
 - DaVinci Resolve running in the background
+- (Optional) Node.js/npm for some features
 
 ## Platform Support
 
-| Platform | Status |
-|----------|--------|
-| macOS | ✅ Fully supported and tested |
-| Windows | ⚠️ Experimental support (v1.3.2+) |
-| Linux | ❌ Not currently supported |
+| Platform | Status | Quick Start |
+|----------|--------|-------------|
+| macOS | ✅ Stable | `./run-now.sh` |
+| Windows | ✅ Stable | `run-now.bat` |
+| Linux | ❌ Not supported | N/A |
 
 ## Quick Start Guide
 
-The fastest way to get up and running with DaVinci Resolve MCP:
+### All
 
-### For macOS Users
+- Clone the repository:
+   ```bash
+   git clone https://github.com/samuelgursky/davinci-resolve-mcp.git
+   cd davinci-resolve-mcp
+   ```
+- Make sure DaVinci Resolve Studio is installed and running
 
-```bash
-# Clone the repository 
-git clone https://github.com/samuelgursky/davinci-resolve-mcp.git
-cd davinci-resolve-mcp
-
-# Make the script executable and run the quick start script
-chmod +x scripts/run-now.sh
-./scripts/run-now.sh
-```
-
-### For Windows Users
-
-```
-# Simply double-click run-now.bat in the repository root
-# or run it from Command Prompt
-run-now.bat
-```
 
 These quick start scripts will:
 1. Check if DaVinci Resolve is running
@@ -63,6 +52,40 @@ These quick start scripts will:
 4. Set up environment variables
 5. Configure Cursor/Claude integration
 6. Start the MCP server in development mode
+
+
+### For Windows Users
+
+- Double-click `run-now.bat` or run it from Command Prompt
+
+### For macOS Users
+
+Make the script executable and run:
+   ```bash
+   chmod +x run-now.sh
+   ./run-now.sh
+   ```
+
+## Configuration
+
+For configuration of DaVinci Resolve MCP with different AI assistant clients like Cursor or Claude, see [config-templates]()
+
+## Troubleshooting
+
+### Windows
+- Make sure to use forward slashes (/) in configuration files
+- Python must be installed and paths configured in configs
+- DaVinci Resolve must be running before starting the server
+
+### macOS
+- Make sure scripts have execute permissions
+- Check Console.app for any Python-related errors
+- Verify environment variables are set correctly
+- DaVinci Resolve must be running before starting the server
+
+## Support
+
+For issues and feature requests, please use the GitHub issue tracker.
 
 ## Launch Options
 
@@ -281,7 +304,7 @@ For a complete manual installation:
 
 ## Windows Support Notes
 
-Windows support is experimental in v1.3.2 and may require additional troubleshooting:
+Windows support is stable in v1.3.3 and should not require additional troubleshooting:
 - Ensure DaVinci Resolve is installed in the default location
 - Environment variables are properly set as described above
 - Windows paths may require adjustment based on your installation

@@ -2,6 +2,21 @@
 
 All notable changes to the DaVinci Resolve MCP Server project will be documented in this file.
 
+## [1.3.3] - 2025-03-27
+
+### Fixed
+- Improved Windows compatibility for the run-now.bat script:
+  - Fixed ANSI color code syntax errors in Windows command prompt
+  - Made the npm/Node.js check a warning instead of an error
+  - Simplified environment variable handling for better Windows compatibility
+  - Fixed command syntax in batch file for more reliable execution
+  - Improved DaVinci Resolve process detection for Windows
+  - Added support for detecting multiple possible DaVinci Resolve executable names
+  - Enhanced batch file error handling and robustness
+  - Fixed issue with running the MCP server executable on Windows
+  - Increased timeout waiting for DaVinci Resolve to start 
+- Added Windows specific templates in config-templates
+
 ## [1.3.2] - 2025-03-28
 
 ### Added
@@ -180,4 +195,4 @@ All notable changes to the DaVinci Resolve MCP Server project will be documented
 
 ### Future Work
 - [ ] Task 1 – Description of the task
-- [ ] Task 2 – Description of the task 
+- [ ] Task 2 – Description of the task
