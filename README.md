@@ -56,7 +56,11 @@ These quick start scripts will:
 
 ### For Windows Users
 
-- Double-click `run-now.bat` or run it from Command Prompt
+- Double-click run-now.bat in the root of the repo or run it from Command Prompt
+```bash
+run-now.bat
+``` 
+
 
 ### For macOS Users
 
