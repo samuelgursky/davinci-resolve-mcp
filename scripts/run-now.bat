@@ -9,7 +9,7 @@ echo.
 
 REM Get the script directory and root directory
 set SCRIPT_DIR=%~dp0
-set ROOT_DIR=%SCRIPT_DIR%..
+set ROOT_DIR=%SCRIPT_DIR%\..\
 set VENV_DIR=%ROOT_DIR%venv
 set RESOLVE_MCP_SERVER=%ROOT_DIR%src\resolve_mcp_server.py
 
@@ -91,12 +91,12 @@ REM Set environment variables
 echo Setting environment variables...
 set RESOLVE_SCRIPT_API=C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting
 set RESOLVE_SCRIPT_LIB=C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll
-set PYTHONPATH=%PYTHONPATH%;%RESOLVE_SCRIPT_API%\Modules
+set PYTHONPATH=%ROOT_DIR%;%PYTHONPATH%;%RESOLVE_SCRIPT_API%\Modules
 
 REM Save environment variables for user
 setx RESOLVE_SCRIPT_API "%RESOLVE_SCRIPT_API%" >nul
 setx RESOLVE_SCRIPT_LIB "%RESOLVE_SCRIPT_LIB%" >nul
-setx PYTHONPATH "%RESOLVE_SCRIPT_API%\Modules" >nul
+setx PYTHONPATH "%ROOT_DIR%;%RESOLVE_SCRIPT_API%\Modules" >nul
 
 REM Start the server
 echo Starting DaVinci Resolve MCP Server...
