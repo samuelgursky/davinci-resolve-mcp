@@ -22,13 +22,11 @@ Requirements:
 """
 
 import os
-import sys
-import time
 import json
 import argparse
 import logging
 import requests
-from typing import Dict, Any, List, Tuple, Optional, Callable
+from typing import Dict, Any, Optional, Callable
 from datetime import datetime
 
 # Configure logging

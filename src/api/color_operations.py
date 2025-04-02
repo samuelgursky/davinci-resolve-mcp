@@ -4,7 +4,7 @@ DaVinci Resolve Color Page Operations
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Dict, Any, Optional, Tuple
 
 logger = logging.getLogger("davinci-resolve-mcp.color")
 

@@ -4,7 +4,7 @@ DaVinci Resolve Delivery Page Operations
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Union, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 
 logger = logging.getLogger("davinci-resolve-mcp.delivery")
 

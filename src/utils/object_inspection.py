@@ -9,9 +9,8 @@ This module provides functions for inspecting DaVinci Resolve API objects:
 - Converting between Python and Lua objects if needed
 """
 
-import sys
 import inspect
-from typing import Any, Dict, List, Optional, Union, Callable
+from typing import Any, Dict, List
 
 
 def get_object_methods(obj: Any) -> Dict[str, Dict[str, Any]]:

@@ -4,7 +4,7 @@ DaVinci Resolve Project Operations
 """
 
 import logging
-from typing import List, Dict, Any
+from typing import List
 
 logger = logging.getLogger("davinci-resolve-mcp.project")
 

@@ -15,10 +15,7 @@ Prerequisites:
 - A project should be open in DaVinci Resolve
 """
 
-import os
 import sys
-import json
-import time
 from mcp.client import Client
 
 

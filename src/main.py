@@ -4,7 +4,6 @@ DaVinci Resolve MCP Server - Main Entry Point
 This file serves as the main entry point for running the DaVinci Resolve MCP server
 """
 
-import os
 import sys
 import argparse
 import logging

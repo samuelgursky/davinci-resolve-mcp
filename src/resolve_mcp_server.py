@@ -9,7 +9,7 @@ Version: 1.3.8 - Improved Cursor Integration, Entry Point Standardization
 import os
 import sys
 import logging
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any
 
 # Add src directory to Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +18,7 @@ if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
 # Import platform utilities
-from src.utils.platform import setup_environment, get_platform, get_resolve_paths
+from src.utils.platform import get_platform, get_resolve_paths
 
 # Setup platform-specific paths and environment variables
 paths = get_resolve_paths()
@@ -37,13 +37,10 @@ if RESOLVE_MODULES_PATH not in sys.path:
 from mcp.server.fastmcp import FastMCP
 
 # Import our utility functions
-from src.utils.platform import setup_environment, get_platform, get_resolve_paths
+from src.utils.platform import get_resolve_paths
 from src.utils.object_inspection import (
     inspect_object,
-    get_object_methods,
-    get_object_properties,
     print_object_help,
-    convert_lua_to_python,
 )
 from src.utils.layout_presets import (
     list_layout_presets,
@@ -1865,7 +1862,7 @@ def generate_optimized_media(clip_names: List[str] = None) -> str:
         if result:
             return f"Successfully started optimized media generation for {len(clips_to_process)} clips"
         else:
-            return f"Failed to start optimized media generation"
+            return "Failed to start optimized media generation"
     except Exception as e:
         # Clean up flags in case of error
         try:
@@ -1948,7 +1945,7 @@ def delete_optimized_media(clip_names: List[str] = None) -> str:
         if result:
             return f"Successfully deleted optimized media for {len(clips_to_process)} clips"
         else:
-            return f"Failed to delete optimized media"
+            return "Failed to delete optimized media"
     except Exception as e:
         # Clean up flags in case of error
         try:
@@ -3680,7 +3677,7 @@ def apply_color_preset(
         if result:
             return f"Successfully applied color preset to {'specified clip' if clip_name else 'current clip'}"
         else:
-            return f"Failed to apply color preset"
+            return "Failed to apply color preset"
 
     except Exception as e:
         # Return to the original page if we switched
@@ -3772,7 +3769,7 @@ def delete_color_preset(
         if result:
             return f"Successfully deleted color preset from album '{album_name}'"
         else:
-            return f"Failed to delete color preset"
+            return "Failed to delete color preset"
 
     except Exception as e:
         # Return to the original page if we switched
@@ -4022,7 +4019,7 @@ def export_lut(
         if result:
             return f"Successfully exported LUT to '{export_path}' in {lut_format} format with {lut_size} size"
         else:
-            return f"Failed to export LUT"
+            return "Failed to export LUT"
 
     except Exception as e:
         # Return to the original page if we switched

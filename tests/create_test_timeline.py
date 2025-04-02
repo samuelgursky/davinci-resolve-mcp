@@ -20,7 +20,7 @@ import requests
 import logging
 import tempfile
 import subprocess
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 # Configure logging
 logging.basicConfig(

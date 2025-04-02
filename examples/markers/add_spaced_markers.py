@@ -169,10 +169,10 @@ def add_markers(
         result = current_timeline.AddMarker(frame, color, note, note, 1, "")
 
         if result:
-            print(f"✓ Successfully added marker")
+            print("✓ Successfully added marker")
             markers_added += 1
         else:
-            print(f"✗ Failed to add marker - checking if position already has a marker")
+            print("✗ Failed to add marker - checking if position already has a marker")
 
             # Check if a marker already exists
             markers = current_timeline.GetMarkers() or {}
@@ -187,7 +187,7 @@ def add_markers(
                 )
 
                 if alt_result:
-                    print(f"✓ Successfully added marker at alternate position")
+                    print("✓ Successfully added marker at alternate position")
                     markers_added += 1
 
     # Get final count of markers

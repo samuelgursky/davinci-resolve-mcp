@@ -18,8 +18,6 @@ Requirements:
     - requests, psutil modules (pip install requests psutil)
 """
 
-import os
-import sys
 import time
 import json
 import argparse
@@ -27,7 +25,7 @@ import statistics
 import requests
 import logging
 import psutil
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, Tuple
 from datetime import datetime
 
 # Configure logging

@@ -9,10 +9,8 @@ This module provides functions for working with DaVinci Resolve cloud projects:
 - Managing cloud project settings and metadata
 """
 
-import os
 import logging
-import json
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, Any
 
 # Configure logging
 logger = logging.getLogger("davinci-resolve-mcp.cloud_operations")
@@ -131,7 +129,7 @@ def import_cloud_project(
         if imported_project:
             return {
                 "success": True,
-                "message": f"Successfully imported cloud project",
+                "message": "Successfully imported cloud project",
                 "project_name": imported_project.GetName(),
                 "project_id": imported_project.GetUniqueId()
                 if hasattr(imported_project, "GetUniqueId")
@@ -192,7 +190,7 @@ def restore_cloud_project(
         if restored_project:
             return {
                 "success": True,
-                "message": f"Successfully restored cloud project",
+                "message": "Successfully restored cloud project",
                 "project_name": restored_project.GetName(),
                 "project_id": restored_project.GetUniqueId()
                 if hasattr(restored_project, "GetUniqueId")

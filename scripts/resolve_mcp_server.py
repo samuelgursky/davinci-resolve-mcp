@@ -4,10 +4,8 @@ DaVinci Resolve MCP Server
 A server that connects to DaVinci Resolve via the Model Context Protocol (MCP)
 """
 
-import os
 import sys
 import logging
-from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
 
 # Configure logging

@@ -8,13 +8,12 @@ This module provides functions for controlling DaVinci Resolve application:
 - Handling basic application functions
 """
 
-import os
 import logging
 import time
 import sys
 import platform
 import subprocess
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any
 
 # Configure logging
 logger = logging.getLogger("davinci-resolve-mcp.app_control")

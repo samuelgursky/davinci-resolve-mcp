@@ -87,7 +87,7 @@ def main():
 
     # Calculate various time positions
     one_hour_frames = int(frame_rate * 60 * 60)
-    print(f"\nTime calculations:")
+    print("\nTime calculations:")
     print(f"One hour in frames: {one_hour_frames}")
     print(f"01:00:00:00 would be frame: {one_hour_frames}")
     print(f"02:00:00:00 would be frame: {one_hour_frames * 2}")

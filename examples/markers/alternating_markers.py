@@ -149,10 +149,10 @@ def main():
         result = current_timeline.AddMarker(frame, color, note, note, 1, "")
 
         if result:
-            print(f"✓ Successfully added marker")
+            print("✓ Successfully added marker")
             markers_added += 1
         else:
-            print(f"✗ Failed to add marker")
+            print("✗ Failed to add marker")
 
     # Get final count of markers
     final_markers = current_timeline.GetMarkers() or {}

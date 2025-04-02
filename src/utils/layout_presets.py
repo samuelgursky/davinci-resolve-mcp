@@ -10,9 +10,8 @@ This module provides functions for working with DaVinci Resolve UI layout preset
 """
 
 import os
-import json
 import logging
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any
 
 # Configure logging
 logger = logging.getLogger("davinci-resolve-mcp.layout_presets")

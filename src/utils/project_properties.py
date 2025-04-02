@@ -8,10 +8,8 @@ This module provides functions for working with DaVinci Resolve project properti
 - Handling project-specific configurations
 """
 
-import os
 import logging
-import json
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, Any
 
 # Configure logging
 logger = logging.getLogger("davinci-resolve-mcp.project_properties")

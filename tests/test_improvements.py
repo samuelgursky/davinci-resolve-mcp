@@ -14,12 +14,11 @@ Requirements:
     - requests module (pip install requests)
 """
 
-import json
 import time
 import sys
 import requests
 import logging
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any
 
 # Configure logging
 logging.basicConfig(
@@ -95,7 +94,7 @@ def test_project_settings() -> bool:
         logger.info("✅ Project settings parameter handling is working")
         return True
     else:
-        logger.error(f"❌ Project settings parameter handling failed")
+        logger.error("❌ Project settings parameter handling failed")
         logger.error(f"    Numeric test: {'✅ Passed' if success1 else '❌ Failed'}")
         logger.error(f"    String test: {'✅ Passed' if success2 else '❌ Failed'}")
         logger.error(f"    Float test: {'✅ Passed' if success3 else '❌ Failed'}")
@@ -140,7 +139,7 @@ def test_color_page_operations() -> bool:
         )
         return True
     else:
-        logger.error(f"❌ Color page operations test failed")
+        logger.error("❌ Color page operations test failed")
         logger.error(
             f"    Switch to color page: {'✅ Passed' if success1 else '❌ Failed'}"
         )
@@ -194,7 +193,7 @@ def test_render_queue_operations() -> bool:
         logger.info("✅ Render queue operations are working or properly using helpers")
         return True
     else:
-        logger.error(f"❌ Render queue operations test failed")
+        logger.error("❌ Render queue operations test failed")
         logger.error(
             f"    Switch to deliver page: {'✅ Passed' if success1 else '❌ Failed'}"
         )
