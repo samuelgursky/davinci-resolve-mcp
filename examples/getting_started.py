@@ -15,11 +15,9 @@ Prerequisites:
 - A project should be open in DaVinci Resolve
 """
 
-import os
 import sys
-import json
-import time
 from mcp.client import Client
+
 
 # Connect to the MCP server
 def connect_to_mcp_server():
@@ -29,6 +27,7 @@ def connect_to_mcp_server():
     client.connect_to_local_server("DaVinciResolveMCP")
     return client
 
+
 # Get DaVinci Resolve version
 def get_resolve_version(client):
     """Get the version of DaVinci Resolve."""
@@ -36,6 +35,7 @@ def get_resolve_version(client):
     response = client.resource("resolve://version")
     print(f"DaVinci Resolve Version: {response}")
     return response
+
 
 # Get current page
 def get_current_page(client):
@@ -45,12 +45,13 @@ def get_current_page(client):
     print(f"Current Page: {response}")
     return response
 
+
 # List projects
 def list_projects(client):
     """List all available projects in DaVinci Resolve."""
     print("\n--- Available Projects ---")
     response = client.resource("resolve://projects")
-    
+
     if isinstance(response, list):
         if len(response) > 0:
             for i, project in enumerate(response, 1):
@@ -59,8 +60,9 @@ def list_projects(client):
             print("No projects found.")
     else:
         print(f"Error: {response}")
-    
+
     return response
+
 
 # Get current project
 def get_current_project(client):
@@ -70,12 +72,13 @@ def get_current_project(client):
     print(f"Current Project: {response}")
     return response
 
+
 # List timelines
 def list_timelines(client):
     """List all timelines in the current project."""
     print("\n--- Available Timelines ---")
     response = client.resource("resolve://timelines")
-    
+
     if isinstance(response, list):
         if len(response) > 0:
             for i, timeline in enumerate(response, 1):
@@ -84,8 +87,9 @@ def list_timelines(client):
             print("No timelines found.")
     else:
         print(f"Error: {response}")
-    
+
     return response
+
 
 # Main function
 def main():
@@ -94,24 +98,24 @@ def main():
         # Connect to the MCP server
         client = connect_to_mcp_server()
         print("Connected to MCP server!")
-        
+
         # Get DaVinci Resolve version
         get_resolve_version(client)
-        
+
         # Get current page
         get_current_page(client)
-        
+
         # List projects
         list_projects(client)
-        
+
         # Get current project
         get_current_project(client)
-        
+
         # List timelines
         list_timelines(client)
-        
+
         print("\nGetting Started Example completed successfully!")
-        
+
     except Exception as e:
         print(f"Error: {str(e)}")
         print("\nTroubleshooting tips:")
@@ -120,8 +124,9 @@ def main():
         print("3. Ensure a project is open in DaVinci Resolve")
         print("4. Check environment variables are set correctly")
         return 1
-    
+
     return 0
 
+
 if __name__ == "__main__":
-    sys.exit(main()) 
+    sys.exit(main())
