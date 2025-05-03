@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/samuelgursky-davinci-resolve-mcp-badge.png)](https://mseep.ai/app/samuelgursky-davinci-resolve-mcp)
+
 # DaVinci Resolve MCP Server
 
 [![Version](https://img.shields.io/badge/version-1.3.8-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
