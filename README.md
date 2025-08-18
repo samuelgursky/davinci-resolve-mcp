@@ -7,6 +7,8 @@
 [![Windows](https://img.shields.io/badge/Windows-stable-brightgreen.svg)](https://www.microsoft.com/windows)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
+[![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/samuelgursky/davinci-resolve-mcp)](https://archestra.ai/mcp-catalog/samuelgursky__davinci-resolve-mcp)
+
 A Model Context Protocol (MCP) server that connects AI coding assistants (Cursor, Claude Desktop) to DaVinci Resolve, enabling them to query and control DaVinci Resolve through natural language.
 
 ## Features
