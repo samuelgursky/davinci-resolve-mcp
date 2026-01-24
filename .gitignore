@@ -81,6 +81,9 @@ coverage.xml
 # Environments
 .env
 .venv
+
+# Autonomous editor work directory (generated files)
+work/
 env/
 venv/
 ENV/

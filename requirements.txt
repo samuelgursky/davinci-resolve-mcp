@@ -11,4 +11,19 @@ psutil>=5.9.0
 jsonrpcserver>=5.0.0
 
 # Git repository dependencies
-git+https://github.com/modelcontextprotocol/python-sdk.git 
+git+https://github.com/modelcontextprotocol/python-sdk.git
+
+# Testing
+pytest>=7.0.0
+
+# =============================================================================
+# OPTIONAL DEPENDENCIES FOR AUTONOMOUS EDITOR
+# Install these only if you need the specific features
+# =============================================================================
+
+# Milestone 3 - Video Analysis (optional)
+# pip install scenedetect[opencv]  # Scene detection
+# pip install faster-whisper       # Audio transcription
+
+# Milestone 5 - Beat Sync (optional)
+# pip install librosa              # Beat detection from audio 
