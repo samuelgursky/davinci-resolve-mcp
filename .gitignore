@@ -99,3 +99,6 @@ logs/*
 
 # Cursor
 .cursor/ 
+# Claude local settings
+.claude/
+
