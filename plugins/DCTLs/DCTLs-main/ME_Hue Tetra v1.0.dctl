@@ -1,0 +1,466 @@
+#line 2
+
+/*
+Written by Moaz Elgabry 
+
+ME_Hue Tetra V 1.0.1
+
+This tool uses the Tetra HSV model to manipulate 6 vectors of hues 
+with the added functionality of mixing back original saturation and luminance.
+by using a couple of different color models to separate the color elements the results can vary in interesting ways.
+
+Tetra HSV code is based on this DCTL
+https://github.com/hotgluebanjo/TetraInterp-DCTL/blob/master/TetraInterpHSV.dctl
+
+*/
+
+ __DEVICE__ float3 mv_33_3(float mat[3][3], float3 v) {
+     float3 out = make_float3(mat[0][0] * v.x + mat[0][1] * v.y + mat[0][2] * v.z,
+                              mat[1][0] * v.x + mat[1][1] * v.y + mat[1][2] * v.z,
+                              mat[2][0] * v.x + mat[2][1] * v.y + mat[2][2] * v.z);
+     return out;
+ }
+
+
+ __DEVICE__ float mod(float x, float y) {
+     if (x < 0) {
+         return y + _fmod(x, y);
+     } else {
+         return _fmod(x, y);
+     }
+ }
+
+//color models
+   __DEVICE__ float3 RGBtoCHEN(float3 in) {
+    float r = in.x;
+    float g = in.y;
+    float b = in.z;
+
+    float h;
+    float c;
+    float l;
+
+    const float rtr = r * 0.81649658f + g * -0.40824829f + b * -0.40824829f;
+    const float rtg = r * 0.0f + g * 0.70710678f + b * -0.70710678f;
+    const float rtb = r * 0.57735027f + g * 0.57735027f + b * 0.57735027f;
+
+    const float art = _atan2f(rtg, rtr);
+
+    const float sphr = _sqrtf(rtr*rtr + rtg*rtg + rtb*rtb);
+    const float spht = art < 0.0f ? art + 2.0f * 3.141592653589f : art;
+    const float sphp = _atan2f(_sqrtf(rtr*rtr + rtg*rtg), rtb);
+
+    l = sphr * 0.5773502691896258f;
+    h = spht * 0.15915494309189535f;
+    c = sphp * 1.0467733744265997f;
+
+    return make_float3(h, c, l);
+    } //by Kaur Hendrikson
+   
+   __DEVICE__ float3 CHENtoRGB(float3 in) {
+    float h = in.x * 6.283185307179586f;
+    float c = in.y * 0.9553166181245093f;
+    float l = in.z * 1.7320508075688772f;
+    
+   float r = 0;
+   float g = 0;
+   float b = 0;
+
+    const float ctr = l * _sinf(c) * _cosf(h);
+    const float ctg = l * _sinf(c) * _sinf(h);
+    const float ctb = l * _cosf(c);
+
+    r = ctr * 0.81649658f + ctg * 0.0f + ctb * 0.57735027f;
+    g = ctr * -0.40824829f + ctg * 0.70710678f + ctb * 0.57735027f;
+    b = ctr * -0.40824829f + ctg * -0.70710678f + ctb * 0.57735027f;
+
+    return make_float3(r, g, b);
+    } //by Kaur Hendrikson
+  
+  __DEVICE__ float3 rgb_to_reuleaux(float3 rgb) {
+    #define PI 3.1415926535897932384626
+
+    float3 NORM_MULTS = make_float3(2.0f * PI, _sqrtf(2.0f), 1.0f);
+    float3 rot = {  _sqrtf(2.0f) / 6.0f * (2.0f * rgb.x - rgb.y - rgb.z),
+                    (rgb.y - rgb.z) / _sqrtf(6.0f),
+                    (rgb.x + rgb.y + rgb.z) / 3.0f};
+    float3 rlx = {  PI - _atan2f(rot.y, -rot.x),
+                    rot.z == 0.0f ? 0.0f : _hypotf(rot.x, rot.y) / rot.z,
+                    _fmaxf(rgb.x, _fmaxf(rgb.y, rgb.z))};
+    return rlx / NORM_MULTS;
+     }
+  
+  __DEVICE__ float3 reuleaux_to_rgb(float3 rlx) {
+    #define PI 3.1415926535897932384626
+    float3 NORM_MULTS = make_float3(2.0f * PI, _sqrtf(2.0f), 1.0f);
+    rlx *= NORM_MULTS;
+    float m = NORM_MULTS.y * _fmaxf(_cosf(rlx.x), _fmaxf(_cosf(rlx.x + NORM_MULTS.x / 3.0f), _cosf(rlx.x - NORM_MULTS.x / 3.0f))) + 1.0f/rlx.y;
+    float3 ocs = {  rlx.z * _cosf(rlx.x) / m,
+                    rlx.z * _sinf(rlx.x) / m,
+                    rlx.z};
+    float3 rgb = {  ocs.z - _sqrtf(3.0f / 2.0f) * _fmaxf(_fabs(ocs.y) - _sqrtf(3.0f) * ocs.x, 0.0f),
+                    ocs.z - _sqrtf(3.0f / 2.0f) * (_fmaxf(_fabs(ocs.y), _sqrtf(3.0f) * ocs.x) - ocs.y),
+                    ocs.z - _sqrtf(3.0f / 2.0f) * (_fmaxf(_fabs(ocs.y), _sqrtf(3.0f) * ocs.x) + ocs.y)};
+    return rgb;
+     }
+ 
+ __DEVICE__ float3 cylindrical_to_rgb(float3 hsv) {
+    // Adapted from Juan Pablo Zambrano's code
+    float3 lsh = make_float3(hsv.z, hsv.y * 3.0, mod(hsv.x, 1.0) * 2.0 * PI);
+
+    float ctr = lsh.x * lsh.y * _cosf(lsh.z);
+    float ctg = lsh.x;
+    float ctb = lsh.x * lsh.y * _sinf(lsh.z);
+    float3 c = make_float3(ctr, ctg, ctb);
+
+    float mat[3][3] = {
+        {2.0 / 3.0, 1.0, 0.0},
+        {-1.0 / 3.0, 1.0, _sqrtf(3.0) / 3.0},
+        {-1.0 / 3.0, 1.0, -_sqrtf(3.0) / 3.0},
+    };
+
+    return mv_33_3(mat, c);
+ }
+ 
+ __DEVICE__ float3 rgb_to_cylindrical(float3 x) {
+
+    // Matrix aligns and scales achromatic white (1, 1, 1) with (0, 1, 0)
+    // Also rotates input (1, 0, 0) above the red axis and ensures that
+    // (1, 0, 0) input ends up having a red channel code value of (1).
+    float mat[3][3] = {
+        {1.0, -1.0 / 2.0, -1.0 / 2.0},
+        {1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0},
+        {0.0, _sqrtf(3.0) / 2.0, -_sqrtf(3.0) / 2.0},
+    };
+
+    float3 rotated_color = mv_33_3(mat, x);
+    float l = rotated_color.y;
+    float3 hsl = make_float3(0.0, 0.0, 0.0);
+
+    float3 normalized_color = rotated_color / l;
+    if (l == 0.0) {
+        hsl = make_float3(0.0, 0.0, l);
+    } else {
+        float theta = _atan2f(normalized_color.z, normalized_color.x);
+        hsl.x = mod(theta, 2.0 * PI) / (2.0 * PI);
+        hsl.y = _hypotf(normalized_color.x, normalized_color.z) / 3.0;
+        hsl.z = l;
+    }
+    return hsl;
+ }
+ 
+ __DEVICE__ float3 RGB_to_HSV(float3 RGB) {
+    float3 HSV;
+    float min = _fminf(_fminf(RGB.x, RGB.y), RGB.z);
+    float max = _fmaxf(_fmaxf(RGB.x, RGB.y), RGB.z);
+    HSV.z = max;
+    float delta = max - min;
+    if (max != 0.0f) {
+    HSV.y = delta / max;
+    } else {
+    HSV.y = 0.0f;
+    HSV.x = 0.0f;
+    return HSV;
+    }
+    if (delta == 0.0f) {
+    HSV.x = 0.0f;
+    } else if (RGB.x == max) {
+    HSV.x = (RGB.y - RGB.z) / delta;
+    } else if (RGB.y == max) {
+    HSV.x = 2.0f + (RGB.z - RGB.x) / delta;
+    } else {
+    HSV.x = 4.0f + (RGB.x - RGB.y) / delta;
+    }
+    HSV.x *= 1.0f / 6.0f;
+    if (HSV.x < 0.0f)
+    HSV.x += 1.0f;
+    return HSV;
+    } //Convert to HSV
+ 
+ __DEVICE__ float3 HSV_to_RGB(float3 HSV) {
+    float3 RGB;
+    if (HSV.y == 0.0f) {
+    RGB.x = RGB.y = RGB.z = HSV.z;
+    } else {
+    HSV.x *= 6.0f;
+    int i = floor(HSV.x);
+    float f = HSV.x - i;
+    i = (i >= 0) ? (i % 6) : (i % 6) + 6;
+    float p = HSV.z * (1.0f - HSV.y);
+    float q = HSV.z * (1.0f - HSV.y * f);
+    float t = HSV.z * (1.0f - HSV.y * (1.0f - f));
+    RGB.x = i == 0 ? HSV.z : i == 1 ? q : i == 2 ? p : i == 3 ? p : i == 4 ? t : HSV.z;
+    RGB.y = i == 0 ? t : i == 1 ? HSV.z : i == 2 ? HSV.z : i == 3 ? q : i == 4 ? p : p;
+    RGB.z = i == 0 ? p : i == 1 ? p : i == 2 ? t : i == 3 ? HSV.z : i == 4 ? HSV.z : q;
+    }
+    return RGB;
+    } //Convert from HSV to RGB
+
+
+
+
+ __DEVICE__ float3 ColorModel(float3 in, int colorModel, bool direction) {
+  
+   float3 out;
+    out = in;
+
+ //==============================
+ //color model convert functions
+ //===============================
+    
+    if (colorModel == 0 && direction == 1) {out = RGBtoCHEN(out);}
+    if (colorModel == 0 && direction == 0) {out = CHENtoRGB(out);}
+
+    if (colorModel == 1 && direction == 1) {out = RGB_to_HSV(out);}
+    if (colorModel == 1 && direction == 0) {out = HSV_to_RGB(out);}
+    if (colorModel == 2&& direction == 1) {out = rgb_to_reuleaux(out);}
+    if (colorModel == 2&& direction == 0) {out = reuleaux_to_rgb(out);}
+    if (colorModel == 3&& direction == 1) {out = rgb_to_cylindrical(out);}
+    if (colorModel == 3&& direction == 0) {out = cylindrical_to_rgb(out);}
+
+   //else { out = make_float3(1,0,0);} //red on error
+
+   return out;
+
+ }
+
+
+
+DEFINE_UI_PARAMS(RED, Red 🟥, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(SKIN, Skin 👩🏻‍🦲, DCTLUI_SLIDER_FLOAT, 0.0, -.5, .5, 0.001)
+DEFINE_UI_PARAMS(YEL, Yellow 🟨, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(GRN, Green 🟩, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(CYN, Cyan ⬜️, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(BLU, Blue 🟦, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(MAG, Magenta 🟪, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+
+DEFINE_UI_PARAMS(bypass, 🚫 Bypass, DCTLUI_CHECK_BOX, 0)
+
+DEFINE_UI_PARAMS(Preservation, Preservation model, DCTLUI_COMBO_BOX, 1, {rL,hsvSrL ,rSL, hsvSL, cylinSL, cylinLhsvS,none}, {Reuleaux L,HSV S Reuleaux L, Reuleaux S+L, HSV S+L, Cylindrical S+L,Cylindrical L HSV S, None})
+
+
+
+
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B) {
+
+    float3 rgb;
+
+    int mixback;
+    int color_model;
+
+//numbers below are based on the folowing order
+//mixback:0 none, 1 sat, 2 luma, 3 both 
+//color_model: 0 Chen, 1 HSV,  2 Reuleaux, 3 Cylindrical
+
+if (Preservation == 0) {mixback = 2; color_model = 2;}
+if (Preservation == 1) {mixback = 2; color_model = 2;}
+if (Preservation == 2) {mixback = 3; color_model = 2;}
+if (Preservation == 3) {mixback = 3; color_model = 1;}
+if (Preservation == 4) {mixback = 3; color_model = 3;}
+if (Preservation == 5) {mixback = 3; color_model = 3;}
+if (Preservation == 6) {mixback = 0; color_model = 2;}
+
+
+    float3 in_rgb = make_float3(p_R, p_G, p_B);
+    float3 HSV_sat_3 = ColorModel(in_rgb,1,1);
+    float HSV_sat = HSV_sat_3.y;
+
+    //bypass all check box
+    if (bypass) {return in_rgb;}
+
+
+    //start the code here
+    //--------------------
+
+   //float BLK_RGB = 0;
+   //float WHT_RGB = 1;
+
+    typedef struct {
+            float r_hue,r_sat,r_val;
+            float g_hue,g_sat,g_val;
+            float b_hue,b_sat,b_val;
+            float c_hue,c_sat,c_val;
+            float m_hue,m_sat,m_val;
+            float y_hue,y_sat,y_val;
+    
+    } params_t;
+
+    params_t tetraP;
+
+// setup the tetra hsv parameters to only modify hues
+    tetraP.r_hue = RED;
+    tetraP.r_sat = _fminf(0,tetraP.r_hue);
+    tetraP.r_val = 0;
+    tetraP.g_hue = GRN;
+    tetraP.g_sat = _fminf(0,tetraP.g_hue);
+    tetraP.g_val = 0;
+    tetraP.b_hue = BLU;
+    tetraP.b_sat = _fminf(0,tetraP.b_hue);
+    tetraP.b_val = 0;
+    tetraP.c_hue = CYN;
+    tetraP.c_sat = tetraP.c_hue>0 ? tetraP.c_hue*-1 : 0;
+    tetraP.c_val = tetraP.c_hue>0 ? tetraP.c_hue*-1 : 0;
+    tetraP.m_hue = MAG;
+    tetraP.m_sat = tetraP.m_hue>0 ? tetraP.m_hue*-1 : 0;
+    tetraP.m_val = tetraP.m_hue>0 ? tetraP.m_hue*-1 : 0;
+    tetraP.y_hue = YEL;
+    tetraP.y_sat = tetraP.y_hue>0 ? tetraP.y_hue*-1 : 0;
+    tetraP.y_val = tetraP.y_hue>0 ? tetraP.y_hue*-1 : 0;
+
+ // implementation of the tetra HSV
+
+    float RED_HUE = tetraP.r_val + 1.0f;
+    float RED_SAT = tetraP.r_val - tetraP.r_sat;
+    float RED_VAL = tetraP.r_val + tetraP.r_hue - tetraP.r_sat;
+    
+    float GRN_HUE = tetraP.g_val - tetraP.g_sat;
+    float GRN_SAT = tetraP.g_val + 1.0f;
+    float GRN_VAL = tetraP.g_val + tetraP.g_hue - tetraP.g_sat;
+    
+    float BLU_HUE = tetraP.b_val + tetraP.b_hue - tetraP.b_sat;
+    float BLU_SAT = tetraP.b_val - tetraP.b_sat;
+    float BLU_VAL = tetraP.b_val + 1.0f;
+    
+    float CYN_HUE = tetraP.c_val - tetraP.c_sat;
+    float CYN_SAT = tetraP.c_val + 1.0f + tetraP.c_hue;
+    float CYN_VAL = tetraP.c_val + 1.0f;
+    
+    float MAG_HUE = tetraP.m_val + 1.0f;
+    float MAG_SAT = tetraP.m_val - tetraP.m_sat;
+    float MAG_VAL = tetraP.m_val + 1.0f + tetraP.m_hue;
+    
+    float YEL_HUE = tetraP.y_val + 1.0f + tetraP.y_hue;
+    float YEL_SAT = tetraP.y_val + 1.0f;
+    float YEL_VAL = tetraP.y_val - tetraP.y_sat;
+
+     float3 blk = make_float3(0, 0, 0);
+     float3 wht = make_float3(1, 1, 1);
+     float3 red = make_float3(RED_HUE, RED_SAT, RED_VAL); 
+     float3 grn = make_float3(GRN_HUE, GRN_SAT, GRN_VAL);
+     float3 blu = make_float3(BLU_HUE, BLU_SAT, BLU_VAL);
+     float3 cyn = make_float3(CYN_HUE, CYN_SAT, CYN_VAL);
+     float3 mag = make_float3(MAG_HUE, MAG_SAT, MAG_VAL);
+     float3 yel = make_float3(YEL_HUE, YEL_SAT, YEL_VAL);
+
+
+    if (p_R > p_G) {
+        if (p_G > p_B) {
+            rgb = p_R * (red - blk) + blk + p_G * (yel - red) + p_B * (wht - yel);
+        } else if (p_R > p_B) {
+            rgb = p_R * (red - blk) + blk + p_G * (wht - mag) + p_B * (mag - red);
+        } else {
+            rgb = p_R * (mag - blu) + p_G * (wht - mag) + p_B * (blu - blk) + blk;
+        }
+    } else {
+        if (p_B > p_G) {
+            rgb = p_R * (wht - cyn) + p_G * (cyn - blu) + p_B * (blu - blk) + blk;
+        } else if (p_B > p_R) {
+            rgb = p_R * (wht - cyn) + p_G * (grn - blk) + blk + p_B * (cyn - grn);
+        } else {
+            rgb = p_R * (yel - grn) + p_G * (grn - blk) + blk + p_B * (wht - yel);
+        }
+    }
+
+
+// transform to different color models to separate luminance and saturation for mixing it back afterwards
+
+    in_rgb = ColorModel(in_rgb,color_model,1);
+    float3 output = ColorModel(rgb, color_model,1);
+
+
+    float mixsat= 0;
+    float mixlum = 0;
+    if (mixback ==1 || mixback == 3) { mixsat = 1;}
+    if (mixback ==2 || mixback == 3) { mixlum = 1;}
+
+
+    output.y = output.y*(1-mixsat)+in_rgb.y*mixsat;
+    output.z = output.z*(1-mixlum)+in_rgb.z*mixlum;
+
+//transform back to rgb after mixing original saturation or luminance
+    output = ColorModel(output, color_model,0);
+
+
+//a branch running in parallel to adjust the skin slider
+
+    float3 skin;
+
+    in_rgb = make_float3(p_R, p_G, p_B);
+
+
+
+    params_t skin_t_P =  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    skin_t_P.r_hue = SKIN*.6;
+    skin_t_P.r_sat = _fminf(0,skin_t_P.r_hue);
+    skin_t_P.y_hue = SKIN*1.1;
+    skin_t_P.y_sat = skin_t_P.y_hue>0 ? skin_t_P.y_hue*-1 : 0;
+    skin_t_P.y_val = skin_t_P.y_hue>0 ? skin_t_P.y_hue*-1 : 0;
+
+
+    float s_RED_HUE = 1.0f;
+    float s_RED_SAT = skin_t_P.r_val - skin_t_P.r_sat;
+    float s_RED_VAL = skin_t_P.r_val + skin_t_P.r_hue - skin_t_P.r_sat;
+
+
+    float s_YEL_HUE = skin_t_P.y_val + 1.0f + skin_t_P.y_hue;
+    float s_YEL_SAT = skin_t_P.y_val + 1.0f;
+    float s_YEL_VAL = skin_t_P.y_val - skin_t_P.y_sat;
+
+
+    float3 s_red = make_float3(s_RED_HUE, s_RED_SAT, s_RED_VAL); 
+    float3 s_grn = make_float3(0, 1, 0);
+    float3 s_blu = make_float3(0, 0, 1);
+    float3 s_cyn = make_float3(0, 1, 1);
+    float3 s_mag = make_float3(1, 0, 1);
+    float3 s_yel = make_float3(s_YEL_HUE, s_YEL_SAT, s_YEL_VAL);
+
+
+    if (p_R > p_G) {
+        if (p_G > p_B) {
+            skin = p_R * (s_red - blk) + blk + p_G * (s_yel - s_red) + p_B * (wht - s_yel);
+        } else if (p_R > p_B) {
+            skin = p_R * (s_red - blk) + blk + p_G * (wht - s_mag) + p_B * (s_mag - s_red);
+        } else {
+            skin = p_R * (s_mag - s_blu) + p_G * (wht - s_mag) + p_B * (s_blu - blk) + blk;
+        }
+    } else {
+        if (p_B > p_G) {
+            skin = p_R * (wht - s_cyn) + p_G * (s_cyn - s_blu) + p_B * (s_blu - blk) + blk;
+        } else if (p_B > p_R) {
+            skin = p_R * (wht - s_cyn) + p_G * (s_grn - blk) + blk + p_B * (s_cyn - s_grn);
+        } else {
+            skin = p_R * (s_yel - s_grn) + p_G * (s_grn - blk) + blk + p_B * (wht - s_yel);
+        }
+    }
+
+
+
+    in_rgb = ColorModel(in_rgb,color_model,1);
+    skin = ColorModel(skin, color_model,1);
+
+
+
+    if (mixback ==1 || mixback == 3) { mixsat = 1;}
+    if (mixback ==2 || mixback == 3) { mixlum = 1;}
+
+    skin.y = skin.y*(1-mixsat)+in_rgb.y*mixsat;
+    skin.z = skin.z*(1-mixlum)+in_rgb.z*mixlum;
+
+    skin = ColorModel(skin, color_model,0);
+    in_rgb = ColorModel(in_rgb,color_model,0);
+
+    //-----------------
+    float3 out = in_rgb + (output- in_rgb) + (skin - in_rgb);
+
+    if (Preservation == 1 || Preservation == 5) {
+        out=ColorModel(out,1,1);
+        float mixfactor = 1;
+        HSV_sat = out.y*(1-mixfactor)+HSV_sat*mixfactor;
+        out = make_float3(out.x,HSV_sat,out.z);
+        out=ColorModel(out,1,0);
+     }
+
+    return out;
+
+}

@@ -1,0 +1,174 @@
+#line 2
+//Cone model code fromby Juan Pablo Zambrano
+//Base transformation to Chen/Spherical coordinates from Quinn Leiho
+//Modifications to convert into 'Cone Coordinates' inspired by Steve Yedlin and Matthias Stoopman
+//Thanks for the help to Jan Karow, Kaur Hendrikson, Nico Wieseneder,and Keidrych Wasley
+
+
+__DEVICE__ float3 rgb_to_cone(float3 rgb) {
+    const float pi= 3.14159265359f;
+    const float rtr = rgb.x * 0.81649658f + rgb.y * -0.40824829f + rgb.z * -0.40824829f;
+    const float rtg = rgb.x * 0.0f + rgb.y * 0.70710678f + rgb.z * -0.70710678f;
+    const float rtb = rgb.x * 0.57735027f + rgb.y * 0.57735027f + rgb.z * 0.57735027f;
+
+    const float art = _atan2f(rtg, rtr);
+
+    const float sphr = _sqrtf(rtr*rtr + rtg*rtg + rtb*rtb);
+    const float spht = art < 0.0f ? art + 2.0f * 3.141592653589f : art;
+    const float sphp = _atan2f(_sqrtf(rtr*rtr + rtg*rtg), rtb);
+
+//This is to modify the lum component which is the main reason why the saturation component has a different behavior 
+    const float huecoef1= 1.0f/(2.0f-(0.78539816f/0.61547971f));
+    const float huecoef2 = 2.0f*sphp*_sinf((2.0f*pi/3.0f)-_fmod(spht,(pi/3.0f)))/1.7320508075688f;
+    const float huemag =((_acosf(_cosf(3.0f*spht+pi)))/(pi*huecoef1)+(((0.78539816f/0.61547971f))-1.0f))*huecoef2;
+    const float satmag = _sinf(huemag+0.61547971f);
+
+
+
+    return make_float3(
+        sphr*satmag,
+        spht * 0.15915494309189535f,
+        sphp * 1.0467733744265997f
+    );
+    }
+
+__DEVICE__ float3 cone_to_rgb(float3 sph) {
+    
+    const float pi= 3.14159265359f;
+    sph.y *= 6.283185307179586f;
+    sph.z *= 0.9553166181245093f;
+    const float huecoef1= 1.0f/(2.0f-(0.78539816f/0.61547971f));
+    const float huecoef2 = 2.0f*sph.z*_sinf((2.0f*pi/3.0f)- _fmod(sph.y,(pi/3.0f)))/1.7320508075688f;
+    const float huemag =((_acosf(_cosf(3.0f*sph.y+pi)))/(pi*huecoef1)+(((0.78539816f/0.61547971f))-1.0f))*huecoef2;
+    const float satmagsp = _sinf(huemag+0.61547971f);
+    sph.x *= 1.0f/satmagsp;
+
+    const float ctr = sph.x * _sinf(sph.z) * _cosf(sph.y);
+    const float ctg = sph.x * _sinf(sph.z) * _sinf(sph.y);
+    const float ctb = sph.x * _cosf(sph.z);
+
+    return make_float3(
+        ctr * 0.81649658f + ctg * 0.0f + ctb * 0.57735027f,
+        ctr * -0.40824829f + ctg * 0.70710678f + ctb * 0.57735027f,
+        ctr * -0.40824829f + ctg * -0.70710678f + ctb * 0.57735027f
+    );
+    }
+
+
+DEFINE_UI_PARAMS(global_sat, Global deSatch, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 0.0, 0.0001)
+DEFINE_UI_PARAMS(r_sat, Red deSatch, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 0.0, 0.0001)
+DEFINE_UI_PARAMS(g_sat, Green deSatch, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 0.0, 0.0001)
+DEFINE_UI_PARAMS(b_sat, Blue deSatch, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 0.0, 0.0001)
+DEFINE_UI_PARAMS(c_sat, Cyan deSatch, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 0.0, 0.0001)
+DEFINE_UI_PARAMS(m_sat, Magenta deSatch, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 0.0, 0.0001)
+DEFINE_UI_PARAMS(y_sat, Yellow deSatch, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 0.0, 0.0001)
+
+
+
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B) {
+
+
+float3 RGB = make_float3(p_R, p_G, p_B);
+
+RGB = rgb_to_cone(RGB);
+//Initialize variables
+
+const float3 rgb = make_float3(RGB.x, RGB.y, RGB.z);
+
+float r = rgb.x;
+float g = rgb.y;
+float b = rgb.z;
+
+const float r_pos = 0.0f;
+const float g_pos = 0.333f;
+const float b_pos = 0.666f;
+const float c_pos = 0.4999f;
+const float m_pos = 0.8333f;
+const float y_pos = 0.1666f;
+
+const float r_rad = 0.1666f;
+const float g_rad = 0.1666f;
+const float b_rad = 0.1666f;
+const float c_rad = 0.1666f;
+const float m_rad = 0.1666f;
+const float y_rad = 0.1666f;
+
+
+
+//Global deSatch
+r = r*(global_sat*b+1.0f);
+//g = g-(global_sat/15.0f*b+1.0f);
+
+//RED
+if ( g <= r_pos + r_rad){
+    
+
+    float r_dist = _fabs(g - r_pos);
+    float r_offset = (r_dist - 0)/ (r_rad - 0) -1;
+    r = r*(r_sat*-r_offset*b+1);    
+
+    
+    }
+
+if ( g >= (r_pos - r_rad+1)){
+    
+    float r_dist = _fabs(g - (r_pos+1));
+    float r_offset = (r_dist - 0)/ (r_rad - 0) -1;
+    r = r*(r_sat*-r_offset*b+1);    
+    
+    }
+
+//GREEN
+if (g >= g_pos - g_rad && g <= g_pos + g_rad){
+    
+    float g_dist = _fabs(g - g_pos);
+    float g_offset = (g_dist - 0)/ (g_rad - 0) -1;
+    r = r*(g_sat*-g_offset*b+1);
+    
+
+    }
+
+//BLUE
+if (g >= b_pos - b_rad && g <= b_pos + b_rad){
+    
+    float b_dist = _fabs(g - b_pos);
+    float b_offset = (b_dist - 0)/ (b_rad - 0) -1;
+    r = r*(b_sat*-b_offset*b+1);
+
+    }
+
+//CYAN
+if (g >= c_pos - c_rad && g <= c_pos + c_rad){
+    
+    float c_dist = _fabs(g - c_pos);
+    float c_offset = (c_dist - 0)/ (c_rad - 0) -1;
+    r = r*(c_sat*-c_offset*b+1);
+
+    }
+
+//MANGETA
+if (g >= m_pos - m_rad && g <= m_pos + m_rad){
+    
+    float m_dist = _fabs(g - m_pos);
+    float m_offset = (m_dist - 0)/ (m_rad - 0) -1;
+    r = r*(m_sat*-m_offset*b+1);
+
+    }
+
+
+//YELLOW
+if (g >= y_pos - y_rad && g <= y_pos + y_rad){
+    
+    float y_dist = _fabs(g - y_pos);
+    float y_offset = (y_dist - 0)/ (y_rad - 0) -1;
+    r = r*(y_sat*-y_offset*b+1);
+
+    }
+
+RGB = make_float3 (r,g,b);
+RGB = cone_to_rgb(RGB);
+
+
+    return RGB;
+}

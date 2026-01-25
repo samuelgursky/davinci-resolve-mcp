@@ -1,0 +1,120 @@
+#line 2
+// Hue-Sat Ramp
+//based on baldavenger's SatRamp DCTL
+
+
+__DEVICE__ float3 RGBtoHSV(float3 RGB) {
+    float3 HSV;
+    float min = _fminf(_fminf(RGB.x, RGB.y), RGB.z);
+    float max = _fmaxf(_fmaxf(RGB.x, RGB.y), RGB.z);
+    HSV.z = max;
+    float delta = max - min;
+    if (max != 0.0f) {
+    HSV.y = delta / max;
+    } else {
+    HSV.y = 0.0f;
+    HSV.x = 0.0f;
+    return HSV;
+    }
+    if (delta == 0.0f) {
+    HSV.x = 0.0f;
+    } else if (RGB.x == max) {
+    HSV.x = (RGB.y - RGB.z) / delta;
+    } else if (RGB.y == max) {
+    HSV.x = 2.0f + (RGB.z - RGB.x) / delta;
+    } else {
+    HSV.x = 4.0f + (RGB.x - RGB.y) / delta;
+    }
+    HSV.x *= 1.0f / 6.0f;
+    if (HSV.x < 0.0f)
+    HSV.x += 1.0f;
+    return HSV;
+    } //Convert to HSV
+ 
+ __DEVICE__ float3 HSVtoRGB(float3 HSV) {
+    float3 RGB;
+    if (HSV.y == 0.0f) {
+    RGB.x = RGB.y = RGB.z = HSV.z;
+    } else {
+    HSV.x *= 6.0f;
+    int i = floor(HSV.x);
+    float f = HSV.x - i;
+    i = (i >= 0) ? (i % 6) : (i % 6) + 6;
+    float p = HSV.z * (1.0f - HSV.y);
+    float q = HSV.z * (1.0f - HSV.y * f);
+    float t = HSV.z * (1.0f - HSV.y * (1.0f - f));
+    RGB.x = i == 0 ? HSV.z : i == 1 ? q : i == 2 ? p : i == 3 ? p : i == 4 ? t : HSV.z;
+    RGB.y = i == 0 ? t : i == 1 ? HSV.z : i == 2 ? HSV.z : i == 3 ? q : i == 4 ? p : p;
+    RGB.z = i == 0 ? p : i == 1 ? p : i == 2 ? t : i == 3 ? HSV.z : i == 4 ? HSV.z : q;
+    }
+    return RGB;
+    } //Convert HSV to RGB
+
+
+ DEFINE_UI_PARAMS(p_hue, Hue, DCTLUI_SLIDER_FLOAT, 1f, 0.0f, 1f, 0.01f)
+ DEFINE_UI_PARAMS(p_overlay, Overlay mode, DCTLUI_CHECK_BOX, 0)
+
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B) {
+
+    float3 RGB;
+    float3 in_RGB = make_float3(p_R, p_G, p_B);
+
+   // float width = (float)p_Width;
+    float height = (float)p_Height;
+    //float X = (float)p_X;
+    float Y = height - (float)p_Y;
+    //Relative X,Y 
+    float rY = Y / height;
+    //float rX = X / width;
+
+
+
+    float X = p_X;
+    
+    
+    float s = X / (p_Width-1);
+    float h = s > 0.0f ? 1.0f : 0.0f;
+    float l = 0.5f;
+ 
+    float q = l < 0.5f ? l * (1.0f + s) : l + s - l * s;
+    float p = 2.0f * l - q;
+
+    float rh = h + 1.0f / 3.0f < 0.0f ? h + 1.0f / 3.0f + 1.0f : 
+    h + 1.0f / 3.0f > 1.0f ? h + 1.0f / 3.0f - 1.0f : h + 1.0f / 3.0f;
+    
+    float rr = rh < 1.0f / 6.0f ? p + (q - p) * 6.0f * rh : 
+    rh < 1.0f / 2.0f ? q : rh < 2.0f / 3.0f ? p + (q - p) * (2.0f / 3.0f - rh) * 6.0f : p;
+
+    float gh = h < 0.0f ? h + 1.0f : h > 1.0f ? h - 1.0f : h;
+
+    float gg = gh < 1.0f / 6.0f ? p + (q - p) * 6.0f * gh : 
+    gh < 1.0f / 2.0f ? q : gh < 2.0f / 3.0f ? p + (q - p) * (2.0f / 3.0f - gh) * 6.0f : p;
+
+    float bh = h - 1.0f / 3.0f < 0.0f ? h - 1.0f / 3.0f + 1.0f : 
+    h - 1.0f / 3.0f > 1.0f ? h - 1.0f / 3.0f - 1.0f : h - 1.0f / 3.0f;
+    
+    float bb = bh < 1.0f / 6.0f ? p + (q - p) * 6.0f * bh : 
+    bh < 1.0f / 2.0f ? q : bh < 2.0f / 3.0f ? p + (q - p) * (2.0f / 3.0f - bh) * 6.0f : p;
+    
+    
+    float r = s == 0.0f ? l : rr;
+    float g = s == 0.0f ? l : gg;
+    float b = s == 0.0f ? l : bb;
+
+
+    RGB = make_float3(r, g, b);
+
+    //rotate hue in HSV
+    RGB = RGBtoHSV(RGB);
+    RGB.x = RGB.x + p_hue;
+    RGB = HSVtoRGB(RGB);
+
+
+
+
+ if (p_overlay == 1) {
+    if (rY > .2f) {RGB = in_RGB;}
+ }
+   return RGB;
+}

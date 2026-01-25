@@ -1,0 +1,533 @@
+#line 2
+/*
+"ME_Color Models"
+version : 1.0.0
+by Moaz Elgabry
+
+This DCTL converts between a set of color models originally made for testing and experimenting purposes 
+either in the color page of Resolve or in fusion.
+a basic setup is to make a sandwitch where you go into one of the color models in one nose 
+and apply the inverse conversion in the second node and apply any adjustments inbetween.
+
+*/
+
+//helper functions
+
+#define PI 3.1415926535897932384626
+ __DEVICE__ float fmod(float x, float y) {
+     if (x < 0) {
+         return y + _fmod(x, y);
+     } else {
+         return _fmod(x, y);
+     }
+    }
+
+
+__DEVICE__ float3 cross_product(float3 a, float3 b) {
+    float3 out = make_float3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+    return out;
+    }
+
+__DEVICE__ inline float pow2f(float base) {
+    return base * base;
+    }
+
+__DEVICE__ float dot_product(float3 a, float3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+    }
+
+__DEVICE__ float norm_f3(float3 a) {
+    return _sqrtf(pow2f(a.x) + pow2f(a.y) + pow2f(a.z));
+    }
+
+__DEVICE__ float3 unit_vec(float3 a) {
+    float norm = norm_f3(a);
+    float3 out = make_float3(a.x / norm, a.y / norm, a.z / norm);
+    return out;
+    }
+
+__DEVICE__ float3 mv_33_3(float mat[3][3], float3 v) {
+    float3 out = make_float3(mat[0][0] * v.x + mat[0][1] * v.y + mat[0][2] * v.z,
+                             mat[1][0] * v.x + mat[1][1] * v.y + mat[1][2] * v.z,
+                             mat[2][0] * v.x + mat[2][1] * v.y + mat[2][2] * v.z);
+    return out;
+    }
+
+__DEVICE__ void make_rotation_mat_axis_angle(float mat[3][3], float3 axis, float angle) {
+    // Axis assumed to be unit vector, angle assuemd to be in radians
+    float c = _cosf(angle);
+    float s = _sinf(angle);
+
+    mat[0][0] = c + pow2f(axis.x) * (1.0 - c);
+    mat[0][1] = axis.x * axis.y * (1.0 - c) - axis.z * s;
+    mat[0][2] = axis.x * axis.z * (1.0 - c) + axis.y * s;
+    mat[1][0] = axis.x * axis.y * (1.0 - c) + axis.z * s;
+    mat[1][1] = c + pow2f(axis.y) * (1.0 - c);
+    mat[1][2] = axis.y * axis.z * (1.0 - c) - axis.x * s;
+    mat[2][0] = axis.z * axis.x * (1.0 - c) - axis.y * s;
+    mat[2][1] = axis.z * axis.y * (1.0 - c) + axis.x * s;
+    mat[2][2] = c + pow2f(axis.z) * (1.0 - c);
+    }
+
+
+
+//color models 
+ __DEVICE__ float3 RGB_to_HSL(float3 RGB) {
+    float R = RGB.x;
+    float G = RGB.y;
+    float B = RGB.z;
+
+    float maxVal = max(R, max(G, B));
+    float minVal = min(R, min(G, B));
+    float delta = maxVal - minVal;
+
+    float H = 0.0, S = 0.0, L = (maxVal + minVal) / 2.0;
+
+    if (delta != 0.0) {
+        S = (L > 0.5) ? delta / (2.0 - maxVal - minVal) : delta / (maxVal + minVal);
+
+        if (maxVal == R) {
+            H = fmod(((G - B) / delta), 6.0);
+        } else if (maxVal == G) {
+            H = ((B - R) / delta) + 2.0;
+        } else {
+            H = ((R - G) / delta) + 4.0;
+        }
+        H /= 6.0;
+    }
+
+    return make_float3(H, S, L);
+ } //Convert to HSL
+ 
+ __DEVICE__ float3 HSL_to_RGB(float3 HSL) {
+    float3 RGB;
+    float H = HSL.x * 6.0; // Scale hue to [0, 6]
+    float S = HSL.y;
+    float L = HSL.z;
+
+    float C = (1 - _fabs(2 * L - 1)) * S; // Chroma
+    float X = C * (1 - _fabs(fmod(H, 2.0) - 1.0)); // Second largest component
+    float m = L - C / 2.0;
+
+
+    if      (H < 1.0) RGB = make_float3(C, X, 0);
+    else if (H < 2.0) RGB = make_float3(X, C, 0);
+    else if (H < 3.0) RGB = make_float3(0, C, X);
+    else if (H < 4.0) RGB = make_float3(0, X, C);
+    else if (H < 5.0) RGB = make_float3(X, 0, C);
+    else              RGB = make_float3(C, 0, X);
+
+    return RGB + m; // Adjust with lightness
+    } //Convert from HSL to RGB
+
+ __DEVICE__ float3 RGB_to_HSV(float3 RGB) {
+    float R = RGB.x, G = RGB.y, B = RGB.z;
+    float maxVal = max(R, max(G, B));
+    float minVal = min(R, min(G, B));
+    float delta = maxVal - minVal;
+
+    float H = 0.0, S = (maxVal == 0.0) ? 0.0 : delta / maxVal;
+    float V = maxVal;
+
+    if (delta != 0.0) {
+        if (maxVal == R) {
+            H = fmod(((G - B) / delta), 6.0);
+        } else if (maxVal == G) {
+            H = ((B - R) / delta) + 2.0;
+        } else {
+            H = ((R - G) / delta) + 4.0;
+        }
+        H /= 6.0;
+        if (H < 0.0) H += 1.0;
+    }
+
+    return make_float3(H, S, V);
+    } //Convert to HSV
+ 
+ __DEVICE__ float3 HSV_to_RGB(float3 HSV) {
+    float H = HSV.x * 6.0; // Scale hue to [0, 6]
+    float S = HSV.y;
+    float V = HSV.z;
+
+    float C = V * S; // Chroma
+    float X = C * (1.0 - _fabs(fmod(H, 2.0) - 1.0)); // Second largest component
+    float m = V - C;
+
+    float3 RGB;
+    if      (H < 1.0) RGB = make_float3(C, X, 0);
+    else if (H < 2.0) RGB = make_float3(X, C, 0);
+    else if (H < 3.0) RGB = make_float3(0, C, X);
+    else if (H < 4.0) RGB = make_float3(0, X, C);
+    else if (H < 5.0) RGB = make_float3(X, 0, C);
+    else              RGB = make_float3(C, 0, X);
+
+    return RGB + m;
+    } //Convert from HSV to RGB
+
+__DEVICE__ float3 rgb_to_cone(float3 rgb) {
+    const float pi= 3.14159265359f;
+    const float rtr = rgb.x * 0.81649658f + rgb.y * -0.40824829f + rgb.z * -0.40824829f;
+    const float rtg = rgb.x * 0.0f + rgb.y * 0.70710678f + rgb.z * -0.70710678f;
+    const float rtb = rgb.x * 0.57735027f + rgb.y * 0.57735027f + rgb.z * 0.57735027f;
+
+    const float art = _atan2f(rtg, rtr);
+
+    const float sphr = _sqrtf(rtr*rtr + rtg*rtg + rtb*rtb);
+    const float spht = art < 0.0f ? art + 2.0f * 3.141592653589f : art;
+    const float sphp = _atan2f(_sqrtf(rtr*rtr + rtg*rtg), rtb);
+
+//This is to modify the lum component which is the main reason why the saturation component has a different behavior 
+    const float huecoef1= 1.0f/(2.0f-(0.78539816f/0.61547971f));
+    const float huecoef2 = 2.0f*sphp*_sinf((2.0f*pi/3.0f)-_fmod(spht,(pi/3.0f)))/1.7320508075688f;
+    const float huemag =((_acosf(_cosf(3.0f*spht+pi)))/(pi*huecoef1)+(((0.78539816f/0.61547971f))-1.0f))*huecoef2;
+    const float satmag = _sinf(huemag+0.61547971f);
+
+
+
+    return make_float3(
+        sphr*satmag,
+        spht * 0.15915494309189535f,
+        sphp * 1.0467733744265997f
+    );
+    } //Convert to cone cordinates by Juan Pablo Zambrano
+
+__DEVICE__ float3 cone_to_rgb(float3 sph) {
+    
+    const float pi= 3.14159265359f;
+    sph.y *= 6.283185307179586f;
+    sph.z *= 0.9553166181245093f;
+    const float huecoef1= 1.0f/(2.0f-(0.78539816f/0.61547971f));
+    const float huecoef2 = 2.0f*sph.z*_sinf((2.0f*pi/3.0f)- _fmod(sph.y,(pi/3.0f)))/1.7320508075688f;
+    const float huemag =((_acosf(_cosf(3.0f*sph.y+pi)))/(pi*huecoef1)+(((0.78539816f/0.61547971f))-1.0f))*huecoef2;
+    const float satmagsp = _sinf(huemag+0.61547971f);
+    sph.x *= 1.0f/satmagsp;
+
+    const float ctr = sph.x * _sinf(sph.z) * _cosf(sph.y);
+    const float ctg = sph.x * _sinf(sph.z) * _sinf(sph.y);
+    const float ctb = sph.x * _cosf(sph.z);
+
+    return make_float3(
+        ctr * 0.81649658f + ctg * 0.0f + ctb * 0.57735027f,
+        ctr * -0.40824829f + ctg * 0.70710678f + ctb * 0.57735027f,
+        ctr * -0.40824829f + ctg * -0.70710678f + ctb * 0.57735027f
+    );
+    } // convert from cone to RGB
+
+
+__DEVICE__ float3 rgb_to_spherical(float3 rgb) {
+    const float rtr = rgb.x * 0.81649658f + rgb.y * -0.40824829f + rgb.z * -0.40824829f;
+    const float rtg = rgb.x * 0.0f + rgb.y * 0.70710678f + rgb.z * -0.70710678f;
+    const float rtb = rgb.x * 0.57735027f + rgb.y * 0.57735027f + rgb.z * 0.57735027f;
+
+    const float art = _atan2f(rtg, rtr);
+
+    const float sphr = _sqrtf(rtr*rtr + rtg*rtg + rtb*rtb);
+    const float spht = art < 0.0f ? art + 2.0f * 3.141592653589f : art;
+    const float sphp = _atan2f(_sqrtf(rtr*rtr + rtg*rtg), rtb);
+
+    return make_float3(
+        sphr * 0.5773502691896258f,
+        spht * 0.15915494309189535f,
+        sphp * 1.0467733744265997f
+    );
+    }
+
+
+__DEVICE__ float3 spherical_to_rgb(float3 sph) {
+    sph.x *= 1.7320508075688772f;
+    sph.y *= 6.283185307179586f;
+    sph.z *= 0.9553166181245093f;
+
+    const float ctr = sph.x * _sinf(sph.z) * _cosf(sph.y);
+    const float ctg = sph.x * _sinf(sph.z) * _sinf(sph.y);
+    const float ctb = sph.x * _cosf(sph.z);
+
+    return make_float3(
+        ctr * 0.81649658f + ctg * 0.0f + ctb * 0.57735027f,
+        ctr * -0.40824829f + ctg * 0.70710678f + ctb * 0.57735027f,
+        ctr * -0.40824829f + ctg * -0.70710678f + ctb * 0.57735027f
+    );
+    } 
+
+__DEVICE__ float3 RGBtoCHEN(float3 in) {
+ float r = in.x;
+ float g = in.y;
+ float b = in.z;
+
+ float h;
+ float c;
+ float l;
+
+ const float rtr = r * 0.81649658f + g * -0.40824829f + b * -0.40824829f;
+ const float rtg = r * 0.0f + g * 0.70710678f + b * -0.70710678f;
+ const float rtb = r * 0.57735027f + g * 0.57735027f + b * 0.57735027f;
+
+ const float art = _atan2f(rtg, rtr);
+
+ const float sphr = _sqrtf(rtr*rtr + rtg*rtg + rtb*rtb);
+ const float spht = art < 0.0f ? art + 2.0f * 3.141592653589f : art;
+ const float sphp = _atan2f(_sqrtf(rtr*rtr + rtg*rtg), rtb);
+
+ l = sphr * 0.5773502691896258f;
+ h = spht * 0.15915494309189535f;
+ c = sphp * 1.0467733744265997f;
+
+ return make_float3(h, c, l);
+ } //by Kaur Hendrikson
+
+__DEVICE__ float3 CHENtoRGB(float3 in) {
+ float h = in.x * 6.283185307179586f;
+ float c = in.y * 0.9553166181245093f;
+ float l = in.z * 1.7320508075688772f;
+ 
+float r = 0;
+float g = 0;
+float b = 0;
+
+ const float ctr = l * _sinf(c) * _cosf(h);
+ const float ctg = l * _sinf(c) * _sinf(h);
+ const float ctb = l * _cosf(c);
+
+ r = ctr * 0.81649658f + ctg * 0.0f + ctb * 0.57735027f;
+ g = ctr * -0.40824829f + ctg * 0.70710678f + ctb * 0.57735027f;
+ b = ctr * -0.40824829f + ctg * -0.70710678f + ctb * 0.57735027f;
+
+ return make_float3(r, g, b);
+ } //by Kaur Hendrikson
+
+
+
+__DEVICE__ float3 rgb_to_reuleaux(float3 rgb) {
+    #define PI 3.1415926535897932384626
+
+    float3 NORM_MULTS = make_float3(2.0f * PI, _sqrtf(2.0f), 1.0f);
+    float3 rot = {  _sqrtf(2.0f) / 6.0f * (2.0f * rgb.x - rgb.y - rgb.z),
+                    (rgb.y - rgb.z) / _sqrtf(6.0f),
+                    (rgb.x + rgb.y + rgb.z) / 3.0f};
+    float3 rlx = {  PI - _atan2f(rot.y, -rot.x),
+                    rot.z == 0.0f ? 0.0f : _hypotf(rot.x, rot.y) / rot.z,
+                    _fmaxf(rgb.x, _fmaxf(rgb.y, rgb.z))};
+    return rlx / NORM_MULTS;
+}
+
+__DEVICE__ float3 reuleaux_to_rgb(float3 rlx) {
+    #define PI 3.1415926535897932384626
+    float3 NORM_MULTS = make_float3(2.0f * PI, _sqrtf(2.0f), 1.0f);
+    rlx *= NORM_MULTS;
+    float m = NORM_MULTS.y * _fmaxf(_cosf(rlx.x), _fmaxf(_cosf(rlx.x + NORM_MULTS.x / 3.0f), _cosf(rlx.x - NORM_MULTS.x / 3.0f))) + 1.0f/rlx.y;
+    float3 ocs = {  rlx.z * _cosf(rlx.x) / m,
+                    rlx.z * _sinf(rlx.x) / m,
+                    rlx.z};
+    float3 rgb = {  ocs.z - _sqrtf(3.0f / 2.0f) * _fmaxf(_fabs(ocs.y) - _sqrtf(3.0f) * ocs.x, 0.0f),
+                    ocs.z - _sqrtf(3.0f / 2.0f) * (_fmaxf(_fabs(ocs.y), _sqrtf(3.0f) * ocs.x) - ocs.y),
+                    ocs.z - _sqrtf(3.0f / 2.0f) * (_fmaxf(_fabs(ocs.y), _sqrtf(3.0f) * ocs.x) + ocs.y)};
+    return rgb;
+}
+
+// Convert HSP (Hue, Saturation, Perceived brightness) to RGB
+__DEVICE__ float3 HSPtoRGB(float3 hsp) {
+    // Constants for the HSP-RGB conversion
+    const float Pr = 0.299f;
+    const float Pg = 0.587f;
+    const float Pb = 0.114f;
+    float H = hsp.x;
+    float S = hsp.y;
+    float P = hsp.z;
+
+    float3 rgb;
+    float minOverMax = 1.0f - S;
+    float part;
+
+    if (minOverMax > 0.0f) {
+        if (H < 1.0f / 6.0f) {  // R > G > B
+            H = 6.0f * H;
+            part = 1.0f + H * (1.0f / minOverMax - 1.0f);
+            rgb.z = P / sqrtf(Pr / (minOverMax * minOverMax) + Pg * part * part + Pb);
+            rgb.x = rgb.z / minOverMax;
+            rgb.y = rgb.z + H * (rgb.x - rgb.z);
+        } else if (H < 2.0f / 6.0f) {  // G > R > B
+            H = 6.0f * (2.0f / 6.0f - H);
+            part = 1.0f + H * (1.0f / minOverMax - 1.0f);
+            rgb.z = P / sqrtf(Pg / (minOverMax * minOverMax) + Pr * part * part + Pb);
+            rgb.y = rgb.z / minOverMax;
+            rgb.x = rgb.z + H * (rgb.y - rgb.z);
+        } else if (H < 3.0f / 6.0f) {  // G > B > R
+            H = 6.0f * (H - 2.0f / 6.0f);
+            part = 1.0f + H * (1.0f / minOverMax - 1.0f);
+            rgb.x = P / sqrtf(Pg / (minOverMax * minOverMax) + Pb * part * part + Pr);
+            rgb.y = rgb.x / minOverMax;
+            rgb.z = rgb.x + H * (rgb.y - rgb.x);
+        } else if (H < 4.0f / 6.0f) {  // B > G > R
+            H = 6.0f * (4.0f / 6.0f - H);
+            part = 1.0f + H * (1.0f / minOverMax - 1.0f);
+            rgb.x = P / sqrtf(Pb / (minOverMax * minOverMax) + Pg * part * part + Pr);
+            rgb.z = rgb.x / minOverMax;
+            rgb.y = rgb.x + H * (rgb.z - rgb.x);
+        } else if (H < 5.0f / 6.0f) {  // B > R > G
+            H = 6.0f * (H - 4.0f / 6.0f);
+            part = 1.0f + H * (1.0f / minOverMax - 1.0f);
+            rgb.y = P / sqrtf(Pb / (minOverMax * minOverMax) + Pr * part * part + Pg);
+            rgb.z = rgb.y / minOverMax;
+            rgb.x = rgb.y + H * (rgb.z - rgb.y);
+        } else {  // R > B > G
+            H = 6.0f * (6.0f / 6.0f - H);
+            part = 1.0f + H * (1.0f / minOverMax - 1.0f);
+            rgb.y = P / sqrtf(Pr / (minOverMax * minOverMax) + Pb * part * part + Pg);
+            rgb.x = rgb.y / minOverMax;
+            rgb.z = rgb.y + H * (rgb.x - rgb.y);
+        }
+    } else {
+        // Handle grayscale case when minOverMax == 0
+        if (H < 1.0f / 6.0f) {  // R > G > B
+            H = 6.0f * H;
+            rgb.x = sqrtf(P * P / (Pr + Pg * H * H));
+            rgb.y = rgb.x * H;
+            rgb.z = 0.0f;
+        } else if (H < 2.0f / 6.0f) {  // G > R > B
+            H = 6.0f * (2.0f / 6.0f - H);
+            rgb.y = sqrtf(P * P / (Pg + Pr * H * H));
+            rgb.x = rgb.y * H;
+            rgb.z = 0.0f;
+        } else if (H < 3.0f / 6.0f) {  // G > B > R
+            H = 6.0f * (H - 2.0f / 6.0f);
+            rgb.y = sqrtf(P * P / (Pg + Pb * H * H));
+            rgb.z = rgb.y * H;
+            rgb.x = 0.0f;
+        } else if (H < 4.0f / 6.0f) {  // B > G > R
+            H = 6.0f * (4.0f / 6.0f - H);
+            rgb.z = sqrtf(P * P / (Pb + Pg * H * H));
+            rgb.y = rgb.z * H;
+            rgb.x = 0.0f;
+        } else if (H < 5.0f / 6.0f) {  // B > R > G
+            H = 6.0f * (H - 4.0f / 6.0f);
+            rgb.z = sqrtf(P * P / (Pb + Pr * H * H));
+            rgb.x = rgb.z * H;
+            rgb.y = 0.0f;
+        } else {  // R > B > G
+            H = 6.0f * (6.0f / 6.0f - H);
+            rgb.x = sqrtf(P * P / (Pr + Pb * H * H));
+            rgb.z = rgb.x * H;
+            rgb.y = 0.0f;
+        }
+    }
+
+    return rgb;
+}
+
+// Convert RGB to HSP (Perceived Brightness, Hue, Saturation)
+__DEVICE__ float3 RGBtoHSP(float3 rgb) {
+    // Constants for the HSP-RGB conversion
+    const float Pr = 0.299f;
+    const float Pg = 0.587f;
+    const float Pb = 0.114f;
+    float R = rgb.x;
+    float G = rgb.y;
+    float B = rgb.z;
+
+    float3 hsp;
+    float P = sqrtf(R * R * Pr + G * G * Pg + B * B * Pb);  // Perceived brightness
+    hsp.z = P;
+
+    // Calculate Hue and Saturation
+    if (R == G && R == B) {  // Grayscale, no hue or saturation
+        hsp.x = 0.0f; // Hue
+        hsp.y = 0.0f; // Saturation
+        return hsp;
+    }
+
+    if (R >= G && R >= B) {  // R is largest
+        if (B >= G) {
+            hsp.x = 1.0f - (B - G) / (6.0f * (R - G)); // Hue
+            hsp.y = 1.0f - G / R;                     // Saturation
+        } else {
+            hsp.x = (G - B) / (6.0f * (R - B));       // Hue
+            hsp.y = 1.0f - B / R;                     // Saturation
+        }
+    } else if (G >= R && G >= B) {  // G is largest
+        if (R >= B) {
+            hsp.x = (2.0f / 6.0f) - (R - B) / (6.0f * (G - B)); // Hue
+            hsp.y = 1.0f - B / G;                               // Saturation
+        } else {
+            hsp.x = (2.0f / 6.0f) + (B - R) / (6.0f * (G - R)); // Hue
+            hsp.y = 1.0f - R / G;                               // Saturation
+        }
+    } else {  // B is largest
+        if (G >= R) {
+            hsp.x = (4.0f / 6.0f) - (G - R) / (6.0f * (B - R)); // Hue
+            hsp.y = 1.0f - R / B;                               // Saturation
+        } else {
+            hsp.x = (4.0f / 6.0f) + (R - G) / (6.0f * (B - G)); // Hue
+            hsp.y = 1.0f - G / B;                               // Saturation
+        }
+    }
+
+    return hsp;
+}
+ __DEVICE__ float3 cylindrical_to_rgb(float3 hsv) {
+    // Adapted from Juan Pablo Zambrano's code
+    float3 lsh = make_float3(hsv.z, hsv.y * 3.0, fmod(hsv.x, 1.0) * 2.0 * PI);
+
+    float ctr = lsh.x * lsh.y * _cosf(lsh.z);
+    float ctg = lsh.x;
+    float ctb = lsh.x * lsh.y * _sinf(lsh.z);
+    float3 c = make_float3(ctr, ctg, ctb);
+
+    float mat[3][3] = {
+        {2.0 / 3.0, 1.0, 0.0},
+        {-1.0 / 3.0, 1.0, _sqrtf(3.0) / 3.0},
+        {-1.0 / 3.0, 1.0, -_sqrtf(3.0) / 3.0},
+    };
+
+    return mv_33_3(mat, c);
+ }
+ 
+ __DEVICE__ float3 rgb_to_cylindrical(float3 x) {
+
+    // Matrix aligns and scales achromatic white (1, 1, 1) with (0, 1, 0)
+    // Also rotates input (1, 0, 0) above the red axis and ensures that
+    // (1, 0, 0) input ends up having a red channel code value of (1).
+    float mat[3][3] = {
+        {1.0, -1.0 / 2.0, -1.0 / 2.0},
+        {1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0},
+        {0.0, _sqrtf(3.0) / 2.0, -_sqrtf(3.0) / 2.0},
+    };
+
+    float3 rotated_color = mv_33_3(mat, x);
+    float l = rotated_color.y;
+    float3 hsl = make_float3(0.0, 0.0, 0.0);
+
+    float3 normalized_color = rotated_color / l;
+    if (l == 0.0) {
+        hsl = make_float3(0.0, 0.0, l);
+    } else {
+        float theta = _atan2f(normalized_color.z, normalized_color.x);
+        hsl.x = fmod(theta, 2.0 * PI) / (2.0 * PI);
+        hsl.y = _hypotf(normalized_color.x, normalized_color.z) / 3.0;
+        hsl.z = l;
+    }
+    return hsl;
+ }
+    
+
+
+
+DEFINE_UI_PARAMS(p_model, Color model, DCTLUI_COMBO_BOX, 0, { hsl, hsv, cone, spherical,Chen,Reul,hsp, cylindrical}, { HSL, HSV, Cone, Spherical,Chen,Reuleaux,HSP,Cylindrical})
+DEFINE_UI_PARAMS(p_inverse, Inverse, DCTLUI_CHECK_BOX, 0)
+
+//DEFINE_UI_PARAMS(p_dir, Direction, DCTLUI_COMBO_BOX, 0, { p_forward, p_inverse }, { Forward, Inverse })
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B) {
+    float3 RGB = make_float3(p_R, p_G, p_B);
+    float3 output;
+    //float PI = 3.1415926535897932384626;
+if      (p_model == 0) { if (p_inverse == 0) {output = RGB_to_HSL(RGB);} else { output = HSL_to_RGB(RGB);}}
+else if (p_model == 1) { if (p_inverse == 0) {output = RGB_to_HSV(RGB);} else { output = HSV_to_RGB(RGB);}}
+else if (p_model == 2) { if (p_inverse == 0) {output = rgb_to_cone(RGB);} else { output = cone_to_rgb(RGB);}}
+else if (p_model == 3) { if (p_inverse == 0) {output = rgb_to_spherical(RGB);} else { output = spherical_to_rgb(RGB);}}
+else if (p_model == 4) { if (p_inverse == 0) {output = RGBtoCHEN(RGB);} else { output = CHENtoRGB(RGB);}}
+else if (p_model == 5) { if (p_inverse == 0) {output = rgb_to_reuleaux(RGB);} else { output = reuleaux_to_rgb(RGB);}}
+else if (p_model == 6) { if (p_inverse == 0) {output = RGBtoHSP(RGB);} else { output = HSPtoRGB(RGB);}}
+else if (p_model == 7) { if (p_inverse == 0) {output = rgb_to_cylindrical(RGB);} else { output = cylindrical_to_rgb(RGB);}}
+
+    return output;
+}

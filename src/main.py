@@ -10,6 +10,10 @@ import argparse
 import logging
 from pathlib import Path
 
+# Ensure unbuffered output for MCP stdio communication
+sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
+sys.stderr.reconfigure(line_buffering=True) if hasattr(sys.stderr, 'reconfigure') else None
+
 # Add the parent directory to sys.path to ensure imports work
 project_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(project_dir))
@@ -17,11 +21,11 @@ sys.path.insert(0, str(project_dir))
 # Import the connection utils first to set environment variables
 from src.utils.resolve_connection import check_environment_variables, set_default_environment_variables
 
-# Set up logging
+# Set up logging to stderr (MCP uses stdout for protocol communication)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
+    handlers=[logging.StreamHandler(sys.stderr)]  # Use stderr for logs
 )
 logger = logging.getLogger("davinci-resolve-mcp.main")
 

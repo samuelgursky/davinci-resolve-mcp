@@ -135,6 +135,7 @@ class CinematicPipeline:
         variants: List[str] = None,
         music_path: Optional[str] = None,
         voice_path: Optional[str] = None,
+        vad_json_path: Optional[str] = None,
         execute: bool = False,
         target_duration_sec: Optional[float] = None,
     ) -> PipelineResult:
@@ -178,8 +179,14 @@ class CinematicPipeline:
                     result.beats_path = self.config.beats_path
 
             # Step 3: Create ducked music (Milestone 6)
-            if music_path and voice_path and self.config.features.ducking_enabled:
-                self.ducked_music_path = self._create_ducked_music(music_path, voice_path)
+            if music_path and self.config.features.ducking_enabled:
+                if vad_json_path:
+                    self.ducked_music_path = self._create_ducked_music_from_vad(
+                        music_path, vad_json_path
+                    )
+                elif voice_path:
+                    self.ducked_music_path = self._create_ducked_music(music_path, voice_path)
+
                 if self.ducked_music_path:
                     result.ducked_music_path = self.ducked_music_path
 
@@ -278,6 +285,48 @@ class CinematicPipeline:
 
         except Exception as e:
             logger.warning(f"Ducking failed: {e}")
+            return None
+
+    def _create_ducked_music_from_vad(
+        self,
+        music_path: str,
+        vad_json_path: str,
+    ) -> Optional[Path]:
+        """Create ducked music file using VAD speech segments."""
+        if not is_ffmpeg_available():
+            logger.warning("ffmpeg not available - ducking disabled")
+            return None
+
+        music_path_obj = Path(music_path)
+        vad_path_obj = Path(vad_json_path)
+        if not music_path_obj.exists():
+            logger.warning(f"Music file not found: {music_path}")
+            return None
+        if not vad_path_obj.exists():
+            logger.warning(f"VAD JSON not found: {vad_json_path}")
+            return None
+
+        try:
+            logger.info("Creating VAD-based ducked music...")
+
+            duck_db = abs(self.config.features.ducking_db)
+
+            result = self.audio_processor.create_ducked_music_segment_aware(
+                music_path=music_path_obj,
+                vad_json_path=vad_path_obj,
+                output_path=self.config.ducked_music_path,
+                duck_db=duck_db,
+            )
+
+            if result.success:
+                logger.info(f"Ducked music created: {result.output_path}")
+                return Path(result.output_path)
+            else:
+                logger.warning(f"VAD ducking failed: {result.error_message}")
+                return None
+
+        except Exception as e:
+            logger.warning(f"VAD ducking failed: {e}")
             return None
 
     def _generate_variant(
@@ -467,6 +516,7 @@ def run_pipeline(
     variants: List[str] = None,
     music_path: Optional[str] = None,
     voice_path: Optional[str] = None,
+    vad_json_path: Optional[str] = None,
     execute: bool = False,
     target_duration_sec: Optional[float] = None,
 ) -> PipelineResult:
@@ -488,6 +538,7 @@ def run_pipeline(
         variants=variants,
         music_path=music_path,
         voice_path=voice_path,
+        vad_json_path=vad_json_path,
         execute=execute,
         target_duration_sec=target_duration_sec,
     )

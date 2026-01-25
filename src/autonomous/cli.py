@@ -8,8 +8,10 @@ Usage:
     python -m src.autonomous.cli analyze [--bin BIN] [--out work/candidates.json]
     python -m src.autonomous.cli prompts [--candidates work/analysis/candidates.json]
     python -m src.autonomous.cli beats --music path/to/music.wav
+    python -m src.autonomous.cli vad --audio path/to/audio.wav
+    python -m src.autonomous.cli duck-vad --music path/to/music.wav --vad work/audio/vad.json
     python -m src.autonomous.cli plan --target 30 --pacing fast [--music "..."]
-    python -m src.autonomous.cli run-all --variants trailer,balanced,atmo [--music "..."] [--voice "..."] [--execute]
+    python -m src.autonomous.cli run-all --variants trailer,balanced,atmo [--music "..."] [--voice "..."] [--vad "..."] [--execute]
     python -m src.autonomous.cli capabilities
     python -m src.autonomous.cli list-clips
     python -m src.autonomous.cli list-presets
@@ -30,6 +32,7 @@ from autonomous.auto_editor import AutoEditor, ResolveConnectionError
 from autonomous.video_analyzer import VideoAnalyzer, analyze_media_pool_clips
 from autonomous.prompt_generator import PromptGenerator, generate_prompt_packs
 from autonomous.beat_analyzer import BeatAnalyzer, analyze_music, is_librosa_available
+from autonomous.analysis.vad import detect_speech_segments, vad_summary, write_vad_json
 from autonomous.decision_engine import DecisionEngine, VariantConfig
 from autonomous.cinematic_pipeline import CinematicPipeline, run_pipeline
 from autonomous.skills import generate_capabilities_report
@@ -80,6 +83,14 @@ def cmd_edit(args: argparse.Namespace) -> int:
         logger.info("Building edit plan from media pool...")
         plan = editor.build_plan_from_media_pool()
 
+        # Set render preset ONLY if explicitly provided via --render-preset
+        if args.render_preset:
+            plan.set_render(
+                preset_name=args.render_preset,
+                output_directory=config.resolve.output_directory,
+            )
+            logger.info(f"Render preset set: {args.render_preset}")
+
         # Validate plan
         issues = plan.validate()
         if issues:
@@ -105,8 +116,10 @@ def cmd_edit(args: argparse.Namespace) -> int:
             print(f"  Audio tracks: {len(plan.audio)}")
             for audio in plan.audio:
                 print(f"    [A{audio.track}] {audio.name} ({audio.audio_type})")
-            if plan.render:
+            if plan.render and plan.render.preset_name:
                 print(f"  Render preset: {plan.render.preset_name}")
+            else:
+                print(f"  Render: disabled (use --render-preset to enable)")
             return 0
 
         # Execute plan
@@ -489,6 +502,122 @@ def cmd_beats(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_vad(args: argparse.Namespace) -> int:
+    """Detect speech segments in an audio file using VAD."""
+    logger = logging.getLogger("cli.vad")
+
+    if not args.audio:
+        print("Error: --audio is required")
+        return 1
+
+    audio_path = Path(args.audio)
+    if not audio_path.exists():
+        print(f"Error: Audio file not found: {audio_path}")
+        return 1
+
+    config = PipelineConfig.from_env()
+
+    # Determine output path
+    output_path = Path(args.out) if args.out else config.work_dir / "audio" / "vad.json"
+
+    try:
+        logger.info(f"Detecting speech segments: {audio_path}")
+
+        segments = detect_speech_segments(
+            audio_path=str(audio_path),
+            aggressiveness=args.aggressiveness,
+        )
+
+        # Get total duration if available
+        total_duration = args.duration
+
+        summary = vad_summary(segments, total_duration)
+
+        # Save results
+        write_vad_json(summary, str(output_path))
+
+        # Print summary
+        print(f"\n{'='*60}")
+        print("VAD ANALYSIS COMPLETE")
+        print(f"{'='*60}")
+        print(f"Output: {output_path}")
+        print(f"\nResults:")
+        print(f"  Has speech: {summary['has_speech']}")
+        print(f"  Speech duration: {summary['speech_seconds']:.1f}s")
+        if summary['speech_ratio'] is not None:
+            print(f"  Speech ratio: {summary['speech_ratio']:.1%}")
+        print(f"  Segments detected: {len(segments)}")
+
+        # Show first few segments
+        if segments:
+            print(f"\n  First 10 segments:")
+            for i, seg in enumerate(segments[:10]):
+                print(f"    [{i+1}] {seg['start']:.2f}s - {seg['end']:.2f}s (conf: {seg['confidence']:.2f})")
+            if len(segments) > 10:
+                print(f"    ... and {len(segments) - 10} more")
+
+        return 0
+
+    except Exception as e:
+        logger.exception(f"VAD analysis failed: {e}")
+        print(f"\nError: {e}")
+        return 1
+
+
+def cmd_duck_vad(args: argparse.Namespace) -> int:
+    """Create ducked music using VAD speech segments."""
+    logger = logging.getLogger("cli.duck_vad")
+
+    if not args.music:
+        print("Error: --music is required")
+        return 1
+    if not args.vad:
+        print("Error: --vad is required")
+        return 1
+
+    music_path = Path(args.music)
+    vad_path = Path(args.vad)
+    if not music_path.exists():
+        print(f"Error: Music file not found: {music_path}")
+        return 1
+    if not vad_path.exists():
+        print(f"Error: VAD JSON not found: {vad_path}")
+        return 1
+
+    config = PipelineConfig.from_env()
+    output_path = Path(args.out) if args.out else config.ducked_music_path
+
+    from autonomous.audio_processor import AudioProcessor
+
+    processor = AudioProcessor(work_dir=config.work_dir / "audio")
+
+    try:
+        logger.info("Creating VAD-based ducked music...")
+        duck_db = args.ducking_db if args.ducking_db is not None else abs(config.features.ducking_db)
+
+        result = processor.create_ducked_music_segment_aware(
+            music_path=music_path,
+            vad_json_path=vad_path,
+            output_path=output_path,
+            duck_db=duck_db,
+            fade_ms=args.fade_ms,
+            pad_ms=args.pad_ms,
+            min_gap_ms=args.min_gap_ms,
+        )
+
+        if not result.success:
+            print(f"Error: Ducking failed: {result.error_message}")
+            return 1
+
+        print(f"\nDucked music created: {output_path}")
+        return 0
+
+    except Exception as e:
+        logger.exception(f"VAD ducking failed: {e}")
+        print(f"\nError: {e}")
+        return 1
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
     """Generate an edit plan using the decision engine."""
     logger = logging.getLogger("cli.plan")
@@ -620,6 +749,7 @@ def cmd_run_all(args: argparse.Namespace) -> int:
             variants=variants,
             music_path=args.music,
             voice_path=args.voice,
+            vad_json_path=args.vad,
             execute=args.execute,
             target_duration_sec=args.target,
         )
@@ -782,6 +912,73 @@ def main() -> int:
         help="Output path for beats.json (default: work/audio/beats.json)"
     )
 
+    # vad command
+    p_vad = subparsers.add_parser("vad", help="Detect speech segments in an audio file (VAD)")
+    p_vad.add_argument("--audio", required=True, help="Path to audio file containing speech (wav/mp3/etc.)")
+    p_vad.add_argument(
+        "--aggressiveness",
+        type=int,
+        default=2,
+        choices=[0, 1, 2, 3],
+        help="WebRTC VAD aggressiveness (0=least, 3=most)",
+    )
+    p_vad.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        help="Optional total duration (seconds) to compute speech ratio",
+    )
+    p_vad.add_argument(
+        "--out",
+        default=None,
+        help="Output JSON path (default: <work_dir>/audio/vad.json)",
+    )
+
+    # duck-vad command
+    duck_vad_parser = subparsers.add_parser(
+        "duck-vad",
+        help="Create ducked music using VAD speech segments",
+    )
+    duck_vad_parser.add_argument(
+        "--music", "-m",
+        required=True,
+        help="Path to music file (WAV, MP3, etc.)",
+    )
+    duck_vad_parser.add_argument(
+        "--vad",
+        required=True,
+        help="Path to VAD JSON (from 'vad' command)",
+    )
+    duck_vad_parser.add_argument(
+        "--out", "-o",
+        default=None,
+        help="Output path for ducked music (default: work/audio/music_ducked.wav)",
+    )
+    duck_vad_parser.add_argument(
+        "--ducking-db",
+        type=float,
+        default=None,
+        help="Ducking amount in dB (positive number, default: config setting)",
+    )
+    duck_vad_parser.add_argument(
+        "--fade-ms",
+        type=int,
+        default=120,
+        help="Fade duration in ms at segment edges (default: 120)",
+    )
+    duck_vad_parser.add_argument(
+        "--pad-ms",
+        type=int,
+        default=80,
+        help="Pad speech segments by ms on each side (default: 80)",
+    )
+    duck_vad_parser.add_argument(
+        "--min-gap-ms",
+        type=int,
+        default=200,
+        help="Merge segments separated by <= ms (default: 200)",
+    )
+
     # plan command (Milestone 7)
     plan_parser = subparsers.add_parser(
         "plan",
@@ -841,6 +1038,11 @@ def main() -> int:
         help="Path to voiceover file"
     )
     run_all_parser.add_argument(
+        "--vad",
+        default=None,
+        help="Path to VAD JSON for segment-aware ducking (overrides --voice ducking)",
+    )
+    run_all_parser.add_argument(
         "--target", "-t",
         type=float,
         default=None,
@@ -895,6 +1097,10 @@ def main() -> int:
         return cmd_prompts(args)
     elif args.command == "beats":
         return cmd_beats(args)
+    elif args.command == "vad":
+        return cmd_vad(args)
+    elif args.command == "duck-vad":
+        return cmd_duck_vad(args)
     elif args.command == "plan":
         return cmd_plan(args)
     elif args.command == "run-all":

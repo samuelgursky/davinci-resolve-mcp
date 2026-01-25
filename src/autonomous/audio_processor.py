@@ -14,9 +14,80 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 logger = logging.getLogger("autonomous.audio_processor")
+
+
+def _load_vad(vad_json_path: Path) -> dict:
+    with open(vad_json_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _merge_and_pad_regions(
+    segments: List[Dict[str, float]],
+    pad_ms: int = 80,
+    min_gap_ms: int = 200,
+) -> List[Tuple[float, float]]:
+    if not segments:
+        return []
+
+    segs = sorted(
+        [(float(s["start"]), float(s["end"])) for s in segments],
+        key=lambda x: x[0],
+    )
+    pad = pad_ms / 1000.0
+    gap = min_gap_ms / 1000.0
+
+    merged: List[Tuple[float, float]] = []
+    cur_s, cur_e = segs[0]
+    cur_s = max(0.0, cur_s - pad)
+    cur_e = max(cur_s, cur_e + pad)
+
+    for s, e in segs[1:]:
+        s = max(0.0, s - pad)
+        e = max(s, e + pad)
+        if s - cur_e <= gap:
+            cur_e = max(cur_e, e)
+        else:
+            merged.append((cur_s, cur_e))
+            cur_s, cur_e = s, e
+
+    merged.append((cur_s, cur_e))
+    return merged
+
+
+def _build_segment_duck_volume_expr(
+    regions: List[Tuple[float, float]],
+    duck_db: float,
+    fade_ms: int = 120,
+) -> str:
+    duck_mult = 10 ** (-duck_db / 20.0)
+    fade = max(0.01, fade_ms / 1000.0)
+
+    def region_expr(s: float, e: float) -> str:
+        s1 = s
+        s2 = s + fade
+        e1 = max(s2, e - fade)
+        e2 = e
+
+        return (
+            f"if(lt(t,{s1}),1,"
+            f"if(lt(t,{s2}),"
+            f"(1-({1.0 - duck_mult})*((t-{s1})/{fade})),"
+            f"if(lt(t,{e1}),{duck_mult},"
+            f"if(lt(t,{e2}),"
+            f"({duck_mult}+({1.0 - duck_mult})*((t-{e1})/{fade})),"
+            f"1))))"
+        )
+
+    if not regions:
+        return "1"
+
+    expr = region_expr(regions[0][0], regions[0][1])
+    for s, e in regions[1:]:
+        expr = f"min({expr},{region_expr(s,e)})"
+    return expr
 
 
 def is_ffmpeg_available() -> bool:
@@ -274,6 +345,69 @@ class AudioProcessor:
             logger.error(f"Ducking failed: {e}")
 
         return result
+
+    def create_ducked_music_segment_aware(
+        self,
+        music_path: Path,
+        vad_json_path: Path,
+        output_path: Path,
+        duck_db: float = 10.0,
+        fade_ms: int = 120,
+        pad_ms: int = 80,
+        min_gap_ms: int = 200,
+    ) -> DuckingResult:
+        """
+        Segment-aware ducking: reduce music only during VAD speech segments.
+        Produces output_path.
+        """
+        # Create config from parameters
+        config = DuckingConfig(ducking_db=-duck_db)  # Convert positive duck_db to negative dB
+        
+        # Initialize result with required fields
+        result = DuckingResult(
+            music_path=str(music_path),
+            voice_path=str(vad_json_path),  # Use vad_json_path as voice_path since no voice file is used
+            output_path=str(output_path),
+            config=config,
+        )
+        
+        try:
+            if not vad_json_path.exists():
+                result.error_message = f"vad.json not found: {vad_json_path}"
+                return result
+
+            vad = _load_vad(vad_json_path)
+            segments = vad.get("segments") or []
+            has_speech = bool(vad.get("has_speech", False)) and len(segments) > 0
+
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if not has_speech:
+                cmd = ["ffmpeg", "-y", "-i", str(music_path), "-c", "copy", str(output_path)]
+                proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if proc.returncode != 0:
+                    result.error_message = proc.stderr
+                    return result
+                result.success = True
+                result.output_duration_sec = self.get_audio_duration(str(output_path))
+                return result
+
+            regions = _merge_and_pad_regions(segments, pad_ms=pad_ms, min_gap_ms=min_gap_ms)
+            vol_expr = _build_segment_duck_volume_expr(regions, duck_db=duck_db, fade_ms=fade_ms)
+
+            cmd = ["ffmpeg", "-y", "-i", str(music_path), "-af", f"volume='{vol_expr}'", str(output_path)]
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if proc.returncode != 0:
+                result.error_message = proc.stderr
+                return result
+
+            result.success = True
+            result.output_duration_sec = self.get_audio_duration(str(output_path))
+            return result
+
+        except Exception as e:
+            result.error_message = str(e)
+            return result
 
     def _create_ducked_music_fallback(
         self,

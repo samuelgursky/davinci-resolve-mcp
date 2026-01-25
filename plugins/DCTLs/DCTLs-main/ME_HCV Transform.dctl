@@ -1,0 +1,157 @@
+#line 2
+
+/* HCV Color Model Transform v1.3 DCTL   
+   Ported from Akiyoshi Kitaoka
+   Modified by Moaz Elgabry, moazelgabry.com
+   This tools is for experiment and demonestration purposes only and is not meant for grading.
+*/
+
+// UI Controls
+//DEFINE_UI_PARAMS(Direction, Direction, DCTLUI_COMBO_BOX, 0, {forward, inverse}, {Forward RGB to HCV, Inverse HCV to RGB})
+DEFINE_UI_PARAMS(ColorSpace, Color Space, DCTLUI_COMBO_BOX, 0, {sRGB, DWG}, {sRGB, DaVinci Wide Gamut})
+DEFINE_UI_PARAMS(LumMethod, Luma method, DCTLUI_COMBO_BOX, 0, {simple, iterative}, {Simple Luma, Iterative Luma})
+DEFINE_UI_PARAMS(showPatch, Show Patch, DCTLUI_CHECK_BOX, 0)
+DEFINE_UI_PARAMS(Direction, Inverse Direction, DCTLUI_CHECK_BOX, 0)
+DEFINE_UI_PARAMS(customR, Custom R, DCTLUI_SLIDER_FLOAT, 142, 0.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(customG, Custom G, DCTLUI_SLIDER_FLOAT, 204, 0.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(customB, Custom B, DCTLUI_SLIDER_FLOAT, 92, 0.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(customH, Custom H, DCTLUI_SLIDER_FLOAT, 100, 0, 359, 1)
+DEFINE_UI_PARAMS(customC, Custom C, DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(customV, Custom V, DCTLUI_SLIDER_FLOAT, 0.5, 0.0, 1.0, 0.01)
+
+// Function to linearize sRGB values
+__DEVICE__ float3 srgb_to_linear(float3 gammaRGB) {
+    return make_float3(
+        gammaRGB.x <= 0.04045f ? gammaRGB.x / 12.92f : _powf((gammaRGB.x + 0.055f) / 1.055f, 2.4f),
+        gammaRGB.y <= 0.04045f ? gammaRGB.y / 12.92f : _powf((gammaRGB.y + 0.055f) / 1.055f, 2.4f),
+        gammaRGB.z <= 0.04045f ? gammaRGB.z / 12.92f : _powf((gammaRGB.z + 0.055f) / 1.055f, 2.4f)
+    );
+}
+
+// Function to apply sRGB gamma encoding
+__DEVICE__ float3 linear_to_srgb(float3 linearRGB) {
+    return make_float3(
+        linearRGB.x <= 0.0031308f ? linearRGB.x * 12.92f : 1.055f * _powf(linearRGB.x, 1.0f / 2.4f) - 0.055f,
+        linearRGB.y <= 0.0031308f ? linearRGB.y * 12.92f : 1.055f * _powf(linearRGB.y, 1.0f / 2.4f) - 0.055f,
+        linearRGB.z <= 0.0031308f ? linearRGB.z * 12.92f : 1.055f * _powf(linearRGB.z, 1.0f / 2.4f) - 0.055f
+    );
+}
+
+__DEVICE__ float di_to_linear(float t) {
+     float a = 0.0075f;
+     float b = 7.0f;
+     float c = 0.07329248f;
+     float m = 10.44426855f;
+     float log_cut = 0.02740668f; // should be equal to (e * cut1 + f)
+
+    if (t > log_cut) {
+        return _exp2f((t / c) - b) - a;
+    } else {
+        return t / m;
+    }
+}
+
+__DEVICE__ float3 di_to_linear3(float3 in) {return make_float3(di_to_linear(in.x),di_to_linear(in.y),di_to_linear(in.z));}
+
+__DEVICE__ float linear_to_di(float x) {
+     float a = 0.0075f;
+     float b = 7.0f;
+     float c = 0.07329248f;
+     float m = 10.44426855f;
+     float lin_cut = 0.00262409f; // Should be equal to ((cut2 - f) / e)
+
+    if (x > lin_cut) {
+        return (_log2f(x + a) + b) * c;
+    } else {
+        return x * m;
+    }
+}
+__DEVICE__ float3 linear_to_di3(float3 in) {return make_float3(linear_to_di(in.x),linear_to_di(in.y),linear_to_di(in.z));}
+
+
+// RGB to HCV conversion (no arbitrary scaling applied)
+__DEVICE__ float3 rgb_to_hcv(float3 rgb, int ColorSpace,float3 lumaCoeffs) {
+     if(ColorSpace ==0){rgb = srgb_to_linear(rgb);} else {rgb = di_to_linear3(rgb);} // Convert to linear light
+
+    float maxVal = _fmaxf(_fmaxf(rgb.x, rgb.y), rgb.z);
+    float minVal = _fminf(_fminf(rgb.x, rgb.y), rgb.z);
+    float delta = maxVal - minVal;
+
+    float hue = 0.0f;
+    if (delta > 0.0f) {
+        if (rgb.x == maxVal) hue = _fmod(((rgb.y - rgb.z) / delta) * 60.0f + 360.0f, 360.0f);
+        else if (rgb.y == maxVal) hue = _fmod(((rgb.z - rgb.x) / delta) * 60.0f + 120.0f, 360.0f);
+        else hue = _fmod(((rgb.x - rgb.y) / delta) * 60.0f + 240.0f, 360.0f);
+    }
+
+    float chroma = delta; // No scaling applied
+    float luminance = (lumaCoeffs.x * rgb.x + lumaCoeffs.y * rgb.y + lumaCoeffs.z * rgb.z); // No scaling applied
+
+    return make_float3(hue, chroma, luminance);
+}
+
+// HCV to RGB conversion (with non-scaled chroma/luminance)
+__DEVICE__ float3 hcv_to_rgb(float3 hcv, int Method, int ColorSpace,float3 lumaCoeffs) {
+    float h = hcv.x;
+    float c = hcv.y; // No scaling applied
+    float v = hcv.z; // No scaling applied
+
+    float x = c * (1.0f - _fabs(_fmod(h / 60.0f, 2.0f) - 1.0f));
+    float3 rgb;
+
+    if (h < 60.0f) rgb = make_float3(c, x, 0.0f);
+    else if (h < 120.0f) rgb = make_float3(x, c, 0.0f);
+    else if (h < 180.0f) rgb = make_float3(0.0f, c, x);
+    else if (h < 240.0f) rgb = make_float3(0.0f, x, c);
+    else if (h < 300.0f) rgb = make_float3(x, 0.0f, c);
+    else rgb = make_float3(c, 0.0f, x);
+
+    // Adjust luminance
+    if (Method == 0) {
+        // Simple correction
+        float Y_target = v;
+        float M = Y_target - (lumaCoeffs.x * rgb.x + lumaCoeffs.y * rgb.y + lumaCoeffs.z * rgb.z);
+        rgb = make_float3(rgb.x + M, rgb.y + M, rgb.z + M);
+    } else {
+        // Iterative refinement
+        float bestMatchDiff = 99999.0f;
+        for (int i = 0; i <= 1000; i++) {
+            float m = (float)i / 1000.0f;
+            float3 testRGB = make_float3(rgb.x + m, rgb.y + m, rgb.z + m);
+            float testY = lumaCoeffs.x * testRGB.x + lumaCoeffs.y * testRGB.y + lumaCoeffs.z * testRGB.z;
+    
+            float diff = _fabs(testY - v);
+            if (diff < bestMatchDiff) {
+                bestMatchDiff = diff;
+                rgb = testRGB;
+            }
+        }
+    }
+    
+    // Apply gamma correction
+    if (ColorSpace ==0){rgb = linear_to_srgb(rgb);} else { rgb = linear_to_di3(rgb);}
+    return rgb;
+}
+
+// Main DCTL function
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B) {
+    float3 inputRGB = make_float3(p_R, p_G, p_B);
+    float3 lumaCoeffs = (ColorSpace == 0) ? make_float3(0.2126f, 0.7152f, 0.0722f) : make_float3(0.27411851f,  0.87363190f, -0.14775041f);
+
+    float3 patchRGB = make_float3(customR, customG, customB); // Already in 0-1 range
+    float3 patchHCV = make_float3(customH, customC, customV);
+
+    // Apply transformation
+    float3 outputColor = Direction == 0 ? rgb_to_hcv(inputRGB, ColorSpace, lumaCoeffs) : hcv_to_rgb(inputRGB, LumMethod, ColorSpace, lumaCoeffs);
+
+    // Display patch overlay in bottom-right corner
+    if (showPatch) {
+        int patchWidth = p_Width * 0.2f;
+        int patchHeight = p_Height * 0.15f;
+        if (p_X > p_Width - patchWidth && p_Y > p_Height - patchHeight) {
+            outputColor = Direction == 0 ? rgb_to_hcv(patchRGB, ColorSpace, lumaCoeffs) : hcv_to_rgb(patchHCV, LumMethod, ColorSpace, lumaCoeffs);
+        }
+    }
+
+    return outputColor;
+}

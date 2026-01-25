@@ -1,0 +1,305 @@
+#line 2
+/* 
+Written by Moaz ELgabry | moazelgabry.com
+ 
+ ME_Smooth Tetra v0.3.10
+
+  - Added: Continuous Energy Reconstruction (Luma Stability)
+  - Improved: Stability Logic uses smooth derivatives to avoid hard edges
+  - Native smooth sector map in an axis-locked basis
+  - Neutrals preserved (operations vanish at c=0)
+  - Six C∞ angular windows (partition of unity) -> tetrahedra "aware" of each other
+ */
+
+/* ------------------------------------------------------------------------------------
+   Primary UI 
+------------------------------------------------------------------------------------ */
+DEFINE_UI_PARAMS(RED_HUE, [R] _ RED HUE, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(RED_SAT, [R] _ Red Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(RED_VAL, [R] _ Red Value, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(GRN_HUE, [G] _ GREEN HUE, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(GRN_SAT, [G] _ Green Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(GRN_VAL, [G] _ Green Value, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(BLU_HUE, [B] _ BLUE HUE, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(BLU_SAT, [B] _ Blue Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(BLU_VAL, [B] _ Blue Value, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(CYN_HUE, [C] _ CYAN HUE, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(CYN_SAT, [C] _ Cyan Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(CYN_VAL, [C] _ Cyan Value, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(MAG_HUE, [M] _ MAGENTA HUE, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(MAG_SAT, [M] _ Magenta Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(MAG_VAL, [M] _ Magenta Value, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(YEL_HUE, [Y] _ YELLOW HUE, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(YEL_SAT, [Y] _ Yellow Sat, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+DEFINE_UI_PARAMS(YEL_VAL, [Y] _ Yellow Value, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 1.0, 0.001)
+
+DEFINE_UI_PARAMS(HUE_SHARPNESS,  Hue Sharpness,  DCTLUI_SLIDER_FLOAT, .880, 0.50, 1.80, 0.01)
+DEFINE_UI_PARAMS(VAL_STABILITY,  Luma Stability, DCTLUI_SLIDER_FLOAT, 0.45, 0.00, 1.00, 0.01) 
+DEFINE_UI_PARAMS(CLAMP_OUT,      Clamp Output,   DCTLUI_CHECK_BOX, 1)
+
+/* ------------------------------------------------------------------------------------
+   Helpers
+------------------------------------------------------------------------------------ */
+__DEVICE__ inline float3 add3(float3 a,float3 b){return make_float3(a.x+b.x,a.y+b.y,a.z+b.z);}
+__DEVICE__ inline float3 sub3(float3 a,float3 b){return make_float3(a.x-b.x,a.y-b.y,a.z-b.z);}
+__DEVICE__ inline float3 muls(float3 a,float s){return make_float3(a.x*s,a.y*s,a.z*s);}
+__DEVICE__ inline float  dot3(float3 a,float3 b){return a.x*b.x+a.y*b.y+a.z*b.z;}
+__DEVICE__ inline float3 cross3(float3 a,float3 b){return make_float3(a.y*b.z-a.z*b.y, a.z*b.x-a.x*b.z, a.x*b.y-a.y*b.x);}
+__DEVICE__ inline float  len3(float3 a){return _sqrtf(dot3(a,a));}
+__DEVICE__ inline float3 norm3(float3 a){float L=len3(a);return (L>1e-8f)?muls(a,1.0f/L):make_float3(0.577f,0.577f,0.577f);}
+__DEVICE__ inline float3 clamp01(float3 v){v.x=_fminf(_fmaxf(v.x,0.0f),1.0f);v.y=_fminf(_fmaxf(v.y,0.0f),1.0f);v.z=_fminf(_fmaxf(v.z,0.0f),1.0f);return v;}
+__DEVICE__ inline float wrap_pi(float a){const float TW=6.28318530718f,PI=3.141592653589f;return a - TW*_floorf((a+PI)/TW);}
+__DEVICE__ inline float smoothstep(float e0,float e1,float x){float d=_fmaxf(e1-e0,1e-12f);float t=_fminf(1.0f,_fmaxf(0.0f,(x-e0)/d));return t*t*(3.0f-2.0f*t);}
+__DEVICE__ inline float lerp(float a, float b, float t){ return a + t*(b - a); }
+__DEVICE__ inline float max3(float a, float b, float c) { return _fmaxf(a, _fmaxf(b, c)); }
+
+/* basis */
+typedef struct { float3 n,u,v; float Lbw; } Basis;
+__DEVICE__ inline Basis build_basis(float3 blk,float3 wht){
+  Basis B; float3 d=sub3(wht,blk);
+  B.n=norm3(d);
+  float3 a=make_float3(1,0,0); if(_fabs(B.n.x)>0.9f) a=make_float3(0,1,0);
+  float3 ut=sub3(a,muls(B.n,dot3(a,B.n))); B.u=norm3(ut);
+  B.v=cross3(B.u,B.n); if(dot3(cross3(B.u,B.v),B.n)<0.0f) B.v=muls(B.v,-1.0f);
+  B.Lbw=_fmaxf(dot3(d,B.n),1e-8f);
+  return B;
+}
+__DEVICE__ inline float3 to_coords(float3 x,float3 blk,Basis B){float3 d=sub3(x,blk);return make_float3(dot3(d,B.n)/B.Lbw,dot3(d,B.u),dot3(d,B.v));}
+__DEVICE__ inline float ang_of(float3 dir,Basis B){float3 dp=sub3(dir,muls(B.n,dot3(dir,B.n)));return _atan2f(dot3(dp,B.v),dot3(dp,B.u));}
+
+/* headroom */
+__DEVICE__ inline float headroom_soft_unbiased(float3 N, float3 D, float beta){
+  const float BIG = 1e8f;
+
+  float tx = (_fabs(D.x)<1e-8f)?BIG:(D.x>0.0f?(1.0f-N.x)/D.x:(0.0f-N.x)/D.x);
+  float ty = (_fabs(D.y)<1e-8f)?BIG:(D.y>0.0f?(1.0f-N.y)/D.y:(0.0f-N.y)/D.y);
+  float tz = (_fabs(D.z)<1e-8f)?BIG:(D.z>0.0f?(1.0f-N.z)/D.z:(0.0f-N.z)/D.z);
+
+  float m = _fminf(tx, _fminf(ty, tz));
+  float ex = _expf(-beta*(tx - m));
+  float ey = _expf(-beta*(ty - m));
+  float ez = _expf(-beta*(tz - m));
+  float s  = ex + ey + ez;
+  float r_soft = m - (_logf(s) / _fmaxf(beta,1e-6f));
+
+  float wx = ex / _fmaxf(s, 1e-20f);
+  float wy = ey / _fmaxf(s, 1e-20f);
+  float wz = ez / _fmaxf(s, 1e-20f);
+  float inv_sum_sq = 1.0f / _fmaxf(wx*wx + wy*wy + wz*wz, 1e-12f);
+  float K_eff = _fminf(3.0f, _fmaxf(1.0f, inv_sum_sq));
+
+  float bias = _logf(K_eff) / _fmaxf(beta, 1e-6f);
+  float r_unbiased = r_soft + bias;
+
+  return _fmaxf(r_unbiased, 0.0f);
+}
+
+__DEVICE__ inline float soft_knee_down(float x, float t) {
+  float tt = _fmaxf(t, 1e-8f);
+  float u  = x / tt;
+  return x / (1.0f + u*u);
+}
+
+typedef struct {
+  float hue_gate_bias, hue_gate_floor, hue_gate_mix, hue_gate_k;
+  float beta_lo;
+  float val_range, val_bias;
+  float UI_EPS;
+  } Tunables;
+
+/* ------------------------------------------------------------------------------------
+   main
+------------------------------------------------------------------------------------ */
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+  {
+  Tunables cfg;
+  cfg.hue_gate_bias  = 0.958f;  cfg.hue_gate_floor = 0.06f;
+  cfg.hue_gate_mix   = 0.775f;  cfg.hue_gate_k     = 0.031f;
+  cfg.beta_lo        = 6.0f;    
+  cfg.val_range      = 0.25f;  cfg.val_bias       = 1.70f;
+  cfg.UI_EPS         = 1e-4f;
+
+  const float3 BLK = make_float3(0,0,0), WHT = make_float3(1,1,1);
+  const float  PI  = 3.141592653589f, LN2 = 0.69314718056f;
+
+  // ---------------- Basis & coordinates ----------------
+  Basis B = build_basis(BLK, WHT);
+  float3 P = make_float3(p_R, p_G, p_B);
+  
+  // Track Energy
+  float E_in = max3(P.x, P.y, P.z);
+
+  const float UI_MAG =
+      _fabs(RED_HUE)+_fabs(RED_SAT)+_fabs(RED_VAL)+
+      _fabs(GRN_HUE)+_fabs(GRN_SAT)+_fabs(GRN_VAL)+
+      _fabs(BLU_HUE)+_fabs(BLU_SAT)+_fabs(BLU_VAL)+
+      _fabs(CYN_HUE)+_fabs(CYN_SAT)+_fabs(CYN_VAL)+
+      _fabs(MAG_HUE)+_fabs(MAG_SAT)+_fabs(MAG_VAL)+
+      _fabs(YEL_HUE)+_fabs(YEL_SAT)+_fabs(YEL_VAL);
+
+  if (UI_MAG == 0.0f) { 
+    float3 out0 = P; if (CLAMP_OUT) out0 = clamp01(out0);
+    return out0;
+  }
+
+  // Scene coords & polar
+  float3 scv = to_coords(P, BLK, B);
+  float s  = scv.x;
+  float cu = scv.y;
+  float cv = scv.z;
+  float c  = _sqrtf(cu*cu + cv*cv);
+  float h  = _atan2f(cv, cu);
+
+  // Base axis & chroma norm
+  float3 N0  = add3(BLK, muls(B.n, s * B.Lbw));
+  float ch   = _cosf(h), sh = _sinf(h);
+  float3 dir0 = add3(muls(B.u, ch), muls(B.v, sh));
+  float  R0s  = headroom_soft_unbiased(N0, dir0, cfg.beta_lo);
+  float  alpha0 = (R0s > 1e-8f) ? _fminf(c/R0s, 1.0f) : 0.0f;
+
+   // --- Compute rho0 at the current angle (axis N0, dir0_u) for chroma-aware kappa ---
+  float3 dir0_u = norm3(add3(muls(B.u, ch), muls(B.v, sh)));
+  float  R0     = headroom_soft_unbiased(N0, dir0_u, cfg.beta_lo);
+  float  rho0   = (R0 > 1e-8f) ? (c / R0) : 0.0f;       // 0..1-ish relative chroma
+
+  // --- Six hue window centres ---
+  float aR=ang_of(make_float3(1,0,0),B);
+  float aY=ang_of(make_float3(1,1,0),B);
+  float aG=ang_of(make_float3(0,1,0),B);
+  float aC=ang_of(make_float3(0,1,1),B);
+  float aB=ang_of(make_float3(0,0,1),B);
+  float aM=ang_of(make_float3(1,0,1),B);
+
+  // --- rho-aware sharpness: soften windows near axis to avoid boundary kinks ---
+  float k_user = _fminf(4.0f, 3.0f*HUE_SHARPNESS);
+  float k_chroma = smoothstep(0.12f, 0.35f, rho0);      // 0 near axis, 1 when reasonably saturated
+  float kappa_eff = k_user * k_chroma;
+
+  // --- rounded cosine lobes (p<1 blunts the peak) ---
+  float p_cos = 0.90f;
+  float dR = wrap_pi(h - aR), dY = wrap_pi(h - aY), dG = wrap_pi(h - aG);
+  float dC = wrap_pi(h - aC), dB = wrap_pi(h - aB), dM = wrap_pi(h - aM);
+
+  float cR = _powf(_fmaxf(_cosf(dR), 0.0f), p_cos);
+  float cY = _powf(_fmaxf(_cosf(dY), 0.0f), p_cos);
+  float cG = _powf(_fmaxf(_cosf(dG), 0.0f), p_cos);
+  float cC = _powf(_fmaxf(_cosf(dC), 0.0f), p_cos);
+  float cB = _powf(_fmaxf(_cosf(dB), 0.0f), p_cos);
+  float cM = _powf(_fmaxf(_cosf(dM), 0.0f), p_cos);
+
+  // --- tempered softmax with a tiny floor, then renormalise (prevents hard handovers) ---
+  float eR = _expf(kappa_eff * cR);
+  float eY = _expf(kappa_eff * cY);
+  float eG = _expf(kappa_eff * cG);
+  float eC = _expf(kappa_eff * cC);
+  float eB = _expf(kappa_eff * cB);
+  float eM = _expf(kappa_eff * cM);
+
+  const float epsW = 1e-5f;      // small weight floor to keep all regions “alive”
+  eR += epsW; eY += epsW; eG += epsW; eC += epsW; eB += epsW; eM += epsW;
+
+  float es = eR+eY+eG+eC+eB+eM;
+  float wR = eR/es, wY = eY/es, wG = eG/es, wC = eC/es, wB = eB/es, wM = eM/es;
+
+  // --- Regional asks + UI engagement (unchanged below; reuse your UI_EPS mix) ---
+  float dHue=(PI/3.0f)*(wR*RED_HUE+wY*YEL_HUE+wG*GRN_HUE+wC*CYN_HUE+wB*BLU_HUE+wM*MAG_HUE);
+  float dSat=(wR*RED_SAT+wY*YEL_SAT+wG*GRN_SAT+wC*CYN_SAT+wB*BLU_SAT+wM*MAG_SAT);
+  float dVal=(wR*RED_VAL+wY*YEL_VAL+wG*GRN_VAL+wC*CYN_VAL+wB*BLU_VAL+wM*MAG_VAL);
+
+  float adj_mag = _fabs(dHue)+_fabs(dSat)+_fabs(dVal);
+  float ui_mix  = smoothstep(cfg.UI_EPS, 8.0f*cfg.UI_EPS, adj_mag);
+  dHue*=ui_mix; dSat*=ui_mix; dVal*=ui_mix;
+
+
+  float alpha_abs = c / (c + cfg.hue_gate_k);
+  float a_mix     = (1.0f - cfg.hue_gate_mix)*alpha0 + cfg.hue_gate_mix*alpha_abs;
+  float chi       = _powf(_fmaxf(a_mix, cfg.hue_gate_floor), cfg.hue_gate_bias);
+
+  // Rotation
+  float theta = chi * dHue;
+  float cost  = _cosf(theta),  sint = _sinf(theta);
+  float cu_r = cu*cost - cv*sint;
+  float cv_r = cu*sint + cv*cost;
+
+  float3 C_rot    = add3(muls(B.u, cu_r), muls(B.v, cv_r));
+  float  r2       = cu_r*cu_r + cv_r*cv_r;
+  float3 dir_used = (r2 > 1e-16f) ? norm3(C_rot) : dir0;
+
+  // Value
+  float dVal_soft = dVal / (1.0f + 0.8f*_fabs(dVal));
+  float g_val     = _powf(alpha0, cfg.val_bias);
+  float s2        = _fminf(_fmaxf(s + cfg.val_range*dVal_soft*g_val, 0.0f), 1.0f);
+
+  // Saturation
+  float c_sat     = c * _expf(chi * dSat * LN2);
+
+// Recompute ρ at the *rotated* angle for better locality
+  float r2_rot    = cu_r*cu_r + cv_r*cv_r;
+  float c_rot     = _sqrtf(r2_rot);
+  float R_rot     = headroom_soft_unbiased(N0, norm3(add3(muls(B.u, cu_r/_fmaxf(c_rot,1e-16f)),
+                                                         muls(B.v, cv_r/_fmaxf(c_rot,1e-16f)))),
+                                           cfg.beta_lo);
+  float rho_rot   = (R_rot > 1e-8f) ? (c_rot / R_rot) : 0.0f;
+
+// Gate by ρ so behaviour near the axis is extra smooth regardless of sector shape
+  float tip_gate  = smoothstep(0.06f, 0.24f, rho_rot);
+  float c_req     = lerp(c, c_sat, tip_gate);
+
+
+  // Limiter
+  float use_val   = _fminf(1.0f, _fabs(dVal));
+  float s_used    = lerp(s, s2, use_val);
+  float3 N_wall   = add3(BLK, muls(B.n, s_used * B.Lbw));
+  float R_wall    = headroom_soft_unbiased(N_wall, dir_used, 16.0f);
+  float excess    = _fmaxf(0.0f, c_req - R_wall);
+  float knee      = 0.18f * _fmaxf(R_wall, 1e-6f);
+  float excess_s  = soft_knee_down(excess, knee);
+  float c_limited = c_req - excess + excess_s;
+
+  // Build
+  float3 Cprime   = muls(dir_used, c_limited);
+  const float Lbw_eps = _fmaxf(B.Lbw, 1e-8f);
+  float  Y_in     = dot3(P, B.n);
+  float  Y_target = Y_in + (s2 - s) * B.Lbw;
+  float  s_fix    = Y_target / Lbw_eps;
+  float  s_final  = _fminf(1.0f, _fmaxf(0.0f, s_fix));
+  float3 N_out    = add3(BLK, muls(B.n, s_final * B.Lbw));
+  float  R_final  = headroom_soft_unbiased(N_out, dir_used, 16.0f);
+  float  c_final  = _fminf(c_limited, _fmaxf(R_final*(1.0f - 1e-5f), 0.0f));
+
+  float3 out = add3(N_out, muls(dir_used, c_final));
+
+  /* ------------------------------------------------------------------------------------
+     ENERGY RECONSTRUCTION (Smoothed)
+     Restores Max-RGB energy lost during hue rotation.
+  ------------------------------------------------------------------------------------ */
+  // 1. Measure output energy
+  float E_out = max3(out.x, out.y, out.z);
+  
+  // 2. Conflict Detection:
+  // If user *wants* to darken (dVal < 0), fade out the restoration.
+  // Smoothstep ensures no hard switch-off.
+  float user_darken_intent = smoothstep(-0.25f, -0.05f, dVal); // 0.0 = dark Intent, 1.0 = normal/bright
+  
+  // 3. Loss Calculation:
+  // How much did we lose? (Ratio > 1.0 means loss)
+  float loss_ratio = (E_out > 1e-6f) ? (E_in / E_out) : 1.0f;
+  
+  // 4. Boost Calculation:
+  // We apply boost smoothly based on saturation (chi) and slider strength.
+  // We use `softplus` logic implicitly by blending the gain.
+  float restoration_mask = chi * user_darken_intent; // Only saturated pixels, unless darkened by user
+  
+  // We define "Boost" as the extra gain needed (e.g. 1.5x gain is +0.5 boost)
+  // We scale this boost by the slider (now up to 2.0x strength)
+  float raw_boost = _fmaxf(0.0f, loss_ratio - 1.0f);
+  
+  // Apply Boost smoothly
+  float applied_gain = 1.0f + (raw_boost * VAL_STABILITY * restoration_mask);
+  
+  out = muls(out, applied_gain);
+
+  if (CLAMP_OUT) out = clamp01(out);
+
+  return out;
+  }

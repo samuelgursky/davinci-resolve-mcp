@@ -1,0 +1,130 @@
+#line 2
+/**
+ * DCTL written by Moaz ELgabry
+ * F-log2 to DWG conversion.
+ * Goes from F-Log2 and F-Log2 gamut (equivalent to BT 2020 gamut)
+ * to Davinci Wide Gamut Intermediate.
+ *
+ * This can be used as an IDT in Resolve.
+ */
+
+__DEVICE__ float oetf_fujifilm_flog2(float x, int inv) {
+  /* Fujifilm F-Log2
+      https://dl.fujifilm-x.com/support/lut/F-Log2_DataSheet_E_Ver.1.0.pdf
+  */
+  const float a = 5.555556f;
+  const float b = 0.064829f;
+  const float c = 0.245281f;
+  const float d = 0.384316f;
+  const float e = 8.799461f;
+  const float f = 0.092864f;
+  const float cut1 = 0.000889f;
+  const float cut2 = 0.100686685370811f;
+
+  if (inv == 1) {
+    return x < cut2 ? (x-f)/e : (_exp10f(((x - d)/c))/a - b/a);
+  } else {
+    return x < cut1 ? e*x+f : c*_log10f(a*x + b) + d;
+  }
+}
+
+
+__DEVICE__ float oetf_davinci_intermediate(float x, int inv) {
+  /* DaVinci Intermediate Log
+      https://documents.blackmagicdesign.com/InformationNotes/DaVinci_Resolve_17_Wide_Gamut_Intermediate.pdf
+  */
+
+  const float A = 0.0075f;
+  const float B = 7.0f;
+  const float C = 0.07329248f;
+  const float M = 10.44426855f;
+  const float LIN_CUT = 0.00262409f;
+  const float LOG_CUT = 0.02740668f;
+  
+  if (inv == 1) {
+    return x <= LOG_CUT ? x/M : _exp2f(x/C - B) - A;
+  } else {
+    return x <= LIN_CUT ? x*M : (_log2f(x + A) + B)*C;
+  }
+}
+
+__DEVICE__ inline float flog2_to_linear(float t)
+{
+    const float a = 5.555556f;
+    const float b = 0.064829f;
+    const float c = 0.245281f;
+    const float d = 0.384316f;
+    const float e = 8.799461f;
+    const float f = 0.092864f;
+    const float cut1 = 0.000889f; // Should be equal to ((cut2 - f) / e)
+    const float cut2 = 0.100686685370811f; // should be equal to (e * cut1 + f)
+
+    if (t >= cut2) {
+        return ((_exp10f((t - d) / c) - b) / a);
+    } else {
+        return ((t - f) / e);
+    }
+}
+
+// Used values calculated from http://color.support/colorspacecalculator.html
+// source color space BT 2020 and Output DWG, with Bradford chromatic adaptation.
+__CONSTANT__ float matrix[9] = {
+     0.892112, 0.024369, 0.083519,
+     0.032617, 0.786138, 0.181246,
+     0.069977, 0.104749, 0.825273,
+};
+
+// Used values calculated from http://color.support/colorspacecalculator.html
+// source color space DWG and Output BT 2020, with Bradford chromatic adaptation.
+__CONSTANT__ float inv_matrix[9] = {
+      1.130302, -0.020393, -0.109909,
+     -0.025547,  1.310849, -0.285302,
+     -0.092599, -0.164653,  1.257252,
+};
+
+
+
+DEFINE_UI_PARAMS(invert, invert, DCTLUI_CHECK_BOX, 0);
+
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B)
+{
+    float3 in = make_float3(p_R,p_G,p_B);
+
+
+     
+ if (invert) {
+     in.x = oetf_davinci_intermediate(in.x,invert);
+     in.y = oetf_davinci_intermediate(in.y,invert);
+     in.z = oetf_davinci_intermediate(in.z,invert);
+
+     in.x = ( inv_matrix[0] * in.x) + ( inv_matrix[1] * in.y) + ( inv_matrix[2] * in.z);
+     in.y = ( inv_matrix[3] * in.x) + ( inv_matrix[4] * in.y) + ( inv_matrix[5] * in.z);
+     in.z = ( inv_matrix[6] * in.x) + ( inv_matrix[7] * in.y) + ( inv_matrix[8] * in.z);
+
+     in.x = oetf_fujifilm_flog2(in.x,1-invert);
+     in.y = oetf_fujifilm_flog2(in.y,1-invert);
+     in.z = oetf_fujifilm_flog2(in.z,1-invert);
+
+     } else  {
+
+
+     in.x = oetf_fujifilm_flog2(in.x,1-invert);
+     in.y = oetf_fujifilm_flog2(in.y,1-invert); 
+     in.z = oetf_fujifilm_flog2(in.z,1-invert);
+
+     in.x = ( matrix[0] * in.x) + ( matrix[1] * in.y) + ( matrix[2] * in.z);
+     in.y = ( matrix[3] * in.x) + ( matrix[4] * in.y) + ( matrix[5] * in.z);
+     in.z = ( matrix[6] * in.x) + ( matrix[7] * in.y) + ( matrix[8] * in.z);
+
+     in.x = oetf_davinci_intermediate(in.x,invert);
+     in.y = oetf_davinci_intermediate(in.y,invert);
+     in.z = oetf_davinci_intermediate(in.z,invert);
+     }
+
+
+
+
+    float3 IDT = in;
+    return IDT;
+}

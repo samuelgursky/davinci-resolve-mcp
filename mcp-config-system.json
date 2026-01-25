@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "davinci-resolve": {
+      "name": "DaVinci Resolve MCP",
+      "command": "C:\\Users\\Ruben\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+      "args": [
+        "C:\\Users\\Ruben\\davinci-resolve-mcp\\src\\main.py"
+      ]
+    }
+  }
+}

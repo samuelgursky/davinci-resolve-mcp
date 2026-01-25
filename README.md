@@ -33,7 +33,7 @@ For detailed installation instructions, please see [INSTALL.md](INSTALL.md). Thi
 | Platform | Status | One-Step Install | Quick Start |
 |----------|--------|------------------|-------------|
 | macOS | ✅ Stable | `./install.sh` | `./run-now.sh` |
-| Windows | ✅ Stable | `install.bat` | `run-now.bat` |
+| Windows | ✅ Stable | `install.bat` | `run-now.bat`, `dev.ps1` |
 | Linux | ❌ Not supported | N/A | N/A |
 
 ## Quick Start Guide
@@ -79,10 +79,31 @@ You can also use the original quick start scripts:
 run-now.bat
 ``` 
 
+**Windows Users (PowerShell pre-launch check):**
+```powershell
+.\dev.ps1
+```
+
 **macOS Users:**
 ```bash
 chmod +x run-now.sh
 ./run-now.sh
+```
+
+### Autonomous Audio Utilities (Optional)
+
+These commands are useful when you want VAD-driven audio ducking before importing into Resolve.
+Requires `ffmpeg` on your PATH and the optional VAD dependency (`webrtcvad-wheels`).
+
+```bash
+# 1) Detect speech segments (VAD)
+python -m src.autonomous.cli vad --audio path/to/voice.wav
+
+# 2) Duck music only during speech segments
+python -m src.autonomous.cli duck-vad --music path/to/music.wav --vad work/audio/vad.json
+
+# 3) Run full pipeline using VAD-based ducking
+python -m src.autonomous.cli run-all --music path/to/music.wav --vad work/audio/vad.json
 ```
 
 ## Configuration
@@ -154,8 +175,13 @@ Before connecting AI assistants, verify your environment is properly configured:
 # On macOS
 ./scripts/check-resolve-ready.sh
 
-# On Windows
-./scripts/check-resolve-ready.bat
+# On Windows (PowerShell)
+.\scripts\check-resolve-ready.ps1
+# Or from repo root
+.\dev.ps1
+
+# On Windows (Command Prompt)
+.\scripts\check-resolve-ready.bat
 ```
 
 These scripts will:
@@ -438,6 +464,7 @@ After cleanup, the project has the following structure:
 
 - `resolve_mcp_server.py` - The main MCP server implementation
 - `run-now.sh` - Quick start script that handles setup and runs the server
+- `dev.ps1` - PowerShell pre-launch check wrapper (Windows)
 - `setup.sh` - Complete setup script for installation
 - `check-resolve-ready.sh` - Pre-launch check to verify DaVinci Resolve is ready
 - `start-server.sh` - Script to start the server
@@ -449,7 +476,7 @@ After cleanup, the project has the following structure:
 - `logs/` - Log files directory
 - `scripts/` - Helper scripts
 
-When developing, it's recommended to use `./run-now.sh` which sets up the environment and launches the server in one step. 
+When developing, it's recommended to use `./run-now.sh` (macOS/Linux) or `.\dev.ps1` (Windows) to set up the environment and launch the server in one step. 
 
 ## Changelog
 

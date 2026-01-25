@@ -84,11 +84,11 @@ from src.utils.project_properties import (
     get_project_info
 )
 
-# Configure logging
+# Configure logging to stderr (stdout is used for MCP protocol communication)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
+    handlers=[logging.StreamHandler(sys.stderr)]
 )
 logger = logging.getLogger("davinci-resolve-mcp")
 
@@ -661,6 +661,848 @@ def add_marker(frame: int = None, color: str = "Blue", note: str = "") -> str:
     from api.timeline_operations import add_marker as add_marker_func
     return add_marker_func(resolve, frame, color, note)
 
+@mcp.tool()
+def analyze_audio_beats(audio_file_path: str) -> Dict[str, Any]:
+    """Analyze an audio file to detect beats and BPM.
+    
+    Uses librosa for beat detection. Returns beat timestamps that can be used
+    to add markers or sync video cuts to music.
+    
+    Args:
+        audio_file_path: Full path to the audio file (WAV, MP3, FLAC, etc.)
+    
+    Returns:
+        Dictionary with BPM, beat timestamps, and analysis metadata
+    """
+    try:
+        from autonomous.beat_analyzer import BeatAnalyzer, is_librosa_available
+        
+        if not is_librosa_available():
+            return {
+                "error": "librosa not installed. Run: pip install librosa",
+                "success": False
+            }
+        
+        analyzer = BeatAnalyzer()
+        result = analyzer.analyze(audio_file_path)
+        
+        if result is None:
+            return {
+                "error": f"Failed to analyze audio file: {audio_file_path}",
+                "success": False
+            }
+        
+        return {
+            "success": True,
+            "file_path": result.file_path,
+            "bpm": round(result.bpm, 2),
+            "bpm_confidence": round(result.bpm_confidence, 3) if result.bpm_confidence else None,
+            "duration_sec": round(result.duration_sec, 2),
+            "beat_count": len(result.beats_sec),
+            "downbeat_count": len(result.downbeats_sec),
+            "beats_sec": [round(b, 3) for b in result.beats_sec[:50]],  # First 50 beats
+            "downbeats_sec": [round(d, 3) for d in result.downbeats_sec[:20]],  # First 20 downbeats
+            "all_beats_available": len(result.beats_sec),
+            "message": f"Detected {result.bpm:.1f} BPM with {len(result.beats_sec)} beats"
+        }
+        
+    except Exception as e:
+        logger.error(f"Beat analysis error: {e}")
+        return {
+            "error": str(e),
+            "success": False
+        }
+
+@mcp.tool()
+def add_beat_markers(
+    audio_file_path: str,
+    marker_color: str = "Green",
+    downbeat_color: str = "Blue",
+    marker_interval: int = 1,
+    max_markers: int = 100,
+    add_downbeats_only: bool = False,
+    start_frame: int = 0
+) -> str:
+    """Analyze audio and add markers at beat positions in the current timeline.
+    
+    This tool detects beats in an audio file and adds timeline markers at each beat.
+    Great for syncing video cuts to music.
+    
+    Args:
+        audio_file_path: Full path to the audio file to analyze
+        marker_color: Color for regular beat markers (default: Green)
+        downbeat_color: Color for downbeat markers (default: Blue)
+        marker_interval: Add marker every N beats (default: 1 = every beat)
+        max_markers: Maximum number of markers to add (default: 100)
+        add_downbeats_only: If True, only add markers at downbeats (bar starts)
+        start_frame: Timeline frame where the audio starts (default: 0)
+    
+    Returns:
+        Summary of markers added
+    """
+    if resolve is None:
+        return "Error: Not connected to DaVinci Resolve"
+    
+    try:
+        from autonomous.beat_analyzer import BeatAnalyzer, is_librosa_available
+        
+        if not is_librosa_available():
+            return "Error: librosa not installed. Run: pip install librosa"
+        
+        # Analyze beats
+        analyzer = BeatAnalyzer()
+        beat_result = analyzer.analyze(audio_file_path)
+        
+        if beat_result is None:
+            return f"Error: Failed to analyze audio file: {audio_file_path}"
+        
+        # Get current timeline
+        project_manager = resolve.GetProjectManager()
+        if not project_manager:
+            return "Error: Failed to get Project Manager"
+        
+        current_project = project_manager.GetCurrentProject()
+        if not current_project:
+            return "Error: No project currently open"
+        
+        current_timeline = current_project.GetCurrentTimeline()
+        if not current_timeline:
+            return "Error: No timeline currently active"
+        
+        # Get timeline frame rate
+        fps = float(current_timeline.GetSetting("timelineFrameRate") or 24)
+        timeline_start = current_timeline.GetStartFrame()
+        
+        # Select which beats to mark
+        if add_downbeats_only:
+            beats_to_mark = beat_result.downbeats_sec
+            beat_type = "downbeat"
+        else:
+            beats_to_mark = beat_result.beats_sec
+            beat_type = "beat"
+        
+        # Apply interval filter
+        if marker_interval > 1:
+            beats_to_mark = beats_to_mark[::marker_interval]
+        
+        # Limit number of markers
+        beats_to_mark = beats_to_mark[:max_markers]
+        
+        # Add markers
+        markers_added = 0
+        errors = 0
+        
+        for i, beat_sec in enumerate(beats_to_mark):
+            # Convert seconds to frames
+            beat_frame = int(beat_sec * fps) + start_frame + timeline_start
+            
+            # Determine if this is a downbeat
+            is_downbeat = beat_sec in beat_result.downbeats_sec
+            color = downbeat_color if is_downbeat else marker_color
+            
+            # Create marker note
+            beat_num = i + 1
+            note = f"Beat {beat_num}" if not is_downbeat else f"Downbeat {beat_num}"
+            
+            # Add marker to timeline
+            try:
+                marker_data = {
+                    "color": color,
+                    "duration": 1,
+                    "note": note,
+                    "name": f"B{beat_num}",
+                    "customData": ""
+                }
+                result = current_timeline.AddMarker(beat_frame, marker_data["color"], 
+                                                    marker_data["name"], marker_data["note"],
+                                                    marker_data["duration"], marker_data["customData"])
+                if result:
+                    markers_added += 1
+                else:
+                    errors += 1
+            except Exception as e:
+                logger.warning(f"Failed to add marker at frame {beat_frame}: {e}")
+                errors += 1
+        
+        return (
+            f"Successfully added {markers_added} {beat_type} markers to timeline. "
+            f"BPM: {beat_result.bpm:.1f}, Total beats detected: {len(beat_result.beats_sec)}. "
+            f"Errors: {errors}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Add beat markers error: {e}")
+        return f"Error adding beat markers: {str(e)}"
+
+@mcp.tool()
+def get_audio_clip_path(clip_name: str) -> str:
+    """Get the file path of an audio clip in the media pool.
+    
+    Useful for getting the path to pass to analyze_audio_beats.
+    
+    Args:
+        clip_name: Name of the clip in the media pool
+    
+    Returns:
+        File path of the clip, or error message
+    """
+    if resolve is None:
+        return "Error: Not connected to DaVinci Resolve"
+    
+    try:
+        project_manager = resolve.GetProjectManager()
+        if not project_manager:
+            return "Error: Failed to get Project Manager"
+        
+        current_project = project_manager.GetCurrentProject()
+        if not current_project:
+            return "Error: No project currently open"
+        
+        media_pool = current_project.GetMediaPool()
+        if not media_pool:
+            return "Error: Failed to get Media Pool"
+        
+        # Search all folders for the clip
+        root_folder = media_pool.GetRootFolder()
+        all_clips = []
+        
+        def collect_clips(folder):
+            clips = folder.GetClipList()
+            if clips:
+                all_clips.extend(clips)
+            subfolders = folder.GetSubFolderList()
+            for subfolder in subfolders:
+                collect_clips(subfolder)
+        
+        collect_clips(root_folder)
+        
+        # Find the clip by name
+        for clip in all_clips:
+            if clip and clip.GetName() == clip_name:
+                props = clip.GetClipProperty()
+                file_path = props.get("File Path", "")
+                if file_path:
+                    return file_path
+                else:
+                    return f"Error: Clip '{clip_name}' found but has no file path"
+        
+        return f"Error: Clip '{clip_name}' not found in Media Pool"
+        
+    except Exception as e:
+        logger.error(f"Get audio clip path error: {e}")
+        return f"Error: {str(e)}"
+
+@mcp.tool()
+def analyze_video_scenes(
+    video_file_path: str,
+    method: str = "adaptive",
+    threshold: float = None
+) -> Dict[str, Any]:
+    """Analyze a video file to detect scene changes.
+    
+    Uses PySceneDetect to find cuts, fades, and scene transitions.
+    Results can be used to add markers at scene boundaries.
+    
+    Args:
+        video_file_path: Full path to the video file
+        method: Detection method - 'adaptive' (best for most videos), 
+                'content' (for fast cuts), or 'threshold' (for fades)
+        threshold: Detection sensitivity (optional, uses defaults if not set)
+    
+    Returns:
+        Dictionary with scene timestamps and analysis metadata
+    """
+    try:
+        from autonomous.scene_detector import SceneDetector, is_scenedetect_available
+        
+        if not is_scenedetect_available():
+            return {
+                'success': False,
+                'error': "PySceneDetect not installed. Run: pip install scenedetect[opencv]"
+            }
+        
+        detector = SceneDetector(method=method, threshold=threshold)
+        result = detector.analyze(video_file_path)
+        
+        if result is None:
+            return {
+                'success': False,
+                'error': f"Failed to analyze video: {video_file_path}"
+            }
+        
+        return {
+            'success': True,
+            'file_path': result.file_path,
+            'total_scenes': result.total_scenes,
+            'video_duration': round(result.video_duration, 2),
+            'fps': result.fps,
+            'scenes': [s.to_dict() for s in result.scenes[:20]],  # First 20 scenes
+            'all_scenes_count': len(result.scenes),
+            'detection_method': result.detection_method,
+            'message': f"Detected {result.total_scenes} scenes in {result.video_duration:.1f}s video"
+        }
+        
+    except Exception as e:
+        logger.error(f"Scene analysis error: {e}")
+        return {'success': False, 'error': str(e)}
+
+@mcp.tool()
+def add_scene_markers(
+    video_file_path: str,
+    marker_color: str = "Yellow",
+    method: str = "adaptive",
+    start_frame: int = 0,
+    max_markers: int = 50
+) -> str:
+    """Detect scenes in a video and add markers at scene change points.
+    
+    Analyzes the video for cuts and transitions, then adds timeline markers
+    at each scene boundary.
+    
+    Args:
+        video_file_path: Full path to the video file to analyze
+        marker_color: Color for the markers (default: Yellow)
+        method: Detection method - 'adaptive', 'content', or 'threshold'
+        start_frame: Timeline frame where the video starts (default: 0)
+        max_markers: Maximum number of markers to add (default: 50)
+    
+    Returns:
+        Summary of markers added
+    """
+    if resolve is None:
+        return "Error: Not connected to DaVinci Resolve"
+    
+    try:
+        from autonomous.scene_detector import SceneDetector, is_scenedetect_available
+        
+        if not is_scenedetect_available():
+            return "Error: PySceneDetect not installed. Run: pip install scenedetect[opencv]"
+        
+        # Analyze scenes
+        detector = SceneDetector(method=method)
+        result = detector.analyze(video_file_path)
+        
+        if result is None:
+            return f"Error: Failed to analyze video: {video_file_path}"
+        
+        if not result.scenes:
+            return f"No scene changes detected in: {video_file_path}"
+        
+        # Get current timeline
+        project_manager = resolve.GetProjectManager()
+        if not project_manager:
+            return "Error: Failed to get Project Manager"
+        
+        current_project = project_manager.GetCurrentProject()
+        if not current_project:
+            return "Error: No project currently open"
+        
+        current_timeline = current_project.GetCurrentTimeline()
+        if not current_timeline:
+            return "Error: No timeline currently active"
+        
+        # Get timeline frame rate and start
+        fps = float(current_timeline.GetSetting("timelineFrameRate") or result.fps)
+        timeline_start = current_timeline.GetStartFrame()
+        
+        # Add markers at scene boundaries
+        scenes_to_mark = result.scenes[:max_markers]
+        markers_added = 0
+        errors = 0
+        
+        for scene in scenes_to_mark:
+            # Convert scene start time to frame
+            scene_frame = int(scene.start_time * fps) + start_frame + timeline_start
+            
+            # Add marker
+            try:
+                marker_result = current_timeline.AddMarker(
+                    scene_frame,
+                    marker_color,
+                    f"Scene {scene.index}",
+                    f"Cut at {scene.start_time:.2f}s",
+                    1,  # duration
+                    ""  # customData
+                )
+                if marker_result:
+                    markers_added += 1
+                else:
+                    errors += 1
+            except Exception as e:
+                logger.warning(f"Failed to add marker at frame {scene_frame}: {e}")
+                errors += 1
+        
+        return (
+            f"Added {markers_added} scene markers. "
+            f"Total scenes detected: {result.total_scenes}. "
+            f"Errors: {errors}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Add scene markers error: {e}")
+        return f"Error: {str(e)}"
+
+@mcp.tool()
+def get_video_clip_path(clip_name: str) -> str:
+    """Get the file path of a video clip in the media pool.
+    
+    Useful for getting the path to pass to scene detection tools.
+    
+    Args:
+        clip_name: Name of the clip in the media pool
+    
+    Returns:
+        File path of the clip, or error message
+    """
+    if resolve is None:
+        return "Error: Not connected to DaVinci Resolve"
+    
+    try:
+        project_manager = resolve.GetProjectManager()
+        if not project_manager:
+            return "Error: Failed to get Project Manager"
+        
+        current_project = project_manager.GetCurrentProject()
+        if not current_project:
+            return "Error: No project currently open"
+        
+        media_pool = current_project.GetMediaPool()
+        if not media_pool:
+            return "Error: Failed to get Media Pool"
+        
+        # Search all folders for the clip
+        root_folder = media_pool.GetRootFolder()
+        all_clips = []
+        
+        def collect_clips(folder):
+            clips = folder.GetClipList()
+            if clips:
+                all_clips.extend(clips)
+            subfolders = folder.GetSubFolderList()
+            for subfolder in subfolders:
+                collect_clips(subfolder)
+        
+        collect_clips(root_folder)
+        
+        # Find the clip by name
+        for clip in all_clips:
+            if clip and clip.GetName() == clip_name:
+                props = clip.GetClipProperty()
+                file_path = props.get("File Path", "")
+                if file_path:
+                    return file_path
+                else:
+                    return f"Error: Clip '{clip_name}' found but has no file path"
+        
+        return f"Error: Clip '{clip_name}' not found in Media Pool"
+        
+    except Exception as e:
+        logger.error(f"Get video clip path error: {e}")
+        return f"Error: {str(e)}"
+
+@mcp.tool()
+def analyze_clip_with_ai(
+    clip_name: str,
+    provider: str = "gemini",
+    num_frames: int = 5,
+    model: str = None
+) -> Dict[str, Any]:
+    """Analyze a video clip using AI to generate metadata.
+    
+    Uses Google Gemini or OpenAI to analyze frames and generate:
+    - Cinematic descriptions
+    - Keywords for organization
+    - Scene type, mood, lighting info
+    - Camera movement detection
+    - Color palette and subjects
+    
+    Args:
+        clip_name: Name of the clip in the media pool
+        provider: AI provider - 'gemini' (recommended, free tier) or 'openai'
+        num_frames: Frames to analyze (3, 5, or 7)
+        model: Model to use (default: gemini-1.5-flash or gpt-4o-mini)
+    
+    Returns:
+        Dictionary with analysis results
+    
+    Note: Requires GEMINI_API_KEY or OPENAI_API_KEY environment variable.
+    """
+    if resolve is None:
+        return {'success': False, 'error': 'Not connected to DaVinci Resolve'}
+    
+    try:
+        # Get clip file path
+        project_manager = resolve.GetProjectManager()
+        if not project_manager:
+            return {'success': False, 'error': 'Failed to get Project Manager'}
+        
+        current_project = project_manager.GetCurrentProject()
+        if not current_project:
+            return {'success': False, 'error': 'No project currently open'}
+        
+        media_pool = current_project.GetMediaPool()
+        if not media_pool:
+            return {'success': False, 'error': 'Failed to get Media Pool'}
+        
+        # Search for clip
+        root_folder = media_pool.GetRootFolder()
+        clip_path = None
+        
+        def find_clip(folder):
+            nonlocal clip_path
+            clips = folder.GetClipList()
+            if clips:
+                for clip in clips:
+                    if clip and clip.GetName() == clip_name:
+                        props = clip.GetClipProperty()
+                        clip_path = props.get("File Path", "")
+                        return
+            subfolders = folder.GetSubFolderList()
+            for subfolder in subfolders:
+                find_clip(subfolder)
+        
+        find_clip(root_folder)
+        
+        if not clip_path:
+            return {'success': False, 'error': f"Clip '{clip_name}' not found in Media Pool"}
+        
+        # Run AI analysis
+        from autonomous.clip_analyzer import analyze_clip, is_gemini_available, is_openai_available
+        
+        # Check API availability
+        if provider == "gemini" and not is_gemini_available():
+            return {
+                'success': False,
+                'error': "Gemini not available. Set GEMINI_API_KEY environment variable or install: pip install google-generativeai"
+            }
+        elif provider == "openai" and not is_openai_available():
+            return {
+                'success': False,
+                'error': "OpenAI not available. Set OPENAI_API_KEY environment variable or install: pip install openai"
+            }
+        
+        result = analyze_clip(
+            video_path=clip_path,
+            clip_name=clip_name,
+            num_frames=num_frames,
+            provider=provider,
+            model=model
+        )
+        
+        if result is None:
+            return {'success': False, 'error': 'Analysis failed'}
+        
+        return {
+            'success': True,
+            'clip_name': result.clip_name,
+            'description': result.description,
+            'keywords': result.keywords,
+            'scene_type': result.scene_type,
+            'mood': result.mood,
+            'lighting': result.lighting,
+            'camera_movement': result.camera_movement,
+            'colors': result.colors,
+            'subjects': result.subjects,
+            'model_used': result.model_used,
+            'frames_analyzed': result.frames_analyzed
+        }
+        
+    except ImportError as e:
+        return {
+            'success': False,
+            'error': f"Missing dependency: {e}. Install with: pip install google-generativeai openai"
+        }
+    except Exception as e:
+        logger.error(f"Clip analysis error: {e}")
+        return {'success': False, 'error': str(e)}
+
+@mcp.tool()
+def analyze_all_timeline_clips(
+    provider: str = "gemini",
+    num_frames: int = 3
+) -> Dict[str, Any]:
+    """Analyze all video clips in the current timeline with AI.
+    
+    Batch analyzes all video clips, generating metadata for each.
+    Uses fewer frames per clip (3) by default to reduce API costs.
+    
+    Args:
+        provider: AI provider - 'gemini' or 'openai'
+        num_frames: Frames per clip (3 recommended for batch)
+    
+    Returns:
+        Dictionary with analysis results for all clips
+    """
+    if resolve is None:
+        return {'success': False, 'error': 'Not connected to DaVinci Resolve'}
+    
+    try:
+        project_manager = resolve.GetProjectManager()
+        current_project = project_manager.GetCurrentProject()
+        timeline = current_project.GetCurrentTimeline()
+        
+        if not timeline:
+            return {'success': False, 'error': 'No timeline active'}
+        
+        # Get all video clips
+        video_track_count = timeline.GetTrackCount('video')
+        clips_to_analyze = []
+        
+        for track in range(1, video_track_count + 1):
+            items = timeline.GetItemListInTrack('video', track)
+            if items:
+                for item in items:
+                    clip_name = item.GetName()
+                    # Get source clip from media pool
+                    media_pool_item = item.GetMediaPoolItem()
+                    if media_pool_item:
+                        props = media_pool_item.GetClipProperty()
+                        file_path = props.get("File Path", "")
+                        if file_path:
+                            clips_to_analyze.append({
+                                'name': clip_name,
+                                'path': file_path
+                            })
+        
+        if not clips_to_analyze:
+            return {'success': False, 'error': 'No video clips found in timeline'}
+        
+        from autonomous.clip_analyzer import analyze_clip
+        
+        results = []
+        analyzed = 0
+        failed = 0
+        
+        for clip_info in clips_to_analyze:
+            result = analyze_clip(
+                video_path=clip_info['path'],
+                clip_name=clip_info['name'],
+                num_frames=num_frames,
+                provider=provider
+            )
+            
+            if result:
+                results.append(result.to_dict())
+                analyzed += 1
+            else:
+                failed += 1
+        
+        return {
+            'success': True,
+            'clips_analyzed': analyzed,
+            'clips_failed': failed,
+            'results': results,
+            'message': f"Analyzed {analyzed} clips with {provider}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Timeline analysis error: {e}")
+        return {'success': False, 'error': str(e)}
+
+@mcp.tool()
+def duck_audio_under_voiceover(
+    voiceover_clip_name: str,
+    music_clip_name: str,
+    output_filename: str = None,
+    duck_db: float = 10.0
+) -> Dict[str, Any]:
+    """Duck (lower volume of) music wherever voiceover is detected.
+    
+    Analyzes the voiceover for speech segments, then creates a new music file
+    with volume reduced during speech. The ducked file can be imported into Resolve.
+    
+    Args:
+        voiceover_clip_name: Name of the voiceover clip in media pool
+        music_clip_name: Name of the music clip in media pool
+        output_filename: Optional output filename (default: music_ducked.wav)
+        duck_db: How much to reduce music in dB (default: 10dB)
+    
+    Returns:
+        Dictionary with output path and ducking info
+    """
+    import tempfile
+    from pathlib import Path
+    
+    try:
+        # Get file paths from media pool
+        vo_path = None
+        music_path = None
+        
+        if resolve is None:
+            return {'success': False, 'error': 'Not connected to DaVinci Resolve'}
+        
+        project_manager = resolve.GetProjectManager()
+        if not project_manager:
+            return {'success': False, 'error': 'Failed to get Project Manager'}
+        
+        current_project = project_manager.GetCurrentProject()
+        if not current_project:
+            return {'success': False, 'error': 'No project currently open'}
+        
+        media_pool = current_project.GetMediaPool()
+        if not media_pool:
+            return {'success': False, 'error': 'Failed to get Media Pool'}
+        
+        # Search all folders for clips
+        root_folder = media_pool.GetRootFolder()
+        all_clips = []
+        
+        def collect_clips(folder):
+            clips = folder.GetClipList()
+            if clips:
+                all_clips.extend(clips)
+            subfolders = folder.GetSubFolderList()
+            for subfolder in subfolders:
+                collect_clips(subfolder)
+        
+        collect_clips(root_folder)
+        
+        # Find both clips
+        for clip in all_clips:
+            if clip:
+                name = clip.GetName()
+                props = clip.GetClipProperty()
+                file_path = props.get("File Path", "")
+                if name == voiceover_clip_name and file_path:
+                    vo_path = file_path
+                elif name == music_clip_name and file_path:
+                    music_path = file_path
+        
+        if not vo_path:
+            return {'success': False, 'error': f"Voiceover clip '{voiceover_clip_name}' not found"}
+        if not music_path:
+            return {'success': False, 'error': f"Music clip '{music_clip_name}' not found"}
+        
+        # Run VAD on voiceover
+        from autonomous.analysis.vad import detect_speech_segments, vad_summary
+        
+        logger.info(f"Detecting speech in: {vo_path}")
+        segments = detect_speech_segments(vo_path)
+        vad_data = vad_summary(segments)
+        
+        if not vad_data.get('has_speech'):
+            return {
+                'success': True,
+                'message': 'No speech detected in voiceover - no ducking needed',
+                'original_music': music_path
+            }
+        
+        # Save VAD JSON temporarily
+        with tempfile.TemporaryDirectory() as td:
+            vad_json_path = Path(td) / "vad.json"
+            from autonomous.analysis.vad import write_vad_json
+            write_vad_json(vad_data, str(vad_json_path))
+            
+            # Create output path
+            music_p = Path(music_path)
+            if output_filename:
+                output_path = music_p.parent / output_filename
+            else:
+                output_path = music_p.parent / f"{music_p.stem}_ducked.wav"
+            
+            # Run audio ducking
+            from autonomous.audio_ducker import duck_music_segment_aware, DuckingConfig
+            
+            cfg = DuckingConfig(duck_db=duck_db)
+            result = duck_music_segment_aware(
+                music_in=Path(music_path),
+                vad_json=vad_json_path,
+                music_out=output_path,
+                cfg=cfg
+            )
+            
+            return {
+                'success': True,
+                'output_path': str(output_path),
+                'speech_segments': len(vad_data.get('segments', [])),
+                'speech_seconds': vad_data.get('speech_seconds', 0),
+                'duck_regions': len(result.get('regions', [])),
+                'duck_db': duck_db,
+                'message': f"Created ducked audio: {output_path.name}. Import this file into your timeline."
+            }
+        
+    except ImportError as e:
+        return {
+            'success': False,
+            'error': f"Missing dependency: {e}. Install with: pip install webrtcvad-wheels"
+        }
+    except Exception as e:
+        logger.error(f"Audio ducking error: {e}")
+        return {'success': False, 'error': str(e)}
+
+@mcp.tool()
+def add_clip_from_bin(clip_name: str, bin_name: str = "Master") -> str:
+    """Add a specific clip from a bin to the current timeline.
+    
+    Clips are appended to the end of existing content on the timeline.
+    
+    Args:
+        clip_name: Name of the clip to add
+        bin_name: Name of the bin containing the clip (default: Master/root)
+    
+    Returns:
+        Success or error message
+    """
+    if resolve is None:
+        return "Error: Not connected to DaVinci Resolve"
+    
+    try:
+        project_manager = resolve.GetProjectManager()
+        if not project_manager:
+            return "Error: Failed to get Project Manager"
+        
+        current_project = project_manager.GetCurrentProject()
+        if not current_project:
+            return "Error: No project currently open"
+        
+        media_pool = current_project.GetMediaPool()
+        if not media_pool:
+            return "Error: Failed to get Media Pool"
+        
+        current_timeline = current_project.GetCurrentTimeline()
+        if not current_timeline:
+            return "Error: No timeline currently active"
+        
+        # Find the target bin
+        root_folder = media_pool.GetRootFolder()
+        target_folder = None
+        
+        if bin_name.lower() == "master" or bin_name == root_folder.GetName():
+            target_folder = root_folder
+        else:
+            folders = root_folder.GetSubFolderList()
+            for folder in folders:
+                if folder and folder.GetName() == bin_name:
+                    target_folder = folder
+                    break
+        
+        if not target_folder:
+            return f"Error: Bin '{bin_name}' not found"
+        
+        # Find the clip in the bin
+        clips = target_folder.GetClipList()
+        target_clip = None
+        
+        for clip in clips:
+            if clip and clip.GetName() == clip_name:
+                target_clip = clip
+                break
+        
+        if not target_clip:
+            return f"Error: Clip '{clip_name}' not found in bin '{bin_name}'"
+        
+        # Add clip to timeline
+        result = media_pool.AppendToTimeline([target_clip])
+        
+        if result and len(result) > 0:
+            return f"Successfully added '{clip_name}' to timeline"
+        else:
+            return f"Failed to add '{clip_name}' to timeline"
+        
+    except Exception as e:
+        logger.error(f"Add clip from bin error: {e}")
+        return f"Error: {str(e)}"
+
 # ------------------
 # Media Pool Operations
 # ------------------
@@ -796,6 +1638,89 @@ def create_bin(name: str) -> str:
     from api.media_operations import create_bin as create_bin_func
     return create_bin_func(resolve, name)
 
+@mcp.tool()
+def list_bin_clips(bin_name: str = "Master") -> List[Dict[str, Any]]:
+    """List all clips in a specific bin/folder in the media pool.
+    
+    Args:
+        bin_name: The name of the bin to list clips from. Use 'Master' for the root folder.
+    """
+    from api.media_operations import get_bin_contents as get_bin_contents_func
+    return get_bin_contents_func(resolve, bin_name)
+
+@mcp.tool()
+def add_all_bin_clips_to_timeline(bin_name: str, timeline_name: str = None) -> str:
+    """Add all clips from a bin to the timeline.
+    
+    Args:
+        bin_name: Name of the bin containing clips to add
+        timeline_name: Optional timeline to target (uses current if not specified)
+    """
+    if not resolve:
+        return "Error: Not connected to DaVinci Resolve"
+    
+    project_manager = resolve.GetProjectManager()
+    if not project_manager:
+        return "Error: Failed to get Project Manager"
+    
+    current_project = project_manager.GetCurrentProject()
+    if not current_project:
+        return "Error: No project currently open"
+        
+    media_pool = current_project.GetMediaPool()
+    if not media_pool:
+        return "Error: Failed to get Media Pool"
+    
+    # Get the root folder
+    root_folder = media_pool.GetRootFolder()
+    if not root_folder:
+        return "Error: Failed to get Root Folder"
+    
+    # Find the target bin
+    target_folder = None
+    if bin_name.lower() == "master" or bin_name == root_folder.GetName():
+        target_folder = root_folder
+    else:
+        # Search in subfolders
+        folders = root_folder.GetSubFolderList()
+        for folder in folders:
+            if folder and folder.GetName() == bin_name:
+                target_folder = folder
+                break
+    
+    if not target_folder:
+        return f"Error: Bin '{bin_name}' not found in Media Pool"
+    
+    # Get clips from the target folder
+    clips = target_folder.GetClipList()
+    if not clips or len(clips) == 0:
+        return f"Error: No clips found in bin '{bin_name}'"
+    
+    # Get the target timeline
+    timeline = None
+    if timeline_name:
+        timeline_count = current_project.GetTimelineCount()
+        for i in range(1, timeline_count + 1):
+            t = current_project.GetTimelineByIndex(i)
+            if t and t.GetName() == timeline_name:
+                timeline = t
+                current_project.SetCurrentTimeline(timeline)
+                break
+        if not timeline:
+            return f"Error: Timeline '{timeline_name}' not found"
+    else:
+        timeline = current_project.GetCurrentTimeline()
+        if not timeline:
+            return "Error: No timeline currently active"
+    
+    # Add all clips to timeline
+    result = media_pool.AppendToTimeline(clips)
+    
+    if result and len(result) > 0:
+        return f"Successfully added {len(clips)} clips from bin '{bin_name}' to timeline"
+    else:
+        return f"Failed to add clips from bin '{bin_name}' to timeline"
+
 @mcp.resource("resolve://media-pool-bins")
 def list_media_pool_bins() -> List[Dict[str, Any]]:
     """List all bins/folders in the media pool."""
@@ -920,6 +1845,53 @@ def apply_lut(lut_path: str, node_index: int = None) -> str:
     """
     from api.color_operations import apply_lut as apply_lut_func
     return apply_lut_func(resolve, lut_path, node_index)
+
+@mcp.tool()
+def list_color_presets() -> Dict[str, Any]:
+    """List all available cinematic color presets.
+    
+    Returns a dictionary of preset names with their descriptions.
+    Use apply_color_preset to apply one of these looks to your clips.
+    """
+    from api.color_presets import get_available_presets
+    presets = get_available_presets()
+    return {
+        'success': True,
+        'preset_count': len(presets),
+        'presets': presets,
+        'usage': "Use apply_color_preset with a preset name like 'netflix', 'teal-orange', 'music-video'"
+    }
+
+@mcp.tool()
+def apply_color_preset(
+    preset_name: str,
+    apply_to_all: bool = True,
+    track: int = None
+) -> Dict[str, Any]:
+    """Apply a professional cinematic color preset to timeline clips.
+    
+    Available presets:
+    - netflix: Warm midtones, deep shadows (streaming standard)
+    - teal-orange: Hollywood blockbuster look
+    - music-video: High saturation, strong contrast
+    - cyberpunk: Neon magenta/cyan, very saturated
+    - bleach-bypass: Desaturated, gritty, high contrast
+    - vintage: Faded, warm, nostalgic
+    - kodak-5219: Film stock emulation
+    - documentary: Natural, low contrast
+    - arri-alexa: Clean, natural look
+    - moody-dark: Dark, crushed blacks
+    
+    Args:
+        preset_name: Name of the preset to apply (see list above)
+        apply_to_all: Apply to all video clips if True
+        track: Specific video track number to target (optional)
+    
+    Returns:
+        Results of the operation
+    """
+    from api.color_presets import apply_preset_to_clips
+    return apply_preset_to_clips(resolve, preset_name, apply_to_all, track)
 
 @mcp.tool()
 def set_color_wheel_param(wheel: str, param: str, value: float, node_index: int = None) -> str:

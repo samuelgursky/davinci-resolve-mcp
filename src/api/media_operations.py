@@ -307,13 +307,23 @@ def add_clip_to_timeline(resolve, clip_name: str, timeline_name: str = None) -> 
     if not media_pool:
         return "Error: Failed to get Media Pool"
     
-    # Get all clips in root folder
+    # Get all clips from root folder and subfolders
     root_folder = media_pool.GetRootFolder()
-    clips = root_folder.GetClipList()
+    all_clips = []
+    
+    def collect_clips(folder):
+        clips = folder.GetClipList()
+        if clips:
+            all_clips.extend(clips)
+        subfolders = folder.GetSubFolderList()
+        for subfolder in subfolders:
+            collect_clips(subfolder)
+    
+    collect_clips(root_folder)
     
     target_clip = None
-    for clip in clips:
-        if clip.GetName() == clip_name:
+    for clip in all_clips:
+        if clip and clip.GetName() == clip_name:
             target_clip = clip
             break
     

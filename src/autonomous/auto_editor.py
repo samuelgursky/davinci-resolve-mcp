@@ -458,13 +458,18 @@ class AutoEditor:
             else:
                 plan.log(f"WARNING: Audio file not found: {audio_ref.source_path}")
 
-        # Add to render queue if specified
-        if plan.render:
+        # Add to render queue only if explicitly configured with a valid preset name
+        if plan.render and plan.render.preset_name and plan.render.preset_name.strip():
             plan.log(f"Adding to render queue with preset: {plan.render.preset_name}")
-            if self.add_to_render_queue(plan.render.preset_name, plan.timeline.name):
-                plan.log("Added to render queue")
-            else:
-                plan.log("WARNING: Failed to add to render queue")
+            try:
+                if self.add_to_render_queue(plan.render.preset_name, plan.timeline.name):
+                    plan.log("Added to render queue")
+                else:
+                    plan.log("WARNING: Failed to add to render queue")
+            except Exception as e:
+                plan.log(f"WARNING: Render queue error (skipped): {e}")
+        else:
+            plan.log("Render skipped (manual render)")
 
         plan.executed = True
         plan.log("Plan execution completed")
@@ -525,11 +530,8 @@ class AutoEditor:
                 audio_type="voiceover",
             )
 
-        # Set render preset
-        if self.config.resolve.render_preset_name:
-            plan.set_render(
-                preset_name=self.config.resolve.render_preset_name,
-                output_directory=self.config.resolve.output_directory,
-            )
+        # NOTE: Render preset is NOT set by default.
+        # User must explicitly pass --render-preset to enable rendering.
+        # This is intentional to prevent accidental renders.
 
         return plan

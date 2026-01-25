@@ -80,5 +80,6 @@ def setup_environment():
         return True
     
     except Exception as e:
-        print(f"Error setting up environment: {str(e)}")
+        import sys
+        print(f"Error setting up environment: {str(e)}", file=sys.stderr)
         return False 

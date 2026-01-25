@@ -21,9 +21,26 @@ pytest>=7.0.0
 # Install these only if you need the specific features
 # =============================================================================
 
-# Milestone 3 - Video Analysis (optional)
-# pip install scenedetect[opencv]  # Scene detection
+# Milestone 3 - Video Analysis
+scenedetect[opencv]>=0.6.0         # Scene/shot detection in videos
+
+# Audio transcription (optional)
 # pip install faster-whisper       # Audio transcription
 
-# Milestone 5 - Beat Sync (optional)
-# pip install librosa              # Beat detection from audio 
+# Milestone 5 - Beat Sync
+librosa>=0.10.0                    # Beat detection from audio
+numpy>=1.20.0                      # Required by librosa
+soundfile>=0.12.0                  # Audio file I/O for librosa
+
+# Voice Activity Detection (optional)
+webrtcvad-wheels                   # Pre-built wheels for WebRTC VAD
+
+# Enhanced DaVinci Resolve API wrapper
+git+https://github.com/pedrolabonia/pydavinci.git  # Type hints, auto-completion
+
+# Audio processing for ducking/mixing
+pydub>=0.25.0                      # Audio manipulation
+
+# AI-powered clip analysis (optional - for Metafootage features)
+google-generativeai>=0.3.0         # Google Gemini API
+openai>=1.0.0                      # OpenAI API (alternative to Gemini)

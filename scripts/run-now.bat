@@ -9,11 +9,13 @@ echo.
 
 REM Get the script directory and root directory (using absolute paths)
 set SCRIPT_DIR=%~dp0
-set ROOT_DIR=%SCRIPT_DIR%..
+REM Change to parent directory to get normalized root path
+cd /d "%SCRIPT_DIR%.."
+set ROOT_DIR=%CD%
 echo Project root: %ROOT_DIR%
 
-set VENV_DIR=%ROOT_DIR%venv
-set RESOLVE_MCP_SERVER=%ROOT_DIR%src\resolve_mcp_server.py
+set VENV_DIR=%ROOT_DIR%\venv
+set RESOLVE_MCP_SERVER=%ROOT_DIR%\src\main.py
 
 REM Check if Python is installed
 where python >nul 2>nul
@@ -94,12 +96,21 @@ if not exist "%ROOT_DIR%\requirements.txt" (
 
 REM Install dependencies from requirements.txt
 echo Installing dependencies from requirements.txt...
-call "%VENV_DIR%\Scripts\pip" install -r "%ROOT_DIR%\requirements.txt"
+if exist "%VENV_DIR%\Scripts\pip.exe" (
+    call "%VENV_DIR%\Scripts\pip.exe" install -r "%ROOT_DIR%\requirements.txt"
+) else (
+    echo Warning: pip not found in venv, using system pip
+    python -m pip install -r "%ROOT_DIR%\requirements.txt"
+)
 
 REM Check if MCP CLI is installed
 if not exist "%VENV_DIR%\Scripts\mcp.exe" (
     echo MCP command not found. Installing MCP[cli]...
-    call "%VENV_DIR%\Scripts\pip" install "mcp[cli]"
+    if exist "%VENV_DIR%\Scripts\pip.exe" (
+        call "%VENV_DIR%\Scripts\pip.exe" install "mcp[cli]"
+    ) else (
+        python -m pip install "mcp[cli]"
+    )
     
     if %ERRORLEVEL% NEQ 0 (
         echo Failed to install MCP. Please check your internet connection and try again.
@@ -132,4 +143,10 @@ echo Using server script: %RESOLVE_MCP_SERVER%
 echo.
 
 cd "%ROOT_DIR%"
-"%VENV_DIR%\Scripts\mcp" dev "%RESOLVE_MCP_SERVER%"
+REM Use system Python if venv doesn't have pip (packages are in system Python)
+if exist "%VENV_DIR%\Scripts\pip.exe" (
+    "%VENV_DIR%\Scripts\python.exe" "%RESOLVE_MCP_SERVER%"
+) else (
+    echo Using system Python since venv is not properly set up
+    python "%RESOLVE_MCP_SERVER%"
+)

@@ -1,0 +1,281 @@
+#line 2
+/*
+Custom Input color transform from Sony Slog / S-Gamut
+written by Moazelgabry. moazelgabry.com
+
+*/
+typedef struct {
+        float3 x, y, z;
+} float3x3;
+
+__DEVICE__ float3x3 make_float3x3(float3 a, float3 b, float3 c) {
+    float3x3 d;
+    d.x = a, d.y = b, d.z = c;
+    return d;
+}
+
+__DEVICE__ inline float3x3 inv_f33(float3x3 m) {
+    float d = m.x.x * (m.y.y * m.z.z - m.z.y * m.y.z) - m.x.y * (m.y.x * m.z.z - m.y.z * m.z.x) + m.x.z * (m.y.x * m.z.y - m.y.y * m.z.x);
+    float id = 1.0f / d;
+    float3x3 c = make_float3x3(make_float3(1.0f, 0.0f, 0.0f), make_float3(0.0f, 1.0f, 0.0f), make_float3(0.0f, 0.0f, 1.0f));
+    c.x.x = id * (m.y.y * m.z.z - m.z.y * m.y.z);
+    c.x.y = id * (m.x.z * m.z.y - m.x.y * m.z.z);
+    c.x.z = id * (m.x.y * m.y.z - m.x.z * m.y.y);
+    c.y.x = id * (m.y.z * m.z.x - m.y.x * m.z.z);
+    c.y.y = id * (m.x.x * m.z.z - m.x.z * m.z.x);
+    c.y.z = id * (m.y.x * m.x.z - m.x.x * m.y.z);
+    c.z.x = id * (m.y.x * m.z.y - m.z.x * m.y.y);
+    c.z.y = id * (m.z.x * m.x.y - m.x.x * m.z.y);
+    c.z.z = id * (m.x.x * m.y.y - m.y.x * m.x.y);
+    return c;
+}
+__DEVICE__ float powf(float base, float exp) {
+  return _powf(_fabs(base), exp);
+}
+//Helper Function to Multiply 3x3 Matrix with Vector3:
+
+__DEVICE__ float3x3 mult_f3_f33_f33(float3 a, float3 b, float3x3 ma, float3x3 mb) {
+  float3x3 mc;
+  mc.x.x = mb.x.x * (b.x/a.x) * ma.x.x + mb.x.y * (b.y/a.y) * ma.y.x + mb.x.z * (b.z/a.z) * ma.z.x;
+  mc.x.y = mb.x.x * (b.x/a.x) * ma.x.y + mb.x.y * (b.y/a.y) * ma.y.y + mb.x.z * (b.z/a.z) * ma.z.y;
+  mc.x.z = mb.x.x * (b.x/a.x) * ma.x.z + mb.x.y * (b.y/a.y) * ma.y.z + mb.x.z * (b.z/a.z) * ma.z.z;
+  mc.y.x = mb.y.x * (b.x/a.x) * ma.x.x + mb.y.y * (b.y/a.y) * ma.y.x + mb.y.z * (b.z/a.z) * ma.z.x;
+  mc.y.y = mb.y.x * (b.x/a.x) * ma.x.y + mb.y.y * (b.y/a.y) * ma.y.y + mb.y.z * (b.z/a.z) * ma.z.y;
+  mc.y.z = mb.y.x * (b.x/a.x) * ma.x.z + mb.y.y * (b.y/a.y) * ma.y.z + mb.y.z * (b.z/a.z) * ma.z.z;
+  mc.z.x = mb.z.x * (b.x/a.x) * ma.x.x + mb.z.y * (b.y/a.y) * ma.y.x + mb.z.z * (b.z/a.z) * ma.z.x;
+  mc.z.y = mb.z.x * (b.x/a.x) * ma.x.y + mb.z.y * (b.y/a.y) * ma.y.y + mb.z.z * (b.z/a.z) * ma.z.y;
+  mc.z.z = mb.z.x * (b.x/a.x) * ma.x.z + mb.z.y * (b.y/a.y) * ma.y.z + mb.z.z * (b.z/a.z) * ma.z.z;
+  return mc;
+}
+__DEVICE__ float3 mult_f33_f3(float3x3 m, float3 a){
+  return make_float3( m.x.x * a.x + m.x.y * a.y + m.x.z * a.z,
+            m.y.x * a.x + m.y.y * a.y + m.y.z * a.z,
+            m.z.x * a.x + m.z.y * a.y + m.z.z * a.z);
+}
+
+
+
+#define whitepaper_SGamut_to_XYZ make_float3x3(make_float3(0.7648271319f, 0.2709796708f, -0.0096778454f), make_float3(0.1288010498f, 0.7866064112f, 0.0046000375f), make_float3(0.1151721641f, -0.0575860820f, 1.094135587f))
+#define bradford_SGamut_to_XYZ make_float3x3(make_float3(0.749592f,  0.156488f,  0.093920f), make_float3(0.291356f,  0.770315f, -0.061670f), make_float3(-0.009867f,  0.006001f,  1.003866f))
+#define CAT02_SGamut_to_XYZ make_float3x3(make_float3( 0.743451f,  0.165740f,  0.090809f), make_float3( 0.287051f,  0.776851f, -0.063902f), make_float3(-0.009709f,  0.003346f,  1.006363f))
+#define test_SGamut_to_XYZ make_float3x3(make_float3(  0.743309f,  0.135515f,  0.121176f), make_float3(  0.270980f,  0.786606f, -0.057586f), make_float3(-0.008886f,  0.004224f,  1.004663f))
+#define matrix_dwg_to_xyz make_float3x3(make_float3(0.745602f, 0.183144f, 0.071254f), make_float3(0.295008f, 0.857088f, -0.152096f), make_float3(-0.091799f, -0.124611f, 1.216410f))
+#define matrix_xyz_to_dwg make_float3x3(make_float3(1.51667204202f, -0.281478047879f, -0.146963633237f), make_float3(-0.464917101233f, 1.25142377568f, 0.174884608865f), make_float3(0.064849047067f, 0.109139343711f, 0.76141462155f))
+#define matrix_xyz_to_logc3 make_float3x3(make_float3(1.78906555097f, -0.482533863771f, -0.200075792936f), make_float3(-0.639848659902f, 1.39639995686f, 0.194432291778f), make_float3(-0.041531545853f, 0.082335373554f, 0.878868480293f))
+#define matrix_davinciwg_to_xyz make_float3x3(make_float3( 0.700622320175f, 0.148774802685f, 0.101058728993f), make_float3( 0.274118483067f, 0.873631775379f,-0.147750422359f), make_float3(-0.098962903023f,-0.137895315886f, 1.325916051865f))
+#define matrix_dwg_WPfix make_float3x3(make_float3( 1.032449f, -0.063055f,  0.030605f), make_float3(-0.006363f,  0.998049f,  0.008314f),make_float3(-0.009737f, -0.008747f,  1.018484f))
+
+ __DEVICE__ float3 inline oetf_sony_slog2(float3 x, int inv) {
+  /* Sony S-Log2
+      from the pdf originally retrieved from :
+      https://pro.sony/ue_US/?sonyref=pro.sony.com/bbsccms/assets/files/micro/dmpc/training/S-Log2_Technical_PaperV1_0.pdf
+      Link is down, here is a mirror:
+      https://mega.nz/file/e6hDxC5b#YaRzePfGFFPkx_hRtmqw2gTT0NIPuzlJycwCP38H720
+  */
+    const float c0 = 0.432699f;
+    const float c1 = 155.0f;
+    const float c2 = 219.0f;
+    const float c3 = 0.037584f;
+    const float c4 = 0.616596f;
+    const float c5 = 0.03f;
+    const float c6 = 3.53881278538813f;
+    const float c7 = 0.030001222851889303f;
+
+    float3 result;
+
+    if (inv == 1) {
+        // Inverse transformation
+        float3 normalized = (x - (64.0f / 1023.0f)) / (876.0f / 1023.0f);
+        result.x = (normalized.x < c7) ? (normalized.x - c7) / c6
+                                       : c2 * (_exp10f((normalized.x - c4 - c5) / c0) - c3) / c1;
+        result.y = (normalized.y < c7) ? (normalized.y - c7) / c6
+                                       : c2 * (_exp10f((normalized.y - c4 - c5) / c0) - c3) / c1;
+        result.z = (normalized.z < c7) ? (normalized.z - c7) / c6
+                                       : c2 * (_exp10f((normalized.z - c4 - c5) / c0) - c3) / c1;
+        result = result * 0.9f;
+    } else {
+        // Forward transformation
+        float3 scaled = x / 0.9f;
+        result.x = (scaled.x < 0.0f) ? scaled.x * c6 + c7
+                                     : (c0 * _log10f(c1 * scaled.x / c2 + c3) + c4) + c5;
+        result.y = (scaled.y < 0.0f) ? scaled.y * c6 + c7
+                                     : (c0 * _log10f(c1 * scaled.y / c2 + c3) + c4) + c5;
+        result.z = (scaled.z < 0.0f) ? scaled.z * c6 + c7
+                                     : (c0 * _log10f(c1 * scaled.z / c2 + c3) + c4) + c5;
+        result = result * (876.0f / 1023.0f) + (64.0f / 1023.0f);
+    }
+
+    return result;
+  }
+ __DEVICE__ float3 inline oetf_davinci_intermediate(float3 x, int inv) {
+    /* DaVinci Intermediate Log OETF and Inverse OETF
+       Reference:
+       https://documents.blackmagicdesign.com/InformationNotes/DaVinci_Resolve_17_Wide_Gamut_Intermediate.pdf
+    */
+
+    // Constants as per DaVinci Intermediate Log specification
+    const float A = 0.0075f;
+    const float B = 7.0f;
+    const float C = 0.07329248f;
+    const float M = 10.44426855f;
+    const float LIN_CUT = 0.00262409f;
+    const float LOG_CUT = 0.02740668f;
+
+    float3 result;
+    
+    if (inv == 1) {
+        // **Inverse Transformation (Log to Linear)**
+        
+        // Step 1: Apply piecewise transformation to each component
+        // If x <= LOG_CUT, apply linear scaling: x / M
+        // Else, apply exponential scaling: exp2(x / C - B) - A
+        result.x = (x.x <= LOG_CUT) ? (x.x / M) : (_exp2f(x.x / C - B) - A);
+        result.y = (x.y <= LOG_CUT) ? (x.y / M) : (_exp2f(x.y / C - B) - A);
+        result.z = (x.z <= LOG_CUT) ? (x.z / M) : (_exp2f(x.z / C - B) - A);
+    }
+    else {
+        // **Forward Transformation (Linear to Log)**
+        
+        // Step 1: Apply piecewise transformation to each component
+        // If x <= LIN_CUT, apply linear scaling: x * M
+        // Else, apply logarithmic scaling: (log2(x + A) + B) * C
+        result.x = (x.x <= LIN_CUT) ? (x.x * M) : ((_log2f(x.x + A) + B) * C);
+        result.y = (x.y <= LIN_CUT) ? (x.y * M) : ((_log2f(x.y + A) + B) * C);
+        result.z = (x.z <= LIN_CUT) ? (x.z * M) : ((_log2f(x.z + A) + B) * C);
+    }
+    
+    return result;
+  }
+ __DEVICE__ float3 inline oetf_arri_logc3(float3 x, int inv) {
+    /* Arri Alexa LogC3 
+       Formerly known as Alexa V3LogC EI800
+       https://www.arri.com/resource/blob/31918/66f56e6abb6e5b6553929edf9aa7483e/2017-03-alexa-logc-curve-in-vfx-data.pdf
+    */
+    const float cut = 0.010591f;
+    const float a = 5.555556f;
+    const float b = 0.052272f;
+    const float c = 0.247190f;
+    const float d = 0.385537f;
+    const float e = 5.367655f;
+    const float f = 0.092809f;
+
+    float3 result;
+
+    if (inv == 1) {
+        // **Inverse Transformation**
+        // Apply the inverse OETF to each channel
+        if (x.x < e * cut + f) {
+            result.x = (x.x - f) / e;
+        } else {
+            result.x = (_exp10f((x.x - d) / c) - b) / a;
+        }
+
+        if (x.y < e * cut + f) {
+            result.y = (x.y - f) / e;
+        } else {
+            result.y = (_exp10f((x.y - d) / c) - b) / a;
+        }
+
+        if (x.z < e * cut + f) {
+            result.z = (x.z - f) / e;
+        } else {
+            result.z = (_exp10f((x.z - d) / c) - b) / a;
+        }
+    } else {
+        // **Forward Transformation**
+        // Apply the forward OETF to each channel
+        if (x.x < cut) {
+            result.x = e * x.x + f;
+        } else {
+            result.x = c * _log10f(a * x.x + b) + d;
+        }
+
+        if (x.y < cut) {
+            result.y = e * x.y + f;
+        } else {
+            result.y = c * _log10f(a * x.y + b) + d;
+        }
+
+        if (x.z < cut) {
+            result.z = e * x.z + f;
+        } else {
+            result.z = c * _log10f(a * x.z + b) + d;
+        }
+    }
+
+    return result;
+  }
+
+__DEVICE__ float inline slog1_encode(float t) {
+    return (0.432699f * _log10f(t + 0.037584f) + 0.616596f) + 0.03f;
+}
+__DEVICE__ float inline slog1_decode(float t) {
+    return _powf(10.0f, (t - 0.616596f - 0.03f) / 0.432699f) - 0.037584f;
+}
+__DEVICE__ float3 inline oetf_slog1(float3 rgb, int inverse, int bypass_gamut) {
+    
+    float3 output_rgb = rgb;
+    
+    if (inverse) { // Decode S-Log1 to Linear
+        // Decode each channel
+        output_rgb.x = slog1_decode(rgb.x);
+        output_rgb.y = slog1_decode(rgb.y);
+        output_rgb.z = slog1_decode(rgb.z);
+        
+        // Convert S-Gamut to XYZ
+        if (bypass_gamut == 0) { output_rgb = mult_f33_f3(bradford_SGamut_to_XYZ, output_rgb);}
+        return output_rgb;
+    }
+    else { // Encode Linear to S-Log1
+        // Convert XYZ to S-Gamut
+        if (bypass_gamut == 0) {output_rgb = mult_f33_f3(inv_f33(bradford_SGamut_to_XYZ), rgb);}
+        
+        // Encode each channel
+        output_rgb.x = slog1_encode(output_rgb.x);
+        output_rgb.y = slog1_encode(output_rgb.y);
+        output_rgb.z = slog1_encode(output_rgb.z); 
+        return output_rgb;
+    }
+}
+
+
+// UI Parameters
+DEFINE_UI_PARAMS(bypass, Bypass, DCTLUI_CHECK_BOX, 0)
+DEFINE_UI_PARAMS(bypass_gamut, Bypass Gamut Conversion, DCTLUI_CHECK_BOX, 0)
+DEFINE_UI_PARAMS(P_convert, Convert, DCTLUI_COMBO_BOX, 1, {log2lin, slog2, DWGDI,logc3,lin2log}, {to linear / CIE XYZ, to Slog2 / S-Gamut, to DWG / DI,to LogC3 / Arri Wide Gamut 3, Lin to Slog 1 / S-Gamut})
+
+
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B) {
+    // Create a float3 vector from the input RGB values
+    float3 rgb = make_float3(p_R, p_G, p_B);
+    float3 out = rgb;
+    
+    //do nothing in bypass option
+    if (bypass) { return rgb;}
+    
+
+    if (P_convert == 0){    // Apply S-Log1 Transformation
+     out = oetf_slog1(rgb, 1,bypass_gamut);
+   } else if (P_convert == 1){ //convert to Slog 2 S-Gamut
+     out = oetf_slog1(rgb, 1,bypass_gamut);
+     if (bypass_gamut == 0) { out =mult_f33_f3(inv_f33(bradford_SGamut_to_XYZ), out); }
+     out = oetf_sony_slog2(out,0);
+   
+   } else if (P_convert == 2) { // convert to DWG DI
+    out = oetf_slog1(rgb, 1,bypass_gamut);
+    if (bypass_gamut == 0) { out = mult_f33_f3(matrix_xyz_to_dwg, out);}
+    out = oetf_davinci_intermediate(out , 0);
+    
+
+   }  else if (P_convert == 3) {
+    out = oetf_slog1(rgb, 1,bypass_gamut);
+    if (bypass_gamut == 0) { out = mult_f33_f3(matrix_xyz_to_logc3, out); }
+    out = oetf_arri_logc3(out , 0);
+   } else if (P_convert == 4) {
+     out = oetf_slog1(rgb, 0,bypass_gamut); 
+   }
+
+    
+    return out;
+}

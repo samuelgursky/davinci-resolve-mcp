@@ -1,0 +1,102 @@
+#line 2
+//-------------  Blackmagic Design Pocket Camera 6k Film Gen 4 IDT  -------------//
+// DCTL by Moaz Elgabry
+// Converts BMD Pocket 6k Film Gen 4 to Davinci wide gamut.
+//
+// Input: BMD Pocket 6k Film Gen 4
+// Output: Davinci Widegamut/Davinci Intermediate 
+
+
+// Custom 3x3 matrix struct float3x3
+typedef struct {
+  float3 x, y, z;
+} float3x3;
+
+
+__DEVICE__ float3x3 make_float3x3(float3 a, float3 b, float3 c) {
+  float3x3 d;
+  d.x = a, d.y = b, d.z = c;
+  return d;
+}
+__DEVICE__ float3 mult_f3_f33(float3 a, float3x3 m) {
+  return make_float3(
+    m.x.x * a.x + m.x.y * a.y + m.x.z * a.z,
+    m.y.x * a.x + m.y.y * a.y + m.y.z * a.z,
+    m.z.x * a.x + m.z.y * a.y + m.z.z * a.z);
+}
+
+    
+    
+      
+ 
+     
+//matrices use bradford white adaptation
+//moving to XYZ
+#define matrix_blackmagicwg_to_xyz make_float3x3(make_float3(0.644999f, 0.256084f, 0.098917f), make_float3(0.284726f, 0.819635f, -0.104361f), make_float3(-0.027776f, -0.077820f, 1.105596f))
+#define matrix_dwg_to_xyz make_float3x3(make_float3(0.745602f, 0.183144f, 0.071254f), make_float3(0.295008f, 0.857088f, -0.152096f), make_float3(-0.091799f, -0.124611f, 1.216410))
+
+//moving from XYZ
+#define matrix_xyz_to_blackmagicwg make_float3x3(make_float3(1.798141f, -0.582297f, -0.215844f), make_float3(-0.624485f, 1.433317f, 0.191168f), make_float3(0.001219f, 0.086259f, 0.912522))
+#define matrix_xyz_to_dwg make_float3x3(make_float3(1.456001f, -0.329511f, -0.126489f), make_float3(-0.490572f, 1.299367f, 0.191205f), make_float3(0.059625f, 0.108242f, 0.832133))
+     
+
+#define matrix_blackmagicwg_to_dwg make_float3x3(make_float3(0.848813f, 0.112622f, 0.038565f), make_float3(0.048234f, 0.924500f, 0.027266f), make_float3(0.046164f, 0.039231f, 0.914605))
+
+
+__DEVICE__ float3 BMD6Kgen4_to_Linear(float3 in) {
+
+    float A = 4.724515510884684f;
+    float B = 0.07305940816299691f;
+    float C = 0.027941380463157067f;
+    float D = 0.15545874964938466f;
+    float E = 0.6272665887366995f;
+    //float cut = A*0.005+B;
+    float cut = 0.09449554857962233f;
+
+    
+    float3 out;
+
+     out.x = in.x <= cut ? (in.x - B) / A : _expf((in.x - E) / D) - C;
+     out.y = in.y <= cut ? (in.y - B) / A : _expf((in.y - E) / D) - C;
+     out.z = in.z <= cut ? (in.z - B) / A : _expf((in.z - E) / D) - C;
+
+return out;
+}
+
+__DEVICE__ float3 LinToDI (float3 in) {
+    float3 out;
+
+    out.x = in.x <= 0.00262409f ? in.x * 10.44426855f : (_log2f(in.x + 0.0075f) + 7.0f) * 0.07329248f;
+    out.y = in.y <= 0.00262409f ? in.y * 10.44426855f : (_log2f(in.y + 0.0075f) + 7.0f) * 0.07329248f;
+    out.z = in.z <= 0.00262409f ? in.z * 10.44426855f : (_log2f(in.z + 0.0075f) + 7.0f) * 0.07329248f;
+
+    return out;
+    }
+
+
+DEFINE_UI_PARAMS(bypass, Bypass, DCTLUI_CHECK_BOX, 0)
+DEFINE_UI_PARAMS(log2lin, Linearize, DCTLUI_CHECK_BOX, 1)
+DEFINE_UI_PARAMS(lin2log, To Davinci Intermediate, DCTLUI_CHECK_BOX, 1)
+
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B){
+
+float3 in = make_float3 (p_R, p_G, p_B);
+if (bypass) { return in;}
+
+float3 out;
+
+//Linearize input RGB 
+if (log2lin == 1) out =  BMD6Kgen4_to_Linear(in);
+else if (log2lin == 0) out = in;
+
+
+//convert from linear to Davinci intermediate
+if (lin2log) {
+  //Matrix vector multiply A by rgb_linear
+ out = mult_f3_f33(out, matrix_blackmagicwg_to_dwg);
+ //transform to Davinci Intermediate
+ out = LinToDI(out);
+}
+//  retrn the result
+return out;
+}

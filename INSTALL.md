@@ -51,6 +51,28 @@ The earlier quick start scripts are still available:
 run-now.bat
 ```
 
+**Windows (PowerShell pre-launch check):**
+```powershell
+.\dev.ps1
+```
+
+### Optional: VAD-Based Audio Ducking
+
+If you want VAD-driven ducking (music dips only where speech occurs), use:
+
+```bash
+# 1) Detect speech segments (VAD)
+python -m src.autonomous.cli vad --audio path/to/voice.wav
+
+# 2) Duck music during speech segments
+python -m src.autonomous.cli duck-vad --music path/to/music.wav --vad work/audio/vad.json
+
+# 3) Or run the full pipeline with VAD ducking
+python -m src.autonomous.cli run-all --music path/to/music.wav --vad work/audio/vad.json
+```
+
+Requires `ffmpeg` on your PATH and the optional VAD dependency (`webrtcvad-wheels`).
+
 ### 3. Manual Setup (Advanced)
 
 If you prefer to set up the integration manually or if you encounter issues with the automatic methods:
