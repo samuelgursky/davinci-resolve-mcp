@@ -5526,6 +5526,1649 @@ def render_with_quick_export(preset_name: str) -> Dict[str, Any]:
     return {"success": bool(result), "preset_name": preset_name}
 
 
+# ------------------
+# Helper: get project/mediapool
+# ------------------
+def _get_mp():
+    if resolve is None:
+        return None, None, {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return None, None, {"error": "No project currently open"}
+    mp = project.GetMediaPool()
+    if not mp:
+        return project, None, {"error": "Failed to get MediaPool"}
+    return project, mp, None
+
+def _find_clip_by_id(folder, target_id):
+    for clip in (folder.GetClipList() or []):
+        if clip.GetUniqueId() == target_id:
+            return clip
+    for sub in (folder.GetSubFolderList() or []):
+        found = _find_clip_by_id(sub, target_id)
+        if found:
+            return found
+    return None
+
+def _find_clips_by_ids(folder, ids_set):
+    found = []
+    for clip in (folder.GetClipList() or []):
+        if clip.GetUniqueId() in ids_set:
+            found.append(clip)
+    for sub in (folder.GetSubFolderList() or []):
+        found.extend(_find_clips_by_ids(sub, ids_set))
+    return found
+
+def _navigate_to_folder(mp, folder_path):
+    root = mp.GetRootFolder()
+    if not folder_path or folder_path in ("Master", "/", ""):
+        return root
+    parts = folder_path.strip("/").split("/")
+    if parts[0] == "Master":
+        parts = parts[1:]
+    current = root
+    for part in parts:
+        found = False
+        for sub in (current.GetSubFolderList() or []):
+            if sub.GetName() == part:
+                current = sub
+                found = True
+                break
+        if not found:
+            return None
+    return current
+
+def _get_timeline():
+    if resolve is None:
+        return None, None, {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return None, None, {"error": "No project currently open"}
+    tl = project.GetCurrentTimeline()
+    if not tl:
+        return project, None, {"error": "No current timeline"}
+    return project, tl, None
+
+def _get_timeline_item(track_type="video", track_index=1, item_index=0):
+    _, tl, err = _get_timeline()
+    if err:
+        return None, err
+    items = tl.GetItemListInTrack(track_type, track_index)
+    if not items or item_index >= len(items):
+        return None, {"error": f"No item at index {item_index} on {track_type} track {track_index}"}
+    return items[item_index], None
+
+
+# ------------------
+# MediaPool Tools (remaining)
+# ------------------
+
+@mcp.tool()
+def add_subfolder(folder_name: str) -> Dict[str, Any]:
+    """Create a new subfolder in the current Media Pool folder.
+
+    Args:
+        folder_name: Name of the subfolder to create.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    folder = mp.AddSubFolder(mp.GetCurrentFolder(), folder_name)
+    if folder:
+        return {"success": True, "folder_name": folder.GetName(), "unique_id": folder.GetUniqueId()}
+    return {"success": False, "error": f"Failed to create subfolder '{folder_name}'"}
+
+@mcp.tool()
+def refresh_media_pool_folders() -> Dict[str, Any]:
+    """Refresh all folders in the Media Pool."""
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    result = mp.RefreshFolders()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def import_timeline_from_file(file_path: str, import_options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Import a timeline from a file (AAF, EDL, XML, FCPXML, DRT, ADL, OTIO).
+
+    Args:
+        file_path: Absolute path to the timeline file.
+        import_options: Optional dict of import options.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if import_options:
+        tl = mp.ImportTimelineFromFile(file_path, import_options)
+    else:
+        tl = mp.ImportTimelineFromFile(file_path)
+    if tl:
+        return {"success": True, "timeline_name": tl.GetName(), "unique_id": tl.GetUniqueId()}
+    return {"success": False, "error": f"Failed to import timeline from '{file_path}'"}
+
+@mcp.tool()
+def delete_timelines_by_id(timeline_ids: List[str]) -> Dict[str, Any]:
+    """Delete timelines by their unique IDs.
+
+    Args:
+        timeline_ids: List of timeline unique IDs to delete.
+    """
+    project, mp, err = _get_mp()
+    if err:
+        return err
+    timelines = []
+    for i in range(1, project.GetTimelineCount() + 1):
+        tl = project.GetTimelineByIndex(i)
+        if tl and tl.GetUniqueId() in timeline_ids:
+            timelines.append(tl)
+    if not timelines:
+        return {"error": "No matching timelines found"}
+    result = mp.DeleteTimelines(timelines)
+    return {"success": bool(result), "deleted_count": len(timelines)}
+
+@mcp.tool()
+def set_current_media_pool_folder(folder_path: str) -> Dict[str, Any]:
+    """Navigate to a specific folder in the Media Pool.
+
+    Args:
+        folder_path: Folder path using '/' separators from root (e.g. 'Master/Footage').
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    target = _navigate_to_folder(mp, folder_path)
+    if not target:
+        return {"error": f"Folder '{folder_path}' not found"}
+    result = mp.SetCurrentFolder(target)
+    return {"success": bool(result), "folder": target.GetName()}
+
+@mcp.tool()
+def delete_media_pool_clips(clip_ids: List[str]) -> Dict[str, Any]:
+    """Delete clips from the Media Pool by their unique IDs.
+
+    Args:
+        clip_ids: List of clip unique IDs to delete.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clips = _find_clips_by_ids(mp.GetRootFolder(), set(clip_ids))
+    if not clips:
+        return {"error": "No matching clips found"}
+    result = mp.DeleteClips(clips)
+    return {"success": bool(result), "deleted_count": len(clips)}
+
+@mcp.tool()
+def import_folder_from_file(file_path: str) -> Dict[str, Any]:
+    """Import a Media Pool folder structure from a file.
+
+    Args:
+        file_path: Absolute path to the file.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    result = mp.ImportFolderFromFile(file_path)
+    return {"success": bool(result), "file_path": file_path}
+
+@mcp.tool()
+def delete_media_pool_folders(folder_names: List[str]) -> Dict[str, Any]:
+    """Delete folders from the current Media Pool location.
+
+    Args:
+        folder_names: List of folder names to delete.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    current = mp.GetCurrentFolder()
+    folders = [sub for sub in (current.GetSubFolderList() or []) if sub.GetName() in folder_names]
+    if not folders:
+        return {"error": "No matching folders found"}
+    result = mp.DeleteFolders(folders)
+    return {"success": bool(result), "deleted_count": len(folders)}
+
+@mcp.tool()
+def move_clips_to_folder(clip_ids: List[str], target_folder_path: str) -> Dict[str, Any]:
+    """Move clips to a different Media Pool folder.
+
+    Args:
+        clip_ids: List of clip unique IDs to move.
+        target_folder_path: Path to target folder (e.g. 'Master/Footage').
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clips = _find_clips_by_ids(mp.GetRootFolder(), set(clip_ids))
+    if not clips:
+        return {"error": "No matching clips found"}
+    target = _navigate_to_folder(mp, target_folder_path)
+    if not target:
+        return {"error": f"Target folder '{target_folder_path}' not found"}
+    result = mp.MoveClips(clips, target)
+    return {"success": bool(result), "moved_count": len(clips)}
+
+@mcp.tool()
+def move_media_pool_folders(folder_names: List[str], target_folder_path: str) -> Dict[str, Any]:
+    """Move folders to a different Media Pool location.
+
+    Args:
+        folder_names: List of folder names to move.
+        target_folder_path: Path to target folder.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    current = mp.GetCurrentFolder()
+    folders = [sub for sub in (current.GetSubFolderList() or []) if sub.GetName() in folder_names]
+    if not folders:
+        return {"error": "No matching folders found"}
+    target = _navigate_to_folder(mp, target_folder_path)
+    if not target:
+        return {"error": f"Target folder '{target_folder_path}' not found"}
+    result = mp.MoveFolders(folders, target)
+    return {"success": bool(result), "moved_count": len(folders)}
+
+@mcp.tool()
+def get_clip_matte_list(clip_id: str) -> Dict[str, Any]:
+    """Get list of clip mattes for a MediaPoolItem.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip with ID {clip_id} not found"}
+    mattes = mp.GetClipMatteList(clip)
+    return {"clip_id": clip_id, "mattes": mattes if mattes else []}
+
+@mcp.tool()
+def get_timeline_matte_list(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get list of timeline mattes for a timeline item.
+
+    Args:
+        item_index: 0-based index of the item in the track. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    project, mp, err = _get_mp()
+    if err:
+        return err
+    tl = project.GetCurrentTimeline()
+    if not tl:
+        return {"error": "No current timeline"}
+    items = tl.GetItemListInTrack(track_type, track_index)
+    if not items or item_index >= len(items):
+        return {"error": f"No item at index {item_index}"}
+    mattes = mp.GetTimelineMatteList(items[item_index])
+    return {"mattes": mattes if mattes else []}
+
+@mcp.tool()
+def delete_clip_mattes(clip_id: str, matte_paths: List[str]) -> Dict[str, Any]:
+    """Delete clip mattes from a MediaPoolItem.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        matte_paths: List of matte file paths to delete.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip with ID {clip_id} not found"}
+    result = mp.DeleteClipMattes(clip, matte_paths)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def export_media_pool_metadata(file_path: str) -> Dict[str, Any]:
+    """Export metadata of clips in the current Media Pool folder to a CSV file.
+
+    Args:
+        file_path: Absolute path for the exported CSV file.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    result = mp.ExportMetadata(file_path)
+    return {"success": bool(result), "file_path": file_path}
+
+@mcp.tool()
+def get_media_pool_unique_id() -> Dict[str, Any]:
+    """Get the unique ID of the Media Pool."""
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    return {"unique_id": mp.GetUniqueId()}
+
+@mcp.tool()
+def create_stereo_clip(left_clip_id: str, right_clip_id: str) -> Dict[str, Any]:
+    """Create a stereo clip from left and right eye clips.
+
+    Args:
+        left_clip_id: Unique ID of the left eye clip.
+        right_clip_id: Unique ID of the right eye clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    root = mp.GetRootFolder()
+    left = _find_clip_by_id(root, left_clip_id)
+    right = _find_clip_by_id(root, right_clip_id)
+    if not left:
+        return {"error": f"Left clip {left_clip_id} not found"}
+    if not right:
+        return {"error": f"Right clip {right_clip_id} not found"}
+    result = mp.CreateStereoClip(left, right)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_selected_clips() -> Dict[str, Any]:
+    """Get currently selected clips in the Media Pool."""
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clips = mp.GetSelectedClips()
+    if clips:
+        result = []
+        for clip in clips:
+            try:
+                result.append({"name": clip.GetName(), "unique_id": clip.GetUniqueId()})
+            except Exception:
+                result.append({"name": "Unknown"})
+        return {"selected_clips": result}
+    return {"selected_clips": []}
+
+@mcp.tool()
+def set_selected_clip(clip_id: str) -> Dict[str, Any]:
+    """Set a clip as selected in the Media Pool.
+
+    Args:
+        clip_id: Unique ID of the clip to select.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = mp.SetSelectedClip(clip)
+    return {"success": bool(result)}
+
+
+# ------------------
+# Folder Tools (remaining)
+# ------------------
+
+@mcp.tool()
+def get_folder_clip_list(folder_path: str = "") -> Dict[str, Any]:
+    """Get list of clips in a Media Pool folder.
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if folder_path:
+        folder = _navigate_to_folder(mp, folder_path)
+        if not folder:
+            return {"error": f"Folder '{folder_path}' not found"}
+    else:
+        folder = mp.GetCurrentFolder()
+    clips = folder.GetClipList()
+    if clips:
+        return {"folder": folder.GetName(), "clips": [{"name": c.GetName(), "unique_id": c.GetUniqueId()} for c in clips]}
+    return {"folder": folder.GetName(), "clips": []}
+
+@mcp.tool()
+def get_folder_subfolder_list(folder_path: str = "") -> Dict[str, Any]:
+    """Get list of subfolders in a Media Pool folder.
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if folder_path:
+        folder = _navigate_to_folder(mp, folder_path)
+        if not folder:
+            return {"error": f"Folder '{folder_path}' not found"}
+    else:
+        folder = mp.GetCurrentFolder()
+    subs = folder.GetSubFolderList()
+    if subs:
+        return {"folder": folder.GetName(), "subfolders": [{"name": s.GetName(), "unique_id": s.GetUniqueId()} for s in subs]}
+    return {"folder": folder.GetName(), "subfolders": []}
+
+@mcp.tool()
+def get_folder_is_stale(folder_path: str = "") -> Dict[str, Any]:
+    """Check if a Media Pool folder is stale (needs refresh).
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if folder_path:
+        folder = _navigate_to_folder(mp, folder_path)
+        if not folder:
+            return {"error": f"Folder '{folder_path}' not found"}
+    else:
+        folder = mp.GetCurrentFolder()
+    return {"folder": folder.GetName(), "is_stale": bool(folder.GetIsFolderStale())}
+
+@mcp.tool()
+def get_folder_unique_id(folder_path: str = "") -> Dict[str, Any]:
+    """Get the unique ID of a Media Pool folder.
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if folder_path:
+        folder = _navigate_to_folder(mp, folder_path)
+        if not folder:
+            return {"error": f"Folder '{folder_path}' not found"}
+    else:
+        folder = mp.GetCurrentFolder()
+    return {"folder": folder.GetName(), "unique_id": folder.GetUniqueId()}
+
+@mcp.tool()
+def folder_export(file_path: str, folder_path: str = "") -> Dict[str, Any]:
+    """Export a Media Pool folder to a file.
+
+    Args:
+        file_path: Absolute path for the export.
+        folder_path: Path from root. Empty for current folder.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if folder_path:
+        folder = _navigate_to_folder(mp, folder_path)
+        if not folder:
+            return {"error": f"Folder '{folder_path}' not found"}
+    else:
+        folder = mp.GetCurrentFolder()
+    result = folder.Export(file_path)
+    return {"success": bool(result), "file_path": file_path}
+
+@mcp.tool()
+def folder_transcribe_audio(folder_path: str = "") -> Dict[str, Any]:
+    """Transcribe audio for all clips in a Media Pool folder.
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if folder_path:
+        folder = _navigate_to_folder(mp, folder_path)
+        if not folder:
+            return {"error": f"Folder '{folder_path}' not found"}
+    else:
+        folder = mp.GetCurrentFolder()
+    result = folder.TranscribeAudio()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def folder_clear_transcription(folder_path: str = "") -> Dict[str, Any]:
+    """Clear transcription for all clips in a Media Pool folder.
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if folder_path:
+        folder = _navigate_to_folder(mp, folder_path)
+        if not folder:
+            return {"error": f"Folder '{folder_path}' not found"}
+    else:
+        folder = mp.GetCurrentFolder()
+    result = folder.ClearTranscription()
+    return {"success": bool(result)}
+
+
+# ------------------
+# MediaPoolItem Tools (remaining)
+# ------------------
+
+@mcp.tool()
+def get_clip_metadata(clip_id: str, metadata_type: str = "") -> Dict[str, Any]:
+    """Get metadata for a Media Pool clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        metadata_type: Specific metadata key, or empty for all metadata.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    if metadata_type:
+        result = clip.GetMetadata(metadata_type)
+    else:
+        result = clip.GetMetadata()
+    return {"clip_id": clip_id, "metadata": result if result else {}}
+
+@mcp.tool()
+def set_clip_metadata(clip_id: str, metadata: Dict[str, str]) -> Dict[str, Any]:
+    """Set metadata on a Media Pool clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        metadata: Dict of metadata key-value pairs to set.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.SetMetadata(metadata)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_clip_third_party_metadata(clip_id: str, metadata_key: str = "") -> Dict[str, Any]:
+    """Get third-party metadata for a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        metadata_key: Specific key, or empty for all.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    if metadata_key:
+        result = clip.GetThirdPartyMetadata(metadata_key)
+    else:
+        result = clip.GetThirdPartyMetadata()
+    return {"clip_id": clip_id, "third_party_metadata": result if result else {}}
+
+@mcp.tool()
+def set_clip_third_party_metadata(clip_id: str, metadata: Dict[str, str]) -> Dict[str, Any]:
+    """Set third-party metadata on a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        metadata: Dict of metadata key-value pairs.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.SetThirdPartyMetadata(metadata)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_clip_media_id(clip_id: str) -> Dict[str, Any]:
+    """Get the media ID for a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    media_id = clip.GetMediaId()
+    return {"clip_id": clip_id, "media_id": media_id}
+
+@mcp.tool()
+def add_clip_marker(clip_id: str, frame_id: int, color: str, name: str, note: str = "", duration: int = 1, custom_data: str = "") -> Dict[str, Any]:
+    """Add a marker to a Media Pool clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        frame_id: Frame number for the marker.
+        color: Marker color (Blue, Cyan, Green, Yellow, Red, Pink, Purple, Fuchsia, Rose, Lavender, Sky, Mint, Lemon, Sand, Cocoa, Cream).
+        name: Marker name.
+        note: Marker note. Default: empty.
+        duration: Marker duration in frames. Default: 1.
+        custom_data: Custom data string. Default: empty.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.AddMarker(frame_id, color, name, note, duration, custom_data)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_clip_markers(clip_id: str) -> Dict[str, Any]:
+    """Get all markers on a Media Pool clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    markers = clip.GetMarkers()
+    return {"clip_id": clip_id, "markers": markers if markers else {}}
+
+@mcp.tool()
+def get_clip_marker_by_custom_data(clip_id: str, custom_data: str) -> Dict[str, Any]:
+    """Get a marker by its custom data string.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        custom_data: Custom data string to search for.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    marker = clip.GetMarkerByCustomData(custom_data)
+    return {"marker": marker if marker else {}}
+
+@mcp.tool()
+def update_clip_marker_custom_data(clip_id: str, frame_id: int, custom_data: str) -> Dict[str, Any]:
+    """Update the custom data of a clip marker.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        frame_id: Frame number of the marker.
+        custom_data: New custom data string.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.UpdateMarkerCustomData(frame_id, custom_data)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_clip_marker_custom_data(clip_id: str, frame_id: int) -> Dict[str, Any]:
+    """Get the custom data of a clip marker at a specific frame.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        frame_id: Frame number of the marker.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    data = clip.GetMarkerCustomData(frame_id)
+    return {"frame_id": frame_id, "custom_data": data if data else ""}
+
+@mcp.tool()
+def delete_clip_markers_by_color(clip_id: str, color: str) -> Dict[str, Any]:
+    """Delete all markers of a specific color on a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        color: Color of markers to delete. Use '' to delete all.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.DeleteMarkersByColor(color)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def delete_clip_marker_at_frame(clip_id: str, frame_id: int) -> Dict[str, Any]:
+    """Delete a marker at a specific frame on a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        frame_id: Frame number of the marker to delete.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.DeleteMarkerAtFrame(frame_id)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def delete_clip_marker_by_custom_data(clip_id: str, custom_data: str) -> Dict[str, Any]:
+    """Delete a marker by its custom data string.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        custom_data: Custom data string of the marker to delete.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.DeleteMarkerByCustomData(custom_data)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def add_clip_flag(clip_id: str, color: str) -> Dict[str, Any]:
+    """Add a flag to a Media Pool clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        color: Flag color (Blue, Cyan, Green, Yellow, Red, Pink, Purple, Fuchsia, Rose, Lavender, Sky, Mint, Lemon, Sand, Cocoa, Cream).
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.AddFlag(color)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_clip_flag_list(clip_id: str) -> Dict[str, Any]:
+    """Get list of flags on a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    flags = clip.GetFlagList()
+    return {"clip_id": clip_id, "flags": flags if flags else []}
+
+@mcp.tool()
+def clear_clip_flags(clip_id: str, color: str = "") -> Dict[str, Any]:
+    """Clear flags on a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        color: Specific color to clear, or empty for all colors.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.ClearFlags(color)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_clip_color(clip_id: str) -> Dict[str, Any]:
+    """Get the clip color of a Media Pool item.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    color = clip.GetClipColor()
+    return {"clip_id": clip_id, "clip_color": color if color else ""}
+
+@mcp.tool()
+def set_clip_color(clip_id: str, color: str) -> Dict[str, Any]:
+    """Set the clip color of a Media Pool item.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        color: Color name (Orange, Apricot, Yellow, Lime, Olive, Green, Teal, Navy, Blue, Purple, Violet, Pink, Tan, Beige, Brown, Chocolate).
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.SetClipColor(color)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def clear_clip_color(clip_id: str) -> Dict[str, Any]:
+    """Clear the clip color of a Media Pool item.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.ClearClipColor()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def set_clip_property(clip_id: str, property_name: str, property_value: str) -> Dict[str, Any]:
+    """Set a property on a Media Pool clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        property_name: Property name (e.g. 'Clip Name', 'Comments', 'Description').
+        property_value: Value to set.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.SetClipProperty(property_name, property_value)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_clip_property(clip_id: str, property_name: str = "") -> Dict[str, Any]:
+    """Get a property of a Media Pool clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        property_name: Property name, or empty for all properties.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    if property_name:
+        result = clip.GetClipProperty(property_name)
+    else:
+        result = clip.GetClipProperty()
+    return {"clip_id": clip_id, "property": result if result else {}}
+
+@mcp.tool()
+def link_clip_proxy_media(clip_id: str, proxy_path: str) -> Dict[str, Any]:
+    """Link proxy media to a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        proxy_path: Absolute path to the proxy media file.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.LinkProxyMedia(proxy_path)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def unlink_clip_proxy_media(clip_id: str) -> Dict[str, Any]:
+    """Unlink proxy media from a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.UnlinkProxyMedia()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def replace_media_pool_clip(clip_id: str, new_file_path: str) -> Dict[str, Any]:
+    """Replace a clip with a new media file.
+
+    Args:
+        clip_id: Unique ID of the clip to replace.
+        new_file_path: Absolute path to the new media file.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.ReplaceClip(new_file_path)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_clip_unique_id_by_name(clip_name: str) -> Dict[str, Any]:
+    """Find a clip by name and return its unique ID.
+
+    Args:
+        clip_name: Name of the clip to find.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+
+    def search(folder):
+        for clip in (folder.GetClipList() or []):
+            if clip.GetName() == clip_name:
+                return clip
+        for sub in (folder.GetSubFolderList() or []):
+            found = search(sub)
+            if found:
+                return found
+        return None
+
+    clip = search(mp.GetRootFolder())
+    if clip:
+        return {"name": clip.GetName(), "unique_id": clip.GetUniqueId()}
+    return {"error": f"Clip '{clip_name}' not found"}
+
+@mcp.tool()
+def transcribe_clip_audio(clip_id: str) -> Dict[str, Any]:
+    """Transcribe audio for a specific clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.TranscribeAudio()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def clear_clip_transcription(clip_id: str) -> Dict[str, Any]:
+    """Clear transcription for a specific clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.ClearTranscription()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_clip_audio_mapping(clip_id: str) -> Dict[str, Any]:
+    """Get audio mapping for a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    mapping = clip.GetAudioMapping()
+    return {"clip_id": clip_id, "audio_mapping": mapping if mapping else ""}
+
+@mcp.tool()
+def get_clip_mark_in_out(clip_id: str) -> Dict[str, Any]:
+    """Get mark in/out points for a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.GetMarkInOut()
+    return {"clip_id": clip_id, "mark_in_out": result if result else {}}
+
+@mcp.tool()
+def set_clip_mark_in_out(clip_id: str, mark_in: int, mark_out: int) -> Dict[str, Any]:
+    """Set mark in/out points for a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        mark_in: Mark in frame number.
+        mark_out: Mark out frame number.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.SetMarkInOut(mark_in, mark_out)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def clear_clip_mark_in_out(clip_id: str) -> Dict[str, Any]:
+    """Clear mark in/out points for a clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    result = clip.ClearMarkInOut()
+    return {"success": bool(result)}
+
+
+# ------------------
+# Gallery Tools
+# ------------------
+
+@mcp.tool()
+def get_gallery_album_name() -> Dict[str, Any]:
+    """Get the name of the current gallery album."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    if not gallery:
+        return {"error": "Failed to get Gallery"}
+    name = gallery.GetAlbumName()
+    return {"album_name": name if name else ""}
+
+@mcp.tool()
+def set_gallery_album_name(name: str) -> Dict[str, Any]:
+    """Set the name of the current gallery album.
+
+    Args:
+        name: New album name.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    if not gallery:
+        return {"error": "Failed to get Gallery"}
+    result = gallery.SetAlbumName(name)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_gallery_still_albums() -> Dict[str, Any]:
+    """Get list of all gallery still albums."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    if not gallery:
+        return {"error": "Failed to get Gallery"}
+    albums = gallery.GetGalleryStillAlbums()
+    return {"albums": [str(a) for a in albums] if albums else []}
+
+@mcp.tool()
+def get_gallery_power_grade_albums() -> Dict[str, Any]:
+    """Get list of all gallery power grade albums."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    if not gallery:
+        return {"error": "Failed to get Gallery"}
+    albums = gallery.GetGalleryPowerGradeAlbums()
+    return {"albums": [str(a) for a in albums] if albums else []}
+
+@mcp.tool()
+def get_current_still_album() -> Dict[str, Any]:
+    """Get the current still album."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    if not gallery:
+        return {"error": "Failed to get Gallery"}
+    album = gallery.GetCurrentStillAlbum()
+    return {"has_album": album is not None}
+
+@mcp.tool()
+def set_current_still_album(album_index: int) -> Dict[str, Any]:
+    """Set the current still album by index.
+
+    Args:
+        album_index: 0-based index of the album in GetGalleryStillAlbums() list.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    if not gallery:
+        return {"error": "Failed to get Gallery"}
+    albums = gallery.GetGalleryStillAlbums()
+    if not albums or album_index >= len(albums):
+        return {"error": f"No album at index {album_index}"}
+    result = gallery.SetCurrentStillAlbum(albums[album_index])
+    return {"success": bool(result)}
+
+@mcp.tool()
+def create_gallery_still_album(album_name: str = "") -> Dict[str, Any]:
+    """Create a new gallery still album.
+
+    Args:
+        album_name: Optional name for the new album.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    if not gallery:
+        return {"error": "Failed to get Gallery"}
+    if album_name:
+        album = gallery.CreateGalleryStillAlbum(album_name)
+    else:
+        album = gallery.CreateGalleryStillAlbum()
+    return {"success": album is not None}
+
+@mcp.tool()
+def create_gallery_power_grade_album(album_name: str = "") -> Dict[str, Any]:
+    """Create a new gallery power grade album.
+
+    Args:
+        album_name: Optional name for the new album.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    if not gallery:
+        return {"error": "Failed to get Gallery"}
+    if album_name:
+        album = gallery.CreateGalleryPowerGradeAlbum(album_name)
+    else:
+        album = gallery.CreateGalleryPowerGradeAlbum()
+    return {"success": album is not None}
+
+
+# ------------------
+# GalleryStillAlbum Tools
+# ------------------
+
+@mcp.tool()
+def get_album_stills(album_index: int = 0) -> Dict[str, Any]:
+    """Get list of stills in a gallery album.
+
+    Args:
+        album_index: 0-based index of the album. Default: 0.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    if not gallery:
+        return {"error": "Failed to get Gallery"}
+    albums = gallery.GetGalleryStillAlbums()
+    if not albums or album_index >= len(albums):
+        return {"error": f"No album at index {album_index}"}
+    stills = albums[album_index].GetStills()
+    return {"still_count": len(stills) if stills else 0}
+
+@mcp.tool()
+def get_still_label(album_index: int, still_index: int) -> Dict[str, Any]:
+    """Get the label of a still in a gallery album.
+
+    Args:
+        album_index: 0-based album index.
+        still_index: 0-based still index.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    albums = gallery.GetGalleryStillAlbums()
+    if not albums or album_index >= len(albums):
+        return {"error": f"No album at index {album_index}"}
+    stills = albums[album_index].GetStills()
+    if not stills or still_index >= len(stills):
+        return {"error": f"No still at index {still_index}"}
+    label = albums[album_index].GetLabel(stills[still_index])
+    return {"label": label if label else ""}
+
+@mcp.tool()
+def set_still_label(album_index: int, still_index: int, label: str) -> Dict[str, Any]:
+    """Set the label of a still in a gallery album.
+
+    Args:
+        album_index: 0-based album index.
+        still_index: 0-based still index.
+        label: New label for the still.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    albums = gallery.GetGalleryStillAlbums()
+    if not albums or album_index >= len(albums):
+        return {"error": f"No album at index {album_index}"}
+    stills = albums[album_index].GetStills()
+    if not stills or still_index >= len(stills):
+        return {"error": f"No still at index {still_index}"}
+    result = albums[album_index].SetLabel(stills[still_index], label)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def import_stills_to_album(album_index: int, file_paths: List[str]) -> Dict[str, Any]:
+    """Import stills from file paths into a gallery album.
+
+    Args:
+        album_index: 0-based album index.
+        file_paths: List of absolute file paths to import.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    albums = gallery.GetGalleryStillAlbums()
+    if not albums or album_index >= len(albums):
+        return {"error": f"No album at index {album_index}"}
+    result = albums[album_index].ImportStills(file_paths)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def export_stills_from_album(album_index: int, folder_path: str, file_prefix: str = "still", format: str = "dpx") -> Dict[str, Any]:
+    """Export stills from a gallery album.
+
+    Args:
+        album_index: 0-based album index.
+        folder_path: Directory to export to.
+        file_prefix: Filename prefix. Default: 'still'.
+        format: File format (dpx, cin, tif, jpg, png, ppm, bmp, xpm, drx). Default: 'dpx'.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    albums = gallery.GetGalleryStillAlbums()
+    if not albums or album_index >= len(albums):
+        return {"error": f"No album at index {album_index}"}
+    stills = albums[album_index].GetStills()
+    if not stills:
+        return {"error": "No stills in album"}
+    result = albums[album_index].ExportStills(stills, folder_path, file_prefix, format)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def delete_stills_from_album(album_index: int, still_indices: List[int]) -> Dict[str, Any]:
+    """Delete stills from a gallery album.
+
+    Args:
+        album_index: 0-based album index.
+        still_indices: List of 0-based still indices to delete.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    gallery = project.GetGallery()
+    albums = gallery.GetGalleryStillAlbums()
+    if not albums or album_index >= len(albums):
+        return {"error": f"No album at index {album_index}"}
+    stills = albums[album_index].GetStills()
+    if not stills:
+        return {"error": "No stills in album"}
+    to_delete = [stills[i] for i in still_indices if i < len(stills)]
+    result = albums[album_index].DeleteStills(to_delete)
+    return {"success": bool(result)}
+
+
+# ------------------
+# Graph Tools
+# ------------------
+
+@mcp.tool()
+def graph_get_num_nodes(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get number of nodes in the color graph for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    return {"num_nodes": graph.GetNumNodes()}
+
+@mcp.tool()
+def graph_set_lut(node_index: int, lut_path: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Set LUT on a node in the color graph.
+
+    Args:
+        node_index: 1-based node index.
+        lut_path: Absolute or relative LUT path.
+        item_index: 0-based timeline item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    result = graph.SetLUT(node_index, lut_path)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def graph_get_lut(node_index: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get LUT path on a node in the color graph.
+
+    Args:
+        node_index: 1-based node index.
+        item_index: 0-based timeline item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    lut = graph.GetLUT(node_index)
+    return {"node_index": node_index, "lut_path": lut if lut else ""}
+
+@mcp.tool()
+def graph_set_node_cache_mode(node_index: int, cache_value: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Set the cache mode on a node.
+
+    Args:
+        node_index: 1-based node index.
+        cache_value: -1=Auto, 0=Disabled, 1=Enabled.
+        item_index: 0-based timeline item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    result = graph.SetNodeCacheMode(node_index, cache_value)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def graph_get_node_cache_mode(node_index: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get the cache mode of a node.
+
+    Args:
+        node_index: 1-based node index.
+        item_index: 0-based timeline item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    mode = graph.GetNodeCacheMode(node_index)
+    modes = {-1: "Auto", 0: "Disabled", 1: "Enabled"}
+    return {"node_index": node_index, "cache_mode": mode, "mode_name": modes.get(mode, "Unknown")}
+
+@mcp.tool()
+def graph_get_node_label(node_index: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get the label of a node.
+
+    Args:
+        node_index: 1-based node index.
+        item_index: 0-based timeline item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    label = graph.GetNodeLabel(node_index)
+    return {"node_index": node_index, "label": label if label else ""}
+
+@mcp.tool()
+def graph_get_tools_in_node(node_index: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get list of tools used in a node.
+
+    Args:
+        node_index: 1-based node index.
+        item_index: 0-based timeline item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    tools = graph.GetToolsInNode(node_index)
+    return {"node_index": node_index, "tools": tools if tools else []}
+
+@mcp.tool()
+def graph_set_node_enabled(node_index: int, is_enabled: bool, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Enable or disable a node.
+
+    Args:
+        node_index: 1-based node index.
+        is_enabled: True to enable, False to disable.
+        item_index: 0-based timeline item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    result = graph.SetNodeEnabled(node_index, is_enabled)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def graph_apply_grade_from_drx(drx_path: str, grade_mode: int = 0, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Apply a grade from a .drx file to a timeline item's graph.
+
+    Args:
+        drx_path: Absolute path to the .drx file.
+        grade_mode: 0=No keyframes, 1=Source Timecode aligned, 2=Start Frames aligned.
+        item_index: 0-based timeline item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    result = graph.ApplyGradeFromDRX(drx_path, grade_mode)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def graph_apply_arri_cdl_lut(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Apply ARRI CDL and LUT to a timeline item's graph.
+
+    Args:
+        item_index: 0-based timeline item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    result = graph.ApplyArriCdlLut()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def graph_reset_all_grades(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Reset all grades on a timeline item's graph.
+
+    Args:
+        item_index: 0-based timeline item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if not graph:
+        return {"error": "No node graph available"}
+    result = graph.ResetAllGrades()
+    return {"success": bool(result)}
+
+
+# ------------------
+# ColorGroup Tools
+# ------------------
+
+@mcp.tool()
+def get_color_group_clips(group_name: str) -> Dict[str, Any]:
+    """Get clips in a color group for the current timeline.
+
+    Args:
+        group_name: Name of the color group.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    groups = project.GetColorGroupsList()
+    target = None
+    if groups:
+        for g in groups:
+            if g.GetName() == group_name:
+                target = g
+                break
+    if not target:
+        return {"error": f"Color group '{group_name}' not found"}
+    clips = target.GetClipsInTimeline()
+    if clips:
+        return {"group": group_name, "clips": [{"name": c.GetName()} for c in clips]}
+    return {"group": group_name, "clips": []}
+
+@mcp.tool()
+def get_color_group_pre_clip_node_graph(group_name: str) -> Dict[str, Any]:
+    """Get the pre-clip node graph for a color group.
+
+    Args:
+        group_name: Name of the color group.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    groups = project.GetColorGroupsList()
+    target = None
+    if groups:
+        for g in groups:
+            if g.GetName() == group_name:
+                target = g
+                break
+    if not target:
+        return {"error": f"Color group '{group_name}' not found"}
+    graph = target.GetPreClipNodeGraph()
+    if graph:
+        return {"group": group_name, "graph_type": "pre_clip", "num_nodes": graph.GetNumNodes()}
+    return {"error": "No pre-clip node graph available"}
+
+@mcp.tool()
+def get_color_group_post_clip_node_graph(group_name: str) -> Dict[str, Any]:
+    """Get the post-clip node graph for a color group.
+
+    Args:
+        group_name: Name of the color group.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project open"}
+    groups = project.GetColorGroupsList()
+    target = None
+    if groups:
+        for g in groups:
+            if g.GetName() == group_name:
+                target = g
+                break
+    if not target:
+        return {"error": f"Color group '{group_name}' not found"}
+    graph = target.GetPostClipNodeGraph()
+    if graph:
+        return {"group": group_name, "graph_type": "post_clip", "num_nodes": graph.GetNumNodes()}
+    return {"error": "No post-clip node graph available"}
+
+
 # Start the server
 if __name__ == "__main__":
     try:
