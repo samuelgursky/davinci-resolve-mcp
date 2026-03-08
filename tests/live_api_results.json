@@ -81,7 +81,7 @@
   },
   "Project.GetCurrentRenderFormatAndCodec": {
     "status": "OK",
-    "value": "{'format': 'unknown', 'codec': ''}"
+    "value": "{'format': 'mov', 'codec': 'H264'}"
   },
   "Project.GetCurrentRenderMode": {
     "status": "OK",
@@ -153,7 +153,7 @@
   },
   "MP.GetSelectedClips": {
     "status": "OK",
-    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104a33490>]"
+    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104ef3490>]"
   },
   "Folder.GetName": {
     "status": "OK",
@@ -161,7 +161,7 @@
   },
   "Folder.GetClipList": {
     "status": "OK",
-    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104a33450>, <BlackmagicFusion.PyRemoteObject object at"
+    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104ef3450>, <BlackmagicFusion.PyRemoteObject object at"
   },
   "Folder.GetSubFolderList": {
     "status": "OK",
@@ -185,11 +185,11 @@
   },
   "Gallery.GetGalleryStillAlbums": {
     "status": "OK",
-    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104a33450>]"
+    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104ef3450>]"
   },
   "Gallery.GetGalleryPowerGradeAlbums": {
     "status": "OK",
-    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104a32c50>]"
+    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104ef2c50>]"
   },
   "GSA.GetStills": {
     "status": "OK",
