@@ -4106,95 +4106,80 @@ def get_layout_presets() -> List[Dict[str, Any]]:
     return list_layout_presets(layout_type="ui")
 
 @mcp.tool()
-def save_layout_preset_tool(preset_name: str) -> str:
-    """
-    Save the current UI layout as a preset.
-    
+def save_layout_preset_tool(preset_name: str) -> Dict[str, Any]:
+    """Save the current UI layout as a preset.
+
+    Calls Resolve.SaveLayoutPreset() to save the current UI layout.
+
     Args:
-        preset_name: Name for the saved preset
+        preset_name: Name for the saved preset.
     """
     if resolve is None:
-        return "Error: Not connected to DaVinci Resolve"
-    
-    result = save_layout_preset(resolve, preset_name, layout_type="ui")
-    if result:
-        return f"Successfully saved layout preset '{preset_name}'"
-    else:
-        return f"Failed to save layout preset '{preset_name}'"
+        return {"error": "Not connected to DaVinci Resolve"}
+    result = resolve.SaveLayoutPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
 
 @mcp.tool()
-def load_layout_preset_tool(preset_name: str) -> str:
-    """
-    Load a UI layout preset.
-    
+def load_layout_preset_tool(preset_name: str) -> Dict[str, Any]:
+    """Load a UI layout preset.
+
+    Calls Resolve.LoadLayoutPreset() to load a saved UI layout.
+
     Args:
-        preset_name: Name of the preset to load
+        preset_name: Name of the preset to load.
     """
     if resolve is None:
-        return "Error: Not connected to DaVinci Resolve"
-    
-    result = load_layout_preset(resolve, preset_name, layout_type="ui")
-    if result:
-        return f"Successfully loaded layout preset '{preset_name}'"
-    else:
-        return f"Failed to load layout preset '{preset_name}'"
+        return {"error": "Not connected to DaVinci Resolve"}
+    result = resolve.LoadLayoutPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
 
 @mcp.tool()
-def export_layout_preset_tool(preset_name: str, export_path: str) -> str:
-    """
-    Export a layout preset to a file.
-    
+def export_layout_preset_tool(preset_name: str, export_path: str) -> Dict[str, Any]:
+    """Export a layout preset to a file.
+
+    Calls Resolve.ExportLayoutPreset() to export a preset to disk.
+
     Args:
-        preset_name: Name of the preset to export
-        export_path: Path to export the preset file to
+        preset_name: Name of the preset to export.
+        export_path: Absolute file path to export the preset to.
     """
     if resolve is None:
-        return "Error: Not connected to DaVinci Resolve"
-    
-    result = export_layout_preset(preset_name, export_path, layout_type="ui")
-    if result:
-        return f"Successfully exported layout preset '{preset_name}' to {export_path}"
-    else:
-        return f"Failed to export layout preset '{preset_name}'"
+        return {"error": "Not connected to DaVinci Resolve"}
+    result = resolve.ExportLayoutPreset(preset_name, export_path)
+    return {"success": bool(result), "preset_name": preset_name, "export_path": export_path}
 
 @mcp.tool()
-def import_layout_preset_tool(import_path: str, preset_name: str = None) -> str:
-    """
-    Import a layout preset from a file.
-    
+def import_layout_preset_tool(import_path: str, preset_name: str = None) -> Dict[str, Any]:
+    """Import a layout preset from a file.
+
+    Calls Resolve.ImportLayoutPreset() to import a preset from disk.
+
     Args:
-        import_path: Path to the preset file to import
-        preset_name: Name to save the imported preset as (uses filename if None)
+        import_path: Absolute path to the preset file to import.
+        preset_name: Name to save the imported preset as (uses filename if None).
     """
     if resolve is None:
-        return "Error: Not connected to DaVinci Resolve"
-    
-    result = import_layout_preset(import_path, preset_name, layout_type="ui")
-    
-    if preset_name is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    if preset_name:
+        result = resolve.ImportLayoutPreset(import_path, preset_name)
+    else:
+        result = resolve.ImportLayoutPreset(import_path)
         preset_name = os.path.splitext(os.path.basename(import_path))[0]
-        
-    if result:
-        return f"Successfully imported layout preset as '{preset_name}'"
-    else:
-        return f"Failed to import layout preset from {import_path}"
+    return {"success": bool(result), "preset_name": preset_name, "import_path": import_path}
 
 @mcp.tool()
-def delete_layout_preset_tool(preset_name: str) -> str:
-    """
-    Delete a layout preset.
-    
+def delete_layout_preset_tool(preset_name: str) -> Dict[str, Any]:
+    """Delete a layout preset.
+
+    Calls Resolve.DeleteLayoutPreset() to remove a saved preset.
+
     Args:
-        preset_name: Name of the preset to delete
+        preset_name: Name of the preset to delete.
     """
     if resolve is None:
-        return "Error: Not connected to DaVinci Resolve"
-    
-    result = delete_layout_preset(preset_name, layout_type="ui")
-    if result:
-        return f"Successfully deleted layout preset '{preset_name}'"
-    else:
-        return f"Failed to delete layout preset '{preset_name}'"
+        return {"error": "Not connected to DaVinci Resolve"}
+    result = resolve.DeleteLayoutPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
 
 # ------------------
 # App Control
@@ -8672,6 +8657,120 @@ def ti_set_fusion_output_cache(enabled: bool, item_index: int = 0, track_type: s
     if err:
         return err
     return {"success": bool(item.SetFusionOutputCache(enabled))}
+
+
+# ------------------
+# Final API Gap Coverage (Experiment 4)
+# ------------------
+
+@mcp.tool()
+def add_render_job() -> Dict[str, Any]:
+    """Add a render job based on current render settings to the render queue.
+
+    Returns the unique job ID string for the new render job.
+    Configure render settings first with set_render_settings, set_render_format_and_codec, etc.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    job_id = project.AddRenderJob()
+    if job_id:
+        return {"success": True, "job_id": job_id}
+    return {"success": False, "error": "Failed to add render job. Check render settings are configured."}
+
+
+@mcp.tool()
+def load_cloud_project(project_name: str, project_media_path: str, sync_mode: str = "proxy") -> Dict[str, Any]:
+    """Load a cloud project from DaVinci Resolve cloud.
+
+    Args:
+        project_name: Name of the cloud project to load.
+        project_media_path: Local path for project media cache.
+        sync_mode: Sync mode - 'proxy' or 'full' (default: 'proxy').
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    if not pm:
+        return {"error": "Failed to get ProjectManager"}
+    cloud_settings = {
+        resolve.CLOUD_SETTING_PROJECT_NAME: project_name,
+        resolve.CLOUD_SETTING_PROJECT_MEDIA_PATH: project_media_path,
+        resolve.CLOUD_SETTING_SYNC_MODE: sync_mode,
+    }
+    project = pm.LoadCloudProject(cloud_settings)
+    if project:
+        return {"success": True, "project_name": project.GetName()}
+    return {"success": False, "error": "Failed to load cloud project. Check cloud settings and connectivity."}
+
+
+@mcp.tool()
+def create_timeline_from_clips(name: str, clip_ids: List[str] = None) -> Dict[str, Any]:
+    """Create a new timeline from specified media pool clips.
+
+    Args:
+        name: Name for the new timeline.
+        clip_ids: List of MediaPoolItem unique IDs to include. If None, uses selected clips.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if clip_ids:
+        root = mp.GetRootFolder()
+        clips = []
+        for cid in clip_ids:
+            clip = _find_clip_by_id(root, cid)
+            if clip:
+                clips.append(clip)
+            else:
+                return {"error": f"Clip not found: {cid}"}
+        tl = mp.CreateTimelineFromClips(name, clips)
+    else:
+        selected = mp.GetSelectedClips()
+        if not selected:
+            return {"error": "No clips specified and no clips selected in media pool"}
+        tl = mp.CreateTimelineFromClips(name, selected)
+    if tl:
+        return {"success": True, "timeline_name": tl.GetName(), "timeline_id": tl.GetUniqueId()}
+    return {"success": False, "error": "Failed to create timeline from clips"}
+
+
+@mcp.tool()
+def set_timeline_setting(setting_name: str, setting_value: str) -> Dict[str, Any]:
+    """Set a timeline setting value.
+
+    Args:
+        setting_name: Name of the timeline setting to set (e.g. 'useCustomSettings', 'timelineFrameRate',
+                      'timelineResolutionWidth', 'timelineResolutionHeight', 'timelineOutputResolutionWidth',
+                      'timelineOutputResolutionHeight', 'colorSpaceTimeline', 'colorSpaceOutput').
+        setting_value: Value to set for the setting (string).
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.SetSetting(setting_name, setting_value)
+    return {"success": bool(result), "setting_name": setting_name, "setting_value": setting_value}
+
+
+@mcp.tool()
+def get_fusion_comp_by_name(comp_name: str, track_type: str = "video", track_index: int = 1, item_index: int = 0) -> Dict[str, Any]:
+    """Get a Fusion composition from a timeline item by name.
+
+    Args:
+        comp_name: Name of the Fusion composition to retrieve.
+        track_type: Track type ('video', 'audio', 'subtitle').
+        track_index: Track index (1-based).
+        item_index: Item index on the track (0-based).
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    comp = item.GetFusionCompByName(comp_name)
+    if comp:
+        return {"success": True, "comp_name": comp_name, "comp_available": True}
+    return {"success": False, "error": f"Fusion composition '{comp_name}' not found on this timeline item"}
 
 
 # Start the server
