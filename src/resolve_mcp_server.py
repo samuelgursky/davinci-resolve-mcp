@@ -7169,6 +7169,1511 @@ def get_color_group_post_clip_node_graph(group_name: str) -> Dict[str, Any]:
     return {"error": "No post-clip node graph available"}
 
 
+# ------------------
+# Timeline Tools (remaining)
+# ------------------
+
+@mcp.tool()
+def timeline_set_name(name: str) -> Dict[str, Any]:
+    """Rename the current timeline.
+
+    Args:
+        name: New name for the timeline.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.SetName(name)
+    return {"success": bool(result), "name": name}
+
+@mcp.tool()
+def timeline_set_start_timecode(timecode: str) -> Dict[str, Any]:
+    """Set the start timecode of the current timeline.
+
+    Args:
+        timecode: Timecode string (e.g. '01:00:00:00').
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.SetStartTimecode(timecode)
+    return {"success": bool(result), "timecode": timecode}
+
+@mcp.tool()
+def timeline_get_current_timecode() -> Dict[str, Any]:
+    """Get the current playhead timecode."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    return {"timecode": tl.GetCurrentTimecode()}
+
+@mcp.tool()
+def timeline_set_current_timecode(timecode: str) -> Dict[str, Any]:
+    """Set the playhead to a specific timecode.
+
+    Args:
+        timecode: Timecode string (e.g. '01:00:05:00').
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.SetCurrentTimecode(timecode)
+    return {"success": bool(result), "timecode": timecode}
+
+@mcp.tool()
+def timeline_add_track(track_type: str, sub_track_type: str = "") -> Dict[str, Any]:
+    """Add a new track to the timeline.
+
+    Args:
+        track_type: 'video', 'audio', or 'subtitle'.
+        sub_track_type: For audio: 'mono', 'stereo', '5.1', '7.1', 'adaptive'. Default: ''.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    if sub_track_type:
+        result = tl.AddTrack(track_type, sub_track_type)
+    else:
+        result = tl.AddTrack(track_type)
+    return {"success": bool(result), "track_type": track_type}
+
+@mcp.tool()
+def timeline_delete_track(track_type: str, track_index: int) -> Dict[str, Any]:
+    """Delete a track from the timeline.
+
+    Args:
+        track_type: 'video', 'audio', or 'subtitle'.
+        track_index: 1-based track index to delete.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.DeleteTrack(track_type, track_index)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_get_track_sub_type(track_type: str, track_index: int) -> Dict[str, Any]:
+    """Get the sub-type of a track (e.g. mono, stereo for audio).
+
+    Args:
+        track_type: 'video' or 'audio'.
+        track_index: 1-based track index.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    sub = tl.GetTrackSubType(track_type, track_index)
+    return {"track_type": track_type, "track_index": track_index, "sub_type": sub if sub else ""}
+
+@mcp.tool()
+def timeline_set_track_enable(track_type: str, track_index: int, enabled: bool) -> Dict[str, Any]:
+    """Enable or disable a track.
+
+    Args:
+        track_type: 'video' or 'audio'.
+        track_index: 1-based track index.
+        enabled: True to enable, False to disable.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.SetTrackEnable(track_type, track_index, enabled)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_get_is_track_enabled(track_type: str, track_index: int) -> Dict[str, Any]:
+    """Check if a track is enabled.
+
+    Args:
+        track_type: 'video' or 'audio'.
+        track_index: 1-based track index.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    enabled = tl.GetIsTrackEnabled(track_type, track_index)
+    return {"enabled": bool(enabled)}
+
+@mcp.tool()
+def timeline_set_track_lock(track_type: str, track_index: int, locked: bool) -> Dict[str, Any]:
+    """Lock or unlock a track.
+
+    Args:
+        track_type: 'video' or 'audio'.
+        track_index: 1-based track index.
+        locked: True to lock, False to unlock.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.SetTrackLock(track_type, track_index, locked)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_get_is_track_locked(track_type: str, track_index: int) -> Dict[str, Any]:
+    """Check if a track is locked.
+
+    Args:
+        track_type: 'video' or 'audio'.
+        track_index: 1-based track index.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    locked = tl.GetIsTrackLocked(track_type, track_index)
+    return {"locked": bool(locked)}
+
+@mcp.tool()
+def timeline_delete_clips(clip_ids: List[str], track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Delete clips from the timeline.
+
+    Args:
+        clip_ids: List of clip unique IDs to delete.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    items = tl.GetItemListInTrack(track_type, track_index)
+    if not items:
+        return {"error": "No items in track"}
+    to_delete = [i for i in items if i.GetUniqueId() in clip_ids]
+    if not to_delete:
+        return {"error": "No matching clips found"}
+    result = tl.DeleteClips(to_delete)
+    return {"success": bool(result), "deleted": len(to_delete)}
+
+@mcp.tool()
+def timeline_set_clips_linked(clip_ids: List[str], linked: bool, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Link or unlink clips in the timeline.
+
+    Args:
+        clip_ids: List of clip unique IDs.
+        linked: True to link, False to unlink.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    items = tl.GetItemListInTrack(track_type, track_index)
+    if not items:
+        return {"error": "No items in track"}
+    targets = [i for i in items if i.GetUniqueId() in clip_ids]
+    if not targets:
+        return {"error": "No matching clips found"}
+    result = tl.SetClipsLinked(targets, linked)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_add_marker(frame_id: int, color: str, name: str, note: str = "", duration: int = 1, custom_data: str = "") -> Dict[str, Any]:
+    """Add a marker to the current timeline.
+
+    Args:
+        frame_id: Frame number for the marker.
+        color: Marker color (Blue, Cyan, Green, Yellow, Red, Pink, Purple, Fuchsia, Rose, Lavender, Sky, Mint, Lemon, Sand, Cocoa, Cream).
+        name: Marker name.
+        note: Marker note. Default: empty.
+        duration: Duration in frames. Default: 1.
+        custom_data: Custom data string. Default: empty.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.AddMarker(frame_id, color, name, note, duration, custom_data)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_get_markers() -> Dict[str, Any]:
+    """Get all markers on the current timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    markers = tl.GetMarkers()
+    return {"markers": markers if markers else {}}
+
+@mcp.tool()
+def timeline_get_marker_by_custom_data(custom_data: str) -> Dict[str, Any]:
+    """Find a timeline marker by its custom data.
+
+    Args:
+        custom_data: Custom data string to search for.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    marker = tl.GetMarkerByCustomData(custom_data)
+    return {"marker": marker if marker else {}}
+
+@mcp.tool()
+def timeline_update_marker_custom_data(frame_id: int, custom_data: str) -> Dict[str, Any]:
+    """Update the custom data of a timeline marker.
+
+    Args:
+        frame_id: Frame number of the marker.
+        custom_data: New custom data string.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.UpdateMarkerCustomData(frame_id, custom_data)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_get_marker_custom_data(frame_id: int) -> Dict[str, Any]:
+    """Get the custom data of a timeline marker.
+
+    Args:
+        frame_id: Frame number of the marker.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    data = tl.GetMarkerCustomData(frame_id)
+    return {"frame_id": frame_id, "custom_data": data if data else ""}
+
+@mcp.tool()
+def timeline_delete_markers_by_color(color: str) -> Dict[str, Any]:
+    """Delete all timeline markers of a specific color.
+
+    Args:
+        color: Color of markers to delete. Use '' to delete all.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.DeleteMarkersByColor(color)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_delete_marker_at_frame(frame_id: int) -> Dict[str, Any]:
+    """Delete a timeline marker at a specific frame.
+
+    Args:
+        frame_id: Frame number of the marker.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.DeleteMarkerAtFrame(frame_id)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_delete_marker_by_custom_data(custom_data: str) -> Dict[str, Any]:
+    """Delete a timeline marker by custom data.
+
+    Args:
+        custom_data: Custom data of the marker to delete.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.DeleteMarkerByCustomData(custom_data)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_get_track_name(track_type: str, track_index: int) -> Dict[str, Any]:
+    """Get the name of a track.
+
+    Args:
+        track_type: 'video' or 'audio'.
+        track_index: 1-based track index.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    name = tl.GetTrackName(track_type, track_index)
+    return {"track_name": name if name else ""}
+
+@mcp.tool()
+def timeline_set_track_name(track_type: str, track_index: int, name: str) -> Dict[str, Any]:
+    """Set the name of a track.
+
+    Args:
+        track_type: 'video' or 'audio'.
+        track_index: 1-based track index.
+        name: New track name.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.SetTrackName(track_type, track_index, name)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_duplicate() -> Dict[str, Any]:
+    """Duplicate the current timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    new_tl = tl.DuplicateTimeline()
+    if new_tl:
+        return {"success": True, "name": new_tl.GetName(), "unique_id": new_tl.GetUniqueId()}
+    return {"success": False, "error": "Failed to duplicate timeline"}
+
+@mcp.tool()
+def timeline_create_compound_clip(clip_ids: List[str], track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Create a compound clip from selected items.
+
+    Args:
+        clip_ids: List of timeline item unique IDs.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    items = tl.GetItemListInTrack(track_type, track_index)
+    targets = [i for i in (items or []) if i.GetUniqueId() in clip_ids]
+    if not targets:
+        return {"error": "No matching items found"}
+    result = tl.CreateCompoundClip(targets)
+    if result:
+        return {"success": True}
+    return {"success": False, "error": "Failed to create compound clip"}
+
+@mcp.tool()
+def timeline_create_fusion_clip(clip_ids: List[str], track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Create a Fusion clip from selected items.
+
+    Args:
+        clip_ids: List of timeline item unique IDs.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    items = tl.GetItemListInTrack(track_type, track_index)
+    targets = [i for i in (items or []) if i.GetUniqueId() in clip_ids]
+    if not targets:
+        return {"error": "No matching items found"}
+    result = tl.CreateFusionClip(targets)
+    if result:
+        return {"success": True}
+    return {"success": False, "error": "Failed to create Fusion clip"}
+
+@mcp.tool()
+def timeline_import_into(file_path: str, import_options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Import content into the current timeline from a file.
+
+    Args:
+        file_path: Path to the file to import (AAF, EDL, XML, etc.).
+        import_options: Optional dict of import options.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    if import_options:
+        result = tl.ImportIntoTimeline(file_path, import_options)
+    else:
+        result = tl.ImportIntoTimeline(file_path)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_export(file_path: str, export_type: str, export_subtype: str = "EXPORT_NONE") -> Dict[str, Any]:
+    """Export the current timeline to a file.
+
+    Args:
+        file_path: Output file path.
+        export_type: Export type (e.g. 'EXPORT_AAF', 'EXPORT_EDL', 'EXPORT_FCP_7_XML', 'EXPORT_FCPXML_1_10', 'EXPORT_DRT', 'EXPORT_TEXT_CSV', 'EXPORT_TEXT_TAB', 'EXPORT_OTIO', 'EXPORT_ALE').
+        export_subtype: Export subtype for AAF/EDL. Default: 'EXPORT_NONE'.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    # Map string constants to resolve constants
+    try:
+        etype = getattr(resolve, export_type) if hasattr(resolve, export_type) else export_type
+        esub = getattr(resolve, export_subtype) if hasattr(resolve, export_subtype) else export_subtype
+    except Exception:
+        etype = export_type
+        esub = export_subtype
+    result = tl.Export(file_path, etype, esub)
+    return {"success": bool(result), "file_path": file_path}
+
+@mcp.tool()
+def timeline_insert_generator(generator_name: str, duration: Optional[int] = None) -> Dict[str, Any]:
+    """Insert a generator into the timeline.
+
+    Args:
+        generator_name: Name of the generator to insert.
+        duration: Optional duration in frames.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    if duration:
+        result = tl.InsertGeneratorIntoTimeline(generator_name, {"duration": duration})
+    else:
+        result = tl.InsertGeneratorIntoTimeline(generator_name)
+    return {"success": result is not None}
+
+@mcp.tool()
+def timeline_insert_fusion_generator(generator_name: str) -> Dict[str, Any]:
+    """Insert a Fusion generator into the timeline.
+
+    Args:
+        generator_name: Name of the Fusion generator.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.InsertFusionGeneratorIntoTimeline(generator_name)
+    return {"success": result is not None}
+
+@mcp.tool()
+def timeline_insert_fusion_composition() -> Dict[str, Any]:
+    """Insert a Fusion composition into the timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.InsertFusionCompositionIntoTimeline()
+    return {"success": result is not None}
+
+@mcp.tool()
+def timeline_insert_ofx_generator(generator_name: str) -> Dict[str, Any]:
+    """Insert an OFX generator into the timeline.
+
+    Args:
+        generator_name: Name of the OFX generator.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.InsertOFXGeneratorIntoTimeline(generator_name)
+    return {"success": result is not None}
+
+@mcp.tool()
+def timeline_insert_title(title_name: str) -> Dict[str, Any]:
+    """Insert a title into the timeline.
+
+    Args:
+        title_name: Name of the title to insert.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.InsertTitleIntoTimeline(title_name)
+    return {"success": result is not None}
+
+@mcp.tool()
+def timeline_insert_fusion_title(title_name: str) -> Dict[str, Any]:
+    """Insert a Fusion title into the timeline.
+
+    Args:
+        title_name: Name of the Fusion title.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.InsertFusionTitleIntoTimeline(title_name)
+    return {"success": result is not None}
+
+@mcp.tool()
+def timeline_grab_still() -> Dict[str, Any]:
+    """Grab a still from the current frame of the timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.GrabStill()
+    return {"success": result is not None}
+
+@mcp.tool()
+def timeline_grab_all_stills() -> Dict[str, Any]:
+    """Grab stills from all frames at the current position across all timelines."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.GrabAllStills()
+    return {"success": result is not None}
+
+@mcp.tool()
+def timeline_get_unique_id() -> Dict[str, Any]:
+    """Get the unique ID of the current timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    return {"unique_id": tl.GetUniqueId()}
+
+@mcp.tool()
+def timeline_create_subtitles_from_audio(language: str = "auto", preset: str = "default") -> Dict[str, Any]:
+    """Create subtitles from audio in the current timeline.
+
+    Args:
+        language: Language for captioning ('auto', 'english', 'french', etc.). Default: 'auto'.
+        preset: Caption preset ('default', 'teletext', 'netflix'). Default: 'default'.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    settings = {}
+    result = tl.CreateSubtitlesFromAudio(settings)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_detect_scene_cuts() -> Dict[str, Any]:
+    """Detect scene cuts in the current timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.DetectSceneCuts()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_convert_to_stereo() -> Dict[str, Any]:
+    """Convert the current timeline to stereo."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.ConvertTimelineToStereo()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_get_node_graph() -> Dict[str, Any]:
+    """Get the node graph for the current timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    graph = tl.GetNodeGraph()
+    if graph:
+        return {"has_graph": True, "num_nodes": graph.GetNumNodes()}
+    return {"has_graph": False}
+
+@mcp.tool()
+def timeline_analyze_dolby_vision() -> Dict[str, Any]:
+    """Analyze Dolby Vision for the current timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.AnalyzeDolbyVision()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_get_current_video_item() -> Dict[str, Any]:
+    """Get the current video item at the playhead."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    item = tl.GetCurrentVideoItem()
+    if item:
+        return {"name": item.GetName(), "unique_id": item.GetUniqueId(), "start": item.GetStart(), "end": item.GetEnd()}
+    return {"item": None}
+
+@mcp.tool()
+def timeline_get_current_clip_thumbnail(width: int = 320, height: int = 180) -> Dict[str, Any]:
+    """Get thumbnail image data for the current clip.
+
+    Args:
+        width: Thumbnail width. Default: 320.
+        height: Thumbnail height. Default: 180.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.GetCurrentClipThumbnailImage({"width": width, "height": height})
+    if result:
+        return {"success": True, "has_data": bool(result)}
+    return {"success": False}
+
+@mcp.tool()
+def timeline_get_media_pool_item() -> Dict[str, Any]:
+    """Get the MediaPoolItem for the current timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    mpi = tl.GetMediaPoolItem()
+    if mpi:
+        return {"name": mpi.GetName(), "unique_id": mpi.GetUniqueId()}
+    return {"media_pool_item": None}
+
+@mcp.tool()
+def timeline_get_mark_in_out() -> Dict[str, Any]:
+    """Get mark in/out points for the current timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.GetMarkInOut()
+    return result if result else {}
+
+@mcp.tool()
+def timeline_set_mark_in_out(mark_in: int, mark_out: int) -> Dict[str, Any]:
+    """Set mark in/out points for the current timeline.
+
+    Args:
+        mark_in: Mark in frame number.
+        mark_out: Mark out frame number.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.SetMarkInOut(mark_in, mark_out)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def timeline_clear_mark_in_out() -> Dict[str, Any]:
+    """Clear mark in/out points for the current timeline."""
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    result = tl.ClearMarkInOut()
+    return {"success": bool(result)}
+
+
+# ------------------
+# TimelineItem Tools (remaining)
+# ------------------
+
+@mcp.tool()
+def ti_get_info(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get comprehensive info about a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {
+        "name": item.GetName(), "duration": item.GetDuration(),
+        "start": item.GetStart(), "end": item.GetEnd(),
+        "left_offset": item.GetLeftOffset(), "right_offset": item.GetRightOffset(),
+        "source_start_frame": item.GetSourceStartFrame(), "source_end_frame": item.GetSourceEndFrame(),
+        "unique_id": item.GetUniqueId(), "clip_enabled": item.GetClipEnabled()
+    }
+
+@mcp.tool()
+def ti_get_source_start_time(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get source start time of a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"source_start_time": item.GetSourceStartTime(), "source_end_time": item.GetSourceEndTime()}
+
+@mcp.tool()
+def ti_set_property(property_name: str, property_value: Any, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Set a property on a timeline item.
+
+    Args:
+        property_name: Property name (Pan, Tilt, ZoomX, ZoomY, RotationAngle, Opacity, CropLeft, CropRight, CropTop, CropBottom, etc.).
+        property_value: Value to set.
+        item_index: 0-based item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    result = item.SetProperty(property_name, property_value)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def ti_get_property(property_name: str = "", item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get property of a timeline item.
+
+    Args:
+        property_name: Property name, or empty for all. Default: ''.
+        item_index: 0-based item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    if property_name:
+        result = item.GetProperty(property_name)
+    else:
+        result = item.GetProperty()
+    return {"property": result}
+
+@mcp.tool()
+def ti_add_marker(frame_id: int, color: str, name: str, note: str = "", duration: int = 1, custom_data: str = "", item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Add a marker to a timeline item.
+
+    Args:
+        frame_id: Frame offset within the item.
+        color: Marker color.
+        name: Marker name.
+        note: Marker note. Default: ''.
+        duration: Duration in frames. Default: 1.
+        custom_data: Custom data. Default: ''.
+        item_index: 0-based item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    result = item.AddMarker(frame_id, color, name, note, duration, custom_data)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def ti_get_markers(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get all markers on a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"markers": item.GetMarkers() or {}}
+
+@mcp.tool()
+def ti_delete_markers_by_color(color: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Delete markers by color on a timeline item.
+
+    Args:
+        color: Color to delete. '' for all.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.DeleteMarkersByColor(color))}
+
+@mcp.tool()
+def ti_delete_marker_at_frame(frame_id: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Delete a marker at a frame on a timeline item.
+
+    Args:
+        frame_id: Frame number.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.DeleteMarkerAtFrame(frame_id))}
+
+@mcp.tool()
+def ti_delete_marker_by_custom_data(custom_data: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Delete a marker by custom data on a timeline item.
+
+    Args:
+        custom_data: Custom data of the marker.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.DeleteMarkerByCustomData(custom_data))}
+
+@mcp.tool()
+def ti_get_marker_by_custom_data(custom_data: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Find marker by custom data.
+
+    Args:
+        custom_data: Custom data to search for.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"marker": item.GetMarkerByCustomData(custom_data) or {}}
+
+@mcp.tool()
+def ti_update_marker_custom_data(frame_id: int, custom_data: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Update marker custom data.
+
+    Args:
+        frame_id: Frame number.
+        custom_data: New custom data.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.UpdateMarkerCustomData(frame_id, custom_data))}
+
+@mcp.tool()
+def ti_get_marker_custom_data(frame_id: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get marker custom data.
+
+    Args:
+        frame_id: Frame number.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"custom_data": item.GetMarkerCustomData(frame_id) or ""}
+
+@mcp.tool()
+def ti_add_flag(color: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Add a flag to a timeline item.
+
+    Args:
+        color: Flag color.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.AddFlag(color))}
+
+@mcp.tool()
+def ti_get_flag_list(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get flags on a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"flags": item.GetFlagList() or []}
+
+@mcp.tool()
+def ti_clear_flags(color: str = "", item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Clear flags from a timeline item.
+
+    Args:
+        color: Color to clear, or '' for all.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.ClearFlags(color))}
+
+@mcp.tool()
+def ti_get_clip_color(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get clip color of a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"clip_color": item.GetClipColor() or ""}
+
+@mcp.tool()
+def ti_set_clip_color(color: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Set clip color of a timeline item.
+
+    Args:
+        color: Color name.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.SetClipColor(color))}
+
+@mcp.tool()
+def ti_clear_clip_color(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Clear clip color from a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.ClearClipColor())}
+
+@mcp.tool()
+def ti_add_fusion_comp(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Add a new Fusion composition to a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.AddFusionComp())}
+
+@mcp.tool()
+def ti_import_fusion_comp(file_path: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Import a Fusion composition from file.
+
+    Args:
+        file_path: Path to the .comp file.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.ImportFusionComp(file_path))}
+
+@mcp.tool()
+def ti_export_fusion_comp(file_path: str, comp_index: int = 1, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Export a Fusion composition to file.
+
+    Args:
+        file_path: Output path for the .comp file.
+        comp_index: 1-based Fusion comp index. Default: 1.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    comp = item.GetFusionCompByIndex(comp_index)
+    if not comp:
+        return {"error": f"No Fusion comp at index {comp_index}"}
+    return {"success": bool(item.ExportFusionComp(file_path, comp_index))}
+
+@mcp.tool()
+def ti_delete_fusion_comp(comp_name: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Delete a Fusion composition by name.
+
+    Args:
+        comp_name: Name of the Fusion composition.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.DeleteFusionCompByName(comp_name))}
+
+@mcp.tool()
+def ti_load_fusion_comp(comp_name: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Load a Fusion composition by name.
+
+    Args:
+        comp_name: Name of the Fusion composition.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.LoadFusionCompByName(comp_name))}
+
+@mcp.tool()
+def ti_rename_fusion_comp(old_name: str, new_name: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Rename a Fusion composition.
+
+    Args:
+        old_name: Current name.
+        new_name: New name.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.RenameFusionCompByName(old_name, new_name))}
+
+@mcp.tool()
+def ti_get_fusion_comp_info(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get Fusion composition info for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {
+        "comp_count": item.GetFusionCompCount(),
+        "comp_names": item.GetFusionCompNameList() or {}
+    }
+
+@mcp.tool()
+def ti_add_version(version_name: str, version_type: int = 0, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Add a new color version to a timeline item.
+
+    Args:
+        version_name: Name for the new version.
+        version_type: 0=Local, 1=Remote. Default: 0.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.AddVersion(version_name, version_type))}
+
+@mcp.tool()
+def ti_get_current_version(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get the current color version of a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"version": item.GetCurrentVersion() or {}}
+
+@mcp.tool()
+def ti_delete_version(version_name: str, version_type: int = 0, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Delete a color version.
+
+    Args:
+        version_name: Name of the version.
+        version_type: 0=Local, 1=Remote. Default: 0.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.DeleteVersionByName(version_name, version_type))}
+
+@mcp.tool()
+def ti_load_version(version_name: str, version_type: int = 0, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Load a color version.
+
+    Args:
+        version_name: Name of the version.
+        version_type: 0=Local, 1=Remote. Default: 0.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.LoadVersionByName(version_name, version_type))}
+
+@mcp.tool()
+def ti_rename_version(old_name: str, new_name: str, version_type: int = 0, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Rename a color version.
+
+    Args:
+        old_name: Current version name.
+        new_name: New version name.
+        version_type: 0=Local, 1=Remote. Default: 0.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.RenameVersionByName(old_name, new_name, version_type))}
+
+@mcp.tool()
+def ti_get_version_name_list(version_type: int = 0, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get list of version names.
+
+    Args:
+        version_type: 0=Local, 1=Remote. Default: 0.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"versions": item.GetVersionNameList(version_type) or []}
+
+@mcp.tool()
+def ti_set_cdl(cdl: Dict[str, Any], item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Set CDL (Color Decision List) values on a timeline item.
+
+    Args:
+        cdl: Dict with CDL values: {'NodeIndex': str, 'Slope': str, 'Offset': str, 'Power': str, 'Saturation': str}.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.SetCDL(cdl))}
+
+@mcp.tool()
+def ti_add_take(media_pool_item_id: str, start_frame: int = 0, end_frame: int = 0, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Add a take to a timeline item.
+
+    Args:
+        media_pool_item_id: Unique ID of the MediaPoolItem to use as take.
+        start_frame: Start frame. Default: 0.
+        end_frame: End frame. Default: 0.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    _, mp, mp_err = _get_mp()
+    if mp_err:
+        return mp_err
+    mpi = _find_clip_by_id(mp.GetRootFolder(), media_pool_item_id)
+    if not mpi:
+        return {"error": f"MediaPoolItem {media_pool_item_id} not found"}
+    return {"success": bool(item.AddTake(mpi, start_frame, end_frame))}
+
+@mcp.tool()
+def ti_get_takes_info(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get takes info for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    count = item.GetTakesCount()
+    selected = item.GetSelectedTakeIndex()
+    takes = []
+    for i in range(count):
+        take = item.GetTakeByIndex(i + 1)
+        takes.append(take if take else {})
+    return {"takes_count": count, "selected_take_index": selected, "takes": takes}
+
+@mcp.tool()
+def ti_select_take(take_index: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Select a take by index.
+
+    Args:
+        take_index: 1-based take index.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.SelectTakeByIndex(take_index))}
+
+@mcp.tool()
+def ti_delete_take(take_index: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Delete a take by index.
+
+    Args:
+        take_index: 1-based take index.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.DeleteTakeByIndex(take_index))}
+
+@mcp.tool()
+def ti_finalize_take(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Finalize the selected take.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.FinalizeTake())}
+
+@mcp.tool()
+def ti_copy_grades(target_item_indices: List[int], track_type: str = "video", track_index: int = 1, source_item_index: int = 0) -> Dict[str, Any]:
+    """Copy grades from one timeline item to others.
+
+    Args:
+        target_item_indices: List of 0-based indices of target items.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+        source_item_index: 0-based source item index. Default: 0.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    items = tl.GetItemListInTrack(track_type, track_index)
+    if not items:
+        return {"error": "No items in track"}
+    source = items[source_item_index] if source_item_index < len(items) else None
+    if not source:
+        return {"error": "Source item not found"}
+    targets = [items[i] for i in target_item_indices if i < len(items)]
+    if not targets:
+        return {"error": "No target items found"}
+    result = source.CopyGrades(targets)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def ti_set_clip_enabled(enabled: bool, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Enable or disable a timeline item.
+
+    Args:
+        enabled: True to enable, False to disable.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.SetClipEnabled(enabled))}
+
+@mcp.tool()
+def ti_update_sidecar(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Update sidecar file for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.UpdateSidecar())}
+
+@mcp.tool()
+def ti_load_burn_in_preset(preset_name: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Load a burn-in preset for a timeline item.
+
+    Args:
+        preset_name: Burn-in preset name.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.LoadBurnInPreset(preset_name))}
+
+@mcp.tool()
+def ti_create_magic_mask(mode: str = "Forward", item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Create a Magic Mask on a timeline item.
+
+    Args:
+        mode: 'Forward' or 'Backward'. Default: 'Forward'.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.CreateMagicMask({"mode": mode}))}
+
+@mcp.tool()
+def ti_regenerate_magic_mask(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Regenerate Magic Mask on a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.RegenerateMagicMask())}
+
+@mcp.tool()
+def ti_stabilize(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Stabilize a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.Stabilize())}
+
+@mcp.tool()
+def ti_smart_reframe(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Apply Smart Reframe to a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.SmartReframe())}
+
+@mcp.tool()
+def ti_get_node_graph(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get the color node graph for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    graph = item.GetNodeGraph()
+    if graph:
+        return {"has_graph": True, "num_nodes": graph.GetNumNodes()}
+    return {"has_graph": False}
+
+@mcp.tool()
+def ti_get_color_group(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get the color group for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    group = item.GetColorGroup()
+    if group:
+        return {"group_name": group.GetName()}
+    return {"group_name": None}
+
+@mcp.tool()
+def ti_assign_to_color_group(group_name: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Assign a timeline item to a color group.
+
+    Args:
+        group_name: Name of the color group.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    project = resolve.GetProjectManager().GetCurrentProject()
+    groups = project.GetColorGroupsList()
+    target = None
+    if groups:
+        for g in groups:
+            if g.GetName() == group_name:
+                target = g
+                break
+    if not target:
+        return {"error": f"Color group '{group_name}' not found"}
+    return {"success": bool(item.AssignToColorGroup(target))}
+
+@mcp.tool()
+def ti_remove_from_color_group(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Remove a timeline item from its color group.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.RemoveFromColorGroup())}
+
+@mcp.tool()
+def ti_export_lut(export_type: str, path: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Export LUT from a timeline item.
+
+    Args:
+        export_type: LUT type ('EXPORT_LUT_17PTCUBE', 'EXPORT_LUT_33PTCUBE', 'EXPORT_LUT_65PTCUBE', 'EXPORT_LUT_PANASONICVLUT').
+        path: Output file path.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    try:
+        etype = getattr(resolve, export_type) if hasattr(resolve, export_type) else export_type
+    except Exception:
+        etype = export_type
+    return {"success": bool(item.ExportLUT(etype, path))}
+
+@mcp.tool()
+def ti_get_linked_items(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get items linked to a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    linked = item.GetLinkedItems()
+    if linked:
+        return {"linked_items": [{"name": li.GetName(), "unique_id": li.GetUniqueId()} for li in linked]}
+    return {"linked_items": []}
+
+@mcp.tool()
+def ti_get_track_type_and_index(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get the track type and index for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    result = item.GetTrackTypeAndIndex()
+    return {"track_type": result[0] if result else "", "track_index": result[1] if result and len(result) > 1 else 0}
+
+@mcp.tool()
+def ti_get_source_audio_channel_mapping(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get source audio channel mapping for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    mapping = item.GetSourceAudioChannelMapping()
+    return {"audio_channel_mapping": mapping if mapping else ""}
+
+@mcp.tool()
+def ti_get_stereo_convergence_values(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get stereo convergence values for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"convergence": item.GetStereoConvergenceValues() or {}}
+
+@mcp.tool()
+def ti_get_stereo_floating_window_params(eye: str = "left", item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get stereo floating window parameters.
+
+    Args:
+        eye: 'left' or 'right'. Default: 'left'.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    if eye == "left":
+        return {"params": item.GetStereoLeftFloatingWindowParams() or {}}
+    else:
+        return {"params": item.GetStereoRightFloatingWindowParams() or {}}
+
+@mcp.tool()
+def ti_get_media_pool_item(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get the MediaPoolItem associated with a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    mpi = item.GetMediaPoolItem()
+    if mpi:
+        return {"name": mpi.GetName(), "unique_id": mpi.GetUniqueId()}
+    return {"media_pool_item": None}
+
+@mcp.tool()
+def ti_get_cache_status(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Get cache status for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {
+        "color_output_cache_enabled": bool(item.GetIsColorOutputCacheEnabled()),
+        "fusion_output_cache_enabled": bool(item.GetIsFusionOutputCacheEnabled())
+    }
+
+@mcp.tool()
+def ti_set_color_output_cache(enabled: bool, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Enable/disable color output cache for a timeline item.
+
+    Args:
+        enabled: True to enable, False to disable.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.SetColorOutputCache(enabled))}
+
+@mcp.tool()
+def ti_set_fusion_output_cache(enabled: bool, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Enable/disable Fusion output cache for a timeline item.
+
+    Args:
+        enabled: True to enable, False to disable.
+        item_index: 0-based item index. Default: 0.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    return {"success": bool(item.SetFusionOutputCache(enabled))}
+
+
 # Start the server
 if __name__ == "__main__":
     try:
