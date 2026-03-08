@@ -4625,6 +4625,907 @@ def get_project_info_endpoint() -> Dict[str, Any]:
     
     return get_project_info(current_project)
 
+# ------------------
+# MediaStorage Tools
+# ------------------
+
+@mcp.tool()
+def get_mounted_volumes() -> Dict[str, Any]:
+    """Get list of mounted volumes displayed in Resolve's Media Storage."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    ms = resolve.GetMediaStorage()
+    if not ms:
+        return {"error": "Failed to get MediaStorage"}
+    volumes = ms.GetMountedVolumeList()
+    return {"volumes": volumes if volumes else []}
+
+@mcp.tool()
+def get_media_storage_subfolders(folder_path: str) -> Dict[str, Any]:
+    """Get subfolders in a given absolute folder path from Media Storage.
+
+    Args:
+        folder_path: Absolute path to the folder to list subfolders for.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    ms = resolve.GetMediaStorage()
+    if not ms:
+        return {"error": "Failed to get MediaStorage"}
+    subfolders = ms.GetSubFolderList(folder_path)
+    return {"folder_path": folder_path, "subfolders": subfolders if subfolders else []}
+
+@mcp.tool()
+def get_media_storage_files(folder_path: str) -> Dict[str, Any]:
+    """Get media and file listings in a given absolute folder path from Media Storage.
+
+    Args:
+        folder_path: Absolute path to the folder to list files for.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    ms = resolve.GetMediaStorage()
+    if not ms:
+        return {"error": "Failed to get MediaStorage"}
+    files = ms.GetFileList(folder_path)
+    return {"folder_path": folder_path, "files": files if files else []}
+
+@mcp.tool()
+def reveal_in_media_storage(file_path: str) -> Dict[str, Any]:
+    """Reveal a file path in Resolve's Media Storage browser.
+
+    Args:
+        file_path: Absolute path to the file to reveal.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    ms = resolve.GetMediaStorage()
+    if not ms:
+        return {"error": "Failed to get MediaStorage"}
+    result = ms.RevealInStorage(file_path)
+    return {"success": bool(result), "file_path": file_path}
+
+@mcp.tool()
+def add_items_to_media_pool_from_storage(file_paths: List[str]) -> Dict[str, Any]:
+    """Add specified file/folder paths from Media Storage into current Media Pool folder.
+
+    Args:
+        file_paths: List of absolute file or folder paths to add to the Media Pool.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    ms = resolve.GetMediaStorage()
+    if not ms:
+        return {"error": "Failed to get MediaStorage"}
+    clips = ms.AddItemListToMediaPool(file_paths)
+    if clips:
+        return {"success": True, "clips_added": len(clips)}
+    return {"success": False, "error": "Failed to add items to Media Pool"}
+
+@mcp.tool()
+def add_clip_mattes_to_media_pool(media_pool_item_id: str, matte_paths: List[str]) -> Dict[str, Any]:
+    """Add clip mattes from Media Storage to a MediaPoolItem.
+
+    Args:
+        media_pool_item_id: The unique ID of the MediaPoolItem.
+        matte_paths: List of absolute file paths for the matte files.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    ms = resolve.GetMediaStorage()
+    if not ms:
+        return {"error": "Failed to get MediaStorage"}
+
+    # Find the media pool item by ID
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    mp = project.GetMediaPool()
+    root = mp.GetRootFolder()
+
+    # Search for clip by ID
+    def find_clip_by_id(folder, target_id):
+        for clip in (folder.GetClipList() or []):
+            if clip.GetUniqueId() == target_id:
+                return clip
+        for sub in (folder.GetSubFolderList() or []):
+            found = find_clip_by_id(sub, target_id)
+            if found:
+                return found
+        return None
+
+    clip = find_clip_by_id(root, media_pool_item_id)
+    if not clip:
+        return {"error": f"MediaPoolItem with ID {media_pool_item_id} not found"}
+
+    result = ms.AddClipMattesToMediaPool(clip, matte_paths, root)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def add_timeline_mattes_to_media_pool(timeline_item_index: int, matte_paths: List[str], track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Add timeline mattes from Media Storage to a timeline item.
+
+    Args:
+        timeline_item_index: 0-based index of the item in the track.
+        matte_paths: List of absolute file paths for the matte files.
+        track_type: Track type ('video' or 'audio'). Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    ms = resolve.GetMediaStorage()
+    if not ms:
+        return {"error": "Failed to get MediaStorage"}
+
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    timeline = project.GetCurrentTimeline()
+    if not timeline:
+        return {"error": "No current timeline"}
+
+    items = timeline.GetItemListInTrack(track_type, track_index)
+    if not items or timeline_item_index >= len(items):
+        return {"error": f"Timeline item at index {timeline_item_index} not found"}
+
+    item = items[timeline_item_index]
+    result = ms.AddTimelineMattesToMediaPool(item, matte_paths)
+    return {"success": bool(result)}
+
+
+# ------------------
+# Resolve Object Tools (missing methods)
+# ------------------
+
+@mcp.tool()
+def get_resolve_version_fields() -> Dict[str, Any]:
+    """Get DaVinci Resolve version as structured fields [major, minor, patch, build, suffix]."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    version = resolve.GetVersion()
+    if version:
+        return {"major": version[0], "minor": version[1], "patch": version[2], "build": version[3], "suffix": version[4] if len(version) > 4 else ""}
+    return {"error": "Failed to get version"}
+
+@mcp.tool()
+def get_fusion_object() -> Dict[str, Any]:
+    """Get the Fusion object. Starting point for Fusion scripts."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    fusion = resolve.Fusion()
+    if fusion:
+        return {"success": True, "fusion_available": True}
+    return {"success": False, "fusion_available": False}
+
+@mcp.tool()
+def update_layout_preset(preset_name: str) -> Dict[str, Any]:
+    """Overwrite an existing layout preset with the current UI layout.
+
+    Args:
+        preset_name: Name of the preset to overwrite.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    result = resolve.UpdateLayoutPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+@mcp.tool()
+def import_render_preset(preset_path: str) -> Dict[str, Any]:
+    """Import a render preset from a file.
+
+    Args:
+        preset_path: Absolute path to the render preset file.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    result = resolve.ImportRenderPreset(preset_path)
+    return {"success": bool(result), "preset_path": preset_path}
+
+@mcp.tool()
+def export_render_preset(preset_name: str, export_path: str) -> Dict[str, Any]:
+    """Export a render preset to a file.
+
+    Args:
+        preset_name: Name of the render preset to export.
+        export_path: Absolute path where the preset file will be saved.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    result = resolve.ExportRenderPreset(preset_name, export_path)
+    return {"success": bool(result), "preset_name": preset_name, "export_path": export_path}
+
+@mcp.tool()
+def import_burn_in_preset(preset_path: str) -> Dict[str, Any]:
+    """Import a burn-in preset from a file.
+
+    Args:
+        preset_path: Absolute path to the burn-in preset file.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    result = resolve.ImportBurnInPreset(preset_path)
+    return {"success": bool(result), "preset_path": preset_path}
+
+@mcp.tool()
+def export_burn_in_preset(preset_name: str, export_path: str) -> Dict[str, Any]:
+    """Export a burn-in preset to a file.
+
+    Args:
+        preset_name: Name of the burn-in preset to export.
+        export_path: Absolute path where the preset file will be saved.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    result = resolve.ExportBurnInPreset(preset_name, export_path)
+    return {"success": bool(result), "preset_name": preset_name, "export_path": export_path}
+
+@mcp.tool()
+def get_keyframe_mode() -> Dict[str, Any]:
+    """Get the current keyframe mode in Resolve. Returns 0=ALL, 1=COLOR, 2=SIZING."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    mode = resolve.GetKeyframeMode()
+    mode_names = {0: "All", 1: "Color", 2: "Sizing"}
+    return {"keyframe_mode": mode, "mode_name": mode_names.get(mode, "Unknown")}
+
+@mcp.tool()
+def set_keyframe_mode(mode: int) -> Dict[str, Any]:
+    """Set the keyframe mode in Resolve.
+
+    Args:
+        mode: Keyframe mode - 0=All, 1=Color, 2=Sizing.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    if mode not in (0, 1, 2):
+        return {"error": "Invalid mode. Must be 0 (All), 1 (Color), or 2 (Sizing)"}
+    result = resolve.SetKeyframeMode(mode)
+    mode_names = {0: "All", 1: "Color", 2: "Sizing"}
+    return {"success": bool(result), "keyframe_mode": mode, "mode_name": mode_names[mode]}
+
+@mcp.tool()
+def quit_resolve() -> Dict[str, Any]:
+    """Quit DaVinci Resolve. WARNING: This will close the application."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    result = resolve.Quit()
+    return {"success": True, "message": "DaVinci Resolve is quitting"}
+
+
+# ------------------
+# ProjectManager Tools (missing methods)
+# ------------------
+
+@mcp.tool()
+def archive_project(project_name: str, archive_path: str, archive_src_media: bool = True, archive_render_cache: bool = True, archive_proxy_media: bool = False) -> Dict[str, Any]:
+    """Archive a project to a file with optional media.
+
+    Args:
+        project_name: Name of the project to archive.
+        archive_path: Absolute path for the archive file (.dra).
+        archive_src_media: Include source media in archive. Default: True.
+        archive_render_cache: Include render cache. Default: True.
+        archive_proxy_media: Include proxy media. Default: False.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.ArchiveProject(project_name, archive_path, archive_src_media, archive_render_cache, archive_proxy_media)
+    return {"success": bool(result), "project_name": project_name, "archive_path": archive_path}
+
+@mcp.tool()
+def delete_project(project_name: str) -> Dict[str, Any]:
+    """Delete a project from the current database. WARNING: This is irreversible.
+
+    Args:
+        project_name: Name of the project to delete.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.DeleteProject(project_name)
+    return {"success": bool(result), "project_name": project_name}
+
+@mcp.tool()
+def create_project_folder(folder_name: str) -> Dict[str, Any]:
+    """Create a new folder in the current project folder location.
+
+    Args:
+        folder_name: Name of the folder to create.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.CreateFolder(folder_name)
+    return {"success": bool(result), "folder_name": folder_name}
+
+@mcp.tool()
+def delete_project_folder(folder_name: str) -> Dict[str, Any]:
+    """Delete a folder from the current project folder location.
+
+    Args:
+        folder_name: Name of the folder to delete.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.DeleteFolder(folder_name)
+    return {"success": bool(result), "folder_name": folder_name}
+
+@mcp.tool()
+def get_project_folder_list() -> Dict[str, Any]:
+    """Get list of folders in the current project folder location."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    folders = pm.GetFolderListInCurrentFolder()
+    return {"folders": folders if folders else []}
+
+@mcp.tool()
+def goto_root_project_folder() -> Dict[str, Any]:
+    """Navigate to the root project folder."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.GotoRootFolder()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def goto_parent_project_folder() -> Dict[str, Any]:
+    """Navigate up one level in the project folder hierarchy."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.GotoParentFolder()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_current_project_folder() -> Dict[str, Any]:
+    """Get the name of the current project folder."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    folder = pm.GetCurrentFolder()
+    return {"current_folder": folder}
+
+@mcp.tool()
+def open_project_folder(folder_name: str) -> Dict[str, Any]:
+    """Open/navigate into a project folder.
+
+    Args:
+        folder_name: Name of the folder to open.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.OpenFolder(folder_name)
+    return {"success": bool(result), "folder_name": folder_name}
+
+@mcp.tool()
+def import_project_from_file(file_path: str) -> Dict[str, Any]:
+    """Import a project from a .drp file.
+
+    Args:
+        file_path: Absolute path to the .drp project file.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.ImportProject(file_path)
+    return {"success": bool(result), "file_path": file_path}
+
+@mcp.tool()
+def export_project_to_file(project_name: str, file_path: str, with_stills_and_luts: bool = True) -> Dict[str, Any]:
+    """Export a project to a .drp file.
+
+    Args:
+        project_name: Name of the project to export.
+        file_path: Absolute path for the exported .drp file.
+        with_stills_and_luts: Include stills and LUTs in export. Default: True.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.ExportProject(project_name, file_path, with_stills_and_luts)
+    return {"success": bool(result), "project_name": project_name, "file_path": file_path}
+
+@mcp.tool()
+def restore_project(file_path: str) -> Dict[str, Any]:
+    """Restore a project from an archive (.dra) file.
+
+    Args:
+        file_path: Absolute path to the .dra archive file.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.RestoreProject(file_path)
+    return {"success": bool(result), "file_path": file_path}
+
+@mcp.tool()
+def get_current_database() -> Dict[str, Any]:
+    """Get information about the current database."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    db = pm.GetCurrentDatabase()
+    return db if db else {"error": "Failed to get current database"}
+
+@mcp.tool()
+def get_database_list() -> Dict[str, Any]:
+    """Get list of all available databases."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    dbs = pm.GetDatabaseList()
+    return {"databases": dbs if dbs else []}
+
+@mcp.tool()
+def set_current_database(db_info: Dict[str, str]) -> Dict[str, Any]:
+    """Switch to a different database.
+
+    Args:
+        db_info: Database info dict with keys 'DbType' and 'DbName'. Example: {"DbType": "Disk", "DbName": "Local Database"}
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    pm = resolve.GetProjectManager()
+    result = pm.SetCurrentDatabase(db_info)
+    return {"success": bool(result), "database": db_info}
+
+
+# ------------------
+# Project Tools (missing methods)
+# ------------------
+
+@mcp.tool()
+def set_project_name(name: str) -> Dict[str, Any]:
+    """Rename the current project.
+
+    Args:
+        name: New name for the project.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.SetName(name)
+    return {"success": bool(result), "name": name}
+
+@mcp.tool()
+def get_timeline_by_index(index: int) -> Dict[str, Any]:
+    """Get a timeline by its 1-based index.
+
+    Args:
+        index: 1-based timeline index.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    tl = project.GetTimelineByIndex(index)
+    if tl:
+        return {"name": tl.GetName(), "start_frame": tl.GetStartFrame(), "end_frame": tl.GetEndFrame(), "unique_id": tl.GetUniqueId()}
+    return {"error": f"No timeline at index {index}"}
+
+@mcp.tool()
+def get_project_preset_list() -> Dict[str, Any]:
+    """Get list of available project presets."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    presets = project.GetPresetList()
+    return {"presets": presets if presets else []}
+
+@mcp.tool()
+def set_project_preset(preset_name: str) -> Dict[str, Any]:
+    """Apply a project preset to the current project.
+
+    Args:
+        preset_name: Name of the preset to apply.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.SetPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+@mcp.tool()
+def delete_render_job(job_id: str) -> Dict[str, Any]:
+    """Delete a specific render job by its ID.
+
+    Args:
+        job_id: The unique ID of the render job to delete.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.DeleteRenderJob(job_id)
+    return {"success": bool(result), "job_id": job_id}
+
+@mcp.tool()
+def get_render_job_list() -> Dict[str, Any]:
+    """Get list of all render jobs in the queue."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    jobs = project.GetRenderJobList()
+    return {"render_jobs": jobs if jobs else []}
+
+@mcp.tool()
+def start_rendering_jobs(job_ids: Optional[List[str]] = None, is_interactive_mode: bool = False) -> Dict[str, Any]:
+    """Start rendering jobs. If no job IDs specified, renders all queued jobs.
+
+    Args:
+        job_ids: Optional list of job IDs to render. If None, renders all.
+        is_interactive_mode: If True, enables interactive rendering mode.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    if job_ids:
+        result = project.StartRendering(job_ids, is_interactive_mode)
+    else:
+        result = project.StartRendering(is_interactive_mode)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def stop_rendering() -> Dict[str, Any]:
+    """Stop the current rendering process."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    project.StopRendering()
+    return {"success": True}
+
+@mcp.tool()
+def is_rendering_in_progress() -> Dict[str, Any]:
+    """Check if rendering is currently in progress."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.IsRenderingInProgress()
+    return {"is_rendering": bool(result)}
+
+@mcp.tool()
+def load_render_preset(preset_name: str) -> Dict[str, Any]:
+    """Load a render preset by name.
+
+    Args:
+        preset_name: Name of the render preset to load.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.LoadRenderPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+@mcp.tool()
+def save_as_new_render_preset(preset_name: str) -> Dict[str, Any]:
+    """Save current render settings as a new preset.
+
+    Args:
+        preset_name: Name for the new render preset.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.SaveAsNewRenderPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+@mcp.tool()
+def delete_render_preset(preset_name: str) -> Dict[str, Any]:
+    """Delete a render preset.
+
+    Args:
+        preset_name: Name of the render preset to delete.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.DeleteRenderPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+@mcp.tool()
+def set_render_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Set render settings for the current project.
+
+    Args:
+        settings: Dict of render settings. Supported keys include:
+            SelectAllFrames (bool), MarkIn (int), MarkOut (int),
+            TargetDir (str), CustomName (str), UniqueFilenameStyle (0/1),
+            ExportVideo (bool), ExportAudio (bool), FormatWidth (int),
+            FormatHeight (int), FrameRate (float), VideoQuality (int/str),
+            AudioCodec (str), AudioBitDepth (int), AudioSampleRate (int),
+            ColorSpaceTag (str), GammaTag (str), ExportAlpha (bool).
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.SetRenderSettings(settings)
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_render_job_status(job_id: str) -> Dict[str, Any]:
+    """Get the status of a specific render job.
+
+    Args:
+        job_id: The unique ID of the render job.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    status = project.GetRenderJobStatus(job_id)
+    return status if status else {"error": f"No render job with ID {job_id}"}
+
+@mcp.tool()
+def get_render_formats() -> Dict[str, Any]:
+    """Get all available render formats."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    formats = project.GetRenderFormats()
+    return {"formats": formats if formats else {}}
+
+@mcp.tool()
+def get_render_codecs(format_name: str) -> Dict[str, Any]:
+    """Get available codecs for a given render format.
+
+    Args:
+        format_name: Render format name (e.g. 'mp4', 'mov', 'avi').
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    codecs = project.GetRenderCodecs(format_name)
+    return {"format": format_name, "codecs": codecs if codecs else {}}
+
+@mcp.tool()
+def get_current_render_format_and_codec() -> Dict[str, Any]:
+    """Get the current render format and codec setting."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.GetCurrentRenderFormatAndCodec()
+    return result if result else {"error": "Failed to get render format and codec"}
+
+@mcp.tool()
+def set_current_render_format_and_codec(format_name: str, codec_name: str) -> Dict[str, Any]:
+    """Set the render format and codec.
+
+    Args:
+        format_name: Render format (e.g. 'mp4', 'mov').
+        codec_name: Codec name (e.g. 'H264', 'H265', 'ProRes422HQ').
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.SetCurrentRenderFormatAndCodec(format_name, codec_name)
+    return {"success": bool(result), "format": format_name, "codec": codec_name}
+
+@mcp.tool()
+def get_current_render_mode() -> Dict[str, Any]:
+    """Get the current render mode (0=Individual Clips, 1=Single Clip)."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    mode = project.GetCurrentRenderMode()
+    return {"render_mode": mode, "mode_name": "Individual Clips" if mode == 0 else "Single Clip"}
+
+@mcp.tool()
+def set_current_render_mode(mode: int) -> Dict[str, Any]:
+    """Set the render mode.
+
+    Args:
+        mode: 0 for Individual Clips, 1 for Single Clip.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.SetCurrentRenderMode(mode)
+    return {"success": bool(result), "render_mode": mode}
+
+@mcp.tool()
+def get_render_resolutions(format_name: str, codec_name: str) -> Dict[str, Any]:
+    """Get available render resolutions for a format/codec combination.
+
+    Args:
+        format_name: Render format (e.g. 'mp4').
+        codec_name: Codec name (e.g. 'H264').
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    resolutions = project.GetRenderResolutions(format_name, codec_name)
+    return {"format": format_name, "codec": codec_name, "resolutions": resolutions if resolutions else []}
+
+@mcp.tool()
+def refresh_lut_list() -> Dict[str, Any]:
+    """Refresh the LUT list in the project. Call after adding new LUT files."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.RefreshLUTList()
+    return {"success": bool(result)}
+
+@mcp.tool()
+def get_project_unique_id() -> Dict[str, Any]:
+    """Get the unique ID of the current project."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    uid = project.GetUniqueId()
+    return {"unique_id": uid}
+
+@mcp.tool()
+def insert_audio_to_current_track(file_path: str) -> Dict[str, Any]:
+    """Insert audio file to current track at playhead position.
+
+    Args:
+        file_path: Absolute path to the audio file.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.InsertAudioToCurrentTrackAtPlayhead(file_path)
+    return {"success": bool(result), "file_path": file_path}
+
+@mcp.tool()
+def load_burn_in_preset(preset_name: str) -> Dict[str, Any]:
+    """Load a burn-in preset by name for the project.
+
+    Args:
+        preset_name: Name of the burn-in preset to load.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.LoadBurnInPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+@mcp.tool()
+def export_current_frame_as_still(file_path: str) -> Dict[str, Any]:
+    """Export the current frame as a still image.
+
+    Args:
+        file_path: Absolute path for the exported still image.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.ExportCurrentFrameAsStill(file_path)
+    return {"success": bool(result), "file_path": file_path}
+
+@mcp.tool()
+def get_color_groups_list() -> Dict[str, Any]:
+    """Get list of all color groups in the current project."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    groups = project.GetColorGroupsList()
+    if groups:
+        return {"color_groups": [{"name": g.GetName()} for g in groups]}
+    return {"color_groups": []}
+
+@mcp.tool()
+def add_color_group(group_name: str) -> Dict[str, Any]:
+    """Create a new color group in the current project.
+
+    Args:
+        group_name: Name for the new color group.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.AddColorGroup(group_name)
+    return {"success": bool(result), "group_name": group_name}
+
+@mcp.tool()
+def delete_color_group(group_name: str) -> Dict[str, Any]:
+    """Delete a color group from the current project.
+
+    Args:
+        group_name: Name of the color group to delete.
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    # Find the group by name
+    groups = project.GetColorGroupsList()
+    target = None
+    if groups:
+        for g in groups:
+            if g.GetName() == group_name:
+                target = g
+                break
+    if not target:
+        return {"error": f"Color group '{group_name}' not found"}
+    result = project.DeleteColorGroup(target)
+    return {"success": bool(result), "group_name": group_name}
+
+@mcp.tool()
+def get_quick_export_render_presets() -> Dict[str, Any]:
+    """Get list of available quick export render presets."""
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    presets = project.GetQuickExportRenderPresets()
+    return {"presets": presets if presets else []}
+
+@mcp.tool()
+def render_with_quick_export(preset_name: str) -> Dict[str, Any]:
+    """Render the current timeline using a Quick Export preset.
+
+    Args:
+        preset_name: Name of the Quick Export preset (e.g. 'H.264', 'YouTube', 'Vimeo').
+    """
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    result = project.RenderWithQuickExport(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+
 # Start the server
 if __name__ == "__main__":
     try:
