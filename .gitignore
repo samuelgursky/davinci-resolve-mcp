@@ -95,4 +95,11 @@ logs/*
 *_backup/
 
 # Cursor
-.cursor/ 
+.cursor/
+
+# Autoresearch framework (local development only)
+autoresearch/
+
+# Autoresearch artifacts
+run.log
+*.log.bak
