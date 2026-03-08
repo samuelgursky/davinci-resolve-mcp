@@ -1,0 +1,468 @@
+{
+  "summary": {
+    "total": 113,
+    "tested": 79,
+    "passed": 79,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 34
+  },
+  "pass": [
+    {
+      "name": "Resolve.ExportRenderPreset",
+      "value": "False"
+    },
+    {
+      "name": "Resolve.ImportRenderPreset",
+      "value": "False"
+    },
+    {
+      "name": "Resolve.ExportBurnInPreset",
+      "value": "False"
+    },
+    {
+      "name": "Resolve.ImportBurnInPreset",
+      "value": "False"
+    },
+    {
+      "name": "Resolve.ImportLayoutPreset",
+      "value": "True"
+    },
+    {
+      "name": "PM.CreateFolder",
+      "value": "True"
+    },
+    {
+      "name": "PM.OpenFolder",
+      "value": "True"
+    },
+    {
+      "name": "PM.GotoRootFolder",
+      "value": "True"
+    },
+    {
+      "name": "PM.DeleteFolder",
+      "value": "True"
+    },
+    {
+      "name": "PM.CreateProject",
+      "value": "None"
+    },
+    {
+      "name": "PM.LoadProject",
+      "value": "Project (0x0x32c2cec00) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44a8-9"
+    },
+    {
+      "name": "PM.DeleteProject",
+      "value": "False"
+    },
+    {
+      "name": "PM.ExportProject",
+      "value": "True"
+    },
+    {
+      "name": "PM.ImportProject",
+      "value": "True"
+    },
+    {
+      "name": "PM.RestoreProject",
+      "value": "False"
+    },
+    {
+      "name": "PM.ArchiveProject",
+      "value": "False"
+    },
+    {
+      "name": "PM.CloseProject",
+      "value": "True"
+    },
+    {
+      "name": "PM.LoadProject_reopen",
+      "value": "Project (0x0x32c2cf400) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44a8-9"
+    },
+    {
+      "name": "Project.SaveAsNewRenderPreset",
+      "value": "True"
+    },
+    {
+      "name": "Project.DeleteRenderPreset",
+      "value": "True"
+    },
+    {
+      "name": "Project.GetRenderJobStatus",
+      "value": "{'JobStatus': 'Ready', 'CompletionPercentage': 0}"
+    },
+    {
+      "name": "Project.DeleteRenderJob",
+      "value": "True"
+    },
+    {
+      "name": "Project.StartRendering",
+      "value": "True"
+    },
+    {
+      "name": "Project.RenderWithQuickExport",
+      "value": "{'JobStatus': 'Render Failed'}"
+    },
+    {
+      "name": "MS.AddItemListToMediaPool",
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104c82390>]"
+    },
+    {
+      "name": "MP.AddSubFolder",
+      "value": "True"
+    },
+    {
+      "name": "MP.DeleteFolders",
+      "value": "True"
+    },
+    {
+      "name": "MP.CreateEmptyTimeline",
+      "value": "True"
+    },
+    {
+      "name": "MP.DeleteTimelines",
+      "value": "True"
+    },
+    {
+      "name": "MP.CreateTimelineFromClips",
+      "value": "True"
+    },
+    {
+      "name": "MP.AppendToTimeline",
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104c82330>]"
+    },
+    {
+      "name": "MP.MoveClips",
+      "value": "True"
+    },
+    {
+      "name": "MP.MoveFolders",
+      "value": "True"
+    },
+    {
+      "name": "MP.ImportMedia",
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104c82350>]"
+    },
+    {
+      "name": "MP.UnlinkClips",
+      "value": "True"
+    },
+    {
+      "name": "MP.RelinkClips",
+      "value": "False"
+    },
+    {
+      "name": "MP.DeleteClips",
+      "value": "True"
+    },
+    {
+      "name": "Folder.Export",
+      "value": "True"
+    },
+    {
+      "name": "MPI.SetThirdPartyMetadata",
+      "value": "True"
+    },
+    {
+      "name": "MPI.SetClipProperty",
+      "value": "False"
+    },
+    {
+      "name": "TL.AddTrack",
+      "value": "True"
+    },
+    {
+      "name": "TL.DeleteTrack",
+      "value": "True"
+    },
+    {
+      "name": "TL.DuplicateTimeline",
+      "value": "True"
+    },
+    {
+      "name": "TL.SetClipsLinked",
+      "value": "True"
+    },
+    {
+      "name": "TL.InsertGeneratorIntoTimeline",
+      "value": "True"
+    },
+    {
+      "name": "TL.InsertTitleIntoTimeline",
+      "value": "True"
+    },
+    {
+      "name": "TL.InsertFusionGeneratorIntoTimeline",
+      "value": "True"
+    },
+    {
+      "name": "TL.InsertFusionCompositionIntoTimeline",
+      "value": "True"
+    },
+    {
+      "name": "TL.InsertOFXGeneratorIntoTimeline",
+      "value": "False"
+    },
+    {
+      "name": "TL.InsertFusionTitleIntoTimeline",
+      "value": "True"
+    },
+    {
+      "name": "TL.DeleteClips",
+      "value": "True"
+    },
+    {
+      "name": "TL.CreateCompoundClip",
+      "value": "Timeline item (0x0x32c2ce780) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-"
+    },
+    {
+      "name": "TL.GrabAllStills",
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104c830d0>, <BlackmagicFusion.PyRe"
+    },
+    {
+      "name": "TI.SetProperty",
+      "value": "True"
+    },
+    {
+      "name": "TI.AddFusionComp",
+      "value": "True"
+    },
+    {
+      "name": "TI.GetFusionCompByName",
+      "value": "Composition (0x0x32c348100) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44"
+    },
+    {
+      "name": "TI.GetFusionCompByIndex",
+      "value": "Composition (0x0x32c348100) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44"
+    },
+    {
+      "name": "TI.ExportFusionComp",
+      "value": "True"
+    },
+    {
+      "name": "TI.LoadFusionCompByName",
+      "value": "Composition (0x0x32c348100) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44"
+    },
+    {
+      "name": "TI.RenameFusionCompByName",
+      "value": "True"
+    },
+    {
+      "name": "TI.DeleteFusionCompByName",
+      "value": "False"
+    },
+    {
+      "name": "TI.ImportFusionComp",
+      "value": "Composition (0x0x39b5d2b00) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44"
+    },
+    {
+      "name": "TI.AddVersion",
+      "value": "True"
+    },
+    {
+      "name": "TI.LoadVersionByName",
+      "value": "True"
+    },
+    {
+      "name": "TI.RenameVersionByName",
+      "value": "True"
+    },
+    {
+      "name": "TI.DeleteVersionByName",
+      "value": "False"
+    },
+    {
+      "name": "TI.SetCDL",
+      "value": "True"
+    },
+    {
+      "name": "TI.AddTake",
+      "value": "True"
+    },
+    {
+      "name": "TI.GetTakeByIndex",
+      "value": "{'mediaPoolItem': <BlackmagicFusion.PyRemoteObject object at 0x104c832d0>, 'star"
+    },
+    {
+      "name": "TI.SelectTakeByIndex",
+      "value": "True"
+    },
+    {
+      "name": "TI.DeleteTakeByIndex",
+      "value": "True"
+    },
+    {
+      "name": "TI.CopyGrades",
+      "value": "False"
+    },
+    {
+      "name": "TI.AssignToColorGroup",
+      "value": "True"
+    },
+    {
+      "name": "TI.ExportLUT",
+      "value": "True"
+    },
+    {
+      "name": "TI.SetColorOutputCache",
+      "value": "False"
+    },
+    {
+      "name": "TI.SetFusionOutputCache",
+      "value": "False"
+    },
+    {
+      "name": "Gallery.CreateGalleryStillAlbum",
+      "value": "True"
+    },
+    {
+      "name": "Gallery.SetAlbumName",
+      "value": "True"
+    },
+    {
+      "name": "Gallery.CreateGalleryPowerGradeAlbum",
+      "value": "True"
+    }
+  ],
+  "fail": [],
+  "error": [],
+  "skip": [
+    {
+      "name": "PM.CreateCloudProject",
+      "reason": "needs cloud infrastructure"
+    },
+    {
+      "name": "PM.LoadCloudProject",
+      "reason": "needs cloud infrastructure"
+    },
+    {
+      "name": "PM.ImportCloudProject",
+      "reason": "needs cloud infrastructure"
+    },
+    {
+      "name": "PM.RestoreCloudProject",
+      "reason": "needs cloud infrastructure"
+    },
+    {
+      "name": "PM.SetCurrentDatabase",
+      "reason": "only one database available"
+    },
+    {
+      "name": "Project.InsertAudioToCurrentTrackAtPlayhead",
+      "reason": "needs Fairlight page + audio file"
+    },
+    {
+      "name": "MS.AddClipMattesToMediaPool",
+      "reason": "needs proper matte media files"
+    },
+    {
+      "name": "MS.AddTimelineMattesToMediaPool",
+      "reason": "needs proper matte media files"
+    },
+    {
+      "name": "MP.ImportTimelineFromFile",
+      "reason": "needs AAF/EDL/XML file"
+    },
+    {
+      "name": "MP.ImportFolderFromFile",
+      "reason": "needs DRB file"
+    },
+    {
+      "name": "MP.DeleteClipMattes",
+      "reason": "needs mattes to delete"
+    },
+    {
+      "name": "MP.CreateStereoClip",
+      "reason": "needs stereo L/R clips"
+    },
+    {
+      "name": "MP.AutoSyncAudio",
+      "reason": "needs matching A/V clips"
+    },
+    {
+      "name": "Folder.TranscribeAudio",
+      "reason": "slow AI operation (minutes)"
+    },
+    {
+      "name": "Folder.ClearTranscription",
+      "reason": "needs transcription first"
+    },
+    {
+      "name": "MPI.LinkProxyMedia",
+      "reason": "needs proxy media file"
+    },
+    {
+      "name": "MPI.ReplaceClip",
+      "reason": "irreversible - would replace clip"
+    },
+    {
+      "name": "MPI.TranscribeAudio",
+      "reason": "slow AI operation"
+    },
+    {
+      "name": "MPI.ClearTranscription",
+      "reason": "needs transcription first"
+    },
+    {
+      "name": "TL.CreateFusionClip",
+      "reason": "would merge items irreversibly"
+    },
+    {
+      "name": "TL.CreateSubtitlesFromAudio",
+      "reason": "slow AI operation"
+    },
+    {
+      "name": "TL.DetectSceneCuts",
+      "reason": "slow operation"
+    },
+    {
+      "name": "TL.ConvertTimelineToStereo",
+      "reason": "irreversible"
+    },
+    {
+      "name": "TL.AnalyzeDolbyVision",
+      "reason": "slow/needs HDR content"
+    },
+    {
+      "name": "TL.ImportIntoTimeline",
+      "reason": "needs AAF/EDL file"
+    },
+    {
+      "name": "TI.CreateMagicMask",
+      "reason": "slow AI operation (minutes)"
+    },
+    {
+      "name": "TI.RegenerateMagicMask",
+      "reason": "needs existing mask"
+    },
+    {
+      "name": "TI.Stabilize",
+      "reason": "slow operation"
+    },
+    {
+      "name": "TI.SmartReframe",
+      "reason": "slow operation"
+    },
+    {
+      "name": "GSA.SetLabel",
+      "reason": "no stills in album"
+    },
+    {
+      "name": "GSA.ExportStills",
+      "reason": "no stills"
+    },
+    {
+      "name": "GSA.ImportStills",
+      "reason": "no stills to export first"
+    },
+    {
+      "name": "GSA.DeleteStills",
+      "reason": "no stills"
+    },
+    {
+      "name": "Resolve.Quit",
+      "reason": "would quit Resolve"
+    }
+  ]
+}
