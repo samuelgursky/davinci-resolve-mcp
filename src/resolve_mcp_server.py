@@ -7757,7 +7757,7 @@ def timeline_get_current_clip_thumbnail(width: int = 320, height: int = 180) -> 
     _, tl, err = _get_timeline()
     if err:
         return err
-    result = tl.GetCurrentClipThumbnailImage({"width": width, "height": height})
+    result = tl.GetCurrentClipThumbnailImage()
     if result:
         return {"success": True, "has_data": bool(result)}
     return {"success": False}
