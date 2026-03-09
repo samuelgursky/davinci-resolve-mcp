@@ -1361,12 +1361,12 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       get_track_type_and_index(...) -> {track_type, track_index}
       get_source_audio_mapping(...) -> {mapping}
       load_burnin_preset(name, ...) -> {success}
-      get_retime(...) -> {speed, process}
-      set_retime(speed?, process?, ...) -> {success}  — process: NearestFrame, FrameBlend, OpticalFlow
+      get_retime(...) -> {process, motion_estimation}
+      set_retime(process?, motion_estimation?, ...) -> {success}  — process: nearest, frame_blend, optical_flow (or 0-3); motion_estimation: 0-6
       get_transform(...) -> {Pan, Tilt, ZoomX, ZoomY, RotationAngle, ...}
-      set_transform(Pan?, Tilt?, ZoomX?, ZoomY?, RotationAngle?, AnchorPointX?, AnchorPointY?, Pitch?, Yaw?, ...) -> {success}
-      get_crop(...) -> {CropLeft, CropRight, CropTop, CropBottom, CropRetain}
-      set_crop(CropLeft?, CropRight?, CropTop?, CropBottom?, CropRetain?, ...) -> {success}
+      set_transform(Pan?, Tilt?, ZoomX?, ZoomY?, RotationAngle?, AnchorPointX?, AnchorPointY?, Pitch?, Yaw?, FlipX?, FlipY?, ...) -> {success}
+      get_crop(...) -> {CropLeft, CropRight, CropTop, CropBottom, CropSoftness, CropRetain}
+      set_crop(CropLeft?, CropRight?, CropTop?, CropBottom?, CropSoftness?, CropRetain?, ...) -> {success}
       get_composite(...) -> {Opacity, CompositeMode}
       set_composite(Opacity?, CompositeMode?, ...) -> {success}
       get_audio(...) -> {Volume, Pan, AudioSyncOffset, ...}
@@ -1436,28 +1436,31 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     elif action == "load_burnin_preset":
         return {"success": bool(item.LoadBurnInPreset(p["name"]))}
 
-    # ── Retime / Speed ──
+    # ── Retime ──
     elif action == "get_retime":
-        return {"speed": item.GetProperty("Speed"), "process": item.GetProperty("RetimeProcess")}
+        return {"process": item.GetProperty("RetimeProcess"), "motion_estimation": item.GetProperty("MotionEstimation")}
     elif action == "set_retime":
+        # RetimeProcess: 0=project, 1=nearest, 2=frame_blend, 3=optical_flow
+        # MotionEstimation: 0=project, 1=standard_faster, 2=standard_better, 3=enhanced_faster, 4=enhanced_better, 5=speed_warp_better, 6=speed_warp_faster
+        process_map = {"project": 0, "nearest": 1, "frame_blend": 2, "optical_flow": 3}
         results = {}
-        if "speed" in p:
-            if p["speed"] <= 0:
-                return _err("Speed must be greater than 0")
-            results["speed"] = bool(item.SetProperty("Speed", p["speed"]))
         if "process" in p:
-            valid = ["NearestFrame", "FrameBlend", "OpticalFlow"]
-            if p["process"] not in valid:
-                return _err(f"Invalid process. Must be one of: {', '.join(valid)}")
-            results["process"] = bool(item.SetProperty("RetimeProcess", p["process"]))
-        return _ok(**results) if results else _err("Specify speed and/or process")
+            val = p["process"]
+            if isinstance(val, str):
+                val = process_map.get(val.lower())
+                if val is None:
+                    return _err(f"Invalid process. Use: {', '.join(process_map.keys())} or integer 0-3")
+            results["process"] = bool(item.SetProperty("RetimeProcess", val))
+        if "motion_estimation" in p:
+            results["motion_estimation"] = bool(item.SetProperty("MotionEstimation", p["motion_estimation"]))
+        return _ok(**results) if results else _err("Specify process (0-3 or name) and/or motion_estimation (0-6)")
 
     # ── Transform ──
     elif action == "get_transform":
-        keys = ["Pan", "Tilt", "ZoomX", "ZoomY", "ZoomGang", "RotationAngle", "AnchorPointX", "AnchorPointY", "Pitch", "Yaw"]
+        keys = ["Pan", "Tilt", "ZoomX", "ZoomY", "ZoomGang", "RotationAngle", "AnchorPointX", "AnchorPointY", "Pitch", "Yaw", "FlipX", "FlipY"]
         return {k: item.GetProperty(k) for k in keys}
     elif action == "set_transform":
-        valid = {"Pan", "Tilt", "ZoomX", "ZoomY", "ZoomGang", "RotationAngle", "AnchorPointX", "AnchorPointY", "Pitch", "Yaw"}
+        valid = {"Pan", "Tilt", "ZoomX", "ZoomY", "ZoomGang", "RotationAngle", "AnchorPointX", "AnchorPointY", "Pitch", "Yaw", "FlipX", "FlipY"}
         results = {}
         for k, v in p.items():
             if k in valid:
@@ -1466,10 +1469,10 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 
     # ── Crop ──
     elif action == "get_crop":
-        keys = ["CropLeft", "CropRight", "CropTop", "CropBottom", "CropRetain"]
+        keys = ["CropLeft", "CropRight", "CropTop", "CropBottom", "CropSoftness", "CropRetain"]
         return {k: item.GetProperty(k) for k in keys}
     elif action == "set_crop":
-        valid = {"CropLeft", "CropRight", "CropTop", "CropBottom", "CropRetain"}
+        valid = {"CropLeft", "CropRight", "CropTop", "CropBottom", "CropSoftness", "CropRetain"}
         results = {}
         for k, v in p.items():
             if k in valid:

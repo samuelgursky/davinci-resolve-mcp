@@ -5,10 +5,18 @@
 [![Tools](https://img.shields.io/badge/MCP%20Tools-26%20(342%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-96.6%25-green.svg)](#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
-[![Python](https://img.shields.io/badge/python-3.6+-green.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.10--3.12-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 A Model Context Protocol (MCP) server providing **complete coverage** of the DaVinci Resolve Scripting API. Connect AI assistants (Claude, Cursor, Windsurf) to DaVinci Resolve and control every aspect of your post-production workflow through natural language.
+
+### What's New in v2.0.1
+
+- **26-tool compound server** — all 324 API methods grouped into 26 context-efficient tools (default)
+- **Universal installer** — single `python install.py` for macOS/Windows/Linux, 9 MCP clients
+- **Dedicated timeline_item actions** — retime/speed, transform, crop, composite, audio, keyframes with validation
+- **Lazy Resolve connection** — server starts instantly, connects when first tool is called
+- **Bug fixes** — CreateMagicMask param type, GetCurrentClipThumbnailImage args, Python 3.13+ warning
 
 ## Key Stats
 
@@ -99,6 +107,17 @@ The MCP server comes in two modes:
 | **Compound** (default) | `src/server.py` | 26 | Most users — fast, clean, low context usage |
 | **Full** | `src/resolve_mcp_server.py` | 342 | Power users who want one tool per API method |
 
+The compound server's `timeline_item` tool includes dedicated actions for common workflows:
+
+| Category | Actions | Parameters |
+|----------|---------|------------|
+| **Retime** | `get_retime`, `set_retime` | process (nearest, frame_blend, optical_flow), motion_estimation (0-6) |
+| **Transform** | `get_transform`, `set_transform` | Pan, Tilt, ZoomX/Y, RotationAngle, AnchorPointX/Y, Pitch, Yaw, FlipX/Y |
+| **Crop** | `get_crop`, `set_crop` | CropLeft, CropRight, CropTop, CropBottom, CropSoftness, CropRetain |
+| **Composite** | `get_composite`, `set_composite` | Opacity, CompositeMode |
+| **Audio** | `get_audio`, `set_audio` | Volume, Pan, AudioSyncOffset |
+| **Keyframes** | `get_keyframes`, `add_keyframe`, `modify_keyframe`, `delete_keyframe`, `set_keyframe_interpolation` | property, frame, value, interpolation (Linear, Bezier, EaseIn, EaseOut, EaseInOut) |
+
 The installer uses the compound server by default. To use the full server:
 ```bash
 python src/server.py --full    # Launch full 342-tool server
@@ -114,11 +133,7 @@ If you prefer to set things up yourself, add to your MCP client config:
   "mcpServers": {
     "davinci-resolve": {
       "command": "/path/to/venv/bin/python",
-      "args": ["/path/to/davinci-resolve-mcp/src/server.py"],
-      "env": {
-        "RESOLVE_SCRIPT_API": "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting",
-        "PYTHONPATH": "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
-      }
+      "args": ["/path/to/davinci-resolve-mcp/src/server.py"]
     }
   }
 }
