@@ -1333,7 +1333,8 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 
 @mcp.tool()
 def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Properties and metadata for a timeline item. Identify by track_type, track_index, item_index.
+    """Properties, transforms, speed, keyframes, and metadata for a timeline item.
+    Identify by track_type, track_index, item_index.
 
     Actions:
       get_name(track_type?, track_index?, item_index?) -> {name}
@@ -1360,6 +1361,21 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       get_track_type_and_index(...) -> {track_type, track_index}
       get_source_audio_mapping(...) -> {mapping}
       load_burnin_preset(name, ...) -> {success}
+      get_retime(...) -> {speed, process}
+      set_retime(speed?, process?, ...) -> {success}  — process: NearestFrame, FrameBlend, OpticalFlow
+      get_transform(...) -> {Pan, Tilt, ZoomX, ZoomY, RotationAngle, ...}
+      set_transform(Pan?, Tilt?, ZoomX?, ZoomY?, RotationAngle?, AnchorPointX?, AnchorPointY?, Pitch?, Yaw?, ...) -> {success}
+      get_crop(...) -> {CropLeft, CropRight, CropTop, CropBottom, CropRetain}
+      set_crop(CropLeft?, CropRight?, CropTop?, CropBottom?, CropRetain?, ...) -> {success}
+      get_composite(...) -> {Opacity, CompositeMode}
+      set_composite(Opacity?, CompositeMode?, ...) -> {success}
+      get_audio(...) -> {Volume, Pan, AudioSyncOffset, ...}
+      set_audio(Volume?, Pan?, ...) -> {success}
+      get_keyframes(property, ...) -> {property, count, keyframes}
+      add_keyframe(property, frame, value, ...) -> {success}
+      modify_keyframe(property, frame, new_value?, new_frame?, ...) -> {success}
+      delete_keyframe(property, frame, ...) -> {success}
+      set_keyframe_interpolation(property, frame, interpolation, ...) -> {success}  — Linear, Bezier, EaseIn, EaseOut, EaseInOut
 
     Default: track_type="video", track_index=1, item_index=0
     """
@@ -1419,7 +1435,100 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         return {"mapping": item.GetSourceAudioChannelMapping()}
     elif action == "load_burnin_preset":
         return {"success": bool(item.LoadBurnInPreset(p["name"]))}
-    return _unknown(action, ["get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset"])
+
+    # ── Retime / Speed ──
+    elif action == "get_retime":
+        return {"speed": item.GetProperty("Speed"), "process": item.GetProperty("RetimeProcess")}
+    elif action == "set_retime":
+        results = {}
+        if "speed" in p:
+            if p["speed"] <= 0:
+                return _err("Speed must be greater than 0")
+            results["speed"] = bool(item.SetProperty("Speed", p["speed"]))
+        if "process" in p:
+            valid = ["NearestFrame", "FrameBlend", "OpticalFlow"]
+            if p["process"] not in valid:
+                return _err(f"Invalid process. Must be one of: {', '.join(valid)}")
+            results["process"] = bool(item.SetProperty("RetimeProcess", p["process"]))
+        return _ok(**results) if results else _err("Specify speed and/or process")
+
+    # ── Transform ──
+    elif action == "get_transform":
+        keys = ["Pan", "Tilt", "ZoomX", "ZoomY", "ZoomGang", "RotationAngle", "AnchorPointX", "AnchorPointY", "Pitch", "Yaw"]
+        return {k: item.GetProperty(k) for k in keys}
+    elif action == "set_transform":
+        valid = {"Pan", "Tilt", "ZoomX", "ZoomY", "ZoomGang", "RotationAngle", "AnchorPointX", "AnchorPointY", "Pitch", "Yaw"}
+        results = {}
+        for k, v in p.items():
+            if k in valid:
+                results[k] = bool(item.SetProperty(k, v))
+        return _ok(**results) if results else _err(f"Specify one or more of: {', '.join(sorted(valid))}")
+
+    # ── Crop ──
+    elif action == "get_crop":
+        keys = ["CropLeft", "CropRight", "CropTop", "CropBottom", "CropRetain"]
+        return {k: item.GetProperty(k) for k in keys}
+    elif action == "set_crop":
+        valid = {"CropLeft", "CropRight", "CropTop", "CropBottom", "CropRetain"}
+        results = {}
+        for k, v in p.items():
+            if k in valid:
+                results[k] = bool(item.SetProperty(k, v))
+        return _ok(**results) if results else _err(f"Specify one or more of: {', '.join(sorted(valid))}")
+
+    # ── Composite ──
+    elif action == "get_composite":
+        return {"Opacity": item.GetProperty("Opacity"), "CompositeMode": item.GetProperty("CompositeMode")}
+    elif action == "set_composite":
+        results = {}
+        if "Opacity" in p:
+            results["Opacity"] = bool(item.SetProperty("Opacity", p["Opacity"]))
+        if "CompositeMode" in p:
+            results["CompositeMode"] = bool(item.SetProperty("CompositeMode", p["CompositeMode"]))
+        return _ok(**results) if results else _err("Specify Opacity and/or CompositeMode")
+
+    # ── Audio ──
+    elif action == "get_audio":
+        keys = ["Volume", "Pan", "AudioSyncOffsetIsManual", "AudioSyncOffset"]
+        return {k: item.GetProperty(k) for k in keys}
+    elif action == "set_audio":
+        valid = {"Volume", "Pan", "AudioSyncOffsetIsManual", "AudioSyncOffset"}
+        results = {}
+        for k, v in p.items():
+            if k in valid:
+                results[k] = bool(item.SetProperty(k, v))
+        return _ok(**results) if results else _err(f"Specify one or more of: {', '.join(sorted(valid))}")
+
+    # ── Keyframes ──
+    elif action == "get_keyframes":
+        prop = p["property"]
+        count = item.GetKeyframeCount(prop)
+        if count == 0:
+            return {"property": prop, "count": 0, "keyframes": []}
+        kfs = []
+        for i in range(count):
+            kf = item.GetKeyframeAtIndex(prop, i)
+            val = item.GetPropertyAtKeyframeIndex(prop, i)
+            kfs.append({"frame": kf.get("frame") if isinstance(kf, dict) else kf, "value": val})
+        return {"property": prop, "count": count, "keyframes": kfs}
+    elif action == "add_keyframe":
+        return {"success": bool(item.AddKeyframe(p["property"], p["frame"], p["value"]))}
+    elif action == "modify_keyframe":
+        kw = {}
+        if "new_value" in p:
+            kw["value"] = p["new_value"]
+        if "new_frame" in p:
+            kw["frame"] = p["new_frame"]
+        return {"success": bool(item.ModifyKeyframe(p["property"], p["frame"], **kw))}
+    elif action == "delete_keyframe":
+        return {"success": bool(item.DeleteKeyframe(p["property"], p["frame"]))}
+    elif action == "set_keyframe_interpolation":
+        valid = ["Linear", "Bezier", "EaseIn", "EaseOut", "EaseInOut"]
+        if p.get("interpolation") not in valid:
+            return _err(f"Invalid interpolation. Must be one of: {', '.join(valid)}")
+        return {"success": bool(item.SetKeyframeInterpolation(p["property"], p["frame"], p["interpolation"]))}
+
+    return _unknown(action, ["get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
