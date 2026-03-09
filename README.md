@@ -43,9 +43,9 @@ Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The
 
 ## Requirements
 
-- **macOS**, **Windows**, or **Linux** with DaVinci Resolve installed
-- **Python 3.6+**
-- DaVinci Resolve running in the background
+- **DaVinci Resolve Studio** 18.5+ (macOS, Windows, or Linux) — the free edition does not support external scripting
+- **Python 3.10–3.12** recommended (3.13+ may have ABI incompatibilities with Resolve's scripting library)
+- DaVinci Resolve running with **Preferences > General > "External scripting using"** set to **Local**
 
 ## Quick Start
 

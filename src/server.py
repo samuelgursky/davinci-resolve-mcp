@@ -59,6 +59,16 @@ logger = logging.getLogger("resolve-mcp")
 from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("DaVinciResolveMCP")
 
+# ─── Python Version Check ────────────────────────────────────────────────────
+
+_py_ver = sys.version_info[:2]
+if _py_ver >= (3, 13):
+    logger.warning(
+        f"Python {_py_ver[0]}.{_py_ver[1]} detected. DaVinci Resolve's scripting API "
+        f"may not work with Python 3.13+. If scriptapp('Resolve') returns None, "
+        f"recreate the venv with Python 3.10–3.12."
+    )
+
 # ─── Resolve Connection (lazy) ───────────────────────────────────────────────
 
 sys.path.insert(0, RESOLVE_MODULES_PATH)
@@ -83,7 +93,13 @@ def get_resolve():
         if resolve:
             logger.info(f"Connected: {resolve.GetProductName()} {resolve.GetVersionString()}")
         else:
-            logger.warning("DaVinci Resolve not responding. Is it running?")
+            logger.warning(
+                "DaVinci Resolve not responding. Possible causes:\n"
+                "  - Resolve is not running\n"
+                "  - Resolve Free edition (external scripting requires Studio)\n"
+                "  - Python version incompatible (try 3.10–3.12)\n"
+                "  - Preferences > General > 'External scripting using' not set to Local"
+            )
     except Exception as e:
         logger.error(f"Connection error: {e}")
         resolve = None
