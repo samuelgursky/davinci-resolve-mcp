@@ -1,496 +1,663 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-1.3.8-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-26%20(342%20full)-blue.svg)](#server-modes)
+[![Tested](https://img.shields.io/badge/Live%20Tested-96.6%25-green.svg)](#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.6+-green.svg)](https://www.python.org/downloads/)
-[![macOS](https://img.shields.io/badge/macOS-stable-brightgreen.svg)](https://www.apple.com/macos/)
-[![Windows](https://img.shields.io/badge/Windows-stable-brightgreen.svg)](https://www.microsoft.com/windows)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-A Model Context Protocol (MCP) server that connects AI coding assistants (Cursor, Claude Desktop) to DaVinci Resolve, enabling them to query and control DaVinci Resolve through natural language.
+A Model Context Protocol (MCP) server providing **complete coverage** of the DaVinci Resolve Scripting API. Connect AI assistants (Claude, Cursor, Windsurf) to DaVinci Resolve and control every aspect of your post-production workflow through natural language.
 
-## Features
+## Key Stats
 
-For a comprehensive list of implemented and planned features, see [docs/FEATURES.md](docs/FEATURES.md).
+| Metric | Value |
+|--------|-------|
+| MCP Tools | **26** compound (default) / **342** granular |
+| API Methods Covered | **324/324** (100%) |
+| Methods Live Tested | **313/324** (96.6%) |
+| Live Test Pass Rate | **313/313** (100%) |
+| API Object Classes | 13 |
+| Tested Against | DaVinci Resolve 19.1.3 Studio |
+
+## API Coverage
+
+Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **26 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **342 individual tools** for power users. Both modes cover all 13 API object classes:
+
+| Class | Methods | Tools | Description |
+|-------|---------|-------|-------------|
+| Resolve | 21 | 21 | App control, pages, layout presets, render/burn-in presets, keyframe mode |
+| ProjectManager | 25 | 25 | Project CRUD, folders, databases, cloud projects, archive/restore |
+| Project | 42 | 42 | Timelines, render pipeline, settings, LUTs, color groups |
+| MediaStorage | 9 | 9 | Volumes, file browsing, media import, mattes |
+| MediaPool | 27 | 27 | Folders, clips, timelines, metadata, stereo, sync |
+| Folder | 8 | 8 | Clip listing, export, transcription |
+| MediaPoolItem | 32 | 32 | Metadata, markers, flags, properties, proxy, transcription |
+| Timeline | 56 | 56 | Tracks, markers, items, export, generators, titles, stills, stereo |
+| TimelineItem | 76 | 76 | Properties, markers, Fusion comps, versions, takes, CDL, AI tools |
+| Gallery | 8 | 8 | Albums, stills, power grades |
+| GalleryStillAlbum | 6 | 6 | Stills management, import/export, labels |
+| Graph | 11 | 22 | Node operations, LUTs, cache, grades (timeline + clip graph variants) |
+| ColorGroup | 5 | 10 | Group management, pre/post clip node graphs |
 
 ## Requirements
 
-- **macOS** or **Windows** with DaVinci Resolve installed
+- **macOS**, **Windows**, or **Linux** with DaVinci Resolve installed
 - **Python 3.6+**
 - DaVinci Resolve running in the background
-- (Optional) Node.js/npm for some features
 
-## Installation Guide
+## Quick Start
 
-For detailed installation instructions, please see [INSTALL.md](INSTALL.md). This guide covers:
-- Prerequisites and system requirements
-- Step-by-step installation process
-- Configuration details
-- Common troubleshooting steps
+```bash
+# Clone the repository
+git clone https://github.com/samuelgursky/davinci-resolve-mcp.git
+cd davinci-resolve-mcp
+
+# Make sure DaVinci Resolve is running, then:
+python install.py
+```
+
+The universal installer auto-detects your platform, finds your DaVinci Resolve installation, creates a virtual environment, and configures your MCP client — all in one step.
+
+### Supported MCP Clients
+
+The installer can automatically configure any of these clients:
+
+| Client | Config Written To |
+|--------|-------------------|
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) |
+| Claude Code | `.mcp.json` (project root) |
+| Cursor | `~/.cursor/mcp.json` |
+| VS Code (Copilot) | `.vscode/mcp.json` (workspace) |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| Cline | VS Code global storage |
+| Roo Code | VS Code global storage |
+| Zed | `~/.config/zed/settings.json` |
+| Continue | `~/.continue/config.json` |
+| JetBrains IDEs | Manual (Settings > Tools > AI Assistant > MCP) |
+
+You can configure multiple clients at once, or use `--clients manual` to get copy-paste config snippets.
+
+### Installer Options
+
+```bash
+python install.py                              # Interactive mode
+python install.py --clients all                # Configure all clients
+python install.py --clients cursor,claude-desktop  # Specific clients
+python install.py --clients manual             # Just print the config
+python install.py --dry-run --clients all      # Preview without writing
+python install.py --no-venv --clients cursor   # Skip venv creation
+```
+
+### Server Modes
+
+The MCP server comes in two modes:
+
+| Mode | File | Tools | Best For |
+|------|------|-------|----------|
+| **Compound** (default) | `src/server.py` | 26 | Most users — fast, clean, low context usage |
+| **Full** | `src/resolve_mcp_server.py` | 342 | Power users who want one tool per API method |
+
+The installer uses the compound server by default. To use the full server:
+```bash
+python src/server.py --full    # Launch full 342-tool server
+# Or point your MCP config directly at src/resolve_mcp_server.py
+```
+
+### Manual Configuration
+
+If you prefer to set things up yourself, add to your MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "davinci-resolve": {
+      "command": "/path/to/venv/bin/python",
+      "args": ["/path/to/davinci-resolve-mcp/src/server.py"],
+      "env": {
+        "RESOLVE_SCRIPT_API": "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting",
+        "PYTHONPATH": "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
+      }
+    }
+  }
+}
+```
+
+Platform-specific paths:
+
+| Platform | API Path | Library Path |
+|----------|----------|-------------|
+| macOS | `/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting` | `fusionscript.so` in DaVinci Resolve.app |
+| Windows | `C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting` | `fusionscript.dll` in Resolve install dir |
+| Linux | `/opt/resolve/Developer/Scripting` | `/opt/resolve/libs/Fusion/fusionscript.so` |
+
+## Usage Examples
+
+Once connected, you can control DaVinci Resolve through natural language:
+
+```
+"What version of DaVinci Resolve is running?"
+"List all projects and open the one called 'My Film'"
+"Create a new timeline called 'Assembly Cut' and add all clips from the media pool"
+"Add a blue marker at the current playhead position with note 'Review this'"
+"Set up a ProRes 422 HQ render for the current timeline"
+"Export the timeline as an EDL"
+"Switch to the Color page and grab a still"
+"Create a Fusion composition on the selected clip"
+```
+
+## Test Results
+
+All testing performed against **DaVinci Resolve 19.1.3 Studio** on macOS with live API calls (no mocks).
+
+| Phase | Tests | Pass Rate | Scope |
+|-------|-------|-----------|-------|
+| Phase 1 | 204/204 | 100% | Safe read-only operations across all classes |
+| Phase 2 | 79/79 | 100% | Destructive operations with create-test-cleanup patterns |
+| Phase 3 | 20/20 | 100% | Real media import, sync, transcription, database switching, Resolve.Quit |
+| Phase 4 | 10/10 | 100% | AI/ML methods, Fusion clips, stereo, gallery stills |
+| **Total** | **313/313** | **100%** | **96.6% of all API methods tested live** |
+
+### Untested Methods (11 of 324)
+
+| Method | Reason | Help Wanted |
+|--------|--------|-------------|
+| `PM.CreateCloudProject` | Requires DaVinci Resolve cloud infrastructure | Yes |
+| `PM.LoadCloudProject` | Requires DaVinci Resolve cloud infrastructure | Yes |
+| `PM.ImportCloudProject` | Requires DaVinci Resolve cloud infrastructure | Yes |
+| `PM.RestoreCloudProject` | Requires DaVinci Resolve cloud infrastructure | Yes |
+| `TL.CreateSubtitlesFromAudio` | Long-running AI operation, needs audio content | Yes |
+| `TL.DetectSceneCuts` | Long-running analysis operation | Yes |
+| `TL.AnalyzeDolbyVision` | Requires HDR/Dolby Vision content | Yes |
+| `Graph.SetNodeCacheMode` | Needs active color node graph context | Yes |
+| `Graph.GetNodeCacheMode` | Needs active color node graph context | Yes |
+| `Graph.GetToolsInNode` | Needs active color node graph context | Yes |
+| `Graph.SetNodeEnabled` | Needs active color node graph context | Yes |
+
+---
+
+## Complete API Reference
+
+Every method in the DaVinci Resolve Scripting API and its test status. Methods are listed by object class.
+
+**Status Key:**
+- ✅ = Tested live, returned expected result
+- ⚠️ = Tested live, API accepted call (returned `False` — needs specific context to fully execute)
+- ☁️ = Requires cloud infrastructure (untested)
+- 🔬 = Requires specific content/hardware (untested — PRs welcome)
+
+### Resolve
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `Fusion()` | ✅ | Returns Fusion object |
+| 2 | `GetMediaStorage()` | ✅ | Returns MediaStorage object |
+| 3 | `GetProjectManager()` | ✅ | Returns ProjectManager object |
+| 4 | `OpenPage(pageName)` | ✅ | Switches Resolve page |
+| 5 | `GetCurrentPage()` | ✅ | Returns current page name (e.g. `"edit"`) |
+| 6 | `GetProductName()` | ✅ | Returns `"DaVinci Resolve Studio"` |
+| 7 | `GetVersion()` | ✅ | Returns `[19, 1, 3, 7, '']` |
+| 8 | `GetVersionString()` | ✅ | Returns `"19.1.3.7"` |
+| 9 | `LoadLayoutPreset(presetName)` | ✅ | Loads saved layout |
+| 10 | `UpdateLayoutPreset(presetName)` | ✅ | Updates existing preset |
+| 11 | `ExportLayoutPreset(presetName, presetFilePath)` | ✅ | Exports preset to file |
+| 12 | `DeleteLayoutPreset(presetName)` | ✅ | Deletes preset |
+| 13 | `SaveLayoutPreset(presetName)` | ⚠️ | API accepts; returns `False` when preset name conflicts |
+| 14 | `ImportLayoutPreset(presetFilePath, presetName)` | ✅ | Imports preset from file |
+| 15 | `Quit()` | ✅ | Quits DaVinci Resolve |
+| 16 | `ImportRenderPreset(presetPath)` | ⚠️ | API accepts; needs valid preset file |
+| 17 | `ExportRenderPreset(presetName, exportPath)` | ⚠️ | API accepts; needs valid preset name |
+| 18 | `ImportBurnInPreset(presetPath)` | ⚠️ | API accepts; needs valid preset file |
+| 19 | `ExportBurnInPreset(presetName, exportPath)` | ⚠️ | API accepts; needs valid preset name |
+| 20 | `GetKeyframeMode()` | ✅ | Returns keyframe mode |
+| 21 | `SetKeyframeMode(keyframeMode)` | ⚠️ | API accepts; mode must match valid enum |
+
+### ProjectManager
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `ArchiveProject(projectName, filePath, ...)` | ⚠️ | API accepts; archiving is slow |
+| 2 | `CreateProject(projectName)` | ✅ | Creates new project |
+| 3 | `DeleteProject(projectName)` | ⚠️ | Returns `False` if project is open |
+| 4 | `LoadProject(projectName)` | ✅ | Returns Project object |
+| 5 | `GetCurrentProject()` | ✅ | Returns current Project |
+| 6 | `SaveProject()` | ✅ | Saves current project |
+| 7 | `CloseProject(project)` | ✅ | Closes project |
+| 8 | `CreateFolder(folderName)` | ✅ | Creates project folder |
+| 9 | `DeleteFolder(folderName)` | ✅ | Deletes project folder |
+| 10 | `GetProjectListInCurrentFolder()` | ✅ | Returns project name list |
+| 11 | `GetFolderListInCurrentFolder()` | ✅ | Returns folder name list |
+| 12 | `GotoRootFolder()` | ✅ | Navigates to root |
+| 13 | `GotoParentFolder()` | ✅ | Returns `False` at root (expected) |
+| 14 | `GetCurrentFolder()` | ✅ | Returns current folder name |
+| 15 | `OpenFolder(folderName)` | ✅ | Opens folder |
+| 16 | `ImportProject(filePath, projectName)` | ✅ | Imports .drp file |
+| 17 | `ExportProject(projectName, filePath, ...)` | ✅ | Exports .drp file |
+| 18 | `RestoreProject(filePath, projectName)` | ⚠️ | API accepts; needs backup archive |
+| 19 | `GetCurrentDatabase()` | ✅ | Returns `{DbType, DbName}` |
+| 20 | `GetDatabaseList()` | ✅ | Returns list of databases |
+| 21 | `SetCurrentDatabase({dbInfo})` | ✅ | Switches database |
+| 22 | `CreateCloudProject({cloudSettings})` | ☁️ | Requires cloud infrastructure |
+| 23 | `LoadCloudProject({cloudSettings})` | ☁️ | Requires cloud infrastructure |
+| 24 | `ImportCloudProject(filePath, {cloudSettings})` | ☁️ | Requires cloud infrastructure |
+| 25 | `RestoreCloudProject(folderPath, {cloudSettings})` | ☁️ | Requires cloud infrastructure |
+
+### Project
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetMediaPool()` | ✅ | Returns MediaPool object |
+| 2 | `GetTimelineCount()` | ✅ | Returns integer count |
+| 3 | `GetTimelineByIndex(idx)` | ✅ | Returns Timeline object |
+| 4 | `GetCurrentTimeline()` | ✅ | Returns current Timeline |
+| 5 | `SetCurrentTimeline(timeline)` | ✅ | Sets active timeline |
+| 6 | `GetGallery()` | ✅ | Returns Gallery object |
+| 7 | `GetName()` | ✅ | Returns project name |
+| 8 | `SetName(projectName)` | ⚠️ | Returns `False` on open project |
+| 9 | `GetPresetList()` | ✅ | Returns preset list with dimensions |
+| 10 | `SetPreset(presetName)` | ⚠️ | API accepts; preset must exist |
+| 11 | `AddRenderJob()` | ✅ | Returns job ID string |
+| 12 | `DeleteRenderJob(jobId)` | ✅ | Deletes render job |
+| 13 | `DeleteAllRenderJobs()` | ✅ | Clears render queue |
+| 14 | `GetRenderJobList()` | ✅ | Returns job list |
+| 15 | `GetRenderPresetList()` | ✅ | Returns preset names |
+| 16 | `StartRendering(...)` | ✅ | Starts render |
+| 17 | `StopRendering()` | ✅ | Stops render |
+| 18 | `IsRenderingInProgress()` | ✅ | Returns `False` when idle |
+| 19 | `LoadRenderPreset(presetName)` | ✅ | Loads render preset |
+| 20 | `SaveAsNewRenderPreset(presetName)` | ✅ | Creates render preset |
+| 21 | `DeleteRenderPreset(presetName)` | ✅ | Deletes render preset |
+| 22 | `SetRenderSettings({settings})` | ✅ | Applies render settings |
+| 23 | `GetRenderJobStatus(jobId)` | ✅ | Returns `{JobStatus, CompletionPercentage}` |
+| 24 | `GetQuickExportRenderPresets()` | ✅ | Returns preset names |
+| 25 | `RenderWithQuickExport(preset, {params})` | ✅ | Initiates quick export |
+| 26 | `GetSetting(settingName)` | ✅ | Returns project settings dict |
+| 27 | `SetSetting(settingName, settingValue)` | ✅ | Sets project setting |
+| 28 | `GetRenderFormats()` | ✅ | Returns format map |
+| 29 | `GetRenderCodecs(renderFormat)` | ✅ | Returns codec map |
+| 30 | `GetCurrentRenderFormatAndCodec()` | ✅ | Returns `{format, codec}` |
+| 31 | `SetCurrentRenderFormatAndCodec(format, codec)` | ✅ | Sets format and codec |
+| 32 | `GetCurrentRenderMode()` | ✅ | Returns mode integer |
+| 33 | `SetCurrentRenderMode(renderMode)` | ✅ | Sets render mode |
+| 34 | `GetRenderResolutions(format, codec)` | ✅ | Returns resolution list |
+| 35 | `RefreshLUTList()` | ✅ | Refreshes LUT list |
+| 36 | `GetUniqueId()` | ✅ | Returns UUID string |
+| 37 | `InsertAudioToCurrentTrackAtPlayhead(...)` | ⚠️ | Tested; needs Fairlight page context |
+| 38 | `LoadBurnInPreset(presetName)` | ⚠️ | API accepts; preset must exist |
+| 39 | `ExportCurrentFrameAsStill(filePath)` | ⚠️ | API accepts; needs valid playhead position |
+| 40 | `GetColorGroupsList()` | ✅ | Returns color group list |
+| 41 | `AddColorGroup(groupName)` | ✅ | Returns ColorGroup object |
+| 42 | `DeleteColorGroup(colorGroup)` | ✅ | Deletes color group |
+
+### MediaStorage
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetMountedVolumeList()` | ✅ | Returns mounted volume paths |
+| 2 | `GetSubFolderList(folderPath)` | ✅ | Returns subfolder paths |
+| 3 | `GetFileList(folderPath)` | ✅ | Returns file paths |
+| 4 | `RevealInStorage(path)` | ✅ | Reveals path in Media Storage |
+| 5 | `AddItemListToMediaPool(...)` | ✅ | Imports media, returns clips |
+| 6 | `AddClipMattesToMediaPool(item, [paths], eye)` | ✅ | Adds clip mattes |
+| 7 | `AddTimelineMattesToMediaPool([paths])` | ✅ | Returns MediaPoolItem list |
+
+### MediaPool
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetRootFolder()` | ✅ | Returns root Folder |
+| 2 | `AddSubFolder(folder, name)` | ✅ | Creates subfolder |
+| 3 | `RefreshFolders()` | ✅ | Refreshes folder list |
+| 4 | `CreateEmptyTimeline(name)` | ✅ | Creates timeline |
+| 5 | `AppendToTimeline(...)` | ✅ | Appends clips, returns TimelineItems |
+| 6 | `CreateTimelineFromClips(name, ...)` | ✅ | Creates timeline from clips |
+| 7 | `ImportTimelineFromFile(filePath, {options})` | ✅ | Imports AAF/EDL/XML |
+| 8 | `DeleteTimelines([timeline])` | ✅ | Deletes timelines |
+| 9 | `GetCurrentFolder()` | ✅ | Returns current Folder |
+| 10 | `SetCurrentFolder(folder)` | ✅ | Sets current folder |
+| 11 | `DeleteClips([clips])` | ✅ | Deletes clips |
+| 12 | `ImportFolderFromFile(filePath)` | ✅ | Imports DRB folder |
+| 13 | `DeleteFolders([subfolders])` | ✅ | Deletes folders |
+| 14 | `MoveClips([clips], targetFolder)` | ✅ | Moves clips |
+| 15 | `MoveFolders([folders], targetFolder)` | ✅ | Moves folders |
+| 16 | `GetClipMatteList(item)` | ✅ | Returns matte paths |
+| 17 | `GetTimelineMatteList(folder)` | ✅ | Returns matte items |
+| 18 | `DeleteClipMattes(item, [paths])` | ✅ | Deletes clip mattes |
+| 19 | `RelinkClips([items], folderPath)` | ⚠️ | API accepts; needs offline clips |
+| 20 | `UnlinkClips([items])` | ✅ | Unlinks clips |
+| 21 | `ImportMedia([items])` | ✅ | Imports media files |
+| 22 | `ExportMetadata(fileName, [clips])` | ✅ | Exports metadata CSV |
+| 23 | `GetUniqueId()` | ✅ | Returns UUID string |
+| 24 | `CreateStereoClip(left, right)` | ✅ | Creates stereo pair |
+| 25 | `AutoSyncAudio([items], {settings})` | ⚠️ | Tested; needs matching A/V clips |
+| 26 | `GetSelectedClips()` | ✅ | Returns selected clips |
+| 27 | `SetSelectedClip(item)` | ✅ | Selects clip |
+
+### Folder
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetClipList()` | ✅ | Returns clip list |
+| 2 | `GetName()` | ✅ | Returns folder name |
+| 3 | `GetSubFolderList()` | ✅ | Returns subfolder list |
+| 4 | `GetIsFolderStale()` | ✅ | Returns `False` |
+| 5 | `GetUniqueId()` | ✅ | Returns UUID string |
+| 6 | `Export(filePath)` | ✅ | Exports DRB file |
+| 7 | `TranscribeAudio()` | ✅ | Starts audio transcription |
+| 8 | `ClearTranscription()` | ✅ | Clears transcription |
+
+### MediaPoolItem
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetName()` | ✅ | Returns clip name |
+| 2 | `GetMetadata(metadataType)` | ✅ | Returns metadata dict |
+| 3 | `SetMetadata(type, value)` | ✅ | Sets metadata |
+| 4 | `GetThirdPartyMetadata(type)` | ✅ | Returns third-party metadata |
+| 5 | `SetThirdPartyMetadata(type, value)` | ✅ | Sets third-party metadata |
+| 6 | `GetMediaId()` | ✅ | Returns media UUID |
+| 7 | `AddMarker(frameId, color, name, note, duration, customData)` | ✅ | Adds marker |
+| 8 | `GetMarkers()` | ✅ | Returns marker dict |
+| 9 | `GetMarkerByCustomData(customData)` | ✅ | Finds marker by data |
+| 10 | `UpdateMarkerCustomData(frameId, customData)` | ✅ | Updates marker data |
+| 11 | `GetMarkerCustomData(frameId)` | ✅ | Returns custom data string |
+| 12 | `DeleteMarkersByColor(color)` | ✅ | Deletes markers by color |
+| 13 | `DeleteMarkerAtFrame(frameNum)` | ⚠️ | Returns `False` if no marker at frame |
+| 14 | `DeleteMarkerByCustomData(customData)` | ⚠️ | Returns `False` if no match |
+| 15 | `AddFlag(color)` | ✅ | Adds flag |
+| 16 | `GetFlagList()` | ✅ | Returns flag colors |
+| 17 | `ClearFlags(color)` | ✅ | Clears flags |
+| 18 | `GetClipColor()` | ✅ | Returns clip color |
+| 19 | `SetClipColor(colorName)` | ✅ | Sets clip color |
+| 20 | `ClearClipColor()` | ✅ | Clears clip color |
+| 21 | `GetClipProperty(propertyName)` | ✅ | Returns property dict |
+| 22 | `SetClipProperty(propertyName, value)` | ⚠️ | API accepts; some properties read-only |
+| 23 | `LinkProxyMedia(proxyMediaFilePath)` | ✅ | Links proxy media |
+| 24 | `UnlinkProxyMedia()` | ✅ | Unlinks proxy media |
+| 25 | `ReplaceClip(filePath)` | ✅ | Replaces clip source |
+| 26 | `GetUniqueId()` | ✅ | Returns UUID string |
+| 27 | `TranscribeAudio()` | ✅ | Starts audio transcription |
+| 28 | `ClearTranscription()` | ✅ | Clears transcription |
+| 29 | `GetAudioMapping()` | ✅ | Returns JSON audio mapping |
+| 30 | `GetMarkInOut()` | ✅ | Returns mark in/out dict |
+| 31 | `SetMarkInOut(in, out, type)` | ✅ | Sets mark in/out |
+| 32 | `ClearMarkInOut(type)` | ✅ | Clears mark in/out |
+
+### Timeline
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetName()` | ✅ | Returns timeline name |
+| 2 | `SetName(timelineName)` | ⚠️ | Returns `False` on active timeline |
+| 3 | `GetStartFrame()` | ✅ | Returns start frame |
+| 4 | `GetEndFrame()` | ✅ | Returns end frame |
+| 5 | `SetStartTimecode(timecode)` | ✅ | Sets start timecode |
+| 6 | `GetStartTimecode()` | ✅ | Returns `"01:00:00:00"` |
+| 7 | `GetTrackCount(trackType)` | ✅ | Returns track count |
+| 8 | `AddTrack(trackType, subTrackType)` | ✅ | Adds track |
+| 9 | `DeleteTrack(trackType, trackIndex)` | ✅ | Deletes track |
+| 10 | `GetTrackSubType(trackType, trackIndex)` | ✅ | Returns sub-type (e.g. `"stereo"`) |
+| 11 | `SetTrackEnable(trackType, trackIndex, enabled)` | ✅ | Enables/disables track |
+| 12 | `GetIsTrackEnabled(trackType, trackIndex)` | ✅ | Returns enabled state |
+| 13 | `SetTrackLock(trackType, trackIndex, locked)` | ✅ | Locks/unlocks track |
+| 14 | `GetIsTrackLocked(trackType, trackIndex)` | ✅ | Returns lock state |
+| 15 | `DeleteClips([timelineItems], ripple)` | ✅ | Deletes clips from timeline |
+| 16 | `SetClipsLinked([timelineItems], linked)` | ✅ | Links/unlinks clips |
+| 17 | `GetItemListInTrack(trackType, index)` | ✅ | Returns items on track |
+| 18 | `AddMarker(frameId, color, name, note, duration, customData)` | ✅ | Adds timeline marker |
+| 19 | `GetMarkers()` | ✅ | Returns marker dict |
+| 20 | `GetMarkerByCustomData(customData)` | ✅ | Finds marker by data |
+| 21 | `UpdateMarkerCustomData(frameId, customData)` | ✅ | Updates marker data |
+| 22 | `GetMarkerCustomData(frameId)` | ✅ | Returns custom data |
+| 23 | `DeleteMarkersByColor(color)` | ✅ | Deletes markers by color |
+| 24 | `DeleteMarkerAtFrame(frameNum)` | ⚠️ | Returns `False` if no marker at frame |
+| 25 | `DeleteMarkerByCustomData(customData)` | ⚠️ | Returns `False` if no match |
+| 26 | `GetCurrentTimecode()` | ✅ | Returns timecode string |
+| 27 | `SetCurrentTimecode(timecode)` | ⚠️ | Returns `False` if playback not active |
+| 28 | `GetCurrentVideoItem()` | ✅ | Returns item at playhead |
+| 29 | `GetCurrentClipThumbnailImage()` | ✅ | Returns thumbnail data |
+| 30 | `GetTrackName(trackType, trackIndex)` | ✅ | Returns track name |
+| 31 | `SetTrackName(trackType, trackIndex, name)` | ✅ | Sets track name |
+| 32 | `DuplicateTimeline(timelineName)` | ✅ | Duplicates timeline |
+| 33 | `CreateCompoundClip([items], {clipInfo})` | ✅ | Returns compound clip item |
+| 34 | `CreateFusionClip([timelineItems])` | ✅ | Returns Fusion clip item |
+| 35 | `ImportIntoTimeline(filePath, {options})` | ⚠️ | Tested; result depends on file format |
+| 36 | `Export(fileName, exportType, exportSubtype)` | ✅ | Exports EDL/XML/AAF |
+| 37 | `GetSetting(settingName)` | ✅ | Returns settings dict |
+| 38 | `SetSetting(settingName, settingValue)` | ⚠️ | API accepts; some settings read-only |
+| 39 | `InsertGeneratorIntoTimeline(name)` | ✅ | Inserts generator |
+| 40 | `InsertFusionGeneratorIntoTimeline(name)` | ✅ | Inserts Fusion generator |
+| 41 | `InsertFusionCompositionIntoTimeline()` | ✅ | Inserts Fusion composition |
+| 42 | `InsertOFXGeneratorIntoTimeline(name)` | ⚠️ | API accepts; needs valid OFX plugin |
+| 43 | `InsertTitleIntoTimeline(name)` | ✅ | Inserts title |
+| 44 | `InsertFusionTitleIntoTimeline(name)` | ✅ | Inserts Fusion title |
+| 45 | `GrabStill()` | ✅ | Returns GalleryStill object |
+| 46 | `GrabAllStills(stillFrameSource)` | ✅ | Returns list of GalleryStill objects |
+| 47 | `GetUniqueId()` | ✅ | Returns UUID string |
+| 48 | `CreateSubtitlesFromAudio({settings})` | 🔬 | Long-running AI operation — needs audio content |
+| 49 | `DetectSceneCuts()` | 🔬 | Long-running analysis operation |
+| 50 | `ConvertTimelineToStereo()` | ✅ | Converts timeline to stereo 3D |
+| 51 | `GetNodeGraph()` | ✅ | Returns Graph object |
+| 52 | `AnalyzeDolbyVision([items], analysisType)` | 🔬 | Requires HDR/Dolby Vision content |
+| 53 | `GetMediaPoolItem()` | ✅ | Returns MediaPoolItem for timeline |
+| 54 | `GetMarkInOut()` | ✅ | Returns mark in/out dict |
+| 55 | `SetMarkInOut(in, out, type)` | ✅ | Sets mark in/out |
+| 56 | `ClearMarkInOut(type)` | ✅ | Clears mark in/out |
+
+### TimelineItem
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetName()` | ✅ | Returns item name |
+| 2 | `GetDuration(subframe_precision)` | ✅ | Returns duration |
+| 3 | `GetEnd(subframe_precision)` | ✅ | Returns end frame |
+| 4 | `GetSourceEndFrame()` | ✅ | Returns source end frame |
+| 5 | `GetSourceEndTime()` | ✅ | Returns source end time |
+| 6 | `GetFusionCompCount()` | ✅ | Returns comp count |
+| 7 | `GetFusionCompByIndex(compIndex)` | ✅ | Returns Fusion composition |
+| 8 | `GetFusionCompNameList()` | ✅ | Returns comp names |
+| 9 | `GetFusionCompByName(compName)` | ✅ | Returns Fusion composition |
+| 10 | `GetLeftOffset(subframe_precision)` | ✅ | Returns left offset |
+| 11 | `GetRightOffset(subframe_precision)` | ✅ | Returns right offset |
+| 12 | `GetStart(subframe_precision)` | ✅ | Returns start frame |
+| 13 | `GetSourceStartFrame()` | ✅ | Returns source start |
+| 14 | `GetSourceStartTime()` | ✅ | Returns source start time |
+| 15 | `SetProperty(propertyKey, propertyValue)` | ✅ | Sets item property |
+| 16 | `GetProperty(propertyKey)` | ✅ | Returns property dict |
+| 17 | `AddMarker(frameId, color, name, note, duration, customData)` | ✅ | Adds marker to item |
+| 18 | `GetMarkers()` | ✅ | Returns marker dict |
+| 19 | `GetMarkerByCustomData(customData)` | ✅ | Finds marker by data |
+| 20 | `UpdateMarkerCustomData(frameId, customData)` | ✅ | Updates marker data |
+| 21 | `GetMarkerCustomData(frameId)` | ✅ | Returns custom data |
+| 22 | `DeleteMarkersByColor(color)` | ✅ | Deletes markers by color |
+| 23 | `DeleteMarkerAtFrame(frameNum)` | ⚠️ | Returns `False` if no marker at frame |
+| 24 | `DeleteMarkerByCustomData(customData)` | ⚠️ | Returns `False` if no match |
+| 25 | `AddFlag(color)` | ✅ | Adds flag |
+| 26 | `GetFlagList()` | ✅ | Returns flag colors |
+| 27 | `ClearFlags(color)` | ✅ | Clears flags |
+| 28 | `GetClipColor()` | ✅ | Returns clip color |
+| 29 | `SetClipColor(colorName)` | ✅ | Sets clip color |
+| 30 | `ClearClipColor()` | ✅ | Clears clip color |
+| 31 | `AddFusionComp()` | ✅ | Creates Fusion composition |
+| 32 | `ImportFusionComp(path)` | ✅ | Imports .comp file |
+| 33 | `ExportFusionComp(path, compIndex)` | ✅ | Exports .comp file |
+| 34 | `DeleteFusionCompByName(compName)` | ⚠️ | Returns `False` if comp not found |
+| 35 | `LoadFusionCompByName(compName)` | ✅ | Loads composition |
+| 36 | `RenameFusionCompByName(oldName, newName)` | ✅ | Renames composition |
+| 37 | `AddVersion(versionName, versionType)` | ✅ | Adds grade version |
+| 38 | `GetCurrentVersion()` | ✅ | Returns version info |
+| 39 | `DeleteVersionByName(versionName, versionType)` | ⚠️ | Returns `False` if version not found |
+| 40 | `LoadVersionByName(versionName, versionType)` | ✅ | Loads grade version |
+| 41 | `RenameVersionByName(oldName, newName, type)` | ✅ | Renames version |
+| 42 | `GetVersionNameList(versionType)` | ✅ | Returns version names |
+| 43 | `GetMediaPoolItem()` | ✅ | Returns source MediaPoolItem |
+| 44 | `GetStereoConvergenceValues()` | ✅ | Returns stereo keyframes |
+| 45 | `GetStereoLeftFloatingWindowParams()` | ✅ | Returns stereo params |
+| 46 | `GetStereoRightFloatingWindowParams()` | ✅ | Returns stereo params |
+| 47 | `SetCDL([CDL map])` | ✅ | Sets CDL values |
+| 48 | `AddTake(mediaPoolItem, startFrame, endFrame)` | ✅ | Adds take |
+| 49 | `GetSelectedTakeIndex()` | ✅ | Returns selected take index |
+| 50 | `GetTakesCount()` | ✅ | Returns take count |
+| 51 | `GetTakeByIndex(idx)` | ✅ | Returns take info |
+| 52 | `DeleteTakeByIndex(idx)` | ✅ | Deletes take |
+| 53 | `SelectTakeByIndex(idx)` | ✅ | Selects take |
+| 54 | `FinalizeTake()` | ⚠️ | Returns `False` when no take selected |
+| 55 | `CopyGrades([tgtTimelineItems])` | ⚠️ | API accepts; needs matching items |
+| 56 | `SetClipEnabled(enabled)` | ✅ | Enables/disables clip |
+| 57 | `GetClipEnabled()` | ✅ | Returns enabled state |
+| 58 | `UpdateSidecar()` | ⚠️ | Returns `False` for non-BRAW clips |
+| 59 | `GetUniqueId()` | ✅ | Returns UUID string |
+| 60 | `LoadBurnInPreset(presetName)` | ⚠️ | API accepts; preset must exist |
+| 61 | `CreateMagicMask(mode)` | ⚠️ | Tested; needs DaVinci Neural Engine + Color page context |
+| 62 | `RegenerateMagicMask()` | ⚠️ | Tested; needs existing mask |
+| 63 | `Stabilize()` | ✅ | Returns `True` on supported clips |
+| 64 | `SmartReframe()` | ⚠️ | Tested; needs specific aspect ratio setup |
+| 65 | `GetNodeGraph(layerIdx)` | ✅ | Returns Graph object |
+| 66 | `GetColorGroup()` | ✅ | Returns ColorGroup |
+| 67 | `AssignToColorGroup(colorGroup)` | ✅ | Assigns to group |
+| 68 | `RemoveFromColorGroup()` | ⚠️ | Returns `False` if not in group |
+| 69 | `ExportLUT(exportType, path)` | ✅ | Exports LUT file |
+| 70 | `GetLinkedItems()` | ✅ | Returns linked items |
+| 71 | `GetTrackTypeAndIndex()` | ✅ | Returns `[trackType, trackIndex]` |
+| 72 | `GetSourceAudioChannelMapping()` | ✅ | Returns audio mapping |
+| 73 | `GetIsColorOutputCacheEnabled()` | ✅ | Returns cache state |
+| 74 | `GetIsFusionOutputCacheEnabled()` | ✅ | Returns cache state |
+| 75 | `SetColorOutputCache(cache_value)` | ⚠️ | Tested; needs active color pipeline |
+| 76 | `SetFusionOutputCache(cache_value)` | ⚠️ | Tested; needs active Fusion pipeline |
+
+### Gallery
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetAlbumName(galleryStillAlbum)` | ✅ | Returns album name |
+| 2 | `SetAlbumName(galleryStillAlbum, albumName)` | ✅ | Sets album name |
+| 3 | `GetCurrentStillAlbum()` | ✅ | Returns GalleryStillAlbum |
+| 4 | `SetCurrentStillAlbum(galleryStillAlbum)` | ✅ | Sets current album |
+| 5 | `GetGalleryStillAlbums()` | ✅ | Returns album list |
+| 6 | `GetGalleryPowerGradeAlbums()` | ✅ | Returns power grade albums |
+| 7 | `CreateGalleryStillAlbum()` | ✅ | Creates still album |
+| 8 | `CreateGalleryPowerGradeAlbum()` | ✅ | Creates power grade album |
+
+### GalleryStillAlbum
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetStills()` | ✅ | Returns list of GalleryStill objects |
+| 2 | `GetLabel(galleryStill)` | ✅ | Returns label string |
+| 3 | `SetLabel(galleryStill, label)` | ⚠️ | API accepts; may not persist in all versions |
+| 4 | `ImportStills([filePaths])` | ✅ | Imports DRX still files (requires Color page) |
+| 5 | `ExportStills([stills], folderPath, prefix, format)` | ✅ | Exports stills as DRX+DPX (requires Color page) |
+| 6 | `DeleteStills([galleryStill])` | ✅ | Deletes stills from album |
+
+### Graph
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetNumNodes()` | ✅ | Returns node count (via ColorGroup pre/post graphs) |
+| 2 | `SetLUT(nodeIndex, lutPath)` | ✅ | Sets LUT on node |
+| 3 | `GetLUT(nodeIndex)` | ✅ | Returns LUT path |
+| 4 | `SetNodeCacheMode(nodeIndex, cache_value)` | 🔬 | Needs active color graph context |
+| 5 | `GetNodeCacheMode(nodeIndex)` | 🔬 | Needs active color graph context |
+| 6 | `GetNodeLabel(nodeIndex)` | ✅ | Returns node label string |
+| 7 | `GetToolsInNode(nodeIndex)` | 🔬 | Needs active color graph context |
+| 8 | `SetNodeEnabled(nodeIndex, isEnabled)` | 🔬 | Needs active color graph context |
+| 9 | `ApplyGradeFromDRX(path, gradeMode)` | ✅ | Applies grade from DRX file |
+| 10 | `ApplyArriCdlLut()` | ✅ | Applies ARRI CDL LUT |
+| 11 | `ResetAllGrades()` | ✅ | Resets all grades |
+
+### ColorGroup
+
+| # | Method | Status | Test Result / Notes |
+|---|--------|--------|---------------------|
+| 1 | `GetName()` | ✅ | Returns group name |
+| 2 | `SetName(groupName)` | ✅ | Sets group name |
+| 3 | `GetClipsInTimeline(timeline)` | ✅ | Returns clips in group |
+| 4 | `GetPreClipNodeGraph()` | ✅ | Returns Graph object |
+| 5 | `GetPostClipNodeGraph()` | ✅ | Returns Graph object |
+
+---
+
+## Contributing
+
+We welcome contributions! The following areas especially need help:
+
+### Help Wanted: Untested API Methods
+
+**11 methods** (3.4%) remain untested against a live DaVinci Resolve instance. If you have access to the required infrastructure or content, we'd love a PR with test confirmation:
+
+1. **Cloud Project Methods** (4 methods) — Need DaVinci Resolve cloud infrastructure:
+   - `ProjectManager.CreateCloudProject`
+   - `ProjectManager.LoadCloudProject`
+   - `ProjectManager.ImportCloudProject`
+   - `ProjectManager.RestoreCloudProject`
+
+2. **Long-Running AI/Analysis** (3 methods) — Need specific content + patience:
+   - `Timeline.CreateSubtitlesFromAudio` — needs timeline with dialogue audio
+   - `Timeline.DetectSceneCuts` — needs timeline with multiple scenes
+   - `Timeline.AnalyzeDolbyVision` — needs HDR/Dolby Vision content
+
+3. **Graph Node Operations** (4 methods) — Need active color grading context:
+   - `Graph.SetNodeCacheMode`
+   - `Graph.GetNodeCacheMode`
+   - `Graph.GetToolsInNode`
+   - `Graph.SetNodeEnabled`
+
+### How to Contribute
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/my-contribution`)
+3. Run the existing test suite to ensure nothing breaks
+4. Add your test results or fixes
+5. Submit a pull request
+
+### Other Contribution Ideas
+
+- **Windows testing** — All tests were run on macOS; Windows verification welcome
+- **Linux testing** — DaVinci Resolve supports Linux; test coverage needed
+- **Resolve version compatibility** — Test against Resolve 18.x, 19.0, or newer versions
+- **Bug reports** — If a tool returns unexpected results on your setup, file an issue
+- **Documentation** — Improve examples, add tutorials, translate docs
 
 ## Platform Support
 
-| Platform | Status | One-Step Install | Quick Start |
-|----------|--------|------------------|-------------|
-| macOS | ✅ Stable | `./install.sh` | `./run-now.sh` |
-| Windows | ✅ Stable | `install.bat` | `run-now.bat` |
-| Linux | ❌ Not supported | N/A | N/A |
-
-## Quick Start Guide
-
-### New One-Step Installation (Recommended)
-
-The easiest way to get started is with our new unified installation script. This script does everything automatically:
-
-- Clone the repository:
-   ```bash
-   git clone https://github.com/samuelgursky/davinci-resolve-mcp.git
-   cd davinci-resolve-mcp
-   ```
-
-- Make sure DaVinci Resolve Studio is installed and running
-
-- Run the installation script:
-   **macOS/Linux:**
-   ```bash
-   ./install.sh
-   ```
-   
-   **Windows:**
-   ```batch
-   install.bat
-   ```
-
-This will:
-1. Automatically detect the correct paths on your system
-2. Create a Python virtual environment
-3. Install the MCP SDK from the official repository
-4. Set up environment variables
-5. Configure Cursor/Claude integration 
-6. Verify the installation is correct
-7. Optionally start the MCP server
-
-### Alternative Quick Start
-
-You can also use the original quick start scripts:
-
-**Windows Users:**
-```bash
-run-now.bat
-``` 
-
-**macOS Users:**
-```bash
-chmod +x run-now.sh
-./run-now.sh
-```
-
-## Configuration
-
-For configuration of DaVinci Resolve MCP with different AI assistant clients like Cursor or Claude, see the [config-templates](config-templates) directory.
-
-## Troubleshooting
-
-For detailed troubleshooting guidance, refer to the [INSTALL.md](INSTALL.md#troubleshooting) file which contains solutions to common issues.
-
-### Common Issues
-
-#### Path Resolution
-- The installation scripts now use more robust path resolution, fixing issues with `run-now.sh` looking for files in the wrong locations
-- Always let the scripts determine the correct paths based on their location
-
-#### DaVinci Resolve Detection
-- We've improved the process detection to reliably find DaVinci Resolve regardless of how it appears in the process list
-- Make sure DaVinci Resolve is running before starting the MCP server
-
-#### Environment Variables
-- Make sure all required environment variables are set correctly
-- Review the log file at `scripts/cursor_resolve_server.log` for troubleshooting
-
-### Windows
-- Make sure to use forward slashes (/) in configuration files
-- Python must be installed and paths configured in configs
-- DaVinci Resolve must be running before starting the server
-
-### macOS
-- Make sure scripts have execute permissions
-- Check Console.app for any Python-related errors
-- Verify environment variables are set correctly
-- DaVinci Resolve must be running before starting the server
-
-## Support
-
-For issues and feature requests, please use the GitHub issue tracker.
-
-## Launch Options
-
-After installation, you have several ways to start the server:
-
-### Client-Specific Launch Scripts
-
-The repository includes dedicated scripts for launching with specific clients:
-
-```bash
-# For Cursor integration (macOS)
-chmod +x scripts/mcp_resolve-cursor_start
-./scripts/mcp_resolve-cursor_start
-
-# For Claude Desktop integration (macOS)
-chmod +x scripts/mcp_resolve-claude_start
-./scripts/mcp_resolve-claude_start
-```
-
-These specialized scripts:
-- Set up the proper environment for each client
-- Verify DaVinci Resolve is running
-- Configure client-specific settings
-- Start the MCP server with appropriate parameters
-
-### Pre-Launch Check
-
-Before connecting AI assistants, verify your environment is properly configured:
-
-```bash
-# On macOS
-./scripts/check-resolve-ready.sh
-
-# On Windows
-./scripts/check-resolve-ready.bat
-```
-
-These scripts will:
-- Verify DaVinci Resolve is running (and offer to start it)
-- Check environment variables are properly set
-- Ensure the Python environment is configured correctly
-- Validate Cursor/Claude configuration
-- Optionally launch Cursor
-
-### Universal Launcher
-
-For advanced users, our unified launcher provides full control over both Cursor and Claude Desktop servers:
-
-```bash
-# Make the script executable (macOS only)
-chmod +x scripts/mcp_resolve_launcher.sh
-
-# Run in interactive mode
-./scripts/mcp_resolve_launcher.sh
-
-# Or use command line options
-./scripts/mcp_resolve_launcher.sh --start-cursor    # Start Cursor server (uses mcp_resolve-cursor_start)
-./scripts/mcp_resolve_launcher.sh --start-claude    # Start Claude Desktop server (uses mcp_resolve-claude_start)
-./scripts/mcp_resolve_launcher.sh --start-both      # Start both servers
-./scripts/mcp_resolve_launcher.sh --stop-all        # Stop all running servers
-./scripts/mcp_resolve_launcher.sh --status          # Show server status
-```
-
-Additional options:
-- Force mode (skip Resolve running check): `--force`
-- Project selection: `--project "Project Name"`
-
-## Full Installation
-
-For a complete manual installation:
-
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/samuelgursky/davinci-resolve-mcp.git
-   cd davinci-resolve-mcp
-   ```
-
-2. Create a Python virtual environment:
-   ```bash
-   # Create virtual environment
-   python -m venv venv
-   
-   # Activate it
-   # On macOS/Linux:
-   source venv/bin/activate
-   # On Windows:
-   venv\Scripts\activate
-   
-   # Install dependencies from requirements.txt
-   pip install -r requirements.txt
-   
-   # Alternatively, install MCP SDK directly
-   pip install git+https://github.com/modelcontextprotocol/python-sdk.git
-   ```
-
-3. Set up DaVinci Resolve scripting environment variables:
-
-   **For macOS**:
-   ```bash
-   export RESOLVE_SCRIPT_API="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
-   export RESOLVE_SCRIPT_LIB="/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
-   export PYTHONPATH="$PYTHONPATH:$RESOLVE_SCRIPT_API/Modules/"
-   ```
-
-   **For Windows**:
-   ```cmd
-   set RESOLVE_SCRIPT_API=C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting
-   set RESOLVE_SCRIPT_LIB=C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll
-   set PYTHONPATH=%PYTHONPATH%;%RESOLVE_SCRIPT_API%\Modules
-   ```
-   
-   Alternatively, run the pre-launch check script which will set these for you:
-   ```
-   # On macOS
-   ./scripts/check-resolve-ready.sh
-   
-   # On Windows
-   ./scripts/check-resolve-ready.bat
-   ```
-
-4. Configure Cursor to use the server by creating a configuration file:
-
-   **For macOS** (`~/.cursor/mcp.json`):
-   ```json
-   {
-     "mcpServers": {
-       "davinci-resolve": {
-         "name": "DaVinci Resolve MCP",
-         "command": "/path/to/your/venv/bin/python",
-         "args": [
-           "/path/to/your/davinci-resolve-mcp/src/main.py"
-         ]
-       }
-     }
-   }
-   ```
-
-   **For Windows** (`%APPDATA%\Cursor\mcp.json`):
-   ```json
-   {
-     "mcpServers": {
-       "davinci-resolve": {
-         "name": "DaVinci Resolve MCP",
-         "command": "C:\\path\\to\\venv\\Scripts\\python.exe",
-         "args": ["C:\\path\\to\\davinci-resolve-mcp\\src\\main.py"]
-       }
-     }
-   }
-   ```
-
-5. Start the server using one of the client-specific scripts:
-   ```bash
-   # For Cursor
-   ./scripts/mcp_resolve-cursor_start
-   
-   # For Claude Desktop
-   ./scripts/mcp_resolve-claude_start
-   ```
-
-## Usage with AI Assistants
-
-### Using with Cursor
-
-1. Start the Cursor server using the dedicated script:
-   ```bash
-   ./scripts/mcp_resolve-cursor_start
-   ```
-   Or use the universal launcher:
-   ```bash
-   ./scripts/mcp_resolve_launcher.sh --start-cursor
-   ```
-
-2. Start Cursor and open a project.
-
-3. In Cursor's AI chat, you can now interact with DaVinci Resolve. Try commands like:
-   - "What version of DaVinci Resolve is running?"
-   - "List all projects in DaVinci Resolve"
-   - "Create a new timeline called 'My Sequence'"
-   - "Add a marker at the current position"
-
-### Using with Claude Desktop
-
-1. Create a `claude_desktop_config.json` file in your Claude Desktop configuration directory using the template in the `config-templates` directory.
-
-2. Run the Claude Desktop server using the dedicated script:
-   ```bash
-   ./scripts/mcp_resolve-claude_start
-   ```
-   Or use the universal launcher:
-   ```bash
-   ./scripts/mcp_resolve_launcher.sh --start-claude
-   ```
-
-3. In Claude Desktop, you can now interact with DaVinci Resolve using the same commands as with Cursor.
-
-## Available Features
-
-### General
-- Get DaVinci Resolve version
-- Get/switch current page (Edit, Color, Fusion, etc.)
-
-### Project Management
-- List available projects
-- Get current project name
-- Open project by name
-- Create new project
-- Save current project
-
-### Timeline Operations
-- List all timelines
-- Get current timeline info
-- Create new timeline
-- Switch to timeline by name
-- Add marker to timeline
-
-### Media Pool Operations
-- List media pool clips
-- Import media file
-- Create media bin
-- Add clip to timeline
-
-## Windows Support Notes
-
-Windows support is stable in v1.3.3 and should not require additional troubleshooting:
-- Ensure DaVinci Resolve is installed in the default location
-- Environment variables are properly set as described above
-- Windows paths may require adjustment based on your installation
-- For issues, please check the logs in the `logs/` directory
-
-## Troubleshooting
-
-### DaVinci Resolve Connection
-Make sure DaVinci Resolve is running before starting the server. If the server can't connect to Resolve, check that:
-
-1. Your environment variables are set correctly
-2. You have the correct paths for your DaVinci Resolve installation
-3. You have restarted your terminal after setting environment variables
+| Platform | Status | Resolve Paths Auto-Detected | Notes |
+|----------|--------|----------------------------|-------|
+| macOS | ✅ Tested | `/Library/Application Support/Blackmagic Design/...` | Primary development and test platform |
+| Windows | ✅ Supported | `C:\ProgramData\Blackmagic Design\...` | Community-tested; PRs welcome |
+| Linux | ⚠️ Experimental | `/opt/resolve/...` | Should work — testing and feedback welcome |
 
 ## Project Structure
 
 ```
 davinci-resolve-mcp/
-├── README.md               # This file
-├── docs/                   # Documentation
-│   ├── FEATURES.md         # Feature list and status
-│   ├── CHANGELOG.md        # Version history
-│   ├── VERSION.md          # Version information
-│   ├── TOOLS_README.md     # Tools documentation
-│   ├── PROJECT_MCP_SETUP.md # Project setup guide
-│   └── COMMIT_MESSAGE.txt  # Latest commit information
-├── config-templates/       # Configuration templates
-│   ├── sample_config.json  # Example configuration
-│   ├── cursor-mcp-example.json # Cursor config example
-│   └── mcp-project-template.json # MCP project template
-├── scripts/                # Utility scripts
-│   ├── tests/              # Test scripts
-│   │   ├── benchmark_server.py # Performance tests
-│   │   ├── test_improvements.py # Test scripts
-│   │   ├── test_custom_timeline.py # Timeline tests
-│   │   ├── create_test_timeline.py # Create test timeline
-│   │   ├── test-after-restart.sh # Test after restart (Unix)
-│   │   └── test-after-restart.bat # Test after restart (Windows)
-│   ├── batch_automation.py # Batch automation script
-│   ├── restart-server.sh   # Server restart script (Unix)
-│   ├── restart-server.bat  # Server restart script (Windows)
-│   ├── run-now.sh          # Quick start script (Unix)
-│   └── run-now.bat         # Quick start script (Windows)
-├── resolve_mcp_server.py   # Main server implementation
-├── src/                    # Source code
-│   ├── api/                # API implementation
-│   ├── features/           # Feature modules
-│   └── utils/              # Utility functions
-├── logs/                   # Log files
-├── tools/                  # Development tools
-├── assets/                 # Project assets
-└── examples/               # Example code
+├── install.py                   # Universal installer (macOS/Windows/Linux)
+├── src/
+│   ├── server.py               # Compound MCP server — 26 tools (default)
+│   └── resolve_mcp_server.py   # Full MCP server — 342 tools (power users)
+├── tests/
+│   ├── test_all_tools.py       # Phase 1: 204 read-only tests
+│   ├── test_phase2_skipped.py  # Phase 2: 79 destructive tests
+│   ├── test_phase3_final.py    # Phase 3: 20 real media tests
+│   └── test_phase4_remaining.py # Phase 4: 10 remaining tests
+├── docs/
+│   └── resolve_scripting_api.txt # Official API reference
+├── scripts/                     # Legacy platform-specific scripts
+├── config/                      # MCP client config templates
+└── examples/                    # Example scripts
 ```
 
 ## License
 
 MIT
-
-## Acknowledgments
-
-- Blackmagic Design for DaVinci Resolve and its API
-- The MCP protocol team for enabling AI assistant integration
 
 ## Author
 
 Samuel Gursky (samgursky@gmail.com)
 - GitHub: [github.com/samuelgursky](https://github.com/samuelgursky)
 
-## Future Plans
-
-- Windows and Linux support
-- Additional DaVinci Resolve features
-- Support for Claude Desktop
-
-## Development
-
-If you'd like to contribute, please check the feature checklist in the repo and pick an unimplemented feature to work on. The code is structured with clear sections for different areas of functionality.
-
-## License
-
-MIT
-
 ## Acknowledgments
 
-- Blackmagic Design for DaVinci Resolve and its API
-- The MCP protocol team for enabling AI assistant integration
-
-## Project Structure
-
-After cleanup, the project has the following structure:
-
-- `resolve_mcp_server.py` - The main MCP server implementation
-- `run-now.sh` - Quick start script that handles setup and runs the server
-- `setup.sh` - Complete setup script for installation
-- `check-resolve-ready.sh` - Pre-launch check to verify DaVinci Resolve is ready
-- `start-server.sh` - Script to start the server
-- `run-server.sh` - Simplified script to run the server directly
-
-**Key Directories:**
-- `src/` - Source code and modules
-- `assets/` - Project assets and resources
-- `logs/` - Log files directory
-- `scripts/` - Helper scripts
-
-When developing, it's recommended to use `./run-now.sh` which sets up the environment and launches the server in one step. 
-
-## Changelog
-
-See [docs/CHANGELOG.md](docs/CHANGELOG.md) for a detailed history of changes. 
-
-### Cursor-Specific Setup
-
-When integrating with Cursor, follow these specific steps:
-
-1. Make sure DaVinci Resolve is running before starting Cursor
-
-2. Install required dependencies:
-   ```bash
-   # From the davinci-resolve-mcp directory:
-   pip install -r requirements.txt
-   ```
-   Note: This will install the MCP package and other dependencies automatically.
-
-3. Set up the MCP server configuration in Cursor:
-   
-   Create or edit `~/.cursor/mcp.json` on macOS (or `%USERPROFILE%\.cursor\mcp.json` on Windows):
-   
-   ```json
-   {
-     "mcpServers": {
-       "davinci-resolve": {
-         "name": "DaVinci Resolve MCP",
-         "command": "/path/to/your/venv/bin/python",
-         "args": [
-           "/path/to/your/davinci-resolve-mcp/src/main.py"
-         ]
-       }
-     }
-   }
-   ```
-   
-   **Important Notes:**
-   - Use `main.py` as the entry point (not `resolve_mcp_server.py`)
-   - Use absolute paths in the configuration
-
-4. Common issues:
-   - "Client closed" error: Check that paths are correct in mcp.json and dependencies are installed
-   - Connection problems: Make sure DaVinci Resolve is running before starting Cursor
-   - Environment variables: The main.py script will handle setting environment variables
+- Blackmagic Design for DaVinci Resolve and its scripting API
+- The Model Context Protocol team for enabling AI assistant integration
+- Anthropic for Claude Code, used extensively in development and testing
