@@ -3,7 +3,7 @@
 [![Version](https://img.shields.io/badge/version-2.0.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-26%20(342%20full)-blue.svg)](#server-modes)
-[![Tested](https://img.shields.io/badge/Live%20Tested-96.6%25-green.svg)](#test-results)
+[![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.10--3.12-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
@@ -24,8 +24,8 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 |--------|-------|
 | MCP Tools | **26** compound (default) / **342** granular |
 | API Methods Covered | **324/324** (100%) |
-| Methods Live Tested | **313/324** (96.6%) |
-| Live Test Pass Rate | **313/313** (100%) |
+| Methods Live Tested | **319/324** (98.5%) |
+| Live Test Pass Rate | **319/319** (100%) |
 | API Object Classes | 13 |
 | Tested Against | DaVinci Resolve 19.1.3 Studio |
 
@@ -172,9 +172,10 @@ All testing performed against **DaVinci Resolve 19.1.3 Studio** on macOS with li
 | Phase 2 | 79/79 | 100% | Destructive operations with create-test-cleanup patterns |
 | Phase 3 | 20/20 | 100% | Real media import, sync, transcription, database switching, Resolve.Quit |
 | Phase 4 | 10/10 | 100% | AI/ML methods, Fusion clips, stereo, gallery stills |
-| **Total** | **313/313** | **100%** | **96.6% of all API methods tested live** |
+| Phase 5 | 6/6 | 100% | Scene cuts, subtitles from audio, graph node cache/tools/enable |
+| **Total** | **319/319** | **100%** | **98.5% of all API methods tested live** |
 
-### Untested Methods (11 of 324)
+### Untested Methods (5 of 324)
 
 | Method | Reason | Help Wanted |
 |--------|--------|-------------|
@@ -182,13 +183,7 @@ All testing performed against **DaVinci Resolve 19.1.3 Studio** on macOS with li
 | `PM.LoadCloudProject` | Requires DaVinci Resolve cloud infrastructure | Yes |
 | `PM.ImportCloudProject` | Requires DaVinci Resolve cloud infrastructure | Yes |
 | `PM.RestoreCloudProject` | Requires DaVinci Resolve cloud infrastructure | Yes |
-| `TL.CreateSubtitlesFromAudio` | Long-running AI operation, needs audio content | Yes |
-| `TL.DetectSceneCuts` | Long-running analysis operation | Yes |
 | `TL.AnalyzeDolbyVision` | Requires HDR/Dolby Vision content | Yes |
-| `Graph.SetNodeCacheMode` | Needs active color node graph context | Yes |
-| `Graph.GetNodeCacheMode` | Needs active color node graph context | Yes |
-| `Graph.GetToolsInNode` | Needs active color node graph context | Yes |
-| `Graph.SetNodeEnabled` | Needs active color node graph context | Yes |
 
 ---
 
@@ -450,8 +445,8 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 45 | `GrabStill()` | ✅ | Returns GalleryStill object |
 | 46 | `GrabAllStills(stillFrameSource)` | ✅ | Returns list of GalleryStill objects |
 | 47 | `GetUniqueId()` | ✅ | Returns UUID string |
-| 48 | `CreateSubtitlesFromAudio({settings})` | 🔬 | Long-running AI operation — needs audio content |
-| 49 | `DetectSceneCuts()` | 🔬 | Long-running analysis operation |
+| 48 | `CreateSubtitlesFromAudio({settings})` | ✅ | Returns `True` — creates subtitles from audio |
+| 49 | `DetectSceneCuts()` | ✅ | Returns `True` — detects scene cuts in timeline |
 | 50 | `ConvertTimelineToStereo()` | ✅ | Converts timeline to stereo 3D |
 | 51 | `GetNodeGraph()` | ✅ | Returns Graph object |
 | 52 | `AnalyzeDolbyVision([items], analysisType)` | 🔬 | Requires HDR/Dolby Vision content |
@@ -572,11 +567,11 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 1 | `GetNumNodes()` | ✅ | Returns node count (via ColorGroup pre/post graphs) |
 | 2 | `SetLUT(nodeIndex, lutPath)` | ✅ | Sets LUT on node |
 | 3 | `GetLUT(nodeIndex)` | ✅ | Returns LUT path |
-| 4 | `SetNodeCacheMode(nodeIndex, cache_value)` | 🔬 | Needs active color graph context |
-| 5 | `GetNodeCacheMode(nodeIndex)` | 🔬 | Needs active color graph context |
+| 4 | `SetNodeCacheMode(nodeIndex, cache_value)` | ✅ | Returns `True` |
+| 5 | `GetNodeCacheMode(nodeIndex)` | ✅ | Returns `-1` (no cache mode set) |
 | 6 | `GetNodeLabel(nodeIndex)` | ✅ | Returns node label string |
-| 7 | `GetToolsInNode(nodeIndex)` | 🔬 | Needs active color graph context |
-| 8 | `SetNodeEnabled(nodeIndex, isEnabled)` | 🔬 | Needs active color graph context |
+| 7 | `GetToolsInNode(nodeIndex)` | ✅ | Returns `None` (no OFX tools in node) |
+| 8 | `SetNodeEnabled(nodeIndex, isEnabled)` | ✅ | Returns `True` |
 | 9 | `ApplyGradeFromDRX(path, gradeMode)` | ✅ | Applies grade from DRX file |
 | 10 | `ApplyArriCdlLut()` | ✅ | Applies ARRI CDL LUT |
 | 11 | `ResetAllGrades()` | ✅ | Resets all grades |
@@ -599,7 +594,7 @@ We welcome contributions! The following areas especially need help:
 
 ### Help Wanted: Untested API Methods
 
-**11 methods** (3.4%) remain untested against a live DaVinci Resolve instance. If you have access to the required infrastructure or content, we'd love a PR with test confirmation:
+**5 methods** (1.5%) remain untested against a live DaVinci Resolve instance. If you have access to the required infrastructure or content, we'd love a PR with test confirmation:
 
 1. **Cloud Project Methods** (4 methods) — Need DaVinci Resolve cloud infrastructure:
    - `ProjectManager.CreateCloudProject`
@@ -607,16 +602,8 @@ We welcome contributions! The following areas especially need help:
    - `ProjectManager.ImportCloudProject`
    - `ProjectManager.RestoreCloudProject`
 
-2. **Long-Running AI/Analysis** (3 methods) — Need specific content + patience:
-   - `Timeline.CreateSubtitlesFromAudio` — needs timeline with dialogue audio
-   - `Timeline.DetectSceneCuts` — needs timeline with multiple scenes
+2. **HDR Analysis** (1 method) — Needs specific content:
    - `Timeline.AnalyzeDolbyVision` — needs HDR/Dolby Vision content
-
-3. **Graph Node Operations** (4 methods) — Need active color grading context:
-   - `Graph.SetNodeCacheMode`
-   - `Graph.GetNodeCacheMode`
-   - `Graph.GetToolsInNode`
-   - `Graph.SetNodeEnabled`
 
 ### How to Contribute
 
@@ -651,7 +638,7 @@ davinci-resolve-mcp/
 │   ├── server.py                # Compound MCP server — 26 tools (default)
 │   ├── resolve_mcp_server.py    # Full MCP server — 342 tools (power users)
 │   └── utils/                   # Platform detection, Resolve connection helpers
-├── tests/                       # 4-phase live API test suite (313/313 pass)
+├── tests/                       # 5-phase live API test suite (319/319 pass)
 ├── docs/
 │   └── resolve_scripting_api.txt # Official Resolve Scripting API reference
 └── examples/                    # Getting started, markers, media, timeline examples

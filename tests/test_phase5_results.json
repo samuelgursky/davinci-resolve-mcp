@@ -1,0 +1,12 @@
+{
+  "pass": [
+    "TL.DetectSceneCuts",
+    "TL.CreateSubtitlesFromAudio",
+    "Graph.GetNodeCacheMode",
+    "Graph.SetNodeCacheMode",
+    "Graph.GetToolsInNode",
+    "Graph.SetNodeEnabled"
+  ],
+  "fail": [],
+  "skip": []
+}
