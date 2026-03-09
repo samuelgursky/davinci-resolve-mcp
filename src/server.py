@@ -16,7 +16,10 @@ import os
 import sys
 import json
 import logging
+import platform
+import subprocess
 import tempfile
+import time
 from typing import Dict, Any, Optional, List
 
 # ─── Path Setup ───────────────────────────────────────────────────────────────
@@ -57,7 +60,15 @@ logger = logging.getLogger("resolve-mcp")
 # ─── MCP Server ───────────────────────────────────────────────────────────────
 
 from mcp.server.fastmcp import FastMCP
-mcp = FastMCP("DaVinciResolveMCP")
+mcp = FastMCP(
+    "DaVinciResolveMCP",
+    instructions=(
+        "DaVinci Resolve MCP Server — controls Resolve via its Scripting API. "
+        "IMPORTANT: If any tool returns a 'Not connected to DaVinci Resolve' error, "
+        "DO NOT report the error to the user. Instead, automatically call "
+        "resolve_control(action='launch') to start Resolve, then retry your original operation."
+    ),
+)
 
 # ─── Python Version Check ────────────────────────────────────────────────────
 
@@ -208,6 +219,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     """App-level DaVinci Resolve operations.
 
     Actions:
+      launch() -> {success, message}  — Launch DaVinci Resolve if not running. Call this FIRST if any tool returns a 'Not connected' error.
       get_version() -> {product, version, version_string}
       get_page() -> {page}
       open_page(page) -> {success}  — page: edit, cut, color, fusion, fairlight, deliver
@@ -216,9 +228,44 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       quit() -> {success}
     """
     p = params or {}
+
+    # launch works even when Resolve is not connected
+    if action == "launch":
+        r = get_resolve()
+        if r is not None:
+            return _ok(message="DaVinci Resolve is already running.")
+        # Determine executable path
+        sys_name = platform.system().lower()
+        if sys_name == "darwin":
+            app_path = "/Applications/DaVinci Resolve/DaVinci Resolve.app"
+            if not os.path.exists(app_path):
+                return _err(f"DaVinci Resolve not found at {app_path}")
+            subprocess.Popen(["open", app_path])
+        elif sys_name == "windows":
+            app_path = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"
+            if not os.path.exists(app_path):
+                return _err(f"DaVinci Resolve not found at {app_path}")
+            subprocess.Popen([app_path])
+        elif sys_name == "linux":
+            app_path = "/opt/resolve/bin/resolve"
+            if not os.path.exists(app_path):
+                return _err(f"DaVinci Resolve not found at {app_path}")
+            subprocess.Popen([app_path])
+        else:
+            return _err(f"Unsupported platform: {sys_name}")
+        # Wait for Resolve to become available
+        for i in range(30):
+            time.sleep(2)
+            global resolve
+            resolve = None  # force reconnect attempt
+            r = get_resolve()
+            if r is not None:
+                return _ok(message=f"DaVinci Resolve launched successfully ({(i+1)*2}s).")
+        return _err("DaVinci Resolve was launched but did not respond within 60 seconds. It may still be loading — try again shortly.")
+
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
 
     if action == "get_version":
         return {"product": r.GetProductName(), "version": r.GetVersion(), "version_string": r.GetVersionString()}
@@ -233,7 +280,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "quit":
         r.Quit()
         return _ok()
-    return _unknown(action, ["get_version","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit"])
+    return _unknown(action, ["launch","get_version","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -255,7 +302,7 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
 
     if action == "save":
         return {"success": bool(r.SaveLayoutPreset(p["name"]))}
@@ -291,7 +338,7 @@ def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
 
     if action == "import_render":
         return {"success": bool(r.ImportRenderPreset(p["path"]))}
@@ -328,7 +375,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
     pm = r.GetProjectManager()
 
     if action == "list":
@@ -381,7 +428,7 @@ def project_manager_folders(action: str, params: Optional[Dict[str, Any]] = None
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
     pm = r.GetProjectManager()
 
     if action == "list":
@@ -418,7 +465,7 @@ def project_manager_cloud(action: str, params: Optional[Dict[str, Any]] = None) 
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
     pm = r.GetProjectManager()
 
     if action == "create":
@@ -450,7 +497,7 @@ def project_manager_database(action: str, params: Optional[Dict[str, Any]] = Non
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
     pm = r.GetProjectManager()
 
     if action == "get_current":
@@ -644,7 +691,7 @@ def media_storage(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
     ms = r.GetMediaStorage()
 
     if action == "get_volumes":
