@@ -10,7 +10,7 @@ Usage:
     python src/server.py --full       # Start the 342-tool granular server instead
 """
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 import os
 import sys
@@ -1676,7 +1676,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       set_fusion_cache(enabled, ...) -> {success}
       stabilize(...) -> {success}
       smart_reframe(...) -> {success}
-      create_magic_mask(mode, ...) -> {success}  — mode: "F" forward, "B" backward
+      create_magic_mask(mode, ...) -> {success}  — mode: "F" forward, "B" backward, "BI" bidirectional
       regenerate_magic_mask(...) -> {success}
 
     Default: track_type="video", track_index=1, item_index=0

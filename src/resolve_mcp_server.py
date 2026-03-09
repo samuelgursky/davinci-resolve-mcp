@@ -3,7 +3,7 @@
 DaVinci Resolve MCP Server
 A server that connects to DaVinci Resolve via the Model Context Protocol (MCP)
 
-Version: 2.0.0 - Complete API Coverage, Compound Tool Server, Universal Installer
+Version: 2.0.1 - Bug Fixes, Consolidated Tool Features
 """
 
 import os
@@ -93,7 +93,7 @@ logging.basicConfig(
 logger = logging.getLogger("davinci-resolve-mcp")
 
 # Log server version and platform
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
 logger.info(f"Using Resolve API path: {RESOLVE_API_PATH}")
@@ -8412,7 +8412,7 @@ def ti_create_magic_mask(mode: str = "Forward", item_index: int = 0, track_type:
     item, err = _get_timeline_item(track_type, track_index, item_index)
     if err:
         return err
-    return {"success": bool(item.CreateMagicMask({"mode": mode}))}
+    return {"success": bool(item.CreateMagicMask(mode))}
 
 @mcp.tool()
 def ti_regenerate_magic_mask(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
