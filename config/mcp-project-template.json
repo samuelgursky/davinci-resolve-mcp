@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "davinci-resolve": {
-      "name": "DaVinci Resolve Project-Specific",
-      "command": "${PROJECT_ROOT}/mcp_resolve-cursor_start",
-      "args": ["--project", "${PROJECT_NAME}"]
-    }
-  }
-} 

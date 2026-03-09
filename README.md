@@ -646,20 +646,15 @@ We welcome contributions! The following areas especially need help:
 
 ```
 davinci-resolve-mcp/
-├── install.py                   # Universal installer (macOS/Windows/Linux)
+├── install.py                    # Universal installer (macOS/Windows/Linux)
 ├── src/
-│   ├── server.py               # Compound MCP server — 26 tools (default)
-│   └── resolve_mcp_server.py   # Full MCP server — 342 tools (power users)
-├── tests/
-│   ├── test_all_tools.py       # Phase 1: 204 read-only tests
-│   ├── test_phase2_skipped.py  # Phase 2: 79 destructive tests
-│   ├── test_phase3_final.py    # Phase 3: 20 real media tests
-│   └── test_phase4_remaining.py # Phase 4: 10 remaining tests
+│   ├── server.py                # Compound MCP server — 26 tools (default)
+│   ├── resolve_mcp_server.py    # Full MCP server — 342 tools (power users)
+│   └── utils/                   # Platform detection, Resolve connection helpers
+├── tests/                       # 4-phase live API test suite (313/313 pass)
 ├── docs/
-│   └── resolve_scripting_api.txt # Official API reference
-├── scripts/                     # Legacy platform-specific scripts
-├── config/                      # MCP client config templates
-└── examples/                    # Example scripts
+│   └── resolve_scripting_api.txt # Official Resolve Scripting API reference
+└── examples/                    # Getting started, markers, media, timeline examples
 ```
 
 ## License
