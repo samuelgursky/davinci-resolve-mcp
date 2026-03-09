@@ -64,9 +64,8 @@ mcp = FastMCP(
     "DaVinciResolveMCP",
     instructions=(
         "DaVinci Resolve MCP Server — controls Resolve via its Scripting API. "
-        "IMPORTANT: If any tool returns a 'Not connected to DaVinci Resolve' error, "
-        "DO NOT report the error to the user. Instead, automatically call "
-        "resolve_control(action='launch') to start Resolve, then retry your original operation."
+        "Tools automatically launch Resolve if it is not running (may take up to 60s on first call). "
+        "If a tool returns a connection error, Resolve Studio may not be installed or external scripting is disabled."
     ),
 )
 
@@ -92,28 +91,64 @@ try:
 except ImportError as e:
     logger.error(f"Cannot import DaVinciResolveScript: {e}")
 
-def get_resolve():
-    """Lazy connection to Resolve — connects on first tool call, reconnects if lost."""
+def _try_connect():
+    """Attempt to connect to Resolve once. Returns resolve object or None."""
     global resolve
-    if resolve is not None:
-        return resolve
     if dvr_script is None:
         return None
     try:
         resolve = dvr_script.scriptapp("Resolve")
         if resolve:
             logger.info(f"Connected: {resolve.GetProductName()} {resolve.GetVersionString()}")
-        else:
-            logger.warning(
-                "DaVinci Resolve not responding. Possible causes:\n"
-                "  - Resolve is not running\n"
-                "  - Resolve Free edition (external scripting requires Studio)\n"
-                "  - Python version incompatible (try 3.10–3.12)\n"
-                "  - Preferences > General > 'External scripting using' not set to Local"
-            )
+        return resolve
     except Exception as e:
         logger.error(f"Connection error: {e}")
         resolve = None
+        return None
+
+def _launch_resolve():
+    """Launch DaVinci Resolve and wait for it to become available."""
+    sys_name = platform.system().lower()
+    if sys_name == "darwin":
+        app_path = "/Applications/DaVinci Resolve/DaVinci Resolve.app"
+        if not os.path.exists(app_path):
+            logger.error(f"DaVinci Resolve not found at {app_path}")
+            return False
+        subprocess.Popen(["open", app_path])
+    elif sys_name == "windows":
+        app_path = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"
+        if not os.path.exists(app_path):
+            logger.error(f"DaVinci Resolve not found at {app_path}")
+            return False
+        subprocess.Popen([app_path])
+    elif sys_name == "linux":
+        app_path = "/opt/resolve/bin/resolve"
+        if not os.path.exists(app_path):
+            logger.error(f"DaVinci Resolve not found at {app_path}")
+            return False
+        subprocess.Popen([app_path])
+    else:
+        return False
+    logger.info("Launched DaVinci Resolve, waiting for it to respond...")
+    for i in range(30):
+        time.sleep(2)
+        if _try_connect():
+            logger.info(f"Resolve responded after {(i+1)*2}s")
+            return True
+    logger.warning("Resolve did not respond within 60s after launch")
+    return False
+
+def get_resolve():
+    """Lazy connection to Resolve — connects on first tool call, auto-launches if needed."""
+    global resolve
+    if resolve is not None:
+        return resolve
+    # Try to connect to an already-running Resolve
+    if _try_connect():
+        return resolve
+    # Not running — launch it automatically
+    logger.info("Resolve not running, attempting to launch automatically...")
+    _launch_resolve()
     return resolve
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -231,41 +266,14 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 
     # launch works even when Resolve is not connected
     if action == "launch":
-        r = get_resolve()
+        r = get_resolve()  # auto-launches if not running
         if r is not None:
-            return _ok(message="DaVinci Resolve is already running.")
-        # Determine executable path
-        sys_name = platform.system().lower()
-        if sys_name == "darwin":
-            app_path = "/Applications/DaVinci Resolve/DaVinci Resolve.app"
-            if not os.path.exists(app_path):
-                return _err(f"DaVinci Resolve not found at {app_path}")
-            subprocess.Popen(["open", app_path])
-        elif sys_name == "windows":
-            app_path = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"
-            if not os.path.exists(app_path):
-                return _err(f"DaVinci Resolve not found at {app_path}")
-            subprocess.Popen([app_path])
-        elif sys_name == "linux":
-            app_path = "/opt/resolve/bin/resolve"
-            if not os.path.exists(app_path):
-                return _err(f"DaVinci Resolve not found at {app_path}")
-            subprocess.Popen([app_path])
-        else:
-            return _err(f"Unsupported platform: {sys_name}")
-        # Wait for Resolve to become available
-        for i in range(30):
-            time.sleep(2)
-            global resolve
-            resolve = None  # force reconnect attempt
-            r = get_resolve()
-            if r is not None:
-                return _ok(message=f"DaVinci Resolve launched successfully ({(i+1)*2}s).")
-        return _err("DaVinci Resolve was launched but did not respond within 60 seconds. It may still be loading — try again shortly.")
+            return _ok(message="DaVinci Resolve is running and connected.")
+        return _err("Could not connect to DaVinci Resolve. Check that Resolve Studio is installed and 'External scripting using' is set to Local in Preferences.")
 
-    r = get_resolve()
+    r = get_resolve()  # auto-launches if not running
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
+        return _err("Could not connect to DaVinci Resolve after auto-launch attempt. Check that Resolve Studio is installed.")
 
     if action == "get_version":
         return {"product": r.GetProductName(), "version": r.GetVersion(), "version_string": r.GetVersionString()}
@@ -302,7 +310,7 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
+        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
 
     if action == "save":
         return {"success": bool(r.SaveLayoutPreset(p["name"]))}
@@ -338,7 +346,7 @@ def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
+        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
 
     if action == "import_render":
         return {"success": bool(r.ImportRenderPreset(p["path"]))}
@@ -375,7 +383,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
+        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
     pm = r.GetProjectManager()
 
     if action == "list":
@@ -428,7 +436,7 @@ def project_manager_folders(action: str, params: Optional[Dict[str, Any]] = None
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
+        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
     pm = r.GetProjectManager()
 
     if action == "list":
@@ -465,7 +473,7 @@ def project_manager_cloud(action: str, params: Optional[Dict[str, Any]] = None) 
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
+        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
     pm = r.GetProjectManager()
 
     if action == "create":
@@ -497,7 +505,7 @@ def project_manager_database(action: str, params: Optional[Dict[str, Any]] = Non
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
+        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
     pm = r.GetProjectManager()
 
     if action == "get_current":
@@ -691,7 +699,7 @@ def media_storage(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     p = params or {}
     r = get_resolve()
     if r is None:
-        return _err("Not connected to DaVinci Resolve. Use resolve_control(action='launch') to start it.")
+        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
     ms = r.GetMediaStorage()
 
     if action == "get_volumes":
