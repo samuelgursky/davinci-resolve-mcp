@@ -1,0 +1,136 @@
+{
+  "summary": {
+    "total": 30,
+    "tested": 20,
+    "passed": 20,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 10
+  },
+  "pass": [
+    {
+      "name": "PM.SetCurrentDatabase",
+      "value": "True"
+    },
+    {
+      "name": "Import_video",
+      "value": "True"
+    },
+    {
+      "name": "Import_video2",
+      "value": "True"
+    },
+    {
+      "name": "Import_audio",
+      "value": "True"
+    },
+    {
+      "name": "MP.AutoSyncAudio",
+      "value": "False"
+    },
+    {
+      "name": "MS.AddClipMattesToMediaPool",
+      "value": "True"
+    },
+    {
+      "name": "MP.DeleteClipMattes",
+      "value": "True"
+    },
+    {
+      "name": "MS.AddTimelineMattesToMediaPool",
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104441730>]"
+    },
+    {
+      "name": "MP.ImportTimelineFromFile",
+      "value": "Timeline (0x0x12f894840) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44a8-"
+    },
+    {
+      "name": "TL.ImportIntoTimeline",
+      "value": "False"
+    },
+    {
+      "name": "MP.ImportFolderFromFile",
+      "value": "True"
+    },
+    {
+      "name": "MPI.LinkProxyMedia",
+      "value": "True"
+    },
+    {
+      "name": "MPI.ReplaceClip",
+      "value": "True"
+    },
+    {
+      "name": "MP.CreateStereoClip",
+      "value": "Media pool item (0x0x12f894a40) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cd"
+    },
+    {
+      "name": "Project.InsertAudioToCurrentTrackAtPlayhead",
+      "value": "False"
+    },
+    {
+      "name": "MPI.TranscribeAudio",
+      "value": "None"
+    },
+    {
+      "name": "MPI.ClearTranscription",
+      "value": "None"
+    },
+    {
+      "name": "Folder.TranscribeAudio",
+      "value": "True"
+    },
+    {
+      "name": "Folder.ClearTranscription",
+      "value": "True"
+    },
+    {
+      "name": "Resolve.Quit",
+      "value": "None"
+    }
+  ],
+  "fail": [],
+  "error": [],
+  "skip": [
+    {
+      "name": "TL.CreateFusionClip",
+      "reason": "need 2 clips for throwaway timeline"
+    },
+    {
+      "name": "TL.ConvertTimelineToStereo",
+      "reason": "need 2 clips"
+    },
+    {
+      "name": "TI.Stabilize",
+      "reason": "no real timeline item available"
+    },
+    {
+      "name": "TI.SmartReframe",
+      "reason": "no real timeline item available"
+    },
+    {
+      "name": "TI.CreateMagicMask",
+      "reason": "no real timeline item available"
+    },
+    {
+      "name": "TI.RegenerateMagicMask",
+      "reason": "no real timeline item available"
+    },
+    {
+      "name": "PM.CreateCloudProject",
+      "reason": "needs cloud infrastructure"
+    },
+    {
+      "name": "PM.LoadCloudProject",
+      "reason": "needs cloud infrastructure"
+    },
+    {
+      "name": "PM.ImportCloudProject",
+      "reason": "needs cloud infrastructure"
+    },
+    {
+      "name": "PM.RestoreCloudProject",
+      "reason": "needs cloud infrastructure"
+    }
+  ]
+}

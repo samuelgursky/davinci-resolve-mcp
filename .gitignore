@@ -32,6 +32,8 @@ cleanup_backup/
 
 # Configuration files with sensitive info
 # Don't ignore templates
+.mcp.json
+.mcp.json.backup
 .cursor/mcp.json
 claude_desktop_config.json
 !config-templates/*.template.json
@@ -95,4 +97,11 @@ logs/*
 *_backup/
 
 # Cursor
-.cursor/ 
+.cursor/
+
+# Autoresearch framework (local development only)
+autoresearch/
+
+# Autoresearch artifacts
+run.log
+*.log.bak

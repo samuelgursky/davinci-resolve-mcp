@@ -1,0 +1,13 @@
+{
+  "pass": [
+    "TI.Stabilize",
+    "TI.SmartReframe",
+    "TI.CreateMagicMask",
+    "TI.RegenerateMagicMask",
+    "TL.CreateFusionClip",
+    "TL.ConvertTimelineToStereo",
+    "Gallery.StillAlbum ops (SetLabel/Export/Import/Delete)"
+  ],
+  "fail": [],
+  "skip": []
+}

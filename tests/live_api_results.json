@@ -1,0 +1,246 @@
+{
+  "Resolve.GetProductName": {
+    "status": "OK",
+    "value": "DaVinci Resolve Studio"
+  },
+  "Resolve.GetVersion": {
+    "status": "OK",
+    "value": "[19, 1, 3, 7, '']"
+  },
+  "Resolve.GetVersionString": {
+    "status": "OK",
+    "value": "19.1.3.7"
+  },
+  "Resolve.GetCurrentPage": {
+    "status": "OK",
+    "value": "edit"
+  },
+  "Resolve.GetMediaStorage": {
+    "status": "OK",
+    "value": "True"
+  },
+  "Resolve.GetProjectManager": {
+    "status": "OK",
+    "value": "True"
+  },
+  "Resolve.GetKeyframeMode": {
+    "status": "OK",
+    "value": "None"
+  },
+  "Resolve.Fusion": {
+    "status": "OK",
+    "value": "FusionUI (0x0x155b37040) [App: 'Resolve' on 127.0.0.1, UUID: c80f160d-86ff-480b-b5e3-211d4739d4e6]"
+  },
+  "PM.GetCurrentProject": {
+    "status": "OK",
+    "value": "True"
+  },
+  "PM.GetProjectListInCurrentFolder": {
+    "status": "OK",
+    "value": "['Sample', '2025-10-20_20-49-52', '240069_DCTV_Twin_SLG-C_20250106_v05', '240069_DCTV_Twin_SLG-C_202"
+  },
+  "PM.GetFolderListInCurrentFolder": {
+    "status": "OK",
+    "value": "[]"
+  },
+  "PM.GetCurrentFolder": {
+    "status": "OK",
+    "value": ""
+  },
+  "PM.GetCurrentDatabase": {
+    "status": "OK",
+    "value": "{'DbType': 'Disk', 'DbName': 'Local Database'}"
+  },
+  "PM.GetDatabaseList": {
+    "status": "OK",
+    "value": "[{'DbType': 'Disk', 'DbName': 'Local Database'}]"
+  },
+  "Project.GetName": {
+    "status": "OK",
+    "value": "Sample"
+  },
+  "Project.GetMediaPool": {
+    "status": "OK",
+    "value": "True"
+  },
+  "Project.GetTimelineCount": {
+    "status": "OK",
+    "value": "1"
+  },
+  "Project.GetSetting('')": {
+    "status": "OK",
+    "value": "{'audioCaptureNumChannels': '2', 'audioOutputHasTimecode': '0', 'audioPlayoutNumChannels': '2', 'clo"
+  },
+  "Project.GetRenderFormats": {
+    "status": "OK",
+    "value": "{'AVI': 'avi', 'BRAW': 'braw', 'Cineon': 'cin', 'DCP': 'dcp', 'DPX': 'dpx', 'EXR': 'exr', 'GIF': 'gi"
+  },
+  "Project.GetRenderCodecs": {
+    "status": "OK",
+    "value": "{'H.264': 'H264', 'H.265': 'H265'}"
+  },
+  "Project.GetCurrentRenderFormatAndCodec": {
+    "status": "OK",
+    "value": "{'format': 'mov', 'codec': 'H264'}"
+  },
+  "Project.GetCurrentRenderMode": {
+    "status": "OK",
+    "value": "1"
+  },
+  "Project.GetRenderPresetList": {
+    "status": "OK",
+    "value": "['H.264 Master', 'HyperDeck', 'H.265 Master', 'ProRes 422 HQ', 'YouTube - 720p', 'YouTube - 1080p', "
+  },
+  "Project.GetRenderJobList": {
+    "status": "OK",
+    "value": "[]"
+  },
+  "Project.IsRenderingInProgress": {
+    "status": "OK",
+    "value": "False"
+  },
+  "Project.GetGallery": {
+    "status": "OK",
+    "value": "True"
+  },
+  "Project.GetUniqueId": {
+    "status": "OK",
+    "value": "72381ad3-7787-4e63-bb43-132a5f066650"
+  },
+  "Project.GetPresetList": {
+    "status": "OK",
+    "value": "[{'Name': 'Current Project', 'Width': 1920, 'Height': 1080}, {'Name': 'System Config', 'Width': 1920"
+  },
+  "Project.GetColorGroupsList": {
+    "status": "OK",
+    "value": "[]"
+  },
+  "Project.RefreshLUTList": {
+    "status": "OK",
+    "value": "True"
+  },
+  "Project.GetQuickExportRenderPresets": {
+    "status": "OK",
+    "value": "['H.264', 'HyperDeck', 'H.265', 'ProRes', 'YouTube', 'Vimeo', 'TikTok', 'Presentations', 'Dropbox', "
+  },
+  "Project.GetRenderResolutions": {
+    "status": "OK",
+    "value": "[]"
+  },
+  "MS.GetMountedVolumeList": {
+    "status": "OK",
+    "value": "['/Users/samuelgursky/Movies', '/Volumes/IH_Runner_v02', '/Volumes/Macintosh HD', '/Volumes/Sam Joyb"
+  },
+  "MS.GetSubFolderList": {
+    "status": "OK",
+    "value": "['/Users/samuelgursky/Movies/Resolve Project Backups', '/Users/samuelgursky/Movies/TV']"
+  },
+  "MS.GetFileList": {
+    "status": "OK",
+    "value": "[]"
+  },
+  "MP.GetRootFolder": {
+    "status": "OK",
+    "value": "True"
+  },
+  "MP.GetCurrentFolder": {
+    "status": "OK",
+    "value": "True"
+  },
+  "MP.GetUniqueId": {
+    "status": "OK",
+    "value": "dde652a0-5930-4198-8896-c750e3b48962"
+  },
+  "MP.GetSelectedClips": {
+    "status": "OK",
+    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104ef3490>]"
+  },
+  "Folder.GetName": {
+    "status": "OK",
+    "value": "Master"
+  },
+  "Folder.GetClipList": {
+    "status": "OK",
+    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104ef3450>, <BlackmagicFusion.PyRemoteObject object at"
+  },
+  "Folder.GetSubFolderList": {
+    "status": "OK",
+    "value": "[]"
+  },
+  "Folder.GetIsFolderStale": {
+    "status": "OK",
+    "value": "False"
+  },
+  "Folder.GetUniqueId": {
+    "status": "OK",
+    "value": "6afc6551-6f6d-4847-a76a-ea0ada79436a"
+  },
+  "Gallery.GetAlbumName": {
+    "status": "OK",
+    "value": "None"
+  },
+  "Gallery.GetCurrentStillAlbum": {
+    "status": "OK",
+    "value": "True"
+  },
+  "Gallery.GetGalleryStillAlbums": {
+    "status": "OK",
+    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104ef3450>]"
+  },
+  "Gallery.GetGalleryPowerGradeAlbums": {
+    "status": "OK",
+    "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104ef2c50>]"
+  },
+  "GSA.GetStills": {
+    "status": "OK",
+    "value": "[]"
+  },
+  "GSA.GetLabel": {
+    "status": "OK",
+    "value": "no stills"
+  },
+  "TL.GetName": {
+    "status": "OK",
+    "value": "Timeline 1"
+  },
+  "TL.GetStartFrame": {
+    "status": "OK",
+    "value": "86400"
+  },
+  "TL.GetEndFrame": {
+    "status": "OK",
+    "value": "208991"
+  },
+  "TL.GetTrackCount('video')": {
+    "status": "OK",
+    "value": "1"
+  },
+  "TL.GetTrackCount('audio')": {
+    "status": "OK",
+    "value": "1"
+  },
+  "TL.GetStartTimecode": {
+    "status": "OK",
+    "value": "01:00:00:00"
+  },
+  "TL.GetCurrentTimecode": {
+    "status": "OK",
+    "value": "01:00:00:00"
+  },
+  "TL.GetMarkers": {
+    "status": "OK",
+    "value": "{}"
+  },
+  "TL.GetSetting('')": {
+    "status": "OK",
+    "value": "{'audioCaptureNumChannels': '2', 'audioOutputHasTimecode': '0', 'audioPlayoutNumChannels': '2', 'clo"
+  },
+  "TL.GetUniqueId": {
+    "status": "OK",
+    "value": "314524ab-705f-4527-9362-9cea0e60d6ac"
+  },
+  "TL.GetCurrentVideoItem": {
+    "status": "OK",
+    "value": "Timeline item (0x0x31fd5b080) [App: 'Resolve' on 127.0.0.1, UUID: c80f160d-86ff-480b-b5e3-211d4739d4"
+  }
+}
