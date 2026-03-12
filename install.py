@@ -200,6 +200,13 @@ MCP_CLIENTS = [
         "notes": "Project-scoped config (committed to repo)",
     },
     {
+        "id": "antigravity",
+        "name": "Antigravity",
+        "get_path": lambda: home() / ".gemini" / "antigravity" / "mcp_config.json",
+        "config_key": "mcpServers",
+        "notes": "Google's agentic AI coding assistant (VS Code fork)",
+    },
+    {
         "id": "cursor",
         "name": "Cursor",
         "get_path": lambda: {
