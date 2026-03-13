@@ -10,7 +10,7 @@ Usage:
     python src/server.py --full       # Start the 342-tool granular server instead
 """
 
-VERSION = "2.0.2"
+VERSION = "2.0.3"
 
 import os
 import sys
@@ -1773,7 +1773,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     elif action == "delete_version":
         return {"success": bool(item.DeleteVersionByName(p["name"], p.get("type", 0)))}
     elif action == "get_node_graph":
-        g = item.GetNodeGraph(p.get("layer_index", 0))
+        g = item.GetNodeGraph(p["layer_index"]) if "layer_index" in p else item.GetNodeGraph()
         return {"available": g is not None}
     elif action == "get_color_group":
         g = item.GetColorGroup()
@@ -2028,7 +2028,7 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         _, item, err = _get_item(p)
         if err:
             return err
-        g = item.GetNodeGraph(p.get("layer_index", 0))
+        g = item.GetNodeGraph(p["layer_index"]) if "layer_index" in p else item.GetNodeGraph()
     elif source in ("color_group_pre", "color_group_post"):
         _, proj, err = _check()
         if err:
@@ -2041,7 +2041,7 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         if g is None:
             return _err(f"Color group '{p.get('group_name')}' not found")
 
-    if g is None:
+    if not g:
         return _err("No node graph available for the specified source")
 
     if action == "get_num_nodes":
