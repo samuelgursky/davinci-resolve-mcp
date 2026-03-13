@@ -10,7 +10,7 @@ Usage:
     python src/server.py --full       # Start the 342-tool granular server instead
 """
 
-VERSION = "2.0.3"
+VERSION = "2.0.4"
 
 import os
 import sys
@@ -2007,7 +2007,9 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
       get_node_label(node_index, source?, ...) -> {label}
       get_tools_in_node(node_index, source?, ...) -> {tools}
       set_node_enabled(node_index, enabled, source?, ...) -> {success}
-      apply_grade_from_drx(path, mode?, source?, ...) -> {success}
+      apply_grade_from_drx(path, grade_mode?, source?, ...) -> {success}
+        grade_mode: 0="No keyframes" (default), 1="Source Timecode aligned", 2="Start Frames aligned"
+        Note: All modes replace the entire node graph — there is no append mode.
       apply_arri_cdl_lut(source?, ...) -> {success}
       reset_all_grades(source?, ...) -> {success}
 
@@ -2061,7 +2063,7 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     elif action == "set_node_enabled":
         return {"success": bool(g.SetNodeEnabled(p["node_index"], p["enabled"]))}
     elif action == "apply_grade_from_drx":
-        return {"success": bool(g.ApplyGradeFromDRX(p["path"], p.get("mode", 0)))}
+        return {"success": bool(g.ApplyGradeFromDRX(p["path"], p.get("grade_mode", p.get("mode", 0))))}
     elif action == "apply_arri_cdl_lut":
         return {"success": bool(g.ApplyArriCdlLut())}
     elif action == "reset_all_grades":
