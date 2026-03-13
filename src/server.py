@@ -10,7 +10,7 @@ Usage:
     python src/server.py --full       # Start the 342-tool granular server instead
 """
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 
 import os
 import sys

@@ -25,7 +25,7 @@ from pathlib import Path
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 
 # ─── Colors (disabled on Windows cmd without ANSI support) ────────────────────
 
@@ -182,6 +182,13 @@ def vscode_global_storage():
 
 MCP_CLIENTS = [
     {
+        "id": "antigravity",
+        "name": "Antigravity",
+        "get_path": lambda: home() / ".gemini" / "antigravity" / "mcp_config.json",
+        "config_key": "mcpServers",
+        "notes": "Google's agentic AI coding assistant (VS Code fork)",
+    },
+    {
         "id": "claude-desktop",
         "name": "Claude Desktop",
         "get_path": lambda: {
@@ -198,13 +205,6 @@ MCP_CLIENTS = [
         "get_path": lambda: Path.cwd() / ".mcp.json",
         "config_key": "mcpServers",
         "notes": "Project-scoped config (committed to repo)",
-    },
-    {
-        "id": "antigravity",
-        "name": "Antigravity",
-        "get_path": lambda: home() / ".gemini" / "antigravity" / "mcp_config.json",
-        "config_key": "mcpServers",
-        "notes": "Google's agentic AI coding assistant (VS Code fork)",
     },
     {
         "id": "cursor",

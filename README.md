@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.0.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-26%20(342%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -10,10 +10,15 @@
 
 A Model Context Protocol (MCP) server providing **complete coverage** of the DaVinci Resolve Scripting API. Connect AI assistants (Claude, Cursor, Windsurf) to DaVinci Resolve and control every aspect of your post-production workflow through natural language.
 
-### What's New in v2.0.1
+### What's New in v2.0.2
+
+- **Antigravity support** — Google's agentic AI coding assistant added as 10th MCP client
+- **Alphabetical client ordering** — MCP_CLIENTS list sorted for easier maintenance
+
+### v2.0.1
 
 - **26-tool compound server** — all 324 API methods grouped into 26 context-efficient tools (default)
-- **Universal installer** — single `python install.py` for macOS/Windows/Linux, 9 MCP clients
+- **Universal installer** — single `python install.py` for macOS/Windows/Linux, 10 MCP clients
 - **Dedicated timeline_item actions** — retime/speed, transform, crop, composite, audio, keyframes with validation
 - **Lazy Resolve connection** — server starts instantly, connects when first tool is called
 - **Bug fixes** — CreateMagicMask param type, GetCurrentClipThumbnailImage args, Python 3.13+ warning
