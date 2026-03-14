@@ -3,7 +3,7 @@
 DaVinci Resolve MCP Server
 A server that connects to DaVinci Resolve via the Model Context Protocol (MCP)
 
-Version: 2.0.5 - Lazy connection recovery and null guards for all tools
+Version: 2.0.6 - Fix _check() unpacking in timeline_item_color
 """
 
 import os
@@ -96,7 +96,7 @@ logging.basicConfig(
 logger = logging.getLogger("davinci-resolve-mcp")
 
 # Log server version and platform
-VERSION = "2.0.5"
+VERSION = "2.0.6"
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
 logger.info(f"Using Resolve API path: {RESOLVE_API_PATH}")

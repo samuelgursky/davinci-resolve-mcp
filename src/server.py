@@ -10,7 +10,7 @@ Usage:
     python src/server.py --full       # Start the 342-tool granular server instead
 """
 
-VERSION = "2.0.5"
+VERSION = "2.0.6"
 
 import os
 import sys
@@ -1744,7 +1744,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     if err:
         return err
 
-    proj, _, _ = _check()
+    _, proj, _ = _check()
 
     if action == "set_cdl":
         return {"success": bool(item.SetCDL(p["cdl"]))}
