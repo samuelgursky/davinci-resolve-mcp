@@ -17,6 +17,25 @@ from typing import Dict, List, Any, Optional, Union
 # Configure logging
 logger = logging.getLogger("davinci-resolve-mcp.layout_presets")
 
+
+def _validate_path_within_directory(path: str, allowed_dir: str) -> bool:
+    """Validate that a resolved path is within the allowed directory.
+
+    Prevents path traversal attacks (e.g. preset_name='../../etc/passwd').
+
+    Args:
+        path: The path to validate (will be resolved to absolute).
+        allowed_dir: The directory the path must reside within.
+
+    Returns:
+        True if the path is safely within allowed_dir.
+    """
+    resolved = os.path.realpath(path)
+    allowed = os.path.realpath(allowed_dir)
+    # Ensure the resolved path starts with the allowed directory
+    # (trailing sep prevents '/presets2' matching '/presets')
+    return resolved.startswith(allowed + os.sep) or resolved == allowed
+
 # Default preset locations by platform
 DEFAULT_PRESET_PATHS = {
     "darwin": "~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Presets/",
@@ -203,19 +222,22 @@ def export_layout_preset(preset_name: str, export_path: str, layout_type: str = 
             # Other layout types would be handled here
             preset_dir = get_ui_layout_path()
         
-        # Construct source and destination paths
+        # Construct source path and validate it stays within preset_dir
         source_path = os.path.join(preset_dir, f"{preset_name}.layout")
-        
+        if not _validate_path_within_directory(source_path, preset_dir):
+            logger.error(f"Path traversal blocked in preset name: {preset_name}")
+            return False
+
         # Ensure source file exists
         if not os.path.exists(source_path):
             logger.error(f"Preset file not found: {source_path}")
             return False
-        
+
         # Ensure destination directory exists
         export_dir = os.path.dirname(export_path)
         if export_dir and not os.path.exists(export_dir):
             os.makedirs(export_dir, exist_ok=True)
-        
+
         # Copy the preset file
         import shutil
         shutil.copy2(source_path, export_path)
@@ -257,9 +279,12 @@ def import_layout_preset(import_path: str, preset_name: str = None, layout_type:
         # Ensure preset name has no spaces or special characters
         safe_name = preset_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
         
-        # Construct destination path
+        # Construct destination path and validate it stays within preset_dir
         dest_path = os.path.join(preset_dir, f"{safe_name}.layout")
-        
+        if not _validate_path_within_directory(dest_path, preset_dir):
+            logger.error(f"Path traversal blocked in preset name: {preset_name}")
+            return False
+
         # Copy the preset file
         import shutil
         shutil.copy2(import_path, dest_path)
@@ -288,14 +313,17 @@ def delete_layout_preset(preset_name: str, layout_type: str = "ui") -> bool:
             # Other layout types would be handled here
             preset_dir = get_ui_layout_path()
         
-        # Construct the preset file path
+        # Construct the preset file path and validate it stays within preset_dir
         preset_path = os.path.join(preset_dir, f"{preset_name}.layout")
-        
+        if not _validate_path_within_directory(preset_path, preset_dir):
+            logger.error(f"Path traversal blocked in preset name: {preset_name}")
+            return False
+
         # Ensure file exists
         if not os.path.exists(preset_path):
             logger.error(f"Preset file not found: {preset_path}")
             return False
-        
+
         # Delete the file
         os.remove(preset_path)
         
