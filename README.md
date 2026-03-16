@@ -10,7 +10,14 @@
 
 A Model Context Protocol (MCP) server providing **complete coverage** of the DaVinci Resolve Scripting API. Connect AI assistants (Claude, Cursor, Windsurf) to DaVinci Resolve and control every aspect of your post-production workflow through natural language.
 
-### What's New in v2.0.7
+### What's New in v2.0.8
+
+- **New `grab_and_export` action on `gallery_stills`** — combines `GrabStill()` + `ExportStills()` in a single atomic call, keeping the live GalleryStill reference for reliable export. Returns a file manifest with exported image + companion `.drx` grade file
+- **Format fallback chain** — if the requested format fails, automatically retries with tif then dpx
+- **macOS sandbox path redirect** — `/var/folders` and `/private/var` paths are redirected to `~/Desktop/resolve-stills` since Resolve's process can't write to sandboxed temp directories
+- **Key finding documented** — `ExportStills` requires the Gallery panel to be visible on the Color page. All 9 supported formats (dpx, cin, tif, jpg, png, ppm, bmp, xpm, drx) produce a companion `.drx` grade file alongside the image
+
+### v2.0.7
 
 - **Security: path traversal protection for layout preset tools** — `export_layout_preset`, `import_layout_preset`, and `delete_layout_preset` now validate that resolved file paths stay within the expected Resolve presets directory, preventing path traversal via crafted preset names
 - **Security: document destructive tool risk** — added Security Considerations section noting that `quit_app`/`restart_app` tools can terminate Resolve; MCP clients should require user confirmation before invoking
@@ -587,8 +594,10 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 2 | `GetLabel(galleryStill)` | ✅ | Returns label string |
 | 3 | `SetLabel(galleryStill, label)` | ⚠️ | API accepts; may not persist in all versions |
 | 4 | `ImportStills([filePaths])` | ✅ | Imports DRX still files (requires Color page) |
-| 5 | `ExportStills([stills], folderPath, prefix, format)` | ✅ | Exports stills as DRX+DPX (requires Color page) |
+| 5 | `ExportStills([stills], folderPath, prefix, format)` | ✅ | Exports stills as image + companion .drx grade file. Requires Color page with Gallery panel visible. Supported formats: dpx, cin, tif, jpg, png, ppm, bmp, xpm, drx. |
 | 6 | `DeleteStills([galleryStill])` | ✅ | Deletes stills from album |
+
+> **Note (v2.0.8+):** The compound server's `gallery_stills` tool includes a `grab_and_export` action that combines `GrabStill()` + `ExportStills()` in a single call — more reliable than calling them separately since it keeps the live GalleryStill reference. Returns the list of exported files (image + .drx grade data). Requires the Color page with the Gallery panel open.
 
 ### Graph
 

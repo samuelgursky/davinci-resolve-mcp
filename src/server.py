@@ -10,7 +10,7 @@ Usage:
     python src/server.py --full       # Start the 342-tool granular server instead
 """
 
-VERSION = "2.0.7"
+VERSION = "2.0.8"
 
 import os
 import sys
@@ -1933,9 +1933,14 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
       set_label(still_index, label, album_index?) -> {success}
       import_stills(paths, album_index?) -> {success}
       export_stills(folder_path, prefix?, format?, album_index?) -> {success}
+      grab_and_export(folder_path, prefix?, format?, album_index?, delete_after?) -> {files}
       delete_stills(still_indices, album_index?) -> {success}
 
     album_index defaults to current album. still_index is 0-based.
+    format for export: dpx, cin, tif, jpg, png, ppm, bmp, xpm, drx (default: dpx).
+    grab_and_export grabs a still from the current frame and exports it immediately,
+    keeping the live GalleryStill reference (more reliable than separate grab + export).
+    Requires Color page. Automatically produces a companion .drx grade file.
     """
     p = params or {}
     _, proj, err = _check()
@@ -1983,11 +1988,58 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
         if not stills:
             return _err("No stills to export")
         return {"success": bool(album.ExportStills(stills, p["folder_path"], p.get("prefix", "still"), p.get("format", "dpx")))}
+    elif action == "grab_and_export":
+        import time, os
+        folder_path = p.get("folder_path")
+        if not folder_path:
+            return _err("folder_path is required")
+        prefix = p.get("prefix", "still")
+        fmt = p.get("format", "dpx")
+        delete_after = p.get("delete_after", True)
+        # Redirect sandbox paths — Resolve can't write to /var/folders or /private/var
+        if folder_path.startswith("/var/") or folder_path.startswith("/private/var/"):
+            folder_path = os.path.join(os.path.expanduser("~"), "Desktop", "resolve-stills")
+        os.makedirs(folder_path, exist_ok=True)
+        # Snapshot directory before export
+        before = set(os.listdir(folder_path))
+        # Grab still — requires Color page with a clip under the playhead
+        _, tl, err2 = _get_tl()
+        if err2:
+            return err2
+        still = tl.GrabStill()
+        if not still:
+            return _err("GrabStill failed — ensure Color page is active with a clip under the playhead")
+        time.sleep(0.5)
+        # Export using the live still reference with format fallback chain
+        export_ok = False
+        used_format = fmt
+        for try_fmt in [fmt, "tif", "dpx"]:
+            result = album.ExportStills([still], folder_path, prefix, try_fmt)
+            if result:
+                export_ok = True
+                used_format = try_fmt
+                break
+            time.sleep(0.3)
+        # Clean up still from gallery
+        if delete_after:
+            album.DeleteStills([still])
+        if not export_ok:
+            return _err("ExportStills failed — ensure the Gallery panel is open on the Color page (Workspace > Gallery)")
+        # Wait for filesystem
+        time.sleep(0.3)
+        # Find new files
+        after = set(os.listdir(folder_path))
+        new_files = sorted(after - before)
+        file_details = []
+        for f in new_files:
+            fpath = os.path.join(folder_path, f)
+            file_details.append({"name": f, "path": fpath, "size": os.path.getsize(fpath)})
+        return {"files": file_details, "format": used_format, "folder": folder_path}
     elif action == "delete_stills":
         stills = album.GetStills() or []
         to_delete = [stills[i] for i in p["still_indices"] if i < len(stills)]
         return {"success": bool(album.DeleteStills(to_delete))} if to_delete else _err("No valid still indices")
-    return _unknown(action, ["get_stills","get_label","set_label","import_stills","export_stills","delete_stills"])
+    return _unknown(action, ["get_stills","get_label","set_label","import_stills","export_stills","grab_and_export","delete_stills"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
