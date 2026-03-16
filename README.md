@@ -1,8 +1,8 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.0.9-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
-[![Tools](https://img.shields.io/badge/MCP%20Tools-26%20(342%20full)-blue.svg)](#server-modes)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-27%20(342%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.10--3.12-green.svg)](https://www.python.org/downloads/)
@@ -10,7 +10,13 @@
 
 A Model Context Protocol (MCP) server providing **complete coverage** of the DaVinci Resolve Scripting API. Connect AI assistants (Claude, Cursor, Windsurf) to DaVinci Resolve and control every aspect of your post-production workflow through natural language.
 
-### What's New in v2.0.9
+### What's New in v2.1.0
+
+- **New `fusion_comp` tool** — 20-action tool exposing the full Fusion composition node graph API. Add/delete/find nodes, wire connections, set/get parameters, manage keyframes, control undo grouping, set render ranges, and trigger renders — all on the currently active Fusion page composition
+- **`timeline_item_fusion` cache actions** — added `get_cache_enabled` and `set_cache` actions for Fusion output cache control directly on timeline items
+- **Fusion node graph reference** — docstring includes common tool IDs (Merge, TextPlus, Background, Transform, ColorCorrector, DeltaKeyer, etc.) for discoverability
+
+### v2.0.9
 
 - **Cross-platform sandbox path redirect** — `_resolve_safe_dir()` now handles macOS (`/var/folders`, `/private/var`), Linux (`/tmp`, `/var/tmp`), and Windows (`AppData\Local\Temp`) sandbox paths that Resolve can't write to. Redirects to `~/Documents/resolve-stills` instead of Desktop
 - **Auto-cleanup for `grab_and_export`** — exported files are read into the response (DRX as inline text, images as base64) then deleted from disk automatically. Zero file accumulation. Pass `cleanup: false` to keep files on disk
@@ -74,7 +80,7 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 
 ## API Coverage
 
-Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **26 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **342 individual tools** for power users. Both modes cover all 13 API object classes:
+Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **27 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **342 individual tools** for power users. Both modes cover all 13 API object classes:
 
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|
@@ -694,7 +700,7 @@ This MCP server controls DaVinci Resolve via its Scripting API. Some tools perfo
 davinci-resolve-mcp/
 ├── install.py                    # Universal installer (macOS/Windows/Linux)
 ├── src/
-│   ├── server.py                # Compound MCP server — 26 tools (default)
+│   ├── server.py                # Compound MCP server — 27 tools (default)
 │   ├── resolve_mcp_server.py    # Full MCP server — 342 tools (power users)
 │   └── utils/                   # Platform detection, Resolve connection helpers
 ├── tests/                       # 5-phase live API test suite (319/319 pass)

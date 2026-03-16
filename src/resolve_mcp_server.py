@@ -97,7 +97,7 @@ logging.basicConfig(
 logger = logging.getLogger("davinci-resolve-mcp")
 
 # Log server version and platform
-VERSION = "2.0.9"
+VERSION = "2.1.0"
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
 logger.info(f"Using Resolve API path: {RESOLVE_API_PATH}")

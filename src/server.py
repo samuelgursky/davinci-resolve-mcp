@@ -2,7 +2,7 @@
 """
 DaVinci Resolve MCP Server (Compound Tools)
 
-26 compound tools covering 100% of the DaVinci Resolve Scripting API (324 methods).
+27 compound tools covering 100% of the DaVinci Resolve Scripting API (324 methods).
 Each tool groups related operations via an 'action' parameter.
 
 Usage:
@@ -10,7 +10,7 @@ Usage:
     python src/server.py --full       # Start the 342-tool granular server instead
 """
 
-VERSION = "2.0.9"
+VERSION = "2.1.0"
 
 import base64
 import os
@@ -1694,6 +1694,8 @@ def timeline_item_fusion(action: str, params: Optional[Dict[str, Any]] = None) -
       delete_comp(name, ...) -> {success}
       load_comp(name, ...) -> {success}
       rename_comp(old_name, new_name, ...) -> {success}
+      get_cache_enabled(...) -> {enabled}  — Fusion output cache status
+      set_cache(value, ...) -> {success}  — value: "Auto", "On", or "Off"
 
     Default: track_type="video", track_index=1, item_index=0
     """
@@ -1727,7 +1729,11 @@ def timeline_item_fusion(action: str, params: Optional[Dict[str, Any]] = None) -
         return _ok() if comp else _err("Failed to load comp")
     elif action == "rename_comp":
         return {"success": bool(item.RenameFusionCompByName(p["old_name"], p["new_name"]))}
-    return _unknown(action, ["add_comp","get_comp_count","get_comp_names","get_comp_by_name","get_comp_by_index","export_comp","import_comp","delete_comp","load_comp","rename_comp"])
+    elif action == "get_cache_enabled":
+        return {"enabled": item.GetIsFusionOutputCacheEnabled()}
+    elif action == "set_cache":
+        return {"success": bool(item.SetFusionOutputCache(p["value"]))}
+    return _unknown(action, ["add_comp","get_comp_count","get_comp_names","get_comp_by_name","get_comp_by_index","export_comp","import_comp","delete_comp","load_comp","rename_comp","get_cache_enabled","set_cache"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2230,6 +2236,297 @@ def color_group(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TOOL 27: fusion_comp
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Fusion composition node graph operations on the currently active comp.
+
+    Operates on the comp open in the Fusion page. Use timeline_item_fusion to
+    manage comp lifecycle (add/delete/import/export). Use this tool to manipulate
+    the node graph inside a composition.
+
+    Actions:
+      add_tool(tool_type, x?, y?, name?) -> {tool_name, tool_type}
+      delete_tool(tool_name) -> {success}
+      get_tool_list(type?) -> {tools, count}
+      find_tool(name) -> {found, name, type, attrs}
+      connect(target_tool, input_name, source_tool, output_name?) -> {success}
+      disconnect(tool_name, input_name) -> {success}
+      get_inputs(tool_name) -> {inputs}
+      get_outputs(tool_name) -> {outputs}
+      set_input(tool_name, input_name, value, time?) -> {success}
+      get_input(tool_name, input_name, time?) -> {value}
+      set_attrs(tool_name, attrs) -> {success}
+      get_attrs(tool_name) -> {attrs}
+      add_keyframe(tool_name, input_name, time, value) -> {success}
+      get_keyframes(tool_name, input_name) -> {keyframes}
+      delete_keyframe(tool_name, input_name, time) -> {success}
+      get_comp_info() -> {name, tool_count, attrs}
+      set_frame_range(start, end) -> {success}
+      render() -> {success}
+      start_undo(name?) -> {success}
+      end_undo(keep?) -> {success}
+
+    Common tool_type values: Merge, Background, TextPlus, Transform, Blur,
+      ColorCorrector, RectangleMask, EllipseMask, Tracker, MediaIn, MediaOut,
+      Loader, Saver, Glow, FilmGrain, CornerPositioner, DeltaKeyer, UltraKeyer
+    """
+    p = params or {}
+
+    # Get current Fusion composition
+    r = get_resolve()
+    if not r:
+        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+
+    fusion = r.Fusion()
+    if not fusion:
+        return _err("Fusion not available — switch to the Fusion page first")
+
+    comp = fusion.GetCurrentComp()
+    if not comp:
+        return _err("No active Fusion composition. Open a clip in the Fusion page first, or use timeline_item_fusion to add a comp.")
+
+    # --- Node Management ---
+    if action == "add_tool":
+        tool_type = p.get("tool_type")
+        if not tool_type:
+            return _err("tool_type is required (e.g. 'Merge', 'Transform', 'TextPlus', 'Background')")
+        x = p.get("x", -1)
+        y = p.get("y", -1)
+        comp.Lock()
+        try:
+            tool = comp.AddTool(tool_type, x, y)
+            if not tool:
+                return _err(f"Failed to add tool '{tool_type}'. Check the tool ID is valid.")
+            name = p.get("name")
+            if name:
+                tool.SetAttrs({"TOOLS_Name": name})
+            attrs = tool.GetAttrs()
+            return {"tool_name": attrs.get("TOOLS_Name", ""), "tool_type": attrs.get("TOOLS_RegID", tool_type)}
+        finally:
+            comp.Unlock()
+
+    elif action == "delete_tool":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        comp.Lock()
+        try:
+            tool.Delete()
+            return _ok()
+        finally:
+            comp.Unlock()
+
+    elif action == "get_tool_list":
+        filter_type = p.get("type")
+        if filter_type:
+            tools = comp.GetToolList(False, filter_type)
+        else:
+            tools = comp.GetToolList()
+        result = []
+        if tools:
+            for idx in tools:
+                t = tools[idx]
+                attrs = t.GetAttrs()
+                result.append({
+                    "name": attrs.get("TOOLS_Name", ""),
+                    "type": attrs.get("TOOLS_RegID", ""),
+                })
+        return {"tools": result, "count": len(result)}
+
+    elif action == "find_tool":
+        tool = comp.FindTool(p["name"])
+        if not tool:
+            return {"found": False}
+        attrs = tool.GetAttrs()
+        return {"found": True, "name": attrs.get("TOOLS_Name", ""), "type": attrs.get("TOOLS_RegID", ""), "attrs": _ser(attrs)}
+
+    # --- Wiring ---
+    elif action == "connect":
+        target = comp.FindTool(p["target_tool"])
+        if not target:
+            return _err(f"Target tool '{p['target_tool']}' not found")
+        source = comp.FindTool(p["source_tool"])
+        if not source:
+            return _err(f"Source tool '{p['source_tool']}' not found")
+        comp.Lock()
+        try:
+            result = target.ConnectInput(p["input_name"], source)
+            return {"success": bool(result)}
+        finally:
+            comp.Unlock()
+
+    elif action == "disconnect":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        comp.Lock()
+        try:
+            result = tool.ConnectInput(p["input_name"], None)
+            return {"success": bool(result)}
+        finally:
+            comp.Unlock()
+
+    elif action == "get_inputs":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        input_list = tool.GetInputList()
+        inputs = []
+        if input_list:
+            for idx in input_list:
+                inp = input_list[idx]
+                attrs = inp.GetAttrs()
+                connected = inp.GetConnectedOutput()
+                conn_info = None
+                if connected:
+                    conn_tool = connected.GetTool()
+                    if conn_tool:
+                        conn_info = conn_tool.GetAttrs().get("TOOLS_Name", "")
+                inputs.append({
+                    "name": attrs.get("INPS_Name", ""),
+                    "id": attrs.get("INPS_ID", ""),
+                    "type": attrs.get("INPS_DataType", ""),
+                    "connected_to": conn_info,
+                })
+        return {"inputs": inputs}
+
+    elif action == "get_outputs":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        output_list = tool.GetOutputList()
+        outputs = []
+        if output_list:
+            for idx in output_list:
+                out = output_list[idx]
+                attrs = out.GetAttrs()
+                outputs.append({
+                    "name": attrs.get("OUTS_Name", ""),
+                    "id": attrs.get("OUTS_ID", ""),
+                    "type": attrs.get("OUTS_DataType", ""),
+                })
+        return {"outputs": outputs}
+
+    # --- Parameters ---
+    elif action == "set_input":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        comp.Lock()
+        try:
+            if "time" in p:
+                tool.SetInput(p["input_name"], p["value"], p["time"])
+            else:
+                tool.SetInput(p["input_name"], p["value"])
+            return _ok()
+        finally:
+            comp.Unlock()
+
+    elif action == "get_input":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        if "time" in p:
+            val = tool.GetInput(p["input_name"], p["time"])
+        else:
+            val = tool.GetInput(p["input_name"])
+        return {"value": _ser(val)}
+
+    elif action == "set_attrs":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        tool.SetAttrs(p["attrs"])
+        return _ok()
+
+    elif action == "get_attrs":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        return {"attrs": _ser(tool.GetAttrs())}
+
+    # --- Keyframes ---
+    elif action == "add_keyframe":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        comp.Lock()
+        try:
+            inp = tool[p["input_name"]]
+            if not inp:
+                return _err(f"Input '{p['input_name']}' not found on tool '{p['tool_name']}'")
+            inp[p["time"]] = p["value"]
+            return _ok()
+        finally:
+            comp.Unlock()
+
+    elif action == "get_keyframes":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        inp = tool[p["input_name"]]
+        if not inp:
+            return _err(f"Input '{p['input_name']}' not found on tool '{p['tool_name']}'")
+        keyframes = []
+        kfs = inp.GetKeyFrames()
+        if kfs:
+            for t in kfs:
+                keyframes.append({"time": t, "value": _ser(kfs[t])})
+        return {"keyframes": keyframes}
+
+    elif action == "delete_keyframe":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        comp.Lock()
+        try:
+            inp = tool[p["input_name"]]
+            if not inp:
+                return _err(f"Input '{p['input_name']}' not found on tool '{p['tool_name']}'")
+            inp.RemoveKeyFrame(p["time"])
+            return _ok()
+        finally:
+            comp.Unlock()
+
+    # --- Composition Control ---
+    elif action == "get_comp_info":
+        attrs = comp.GetAttrs()
+        return {
+            "name": attrs.get("COMPS_Name", ""),
+            "tool_count": len(comp.GetToolList() or {}),
+            "attrs": _ser(attrs),
+        }
+
+    elif action == "set_frame_range":
+        comp.SetAttrs({"COMPN_RenderStartTime": p["start"], "COMPN_RenderEndTime": p["end"]})
+        return _ok()
+
+    elif action == "render":
+        comp.Render()
+        return _ok()
+
+    elif action == "start_undo":
+        comp.StartUndo(p.get("name", "MCP Operation"))
+        return _ok()
+
+    elif action == "end_undo":
+        comp.EndUndo(p.get("keep", True))
+        return _ok()
+
+    return _unknown(action, [
+        "add_tool","delete_tool","get_tool_list","find_tool",
+        "connect","disconnect","get_inputs","get_outputs",
+        "set_input","get_input","set_attrs","get_attrs",
+        "add_keyframe","get_keyframes","delete_keyframe",
+        "get_comp_info","set_frame_range","render",
+        "start_undo","end_undo",
+    ])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Server Startup
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2246,5 +2543,5 @@ if __name__ == "__main__":
         spec.loader.exec_module(mod)
         sys.exit(0)
 
-    logger.info(f"Starting DaVinci Resolve MCP Server (26 compound tools)")
+    logger.info(f"Starting DaVinci Resolve MCP Server (27 compound tools)")
     mcp.run()
