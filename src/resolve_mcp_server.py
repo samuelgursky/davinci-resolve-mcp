@@ -3,7 +3,7 @@
 DaVinci Resolve MCP Server
 A server that connects to DaVinci Resolve via the Model Context Protocol (MCP)
 
-Version: 2.0.7 - Security: path traversal protection for layout preset tools
+Version: 2.0.9 - Cross-platform sandbox path redirect, auto-cleanup for grab_and_export
 """
 
 import os
@@ -11,6 +11,7 @@ import sys
 import logging
 import platform
 import subprocess
+import tempfile
 import time
 from typing import List, Dict, Any, Optional, Union
 
@@ -96,7 +97,7 @@ logging.basicConfig(
 logger = logging.getLogger("davinci-resolve-mcp")
 
 # Log server version and platform
-VERSION = "2.0.7"
+VERSION = "2.0.9"
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
 logger.info(f"Using Resolve API path: {RESOLVE_API_PATH}")
@@ -126,6 +127,27 @@ except ImportError as e:
 except Exception as e:
     logger.error(f"Unexpected error initializing Resolve: {str(e)}")
     resolve = None
+
+def _resolve_safe_dir(path):
+    """Redirect sandbox/temp paths that Resolve can't access to ~/Desktop/resolve-stills.
+
+    Covers macOS (/var/folders, /private/var), Linux (/tmp, /var/tmp),
+    and Windows (AppData\\Local\\Temp) sandbox temp directories.
+    """
+    system_temp = tempfile.gettempdir()
+    _is_sandbox = False
+    if platform.system() == "Darwin":
+        _is_sandbox = path.startswith("/var/") or path.startswith("/private/var/")
+    elif platform.system() == "Linux":
+        _is_sandbox = path.startswith("/tmp") or path.startswith("/var/tmp")
+    elif platform.system() == "Windows":
+        try:
+            _is_sandbox = os.path.commonpath([os.path.abspath(path), os.path.abspath(system_temp)]) == os.path.abspath(system_temp)
+        except ValueError:
+            _is_sandbox = False
+    if _is_sandbox:
+        return os.path.join(os.path.expanduser("~"), "Documents", "resolve-stills")
+    return path
 
 # ─── Connection Helpers ──────────────────────────────────────────────────────
 
@@ -444,10 +466,9 @@ def save_project() -> str:
         # Method 3: Try the export method as a backup approach
         if not success:
             try:
-                # Get a temporary file path in the same location as other project files
-                import tempfile
-                import os
-                temp_dir = tempfile.gettempdir()
+                # Get a temporary file path that Resolve can access
+                temp_dir = _resolve_safe_dir(tempfile.gettempdir())
+                os.makedirs(temp_dir, exist_ok=True)
                 temp_file = os.path.join(temp_dir, f"{project_name}_temp.drp")
                 
                 # Try to export the project, which should trigger a save
@@ -3478,10 +3499,9 @@ def export_lut(clip_name: str = None,
         
         # Generate export path if not provided
         if not export_path:
-            import tempfile
             clip_name_safe = clip_name if clip_name else "current_clip"
             clip_name_safe = clip_name_safe.replace(' ', '_').replace(':', '-')
-            
+
             extension = ".cube"
             if lut_format.lower() == "davinci":
                 extension = ".ilut"
@@ -3489,8 +3509,10 @@ def export_lut(clip_name: str = None,
                 extension = ".3dl"
             elif lut_format.lower() == "panasonic":
                 extension = ".vlut"
-                
-            export_path = os.path.join(tempfile.gettempdir(), f"{clip_name_safe}_lut{extension}")
+
+            safe_dir = _resolve_safe_dir(tempfile.gettempdir())
+            os.makedirs(safe_dir, exist_ok=True)
+            export_path = os.path.join(safe_dir, f"{clip_name_safe}_lut{extension}")
         
         # Validate LUT format
         valid_formats = ['Cube', 'Davinci', '3dl', 'Panasonic']

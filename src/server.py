@@ -10,8 +10,9 @@ Usage:
     python src/server.py --full       # Start the 342-tool granular server instead
 """
 
-VERSION = "2.0.8"
+VERSION = "2.0.9"
 
+import base64
 import os
 import sys
 import json
@@ -152,6 +153,29 @@ def get_resolve():
     return resolve
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _resolve_safe_dir(path):
+    """Redirect sandbox/temp paths that Resolve can't access to ~/Desktop/resolve-stills.
+
+    Covers macOS (/var/folders, /private/var), Linux (/tmp, /var/tmp),
+    and Windows (AppData\\Local\\Temp) sandbox temp directories.
+    """
+    system_temp = tempfile.gettempdir()
+    _is_sandbox = False
+    if platform.system() == "Darwin":
+        _is_sandbox = path.startswith("/var/") or path.startswith("/private/var/")
+    elif platform.system() == "Linux":
+        _is_sandbox = path.startswith("/tmp") or path.startswith("/var/tmp")
+    elif platform.system() == "Windows":
+        # Check if path is under the system temp directory (e.g. AppData\Local\Temp)
+        try:
+            _is_sandbox = os.path.commonpath([os.path.abspath(path), os.path.abspath(system_temp)]) == os.path.abspath(system_temp)
+        except ValueError:
+            # Different drives on Windows
+            _is_sandbox = False
+    if _is_sandbox:
+        return os.path.join(os.path.expanduser("~"), "Documents", "resolve-stills")
+    return path
 
 def _err(msg):
     return {"error": msg}
@@ -1933,7 +1957,7 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
       set_label(still_index, label, album_index?) -> {success}
       import_stills(paths, album_index?) -> {success}
       export_stills(folder_path, prefix?, format?, album_index?) -> {success}
-      grab_and_export(folder_path, prefix?, format?, album_index?, delete_after?) -> {files}
+      grab_and_export(folder_path, prefix?, format?, album_index?, delete_after?, cleanup?) -> {files}
       delete_stills(still_indices, album_index?) -> {success}
 
     album_index defaults to current album. still_index is 0-based.
@@ -1941,6 +1965,8 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     grab_and_export grabs a still from the current frame and exports it immediately,
     keeping the live GalleryStill reference (more reliable than separate grab + export).
     Requires Color page. Automatically produces a companion .drx grade file.
+    File data is inlined in the response (DRX as text, images as base64).
+    cleanup (default true) deletes exported files from disk after inlining.
     """
     p = params or {}
     _, proj, err = _check()
@@ -1996,9 +2022,8 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
         prefix = p.get("prefix", "still")
         fmt = p.get("format", "dpx")
         delete_after = p.get("delete_after", True)
-        # Redirect sandbox paths — Resolve can't write to /var/folders or /private/var
-        if folder_path.startswith("/var/") or folder_path.startswith("/private/var/"):
-            folder_path = os.path.join(os.path.expanduser("~"), "Desktop", "resolve-stills")
+        # Redirect sandbox/temp paths that Resolve can't access
+        folder_path = _resolve_safe_dir(folder_path)
         os.makedirs(folder_path, exist_ok=True)
         # Snapshot directory before export
         before = set(os.listdir(folder_path))
@@ -2033,8 +2058,37 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
         file_details = []
         for f in new_files:
             fpath = os.path.join(folder_path, f)
-            file_details.append({"name": f, "path": fpath, "size": os.path.getsize(fpath)})
-        return {"files": file_details, "format": used_format, "folder": folder_path}
+            entry = {"name": f, "path": fpath, "size": os.path.getsize(fpath)}
+            # Inline file data so cleanup can safely remove files
+            try:
+                with open(fpath, "rb") as fh:
+                    raw = fh.read()
+                if f.endswith(".drx"):
+                    # DRX files are small XML — inline as text
+                    try:
+                        entry["data"] = raw.decode("utf-8")
+                    except UnicodeDecodeError:
+                        entry["data_base64"] = base64.b64encode(raw).decode("ascii")
+                else:
+                    entry["data_base64"] = base64.b64encode(raw).decode("ascii")
+            except OSError:
+                pass
+            file_details.append(entry)
+        # Cleanup: remove exported files now that data is inlined (default: True)
+        cleanup = p.get("cleanup", True)
+        if cleanup:
+            for f in file_details:
+                try:
+                    os.remove(f["path"])
+                except OSError:
+                    pass
+            # Remove the directory if empty
+            try:
+                if os.path.isdir(folder_path) and not os.listdir(folder_path):
+                    os.rmdir(folder_path)
+            except OSError:
+                pass
+        return {"files": file_details, "format": used_format, "folder": folder_path, "cleaned_up": cleanup}
     elif action == "delete_stills":
         stills = album.GetStills() or []
         to_delete = [stills[i] for i in p["still_indices"] if i < len(stills)]
