@@ -104,6 +104,10 @@ Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The
 - **Python 3.10–3.12** recommended (3.13+ may have ABI incompatibilities with Resolve's scripting library)
 - DaVinci Resolve running with **Preferences > General > "External scripting using"** set to **Local**
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/samuelgursky-davinci-resolve-mcp).
+
 ## Quick Start
 
 ```bash
