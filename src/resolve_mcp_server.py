@@ -5349,6 +5349,24 @@ def _get_timeline_item(track_type="video", track_index=1, item_index=0):
     return items[item_index], None
 
 
+def _normalize_cdl(cdl):
+    """Resolve's SetCDL expects string values ("1.0 1.0 1.0"), not arrays.
+    Accepts either and converts to the string form the API requires."""
+    if not isinstance(cdl, dict):
+        return cdl
+    out = {}
+    for k, v in cdl.items():
+        if isinstance(v, (list, tuple)):
+            out[k] = " ".join(str(x) for x in v)
+        elif isinstance(v, bool):
+            out[k] = str(v)
+        elif isinstance(v, (int, float)):
+            out[k] = str(v)
+        else:
+            out[k] = v
+    return out
+
+
 # ------------------
 # MediaPool Tools (remaining)
 # ------------------
@@ -8041,7 +8059,7 @@ def ti_set_cdl(cdl: Dict[str, Any], item_index: int = 0, track_type: str = "vide
     item, err = _get_timeline_item(track_type, track_index, item_index)
     if err:
         return err
-    return {"success": bool(item.SetCDL(cdl))}
+    return {"success": bool(item.SetCDL(_normalize_cdl(cdl)))}
 
 @mcp.tool()
 def ti_add_take(media_pool_item_id: str, start_frame: int = 0, end_frame: int = 0, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:

@@ -268,6 +268,23 @@ def _ser(obj):
 def _unknown(action, valid):
     return _err(f"Unknown action '{action}'. Valid actions: {', '.join(valid)}")
 
+def _normalize_cdl(cdl):
+    """Resolve's SetCDL expects string values ("1.0 1.0 1.0"), not arrays.
+    Accepts either and converts to the string form the API requires."""
+    if not isinstance(cdl, dict):
+        return cdl
+    out = {}
+    for k, v in cdl.items():
+        if isinstance(v, (list, tuple)):
+            out[k] = " ".join(str(x) for x in v)
+        elif isinstance(v, bool):
+            out[k] = str(v)
+        elif isinstance(v, (int, float)):
+            out[k] = str(v)
+        else:
+            out[k] = v
+    return out
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOOL 1: resolve
@@ -1777,7 +1794,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     _, proj, _ = _check()
 
     if action == "set_cdl":
-        return {"success": bool(item.SetCDL(p["cdl"]))}
+        return {"success": bool(item.SetCDL(_normalize_cdl(p["cdl"])))}
     elif action == "copy_grades":
         # Find target items by IDs
         _, tl, _ = _get_tl()
