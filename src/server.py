@@ -223,6 +223,112 @@ def _get_item(p):
         return tl, None, _err(f"No item at index {item_index} on {track_type} track {track_index}")
     return tl, items[item_index], None
 
+
+def _find_timeline_item_by_clip_id(tl, clip_id) -> Optional[Any]:
+    """Find a video or subtitle timeline item by GetUniqueId()."""
+    if not clip_id:
+        return None
+    want = str(clip_id)
+    for tt in ("video", "subtitle"):
+        try:
+            n = tl.GetTrackCount(tt)
+        except Exception:
+            continue
+        if not n:
+            continue
+        for ti in range(1, int(n) + 1):
+            for it in (tl.GetItemListInTrack(tt, ti) or []):
+                try:
+                    if str(it.GetUniqueId()) == want:
+                        return it
+                except Exception:
+                    continue
+    return None
+
+
+def _get_timeline_item_for_fusion(p: Dict[str, Any]):
+    """
+    Resolve optional timeline scope for fusion_comp.
+
+    Returns (item, err):
+      - (item, None) when clip_id / timeline_item dict identifies a clip
+      - (None, None) when no timeline scope — use Fusion().GetCurrentComp()
+      - (None, err) on failure
+    """
+    cid = p.get("clip_id") or p.get("timeline_item_id")
+    proj, tl, err = _get_tl()
+    if err:
+        return None, err
+    if cid:
+        it = _find_timeline_item_by_clip_id(tl, cid)
+        if not it:
+            return None, _err(f"No timeline item with clip_id/timeline_item_id={cid!r}")
+        return it, None
+    tin = p.get("timeline_item")
+    if isinstance(tin, dict):
+        q = dict(tin)
+        q.setdefault("track_type", "video")
+        _, item, ierr = _get_item(q)
+        if ierr:
+            return None, ierr
+        return item, None
+    return None, None
+
+
+def _get_fusion_comp_on_timeline_item(item, p: Dict[str, Any]):
+    """
+    Get Fusion composition on a TimelineItem (1-based comp_index per Resolve API).
+    Use comp_name, or comp_index, or default first composition.
+    """
+    try:
+        count = item.GetFusionCompCount()
+    except Exception as e:
+        return None, _err(f"GetFusionCompCount failed: {e}")
+    if not count:
+        return None, _err("Timeline item has no Fusion compositions")
+    name = p.get("comp_name")
+    if name:
+        comp = item.GetFusionCompByName(str(name))
+        if not comp:
+            return None, _err(f"No Fusion comp named {name!r} on this timeline item")
+        return comp, None
+    if p.get("comp_index") is not None:
+        comp = item.GetFusionCompByIndex(int(p["comp_index"]))
+        if not comp:
+            return None, _err(f"No Fusion comp at comp_index={p['comp_index']!r}")
+        return comp, None
+    comp = item.GetFusionCompByIndex(1)
+    if not comp:
+        return None, _err("GetFusionCompByIndex(1) returned no composition")
+    return comp, None
+
+
+def _resolve_fusion_comp(p: Dict[str, Any]):
+    """
+    Active Fusion comp: either from a timeline item (clip_id / timeline_item + comp_*)
+    or from Fusion().GetCurrentComp() when working on the Fusion page.
+    Returns (comp, err_dict_or_none).
+    """
+    r = get_resolve()
+    if not r:
+        return None, _err("Not connected to DaVinci Resolve. Is Resolve running?")
+    item, ierr = _get_timeline_item_for_fusion(p)
+    if ierr:
+        return None, ierr
+    if item is not None:
+        return _get_fusion_comp_on_timeline_item(item, p)
+    fusion = r.Fusion()
+    if not fusion:
+        return None, _err("Fusion not available — switch to the Fusion page first")
+    comp = fusion.GetCurrentComp()
+    if not comp:
+        return None, _err(
+            "No active Fusion composition. Open a clip in the Fusion page first, "
+            "or pass clip_id / timeline_item_id, or timeline_item={track_type,track_index,item_index} "
+            "(optional comp_name / comp_index) to target a timeline clip's Fusion comp."
+        )
+    return comp, None
+
 def _find_clip(folder, clip_id):
     for clip in (folder.GetClipList() or []):
         if clip.GetUniqueId() == clip_id:
@@ -2239,13 +2345,73 @@ def color_group(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 # TOOL 27: fusion_comp
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _fusion_comp_bulk_set_inputs(p: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply set_input across many timeline-scoped comps (one registered undo per op)."""
+    ops = p.get("ops")
+    if not isinstance(ops, list) or not ops:
+        return _err(
+            "bulk_set_inputs requires params.ops: non-empty list of objects. "
+            "Each must include tool_name, input_name, value, and a timeline scope: "
+            "clip_id (or timeline_item_id), or timeline_item={track_type, track_index, item_index}. "
+            "Optional per-op: comp_name, comp_index, time, undo_name."
+        )
+    results: List[Dict[str, Any]] = []
+    for i, op in enumerate(ops):
+        if not isinstance(op, dict):
+            results.append({"index": i, "error": "op must be an object"})
+            continue
+        merged = dict(op)
+        comp, cerr = _resolve_fusion_comp(merged)
+        if cerr:
+            results.append({"index": i, "error": cerr.get("error", str(cerr))})
+            continue
+        if "tool_name" not in merged or "input_name" not in merged or "value" not in merged:
+            results.append({"index": i, "error": "each op needs tool_name, input_name, value"})
+            continue
+        tool = comp.FindTool(merged["tool_name"])
+        if not tool:
+            results.append({"index": i, "error": f"Tool {merged['tool_name']!r} not found"})
+            continue
+        undo_name = merged.get("undo_name", f"MCP bulk_set_inputs #{i}")
+        try:
+            comp.StartUndo(undo_name)
+        except Exception:
+            pass
+        ok = False
+        try:
+            comp.Lock()
+            try:
+                if "time" in merged:
+                    tool.SetInput(merged["input_name"], merged["value"], merged["time"])
+                else:
+                    tool.SetInput(merged["input_name"], merged["value"])
+                ok = True
+            finally:
+                comp.Unlock()
+        except Exception as e:
+            results.append({"index": i, "error": str(e)})
+        try:
+            comp.EndUndo(bool(ok))
+        except Exception:
+            pass
+        if ok:
+            results.append({"index": i, "success": True})
+    return {"results": results, "op_count": len(ops)}
+
+
 @mcp.tool()
 def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Fusion composition node graph operations on the currently active comp.
+    """Fusion composition node graph operations.
 
-    Operates on the comp open in the Fusion page. Use timeline_item_fusion to
-    manage comp lifecycle (add/delete/import/export). Use this tool to manipulate
-    the node graph inside a composition.
+    **Target comp (choose one):**
+      1) **Timeline item (recommended for bulk / per-clip edits):** pass
+         `clip_id` or `timeline_item_id` (same as timeline GetUniqueId), **or**
+         `timeline_item`: {`track_type`, `track_index`, `item_index`} (same as other tools; 1-based track).
+         Optional: `comp_name` (e.g. \"Composition 1\") or `comp_index` (1-based). If omitted, uses first comp.
+      2) **Fusion page (legacy):** omit the above; be on the Fusion page with a comp open —
+         uses Fusion().GetCurrentComp().
+
+    Use timeline_item_fusion to add/delete/import/export comps on items.
 
     Actions:
       add_tool(tool_type, x?, y?, name?) -> {tool_name, tool_type}
@@ -2268,6 +2434,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       render() -> {success}
       start_undo(name?) -> {success}
       end_undo(keep?) -> {success}
+      bulk_set_inputs(ops, ...) -> {results, op_count}  — each op: timeline scope + tool_name, input_name, value
 
     Common tool_type values: Merge, Background, TextPlus, Transform, Blur,
       ColorCorrector, RectangleMask, EllipseMask, Tracker, MediaIn, MediaOut,
@@ -2275,18 +2442,12 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
     """
     p = params or {}
 
-    # Get current Fusion composition
-    r = get_resolve()
-    if not r:
-        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+    if action == "bulk_set_inputs":
+        return _fusion_comp_bulk_set_inputs(p)
 
-    fusion = r.Fusion()
-    if not fusion:
-        return _err("Fusion not available — switch to the Fusion page first")
-
-    comp = fusion.GetCurrentComp()
-    if not comp:
-        return _err("No active Fusion composition. Open a clip in the Fusion page first, or use timeline_item_fusion to add a comp.")
+    comp, cerr = _resolve_fusion_comp(p)
+    if cerr:
+        return cerr
 
     # --- Node Management ---
     if action == "add_tool":
@@ -2523,6 +2684,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "add_keyframe","get_keyframes","delete_keyframe",
         "get_comp_info","set_frame_range","render",
         "start_undo","end_undo",
+        "bulk_set_inputs",
     ])
 
 
