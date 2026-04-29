@@ -25,7 +25,7 @@ from pathlib import Path
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.0.7"
+VERSION = "2.2.0"
 
 # ─── Colors (disabled on Windows cmd without ANSI support) ────────────────────
 
@@ -277,21 +277,61 @@ CLIENT_IDS = [c["id"] for c in MCP_CLIENTS]
 
 # ─── Server Entry Builder ────────────────────────────────────────────────────
 
-def build_server_entry(python_path, server_path, api_path):
-    """Build the MCP server config entry. Server handles env setup internally."""
+def get_python_base_install(python_path):
+    """Resolve the base Python install used by the selected interpreter."""
+    script = "import sys; print(sys.base_prefix or sys.prefix)"
+    try:
+        result = subprocess.run(
+            [str(python_path), "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        base_prefix = result.stdout.strip()
+        if result.returncode == 0 and base_prefix:
+            return base_prefix
+    except Exception:
+        pass
+
+    resolved = Path(python_path).resolve()
+    if resolved.parent.name.lower() in {"scripts", "bin"}:
+        return str(resolved.parent.parent)
+    return str(resolved.parent)
+
+
+def build_server_env(python_path, api_path, lib_path, system=SYSTEM, python_home=None):
+    """Build the env block used by all generated stdio MCP configs."""
+    api_value = str(api_path or "")
+    lib_value = str(lib_path or "")
+    env = {
+        "RESOLVE_SCRIPT_API": api_value,
+        "RESOLVE_SCRIPT_LIB": lib_value,
+        "PYTHONPATH": str(Path(api_value) / "Modules") if api_value else "",
+    }
+
+    if system == "Windows":
+        env["PYTHONHOME"] = str(python_home or get_python_base_install(python_path))
+
+    return env
+
+
+def build_server_entry(python_path, server_path, api_path, lib_path, system=SYSTEM, python_home=None):
+    """Build the standard MCP server config entry."""
     return {
         "command": str(python_path),
         "args": [str(server_path)],
+        "env": build_server_env(python_path, api_path, lib_path, system=system, python_home=python_home),
     }
 
 
-def build_zed_entry(python_path, server_path, api_path):
+def build_zed_entry(python_path, server_path, api_path, lib_path, system=SYSTEM, python_home=None):
     """Build Zed-specific server entry (different format)."""
     return {
         "command": {
             "path": str(python_path),
             "args": [str(server_path)],
         },
+        "env": build_server_env(python_path, api_path, lib_path, system=system, python_home=python_home),
         "settings": {},
     }
 
@@ -321,7 +361,7 @@ def write_json(path, data):
         f.write("\n")
 
 
-def write_client_config(client, python_path, server_path, api_path, dry_run=False):
+def write_client_config(client, python_path, server_path, api_path, lib_path, dry_run=False):
     """Write or merge MCP config for a specific client. Returns (success, message)."""
     config_path = client["get_path"]()
     if config_path is None:
@@ -332,9 +372,9 @@ def write_client_config(client, python_path, server_path, api_path, dry_run=Fals
 
     # Build the server entry
     if is_zed:
-        server_entry = build_zed_entry(python_path, server_path, api_path)
+        server_entry = build_zed_entry(python_path, server_path, api_path, lib_path)
     else:
-        server_entry = build_server_entry(python_path, server_path, api_path)
+        server_entry = build_server_entry(python_path, server_path, api_path, lib_path)
 
     if dry_run:
         preview = {config_key: {"davinci-resolve": server_entry}}
@@ -352,10 +392,10 @@ def write_client_config(client, python_path, server_path, api_path, dry_run=Fals
     return True, str(config_path)
 
 
-def generate_manual_config(python_path, server_path, api_path):
+def generate_manual_config(python_path, server_path, api_path, lib_path):
     """Generate config snippets for manual setup."""
-    entry = build_server_entry(python_path, server_path, api_path)
-    zed_entry = build_zed_entry(python_path, server_path, api_path)
+    entry = build_server_entry(python_path, server_path, api_path, lib_path)
+    zed_entry = build_zed_entry(python_path, server_path, api_path, lib_path)
 
     standard = json.dumps({"mcpServers": {"davinci-resolve": entry}}, indent=2)
     vscode_fmt = json.dumps({"servers": {"davinci-resolve": entry}}, indent=2)
@@ -425,12 +465,13 @@ def install_dependencies(venv_path, project_dir):
 
 # ─── Connection Verification ─────────────────────────────────────────────────
 
-def verify_resolve_connection(python_path, api_path):
+def verify_resolve_connection(python_path, api_path, lib_path):
     """Try to import DaVinciResolveScript and connect."""
     if not api_path:
         return False, "Resolve API path not found"
 
-    modules_path = os.path.join(api_path, "Modules")
+    env = {**os.environ, **build_server_env(python_path, api_path, lib_path)}
+    modules_path = env["PYTHONPATH"]
     test_script = textwrap.dedent(f"""\
         import sys
         sys.path.insert(0, {modules_path!r})
@@ -452,15 +493,20 @@ def verify_resolve_connection(python_path, api_path):
     try:
         result = subprocess.run(
             [str(python_path), "-c", test_script],
-            capture_output=True, text=True, timeout=10
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
         )
-        output = result.stdout.strip()
+        output = result.stdout.strip() or result.stderr.strip()
         if output.startswith("CONNECTED:"):
             return True, output.replace("CONNECTED: ", "")
         elif output.startswith("IMPORTED_OK:"):
             return True, "API module loaded (Resolve not running)"
         else:
-            return False, output
+            if output:
+                return False, output
+            return False, f"Process exited with code {result.returncode}"
     except subprocess.TimeoutExpired:
         return False, "Connection timed out"
     except Exception as e:
@@ -469,11 +515,13 @@ def verify_resolve_connection(python_path, api_path):
 # ─── Interactive UI ───────────────────────────────────────────────────────────
 
 def print_banner():
+    title = f"DaVinci Resolve MCP Server — Installer v{VERSION}"
+    subtitle = "27 compound · 342 full · 3 platforms"
     print()
     print(bold("  ╔══════════════════════════════════════════════════════╗"))
-    print(bold("  ║     DaVinci Resolve MCP Server — Installer v2.0    ║"))
+    print(bold(f"  ║{title:^54}║"))
     print(bold("  ╠══════════════════════════════════════════════════════╣"))
-    print(bold("  ║  342 tools · 100% API coverage · 3 platforms       ║"))
+    print(bold(f"  ║{subtitle:^54}║"))
     print(bold("  ╚══════════════════════════════════════════════════════╝"))
     print()
 
@@ -702,7 +750,7 @@ def main():
     if args.server:
         server_path = Path(args.server).resolve()
     else:
-        # Try to find the server script (prefer compound 26-tool server)
+        # Try to find the server script (prefer compound 27-tool server)
         candidates = [
             project_dir / "src" / "server.py",
             project_dir / "src" / "resolve_mcp_server.py",
@@ -757,7 +805,7 @@ def main():
             continue
 
         success, message = write_client_config(
-            client, python_path, server_path, api_path, dry_run=args.dry_run
+            client, python_path, server_path, api_path, lib_path, dry_run=args.dry_run
         )
 
         if success:
@@ -776,8 +824,9 @@ def main():
     # Show manual config
     if show_manual:
         standard, vscode_fmt, zed_fmt = generate_manual_config(
-            python_path, server_path, api_path
+            python_path, server_path, api_path, lib_path
         )
+        env_preview = build_server_env(python_path, api_path, lib_path)
         print(f"\n  {bold('Manual Configuration')}")
         print(f"  {'─' * 50}")
         print(f"\n  {cyan('Standard format')} (Claude Desktop, Cursor, Windsurf, Cline, Roo Code, Continue):")
@@ -795,9 +844,8 @@ def main():
         print(f"\n  {cyan('JetBrains IDEs')} (IntelliJ, WebStorm, PyCharm, etc.):")
         print(f"    Settings → Tools → AI Assistant → Model Context Protocol (MCP)")
         print(f"    Add server with command: {python_path} {server_path}")
-        if api_path:
-            print(f"    Set env: RESOLVE_SCRIPT_API={api_path}")
-            print(f"    Set env: PYTHONPATH={os.path.join(api_path, 'Modules')}")
+        for key, value in env_preview.items():
+            print(f"    Set env: {key}={value}")
         print()
 
     if not selected_ids:
@@ -811,7 +859,7 @@ def main():
         print_step(5, total_steps, "Verification")
 
     if api_path:
-        success, message = verify_resolve_connection(python_path, api_path)
+        success, message = verify_resolve_connection(python_path, api_path, lib_path)
         if success:
             if "not running" in message.lower():
                 print(f"  API:       {green('Module loads OK')}")

@@ -10,7 +10,7 @@ Usage:
     python src/server.py --full       # Start the 342-tool granular server instead
 """
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 import base64
 import os
@@ -34,6 +34,8 @@ for p in [current_dir, project_dir]:
         sys.path.insert(0, p)
 
 # Platform-specific Resolve paths
+from src.utils.cdl import normalize_cdl_payload
+from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.platform import get_resolve_paths
 
 paths = get_resolve_paths()
@@ -223,6 +225,119 @@ def _get_item(p):
         return tl, None, _err(f"No item at index {item_index} on {track_type} track {track_index}")
     return tl, items[item_index], None
 
+
+def _has_fusion_timeline_scope(p: Dict[str, Any]) -> bool:
+    return bool(p.get("clip_id") or p.get("timeline_item_id") or "timeline_item" in p)
+
+
+def _find_timeline_item_by_id(tl, timeline_item_id) -> Optional[Any]:
+    """Find a timeline item by GetUniqueId() across timeline tracks."""
+    if not timeline_item_id:
+        return None
+    want = str(timeline_item_id)
+    for track_type in ("video", "audio", "subtitle"):
+        try:
+            track_count = int(tl.GetTrackCount(track_type) or 0)
+        except Exception:
+            continue
+        for track_index in range(1, track_count + 1):
+            for item in (tl.GetItemListInTrack(track_type, track_index) or []):
+                try:
+                    if str(item.GetUniqueId()) == want:
+                        return item
+                except Exception:
+                    continue
+    return None
+
+
+def _get_timeline_item_for_fusion(p: Dict[str, Any]):
+    """Resolve optional timeline scope for fusion_comp."""
+    if not _has_fusion_timeline_scope(p):
+        return None, None
+
+    timeline_item = p.get("timeline_item")
+    if "timeline_item" in p and not isinstance(timeline_item, dict):
+        return None, _err("timeline_item must be an object with track_type, track_index, and item_index")
+
+    _, tl, err = _get_tl()
+    if err:
+        return None, err
+
+    timeline_item_id = p.get("clip_id") or p.get("timeline_item_id")
+    if timeline_item_id:
+        item = _find_timeline_item_by_id(tl, timeline_item_id)
+        if not item:
+            return None, _err(f"No timeline item with clip_id/timeline_item_id={timeline_item_id!r}")
+        return item, None
+
+    query = dict(timeline_item)
+    query.setdefault("track_type", "video")
+    _, item, item_err = _get_item(query)
+    if item_err:
+        return None, item_err
+    return item, None
+
+
+def _get_fusion_comp_on_timeline_item(item, p: Dict[str, Any]):
+    """Get a Fusion composition on a TimelineItem."""
+    try:
+        comp_count = int(item.GetFusionCompCount() or 0)
+    except Exception as exc:
+        return None, _err(f"GetFusionCompCount failed: {exc}")
+    if comp_count < 1:
+        return None, _err("Timeline item has no Fusion compositions")
+
+    comp_name = p.get("comp_name")
+    if comp_name:
+        comp = item.GetFusionCompByName(str(comp_name))
+        if not comp:
+            return None, _err(f"No Fusion comp named {comp_name!r} on this timeline item")
+        return comp, None
+
+    try:
+        comp_index = int(p.get("comp_index", 1))
+    except (TypeError, ValueError):
+        return None, _err("comp_index must be a 1-based integer")
+    if comp_index < 1 or comp_index > comp_count:
+        return None, _err(f"No Fusion comp at comp_index={comp_index}; item has {comp_count} comp(s)")
+
+    comp = item.GetFusionCompByIndex(comp_index)
+    if not comp:
+        return None, _err(f"GetFusionCompByIndex({comp_index}) returned no composition")
+    return comp, None
+
+
+def _resolve_fusion_comp(p: Dict[str, Any], require_timeline_scope: bool = False):
+    """Resolve a Fusion comp from timeline scope or the active Fusion page comp."""
+    if require_timeline_scope and not _has_fusion_timeline_scope(p):
+        return None, _err(
+            "Timeline scope is required: pass clip_id, timeline_item_id, "
+            "or timeline_item={track_type, track_index, item_index}"
+        )
+
+    r = get_resolve()
+    if not r:
+        return None, _err("Not connected to DaVinci Resolve. Is Resolve running?")
+
+    item, item_err = _get_timeline_item_for_fusion(p)
+    if item_err:
+        return None, item_err
+    if item is not None:
+        return _get_fusion_comp_on_timeline_item(item, p)
+
+    fusion = r.Fusion()
+    if not fusion:
+        return None, _err("Fusion not available — switch to the Fusion page first")
+    comp = fusion.GetCurrentComp()
+    if not comp:
+        return None, _err(
+            "No active Fusion composition. Open a clip in the Fusion page first, "
+            "or pass clip_id, timeline_item_id, or timeline_item={track_type, track_index, item_index} "
+            "with optional comp_name or comp_index."
+        )
+    return comp, None
+
+
 def _find_clip(folder, clip_id):
     for clip in (folder.GetClipList() or []):
         if clip.GetUniqueId() == clip_id:
@@ -269,6 +384,11 @@ def _unknown(action, valid):
     return _err(f"Unknown action '{action}'. Valid actions: {', '.join(valid)}")
 
 
+def _normalize_cdl(cdl):
+    """Normalize CDL payloads to the string format Resolve's SetCDL expects."""
+    return normalize_cdl_payload(cdl)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOOL 1: resolve
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -285,6 +405,8 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       get_keyframe_mode() -> {mode}
       set_keyframe_mode(mode) -> {success}
       quit() -> {success}
+      get_fairlight_presets() -> {presets}
+      set_high_priority() -> {success}
     """
     p = params or {}
 
@@ -304,6 +426,9 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "get_page":
         return {"page": r.GetCurrentPage()}
     elif action == "open_page":
+        valid_pages = ["media", "cut", "edit", "color", "fusion", "fairlight", "deliver"]
+        if p["page"] not in valid_pages:
+            return _err(f"Invalid page '{p['page']}'. Valid pages: {', '.join(valid_pages)}")
         return {"success": bool(r.OpenPage(p["page"]))}
     elif action == "get_keyframe_mode":
         return {"mode": r.GetKeyframeMode()}
@@ -312,7 +437,11 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "quit":
         r.Quit()
         return _ok()
-    return _unknown(action, ["launch","get_version","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit"])
+    elif action == "get_fairlight_presets":
+        return {"presets": _ser(r.GetFairlightPresets())}
+    elif action == "set_high_priority":
+        return {"success": bool(r.SetHighPriority())}
+    return _unknown(action, ["launch","get_version","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -464,9 +593,13 @@ def project_manager_folders(action: str, params: Optional[Dict[str, Any]] = None
     pm = r.GetProjectManager()
 
     if action == "list":
-        return {"folders": pm.GetFolderListInCurrentFolder()}
+        folders = pm.GetFolderListInCurrentFolder() or []
+        return {"folders": [{"name": f.GetName(), "id": f.GetUniqueId()} for f in folders]}
     elif action == "get_current":
-        return {"folder": pm.GetCurrentFolder()}
+        folder = pm.GetCurrentFolder()
+        if not folder:
+            return _err("No current folder")
+        return {"folder": {"name": folder.GetName(), "id": folder.GetUniqueId()}}
     elif action == "create":
         return {"success": bool(pm.CreateFolder(p["name"]))}
     elif action == "delete":
@@ -533,7 +666,10 @@ def project_manager_database(action: str, params: Optional[Dict[str, Any]] = Non
     pm = r.GetProjectManager()
 
     if action == "get_current":
-        return pm.GetCurrentDatabase()
+        db = pm.GetCurrentDatabase()
+        if not db:
+            return _err("Failed to get current database")
+        return {"db_type": db.get("DbType"), "db_name": db.get("DbName")}
     elif action == "list":
         return {"databases": pm.GetDatabaseList()}
     elif action == "set_current":
@@ -565,6 +701,7 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
       get_color_groups() -> {groups}
       add_color_group(name) -> {success, name}
       delete_color_group(name) -> {success}
+      apply_fairlight_preset(preset_name) -> {success}
     """
     p = params or {}
     _, proj, err = _check()
@@ -609,7 +746,9 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
             if g.GetName() == p["name"]:
                 return {"success": bool(proj.DeleteColorGroup(g))}
         return _err(f"Color group '{p['name']}' not found")
-    return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group"])
+    elif action == "apply_fairlight_preset":
+        return {"success": bool(proj.ApplyFairlightPresetToCurrentTimeline(p["preset_name"]))}
+    return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -686,6 +825,8 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return {"success": bool(proj.SetCurrentRenderMode(p["mode"]))}
     elif action == "get_resolutions":
         return {"resolutions": _ser(proj.GetRenderResolutions(p["format"], p["codec"]))}
+    elif action == "get_settings":
+        return {"settings": _ser(proj.GetRenderSettings())}
     elif action == "set_settings":
         return {"success": bool(proj.SetRenderSettings(p["settings"]))}
     elif action == "list_presets":
@@ -700,7 +841,7 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return {"presets": proj.GetQuickExportRenderPresets()}
     elif action == "quick_export":
         return _ser(proj.RenderWithQuickExport(p["preset"], p.get("params", {})))
-    return _unknown(action, ["add_job","delete_job","delete_all_jobs","list_jobs","get_job_status","start","stop","is_rendering","get_formats","get_codecs","get_format_and_codec","set_format_and_codec","get_mode","set_mode","get_resolutions","set_settings","list_presets","load_preset","save_preset","delete_preset","quick_export_presets","quick_export"])
+    return _unknown(action, ["add_job","delete_job","delete_all_jobs","list_jobs","get_job_status","start","stop","is_rendering","get_formats","get_codecs","get_format_and_codec","set_format_and_codec","get_mode","set_mode","get_resolutions","get_settings","set_settings","list_presets","load_preset","save_preset","delete_preset","quick_export_presets","quick_export"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1078,6 +1219,10 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
       add_flag(clip_id, color) -> {success}
       get_flags(clip_id) -> {flags}
       clear_flags(clip_id, color) -> {success}
+      set_name(clip_id, name) -> {success}
+      link_full_resolution_media(clip_id) -> {success}
+      monitor_growing_file(clip_id) -> {success}
+      replace_clip_preserve_sub_clip(clip_id, media_pool_item?|replacement_clip_id?) -> {success}
     """
     p = params or {}
     _, _, mp, err = _get_mp()
@@ -1109,7 +1254,22 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
         return {"flags": clip.GetFlagList()}
     elif action == "clear_flags":
         return {"success": bool(clip.ClearFlags(p["color"]))}
-    return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","add_flag","get_flags","clear_flags"])
+    elif action == "set_name":
+        return {"success": bool(clip.SetName(p["name"]))}
+    elif action == "link_full_resolution_media":
+        return {"success": bool(clip.LinkFullResolutionMedia())}
+    elif action == "monitor_growing_file":
+        return {"success": bool(clip.MonitorGrowingFile())}
+    elif action == "replace_clip_preserve_sub_clip":
+        replacement = _find_clip(mp.GetRootFolder(), p.get("media_pool_item", ""))
+        if not replacement:
+            replacement = _find_clip(mp.GetRootFolder(), p.get("replacement_clip_id", ""))
+        if not replacement:
+            replacement = _find_clip(mp.GetRootFolder(), p.get("clip_id", ""))
+        if not replacement or replacement.GetUniqueId() == clip.GetUniqueId():
+            return _err("Provide media_pool_item or replacement_clip_id for the replacement clip")
+        return {"success": bool(clip.ReplaceClipPreserveSubClip(replacement))}
+    return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","add_flag","get_flags","clear_flags","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1163,6 +1323,9 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       set_mark_in_out(mark_in, mark_out, type?) -> {success}
       clear_mark_in_out(type?) -> {success}
       convert_to_stereo() -> {success}
+      get_items_in_track(track_type, track_index) -> {items}
+      get_voice_isolation_state(track_index) -> {isEnabled, amount}
+      set_voice_isolation_state(track_index, state) -> {success}
     """
     p = params or {}
     pm, proj, err = _check()
@@ -1249,17 +1412,25 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "create_compound_clip":
         ids_set = set(p["clip_ids"])
         found = []
-        for it in (tl.GetItemListInTrack("video", 1) or []):
-            if it.GetUniqueId() in ids_set:
-                found.append(it)
+        for tt in ["video", "audio", "subtitle"]:
+            for ti in range(1, (tl.GetTrackCount(tt) or 0) + 1):
+                for it in (tl.GetItemListInTrack(tt, ti) or []):
+                    if it.GetUniqueId() in ids_set:
+                        found.append(it)
+        if not found:
+            return _err("None of the provided clip IDs were found in the timeline")
         result = tl.CreateCompoundClip(found, p.get("info", {}))
         return _ok() if result else _err("Failed to create compound clip")
     elif action == "create_fusion_clip":
         ids_set = set(p["clip_ids"])
         found = []
-        for it in (tl.GetItemListInTrack("video", 1) or []):
-            if it.GetUniqueId() in ids_set:
-                found.append(it)
+        for tt in ["video", "audio", "subtitle"]:
+            for ti in range(1, (tl.GetTrackCount(tt) or 0) + 1):
+                for it in (tl.GetItemListInTrack(tt, ti) or []):
+                    if it.GetUniqueId() in ids_set:
+                        found.append(it)
+        if not found:
+            return _err("None of the provided clip IDs were found in the timeline")
         result = tl.CreateFusionClip(found)
         return _ok() if result else _err("Failed to create Fusion clip")
     elif action == "import_into_timeline":
@@ -1304,7 +1475,14 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return {"success": bool(tl.ClearMarkInOut(p.get("type", "all")))}
     elif action == "convert_to_stereo":
         return {"success": bool(tl.ConvertTimelineToStereo())}
-    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo"])
+    elif action == "get_items_in_track":
+        return {"items": _ser(tl.GetItemsInTrack(p["track_type"], p["track_index"]))}
+    elif action == "get_voice_isolation_state":
+        state = tl.GetVoiceIsolationState(p["track_index"])
+        return _ser(state) if state else {"isEnabled": False, "amount": 0}
+    elif action == "set_voice_isolation_state":
+        return {"success": bool(tl.SetVoiceIsolationState(p["track_index"], p["state"]))}
+    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1440,6 +1618,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       get_track_type_and_index(...) -> {track_type, track_index}
       get_source_audio_mapping(...) -> {mapping}
       load_burnin_preset(name, ...) -> {success}
+      set_name(name, ...) -> {success}
       get_retime(...) -> {process, motion_estimation}
       set_retime(process?, motion_estimation?, ...) -> {success}  — process: nearest, frame_blend, optical_flow (or 0-3); motion_estimation: 0-6
       get_transform(...) -> {Pan, Tilt, ZoomX, ZoomY, RotationAngle, ...}
@@ -1514,6 +1693,8 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         return {"mapping": item.GetSourceAudioChannelMapping()}
     elif action == "load_burnin_preset":
         return {"success": bool(item.LoadBurnInPreset(p["name"]))}
+    elif action == "set_name":
+        return {"success": bool(item.SetName(p["name"]))}
 
     # ── Retime ──
     elif action == "get_retime":
@@ -1610,7 +1791,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             return _err(f"Invalid interpolation. Must be one of: {', '.join(valid)}")
         return {"success": bool(item.SetKeyframeInterpolation(p["property"], p["frame"], p["interpolation"]))}
 
-    return _unknown(action, ["get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
+    return _unknown(action, ["get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1777,7 +1958,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     _, proj, _ = _check()
 
     if action == "set_cdl":
-        return {"success": bool(item.SetCDL(p["cdl"]))}
+        return {"success": bool(item.SetCDL(_normalize_cdl(p["cdl"])))}
     elif action == "copy_grades":
         # Find target items by IDs
         _, tl, _ = _get_tl()
@@ -2239,13 +2420,89 @@ def color_group(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 # TOOL 27: fusion_comp
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _fusion_comp_bulk_set_inputs(p: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply set_input across many explicitly scoped timeline-item Fusion comps."""
+    ops = p.get("ops")
+    if not isinstance(ops, list) or not ops:
+        return _err(
+            "bulk_set_inputs requires params.ops: non-empty list of objects. "
+            "Each op must include tool_name, input_name, value, and a timeline scope: "
+            "clip_id, timeline_item_id, or timeline_item={track_type, track_index, item_index}. "
+            "Optional per-op: comp_name, comp_index, time, undo_name."
+        )
+
+    results: List[Dict[str, Any]] = []
+    for index, op in enumerate(ops):
+        if not isinstance(op, dict):
+            results.append({"index": index, "error": "op must be an object"})
+            continue
+        if not _has_fusion_timeline_scope(op):
+            results.append({
+                "index": index,
+                "error": "timeline scope is required for bulk_set_inputs",
+            })
+            continue
+        missing = [key for key in ("tool_name", "input_name", "value") if key not in op]
+        if missing:
+            results.append({"index": index, "error": f"missing required field(s): {', '.join(missing)}"})
+            continue
+
+        comp, comp_err = _resolve_fusion_comp(op, require_timeline_scope=True)
+        if comp_err:
+            results.append({"index": index, "error": comp_err.get("error", str(comp_err))})
+            continue
+
+        tool = comp.FindTool(op["tool_name"])
+        if not tool:
+            results.append({"index": index, "error": f"Tool {op['tool_name']!r} not found"})
+            continue
+
+        undo_name = op.get("undo_name", f"MCP bulk_set_inputs #{index}")
+        undo_started = False
+        keep_undo = False
+        error_message = None
+        try:
+            try:
+                comp.StartUndo(undo_name)
+                undo_started = True
+            except Exception:
+                undo_started = False
+            comp.Lock()
+            try:
+                if "time" in op:
+                    tool.SetInput(op["input_name"], op["value"], op["time"])
+                else:
+                    tool.SetInput(op["input_name"], op["value"])
+                keep_undo = True
+            finally:
+                comp.Unlock()
+        except Exception as exc:
+            error_message = str(exc)
+        finally:
+            if undo_started:
+                try:
+                    comp.EndUndo(keep_undo)
+                except Exception:
+                    pass
+        if error_message is not None:
+            results.append({"index": index, "error": error_message})
+        elif keep_undo:
+            results.append({"index": index, "success": True})
+
+    return {"results": results, "op_count": len(ops)}
+
+
 @mcp.tool()
 def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Fusion composition node graph operations on the currently active comp.
+    """Fusion composition node graph operations.
 
-    Operates on the comp open in the Fusion page. Use timeline_item_fusion to
-    manage comp lifecycle (add/delete/import/export). Use this tool to manipulate
-    the node graph inside a composition.
+    Target comp:
+      - Timeline item: pass clip_id, timeline_item_id, or
+        timeline_item={track_type, track_index, item_index}. Optional comp_name or
+        1-based comp_index selects a specific comp; otherwise the first comp is used.
+      - Fusion page: omit timeline scope and this uses Fusion().GetCurrentComp().
+
+    Use timeline_item_fusion to add/delete/import/export comps on items.
 
     Actions:
       add_tool(tool_type, x?, y?, name?) -> {tool_name, tool_type}
@@ -2268,6 +2525,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       render() -> {success}
       start_undo(name?) -> {success}
       end_undo(keep?) -> {success}
+      bulk_set_inputs(ops) -> {results, op_count} — each op requires timeline scope plus tool_name, input_name, value
 
     Common tool_type values: Merge, Background, TextPlus, Transform, Blur,
       ColorCorrector, RectangleMask, EllipseMask, Tracker, MediaIn, MediaOut,
@@ -2275,18 +2533,12 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
     """
     p = params or {}
 
-    # Get current Fusion composition
-    r = get_resolve()
-    if not r:
-        return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+    if action == "bulk_set_inputs":
+        return _fusion_comp_bulk_set_inputs(p)
 
-    fusion = r.Fusion()
-    if not fusion:
-        return _err("Fusion not available — switch to the Fusion page first")
-
-    comp = fusion.GetCurrentComp()
-    if not comp:
-        return _err("No active Fusion composition. Open a clip in the Fusion page first, or use timeline_item_fusion to add a comp.")
+    comp, comp_err = _resolve_fusion_comp(p)
+    if comp_err:
+        return comp_err
 
     # --- Node Management ---
     if action == "add_tool":
@@ -2523,6 +2775,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "add_keyframe","get_keyframes","delete_keyframe",
         "get_comp_info","set_frame_range","render",
         "start_undo","end_undo",
+        "bulk_set_inputs",
     ])
 
 
@@ -2534,14 +2787,11 @@ if __name__ == "__main__":
     # Support --full flag to run the 342-tool granular server instead
     if "--full" in sys.argv:
         logger.info("Starting full 342-tool server...")
-        import importlib
-        spec = importlib.util.spec_from_file_location(
-            "resolve_mcp_server",
-            os.path.join(current_dir, "resolve_mcp_server.py")
-        )
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        sys.argv = [arg for arg in sys.argv if arg != "--full"]
+        from src.granular import mcp as granular_mcp
+
+        run_fastmcp_stdio(granular_mcp)
         sys.exit(0)
 
     logger.info(f"Starting DaVinci Resolve MCP Server (27 compound tools)")
-    mcp.run()
+    run_fastmcp_stdio(mcp)

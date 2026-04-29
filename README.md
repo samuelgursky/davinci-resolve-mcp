@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-27%20(342%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -10,7 +10,17 @@
 
 A Model Context Protocol (MCP) server providing **complete coverage** of the DaVinci Resolve Scripting API. Connect AI assistants (Claude, Cursor, Windsurf) to DaVinci Resolve and control every aspect of your post-production workflow through natural language.
 
-### What's New in v2.1.0
+### What's New in v2.2.0
+
+- **Granular server modularized internally** — `src/resolve_mcp_server.py` is now a thin entrypoint, with the 342-tool implementation split across `src/granular/resolve_control.py`, `project.py`, `timeline.py`, `timeline_item.py`, `media_pool.py`, `folder.py`, `media_pool_item.py`, `gallery.py`, `graph.py`, and `media_storage.py`
+- **Installer now emits env blocks for every generated stdio config** — standard `.mcp.json`, VS Code `.vscode/mcp.json`, Zed `context_servers`, and manual snippets now include `RESOLVE_SCRIPT_API`, `RESOLVE_SCRIPT_LIB`, and `PYTHONPATH`
+- **Windows Resolve 20.3 hardening** — on Windows, the installer also emits `PYTHONHOME` derived from the selected interpreter's base install so Resolve binds against the intended Python instead of a newer globally registered one
+- **Windows stdio transport hardening** — server entrypoints now run FastMCP through strict LF-only stdio wrappers to avoid client disconnects caused by platform newline translation in Windows pipes
+- **`set_cdl` accepts arrays cleanly** — both compound and granular servers now normalize JSON array, tuple, and numeric CDL values into Resolve's required string form like `"1.0 1.0 1.0"`
+- **`fusion_comp` can target timeline item comps** — node graph actions can now operate on a clip's Fusion comp via `clip_id`, `timeline_item_id`, or `timeline_item`, and `bulk_set_inputs` applies scoped input changes across multiple timeline comps
+- **`python src/server.py --full` now stays intact** — the compound entrypoint now correctly launches the granular server instead of importing it and exiting
+
+### v2.1.0
 
 - **New `fusion_comp` tool** — 20-action tool exposing the full Fusion composition node graph API. Add/delete/find nodes, wire connections, set/get parameters, manage keyframes, control undo grouping, set render ranges, and trigger renders — all on the currently active Fusion page composition
 - **`timeline_item_fusion` cache actions** — added `get_cache_enabled` and `set_cache` actions for Fusion output cache control directly on timeline items
@@ -71,12 +81,13 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **26** compound (default) / **342** granular |
+| MCP Tools | **27** compound (default) / **342** granular |
 | API Methods Covered | **324/324** (100%) |
 | Methods Live Tested | **319/324** (98.5%) |
 | Live Test Pass Rate | **319/319** (100%) |
 | API Object Classes | 13 |
 | Tested Against | DaVinci Resolve 19.1.3 Studio |
+| Compatibility Note | Installer hardened for Windows Resolve 20.3 stdio launches; wider Resolve 20/21 validation still pending |
 
 ## API Coverage
 
@@ -103,6 +114,8 @@ Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The
 - **DaVinci Resolve Studio** 18.5+ (macOS, Windows, or Linux) — the free edition does not support external scripting
 - **Python 3.10–3.12** recommended (3.13+ may have ABI incompatibilities with Resolve's scripting library)
 - DaVinci Resolve running with **Preferences > General > "External scripting using"** set to **Local**
+
+Validated live coverage is still based on **DaVinci Resolve 19.1.3 Studio**. Resolve 20.x and 21.x may work, and the installer now specifically hardens Windows Resolve 20.3 launches, but those newer releases are not broadly revalidated in this build yet.
 
 ## Quick Start
 
@@ -153,7 +166,7 @@ The MCP server comes in two modes:
 
 | Mode | File | Tools | Best For |
 |------|------|-------|----------|
-| **Compound** (default) | `src/server.py` | 26 | Most users — fast, clean, low context usage |
+| **Compound** (default) | `src/server.py` | 27 | Most users — fast, clean, low context usage |
 | **Full** | `src/resolve_mcp_server.py` | 342 | Power users who want one tool per API method |
 
 The compound server's `timeline_item` tool includes dedicated actions for common workflows:
@@ -182,11 +195,18 @@ If you prefer to set things up yourself, add to your MCP client config:
   "mcpServers": {
     "davinci-resolve": {
       "command": "/path/to/venv/bin/python",
-      "args": ["/path/to/davinci-resolve-mcp/src/server.py"]
+      "args": ["/path/to/davinci-resolve-mcp/src/server.py"],
+      "env": {
+        "RESOLVE_SCRIPT_API": "/path/to/DaVinci Resolve/Developer/Scripting",
+        "RESOLVE_SCRIPT_LIB": "/path/to/fusionscript.so-or-dll",
+        "PYTHONPATH": "/path/to/DaVinci Resolve/Developer/Scripting/Modules"
+      }
     }
   }
 }
 ```
+
+On Windows, installer-generated configs also include `PYTHONHOME`. That scopes Resolve's Python binding to the selected interpreter and avoids the Resolve 20.3 multi-Python crash reported in [Issue #26](https://github.com/samuelgursky/davinci-resolve-mcp/issues/26).
 
 Platform-specific paths:
 
@@ -677,7 +697,7 @@ We welcome contributions! The following areas especially need help:
 | Platform | Status | Resolve Paths Auto-Detected | Notes |
 |----------|--------|----------------------------|-------|
 | macOS | ✅ Tested | `/Library/Application Support/Blackmagic Design/...` | Primary development and test platform |
-| Windows | ✅ Supported | `C:\ProgramData\Blackmagic Design\...` | Community-tested; PRs welcome |
+| Windows | ✅ Supported | `C:\ProgramData\Blackmagic Design\...` | Community-tested; installer now emits env + `PYTHONHOME` for Resolve 20.3 multi-Python setups |
 | Linux | ⚠️ Experimental | `/opt/resolve/...` | Should work — testing and feedback welcome |
 
 ## Security Considerations
@@ -701,7 +721,8 @@ davinci-resolve-mcp/
 ├── install.py                    # Universal installer (macOS/Windows/Linux)
 ├── src/
 │   ├── server.py                # Compound MCP server — 27 tools (default)
-│   ├── resolve_mcp_server.py    # Full MCP server — 342 tools (power users)
+│   ├── resolve_mcp_server.py    # Thin full-server entrypoint — 342 tools
+│   ├── granular/                # Modular full-server implementation
 │   └── utils/                   # Platform detection, Resolve connection helpers
 ├── tests/                       # 5-phase live API test suite (319/319 pass)
 ├── docs/
