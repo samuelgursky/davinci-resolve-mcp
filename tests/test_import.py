@@ -42,7 +42,7 @@ def test_compound_tool_count():
 
 def test_granular_tool_count():
     total = sum(py_file.read_text().count("@mcp.tool()") for py_file in GRANULAR_DIR.glob("*.py"))
-    assert total == 342
+    assert total == 354
 
 
 def run_all():

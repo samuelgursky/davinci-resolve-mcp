@@ -1,8 +1,8 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
-[![Tools](https://img.shields.io/badge/MCP%20Tools-27%20(342%20full)-blue.svg)](#server-modes)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-27%20(354%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.10--3.12-green.svg)](https://www.python.org/downloads/)
@@ -10,9 +10,17 @@
 
 A Model Context Protocol (MCP) server providing **complete coverage** of the DaVinci Resolve Scripting API. Connect AI assistants (Claude, Cursor, Windsurf) to DaVinci Resolve and control every aspect of your post-production workflow through natural language.
 
-### What's New in v2.2.0
+### What's New in v2.3.0
 
-- **Granular server modularized internally** — `src/resolve_mcp_server.py` is now a thin entrypoint, with the 342-tool implementation split across `src/granular/resolve_control.py`, `project.py`, `timeline.py`, `timeline_item.py`, `media_pool.py`, `folder.py`, `media_pool_item.py`, `gallery.py`, `graph.py`, and `media_storage.py`
+- **Resolve 20.2.2 API sync** — added the 12 scripting methods introduced across Resolve 20.0-20.2.2, with compatibility guards so older Resolve builds return clear "requires Resolve 20.x" errors instead of crashing
+- **Resolve 20 live validation** — revalidated the new API surface against DaVinci Resolve Studio 20.3.2, bringing live-tested coverage to 331/336 methods (98.5%)
+- **Official scripting docs refreshed** — `docs/resolve_scripting_api.txt` now tracks the Resolve 20 scripting README bundled with the installed 20.3.2 developer package
+- **AI skill reference updated** — merged PR #30's `docs/SKILL.md` and updated it for the Resolve 20 method count, 354-tool granular server, version guards, and source media integrity guidance
+- **Stale Resolve handle recovery** — both server modes now validate cached Resolve handles and reconnect cleanly after Resolve restarts or Project Manager transitions
+
+### v2.2.0
+
+- **Granular server modularized internally** — `src/resolve_mcp_server.py` is now a thin entrypoint, with the 354-tool implementation split across `src/granular/resolve_control.py`, `project.py`, `timeline.py`, `timeline_item.py`, `media_pool.py`, `folder.py`, `media_pool_item.py`, `gallery.py`, `graph.py`, and `media_storage.py`
 - **Installer now emits env blocks for every generated stdio config** — standard `.mcp.json`, VS Code `.vscode/mcp.json`, Zed `context_servers`, and manual snippets now include `RESOLVE_SCRIPT_API`, `RESOLVE_SCRIPT_LIB`, and `PYTHONPATH`
 - **Windows Resolve 20.3 hardening** — on Windows, the installer also emits `PYTHONHOME` derived from the selected interpreter's base install so Resolve binds against the intended Python instead of a newer globally registered one
 - **Windows stdio transport hardening** — server entrypoints now run FastMCP through strict LF-only stdio wrappers to avoid client disconnects caused by platform newline translation in Windows pipes
@@ -81,29 +89,29 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **27** compound (default) / **342** granular |
-| API Methods Covered | **324/324** (100%) |
-| Methods Live Tested | **319/324** (98.5%) |
-| Live Test Pass Rate | **319/319** (100%) |
+| MCP Tools | **27** compound (default) / **354** granular |
+| API Methods Covered | **336/336** (100%) |
+| Methods Live Tested | **331/336** (98.5%) |
+| Live Test Pass Rate | **331/331** (100%) |
 | API Object Classes | 13 |
-| Tested Against | DaVinci Resolve 19.1.3 Studio |
-| Compatibility Note | Installer hardened for Windows Resolve 20.3 stdio launches; wider Resolve 20/21 validation still pending |
+| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio |
+| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21 beta APIs are intentionally deferred until stable |
 
 ## API Coverage
 
-Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **27 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **342 individual tools** for power users. Both modes cover all 13 API object classes:
+Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **27 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **354 individual tools** for power users. Both modes cover all 13 API object classes:
 
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|
-| Resolve | 21 | 21 | App control, pages, layout presets, render/burn-in presets, keyframe mode |
+| Resolve | 22 | 22 | App control, pages, layout presets, render/burn-in presets, keyframe mode |
 | ProjectManager | 25 | 25 | Project CRUD, folders, databases, cloud projects, archive/restore |
-| Project | 42 | 42 | Timelines, render pipeline, settings, LUTs, color groups |
+| Project | 43 | 43 | Timelines, render pipeline, settings, LUTs, color groups |
 | MediaStorage | 9 | 9 | Volumes, file browsing, media import, mattes |
 | MediaPool | 27 | 27 | Folders, clips, timelines, metadata, stereo, sync |
 | Folder | 8 | 8 | Clip listing, export, transcription |
-| MediaPoolItem | 32 | 32 | Metadata, markers, flags, properties, proxy, transcription |
-| Timeline | 56 | 56 | Tracks, markers, items, export, generators, titles, stills, stereo |
-| TimelineItem | 76 | 76 | Properties, markers, Fusion comps, versions, takes, CDL, AI tools |
+| MediaPoolItem | 36 | 36 | Metadata, markers, flags, properties, proxy, transcription |
+| Timeline | 58 | 58 | Tracks, markers, items, export, generators, titles, stills, stereo |
+| TimelineItem | 80 | 80 | Properties, markers, Fusion comps, versions, takes, CDL, AI tools |
 | Gallery | 8 | 8 | Albums, stills, power grades |
 | GalleryStillAlbum | 6 | 6 | Stills management, import/export, labels |
 | Graph | 11 | 22 | Node operations, LUTs, cache, grades (timeline + clip graph variants) |
@@ -115,7 +123,7 @@ Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The
 - **Python 3.10–3.12** recommended (3.13+ may have ABI incompatibilities with Resolve's scripting library)
 - DaVinci Resolve running with **Preferences > General > "External scripting using"** set to **Local**
 
-Validated live coverage is still based on **DaVinci Resolve 19.1.3 Studio**. Resolve 20.x and 21.x may work, and the installer now specifically hardens Windows Resolve 20.3 launches, but those newer releases are not broadly revalidated in this build yet.
+Validated live coverage is based on **DaVinci Resolve 19.1.3 Studio** for the original API surface, plus **DaVinci Resolve 20.3.2 Studio** for the Resolve 20.0-20.2.2 scripting additions. Resolve 21 beta APIs are intentionally deferred until a stable release.
 
 ## Quick Start
 
@@ -167,7 +175,7 @@ The MCP server comes in two modes:
 | Mode | File | Tools | Best For |
 |------|------|-------|----------|
 | **Compound** (default) | `src/server.py` | 27 | Most users — fast, clean, low context usage |
-| **Full** | `src/resolve_mcp_server.py` | 342 | Power users who want one tool per API method |
+| **Full** | `src/resolve_mcp_server.py` | 354 | Power users who want one tool per API method |
 
 The compound server's `timeline_item` tool includes dedicated actions for common workflows:
 
@@ -182,7 +190,7 @@ The compound server's `timeline_item` tool includes dedicated actions for common
 
 The installer uses the compound server by default. To use the full server:
 ```bash
-python src/server.py --full    # Launch full 342-tool server
+python src/server.py --full    # Launch full 354-tool server
 # Or point your MCP config directly at src/resolve_mcp_server.py
 ```
 
@@ -233,7 +241,7 @@ Once connected, you can control DaVinci Resolve through natural language:
 
 ## Test Results
 
-All testing performed against **DaVinci Resolve 19.1.3 Studio** on macOS with live API calls (no mocks).
+Baseline testing was performed against **DaVinci Resolve 19.1.3 Studio** on macOS with live API calls (no mocks). Resolve 20 additions were revalidated live against **DaVinci Resolve 20.3.2 Studio**.
 
 | Phase | Tests | Pass Rate | Scope |
 |-------|-------|-----------|-------|
@@ -242,9 +250,10 @@ All testing performed against **DaVinci Resolve 19.1.3 Studio** on macOS with li
 | Phase 3 | 20/20 | 100% | Real media import, sync, transcription, database switching, Resolve.Quit |
 | Phase 4 | 10/10 | 100% | AI/ML methods, Fusion clips, stereo, gallery stills |
 | Phase 5 | 6/6 | 100% | Scene cuts, subtitles from audio, graph node cache/tools/enable |
-| **Total** | **319/319** | **100%** | **98.5% of all API methods tested live** |
+| Resolve 20 delta | 12/12 | 100% | Resolve 20.0-20.2.2 scripting additions live-tested on 20.3.2 |
+| **Total** | **331/331** | **100%** | **98.5% of current API methods tested live** |
 
-### Untested Methods (5 of 324)
+### Untested Methods (5 of 336)
 
 | Method | Reason | Help Wanted |
 |--------|--------|-------------|
@@ -291,13 +300,14 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 19 | `ExportBurnInPreset(presetName, exportPath)` | ⚠️ | API accepts; needs valid preset name |
 | 20 | `GetKeyframeMode()` | ✅ | Returns keyframe mode |
 | 21 | `SetKeyframeMode(keyframeMode)` | ⚠️ | API accepts; mode must match valid enum |
+| 22 | `GetFairlightPresets()` | ✅ | Resolve 20.3.2 live test returns preset map |
 
 ### ProjectManager
 
 | # | Method | Status | Test Result / Notes |
 |---|--------|--------|---------------------|
 | 1 | `ArchiveProject(projectName, filePath, ...)` | ⚠️ | API accepts; archiving is slow |
-| 2 | `CreateProject(projectName)` | ✅ | Creates new project |
+| 2 | `CreateProject(projectName, mediaLocationPath)` | ✅ | Creates new project; optional media location added in Resolve 20.2.2 |
 | 3 | `DeleteProject(projectName)` | ⚠️ | Returns `False` if project is open |
 | 4 | `LoadProject(projectName)` | ✅ | Returns Project object |
 | 5 | `GetCurrentProject()` | ✅ | Returns current Project |
@@ -347,7 +357,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 19 | `LoadRenderPreset(presetName)` | ✅ | Loads render preset |
 | 20 | `SaveAsNewRenderPreset(presetName)` | ✅ | Creates render preset |
 | 21 | `DeleteRenderPreset(presetName)` | ✅ | Deletes render preset |
-| 22 | `SetRenderSettings({settings})` | ✅ | Applies render settings |
+| 22 | `SetRenderSettings({settings})` | ✅ | Applies render settings; Resolve 20.2 adds `ExportSubtitle` and `SubtitleFormat` keys |
 | 23 | `GetRenderJobStatus(jobId)` | ✅ | Returns `{JobStatus, CompletionPercentage}` |
 | 24 | `GetQuickExportRenderPresets()` | ✅ | Returns preset names |
 | 25 | `RenderWithQuickExport(preset, {params})` | ✅ | Initiates quick export |
@@ -368,6 +378,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 40 | `GetColorGroupsList()` | ✅ | Returns color group list |
 | 41 | `AddColorGroup(groupName)` | ✅ | Returns ColorGroup object |
 | 42 | `DeleteColorGroup(colorGroup)` | ✅ | Deletes color group |
+| 43 | `ApplyFairlightPresetToCurrentTimeline(presetName)` | ⚠️ | Resolve 20.3.2 live test accepts call; returns `False` without a named preset |
 
 ### MediaStorage
 
@@ -462,6 +473,10 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 30 | `GetMarkInOut()` | ✅ | Returns mark in/out dict |
 | 31 | `SetMarkInOut(in, out, type)` | ✅ | Sets mark in/out |
 | 32 | `ClearMarkInOut(type)` | ✅ | Clears mark in/out |
+| 33 | `SetName(clipName)` | ✅ | Resolve 20.3.2 live test renames clip |
+| 34 | `LinkFullResolutionMedia(filePath)` | ⚠️ | Resolve 20.3.2 live test accepts call; full-res relink returns `False` without a matching proxy/full-res fixture |
+| 35 | `ReplaceClipPreserveSubClip(filePath)` | ✅ | Resolve 20.3.2 live test replaces clip while preserving subclip metadata |
+| 36 | `MonitorGrowingFile()` | ✅ | Resolve 20.3.2 live test enables growing-file monitoring |
 
 ### Timeline
 
@@ -523,6 +538,8 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 54 | `GetMarkInOut()` | ✅ | Returns mark in/out dict |
 | 55 | `SetMarkInOut(in, out, type)` | ✅ | Sets mark in/out |
 | 56 | `ClearMarkInOut(type)` | ✅ | Clears mark in/out |
+| 57 | `GetVoiceIsolationState(trackIndex)` | ✅ | Resolve 20.3.2 live test returns voice isolation state |
+| 58 | `SetVoiceIsolationState(trackIndex, {state})` | ✅ | Resolve 20.3.2 live test sets voice isolation state |
 
 ### TimelineItem
 
@@ -604,6 +621,10 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 74 | `GetIsFusionOutputCacheEnabled()` | ✅ | Returns cache state |
 | 75 | `SetColorOutputCache(cache_value)` | ⚠️ | Tested; needs active color pipeline |
 | 76 | `SetFusionOutputCache(cache_value)` | ⚠️ | Tested; needs active Fusion pipeline |
+| 77 | `SetName(clipName)` | ✅ | Resolve 20.3.2 live test renames timeline item |
+| 78 | `GetVoiceIsolationState()` | ✅ | Resolve 20.3.2 live test returns voice isolation state |
+| 79 | `SetVoiceIsolationState({state})` | ✅ | Resolve 20.3.2 live test sets voice isolation state |
+| 80 | `ResetAllNodeColors()` | ✅ | Resolve 20.3.2 live test resets node colors |
 
 ### Gallery
 
@@ -721,10 +742,10 @@ davinci-resolve-mcp/
 ├── install.py                    # Universal installer (macOS/Windows/Linux)
 ├── src/
 │   ├── server.py                # Compound MCP server — 27 tools (default)
-│   ├── resolve_mcp_server.py    # Thin full-server entrypoint — 342 tools
+│   ├── resolve_mcp_server.py    # Thin full-server entrypoint — 354 tools
 │   ├── granular/                # Modular full-server implementation
 │   └── utils/                   # Platform detection, Resolve connection helpers
-├── tests/                       # 5-phase live API test suite (319/319 pass)
+├── tests/                       # 5-phase live API test suite + Resolve 20 delta (331/331 pass)
 ├── docs/
 │   └── resolve_scripting_api.txt # Official Resolve Scripting API reference
 └── examples/                    # Getting started, markers, media, timeline examples

@@ -138,11 +138,12 @@ def open_project(name: str) -> str:
 
 
 @mcp.tool()
-def create_project(name: str) -> str:
+def create_project(name: str, media_location_path: str = None) -> str:
     """Create a new project with the given name.
     
     Args:
         name: The name for the new project
+        media_location_path: Optional project media location path (Resolve 20.2.2+).
     """
     resolve = get_resolve()
     if resolve is None:
@@ -160,7 +161,13 @@ def create_project(name: str) -> str:
     if name in projects:
         return f"Error: Project '{name}' already exists"
     
-    result = project_manager.CreateProject(name)
+    if media_location_path:
+        version = resolve.GetVersion() or [0]
+        if version[0] < 20 or (version[0] == 20 and len(version) > 2 and (version[1], version[2]) < (2, 2)):
+            return "Error: ProjectManager.CreateProject media_location_path requires DaVinci Resolve 20.2.2+"
+        result = project_manager.CreateProject(name, media_location_path)
+    else:
+        result = project_manager.CreateProject(name)
     if result:
         return f"Successfully created project '{name}'"
     else:
@@ -1361,7 +1368,8 @@ def set_render_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
             ExportVideo (bool), ExportAudio (bool), FormatWidth (int),
             FormatHeight (int), FrameRate (float), VideoQuality (int/str),
             AudioCodec (str), AudioBitDepth (int), AudioSampleRate (int),
-            ColorSpaceTag (str), GammaTag (str), ExportAlpha (bool).
+            ColorSpaceTag (str), GammaTag (str), ExportAlpha (bool),
+            ExportSubtitle (bool), SubtitleFormat ("BurnIn", "EmbeddedCaptions", or "SeparateFile").
     """
     resolve = get_resolve()
     if resolve is None:
@@ -1633,6 +1641,26 @@ def delete_color_group(group_name: str) -> Dict[str, Any]:
         return {"error": f"Color group '{group_name}' not found"}
     result = project.DeleteColorGroup(target)
     return {"success": bool(result), "group_name": group_name}
+
+
+@mcp.tool()
+def apply_fairlight_preset_to_current_timeline(preset_name: str) -> Dict[str, Any]:
+    """Apply a Fairlight preset to the current timeline.
+
+    Args:
+        preset_name: Name of the Fairlight preset to apply.
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    missing = _requires_method(project, "ApplyFairlightPresetToCurrentTimeline", "20.2.2")
+    if missing:
+        return missing
+    result = project.ApplyFairlightPresetToCurrentTimeline(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
 
 
 @mcp.tool()

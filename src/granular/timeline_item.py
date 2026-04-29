@@ -1269,6 +1269,26 @@ def ti_get_info(item_index: int = 0, track_type: str = "video", track_index: int
 
 
 @mcp.tool()
+def ti_set_name(name: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Rename a timeline item.
+
+    Args:
+        name: New timeline item name.
+        item_index: 0-based item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    missing = _requires_method(item, "SetName", "20.2")
+    if missing:
+        return missing
+    result = item.SetName(name)
+    return {"success": bool(result), "name": name}
+
+
+@mcp.tool()
 def ti_get_source_start_time(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Get source start time of a timeline item.
 
@@ -1930,6 +1950,64 @@ def ti_smart_reframe(item_index: int = 0, track_type: str = "video", track_index
     if err:
         return err
     return {"success": bool(item.SmartReframe())}
+
+
+@mcp.tool()
+def ti_get_voice_isolation_state(item_index: int = 0, track_type: str = "audio", track_index: int = 1) -> Dict[str, Any]:
+    """Get voice isolation state for a timeline item.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+        track_type: 'audio' or 'video'. Default: 'audio'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    missing = _requires_method(item, "GetVoiceIsolationState", "20.1")
+    if missing:
+        return missing
+    state = item.GetVoiceIsolationState()
+    return {"state": state if state else {"isEnabled": False, "amount": 0}}
+
+
+@mcp.tool()
+def ti_set_voice_isolation_state(state: Dict[str, Any], item_index: int = 0, track_type: str = "audio", track_index: int = 1) -> Dict[str, Any]:
+    """Set voice isolation state for a timeline item.
+
+    Args:
+        state: Dict with isEnabled (bool) and amount (0-100).
+        item_index: 0-based item index. Default: 0.
+        track_type: 'audio' or 'video'. Default: 'audio'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    missing = _requires_method(item, "SetVoiceIsolationState", "20.1")
+    if missing:
+        return missing
+    result = item.SetVoiceIsolationState(state)
+    return {"success": bool(result)}
+
+
+@mcp.tool()
+def ti_reset_all_node_colors(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+    """Reset node colors for all nodes in the active clip version.
+
+    Args:
+        item_index: 0-based item index. Default: 0.
+        track_type: 'video' or 'audio'. Default: 'video'.
+        track_index: 1-based track index. Default: 1.
+    """
+    item, err = _get_timeline_item(track_type, track_index, item_index)
+    if err:
+        return err
+    missing = _requires_method(item, "ResetAllNodeColors", "20.2")
+    if missing:
+        return missing
+    result = item.ResetAllNodeColors()
+    return {"success": bool(result)}
 
 
 @mcp.tool()

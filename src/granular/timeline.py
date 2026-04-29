@@ -433,6 +433,41 @@ def timeline_get_is_track_locked(track_type: str, track_index: int) -> Dict[str,
 
 
 @mcp.tool()
+def timeline_get_voice_isolation_state(track_index: int) -> Dict[str, Any]:
+    """Get voice isolation state for an audio track.
+
+    Args:
+        track_index: 1-based audio track index.
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    missing = _requires_method(tl, "GetVoiceIsolationState", "20.1")
+    if missing:
+        return missing
+    state = tl.GetVoiceIsolationState(track_index)
+    return {"state": state if state else {"isEnabled": False, "amount": 0}}
+
+
+@mcp.tool()
+def timeline_set_voice_isolation_state(track_index: int, state: Dict[str, Any]) -> Dict[str, Any]:
+    """Set voice isolation state for an audio track.
+
+    Args:
+        track_index: 1-based audio track index.
+        state: Dict with isEnabled (bool) and amount (0-100).
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    missing = _requires_method(tl, "SetVoiceIsolationState", "20.1")
+    if missing:
+        return missing
+    result = tl.SetVoiceIsolationState(track_index, state)
+    return {"success": bool(result)}
+
+
+@mcp.tool()
 def timeline_delete_clips(clip_ids: List[str], track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Delete clips from the timeline.
 

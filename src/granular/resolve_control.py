@@ -499,6 +499,19 @@ def set_keyframe_mode(mode: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
+def get_fairlight_presets() -> Dict[str, Any]:
+    """Get the available Fairlight preset names."""
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "GetFairlightPresets", "20.2.2")
+    if missing:
+        return missing
+    presets = resolve.GetFairlightPresets()
+    return {"presets": presets if presets else []}
+
+
+@mcp.tool()
 def quit_resolve() -> Dict[str, Any]:
     """Quit DaVinci Resolve. WARNING: This will close the application."""
     resolve = get_resolve()

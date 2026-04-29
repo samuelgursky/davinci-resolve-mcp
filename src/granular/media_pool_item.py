@@ -590,6 +590,27 @@ def get_clip_property(clip_id: str, property_name: str = "") -> Dict[str, Any]:
 
 
 @mcp.tool()
+def set_media_pool_clip_name(clip_id: str, new_name: str) -> Dict[str, Any]:
+    """Rename a Media Pool clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        new_name: New clip name.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    missing = _requires_method(clip, "SetName", "20.2")
+    if missing:
+        return missing
+    result = clip.SetName(new_name)
+    return {"success": bool(result), "name": new_name}
+
+
+@mcp.tool()
 def link_clip_proxy_media(clip_id: str, proxy_path: str) -> Dict[str, Any]:
     """Link proxy media to a clip.
 
@@ -604,6 +625,27 @@ def link_clip_proxy_media(clip_id: str, proxy_path: str) -> Dict[str, Any]:
     if not clip:
         return {"error": f"Clip {clip_id} not found"}
     result = clip.LinkProxyMedia(proxy_path)
+    return {"success": bool(result)}
+
+
+@mcp.tool()
+def link_clip_full_resolution_media(clip_id: str, full_res_media_path: str) -> Dict[str, Any]:
+    """Link full resolution media to a proxy clip.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        full_res_media_path: Absolute path to the full resolution media file.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    missing = _requires_method(clip, "LinkFullResolutionMedia", "20.0")
+    if missing:
+        return missing
+    result = clip.LinkFullResolutionMedia(full_res_media_path)
     return {"success": bool(result)}
 
 
@@ -639,6 +681,43 @@ def replace_media_pool_clip(clip_id: str, new_file_path: str) -> Dict[str, Any]:
     if not clip:
         return {"error": f"Clip {clip_id} not found"}
     result = clip.ReplaceClip(new_file_path)
+    return {"success": bool(result)}
+
+
+@mcp.tool()
+def replace_media_pool_clip_preserve_sub_clip(clip_id: str, file_path: str) -> Dict[str, Any]:
+    """Replace a clip's underlying media while preserving subclip extents.
+
+    Args:
+        clip_id: Unique ID of the clip to replace.
+        file_path: Absolute path to the replacement media file.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    missing = _requires_method(clip, "ReplaceClipPreserveSubClip", "20.0")
+    if missing:
+        return missing
+    result = clip.ReplaceClipPreserveSubClip(file_path)
+    return {"success": bool(result)}
+
+
+@mcp.tool()
+def monitor_clip_growing_file(clip_id: str) -> Dict[str, Any]:
+    """Monitor a growing media file for the given Media Pool clip."""
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    missing = _requires_method(clip, "MonitorGrowingFile", "20.0")
+    if missing:
+        return missing
+    result = clip.MonitorGrowingFile()
     return {"success": bool(result)}
 
 

@@ -29,6 +29,8 @@ logs/*.log
 to_clean/
 logs_backup/
 cleanup_backup/
+tmp/
+tests/test_resolve20_results.json
 
 # Configuration files with sensitive info
 # Don't ignore templates

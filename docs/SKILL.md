@@ -24,7 +24,7 @@ but that first connection can take up to 60 seconds.
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
 | Compound (default) | `src/server.py` | 27 tools | Most workflows — keeps context lean |
-| Granular (full) | `src/server.py --full` | 342 tools | Power users needing one tool per API method |
+| Granular (full) | `src/server.py --full` | 354 tools | Power users needing one tool per API method |
 
 This skill document covers the **compound server** (the default). Each compound
 tool accepts an `action` string and an optional `params` object.
@@ -63,6 +63,8 @@ Key actions:
 - `get_version` — returns `{product, version, version_string}`
 - `get_page` / `open_page(page)` — read or switch the active page
 - `get_keyframe_mode` / `set_keyframe_mode(mode)`
+- `get_fairlight_presets` — Resolve 20.2.2+; returns available Fairlight
+  preset names
 - `quit` — terminates Resolve (destructive; confirm with user first)
 
 **`layout_presets`** — Save, load, export, import, delete UI layout presets.
@@ -75,7 +77,8 @@ Key actions:
 
 **`project_manager`** — CRUD on projects.
 
-Key actions: `list`, `get_current`, `create(name)`, `load(name)`, `save`, `close`,
+Key actions: `list`, `get_current`, `create(name, media_location_path?)`,
+`load(name)`, `save`, `close`,
 `delete(name)`, `import_project(path)`, `export_project(name, path)`, `archive`,
 `restore`
 
@@ -97,7 +100,8 @@ operations on the open project.
 Key actions: `get_name`, `set_name(name)`, `get_setting(name?)`,
 `set_setting(name, value)`, `get_color_groups`, `add_color_group(name)`,
 `delete_color_group(name)`, `export_frame_as_still(path)`,
-`load_burnin_preset(name)`, `insert_audio(media_path, ...)`
+`load_burnin_preset(name)`, `insert_audio(media_path, ...)`,
+`apply_fairlight_preset(preset_name)`
 
 ---
 
@@ -129,6 +133,8 @@ require a `clip_id` (the UUID returned by `GetUniqueId()`).
 Key actions: `get_name`, `get_metadata(key?)`, `set_metadata(key, value)`,
 `get_clip_property(key?)`, `set_clip_property(key, value)`, `get_clip_color`,
 `set_clip_color(color)`, `link_proxy(proxy_path)`, `replace_clip(path)`,
+`set_name(name)`, `link_full_resolution_media(path)`,
+`replace_clip_preserve_sub_clip(path)`, `monitor_growing_file`,
 `transcribe_audio`, `get_audio_mapping`, `get_mark_in_out`, `set_mark_in_out`
 
 **`media_pool_item_markers`** — Markers and flags on clips in the Media Pool.
@@ -196,6 +202,8 @@ Key actions:
 - `get_crop` / `set_crop(CropLeft?, CropRight?, CropTop?, CropBottom?, ...)`
 - `get_composite` / `set_composite(Opacity?, CompositeMode?)`
 - `get_audio` / `set_audio(Volume?, Pan?, AudioSyncOffset?)`
+- `get_voice_isolation_state` / `set_voice_isolation_state(state)` — Resolve
+  20.1+; audio timeline items only
 - `get_keyframes(property)`, `add_keyframe(property, frame, value)`,
   `modify_keyframe`, `delete_keyframe`, `set_keyframe_interpolation`
   - interpolation values: `"Linear"`, `"Bezier"`, `"EaseIn"`, `"EaseOut"`, `"EaseInOut"`
@@ -220,6 +228,8 @@ Key actions:
   - type: `0` = local, `1` = remote
 - `assign_color_group(group_name)`, `remove_from_color_group`
 - `export_lut(type, path)`
+- `reset_all_node_colors` — Resolve 20.2+; resets node colors for the active
+  clip version
 - `stabilize`, `smart_reframe`
 - `create_magic_mask(mode)` — mode: `"F"` forward, `"B"` backward, `"BI"` bidirectional
   (requires DaVinci Neural Engine and Color page)
@@ -463,6 +473,15 @@ user to open it via Workspace menu if export fails.
 Python 3.13+ may cause `scriptapp("Resolve")` to return `None` due to ABI
 incompatibilities.
 
+**Resolve version guards** — Resolve 20-specific actions return a clear
+`requires DaVinci Resolve 20.x+` error when called against older builds. Resolve
+19.1.3 remains the compatibility baseline; Resolve 20 additions were live-tested
+on Resolve Studio 20.3.2.
+
+**Source media integrity** — Do not transcode, convert, create proxies, or write
+derivatives of source media unless the user explicitly asks. Analysis and tests
+should write sidecars or synthetic fixtures, never modify camera originals.
+
 **Windows multi-Python setups** — On Windows with multiple Python installations,
 Resolve 20.3 may crash on import unless `PYTHONHOME` is set to the interpreter
 used to build the venv. The installer handles this automatically; manual configs
@@ -536,8 +555,10 @@ timeline(action="get_items", params={"track_type": "video", "index": 1})
 
 ## API Coverage
 
-All 324 non-deprecated methods of the DaVinci Resolve Scripting API are covered.
-Five methods require infrastructure not available in typical setups:
+All 336 non-deprecated methods of the DaVinci Resolve Scripting API are covered.
+331 methods have been live-tested across Resolve 19.1.3 Studio and Resolve
+20.3.2 Studio. Five methods require infrastructure not available in typical
+setups:
 
 | Method | Requires |
 |---|---|

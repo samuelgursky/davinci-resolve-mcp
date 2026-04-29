@@ -2,15 +2,15 @@
 """
 DaVinci Resolve MCP Server (Compound Tools)
 
-27 compound tools covering 100% of the DaVinci Resolve Scripting API (324 methods).
+27 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods).
 Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 342-tool granular server instead
+    python src/server.py --full       # Start the 354-tool granular server instead
 """
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 import base64
 import os
@@ -94,15 +94,30 @@ try:
 except ImportError as e:
     logger.error(f"Cannot import DaVinciResolveScript: {e}")
 
+def _is_resolve_handle_live(candidate) -> bool:
+    """Return True when a cached Resolve handle still answers root API calls."""
+    try:
+        get_version = getattr(candidate, "GetVersion", None)
+        if not callable(get_version):
+            return False
+        return bool(get_version())
+    except Exception as exc:
+        logger.warning(f"Cached Resolve handle is stale: {exc}")
+        return False
+
+
 def _try_connect():
     """Attempt to connect to Resolve once. Returns resolve object or None."""
     global resolve
     if dvr_script is None:
         return None
     try:
-        resolve = dvr_script.scriptapp("Resolve")
-        if resolve:
+        candidate = dvr_script.scriptapp("Resolve")
+        if candidate and _is_resolve_handle_live(candidate):
+            resolve = candidate
             logger.info(f"Connected: {resolve.GetProductName()} {resolve.GetVersionString()}")
+        else:
+            resolve = None
         return resolve
     except Exception as e:
         logger.error(f"Connection error: {e}")
@@ -144,8 +159,9 @@ def _launch_resolve():
 def get_resolve():
     """Lazy connection to Resolve — connects on first tool call, auto-launches if needed."""
     global resolve
-    if resolve is not None:
+    if resolve is not None and _is_resolve_handle_live(resolve):
         return resolve
+    resolve = None
     # Try to connect to an already-running Resolve
     if _try_connect():
         return resolve
@@ -184,6 +200,14 @@ def _err(msg):
 
 def _ok(**kw):
     return {"success": True, **kw}
+
+def _has_method(obj, method_name):
+    return callable(getattr(obj, method_name, None))
+
+def _requires_method(obj, method_name, min_version):
+    if _has_method(obj, method_name):
+        return None
+    return _err(f"{method_name} requires DaVinci Resolve {min_version}+")
 
 def _check():
     resolve = get_resolve()
@@ -438,6 +462,9 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         r.Quit()
         return _ok()
     elif action == "get_fairlight_presets":
+        missing = _requires_method(r, "GetFairlightPresets", "20.2.2")
+        if missing:
+            return missing
         return {"presets": _ser(r.GetFairlightPresets())}
     elif action == "set_high_priority":
         return {"success": bool(r.SetHighPriority())}
@@ -523,7 +550,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     Actions:
       list() -> {projects}
       get_current() -> {name, id}
-      create(name) -> {success, name}
+      create(name, media_location_path?) -> {success, name}
       load(name) -> {success}
       save() -> {success}
       close() -> {success}
@@ -545,7 +572,12 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         proj = pm.GetCurrentProject()
         return {"name": proj.GetName(), "id": proj.GetUniqueId()} if proj else _err("No project open")
     elif action == "create":
-        proj = pm.CreateProject(p["name"])
+        media_location_path = p.get("media_location_path") or p.get("mediaLocationPath")
+        if media_location_path:
+            version = r.GetVersion() or [0]
+            if version[0] < 20 or (version[0] == 20 and len(version) > 2 and (version[1], version[2]) < (2, 2)):
+                return _err("ProjectManager.CreateProject media_location_path requires DaVinci Resolve 20.2.2+")
+        proj = pm.CreateProject(p["name"], media_location_path) if media_location_path else pm.CreateProject(p["name"])
         return _ok(name=proj.GetName()) if proj else _err(f"Failed to create '{p['name']}'")
     elif action == "load":
         proj = pm.LoadProject(p["name"])
@@ -747,6 +779,9 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
                 return {"success": bool(proj.DeleteColorGroup(g))}
         return _err(f"Color group '{p['name']}' not found")
     elif action == "apply_fairlight_preset":
+        missing = _requires_method(proj, "ApplyFairlightPresetToCurrentTimeline", "20.2.2")
+        if missing:
+            return missing
         return {"success": bool(proj.ApplyFairlightPresetToCurrentTimeline(p["preset_name"]))}
     return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset"])
 
@@ -1135,6 +1170,10 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       link_proxy(clip_id, proxy_path) -> {success}
       unlink_proxy(clip_id) -> {success}
       replace_clip(clip_id, path) -> {success}
+      set_name(clip_id, name) -> {success}
+      link_full_resolution_media(clip_id, path) -> {success}
+      monitor_growing_file(clip_id) -> {success}
+      replace_clip_preserve_sub_clip(clip_id, path) -> {success}
       get_unique_id(clip_id) -> {id}
       transcribe_audio(clip_id) -> {success}
       clear_transcription(clip_id) -> {success}
@@ -1182,6 +1221,32 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"success": bool(clip.UnlinkProxyMedia())}
     elif action == "replace_clip":
         return {"success": bool(clip.ReplaceClip(p["path"]))}
+    elif action == "set_name":
+        missing = _requires_method(clip, "SetName", "20.2")
+        if missing:
+            return missing
+        return {"success": bool(clip.SetName(p["name"]))}
+    elif action == "link_full_resolution_media":
+        missing = _requires_method(clip, "LinkFullResolutionMedia", "20.0")
+        if missing:
+            return missing
+        full_res_path = p.get("path") or p.get("full_res_media_path") or p.get("fullResMediaPath")
+        if not full_res_path:
+            return _err("Provide path or full_res_media_path")
+        return {"success": bool(clip.LinkFullResolutionMedia(full_res_path))}
+    elif action == "monitor_growing_file":
+        missing = _requires_method(clip, "MonitorGrowingFile", "20.0")
+        if missing:
+            return missing
+        return {"success": bool(clip.MonitorGrowingFile())}
+    elif action == "replace_clip_preserve_sub_clip":
+        missing = _requires_method(clip, "ReplaceClipPreserveSubClip", "20.0")
+        if missing:
+            return missing
+        replacement_path = p.get("path") or p.get("file_path") or p.get("filePath")
+        if not replacement_path:
+            return _err("Provide path or file_path")
+        return {"success": bool(clip.ReplaceClipPreserveSubClip(replacement_path))}
     elif action == "get_unique_id":
         return {"id": clip.GetUniqueId()}
     elif action == "transcribe_audio":
@@ -1196,7 +1261,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"success": bool(clip.SetMarkInOut(p["mark_in"], p["mark_out"], p.get("type", "all")))}
     elif action == "clear_mark_in_out":
         return {"success": bool(clip.ClearMarkInOut(p.get("type", "all")))}
-    return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","get_unique_id","transcribe_audio","clear_transcription","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out"])
+    return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip","get_unique_id","transcribe_audio","clear_transcription","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1220,9 +1285,9 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
       get_flags(clip_id) -> {flags}
       clear_flags(clip_id, color) -> {success}
       set_name(clip_id, name) -> {success}
-      link_full_resolution_media(clip_id) -> {success}
+      link_full_resolution_media(clip_id, path) -> {success}
       monitor_growing_file(clip_id) -> {success}
-      replace_clip_preserve_sub_clip(clip_id, media_pool_item?|replacement_clip_id?) -> {success}
+      replace_clip_preserve_sub_clip(clip_id, path) -> {success}
     """
     p = params or {}
     _, _, mp, err = _get_mp()
@@ -1255,20 +1320,31 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
     elif action == "clear_flags":
         return {"success": bool(clip.ClearFlags(p["color"]))}
     elif action == "set_name":
+        missing = _requires_method(clip, "SetName", "20.2")
+        if missing:
+            return missing
         return {"success": bool(clip.SetName(p["name"]))}
     elif action == "link_full_resolution_media":
-        return {"success": bool(clip.LinkFullResolutionMedia())}
+        missing = _requires_method(clip, "LinkFullResolutionMedia", "20.0")
+        if missing:
+            return missing
+        full_res_path = p.get("path") or p.get("full_res_media_path") or p.get("fullResMediaPath")
+        if not full_res_path:
+            return _err("Provide path or full_res_media_path")
+        return {"success": bool(clip.LinkFullResolutionMedia(full_res_path))}
     elif action == "monitor_growing_file":
+        missing = _requires_method(clip, "MonitorGrowingFile", "20.0")
+        if missing:
+            return missing
         return {"success": bool(clip.MonitorGrowingFile())}
     elif action == "replace_clip_preserve_sub_clip":
-        replacement = _find_clip(mp.GetRootFolder(), p.get("media_pool_item", ""))
-        if not replacement:
-            replacement = _find_clip(mp.GetRootFolder(), p.get("replacement_clip_id", ""))
-        if not replacement:
-            replacement = _find_clip(mp.GetRootFolder(), p.get("clip_id", ""))
-        if not replacement or replacement.GetUniqueId() == clip.GetUniqueId():
-            return _err("Provide media_pool_item or replacement_clip_id for the replacement clip")
-        return {"success": bool(clip.ReplaceClipPreserveSubClip(replacement))}
+        missing = _requires_method(clip, "ReplaceClipPreserveSubClip", "20.0")
+        if missing:
+            return missing
+        replacement_path = p.get("path") or p.get("file_path") or p.get("filePath")
+        if not replacement_path:
+            return _err("Provide path or file_path")
+        return {"success": bool(clip.ReplaceClipPreserveSubClip(replacement_path))}
     return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","add_flag","get_flags","clear_flags","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip"])
 
 
@@ -1478,9 +1554,15 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "get_items_in_track":
         return {"items": _ser(tl.GetItemsInTrack(p["track_type"], p["track_index"]))}
     elif action == "get_voice_isolation_state":
+        missing = _requires_method(tl, "GetVoiceIsolationState", "20.1")
+        if missing:
+            return missing
         state = tl.GetVoiceIsolationState(p["track_index"])
         return _ser(state) if state else {"isEnabled": False, "amount": 0}
     elif action == "set_voice_isolation_state":
+        missing = _requires_method(tl, "SetVoiceIsolationState", "20.1")
+        if missing:
+            return missing
         return {"success": bool(tl.SetVoiceIsolationState(p["track_index"], p["state"]))}
     return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state"])
 
@@ -1619,6 +1701,8 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       get_source_audio_mapping(...) -> {mapping}
       load_burnin_preset(name, ...) -> {success}
       set_name(name, ...) -> {success}
+      get_voice_isolation_state(...) -> {state}
+      set_voice_isolation_state(state, ...) -> {success}
       get_retime(...) -> {process, motion_estimation}
       set_retime(process?, motion_estimation?, ...) -> {success}  — process: nearest, frame_blend, optical_flow (or 0-3); motion_estimation: 0-6
       get_transform(...) -> {Pan, Tilt, ZoomX, ZoomY, RotationAngle, ...}
@@ -1694,7 +1778,21 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     elif action == "load_burnin_preset":
         return {"success": bool(item.LoadBurnInPreset(p["name"]))}
     elif action == "set_name":
+        missing = _requires_method(item, "SetName", "20.2")
+        if missing:
+            return missing
         return {"success": bool(item.SetName(p["name"]))}
+    elif action == "get_voice_isolation_state":
+        missing = _requires_method(item, "GetVoiceIsolationState", "20.1")
+        if missing:
+            return missing
+        state = item.GetVoiceIsolationState()
+        return {"state": _ser(state) if state else {"isEnabled": False, "amount": 0}}
+    elif action == "set_voice_isolation_state":
+        missing = _requires_method(item, "SetVoiceIsolationState", "20.1")
+        if missing:
+            return missing
+        return {"success": bool(item.SetVoiceIsolationState(p["state"]))}
 
     # ── Retime ──
     elif action == "get_retime":
@@ -1791,7 +1889,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             return _err(f"Invalid interpolation. Must be one of: {', '.join(valid)}")
         return {"success": bool(item.SetKeyframeInterpolation(p["property"], p["frame"], p["interpolation"]))}
 
-    return _unknown(action, ["get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
+    return _unknown(action, ["get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1943,6 +2041,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       set_color_cache(enabled, ...) -> {success}
       get_fusion_cache(...) -> {enabled}
       set_fusion_cache(enabled, ...) -> {success}
+      reset_all_node_colors(...) -> {success}
       stabilize(...) -> {success}
       smart_reframe(...) -> {success}
       create_magic_mask(mode, ...) -> {success}  — mode: "F" forward, "B" backward, "BI" bidirectional
@@ -2007,6 +2106,11 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
         return {"enabled": item.GetIsFusionOutputCacheEnabled()}
     elif action == "set_fusion_cache":
         return {"success": bool(item.SetFusionOutputCache(p["enabled"]))}
+    elif action == "reset_all_node_colors":
+        missing = _requires_method(item, "ResetAllNodeColors", "20.2")
+        if missing:
+            return missing
+        return {"success": bool(item.ResetAllNodeColors())}
     elif action == "stabilize":
         return {"success": bool(item.Stabilize())}
     elif action == "smart_reframe":
@@ -2015,7 +2119,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
         return {"success": bool(item.CreateMagicMask(p.get("mode", "F")))}
     elif action == "regenerate_magic_mask":
         return {"success": bool(item.RegenerateMagicMask())}
-    return _unknown(action, ["set_cdl","copy_grades","add_version","get_current_version","get_version_names","load_version","rename_version","delete_version","get_node_graph","get_color_group","assign_color_group","remove_from_color_group","export_lut","get_color_cache","set_color_cache","get_fusion_cache","set_fusion_cache","stabilize","smart_reframe","create_magic_mask","regenerate_magic_mask"])
+    return _unknown(action, ["set_cdl","copy_grades","add_version","get_current_version","get_version_names","load_version","rename_version","delete_version","get_node_graph","get_color_group","assign_color_group","remove_from_color_group","export_lut","get_color_cache","set_color_cache","get_fusion_cache","set_fusion_cache","reset_all_node_colors","stabilize","smart_reframe","create_magic_mask","regenerate_magic_mask"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2784,9 +2888,9 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Support --full flag to run the 342-tool granular server instead
+    # Support --full flag to run the 354-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 342-tool server...")
+        logger.info("Starting full 354-tool server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 

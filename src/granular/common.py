@@ -82,7 +82,7 @@ if not logging.getLogger().handlers:
         handlers=[logging.StreamHandler()],
     )
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 logger = logging.getLogger("davinci-resolve-mcp")
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
@@ -159,13 +159,28 @@ def _resolve_safe_dir(path):
         return os.path.join(os.path.expanduser("~"), "Documents", "resolve-stills")
     return path
 
+def _is_resolve_handle_live(candidate) -> bool:
+    """Return True when a cached Resolve handle still answers root API calls."""
+    try:
+        get_version = getattr(candidate, "GetVersion", None)
+        if not callable(get_version):
+            return False
+        return bool(get_version())
+    except Exception as exc:
+        logger.warning(f"Cached Resolve handle is stale: {exc}")
+        return False
+
+
 def _try_connect():
     """Attempt to connect to Resolve once. Returns resolve object or None."""
     global resolve
     try:
-        resolve = dvr_script.scriptapp("Resolve")
-        if resolve:
+        candidate = dvr_script.scriptapp("Resolve")
+        if candidate and _is_resolve_handle_live(candidate):
+            resolve = candidate
             logger.info(f"Connected: {resolve.GetProductName()} {resolve.GetVersionString()}")
+        else:
+            resolve = None
         return resolve
     except Exception as e:
         logger.error(f"Connection error: {e}")
@@ -204,8 +219,9 @@ def _launch_resolve():
 def get_resolve():
     """Lazy connection to Resolve — connects on first tool call, auto-launches if needed."""
     global resolve
-    if resolve is not None:
+    if resolve is not None and _is_resolve_handle_live(resolve):
         return resolve
+    resolve = None
     if _try_connect():
         return resolve
     logger.info("Resolve not running, attempting to launch automatically...")
@@ -330,5 +346,13 @@ def _get_timeline_item(track_type="video", track_index=1, item_index=0):
     if not items or item_index >= len(items):
         return None, {"error": f"No item at index {item_index} on {track_type} track {track_index}"}
     return items[item_index], None
+
+def _has_method(obj, method_name):
+    return callable(getattr(obj, method_name, None))
+
+def _requires_method(obj, method_name, min_version):
+    if _has_method(obj, method_name):
+        return None
+    return {"error": f"{method_name} requires DaVinci Resolve {min_version}+"}
 
 __all__ = [name for name in globals() if not name.startswith("__")]
