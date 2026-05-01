@@ -363,6 +363,10 @@ media_pool(action="get_current_folder")
 media_pool(action="create_timeline", params={"name": "Assembly"})
 media_pool(action="get_selected")
 media_pool(action="append_to_timeline", params={"clip_ids": ["<uuid>", ...]})
+# Positioned append (MediaPool.AppendToTimeline([{clipInfo}, ...])) — e.g. rebuild a subtitle row after delete_clips
+media_pool(action="append_to_timeline", params={"clip_infos": [
+  {"clip_id": "<uuid>", "start_frame": 0, "end_frame": 100, "record_frame": 1200, "track_index": 4}
+]})
 ```
 
 ### 4. Inspect and annotate timeline items

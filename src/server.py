@@ -391,6 +391,51 @@ def _navigate_folder(mp, path):
             return None
     return current
 
+
+def _build_append_clip_info_dict(root, ci: Dict[str, Any], index: int):
+    """Build one MediaPool.AppendToTimeline clipInfo map (Python API uses camelCase keys).
+
+    See docs/resolve_scripting_api.txt: mediaPoolItem, startFrame, endFrame,
+    optional mediaType, trackIndex, recordFrame.
+    """
+    if not isinstance(ci, dict):
+        return None, _err(f"clip_infos[{index}] must be an object")
+    cid = ci.get("clip_id") or ci.get("media_pool_item_id")
+    if not cid:
+        return None, _err(f"clip_infos[{index}] requires clip_id or media_pool_item_id")
+    mp_item = _find_clip(root, cid)
+    if not mp_item:
+        return None, _err(f"clip_infos[{index}]: media pool clip not found: {cid}")
+    sf = ci.get("startFrame", ci.get("start_frame"))
+    ef = ci.get("endFrame", ci.get("end_frame"))
+    if sf is None or ef is None:
+        return None, _err(
+            f"clip_infos[{index}] requires start_frame/startFrame and end_frame/endFrame "
+            "(source range on the MediaPoolItem)"
+        )
+    rf = ci.get("recordFrame", ci.get("record_frame"))
+    if rf is None:
+        return None, _err(
+            f"clip_infos[{index}] requires record_frame/recordFrame (timeline record frame)"
+        )
+    ti = ci.get("trackIndex", ci.get("track_index"))
+    if ti is None:
+        return None, _err(
+            f"clip_infos[{index}] requires track_index/trackIndex (1-based track index)"
+        )
+    out: Dict[str, Any] = {
+        "mediaPoolItem": mp_item,
+        "startFrame": sf,
+        "endFrame": ef,
+        "recordFrame": rf,
+        "trackIndex": ti,
+    }
+    mt = ci.get("mediaType", ci.get("media_type"))
+    if mt is not None:
+        out["mediaType"] = mt
+    return out, None
+
+
 def _ser(obj):
     """Serialize Resolve API objects to JSON-safe values."""
     if obj is None:
@@ -949,6 +994,12 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       import_timeline(path, options?) -> {success, name}
       delete_timelines(timeline_ids) -> {success}
       append_to_timeline(clip_ids) -> {success, count}
+        — legacy: params.clip_ids only (appends at end / default placement)
+      append_to_timeline(clip_infos) -> {success, count, items}
+        — positioned: params.clip_infos is a list of {clip_id or media_pool_item_id,
+          start_frame & end_frame (or startFrame/endFrame), record_frame/recordFrame,
+          track_index/trackIndex (1-based), optional media_type/mediaType (1=video, 2=audio)}.
+          Matches MediaPool.AppendToTimeline([{clipInfo}, ...]). Returns timeline_item_id per item.
       import_media(paths) -> {imported}
       delete_clips(clip_ids) -> {success}
       move_clips(clip_ids, target_path) -> {success}
@@ -1027,7 +1078,36 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 timelines.append(tl)
         return {"success": bool(mp.DeleteTimelines(timelines))} if timelines else _err("No timelines found")
     elif action == "append_to_timeline":
-        clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
+        if p.get("clip_infos") is not None:
+            raw = p["clip_infos"]
+            if not isinstance(raw, list):
+                return _err("clip_infos must be a list")
+            if not raw:
+                return _err("clip_infos must be a non-empty list")
+            built = []
+            for i, ci in enumerate(raw):
+                row, row_err = _build_append_clip_info_dict(root, ci, i)
+                if row_err:
+                    return row_err
+                built.append(row)
+            result = mp.AppendToTimeline(built)
+            items_out = []
+            if result:
+                for item in result:
+                    try:
+                        items_out.append(
+                            {
+                                "timeline_item_id": item.GetUniqueId(),
+                                "name": item.GetName(),
+                            }
+                        )
+                    except Exception:
+                        items_out.append({"timeline_item_id": None, "name": None})
+            return _ok(count=len(result) if result else 0, items=items_out)
+        clip_ids = p.get("clip_ids")
+        if not clip_ids:
+            return _err("Provide clip_ids (simple append) or clip_infos (positioned append)")
+        clips = [_find_clip(root, cid) for cid in clip_ids]
         clips = [c for c in clips if c]
         result = mp.AppendToTimeline(clips)
         return _ok(count=len(result) if result else 0)
