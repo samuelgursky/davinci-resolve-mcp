@@ -10,7 +10,7 @@ Usage:
     python src/server.py --full       # Start the 354-tool granular server instead
 """
 
-VERSION = "2.3.1"
+VERSION = "2.3.2"
 
 import base64
 import os
@@ -434,6 +434,40 @@ def _build_append_clip_info_dict(root, ci: Dict[str, Any], index: int):
     if mt is not None:
         out["mediaType"] = mt
     return out, None
+
+
+def _build_create_clip_info_dict(root, ci: Dict[str, Any], index: int):
+    """Build one MediaPool.CreateTimelineFromClips clipInfo map.
+
+    See docs/resolve_scripting_api.txt line 224: 4 keys only — mediaPoolItem,
+    startFrame, endFrame, recordFrame. No trackIndex, no mediaType.
+    """
+    if not isinstance(ci, dict):
+        return None, _err(f"clip_infos[{index}] must be an object")
+    cid = ci.get("clip_id") or ci.get("media_pool_item_id")
+    if not cid:
+        return None, _err(f"clip_infos[{index}] requires clip_id or media_pool_item_id")
+    mp_item = _find_clip(root, cid)
+    if not mp_item:
+        return None, _err(f"clip_infos[{index}]: media pool clip not found: {cid}")
+    sf = ci.get("startFrame", ci.get("start_frame"))
+    ef = ci.get("endFrame", ci.get("end_frame"))
+    if sf is None or ef is None:
+        return None, _err(
+            f"clip_infos[{index}] requires start_frame/startFrame and end_frame/endFrame "
+            "(source range on the MediaPoolItem)"
+        )
+    rf = ci.get("recordFrame", ci.get("record_frame"))
+    if rf is None:
+        return None, _err(
+            f"clip_infos[{index}] requires record_frame/recordFrame (timeline record frame)"
+        )
+    return {
+        "mediaPoolItem": mp_item,
+        "startFrame": sf,
+        "endFrame": ef,
+        "recordFrame": rf,
+    }, None
 
 
 def _serialize_appended_timeline_item(item, index: int):
@@ -951,7 +985,11 @@ def media_storage(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       get_subfolders(path) -> {subfolders}
       get_files(path) -> {files}
       reveal(path) -> {success}
-      import_to_pool(items) -> {imported}  — items: list of file paths or [{path, ...}]
+      import_to_pool(items) -> {imported}
+        — simple: params.items is a list of absolute file/folder paths
+      import_to_pool(item_infos) -> {imported}
+        — positioned: params.item_infos is a list of {media, startFrame, endFrame}
+          dicts per docs line 210. Mirrors MediaStorage.AddItemListToMediaPool([{itemInfo}, ...]).
       add_clip_mattes(clip_id, paths, stereo_eye?) -> {success}
       add_timeline_mattes(paths) -> {items}
     """
@@ -970,7 +1008,21 @@ def media_storage(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     elif action == "reveal":
         return {"success": bool(ms.RevealInStorage(p["path"]))}
     elif action == "import_to_pool":
-        result = ms.AddItemListToMediaPool(p["items"])
+        if p.get("item_infos") is not None:
+            raw = p["item_infos"]
+            if not isinstance(raw, list) or not raw:
+                return _err("item_infos must be a non-empty list")
+            for i, info in enumerate(raw):
+                if not isinstance(info, dict):
+                    return _err(f"item_infos[{i}] must be an object")
+                if not info.get("media"):
+                    return _err(f"item_infos[{i}] requires media (file path)")
+            result = ms.AddItemListToMediaPool(raw)
+        else:
+            items = p.get("items")
+            if not items:
+                return _err("Provide items (simple) or item_infos (positioned)")
+            result = ms.AddItemListToMediaPool(items)
         return {"imported": len(result) if result else 0}
     elif action == "add_clip_mattes":
         _, proj, mp, err = _get_mp()
@@ -1005,6 +1057,11 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       refresh() -> {success}
       create_timeline(name) -> {success, name, id}
       create_timeline_from_clips(name, clip_ids) -> {success, name, id}
+        — simple: params.clip_ids appends clips end-to-end into a new timeline
+      create_timeline_from_clips(name, clip_infos) -> {success, name, id}
+        — positioned: params.clip_infos is a list of {clip_id or media_pool_item_id,
+          start_frame & end_frame (or startFrame/endFrame), record_frame/recordFrame}.
+          Matches MediaPool.CreateTimelineFromClips(name, [{clipInfo}, ...]).
       import_timeline(path, options?) -> {success, name}
       delete_timelines(timeline_ids) -> {success}
       append_to_timeline(clip_ids) -> {success, count}
@@ -1015,6 +1072,11 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
           track_index/trackIndex (1-based), optional media_type/mediaType (1=video, 2=audio)}.
           Matches MediaPool.AppendToTimeline([{clipInfo}, ...]). Returns timeline_item_id per item.
       import_media(paths) -> {imported}
+        — simple: params.paths is a list of file/folder paths
+      import_media(clip_infos) -> {imported}
+        — image sequences: params.clip_infos is a list of
+          {FilePath, StartIndex, EndIndex} dicts (PascalCase keys per Resolve docs).
+          Example: [{"FilePath": "frame_%03d.dpx", "StartIndex": 1, "EndIndex": 100}]
       delete_clips(clip_ids) -> {success}
       move_clips(clip_ids, target_path) -> {success}
       relink(clip_ids, folder_path) -> {success}
@@ -1074,7 +1136,24 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         tl = mp.CreateEmptyTimeline(p["name"])
         return _ok(name=tl.GetName(), id=tl.GetUniqueId()) if tl else _err("Failed to create timeline")
     elif action == "create_timeline_from_clips":
-        clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
+        if p.get("clip_infos") is not None:
+            raw = p["clip_infos"]
+            if not isinstance(raw, list):
+                return _err("clip_infos must be a list")
+            if not raw:
+                return _err("clip_infos must be a non-empty list")
+            built = []
+            for i, ci in enumerate(raw):
+                row, row_err = _build_create_clip_info_dict(root, ci, i)
+                if row_err:
+                    return row_err
+                built.append(row)
+            tl = mp.CreateTimelineFromClips(p["name"], built)
+            return _ok(name=tl.GetName(), id=tl.GetUniqueId()) if tl else _err("Failed to create timeline from clip_infos")
+        clip_ids = p.get("clip_ids")
+        if not clip_ids:
+            return _err("Provide clip_ids (simple) or clip_infos (positioned)")
+        clips = [_find_clip(root, cid) for cid in clip_ids]
         clips = [c for c in clips if c]
         if not clips:
             return _err("No valid clips found")
@@ -1122,7 +1201,21 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         result = mp.AppendToTimeline(clips)
         return _ok(count=len(result) if result else 0)
     elif action == "import_media":
-        result = mp.ImportMedia(p["paths"])
+        if p.get("clip_infos") is not None:
+            raw = p["clip_infos"]
+            if not isinstance(raw, list) or not raw:
+                return _err("clip_infos must be a non-empty list")
+            for i, ci in enumerate(raw):
+                if not isinstance(ci, dict):
+                    return _err(f"clip_infos[{i}] must be an object")
+                if not ci.get("FilePath"):
+                    return _err(f"clip_infos[{i}] requires FilePath")
+            result = mp.ImportMedia(raw)
+        else:
+            paths = p.get("paths")
+            if not paths:
+                return _err("Provide paths (simple) or clip_infos (image sequences)")
+            result = mp.ImportMedia(paths)
         return {"imported": len(result) if result else 0}
     elif action == "delete_clips":
         clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
@@ -1457,7 +1550,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       get_start_timecode() -> {timecode}
       set_start_timecode(timecode) -> {success}
       get_track_count(track_type) -> {count}  — video, audio, subtitle
-      add_track(track_type, sub_type?) -> {success}
+      add_track(track_type, options?) -> {success}
+        — options dict (newTrackOptions per docs line 327): {audio_type, index}.
+          audio_type: 'mono', 'stereo', '5.1', '7.1', 'adaptive1'..'adaptive36' for audio.
+          index: 1-based slot; appended if omitted/out of bounds.
       delete_track(track_type, index) -> {success}
       get_track_sub_type(track_type, index) -> {sub_type}
       set_track_enable(track_type, index, enabled) -> {success}
@@ -1533,7 +1629,17 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "get_track_count":
         return {"count": tl.GetTrackCount(p["track_type"])}
     elif action == "add_track":
-        return {"success": bool(tl.AddTrack(p["track_type"], p.get("sub_type", "")))}
+        opts_in = p.get("options") or {}
+        new_track_options: Dict[str, Any] = {}
+        if "audio_type" in opts_in:
+            new_track_options["audioType"] = opts_in["audio_type"]
+        elif "audioType" in opts_in:
+            new_track_options["audioType"] = opts_in["audioType"]
+        if "index" in opts_in:
+            new_track_options["index"] = opts_in["index"]
+        if new_track_options:
+            return {"success": bool(tl.AddTrack(p["track_type"], new_track_options))}
+        return {"success": bool(tl.AddTrack(p["track_type"]))}
     elif action == "delete_track":
         return {"success": bool(tl.DeleteTrack(p["track_type"], p["index"]))}
     elif action == "get_track_sub_type":

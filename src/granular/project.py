@@ -1361,15 +1361,20 @@ def delete_render_preset(preset_name: str) -> Dict[str, Any]:
 def set_render_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     """Set render settings for the current project.
 
+    Mirrors Project.SetRenderSettings({settings}) per docs lines 765-799.
+
     Args:
-        settings: Dict of render settings. Supported keys include:
+        settings: Dict of render settings. All documented keys are forwarded:
             SelectAllFrames (bool), MarkIn (int), MarkOut (int),
-            TargetDir (str), CustomName (str), UniqueFilenameStyle (0/1),
+            TargetDir (str), CustomName (str), UniqueFilenameStyle (0=Prefix/1=Suffix),
             ExportVideo (bool), ExportAudio (bool), FormatWidth (int),
-            FormatHeight (int), FrameRate (float), VideoQuality (int/str),
-            AudioCodec (str), AudioBitDepth (int), AudioSampleRate (int),
-            ColorSpaceTag (str), GammaTag (str), ExportAlpha (bool),
-            ExportSubtitle (bool), SubtitleFormat ("BurnIn", "EmbeddedCaptions", or "SeparateFile").
+            FormatHeight (int), FrameRate (float), PixelAspectRatio (float),
+            VideoQuality (int/str), AudioCodec (str), AudioBitDepth (int),
+            AudioSampleRate (int), ColorSpaceTag (str), GammaTag (str),
+            ExportAlpha (bool), EncodingProfile (str), MultiPassEncode (bool),
+            AlphaMode (int), NetworkOptimization (bool), ClipStartFrame (int),
+            TimelineStartTimecode (str), ReplaceExistingFilesInPlace (bool),
+            ExportSubtitle (bool), SubtitleFormat ("BurnIn", "EmbeddedCaptions", "SeparateFile").
     """
     resolve = get_resolve()
     if resolve is None:

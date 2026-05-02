@@ -36,14 +36,46 @@ def list_media_pool_clips() -> List[Dict[str, Any]]:
 
 
 @mcp.tool()
-def import_media(file_path: str) -> str:
-    """Import media file into the current project's media pool.
-    
+def import_media(
+    paths: Optional[List[str]] = None,
+    clip_infos: Optional[List[Dict[str, Any]]] = None,
+    file_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Import media into the current project's media pool.
+
     Args:
-        file_path: The path to the media file to import
+        paths: Simple form — list of file or folder paths to import.
+        clip_infos: Image-sequence form — list of dicts with keys FilePath
+            (required), StartIndex, EndIndex. Mirrors
+            MediaPool.ImportMedia([{clipInfo}, ...]). Each entry imports as
+            one MediaPoolItem unless 'Show Individual Frames' is enabled.
+            Example: [{"FilePath": "frame_%03d.dpx", "StartIndex": 1, "EndIndex": 100}]
+        file_path: Single-path convenience for backward compatibility.
     """
-    from api.media_operations import import_media as import_media_func
-    return import_media_func(resolve, file_path)
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if clip_infos is not None:
+        if not isinstance(clip_infos, list) or not clip_infos:
+            return {"error": "clip_infos must be a non-empty list"}
+        for i, ci in enumerate(clip_infos):
+            if not isinstance(ci, dict):
+                return {"error": f"clip_infos[{i}] must be an object"}
+            if not ci.get("FilePath"):
+                return {"error": f"clip_infos[{i}] requires FilePath"}
+        result = mp.ImportMedia(clip_infos)
+    else:
+        path_list = paths if paths is not None else ([file_path] if file_path else None)
+        if not path_list:
+            return {"error": "Provide paths (list), clip_infos (image sequences), or file_path"}
+        result = mp.ImportMedia(path_list)
+    if not result:
+        return {"success": False, "error": "Failed to import media"}
+    return {
+        "success": True,
+        "imported": len(result),
+        "clips": [{"name": c.GetName(), "id": c.GetUniqueId()} for c in result],
+    }
 
 
 @mcp.tool()

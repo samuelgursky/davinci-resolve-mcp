@@ -323,18 +323,34 @@ def timeline_set_current_timecode(timecode: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def timeline_add_track(track_type: str, sub_track_type: str = "") -> Dict[str, Any]:
+def timeline_add_track(
+    track_type: str,
+    audio_type: Optional[str] = None,
+    index: Optional[int] = None,
+) -> Dict[str, Any]:
     """Add a new track to the timeline.
+
+    Mirrors Timeline.AddTrack(trackType, {newTrackOptions}) per docs line 327.
 
     Args:
         track_type: 'video', 'audio', or 'subtitle'.
-        sub_track_type: For audio: 'mono', 'stereo', '5.1', '7.1', 'adaptive'. Default: ''.
+        audio_type: For audio tracks: 'mono', 'stereo', 'lrc', 'lcr', 'lrcs', 'lcrs',
+            'quad', '5.0', '5.0film', '5.1', '5.1film', '7.0', '7.0film', '7.1',
+            '7.1film', 'adaptive1' through 'adaptive36'. Defaults to 'mono' for audio
+            tracks if omitted.
+        index: 1-based track index where 1 <= index <= GetTrackCount(track_type) + 1.
+            If omitted or out of bounds, the track is appended.
     """
     _, tl, err = _get_timeline()
     if err:
         return err
-    if sub_track_type:
-        result = tl.AddTrack(track_type, sub_track_type)
+    options: Dict[str, Any] = {}
+    if audio_type is not None:
+        options["audioType"] = audio_type
+    if index is not None:
+        options["index"] = index
+    if options:
+        result = tl.AddTrack(track_type, options)
     else:
         result = tl.AddTrack(track_type)
     return {"success": bool(result), "track_type": track_type}
@@ -868,17 +884,38 @@ def timeline_get_unique_id() -> Dict[str, Any]:
 
 
 @mcp.tool()
-def timeline_create_subtitles_from_audio(language: str = "auto", preset: str = "default") -> Dict[str, Any]:
+def timeline_create_subtitles_from_audio(
+    language: str = "auto",
+    preset: str = "default",
+    chars_per_line: Optional[int] = None,
+    line_break: Optional[str] = None,
+    gap: Optional[int] = None,
+) -> Dict[str, Any]:
     """Create subtitles from audio in the current timeline.
 
+    Mirrors Timeline.CreateSubtitlesFromAudio({autoCaptionSettings}) per docs lines 718-761.
+
     Args:
-        language: Language for captioning ('auto', 'english', 'french', etc.). Default: 'auto'.
-        preset: Caption preset ('default', 'teletext', 'netflix'). Default: 'default'.
+        language: 'auto', 'danish', 'dutch', 'english', 'french', 'german', 'italian',
+            'japanese', 'korean', 'mandarin_simplified', 'mandarin_traditional',
+            'norwegian', 'portuguese', 'russian', 'spanish', 'swedish'. Default: 'auto'.
+        preset: 'default', 'teletext', 'netflix'. Default: 'default'.
+        chars_per_line: Integer 1-60. Resolve default is 42 (or 16 for Netflix preset).
+        line_break: 'single' or 'double'. Default: 'single' on Resolve side.
+        gap: Integer 0-10. Default: 0 on Resolve side.
     """
+    r = get_resolve()
+    if r is None:
+        return {"error": "Not connected to DaVinci Resolve"}
     _, tl, err = _get_timeline()
     if err:
         return err
-    settings = {}
+    settings, settings_err = _build_subtitle_settings(
+        r, language=language, preset=preset,
+        chars_per_line=chars_per_line, line_break=line_break, gap=gap,
+    )
+    if settings_err:
+        return settings_err
     result = tl.CreateSubtitlesFromAudio(settings)
     return {"success": bool(result)}
 
@@ -1002,17 +1039,36 @@ def timeline_clear_mark_in_out() -> Dict[str, Any]:
 
 
 @mcp.tool()
-def create_timeline_from_clips(name: str, clip_ids: List[str] = None) -> Dict[str, Any]:
+def create_timeline_from_clips(
+    name: str,
+    clip_ids: Optional[List[str]] = None,
+    clip_infos: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Create a new timeline from specified media pool clips.
 
     Args:
         name: Name for the new timeline.
-        clip_ids: List of MediaPoolItem unique IDs to include. If None, uses selected clips.
+        clip_ids: Simple form — list of MediaPoolItem unique IDs to append end-to-end.
+        clip_infos: Positioned form — list of dicts with keys clip_id (or
+            media_pool_item_id), start_frame, end_frame, record_frame.
+            Mirrors MediaPool.CreateTimelineFromClips(name, [{clipInfo}, ...]).
+        If both are None, uses the currently selected media pool clips.
     """
     _, mp, err = _get_mp()
     if err:
         return err
-    if clip_ids:
+    if clip_infos is not None:
+        if not isinstance(clip_infos, list) or not clip_infos:
+            return {"error": "clip_infos must be a non-empty list"}
+        root = mp.GetRootFolder()
+        built = []
+        for i, ci in enumerate(clip_infos):
+            row, row_err = _build_create_clip_info_dict(root, ci, i)
+            if row_err:
+                return row_err
+            built.append(row)
+        tl = mp.CreateTimelineFromClips(name, built)
+    elif clip_ids:
         root = mp.GetRootFolder()
         clips = []
         for cid in clip_ids:

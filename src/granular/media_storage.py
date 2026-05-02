@@ -69,11 +69,17 @@ def reveal_in_media_storage(file_path: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def add_items_to_media_pool_from_storage(file_paths: List[str]) -> Dict[str, Any]:
+def add_items_to_media_pool_from_storage(
+    file_paths: Optional[List[str]] = None,
+    item_infos: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Add specified file/folder paths from Media Storage into current Media Pool folder.
 
     Args:
-        file_paths: List of absolute file or folder paths to add to the Media Pool.
+        file_paths: Simple form — list of absolute file/folder paths.
+        item_infos: Positioned form — list of dicts with keys media (required),
+            startFrame, endFrame. Mirrors
+            MediaStorage.AddItemListToMediaPool([{itemInfo}, ...]) per docs line 210.
     """
     resolve = get_resolve()
     if resolve is None:
@@ -81,7 +87,19 @@ def add_items_to_media_pool_from_storage(file_paths: List[str]) -> Dict[str, Any
     ms = resolve.GetMediaStorage()
     if not ms:
         return {"error": "Failed to get MediaStorage"}
-    clips = ms.AddItemListToMediaPool(file_paths)
+    if item_infos is not None:
+        if not isinstance(item_infos, list) or not item_infos:
+            return {"error": "item_infos must be a non-empty list"}
+        for i, info in enumerate(item_infos):
+            if not isinstance(info, dict):
+                return {"error": f"item_infos[{i}] must be an object"}
+            if not info.get("media"):
+                return {"error": f"item_infos[{i}] requires media (file path)"}
+        clips = ms.AddItemListToMediaPool(item_infos)
+    else:
+        if not file_paths:
+            return {"error": "Provide file_paths (simple) or item_infos (positioned)"}
+        clips = ms.AddItemListToMediaPool(file_paths)
     if clips:
         return {"success": True, "clips_added": len(clips)}
     return {"success": False, "error": "Failed to add items to Media Pool"}

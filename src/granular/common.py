@@ -82,7 +82,7 @@ if not logging.getLogger().handlers:
         handlers=[logging.StreamHandler()],
     )
 
-VERSION = "2.3.1"
+VERSION = "2.3.2"
 logger = logging.getLogger("davinci-resolve-mcp")
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
@@ -297,6 +297,107 @@ def _find_clip_by_id(folder, target_id):
         if found:
             return found
     return None
+
+_SUBTITLE_LANGUAGE_SUFFIXES = {
+    "auto": "AUTO",
+    "danish": "DANISH",
+    "dutch": "DUTCH",
+    "english": "ENGLISH",
+    "french": "FRENCH",
+    "german": "GERMAN",
+    "italian": "ITALIAN",
+    "japanese": "JAPANESE",
+    "korean": "KOREAN",
+    "mandarin_simplified": "MANDARIN_SIMPLIFIED",
+    "mandarin-simplified": "MANDARIN_SIMPLIFIED",
+    "mandarin_traditional": "MANDARIN_TRADITIONAL",
+    "mandarin-traditional": "MANDARIN_TRADITIONAL",
+    "norwegian": "NORWEGIAN",
+    "portuguese": "PORTUGUESE",
+    "russian": "RUSSIAN",
+    "spanish": "SPANISH",
+    "swedish": "SWEDISH",
+}
+
+_SUBTITLE_PRESET_SUFFIXES = {
+    "default": "SUBTITLE_DEFAULT",
+    "subtitle_default": "SUBTITLE_DEFAULT",
+    "subtitle-default": "SUBTITLE_DEFAULT",
+    "teletext": "TELETEXT",
+    "netflix": "NETFLIX",
+}
+
+_SUBTITLE_LINE_BREAK_SUFFIXES = {
+    "single": "LINE_SINGLE",
+    "double": "LINE_DOUBLE",
+}
+
+
+def _build_subtitle_settings(resolve_obj, language=None, preset=None,
+                             chars_per_line=None, line_break=None, gap=None):
+    """Build the autoCaptionSettings dict for Timeline.CreateSubtitlesFromAudio.
+
+    Maps user-friendly strings to resolve.AUTO_CAPTION_* constants per docs
+    lines 720-761. Returns (settings_dict, None) or (None, error_dict).
+    """
+    settings = {}
+    if language is not None:
+        suffix = _SUBTITLE_LANGUAGE_SUFFIXES.get(str(language).strip().lower())
+        if not suffix:
+            valid = sorted(set(_SUBTITLE_LANGUAGE_SUFFIXES.keys()))
+            return None, {"error": f"Unknown language '{language}'. Valid: {valid}"}
+        settings[resolve_obj.SUBTITLE_LANGUAGE] = getattr(resolve_obj, f"AUTO_CAPTION_{suffix}")
+    if preset is not None:
+        suffix = _SUBTITLE_PRESET_SUFFIXES.get(str(preset).strip().lower())
+        if not suffix:
+            valid = sorted(set(_SUBTITLE_PRESET_SUFFIXES.keys()))
+            return None, {"error": f"Unknown preset '{preset}'. Valid: {valid}"}
+        settings[resolve_obj.SUBTITLE_CAPTION_PRESET] = getattr(resolve_obj, f"AUTO_CAPTION_{suffix}")
+    if chars_per_line is not None:
+        if not isinstance(chars_per_line, int) or not (1 <= chars_per_line <= 60):
+            return None, {"error": "chars_per_line must be an integer between 1 and 60"}
+        settings[resolve_obj.SUBTITLE_CHARS_PER_LINE] = chars_per_line
+    if line_break is not None:
+        suffix = _SUBTITLE_LINE_BREAK_SUFFIXES.get(str(line_break).strip().lower())
+        if not suffix:
+            valid = sorted(set(_SUBTITLE_LINE_BREAK_SUFFIXES.keys()))
+            return None, {"error": f"Unknown line_break '{line_break}'. Valid: {valid}"}
+        settings[resolve_obj.SUBTITLE_LINE_BREAK] = getattr(resolve_obj, f"AUTO_CAPTION_{suffix}")
+    if gap is not None:
+        if not isinstance(gap, int) or not (0 <= gap <= 10):
+            return None, {"error": "gap must be an integer between 0 and 10"}
+        settings[resolve_obj.SUBTITLE_GAP] = gap
+    return settings, None
+
+
+def _build_create_clip_info_dict(root, ci, index):
+    """Build one MediaPool.CreateTimelineFromClips clipInfo map.
+
+    See docs/resolve_scripting_api.txt line 224: 4 keys — mediaPoolItem,
+    startFrame, endFrame, recordFrame.
+    """
+    if not isinstance(ci, dict):
+        return None, {"error": f"clip_infos[{index}] must be an object"}
+    cid = ci.get("clip_id") or ci.get("media_pool_item_id")
+    if not cid:
+        return None, {"error": f"clip_infos[{index}] requires clip_id or media_pool_item_id"}
+    mp_item = _find_clip_by_id(root, cid)
+    if not mp_item:
+        return None, {"error": f"clip_infos[{index}]: media pool clip not found: {cid}"}
+    sf = ci.get("startFrame", ci.get("start_frame"))
+    ef = ci.get("endFrame", ci.get("end_frame"))
+    if sf is None or ef is None:
+        return None, {"error": f"clip_infos[{index}] requires start_frame/startFrame and end_frame/endFrame"}
+    rf = ci.get("recordFrame", ci.get("record_frame"))
+    if rf is None:
+        return None, {"error": f"clip_infos[{index}] requires record_frame/recordFrame"}
+    return {
+        "mediaPoolItem": mp_item,
+        "startFrame": sf,
+        "endFrame": ef,
+        "recordFrame": rf,
+    }, None
+
 
 def _find_clips_by_ids(folder, ids_set):
     found = []
