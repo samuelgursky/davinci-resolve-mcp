@@ -1091,19 +1091,20 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                     return row_err
                 built.append(row)
             result = mp.AppendToTimeline(built)
+            if not result:
+                return _err("Failed to append clip_infos to timeline")
             items_out = []
-            if result:
-                for item in result:
-                    try:
-                        items_out.append(
-                            {
-                                "timeline_item_id": item.GetUniqueId(),
-                                "name": item.GetName(),
-                            }
-                        )
-                    except Exception:
-                        items_out.append({"timeline_item_id": None, "name": None})
-            return _ok(count=len(result) if result else 0, items=items_out)
+            for item in result:
+                try:
+                    items_out.append(
+                        {
+                            "timeline_item_id": item.GetUniqueId(),
+                            "name": item.GetName(),
+                        }
+                    )
+                except Exception:
+                    items_out.append({"timeline_item_id": None, "name": None})
+            return _ok(count=len(result), items=items_out)
         clip_ids = p.get("clip_ids")
         if not clip_ids:
             return _err("Provide clip_ids (simple append) or clip_infos (positioned append)")
