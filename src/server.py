@@ -10,7 +10,7 @@ Usage:
     python src/server.py --full       # Start the 354-tool granular server instead
 """
 
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 
 import base64
 import os
@@ -434,6 +434,20 @@ def _build_append_clip_info_dict(root, ci: Dict[str, Any], index: int):
     if mt is not None:
         out["mediaType"] = mt
     return out, None
+
+
+def _serialize_appended_timeline_item(item, index: int):
+    if not item:
+        return None, _err(f"Failed to append clip_infos to timeline: missing timeline item at index {index}")
+    try:
+        item_id = item.GetUniqueId()
+        name = item.GetName()
+    except Exception as exc:
+        logger.warning(f"Invalid timeline item returned for clip_infos[{index}]: {exc}")
+        return None, _err(f"Failed to append clip_infos to timeline: invalid timeline item at index {index}")
+    if not item_id:
+        return None, _err(f"Failed to append clip_infos to timeline: missing timeline item id at index {index}")
+    return {"timeline_item_id": item_id, "name": name}, None
 
 
 def _ser(obj):
@@ -1094,16 +1108,11 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             if not result:
                 return _err("Failed to append clip_infos to timeline")
             items_out = []
-            for item in result:
-                try:
-                    items_out.append(
-                        {
-                            "timeline_item_id": item.GetUniqueId(),
-                            "name": item.GetName(),
-                        }
-                    )
-                except Exception:
-                    items_out.append({"timeline_item_id": None, "name": None})
+            for i, item in enumerate(result):
+                item_out, item_err = _serialize_appended_timeline_item(item, i)
+                if item_err:
+                    return item_err
+                items_out.append(item_out)
             return _ok(count=len(result), items=items_out)
         clip_ids = p.get("clip_ids")
         if not clip_ids:
