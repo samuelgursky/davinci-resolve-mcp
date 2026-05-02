@@ -68,17 +68,6 @@ def get_current_timeline() -> Dict[str, Any]:
     return result
 
 
-@mcp.resource("resolve://timeline-tracks/{timeline_name}")
-def get_timeline_tracks(timeline_name: str = None) -> Dict[str, Any]:
-    """Get the track structure of a timeline.
-    
-    Args:
-        timeline_name: Optional name of the timeline to get tracks from. Uses current timeline if None.
-    """
-    from api.timeline_operations import get_timeline_tracks as get_tracks_func
-    return get_tracks_func(resolve, timeline_name)
-
-
 @mcp.tool()
 def create_timeline(name: str) -> str:
     """Create a new timeline with the given name.
@@ -110,42 +99,6 @@ def create_timeline(name: str) -> str:
         return f"Successfully created timeline '{name}'"
     else:
         return f"Failed to create timeline '{name}'"
-
-
-@mcp.tool()
-def create_empty_timeline(name: str, 
-                       frame_rate: str = None, 
-                       resolution_width: int = None, 
-                       resolution_height: int = None,
-                       start_timecode: str = None,
-                       video_tracks: int = None,
-                       audio_tracks: int = None) -> str:
-    """Create a new timeline with the given name and custom settings.
-    
-    Args:
-        name: The name for the new timeline
-        frame_rate: Optional frame rate (e.g. "24", "29.97", "30", "60")
-        resolution_width: Optional width in pixels (e.g. 1920)
-        resolution_height: Optional height in pixels (e.g. 1080)
-        start_timecode: Optional start timecode (e.g. "01:00:00:00")
-        video_tracks: Optional number of video tracks (Default is project setting)
-        audio_tracks: Optional number of audio tracks (Default is project setting)
-    """
-    from api.timeline_operations import create_empty_timeline as create_empty_timeline_func
-    return create_empty_timeline_func(resolve, name, frame_rate, resolution_width, 
-                                    resolution_height, start_timecode, 
-                                    video_tracks, audio_tracks)
-
-
-@mcp.tool()
-def delete_timeline(name: str) -> str:
-    """Delete a timeline by name.
-    
-    Args:
-        name: The name of the timeline to delete
-    """
-    from api.timeline_operations import delete_timeline as delete_timeline_func
-    return delete_timeline_func(resolve, name)
 
 
 @mcp.tool()
@@ -182,19 +135,6 @@ def set_current_timeline(name: str) -> str:
                 return f"Failed to switch to timeline '{name}'"
     
     return f"Error: Timeline '{name}' not found"
-
-
-@mcp.tool()
-def add_marker(frame: int = None, color: str = "Blue", note: str = "") -> str:
-    """Add a marker at the specified frame in the current timeline.
-    
-    Args:
-        frame: The frame number to add the marker at (defaults to current position if None)
-        color: The marker color (Blue, Cyan, Green, Yellow, Red, Pink, Purple, Fuchsia, Rose, Lavender, Sky, Mint, Lemon, Sand, Cocoa, Cream)
-        note: Text note to add to the marker
-    """
-    from api.timeline_operations import add_marker as add_marker_func
-    return add_marker_func(resolve, frame, color, note)
 
 
 @mcp.resource("resolve://timeline-clips")
@@ -257,18 +197,6 @@ def list_timelines_tool() -> List[str]:
     """List all timelines in the current project as a tool."""
     logger.info("Received request to list timelines via tool")
     return list_timelines()
-
-
-@mcp.tool()
-def add_clip_to_timeline(clip_name: str, timeline_name: str = None) -> str:
-    """Add a media pool clip to the timeline.
-    
-    Args:
-        clip_name: Name of the clip in the media pool
-        timeline_name: Optional timeline to target (uses current if not specified)
-    """
-    from api.media_operations import add_clip_to_timeline as add_clip_func
-    return add_clip_func(resolve, clip_name, timeline_name)
 
 
 @mcp.tool()

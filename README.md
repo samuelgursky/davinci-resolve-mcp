@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/badge/version-2.3.2-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
-[![Tools](https://img.shields.io/badge/MCP%20Tools-27%20(354%20full)-blue.svg)](#server-modes)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-27%20(336%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.10--3.12-green.svg)](https://www.python.org/downloads/)
@@ -21,8 +21,28 @@ API parity sweep — closing documented overloads and dropped parameters that th
 - **`CreateSubtitlesFromAudio` actually wired up** — granular `timeline_create_subtitles_from_audio` previously advertised `language` and `preset` parameters then silently dropped them. Now maps user strings (e.g. `"korean"`, `"netflix"`, `"double"`) to `resolve.AUTO_CAPTION_*` constants per docs lines 720-761, and exposes the missing `chars_per_line`, `line_break`, `gap` keys
 - **Granular `import_media` no longer crashes** — the granular `import_media` tool was importing from a deleted `api.media_operations` module and would throw `ModuleNotFoundError` on first call. Rewritten to call `MediaPool.ImportMedia` directly and to share the new `clip_infos` overload
 - **`SetRenderSettings` docstring completeness** — granular `set_render_settings` now documents all 27 keys per docs lines 765-799 (previously omitted `EncodingProfile`, `MultiPassEncode`, `AlphaMode`, `NetworkOptimization`, `PixelAspectRatio`, `ClipStartFrame`, `TimelineStartTimecode`, `ReplaceExistingFilesInPlace`)
-
-Note: the granular `media_pool.py`, `timeline.py`, `graph.py`, and `project.py` modules contain ~25 additional tools that import from the same deleted `api.*` namespace and would also crash on first call. Tracking separately for a follow-up release.
+- **Removed 18 broken granular tools (+ 7 broken resources)** that imported from a deleted `api.*` namespace and would crash with `ModuleNotFoundError` on first call. All 25 had working equivalents elsewhere or wrapped undocumented Resolve methods. Granular tool count is now **336** (was 354). Migration map for any caller that was hitting them:
+  - `delete_media` → `media_pool(action="delete_clips")`
+  - `move_media_to_bin` → `media_pool(action="move_clips")`
+  - `auto_sync_audio` (granular tool) → `media_pool(action="auto_sync_audio")`
+  - `unlink_clips` → `media_pool(action="unlink")`
+  - `relink_clips` → `media_pool(action="relink")`
+  - `create_bin` → `media_pool(action="add_subfolder")`
+  - `list_media_pool_bins` (resource) → `folder(action="get_subfolders")`
+  - `get_media_pool_bin_contents` (resource) → `folder(action="get_clips")`
+  - `get_timeline_tracks` (resource) → `timeline(action="get_track_count")` + `timeline(action="get_items_in_track")`
+  - `create_empty_timeline` → `media_pool(action="create_timeline")`
+  - `delete_timeline` → `media_pool(action="delete_timelines")`
+  - `add_marker` (granular timeline tool) → `timeline_markers(action="add")`
+  - `add_clip_to_timeline` → `media_pool(action="append_to_timeline")`
+  - `apply_lut` (granular graph tool) → `graph(action="set_lut")`
+  - `copy_grade` → `timeline_item_color(action="copy_grades")`
+  - `get_render_presets` (resource) → `render(action="list_presets")`
+  - `add_to_render_queue` → `render(action="add_job")`
+  - `start_render` (granular project tool) → `render(action="start")`
+  - `get_render_queue_status` (resource) → `render(action="list_jobs")` + `render(action="get_job_status")`
+  - `clear_render_queue` (granular project tool) → `render(action="delete_all_jobs")`
+  - `create_sub_clip`, `get_current_color_node`, `get_color_wheel_params`, `set_color_wheel_param`, `add_node`: removed — these wrapped undocumented Resolve methods that were never exposed in the official scripting API. No replacement exists; use the Resolve UI for now.
 
 ### v2.3.1
 
@@ -109,7 +129,7 @@ Note: the granular `media_pool.py`, `timeline.py`, `graph.py`, and `project.py` 
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **27** compound (default) / **354** granular |
+| MCP Tools | **27** compound (default) / **336** granular |
 | API Methods Covered | **336/336** (100%) |
 | Methods Live Tested | **331/336** (98.5%) |
 | Live Test Pass Rate | **331/331** (100%) |
@@ -119,7 +139,7 @@ Note: the granular `media_pool.py`, `timeline.py`, `graph.py`, and `project.py` 
 
 ## API Coverage
 
-Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **27 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **354 individual tools** for power users. Both modes cover all 13 API object classes:
+Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **27 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **336 individual tools** for power users. Both modes cover all 13 API object classes:
 
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|

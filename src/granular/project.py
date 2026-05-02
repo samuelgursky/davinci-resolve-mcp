@@ -275,47 +275,6 @@ def close_project() -> str:
         return f"Error closing project: {str(e)}"
 
 
-@mcp.resource("resolve://delivery/render-presets")
-def get_render_presets() -> List[Dict[str, Any]]:
-    """Get all available render presets in the current project."""
-    from api.delivery_operations import get_render_presets as get_presets_func
-    return get_presets_func(resolve)
-
-
-@mcp.tool()
-def add_to_render_queue(preset_name: str, timeline_name: str = None, use_in_out_range: bool = False) -> Dict[str, Any]:
-    """Add a timeline to the render queue with the specified preset.
-    
-    Args:
-        preset_name: Name of the render preset to use
-        timeline_name: Name of the timeline to render (uses current if None)
-        use_in_out_range: Whether to render only the in/out range instead of entire timeline
-    """
-    from api.delivery_operations import add_to_render_queue as add_queue_func
-    return add_queue_func(resolve, preset_name, timeline_name, use_in_out_range)
-
-
-@mcp.tool()
-def start_render() -> Dict[str, Any]:
-    """Start rendering the jobs in the render queue."""
-    from api.delivery_operations import start_render as start_render_func
-    return start_render_func(resolve)
-
-
-@mcp.resource("resolve://delivery/render-queue/status")
-def get_render_queue_status() -> Dict[str, Any]:
-    """Get the status of jobs in the render queue."""
-    from api.delivery_operations import get_render_queue_status as get_status_func
-    return get_status_func(resolve)
-
-
-@mcp.tool()
-def clear_render_queue() -> Dict[str, Any]:
-    """Clear all jobs from the render queue."""
-    from api.delivery_operations import clear_render_queue as clear_queue_func
-    return clear_queue_func(resolve)
-
-
 @mcp.resource("resolve://cache/settings")
 def get_cache_settings() -> Dict[str, Any]:
     """Get current cache settings from the project."""
