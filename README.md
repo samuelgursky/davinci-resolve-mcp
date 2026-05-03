@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/badge/version-2.3.3-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
-[![Tools](https://img.shields.io/badge/MCP%20Tools-27%20(337%20full)-blue.svg)](#server-modes)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-27%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.10--3.12-green.svg)](https://www.python.org/downloads/)
@@ -26,19 +26,21 @@ Granular layer hardening — closing exposure gaps and dropped-dict-key bugs sur
 - **`load_cloud_project_tool`** — was missing entirely; compound had it.
 - **`rename_color_group`** — wraps `ColorGroup.SetName` (compound had it via `color_group(action="set_name")` but no granular tool).
 
-**Removed 4 undocumented cloud method wrappers** (same v2.3.2 cleanup pattern):
+**Removed 4 undocumented cloud method wrappers**:
 - `get_cloud_projects` resource → `GetCloudProjectList` not in API docs
 - `export_project_to_cloud_tool` → `ExportToCloud`/`ExportProjectToCloud` not in API docs
 - `add_user_to_cloud_project_tool` → `AddUserToCloudProject` not in API docs
 - `remove_user_from_cloud_project_tool` → `RemoveUserFromCloudProject` not in API docs
 
+**Removed 9 legacy granular gallery tools** that wrapped undocumented or renamed methods (`gallery.GetAlbums()`, `gallery.CreateAlbum()`, `still.GetTimecode()`, `still.IsGrabbed()`, etc.). The proper documented Gallery and GalleryStillAlbum wrappers (lines 743+ of the previous gallery.py — all 14 of those, e.g. `get_gallery_still_albums`, `create_gallery_still_album`, `import_stills_to_album`, `export_stills_from_album`, `get_album_stills`, `set_still_label`) cover the documented API surface and remain. Removed: `get_color_presets`, `save_color_preset`, `apply_color_preset`, `delete_color_preset`, `create_color_preset_album`, `delete_color_preset_album`, `export_lut`, `get_lut_formats`, `export_all_powergrade_luts`.
+
+**Removed 2 granular project optimized-media tools** that wrapped undocumented Resolve methods (`Project.GenerateOptimizedMedia`, `Project.DeleteOptimizedMedia`, `MediaPool.SetClipSelection` — none in API docs). Removed: `generate_optimized_media`, `delete_optimized_media`. Use the Resolve UI for optimized-media generation; `set_optimized_media_mode` (which uses the documented `Project.SetSetting("OptimizedMediaMode", ...)`) is preserved.
+
 **Deprecated method call fixed**: `timeline(action="get_items_in_track")` was calling the deprecated `tl.GetItemsInTrack()` form (docs line 989, marked deprecated) instead of the supported `tl.GetItemListInTrack()` (line 350). Every other call site already used the correct form.
 
-**New: API parity CI guard** at `scripts/audit_api_parity.py`. Parses `docs/resolve_scripting_api.txt` and verifies (1) no `from api.X` broken imports remain, (2) every documented Resolve method appears somewhere in `src/`, (3) wrappers calling undocumented methods are flagged for review. Run with `python3 scripts/audit_api_parity.py`. Designed to catch the v2.3.2 broken-import and v2.3.2/v2.3.3 undocumented-wrapper bug classes in CI.
+**New: API parity CI guard** at `scripts/audit_api_parity.py`. Parses `docs/resolve_scripting_api.txt` and verifies (1) no `from api.X` broken imports remain, (2) every documented Resolve method appears somewhere in `src/`, (3) wrappers calling undocumented methods are flagged for review. Includes an allowlist for legitimate undocumented-but-real Resolve API surface (Fusion compositing API, UIManager methods like `OpenProjectSettings`/`LoadUILayout`/`SaveUILayout`, internal type-discrimination helpers like `TimelineItem.GetType`/`GetMediaType`). Run with `python3 scripts/audit_api_parity.py` — currently passes all three checks cleanly.
 
-**Tool count: 337 granular tools** (337 = 336 + 4 added − 3 tools removed; 1 resource also removed). 20 new unit tests against Resolve stubs covering the cloud settings builder, audio sync settings builder, and AppendToTimeline clipInfo builder. All 41 tests pass without a live Resolve connection.
-
-**Tracking for follow-up (v2.3.4)**: parity-check advisory flags ~14 wrappers in `src/granular/gallery.py`, `src/granular/project.py`, and `src/granular/timeline_item.py` that call methods (e.g., `Gallery.GetAlbums`, `DeleteOptimizedMedia`, `GenerateOptimizedMedia`, `SetClipSelection`, `TimelineItem.GetMediaType`) that do not appear in the official scripting API docs. These need investigation to determine whether they should be replaced with documented equivalents or removed.
+**Tool count: 328 granular tools** (was 354 before v2.3.2; net change since v2.3.1 is −26 broken/duplicate/undocumented tools removed and +4 missing tools added). 20 new unit tests against Resolve stubs covering the cloud settings builder, audio sync settings builder, and AppendToTimeline clipInfo builder. All 41 tests pass without a live Resolve connection.
 
 ### v2.3.2
 
@@ -159,7 +161,7 @@ API parity sweep — closing documented overloads and dropped parameters that th
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **27** compound (default) / **337** granular |
+| MCP Tools | **27** compound (default) / **328** granular |
 | API Methods Covered | **336/336** (100%) |
 | Methods Live Tested | **331/336** (98.5%) |
 | Live Test Pass Rate | **331/331** (100%) |
@@ -169,7 +171,7 @@ API parity sweep — closing documented overloads and dropped parameters that th
 
 ## API Coverage
 
-Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **27 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **337 individual tools** for power users. Both modes cover all 13 API object classes:
+Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **27 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **328 individual tools** for power users. Both modes cover all 13 API object classes:
 
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|

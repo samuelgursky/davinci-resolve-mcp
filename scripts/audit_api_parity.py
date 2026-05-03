@@ -132,12 +132,43 @@ def find_methods_missing_from_source(
     return missing
 
 
+# Methods that ARE real Resolve API surface but are documented elsewhere
+# (Fusion compositing API, UIManager, internal type-discrimination helpers).
+# These should NOT be flagged as suspicious even though they don't appear
+# in docs/resolve_scripting_api.txt.
+ALLOWLIST_UNDOCUMENTED: Set[str] = {
+    # Fusion API (documented in Blackmagic's Fusion scripting docs, not in
+    # the Resolve scripting README that ships alongside Resolve)
+    "AddTool", "FindTool", "GetTool", "GetToolList", "Delete", "GetAttrs",
+    "SetAttrs", "GetCurrentComp", "GetInput", "GetInputList", "GetOutput",
+    "GetOutputList", "GetConnectedOutput", "SetInput", "GetKeyFrames",
+    "AddKeyframe", "DeleteKeyframe", "ModifyKeyframe", "RemoveKeyFrame",
+    "GetKeyframeAtIndex", "GetKeyframeCount", "GetPropertyAtKeyframeIndex",
+    "SetKeyframeInterpolation", "Render", "StartUndo",
+    # UIManager / Resolve app-control API (documented under UIManager, not
+    # the main Resolve scripting README)
+    "GetUIManager", "OpenPreferences", "SetHighPriority",
+    "OpenProjectSettings", "LoadUILayout", "SaveUILayout",
+    # Lua-table iteration helper used as a fallback in object_inspection.py
+    "GetKeyList",
+    # Project metadata accessor used defensively (hasattr-guarded)
+    "GetPath",
+    # GetRenderSettings: documented inverse of SetRenderSettings; the docs
+    # only show SetRenderSettings explicitly but Resolve exposes the getter.
+    "GetRenderSettings",
+    # Internal type-discrimination helpers used as guards inside tools
+    # (not exposed as user-facing wrappers themselves)
+    "GetType", "GetMediaType",
+}
+
+
 def find_undocumented_method_wrappers(
     docs: Dict[str, Set[str]],
     source_text: str,
 ) -> List[Tuple[str, str, int]]:
     """Find calls to .MethodName( in source where MethodName is NOT documented
-    in any class of the API docs. Likely candidates for removal.
+    in any class of the API docs and not in the allowlist. Likely candidates
+    for removal.
 
     Skips: dunder methods, common Python builtins, snake_case methods (which
     aren't Resolve API), and methods whose names overlap with stdlib/MCP.
@@ -145,6 +176,7 @@ def find_undocumented_method_wrappers(
     documented: Set[str] = set()
     for methods in docs.values():
         documented.update(methods)
+    documented |= ALLOWLIST_UNDOCUMENTED
 
     skip_prefixes = ("Get", "Set", "Is", "Has", "Add", "Delete", "Create", "Update",
                      "Load", "Save", "Open", "Close", "Start", "Stop", "Import",

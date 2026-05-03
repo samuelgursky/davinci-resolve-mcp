@@ -7,7 +7,7 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 337-tool granular server instead
+    python src/server.py --full       # Start the 328-tool granular server instead
 """
 
 VERSION = "2.3.3"
@@ -3084,9 +3084,9 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Support --full flag to run the 337-tool granular server instead
+    # Support --full flag to run the 328-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 337-tool granular server...")
+        logger.info("Starting full 328-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 
