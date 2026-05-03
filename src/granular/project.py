@@ -627,104 +627,96 @@ def delete_optimized_media(clip_names: List[str] = None) -> str:
         return f"Error deleting optimized media: {str(e)}"
 
 
-@mcp.resource("resolve://cloud/projects")
-def get_cloud_projects() -> Dict[str, Any]:
-    """Get list of available cloud projects."""
-    resolve = get_resolve()
-    if resolve is None:
-        return {"error": "Not connected to DaVinci Resolve", "success": False}
-    
-    return get_cloud_project_list(resolve)
-
-
 @mcp.tool()
-def create_cloud_project_tool(project_name: str, folder_path: str = None) -> Dict[str, Any]:
+def create_cloud_project_tool(
+    project_name: Optional[str] = None,
+    project_media_path: Optional[str] = None,
+    is_collab: Optional[bool] = None,
+    sync_mode: Optional[str] = None,
+    is_camera_access: Optional[bool] = None,
+) -> Dict[str, Any]:
     """Create a new cloud project.
-    
+
+    Mirrors ProjectManager.CreateCloudProject({cloudSettings}) per docs lines 138, 576-594.
+
     Args:
-        project_name: Name for the new cloud project
-        folder_path: Optional path for the cloud project folder
+        project_name: maps to resolve.CLOUD_SETTING_PROJECT_NAME (required for create).
+        project_media_path: maps to resolve.CLOUD_SETTING_PROJECT_MEDIA_PATH (required for create).
+        is_collab: maps to resolve.CLOUD_SETTING_IS_COLLAB.
+        sync_mode: 'none', 'proxy_only' (default), or 'proxy_and_orig' — maps to resolve.CLOUD_SYNC_*.
+        is_camera_access: maps to resolve.CLOUD_SETTING_IS_CAMERA_ACCESS.
     """
-    resolve = get_resolve()
-    if resolve is None:
-        return {"error": "Not connected to DaVinci Resolve", "success": False}
-    
-    return create_cloud_project(resolve, project_name, folder_path)
+    return create_cloud_project(get_resolve(), project_name=project_name,
+                                project_media_path=project_media_path, is_collab=is_collab,
+                                sync_mode=sync_mode, is_camera_access=is_camera_access)
 
 
 @mcp.tool()
-def import_cloud_project_tool(cloud_id: str, project_name: str = None) -> Dict[str, Any]:
-    """Import a project from DaVinci Resolve cloud.
-    
+def load_cloud_project_tool(
+    project_name: Optional[str] = None,
+    project_media_path: Optional[str] = None,
+    sync_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Load a cloud project.
+
+    Mirrors ProjectManager.LoadCloudProject({cloudSettings}). Per docs line 585,
+    only project_name, project_media_path, and sync_mode are honoured.
+
     Args:
-        cloud_id: Cloud ID or reference of the project to import
-        project_name: Optional custom name for the imported project (uses original name if None)
+        project_name: required.
+        project_media_path: required.
+        sync_mode: 'none', 'proxy_only', or 'proxy_and_orig'.
     """
-    resolve = get_resolve()
-    if resolve is None:
-        return {"error": "Not connected to DaVinci Resolve", "success": False}
-    
-    return import_cloud_project(resolve, cloud_id, project_name)
+    return load_cloud_project(get_resolve(), project_name=project_name,
+                              project_media_path=project_media_path, sync_mode=sync_mode)
 
 
 @mcp.tool()
-def restore_cloud_project_tool(cloud_id: str, project_name: str = None) -> Dict[str, Any]:
-    """Restore a project from DaVinci Resolve cloud.
-    
+def import_cloud_project_tool(
+    file_path: str,
+    project_name: Optional[str] = None,
+    project_media_path: Optional[str] = None,
+    is_collab: Optional[bool] = None,
+    sync_mode: Optional[str] = None,
+    is_camera_access: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Import a cloud project from a file.
+
+    Mirrors ProjectManager.ImportCloudProject(filePath, {cloudSettings}).
+
     Args:
-        cloud_id: Cloud ID or reference of the project to restore
-        project_name: Optional custom name for the restored project (uses original name if None)
+        file_path: absolute path to the cloud project file (required).
+        project_name, project_media_path, is_collab, sync_mode, is_camera_access:
+            cloudSettings dict keys; same semantics as create_cloud_project_tool.
     """
-    resolve = get_resolve()
-    if resolve is None:
-        return {"error": "Not connected to DaVinci Resolve", "success": False}
-    
-    return restore_cloud_project(resolve, cloud_id, project_name)
+    return import_cloud_project(get_resolve(), file_path=file_path,
+                                project_name=project_name, project_media_path=project_media_path,
+                                is_collab=is_collab, sync_mode=sync_mode,
+                                is_camera_access=is_camera_access)
 
 
 @mcp.tool()
-def export_project_to_cloud_tool(project_name: str = None) -> Dict[str, Any]:
-    """Export current or specified project to DaVinci Resolve cloud.
-    
+def restore_cloud_project_tool(
+    folder_path: str,
+    project_name: Optional[str] = None,
+    project_media_path: Optional[str] = None,
+    is_collab: Optional[bool] = None,
+    sync_mode: Optional[str] = None,
+    is_camera_access: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Restore a cloud project from a folder.
+
+    Mirrors ProjectManager.RestoreCloudProject(folderPath, {cloudSettings}).
+
     Args:
-        project_name: Optional name of project to export (uses current project if None)
+        folder_path: absolute path to the cloud project folder (required).
+        project_name, project_media_path, is_collab, sync_mode, is_camera_access:
+            cloudSettings dict keys; same semantics as create_cloud_project_tool.
     """
-    resolve = get_resolve()
-    if resolve is None:
-        return {"error": "Not connected to DaVinci Resolve", "success": False}
-    
-    return export_project_to_cloud(resolve, project_name)
-
-
-@mcp.tool()
-def add_user_to_cloud_project_tool(cloud_id: str, user_email: str, permissions: str = "viewer") -> Dict[str, Any]:
-    """Add a user to a cloud project with specified permissions.
-    
-    Args:
-        cloud_id: Cloud ID of the project
-        user_email: Email of the user to add
-        permissions: Permission level (viewer, editor, admin)
-    """
-    resolve = get_resolve()
-    if resolve is None:
-        return {"error": "Not connected to DaVinci Resolve", "success": False}
-    
-    return add_user_to_cloud_project(resolve, cloud_id, user_email, permissions)
-
-
-@mcp.tool()
-def remove_user_from_cloud_project_tool(cloud_id: str, user_email: str) -> Dict[str, Any]:
-    """Remove a user from a cloud project.
-    
-    Args:
-        cloud_id: Cloud ID of the project
-        user_email: Email of the user to remove
-    """
-    resolve = get_resolve()
-    if resolve is None:
-        return {"error": "Not connected to DaVinci Resolve", "success": False}
-    
-    return remove_user_from_cloud_project(resolve, cloud_id, user_email)
+    return restore_cloud_project(get_resolve(), folder_path=folder_path,
+                                 project_name=project_name, project_media_path=project_media_path,
+                                 is_collab=is_collab, sync_mode=sync_mode,
+                                 is_camera_access=is_camera_access)
 
 
 @mcp.resource("resolve://project/properties")
@@ -1608,6 +1600,29 @@ def delete_color_group(group_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+def rename_color_group(group_name: str, new_name: str) -> Dict[str, Any]:
+    """Rename a color group.
+
+    Mirrors ColorGroup.SetName(groupName).
+
+    Args:
+        group_name: Current name of the color group.
+        new_name: New name to assign.
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    project = resolve.GetProjectManager().GetCurrentProject()
+    if not project:
+        return {"error": "No project currently open"}
+    groups = project.GetColorGroupsList() or []
+    target = next((g for g in groups if g.GetName() == group_name), None)
+    if not target:
+        return {"error": f"Color group '{group_name}' not found"}
+    return {"success": bool(target.SetName(new_name)), "old_name": group_name, "new_name": new_name}
+
+
+@mcp.tool()
 def apply_fairlight_preset_to_current_timeline(preset_name: str) -> Dict[str, Any]:
     """Apply a Fairlight preset to the current timeline.
 
@@ -1641,11 +1656,23 @@ def get_quick_export_render_presets() -> Dict[str, Any]:
 
 
 @mcp.tool()
-def render_with_quick_export(preset_name: str) -> Dict[str, Any]:
+def render_with_quick_export(
+    preset_name: str,
+    target_dir: Optional[str] = None,
+    custom_name: Optional[str] = None,
+    video_quality: Optional[Any] = None,
+    enable_upload: Optional[bool] = None,
+) -> Dict[str, Any]:
     """Render the current timeline using a Quick Export preset.
 
+    Mirrors Project.RenderWithQuickExport(preset_name, {param_dict}) per docs line 179.
+
     Args:
-        preset_name: Name of the Quick Export preset (e.g. 'H.264', 'YouTube', 'Vimeo').
+        preset_name: Name of the Quick Export preset (from get_quick_export_render_presets).
+        target_dir: Output directory; maps to TargetDir in param_dict.
+        custom_name: Output filename; maps to CustomName.
+        video_quality: Video quality setting (int or string per render-settings spec); maps to VideoQuality.
+        enable_upload: Enable direct upload for supported web presets; maps to EnableUpload.
     """
     resolve = get_resolve()
     if resolve is None:
@@ -1653,8 +1680,24 @@ def render_with_quick_export(preset_name: str) -> Dict[str, Any]:
     project = resolve.GetProjectManager().GetCurrentProject()
     if not project:
         return {"error": "No project currently open"}
-    result = project.RenderWithQuickExport(preset_name)
-    return {"success": bool(result), "preset_name": preset_name}
+    param_dict: Dict[str, Any] = {}
+    if target_dir is not None:
+        param_dict["TargetDir"] = target_dir
+    if custom_name is not None:
+        param_dict["CustomName"] = custom_name
+    if video_quality is not None:
+        param_dict["VideoQuality"] = video_quality
+    if enable_upload is not None:
+        param_dict["EnableUpload"] = bool(enable_upload)
+    if param_dict:
+        result = project.RenderWithQuickExport(preset_name, param_dict)
+    else:
+        result = project.RenderWithQuickExport(preset_name)
+    if not result:
+        return {"success": False, "preset_name": preset_name, "error": "RenderWithQuickExport returned no status"}
+    if isinstance(result, str):
+        return {"success": False, "preset_name": preset_name, "error": result}
+    return {"success": True, "preset_name": preset_name, "status": result}
 
 
 @mcp.tool()

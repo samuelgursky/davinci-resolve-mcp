@@ -32,7 +32,7 @@ from src.utils.mcp_stdio import run_fastmcp_stdio
 
 if __name__ == "__main__":
     try:
-        logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION} (336 granular tools)")
+        logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION} (337 granular tools)")
         run_fastmcp_stdio(mcp)
     except KeyboardInterrupt:
         logger.info("Server shutdown requested")

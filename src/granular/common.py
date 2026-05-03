@@ -28,12 +28,9 @@ from src.utils.app_control import (
 )
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.cloud_operations import (
-    add_user_to_cloud_project,
     create_cloud_project,
-    export_project_to_cloud,
-    get_cloud_project_list,
     import_cloud_project,
-    remove_user_from_cloud_project,
+    load_cloud_project,
     restore_cloud_project,
 )
 from src.utils.layout_presets import (
@@ -82,7 +79,7 @@ if not logging.getLogger().handlers:
         handlers=[logging.StreamHandler()],
     )
 
-VERSION = "2.3.2"
+VERSION = "2.3.3"
 logger = logging.getLogger("davinci-resolve-mcp")
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
@@ -367,6 +364,85 @@ def _build_subtitle_settings(resolve_obj, language=None, preset=None,
         if not isinstance(gap, int) or not (0 <= gap <= 10):
             return None, {"error": "gap must be an integer between 0 and 10"}
         settings[resolve_obj.SUBTITLE_GAP] = gap
+    return settings, None
+
+
+def _build_append_clip_info_dict(root, ci, index):
+    """Build one MediaPool.AppendToTimeline clipInfo map (6 keys per docs line 221).
+
+    Required: clip_id (or media_pool_item_id), start_frame, end_frame,
+    record_frame, track_index. Optional: media_type (1=video only, 2=audio only).
+    """
+    if not isinstance(ci, dict):
+        return None, {"error": f"clip_infos[{index}] must be an object"}
+    cid = ci.get("clip_id") or ci.get("media_pool_item_id")
+    if not cid:
+        return None, {"error": f"clip_infos[{index}] requires clip_id or media_pool_item_id"}
+    mp_item = _find_clip_by_id(root, cid)
+    if not mp_item:
+        return None, {"error": f"clip_infos[{index}]: media pool clip not found: {cid}"}
+    sf = ci.get("startFrame", ci.get("start_frame"))
+    ef = ci.get("endFrame", ci.get("end_frame"))
+    if sf is None or ef is None:
+        return None, {"error": f"clip_infos[{index}] requires start_frame/startFrame and end_frame/endFrame"}
+    rf = ci.get("recordFrame", ci.get("record_frame"))
+    if rf is None:
+        return None, {"error": f"clip_infos[{index}] requires record_frame/recordFrame"}
+    ti = ci.get("trackIndex", ci.get("track_index"))
+    if ti is None:
+        return None, {"error": f"clip_infos[{index}] requires track_index/trackIndex"}
+    out: Dict[str, Any] = {
+        "mediaPoolItem": mp_item,
+        "startFrame": sf,
+        "endFrame": ef,
+        "recordFrame": rf,
+        "trackIndex": ti,
+    }
+    mt = ci.get("mediaType", ci.get("media_type"))
+    if mt is not None:
+        out["mediaType"] = mt
+    return out, None
+
+
+_AUDIO_SYNC_MODE_SUFFIXES = {
+    "waveform": "WAVEFORM",
+    "timecode": "TIMECODE",
+}
+
+_AUDIO_SYNC_CHANNEL_SPECIAL = {
+    "automatic": "CHANNEL_AUTOMATIC",
+    "auto": "CHANNEL_AUTOMATIC",
+    "mix": "CHANNEL_MIX",
+}
+
+
+def _build_audio_sync_settings(resolve_obj, sync_mode=None, channel_number=None,
+                               retain_embedded_audio=None, retain_video_metadata=None):
+    """Build the {audioSyncSettings} dict for MediaPool.AutoSyncAudio per docs lines 600-614.
+
+    Returns (settings_dict, None) on success or (None, error_dict) on validation failure.
+    """
+    settings: Dict[Any, Any] = {}
+    if sync_mode is not None:
+        suffix = _AUDIO_SYNC_MODE_SUFFIXES.get(str(sync_mode).strip().lower())
+        if not suffix:
+            valid = sorted(_AUDIO_SYNC_MODE_SUFFIXES.keys())
+            return None, {"error": f"Unknown sync_mode '{sync_mode}'. Valid: {valid}"}
+        settings[resolve_obj.AUDIO_SYNC_MODE] = getattr(resolve_obj, f"AUDIO_SYNC_{suffix}")
+    if channel_number is not None:
+        if isinstance(channel_number, str):
+            special = _AUDIO_SYNC_CHANNEL_SPECIAL.get(channel_number.strip().lower())
+            if not special:
+                return None, {"error": f"Unknown channel_number '{channel_number}'. Use an int >= 1 or 'automatic'/'mix'."}
+            settings[resolve_obj.AUDIO_SYNC_CHANNEL_NUMBER] = getattr(resolve_obj, f"AUDIO_SYNC_{special}")
+        elif isinstance(channel_number, int):
+            settings[resolve_obj.AUDIO_SYNC_CHANNEL_NUMBER] = channel_number
+        else:
+            return None, {"error": f"channel_number must be int >= 1 or 'automatic'/'mix', got {type(channel_number).__name__}"}
+    if retain_embedded_audio is not None:
+        settings[resolve_obj.AUDIO_SYNC_RETAIN_EMBEDDED_AUDIO] = bool(retain_embedded_audio)
+    if retain_video_metadata is not None:
+        settings[resolve_obj.AUDIO_SYNC_RETAIN_VIDEO_METADATA] = bool(retain_video_metadata)
     return settings, None
 
 

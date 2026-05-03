@@ -614,13 +614,23 @@ def timeline_duplicate() -> Dict[str, Any]:
 
 
 @mcp.tool()
-def timeline_create_compound_clip(clip_ids: List[str], track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+def timeline_create_compound_clip(
+    clip_ids: List[str],
+    track_type: str = "video",
+    track_index: int = 1,
+    name: Optional[str] = None,
+    start_timecode: Optional[str] = None,
+) -> Dict[str, Any]:
     """Create a compound clip from selected items.
+
+    Mirrors Timeline.CreateCompoundClip([timelineItems], {clipInfo}) per docs line 369.
 
     Args:
         clip_ids: List of timeline item unique IDs.
         track_type: 'video' or 'audio'. Default: 'video'.
         track_index: 1-based track index. Default: 1.
+        name: Optional name for the compound clip; maps to clipInfo.name.
+        start_timecode: Optional start timecode (e.g. "01:00:00:00"); maps to clipInfo.startTimecode.
     """
     _, tl, err = _get_timeline()
     if err:
@@ -629,10 +639,22 @@ def timeline_create_compound_clip(clip_ids: List[str], track_type: str = "video"
     targets = [i for i in (items or []) if i.GetUniqueId() in clip_ids]
     if not targets:
         return {"error": "No matching items found"}
-    result = tl.CreateCompoundClip(targets)
-    if result:
-        return {"success": True}
-    return {"success": False, "error": "Failed to create compound clip"}
+    clip_info: Dict[str, Any] = {}
+    if name is not None:
+        clip_info["name"] = name
+    if start_timecode is not None:
+        clip_info["startTimecode"] = start_timecode
+    if clip_info:
+        result = tl.CreateCompoundClip(targets, clip_info)
+    else:
+        result = tl.CreateCompoundClip(targets)
+    if not result:
+        return {"success": False, "error": "Failed to create compound clip"}
+    return {
+        "success": True,
+        "name": result.GetName() if hasattr(result, "GetName") else None,
+        "unique_id": result.GetUniqueId() if hasattr(result, "GetUniqueId") else None,
+    }
 
 
 @mcp.tool()

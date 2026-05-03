@@ -25,7 +25,7 @@ from pathlib import Path
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.3.2"
+VERSION = "2.3.3"
 
 # ─── Colors (disabled on Windows cmd without ANSI support) ────────────────────
 
@@ -516,7 +516,7 @@ def verify_resolve_connection(python_path, api_path, lib_path):
 
 def print_banner():
     title = f"DaVinci Resolve MCP Server — Installer v{VERSION}"
-    subtitle = "27 compound · 336 full · 3 platforms"
+    subtitle = "27 compound · 337 full · 3 platforms"
     print()
     print(bold("  ╔══════════════════════════════════════════════════════╗"))
     print(bold(f"  ║{title:^54}║"))

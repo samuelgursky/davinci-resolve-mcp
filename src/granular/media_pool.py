@@ -79,6 +79,105 @@ def import_media(
 
 
 @mcp.tool()
+def append_to_timeline(
+    clip_ids: Optional[List[str]] = None,
+    clip_infos: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Append clips to the current timeline.
+
+    Mirrors MediaPool.AppendToTimeline per docs lines 219-221. Two forms:
+
+    Args:
+        clip_ids: Simple form — list of MediaPoolItem unique IDs to append in order.
+        clip_infos: Positioned form — list of dicts with keys clip_id (or
+            media_pool_item_id), start_frame, end_frame, record_frame, track_index,
+            and optional media_type (1=video only, 2=audio only). Returns
+            timeline_item_id per appended item.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if clip_infos is not None:
+        if not isinstance(clip_infos, list) or not clip_infos:
+            return {"error": "clip_infos must be a non-empty list"}
+        root = mp.GetRootFolder()
+        built = []
+        for i, ci in enumerate(clip_infos):
+            row, row_err = _build_append_clip_info_dict(root, ci, i)
+            if row_err:
+                return row_err
+            built.append(row)
+        result = mp.AppendToTimeline(built)
+        if not result:
+            return {"success": False, "error": "Failed to append clip_infos to timeline"}
+        items_out = []
+        for i, item in enumerate(result):
+            if not item:
+                return {"success": False, "error": f"Missing timeline item at index {i}"}
+            try:
+                item_id = item.GetUniqueId()
+                name = item.GetName()
+            except Exception as exc:
+                return {"success": False, "error": f"Invalid timeline item at index {i}: {exc}"}
+            if not item_id:
+                return {"success": False, "error": f"Missing timeline item id at index {i}"}
+            items_out.append({"timeline_item_id": item_id, "name": name})
+        return {"success": True, "count": len(items_out), "items": items_out}
+    if not clip_ids:
+        return {"error": "Provide clip_ids (simple) or clip_infos (positioned)"}
+    root = mp.GetRootFolder()
+    clips = [_find_clip_by_id(root, cid) for cid in clip_ids]
+    clips = [c for c in clips if c]
+    if not clips:
+        return {"error": "No valid clips found"}
+    result = mp.AppendToTimeline(clips)
+    return {"success": True, "count": len(result) if result else 0}
+
+
+@mcp.tool()
+def auto_sync_audio(
+    clip_ids: List[str],
+    sync_mode: Optional[str] = None,
+    channel_number: Optional[Any] = None,
+    retain_embedded_audio: Optional[bool] = None,
+    retain_video_metadata: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Sync audio across multiple clips.
+
+    Mirrors MediaPool.AutoSyncAudio([items], {audioSyncSettings}) per docs lines 600-614.
+
+    Args:
+        clip_ids: List of MediaPoolItem unique IDs to sync.
+        sync_mode: 'waveform' or 'timecode' (default on Resolve side: 'timecode').
+        channel_number: int >= 1 for channel offset, or 'automatic' (-1) / 'mix' (-2).
+            Only used in waveform mode.
+        retain_embedded_audio: keep clip's embedded audio after sync.
+        retain_video_metadata: keep video clip's metadata after sync.
+    """
+    r = get_resolve()
+    if r is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    if not clip_ids:
+        return {"error": "clip_ids must be a non-empty list"}
+    root = mp.GetRootFolder()
+    clips = [_find_clip_by_id(root, cid) for cid in clip_ids]
+    clips = [c for c in clips if c]
+    if not clips:
+        return {"error": "No valid clips found"}
+    settings, settings_err = _build_audio_sync_settings(
+        r, sync_mode=sync_mode, channel_number=channel_number,
+        retain_embedded_audio=retain_embedded_audio,
+        retain_video_metadata=retain_video_metadata,
+    )
+    if settings_err:
+        return settings_err
+    return {"success": bool(mp.AutoSyncAudio(clips, settings))}
+
+
+@mcp.tool()
 def add_subfolder(folder_name: str) -> Dict[str, Any]:
     """Create a new subfolder in the current Media Pool folder.
 

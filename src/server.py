@@ -7,10 +7,10 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 336-tool granular server instead
+    python src/server.py --full       # Start the 337-tool granular server instead
 """
 
-VERSION = "2.3.2"
+VERSION = "2.3.3"
 
 import base64
 import os
@@ -1748,7 +1748,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "convert_to_stereo":
         return {"success": bool(tl.ConvertTimelineToStereo())}
     elif action == "get_items_in_track":
-        return {"items": _ser(tl.GetItemsInTrack(p["track_type"], p["track_index"]))}
+        return {"items": _ser(tl.GetItemListInTrack(p["track_type"], p["track_index"]))}
     elif action == "get_voice_isolation_state":
         missing = _requires_method(tl, "GetVoiceIsolationState", "20.1")
         if missing:
@@ -3084,9 +3084,9 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Support --full flag to run the 336-tool granular server instead
+    # Support --full flag to run the 337-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 336-tool granular server...")
+        logger.info("Starting full 337-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 
