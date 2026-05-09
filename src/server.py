@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 
 import base64
 import os
@@ -405,6 +405,272 @@ def _add_marker(target, marker: Dict[str, Any]):
         except Exception:
             pass
     return out
+
+
+_ANNOTATION_KERNEL_ACTIONS = [
+    "annotation_capabilities",
+    "probe_annotations",
+    "normalize_marker_payload",
+    "copy_annotations",
+    "move_annotations",
+    "sync_marker_custom_data",
+    "clear_annotations_by_scope",
+    "export_review_report",
+    "annotation_boundary_report",
+]
+
+
+def _annotation_capabilities():
+    return {
+        "scopes": {
+            "timeline": {
+                "markers": True,
+                "custom_data": True,
+                "flags": False,
+                "clip_color": False,
+                "frame_space": "timeline frames or timeline timecode",
+            },
+            "timeline_item": {
+                "markers": True,
+                "custom_data": True,
+                "flags": True,
+                "clip_color": True,
+                "frame_space": "timeline item local/source-facing marker frames",
+            },
+            "media_pool_item": {
+                "markers": True,
+                "custom_data": True,
+                "flags": True,
+                "clip_color": True,
+                "frame_space": "media pool item source frames",
+            },
+        },
+        "marker_colors": list(_MARKER_COLORS),
+        "frame_aliases": ["frame", "frame_id", "frameId", "frame_num", "frameNum", "timecode", "tc"],
+        "supported": [
+            "marker payload normalization",
+            "marker add/get/update/delete by scope",
+            "custom_data round-trip by scope",
+            "timeline item and media pool item flags",
+            "timeline item and media pool item clip color",
+            "read-only review reports",
+            "direct-frame annotation copy between scopes",
+        ],
+        "version_or_page_dependent": [
+            "current playhead marker insertion requires a current timeline and readable current timecode",
+            "timeline current video item depends on playhead/page state",
+        ],
+        "boundaries": [
+            "timeline, timeline item, and media pool item frame spaces are not equivalent",
+            "copy_annotations uses direct frame numbers unless the caller maps frames explicitly",
+            "clip color and flags are related review metadata but not marker records",
+        ],
+    }
+
+
+def _marker_from_existing(frame, data: Dict[str, Any]):
+    return {
+        "frame": int(frame),
+        "color": data.get("color", "Blue"),
+        "name": data.get("name", ""),
+        "note": data.get("note", ""),
+        "duration": data.get("duration", 1),
+        "custom_data": data.get("customData") or data.get("custom_data") or "",
+    }
+
+
+def _annotation_target(scope: str, p: Dict[str, Any], tl=None):
+    scope = scope or "timeline"
+    if scope == "timeline":
+        if tl is None:
+            _, tl, err = _get_tl()
+            if err:
+                return None, err
+        return tl, None
+    if scope == "timeline_item":
+        if p.get("current"):
+            if tl is None:
+                _, tl, err = _get_tl()
+                if err:
+                    return None, err
+            item = tl.GetCurrentVideoItem()
+            if not item:
+                return None, _err("No current video item")
+            return item, None
+        _, item, err = _get_item(p)
+        if err:
+            return None, err
+        return item, None
+    if scope == "media_pool_item":
+        _, _, mp, err = _get_mp()
+        if err:
+            return None, err
+        clip_id = p.get("clip_id")
+        if clip_id:
+            clip = _find_clip(mp.GetRootFolder(), clip_id)
+            if not clip:
+                return None, _err(f"Clip not found: {clip_id}")
+            return clip, None
+        if tl is None:
+            _, tl, tl_err = _get_tl()
+            if tl_err:
+                return None, tl_err
+        item = tl.GetCurrentVideoItem()
+        clip = item.GetMediaPoolItem() if item else None
+        if not clip:
+            return None, _err("No media pool item could be resolved")
+        return clip, None
+    return None, _err(f"Unknown annotation scope: {scope}")
+
+
+def _annotation_snapshot(scope: str, target):
+    snapshot = {"scope": scope, "markers": {}, "flags": None, "clip_color": None}
+    if _has_method(target, "GetMarkers"):
+        snapshot["markers"] = _ser(target.GetMarkers() or {})
+    if _has_method(target, "GetFlagList"):
+        snapshot["flags"] = _ser(target.GetFlagList() or [])
+    if _has_method(target, "GetClipColor"):
+        snapshot["clip_color"] = _ser(target.GetClipColor())
+    if _has_method(target, "GetUniqueId"):
+        try:
+            snapshot["id"] = target.GetUniqueId()
+        except Exception:
+            pass
+    if _has_method(target, "GetName"):
+        try:
+            snapshot["name"] = target.GetName()
+        except Exception:
+            pass
+    return snapshot
+
+
+def _probe_annotations(tl, p: Dict[str, Any]):
+    scope = p.get("scope")
+    if scope:
+        target, err = _annotation_target(scope, p, tl=tl)
+        if err:
+            return err
+        return {"scopes": [_annotation_snapshot(scope, target)]}
+    scopes = []
+    scopes.append(_annotation_snapshot("timeline", tl))
+    try:
+        item = tl.GetCurrentVideoItem()
+    except Exception:
+        item = None
+    if item:
+        scopes.append(_annotation_snapshot("timeline_item", item))
+        try:
+            clip = item.GetMediaPoolItem()
+        except Exception:
+            clip = None
+        if clip:
+            scopes.append(_annotation_snapshot("media_pool_item", clip))
+    return {"scopes": scopes, "count": len(scopes)}
+
+
+def _normalize_marker_payload_action(tl, p: Dict[str, Any]):
+    marker, err = _marker_add_payload(p, tl=tl, default_to_current=bool(p.get("default_to_current", False)))
+    if err:
+        return err
+    return {"marker": marker}
+
+
+def _copy_annotations(tl, p: Dict[str, Any], *, move: bool = False):
+    source_p = dict(p.get("source") or {})
+    target_p = dict(p.get("target") or {})
+    source_scope = source_p.get("scope") or p.get("source_scope") or "timeline"
+    target_scope = target_p.get("scope") or p.get("target_scope") or "timeline_item"
+    source, err = _annotation_target(source_scope, source_p, tl=tl)
+    if err:
+        return err
+    target, err = _annotation_target(target_scope, target_p, tl=tl)
+    if err:
+        return err
+    markers = source.GetMarkers() if _has_method(source, "GetMarkers") else {}
+    if not markers:
+        return {"success": True, "copied": 0, "warnings": ["Source has no markers"]}
+    warnings = []
+    copied = 0
+    for frame, data in (markers or {}).items():
+        marker = _marker_from_existing(frame, data)
+        result = _add_marker(target, marker)
+        if result.get("success"):
+            copied += 1
+        else:
+            warnings.append({"frame": frame, "result": result})
+    if p.get("include_flags", True) and _has_method(source, "GetFlagList") and _has_method(target, "AddFlag"):
+        for flag in source.GetFlagList() or []:
+            if not target.AddFlag(flag):
+                warnings.append({"flag": flag, "result": "AddFlag returned false"})
+    if p.get("include_clip_color", True) and _has_method(source, "GetClipColor") and _has_method(target, "SetClipColor"):
+        color = source.GetClipColor()
+        if color and not target.SetClipColor(color):
+            warnings.append({"clip_color": color, "result": "SetClipColor returned false"})
+    cleared = None
+    if move and copied:
+        clear_color = p.get("clear_color", "All")
+        cleared = bool(source.DeleteMarkersByColor(clear_color)) if _has_method(source, "DeleteMarkersByColor") else False
+    return {
+        "success": copied == len(markers),
+        "copied": copied,
+        "source_scope": source_scope,
+        "target_scope": target_scope,
+        "frame_mapping": "direct",
+        "warnings": warnings,
+        "cleared_source": cleared,
+    }
+
+
+def _sync_marker_custom_data(tl, p: Dict[str, Any]):
+    scope = p.get("scope", "timeline")
+    target, err = _annotation_target(scope, p, tl=tl)
+    if err:
+        return err
+    frame, frame_err = _marker_frame_from_params(p, tl=tl if scope == "timeline" else None)
+    if frame_err:
+        return frame_err
+    custom = _first_param(p, "custom_data", "customData", default="")
+    if not _has_method(target, "UpdateMarkerCustomData"):
+        return _err(f"{scope} does not expose UpdateMarkerCustomData")
+    return {"success": bool(target.UpdateMarkerCustomData(frame, custom)), "frame": frame}
+
+
+def _clear_annotations_by_scope(tl, p: Dict[str, Any]):
+    scope = p.get("scope", "timeline")
+    target, err = _annotation_target(scope, p, tl=tl)
+    if err:
+        return err
+    if p.get("custom_data") or p.get("customData"):
+        if not _has_method(target, "DeleteMarkerByCustomData"):
+            return _err(f"{scope} does not expose DeleteMarkerByCustomData")
+        return {"success": bool(target.DeleteMarkerByCustomData(_first_param(p, "custom_data", "customData", default="")))}
+    color = p.get("color", "All" if p.get("all", True) else "Blue")
+    if not _has_method(target, "DeleteMarkersByColor"):
+        return _err(f"{scope} does not expose DeleteMarkersByColor")
+    result = {"success": bool(target.DeleteMarkersByColor(color)), "color": color}
+    if p.get("clear_flags") and _has_method(target, "ClearFlags"):
+        result["flags_cleared"] = bool(target.ClearFlags(p.get("flag_color", "All")))
+    if p.get("clear_clip_color") and _has_method(target, "ClearClipColor"):
+        result["clip_color_cleared"] = bool(target.ClearClipColor())
+    return result
+
+
+def _export_review_report(tl, p: Dict[str, Any]):
+    report = {
+        "title": p.get("title", "Review Annotation Report"),
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "annotations": _probe_annotations(tl, p),
+    }
+    if p.get("include_capabilities", True):
+        report["capabilities"] = _annotation_capabilities()
+    return report
+
+
+def _annotation_boundary_report(tl, p: Dict[str, Any]):
+    return {
+        "capabilities": _annotation_capabilities(),
+        "annotations": _probe_annotations(tl, p),
+    }
 
 def _check():
     resolve = get_resolve()
@@ -5022,6 +5288,15 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Di
       set_current_timecode(timecode) -> {success}
       get_current_video_item() -> {name, id}
       get_thumbnail() -> {thumbnail}
+      annotation_capabilities() -> {scopes, marker_colors, frame_aliases}
+      probe_annotations(scope?, ...) -> {scopes, count}
+      normalize_marker_payload(frame|timecode?, color?, name?, note?, duration?, custom_data?) -> {marker}
+      copy_annotations(source={scope,...}, target={scope,...}, include_flags?, include_clip_color?) -> {success}
+      move_annotations(source={scope,...}, target={scope,...}) -> {success}
+      sync_marker_custom_data(scope?, frame|timecode, custom_data, ...) -> {success}
+      clear_annotations_by_scope(scope?, color?, custom_data?, all?, clear_flags?, clear_clip_color?) -> {success}
+      export_review_report(scope?, include_capabilities?) -> {title, annotations, capabilities?}
+      annotation_boundary_report(scope?) -> {capabilities, annotations}
     """
     p = params or {}
     _, tl, err = _get_tl()
@@ -5065,7 +5340,25 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Di
         return {"name": it.GetName(), "id": it.GetUniqueId()} if it else {"name": None, "id": None}
     elif action == "get_thumbnail":
         return _ser(tl.GetCurrentClipThumbnailImage())
-    return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","get_current_timecode","set_current_timecode","get_current_video_item","get_thumbnail"])
+    elif action == "annotation_capabilities":
+        return _annotation_capabilities()
+    elif action == "probe_annotations":
+        return _probe_annotations(tl, p)
+    elif action == "normalize_marker_payload":
+        return _normalize_marker_payload_action(tl, p)
+    elif action == "copy_annotations":
+        return _copy_annotations(tl, p)
+    elif action == "move_annotations":
+        return _copy_annotations(tl, p, move=True)
+    elif action == "sync_marker_custom_data":
+        return _sync_marker_custom_data(tl, p)
+    elif action == "clear_annotations_by_scope":
+        return _clear_annotations_by_scope(tl, p)
+    elif action == "export_review_report":
+        return _export_review_report(tl, p)
+    elif action == "annotation_boundary_report":
+        return _annotation_boundary_report(tl, p)
+    return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","get_current_timecode","set_current_timecode","get_current_video_item","get_thumbnail",*_ANNOTATION_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

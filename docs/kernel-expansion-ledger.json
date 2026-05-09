@@ -58,8 +58,22 @@
   {
     "kernel": "review_annotation",
     "title": "Markers / Review Annotation Kernel",
-    "status": "planned",
-    "passes": false,
+    "status": "implemented_live_validated",
+    "passes": true,
+    "evidence": {
+      "resolve": "DaVinci Resolve Studio 20.3.2.9",
+      "live_report": "/private/tmp/review-annotation-probe-20260509-release/review-annotation-probe.json",
+      "counts": {
+        "supported": 44,
+        "unsupported": 1,
+        "partially_supported": 0,
+        "version_or_page_dependent": 0,
+        "write_only_unverifiable": 0,
+        "read_only": 0,
+        "not_applicable": 0,
+        "error": 0
+      }
+    },
     "steps": [
       "Implement unified annotation normalization and copy/report helpers",
       "Add offline marker payload and review report tests",

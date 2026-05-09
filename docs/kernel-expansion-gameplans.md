@@ -371,6 +371,13 @@ Add `docs/review-annotation-kernel.md` with:
 - Custom-data guidance.
 - Review report format.
 
+### Execution Status
+
+Implemented in v2.10.0. Final live probe on DaVinci Resolve Studio 20.3.2.9
+classified 44 surfaces as `supported`, one expected invalid marker color as
+`unsupported`, and zero surfaces as `error`. See
+`docs/review-annotation-kernel.md`.
+
 ## 4. Color / Grade Kernel
 
 ### Existing Surface

@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.9.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.10.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-30%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -13,7 +13,42 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
 
-### What's New in v2.9.0
+### What's New in v2.10.0
+
+Review Annotation kernel expansion - adding a unified marker, custom data,
+flag, clip color, copy/move, and review report layer across timeline, timeline
+item, and media pool item scopes.
+
+**New `timeline_markers` kernel actions**: added
+`annotation_capabilities`, `probe_annotations`, `normalize_marker_payload`,
+`copy_annotations`, `move_annotations`, `sync_marker_custom_data`,
+`clear_annotations_by_scope`, `export_review_report`, and
+`annotation_boundary_report`.
+
+**Unified annotation scopes**: the new helpers normalize marker payloads,
+frame/timecode aliases, custom data aliases, and marker colors before touching
+Resolve. `probe_annotations` snapshots timeline, current timeline item, and
+media pool item annotations when the current playhead can resolve them.
+
+**Review metadata copying**: `copy_annotations` and `move_annotations` can copy
+marker payloads between timeline, timeline item, and media pool item scopes
+using direct frame numbers. When supported by both scopes, flags and clip color
+can travel with the marker payload.
+
+**Read-only review reports**: `export_review_report` and
+`annotation_boundary_report` produce agent-friendly summaries without mutating
+media or projects.
+
+**Documented support map**: added
+[`docs/review-annotation-kernel.md`](docs/review-annotation-kernel.md) with the
+scope matrix, field support, frame-space caveats, and live probe findings.
+
+**Validation**: live validated against DaVinci Resolve Studio 20.3.2.9 with a
+generated synthetic timeline. Final probe result: 44 supported, 1 expected
+unsupported invalid-color boundary, and 0 errors. The disposable project and
+generated media were cleaned up after report generation.
+
+### v2.9.0
 
 Render / Deliver kernel expansion — adding a safer render planning, settings,
 format/codec compatibility, queue lifecycle, and Quick Export boundary layer.

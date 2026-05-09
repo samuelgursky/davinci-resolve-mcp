@@ -260,6 +260,13 @@ Key actions: `add(frame|frame_id|timecode?, color?, name?, note?, duration?)`, `
 `get_current_timecode`, `set_current_timecode(timecode)`,
 `get_current_video_item`, `get_thumbnail`
 
+Review Annotation kernel actions (v2.10.0+) add a unified review layer across
+timeline, timeline item, and media pool item scopes: `annotation_capabilities`,
+`probe_annotations`, `normalize_marker_payload`, `copy_annotations`,
+`move_annotations`, `sync_marker_custom_data`, `clear_annotations_by_scope`,
+`export_review_report`, and `annotation_boundary_report`. See
+`docs/review-annotation-kernel.md` for the live-tested scope and boundary map.
+
 For `add`, omit `frame`/`timecode` to create the marker at the current playhead.
 The compound tool accepts `frame`, `frame_id`, and `frameId` aliases.
 
@@ -527,6 +534,17 @@ The harness creates a disposable project, generates synthetic video/audio/still
 and image-sequence fixtures, probes safe import/metadata/annotation/link
 helpers, writes JSON and Markdown reports, deletes the project, and removes the
 generated media directory. See `docs/media-pool-ingest-kernel.md`.
+
+For the Review Annotation boundary map, run:
+
+```
+python3.11 tests/live_review_annotation_validation.py --output-dir /tmp/review-annotation-probe
+```
+
+The harness creates a disposable project, generates synthetic video/audio media,
+probes timeline, timeline item, and media pool item marker/flag/color/report
+behavior, writes JSON and Markdown reports, deletes the project, and removes the
+generated media directory. See `docs/review-annotation-kernel.md`.
 
 ### 5. Color grading
 
