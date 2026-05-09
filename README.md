@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.11.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.12.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-30%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -13,7 +13,35 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
 
-### What's New in v2.11.0
+### What's New in v2.12.0
+
+Fusion Composition kernel expansion - adding safe Fusion graph inspection,
+tool creation, input writes, connection validation, scoped bulk writes, and
+boundary reporting around Resolve's public Fusion comp API.
+
+**New `fusion_comp` kernel actions**: added `fusion_graph_capabilities`,
+`probe_fusion_comp`, `probe_fusion_tool`, `safe_add_tool`, `safe_set_inputs`,
+`safe_connect_tools`, and `fusion_boundary_report`.
+
+**Timeline item graph automation**: the kernel can target timeline item Fusion
+comps via `timeline_item`, `clip_id`, or `timeline_item_id`, then add tools,
+write inputs with readback, inspect ports, connect tools, set frame ranges, and
+export the comp through `timeline_item_fusion`.
+
+**Scoped bulk writes**: `bulk_set_inputs` remains the safe batch path for
+applying input updates across multiple explicitly scoped timeline-item comps,
+so agent workflows do not accidentally mutate the active Fusion page comp.
+
+**Documented support map**: added
+[`docs/fusion-composition-kernel.md`](docs/fusion-composition-kernel.md) with
+tool availability, input/output, scope, comp export, and page-state boundaries.
+
+**Validation**: live validated against DaVinci Resolve Studio 20.3.2.9 with a
+generated synthetic timeline item Fusion comp. Final probe result: 18
+supported, 0 unsupported, 0 partially supported, and 0 errors. The disposable
+project, generated media, and exported temp comp were cleaned up.
+
+### v2.11.0
 
 Color / Grade kernel expansion - adding safe grade inspection, CDL validation,
 node graph probing, grade copy, LUT export, version restore, Gallery, and color

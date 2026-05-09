@@ -425,6 +425,17 @@ Key actions:
 - `bulk_set_inputs(ops)` — batch set inputs across multiple timeline item comps in
   one call; each op requires timeline scope plus `tool_name`, `input_name`, `value`
 
+Fusion Composition kernel actions (v2.12.0+) add safer graph inspection and
+mutation wrappers around the raw Fusion API:
+
+- `fusion_graph_capabilities`
+- `probe_fusion_comp(include_io?, max_tools?)`
+- `probe_fusion_tool(tool_name, include_io?)`
+- `safe_add_tool(tool_type, name?, dry_run?)`
+- `safe_set_inputs(tool_name, inputs, readback?)`
+- `safe_connect_tools(target_tool, input_name, source_tool, dry_run?)`
+- `fusion_boundary_report(include_io?)`
+
 ---
 
 ### Render
@@ -624,7 +635,20 @@ render outputs.
 timeline_item_fusion(action="add_comp", params={"track_type": "video", "track_index": 1, "item_index": 0})
 fusion_comp(action="add_tool", params={"tool_type": "Glow", "timeline_item": {"track_type": "video", "track_index": 1, "item_index": 0}})
 fusion_comp(action="set_input", params={"tool_name": "Glow1", "input_name": "Gain", "value": 0.8, "timeline_item": {"track_type": "video", "track_index": 1, "item_index": 0}})
+fusion_comp(action="fusion_boundary_report", params={"timeline_item": {"track_type": "video", "track_index": 1, "item_index": 0}})
 ```
+
+For the Fusion Composition boundary map, run:
+
+```
+python3.11 tests/live_fusion_composition_validation.py --output-dir /tmp/fusion-composition-probe
+```
+
+The harness creates a disposable project, generates synthetic video media,
+probes timeline item comp creation, safe tool creation, input writes, graph
+inspection, connections, bulk writes, frame range, and comp export, writes
+reports, deletes the project, and removes generated media. See
+`docs/fusion-composition-kernel.md`.
 
 ---
 

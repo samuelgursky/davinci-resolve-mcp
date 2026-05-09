@@ -557,6 +557,12 @@ Add `docs/fusion-composition-kernel.md` with:
 - Page-state boundaries.
 - Import/export lifecycle.
 
+### Execution Status
+
+Implemented in v2.12.0. Final live probe on DaVinci Resolve Studio 20.3.2.9
+classified 18 surfaces as `supported` and zero surfaces as `error`. See
+`docs/fusion-composition-kernel.md`.
+
 ## 6. Timeline Conform / Interchange Kernel
 
 ### Existing Surface

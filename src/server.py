@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.11.0"
+VERSION = "2.12.0"
 
 import base64
 import os
@@ -6830,6 +6830,213 @@ def _fusion_comp_bulk_set_inputs(p: Dict[str, Any]) -> Dict[str, Any]:
     return {"results": results, "op_count": len(ops)}
 
 
+_FUSION_KERNEL_ACTIONS = [
+    "fusion_graph_capabilities",
+    "probe_fusion_comp",
+    "probe_fusion_tool",
+    "safe_add_tool",
+    "safe_set_inputs",
+    "safe_connect_tools",
+    "fusion_boundary_report",
+]
+
+_COMMON_FUSION_TOOLS = [
+    "MediaIn",
+    "MediaOut",
+    "Background",
+    "TextPlus",
+    "Merge",
+    "Transform",
+    "Blur",
+    "ColorCorrector",
+    "RectangleMask",
+    "EllipseMask",
+    "Glow",
+]
+
+
+def _fusion_tool_summary(tool, *, include_io=False):
+    attrs = tool.GetAttrs() or {}
+    out = {
+        "name": attrs.get("TOOLS_Name", ""),
+        "type": attrs.get("TOOLS_RegID", ""),
+        "attrs": _ser(attrs),
+    }
+    if include_io:
+        inputs = []
+        input_list = tool.GetInputList() or {}
+        for idx in input_list:
+            inp = input_list[idx]
+            inp_attrs = inp.GetAttrs() or {}
+            connected = inp.GetConnectedOutput()
+            connected_to = None
+            if connected:
+                conn_tool = connected.GetTool()
+                if conn_tool:
+                    connected_to = (conn_tool.GetAttrs() or {}).get("TOOLS_Name", "")
+            inputs.append(
+                {
+                    "name": inp_attrs.get("INPS_Name", ""),
+                    "id": inp_attrs.get("INPS_ID", ""),
+                    "type": inp_attrs.get("INPS_DataType", ""),
+                    "connected_to": connected_to,
+                }
+            )
+        outputs = []
+        output_list = tool.GetOutputList() or {}
+        for idx in output_list:
+            output = output_list[idx]
+            output_attrs = output.GetAttrs() or {}
+            outputs.append(
+                {
+                    "name": output_attrs.get("OUTS_Name", ""),
+                    "id": output_attrs.get("OUTS_ID", ""),
+                    "type": output_attrs.get("OUTS_DataType", ""),
+                }
+            )
+        out["inputs"] = inputs
+        out["outputs"] = outputs
+    return out
+
+
+def _fusion_comp_snapshot(comp, p: Dict[str, Any]):
+    attrs = comp.GetAttrs() or {}
+    tools = []
+    tool_list = comp.GetToolList() or {}
+    max_tools = p.get("max_tools", 20)
+    try:
+        max_tools = int(max_tools)
+    except (TypeError, ValueError):
+        max_tools = 20
+    include_io = bool(p.get("include_io", False))
+    for idx in list(tool_list)[:max_tools]:
+        tools.append(_fusion_tool_summary(tool_list[idx], include_io=include_io))
+    return {
+        "name": attrs.get("COMPS_Name", ""),
+        "tool_count": len(tool_list),
+        "attrs": _ser(attrs),
+        "tools": tools,
+    }
+
+
+def _fusion_graph_capabilities(comp):
+    attrs = comp.GetAttrs() or {}
+    return {
+        "comp": {
+            "name": attrs.get("COMPS_Name", ""),
+            "tool_count": len(comp.GetToolList() or {}),
+        },
+        "common_tools": list(_COMMON_FUSION_TOOLS),
+        "supported": [
+            "timeline-item Fusion comp targeting",
+            "tool list and attr inspection",
+            "tool input/output inspection",
+            "safe tool creation",
+            "safe batch input writes with optional readback",
+            "validated tool connections",
+            "timeline item comp import/export through timeline_item_fusion",
+        ],
+        "boundaries": [
+            "Tool availability varies by Resolve/Fusion build.",
+            "Some inputs are write-only or coerce values without reliable readback.",
+            "Fusion page current comp and timeline-item comp scopes are different.",
+            "Comp rendering requires a valid graph and can be page/state dependent.",
+        ],
+    }
+
+
+def _safe_add_fusion_tool(comp, p: Dict[str, Any]):
+    tool_type = p.get("tool_type")
+    if not tool_type:
+        return _err("tool_type is required")
+    if p.get("dry_run"):
+        return _ok(tool_type=tool_type, name=p.get("name"), would_add=True)
+    comp.Lock()
+    try:
+        tool = comp.AddTool(tool_type, p.get("x", -1), p.get("y", -1))
+        if not tool:
+            return _err(f"Failed to add tool '{tool_type}'. Check the tool ID is valid.")
+        if p.get("name"):
+            tool.SetAttrs({"TOOLS_Name": p["name"]})
+        return _ok(tool=_fusion_tool_summary(tool, include_io=p.get("include_io", True)))
+    finally:
+        comp.Unlock()
+
+
+def _probe_fusion_tool(comp, p: Dict[str, Any]):
+    name = p.get("tool_name") or p.get("name")
+    if not name:
+        return _err("tool_name is required")
+    tool = comp.FindTool(name)
+    if not tool:
+        return {"found": False, "tool_name": name}
+    return {"found": True, "tool": _fusion_tool_summary(tool, include_io=p.get("include_io", True))}
+
+
+def _safe_set_fusion_inputs(comp, p: Dict[str, Any]):
+    tool_name = p.get("tool_name")
+    inputs = p.get("inputs")
+    if not tool_name:
+        return _err("tool_name is required")
+    if not isinstance(inputs, dict) or not inputs:
+        return _err("inputs must be a non-empty object")
+    tool = comp.FindTool(tool_name)
+    if not tool:
+        return _err(f"Tool '{tool_name}' not found")
+    if p.get("dry_run"):
+        return _ok(tool_name=tool_name, inputs=inputs, would_set=True)
+    results = {}
+    comp.Lock()
+    try:
+        for input_name, value in inputs.items():
+            try:
+                if "time" in p:
+                    tool.SetInput(input_name, value, p["time"])
+                else:
+                    tool.SetInput(input_name, value)
+                row = {"success": True}
+                if p.get("readback", True):
+                    try:
+                        row["value"] = _ser(tool.GetInput(input_name, p["time"])) if "time" in p else _ser(tool.GetInput(input_name))
+                    except Exception as exc:
+                        row["readback_error"] = str(exc)
+                results[input_name] = row
+            except Exception as exc:
+                results[input_name] = {"success": False, "error": str(exc)}
+    finally:
+        comp.Unlock()
+    return {"success": all(row.get("success") for row in results.values()), "tool_name": tool_name, "results": results}
+
+
+def _safe_connect_fusion_tools(comp, p: Dict[str, Any]):
+    target_name = p.get("target_tool")
+    source_name = p.get("source_tool")
+    input_name = p.get("input_name")
+    if not target_name or not source_name or not input_name:
+        return _err("target_tool, source_tool, and input_name are required")
+    target = comp.FindTool(target_name)
+    if not target:
+        return _err(f"Target tool '{target_name}' not found")
+    source = comp.FindTool(source_name)
+    if not source:
+        return _err(f"Source tool '{source_name}' not found")
+    if p.get("dry_run"):
+        return _ok(target_tool=target_name, source_tool=source_name, input_name=input_name, would_connect=True)
+    comp.Lock()
+    try:
+        success = bool(target.ConnectInput(input_name, source))
+    finally:
+        comp.Unlock()
+    return {"success": success, "target_tool": target_name, "source_tool": source_name, "input_name": input_name}
+
+
+def _fusion_boundary_report(comp, p: Dict[str, Any]):
+    return {
+        "capabilities": _fusion_graph_capabilities(comp),
+        "composition": _fusion_comp_snapshot(comp, {**p, "include_io": p.get("include_io", True)}),
+    }
+
+
 @mcp.tool()
 def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fusion composition node graph operations.
@@ -6864,6 +7071,13 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       start_undo(name?) -> {success}
       end_undo(keep?) -> {success}
       bulk_set_inputs(ops) -> {results, op_count} — each op requires timeline scope plus tool_name, input_name, value
+      fusion_graph_capabilities(...) -> {supported, boundaries, common_tools}
+      probe_fusion_comp(include_io?, max_tools?) -> {name, tool_count, tools}
+      probe_fusion_tool(tool_name, include_io?) -> {found, tool}
+      safe_add_tool(tool_type, name?, dry_run?) -> {success, tool}
+      safe_set_inputs(tool_name, inputs, readback?) -> {success, results}
+      safe_connect_tools(target_tool, input_name, source_tool, dry_run?) -> {success}
+      fusion_boundary_report(include_io?) -> {capabilities, composition}
 
     Common tool_type values: Merge, Background, TextPlus, Transform, Blur,
       ColorCorrector, RectangleMask, EllipseMask, Tracker, MediaIn, MediaOut,
@@ -6877,6 +7091,21 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
     comp, comp_err = _resolve_fusion_comp(p)
     if comp_err:
         return comp_err
+
+    if action == "fusion_graph_capabilities":
+        return _fusion_graph_capabilities(comp)
+    elif action == "probe_fusion_comp":
+        return _fusion_comp_snapshot(comp, p)
+    elif action == "probe_fusion_tool":
+        return _probe_fusion_tool(comp, p)
+    elif action == "safe_add_tool":
+        return _safe_add_fusion_tool(comp, p)
+    elif action == "safe_set_inputs":
+        return _safe_set_fusion_inputs(comp, p)
+    elif action == "safe_connect_tools":
+        return _safe_connect_fusion_tools(comp, p)
+    elif action == "fusion_boundary_report":
+        return _fusion_boundary_report(comp, p)
 
     # --- Node Management ---
     if action == "add_tool":
@@ -7114,6 +7343,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "get_comp_info","set_frame_range","render",
         "start_undo","end_undo",
         "bulk_set_inputs",
+        *_FUSION_KERNEL_ACTIONS,
     ])
 
 

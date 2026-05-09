@@ -114,8 +114,22 @@
   {
     "kernel": "fusion_composition",
     "title": "Fusion Composition Kernel",
-    "status": "planned",
-    "passes": false,
+    "status": "implemented_live_validated",
+    "passes": true,
+    "evidence": {
+      "resolve": "DaVinci Resolve Studio 20.3.2.9",
+      "live_report": "/private/tmp/fusion-composition-probe-20260509-release/fusion-composition-probe.json",
+      "counts": {
+        "supported": 18,
+        "partially_supported": 0,
+        "unsupported": 0,
+        "version_or_page_dependent": 0,
+        "write_only_unverifiable": 0,
+        "read_only": 0,
+        "not_applicable": 0,
+        "error": 0
+      }
+    },
     "steps": [
       "Implement Fusion graph capability, IO, and safe mutation helpers",
       "Add offline Fusion target, IO, and report tests",
