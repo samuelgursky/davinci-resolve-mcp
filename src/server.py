@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.14.0"
+VERSION = "2.15.0"
 
 import base64
 import os
@@ -4433,6 +4433,545 @@ def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
 # TOOL 4: project_manager
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_PROJECT_KERNEL_ACTIONS = [
+    "project_capabilities",
+    "probe_project_lifecycle",
+    "probe_project_settings",
+    "safe_project_create",
+    "safe_project_export",
+    "safe_project_import",
+    "safe_project_archive",
+    "safe_project_restore",
+    "safe_project_delete",
+    "safe_set_project_settings",
+    "project_settings_snapshot",
+    "database_capabilities",
+    "safe_set_current_database",
+    "preset_lifecycle_probe",
+    "project_boundary_report",
+]
+
+_PROJECT_MANAGER_METHODS = [
+    "ArchiveProject",
+    "CreateProject",
+    "DeleteProject",
+    "LoadProject",
+    "GetCurrentProject",
+    "SaveProject",
+    "CloseProject",
+    "CreateFolder",
+    "DeleteFolder",
+    "GetProjectListInCurrentFolder",
+    "GetFolderListInCurrentFolder",
+    "GotoRootFolder",
+    "GotoParentFolder",
+    "GetCurrentFolder",
+    "OpenFolder",
+    "ImportProject",
+    "ExportProject",
+    "RestoreProject",
+    "GetCurrentDatabase",
+    "GetDatabaseList",
+    "SetCurrentDatabase",
+    "CreateCloudProject",
+    "LoadCloudProject",
+    "ImportCloudProject",
+    "RestoreCloudProject",
+]
+
+_PROJECT_METHODS = [
+    "GetName",
+    "SetName",
+    "GetUniqueId",
+    "GetSetting",
+    "SetSetting",
+    "GetPresetList",
+    "SetPreset",
+    "GetTimelineCount",
+    "GetTimelineByIndex",
+    "GetCurrentTimeline",
+    "SetCurrentTimeline",
+    "GetMediaPool",
+    "GetGallery",
+    "GetRenderPresetList",
+    "GetQuickExportRenderPresets",
+    "GetRenderJobList",
+    "GetRenderSettings",
+    "GetRenderFormats",
+    "RefreshLUTList",
+    "LoadBurnInPreset",
+    "ExportCurrentFrameAsStill",
+    "GetColorGroupsList",
+]
+
+_PROJECT_SETTING_PROBE_KEYS = [
+    "timelineFrameRate",
+    "timelinePlaybackFrameRate",
+    "timelineResolutionWidth",
+    "timelineResolutionHeight",
+    "videoMonitorFormat",
+    "superScale",
+    "colorScienceMode",
+    "timelineWorkingLuminance",
+    "timelineOutputResMismatchBehavior",
+]
+
+
+def _is_disposable_project_name(name: Any) -> bool:
+    return isinstance(name, str) and name.startswith("_mcp_") and len(name) > len("_mcp_")
+
+
+def _require_disposable_project_name(
+    name: Any,
+    *,
+    field: str = "name",
+    allow_non_mcp_name: bool = False,
+) -> Optional[Dict[str, Any]]:
+    if allow_non_mcp_name:
+        if isinstance(name, str) and name:
+            return None
+        return _err(f"{field} must be a non-empty string")
+    if not _is_disposable_project_name(name):
+        return _err(f"{field} must start with '_mcp_' unless allow_non_mcp_name=True")
+    return None
+
+
+def _project_path_guard(path: Any, *, field: str = "path", require_temp_path: bool = True) -> Optional[Dict[str, Any]]:
+    if not isinstance(path, str) or not path:
+        return _err(f"{field} is required")
+    if require_temp_path and not _render_temp_path_ok(path):
+        return _err(f"{field} must be under the system temp directory unless require_temp_path=False")
+    return None
+
+
+def _project_path_parent(path: str) -> str:
+    parent = os.path.dirname(os.path.abspath(path))
+    return parent or os.getcwd()
+
+
+def _project_object_summary(project) -> Optional[Dict[str, Any]]:
+    if not project:
+        return None
+    out: Dict[str, Any] = {}
+    for key, method_name in (("name", "GetName"), ("id", "GetUniqueId")):
+        if _has_method(project, method_name):
+            try:
+                out[key] = _ser(getattr(project, method_name)())
+            except Exception as exc:
+                out[f"{key}_error"] = str(exc)
+    return out
+
+
+def _project_folder_summary(folder) -> Optional[Dict[str, Any]]:
+    if folder is None:
+        return None
+    if isinstance(folder, str):
+        return {"name": folder}
+    out: Dict[str, Any] = {}
+    for key, method_name in (("name", "GetName"), ("id", "GetUniqueId")):
+        if _has_method(folder, method_name):
+            try:
+                out[key] = _ser(getattr(folder, method_name)())
+            except Exception as exc:
+                out[f"{key}_error"] = str(exc)
+    return out or {"repr": str(folder)}
+
+
+def _project_manager_snapshot(pm) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "methods": {method: _has_method(pm, method) for method in _PROJECT_MANAGER_METHODS},
+    }
+    try:
+        out["projects"] = _ser(pm.GetProjectListInCurrentFolder() or [])
+    except Exception as exc:
+        out["projects_error"] = str(exc)
+    try:
+        folders = pm.GetFolderListInCurrentFolder() or []
+        out["folders"] = [_project_folder_summary(folder) for folder in folders]
+    except Exception as exc:
+        out["folders_error"] = str(exc)
+    try:
+        out["current_folder"] = _project_folder_summary(pm.GetCurrentFolder())
+    except Exception as exc:
+        out["current_folder_error"] = str(exc)
+    try:
+        out["current_project"] = _project_object_summary(pm.GetCurrentProject())
+    except Exception as exc:
+        out["current_project_error"] = str(exc)
+    return out
+
+
+def _project_capabilities(pm=None, project=None, resolve_obj=None) -> Dict[str, Any]:
+    return {
+        "project_manager_methods": {method: (_has_method(pm, method) if pm else True) for method in _PROJECT_MANAGER_METHODS},
+        "project_methods": {method: (_has_method(project, method) if project else True) for method in _PROJECT_METHODS},
+        "safe_guards": {
+            "disposable_project_prefix": "_mcp_",
+            "temp_paths_required_by_default": True,
+            "archive_source_media_default": False,
+            "archive_render_cache_default": False,
+            "archive_proxy_media_default": False,
+            "database_switch_dry_run_default": True,
+            "cloud_project_mutation_default": "not_run_by_default",
+        },
+        "kernel_actions": list(_PROJECT_KERNEL_ACTIONS),
+        "resolve": {
+            "layout_presets": {
+                "save": _has_method(resolve_obj, "SaveLayoutPreset") if resolve_obj else True,
+                "load": _has_method(resolve_obj, "LoadLayoutPreset") if resolve_obj else True,
+                "update": _has_method(resolve_obj, "UpdateLayoutPreset") if resolve_obj else True,
+                "export": _has_method(resolve_obj, "ExportLayoutPreset") if resolve_obj else True,
+                "import": _has_method(resolve_obj, "ImportLayoutPreset") if resolve_obj else True,
+                "delete": _has_method(resolve_obj, "DeleteLayoutPreset") if resolve_obj else True,
+            },
+            "render_presets": {
+                "import_render": _has_method(resolve_obj, "ImportRenderPreset") if resolve_obj else True,
+                "export_render": _has_method(resolve_obj, "ExportRenderPreset") if resolve_obj else True,
+                "import_burnin": _has_method(resolve_obj, "ImportBurnInPreset") if resolve_obj else True,
+                "export_burnin": _has_method(resolve_obj, "ExportBurnInPreset") if resolve_obj else True,
+            },
+        },
+    }
+
+
+def _project_settings_snapshot(project, p: Dict[str, Any]) -> Dict[str, Any]:
+    settings_key = p.get("name", p.get("key", ""))
+    out: Dict[str, Any] = {
+        "project": _project_object_summary(project),
+        "methods": {method: _has_method(project, method) for method in _PROJECT_METHODS},
+    }
+    if _has_method(project, "GetSetting"):
+        try:
+            out["settings"] = _ser(project.GetSetting(settings_key))
+        except Exception as exc:
+            out["settings_error"] = str(exc)
+    if _has_method(project, "GetPresetList"):
+        try:
+            out["presets"] = _ser(project.GetPresetList() or [])
+        except Exception as exc:
+            out["presets_error"] = str(exc)
+    if _has_method(project, "GetTimelineCount"):
+        try:
+            out["timeline_count"] = _ser(project.GetTimelineCount())
+        except Exception as exc:
+            out["timeline_count_error"] = str(exc)
+    if _has_method(project, "GetCurrentTimeline"):
+        try:
+            tl = project.GetCurrentTimeline()
+            out["current_timeline"] = {
+                "name": _ser(tl.GetName()) if tl and _has_method(tl, "GetName") else None,
+                "id": _ser(tl.GetUniqueId()) if tl and _has_method(tl, "GetUniqueId") else None,
+            }
+        except Exception as exc:
+            out["current_timeline_error"] = str(exc)
+    if _has_method(project, "GetRenderPresetList"):
+        try:
+            out["render_presets"] = _ser(project.GetRenderPresetList() or [])
+        except Exception as exc:
+            out["render_presets_error"] = str(exc)
+    if _has_method(project, "GetQuickExportRenderPresets"):
+        try:
+            out["quick_export_presets"] = _ser(project.GetQuickExportRenderPresets() or [])
+        except Exception as exc:
+            out["quick_export_presets_error"] = str(exc)
+    if _has_method(project, "GetColorGroupsList"):
+        try:
+            out["color_groups"] = [{"name": _ser(group.GetName())} for group in (project.GetColorGroupsList() or [])]
+        except Exception as exc:
+            out["color_groups_error"] = str(exc)
+    return out
+
+
+def _probe_project_settings(project, p: Dict[str, Any]) -> Dict[str, Any]:
+    keys = p.get("keys", p.get("candidate_keys", _PROJECT_SETTING_PROBE_KEYS))
+    if not isinstance(keys, list):
+        return _err("keys must be a list")
+    out = {
+        "snapshot": _project_settings_snapshot(project, p),
+        "candidate_settings": {},
+    }
+    for key in keys:
+        if not isinstance(key, str) or not key:
+            continue
+        row: Dict[str, Any] = {}
+        try:
+            row["value"] = _ser(project.GetSetting(key))
+        except Exception as exc:
+            row["error"] = str(exc)
+        out["candidate_settings"][key] = row
+    if p.get("try_write"):
+        settings = {
+            key: row["value"]
+            for key, row in out["candidate_settings"].items()
+            if "value" in row and row["value"] not in (None, "")
+        }
+        if settings:
+            out["write_restore_probe"] = _safe_set_project_settings(project, {
+                "settings": settings,
+                "restore": True,
+                "dry_run": bool(p.get("dry_run", False)),
+            })
+    return out
+
+
+def _safe_set_project_settings(project, p: Dict[str, Any]) -> Dict[str, Any]:
+    settings = p.get("settings")
+    if settings is None:
+        settings = {key: p[key] for key in _PROJECT_SETTING_PROBE_KEYS if key in p}
+    if not isinstance(settings, dict) or not settings:
+        return _err("settings must be a non-empty object")
+    original: Dict[str, Any] = {}
+    for key in settings:
+        try:
+            original[key] = _ser(project.GetSetting(key))
+        except Exception as exc:
+            original[key] = {"error": str(exc)}
+    if p.get("dry_run"):
+        return _ok(would_set=settings, original=original, restore=p.get("restore", True))
+    results: Dict[str, Any] = {}
+    for key, value in settings.items():
+        row: Dict[str, Any] = {"requested": value, "original": original.get(key)}
+        try:
+            row["write"] = bool(project.SetSetting(key, value))
+        except Exception as exc:
+            row["write"] = False
+            row["error"] = str(exc)
+        try:
+            row["readback"] = _ser(project.GetSetting(key))
+        except Exception as exc:
+            row["readback_error"] = str(exc)
+        if p.get("restore", True) and not isinstance(original.get(key), dict):
+            try:
+                row["restore"] = bool(project.SetSetting(key, original[key]))
+                row["restored_value"] = _ser(project.GetSetting(key))
+            except Exception as exc:
+                row["restore"] = False
+                row["restore_error"] = str(exc)
+        results[key] = row
+    return {"success": all(row.get("write") for row in results.values()), "results": results}
+
+
+def _safe_project_create(pm, resolve_obj, p: Dict[str, Any]) -> Dict[str, Any]:
+    name = p.get("name")
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    if invalid:
+        return invalid
+    media_location_path = p.get("media_location_path") or p.get("mediaLocationPath")
+    if media_location_path:
+        path_err = _project_path_guard(
+            media_location_path,
+            field="media_location_path",
+            require_temp_path=p.get("require_temp_media_location", True),
+        )
+        if path_err:
+            return path_err
+        version = resolve_obj.GetVersion() or [0]
+        if version[0] < 20 or (version[0] == 20 and len(version) > 2 and (version[1], version[2]) < (2, 2)):
+            return _err("ProjectManager.CreateProject media_location_path requires DaVinci Resolve 20.2.2+")
+    if p.get("dry_run"):
+        return _ok(would_create=True, name=name, media_location_path=media_location_path)
+    project = pm.CreateProject(name, media_location_path) if media_location_path else pm.CreateProject(name)
+    return _ok(project=_project_object_summary(project), name=project.GetName()) if project else _err(f"Failed to create '{name}'")
+
+
+def _safe_project_export(pm, p: Dict[str, Any]) -> Dict[str, Any]:
+    name = p.get("name")
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    if invalid:
+        return invalid
+    path = p.get("path")
+    path_err = _project_path_guard(path, require_temp_path=p.get("require_temp_path", True))
+    if path_err:
+        return path_err
+    os.makedirs(_project_path_parent(path), exist_ok=True)
+    with_stills = bool(p.get("with_stills_and_luts", False))
+    if p.get("dry_run"):
+        return _ok(would_export=True, name=name, path=path, with_stills_and_luts=with_stills)
+    return {"success": bool(pm.ExportProject(name, path, with_stills))}
+
+
+def _safe_project_import(pm, p: Dict[str, Any]) -> Dict[str, Any]:
+    path = p.get("path")
+    path_err = _project_path_guard(path, require_temp_path=p.get("require_temp_path", True))
+    if path_err:
+        return path_err
+    if not os.path.exists(path):
+        return _err(f"path does not exist: {path}")
+    name = p.get("name")
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    if invalid:
+        return invalid
+    if p.get("dry_run"):
+        return _ok(would_import=True, path=path, name=name)
+    return {"success": bool(pm.ImportProject(path, name))}
+
+
+def _safe_project_archive(pm, p: Dict[str, Any]) -> Dict[str, Any]:
+    name = p.get("name")
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    if invalid:
+        return invalid
+    path = p.get("path")
+    path_err = _project_path_guard(path, require_temp_path=p.get("require_temp_path", True))
+    if path_err:
+        return path_err
+    src_media = bool(p.get("src_media", False))
+    render_cache = bool(p.get("render_cache", False))
+    proxy_media = bool(p.get("proxy_media", False))
+    if (src_media or render_cache or proxy_media) and not p.get("allow_media_archive", False):
+        return _err("Archive media/cache/proxy flags must stay false unless allow_media_archive=True")
+    os.makedirs(_project_path_parent(path), exist_ok=True)
+    if p.get("dry_run"):
+        return _ok(
+            would_archive=True,
+            name=name,
+            path=path,
+            src_media=src_media,
+            render_cache=render_cache,
+            proxy_media=proxy_media,
+        )
+    return {"success": bool(pm.ArchiveProject(name, path, src_media, render_cache, proxy_media))}
+
+
+def _safe_project_restore(pm, p: Dict[str, Any]) -> Dict[str, Any]:
+    path = p.get("path")
+    path_err = _project_path_guard(path, require_temp_path=p.get("require_temp_path", True))
+    if path_err:
+        return path_err
+    if not os.path.exists(path):
+        return _err(f"path does not exist: {path}")
+    name = p.get("name")
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    if invalid:
+        return invalid
+    if p.get("dry_run"):
+        return _ok(would_restore=True, path=path, name=name)
+    return {"success": bool(pm.RestoreProject(path, name))}
+
+
+def _safe_project_delete(pm, p: Dict[str, Any]) -> Dict[str, Any]:
+    name = p.get("name")
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    if invalid:
+        return invalid
+    if p.get("dry_run"):
+        return _ok(would_delete=True, name=name)
+    current = pm.GetCurrentProject()
+    current_name = current.GetName() if current and _has_method(current, "GetName") else None
+    if current_name == name:
+        if not p.get("close_current", False):
+            return _err("Refusing to delete the currently open project; pass close_current=True")
+        if p.get("save_current", True):
+            pm.SaveProject()
+        closed = bool(pm.CloseProject(current))
+        if not closed:
+            return _err(f"Failed to close current project '{name}' before delete")
+    return {"success": bool(pm.DeleteProject(name))}
+
+
+def _database_capabilities(pm) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "methods": {
+            "get_current": _has_method(pm, "GetCurrentDatabase"),
+            "list": _has_method(pm, "GetDatabaseList"),
+            "set_current": _has_method(pm, "SetCurrentDatabase"),
+        },
+        "guards": {
+            "set_current_default": "dry_run",
+            "set_current_requires_allow_switch": True,
+            "reason": "SetCurrentDatabase closes any open project and can disrupt the user's Resolve state.",
+        },
+    }
+    if _has_method(pm, "GetCurrentDatabase"):
+        try:
+            out["current"] = _ser(pm.GetCurrentDatabase())
+        except Exception as exc:
+            out["current_error"] = str(exc)
+    if _has_method(pm, "GetDatabaseList"):
+        try:
+            out["databases"] = _ser(pm.GetDatabaseList() or [])
+        except Exception as exc:
+            out["databases_error"] = str(exc)
+    return out
+
+
+def _safe_set_current_database(pm, p: Dict[str, Any]) -> Dict[str, Any]:
+    db_info = p.get("db_info")
+    if not isinstance(db_info, dict) or not db_info.get("DbType") or not db_info.get("DbName"):
+        return _err("db_info must include DbType and DbName")
+    current = _ser(pm.GetCurrentDatabase()) if _has_method(pm, "GetCurrentDatabase") else None
+    dry_run = p.get("dry_run", True) or not p.get("allow_switch", False)
+    if dry_run:
+        return _ok(
+            would_switch=True,
+            current=current,
+            target=_ser(db_info),
+            requires_allow_switch=True,
+            note="SetCurrentDatabase closes any open project; pass allow_switch=True and dry_run=False to execute.",
+        )
+    return {"success": bool(pm.SetCurrentDatabase(db_info))}
+
+
+def _preset_lifecycle_probe(resolve_obj, project, p: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "project_presets": {"available": _has_method(project, "GetPresetList")},
+        "render_presets": {"available": _has_method(project, "GetRenderPresetList")},
+        "quick_export_presets": {"available": _has_method(project, "GetQuickExportRenderPresets")},
+        "fairlight_presets": {"available": _has_method(resolve_obj, "GetFairlightPresets")},
+        "layout_presets": {
+            "save": _has_method(resolve_obj, "SaveLayoutPreset"),
+            "load": _has_method(resolve_obj, "LoadLayoutPreset"),
+            "update": _has_method(resolve_obj, "UpdateLayoutPreset"),
+            "export": _has_method(resolve_obj, "ExportLayoutPreset"),
+            "import": _has_method(resolve_obj, "ImportLayoutPreset"),
+            "delete": _has_method(resolve_obj, "DeleteLayoutPreset"),
+        },
+        "render_preset_files": {
+            "import_render": _has_method(resolve_obj, "ImportRenderPreset"),
+            "export_render": _has_method(resolve_obj, "ExportRenderPreset"),
+            "import_burnin": _has_method(resolve_obj, "ImportBurnInPreset"),
+            "export_burnin": _has_method(resolve_obj, "ExportBurnInPreset"),
+        },
+    }
+    try:
+        out["project_presets"]["items"] = _ser(project.GetPresetList() or [])
+    except Exception as exc:
+        out["project_presets"]["error"] = str(exc)
+    try:
+        out["render_presets"]["items"] = _ser(project.GetRenderPresetList() or [])
+    except Exception as exc:
+        out["render_presets"]["error"] = str(exc)
+    try:
+        out["quick_export_presets"]["items"] = _ser(project.GetQuickExportRenderPresets() or [])
+    except Exception as exc:
+        out["quick_export_presets"]["error"] = str(exc)
+    try:
+        out["fairlight_presets"]["items"] = _ser(resolve_obj.GetFairlightPresets() or [])
+    except Exception as exc:
+        out["fairlight_presets"]["error"] = str(exc)
+    return out
+
+
+def _project_boundary_report(resolve_obj, pm, project, p: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "capabilities": _project_capabilities(pm, project, resolve_obj),
+        "project_manager": _project_manager_snapshot(pm),
+        "settings": _probe_project_settings(project, p) if project else {"available": False},
+        "database": _database_capabilities(pm),
+        "presets": _preset_lifecycle_probe(resolve_obj, project, p) if project else {"available": False},
+        "cloud": {
+            "methods": {
+                "create": _has_method(pm, "CreateCloudProject"),
+                "load": _has_method(pm, "LoadCloudProject"),
+                "import": _has_method(pm, "ImportCloudProject"),
+                "restore": _has_method(pm, "RestoreCloudProject"),
+            },
+            "default_probe_mode": "shape_only",
+            "requires_external_infrastructure": True,
+        },
+    }
+
+
 @mcp.tool()
 def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage DaVinci Resolve projects.
@@ -4449,6 +4988,21 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       export_project(name, path, with_stills_and_luts?) -> {success}
       archive(name, path, src_media?, render_cache?, proxy_media?) -> {success}
       restore(path, name?) -> {success}
+      project_capabilities() -> {capabilities}
+      probe_project_lifecycle() -> {project_manager, ...}
+      probe_project_settings(keys?, try_write?) -> {snapshot, candidate_settings}
+      safe_project_create(name, media_location_path?, dry_run?) -> {success}
+      safe_project_export(name, path, with_stills_and_luts?, dry_run?) -> {success}
+      safe_project_import(path, name, dry_run?) -> {success}
+      safe_project_archive(name, path, src_media=false, render_cache=false, proxy_media=false, dry_run?) -> {success}
+      safe_project_restore(path, name, dry_run?) -> {success}
+      safe_project_delete(name, close_current?, dry_run?) -> {success}
+      safe_set_project_settings(settings, restore?, dry_run?) -> {success}
+      project_settings_snapshot(name?) -> {project, settings, presets, ...}
+      database_capabilities() -> {methods, current, databases}
+      safe_set_current_database(db_info, dry_run?, allow_switch?) -> {success}
+      preset_lifecycle_probe() -> {project_presets, render_presets, layout_presets, ...}
+      project_boundary_report() -> {capabilities, project_manager, settings, database, presets, cloud}
     """
     p = params or {}
     r = get_resolve()
@@ -4456,7 +5010,40 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
     pm = r.GetProjectManager()
 
-    if action == "list":
+    if action == "project_capabilities":
+        return _project_capabilities(pm, pm.GetCurrentProject(), r)
+    elif action == "probe_project_lifecycle":
+        return _project_manager_snapshot(pm)
+    elif action == "database_capabilities":
+        return _database_capabilities(pm)
+    elif action == "safe_set_current_database":
+        return _safe_set_current_database(pm, p)
+    elif action == "safe_project_create":
+        return _safe_project_create(pm, r, p)
+    elif action == "safe_project_export":
+        return _safe_project_export(pm, p)
+    elif action == "safe_project_import":
+        return _safe_project_import(pm, p)
+    elif action == "safe_project_archive":
+        return _safe_project_archive(pm, p)
+    elif action == "safe_project_restore":
+        return _safe_project_restore(pm, p)
+    elif action == "safe_project_delete":
+        return _safe_project_delete(pm, p)
+    elif action in {"probe_project_settings", "safe_set_project_settings", "project_settings_snapshot", "preset_lifecycle_probe", "project_boundary_report"}:
+        proj = pm.GetCurrentProject()
+        if not proj:
+            return _err("No project open")
+        if action == "probe_project_settings":
+            return _probe_project_settings(proj, p)
+        if action == "safe_set_project_settings":
+            return _safe_set_project_settings(proj, p)
+        if action == "project_settings_snapshot":
+            return _project_settings_snapshot(proj, p)
+        if action == "preset_lifecycle_probe":
+            return _preset_lifecycle_probe(r, proj, p)
+        return _project_boundary_report(r, pm, proj, p)
+    elif action == "list":
         return {"projects": pm.GetProjectListInCurrentFolder()}
     elif action == "get_current":
         proj = pm.GetCurrentProject()
@@ -4488,7 +5075,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             p.get("src_media", True), p.get("render_cache", True), p.get("proxy_media", False)))}
     elif action == "restore":
         return {"success": bool(pm.RestoreProject(p["path"], p.get("name")))}
-    return _unknown(action, ["list","get_current","create","load","save","close","delete","import_project","export_project","archive","restore"])
+    return _unknown(action, ["list","get_current","create","load","save","close","delete","import_project","export_project","archive","restore", *_PROJECT_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -4516,12 +5103,12 @@ def project_manager_folders(action: str, params: Optional[Dict[str, Any]] = None
 
     if action == "list":
         folders = pm.GetFolderListInCurrentFolder() or []
-        return {"folders": [{"name": f.GetName(), "id": f.GetUniqueId()} for f in folders]}
+        return {"folders": [_project_folder_summary(f) for f in folders]}
     elif action == "get_current":
         folder = pm.GetCurrentFolder()
         if not folder:
             return _err("No current folder")
-        return {"folder": {"name": folder.GetName(), "id": folder.GetUniqueId()}}
+        return {"folder": _project_folder_summary(folder)}
     elif action == "create":
         return {"success": bool(pm.CreateFolder(p["name"]))}
     elif action == "delete":

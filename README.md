@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.14.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.15.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-30%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -13,7 +13,40 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
 
-### What's New in v2.14.0
+### What's New in v2.15.0
+
+Project / Database / Archive kernel expansion - adding disposable project
+lifecycle guards, settings snapshots and write/restore probes, database switch
+dry-runs, preset lifecycle probing, archive safety validation, and project
+boundary reporting.
+
+**New `project_manager` lifecycle actions**: added `project_capabilities`,
+`probe_project_lifecycle`, `probe_project_settings`, `safe_project_create`,
+`safe_project_export`, `safe_project_import`, `safe_project_archive`,
+`safe_project_restore`, `safe_project_delete`, `safe_set_project_settings`,
+`project_settings_snapshot`, `database_capabilities`,
+`safe_set_current_database`, `preset_lifecycle_probe`, and
+`project_boundary_report`.
+
+**Operational guardrails**: safe project mutation defaults to `_mcp_`
+disposable names and temp paths. Database switching dry-runs by default because
+Resolve closes open projects when changing databases. Archive source media,
+render cache, and proxy media flags are rejected unless explicitly opted in.
+
+**Documented support map**: added
+[`docs/project-lifecycle-kernel.md`](docs/project-lifecycle-kernel.md) with
+project CRUD, DRP import/export, archive/restore, folder, settings, database,
+layout preset, render preset, page, keyframe, and cloud-infrastructure
+boundaries.
+
+**Validation**: live validated against DaVinci Resolve Studio 20.3.2.9 with
+disposable `_mcp_` projects only. Final probe result: 35 supported, 5 partially
+supported lifecycle/archive/keyframe/render-preset boundaries, 1 intentional
+unsupported archive media-flag guard, 1 not-applicable archive restore boundary,
+and 0 errors. Disposable projects, layout presets, and temp work files were
+cleaned up.
+
+### v2.14.0
 
 Audio / Fairlight kernel expansion - adding audio track/item probes, source
 audio mapping reports, guarded audio property writes, voice isolation

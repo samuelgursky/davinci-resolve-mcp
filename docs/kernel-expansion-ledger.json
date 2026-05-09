@@ -198,8 +198,22 @@
   {
     "kernel": "project_lifecycle",
     "title": "Project / Database / Archive Kernel",
-    "status": "planned",
-    "passes": false,
+    "status": "implemented_live_validated",
+    "passes": true,
+    "evidence": {
+      "resolve": "DaVinci Resolve Studio 20.3.2.9",
+      "live_report": "/private/tmp/project-lifecycle-probe-20260509-release/project-lifecycle-probe.json",
+      "counts": {
+        "supported": 35,
+        "partially_supported": 5,
+        "unsupported": 1,
+        "not_applicable": 1,
+        "version_or_page_dependent": 0,
+        "write_only_unverifiable": 0,
+        "read_only": 0,
+        "error": 0
+      }
+    },
     "steps": [
       "Implement disposable project, settings snapshot, preset, archive, and database safety helpers",
       "Add offline project safety and settings diff tests",

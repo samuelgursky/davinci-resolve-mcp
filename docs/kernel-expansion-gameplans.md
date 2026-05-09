@@ -777,11 +777,14 @@ It should answer:
 - `probe_project_lifecycle`
 - `probe_project_settings`
 - `safe_project_create`
+- `safe_project_export`
+- `safe_project_import`
 - `safe_project_archive`
 - `safe_project_restore`
+- `safe_project_delete`
 - `project_settings_snapshot`
-- `project_settings_restore`
 - `database_capabilities`
+- `safe_set_current_database`
 - `preset_lifecycle_probe`
 - `project_boundary_report`
 

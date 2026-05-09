@@ -134,6 +134,30 @@ Key actions: `list`, `get_current`, `create(name, media_location_path?)`,
 `delete(name)`, `import_project(path)`, `export_project(name, path)`, `archive`,
 `restore`
 
+Project / Database / Archive kernel actions (v2.15.0+) add guarded project
+lifecycle, settings, database, preset, and archive boundary helpers:
+
+- `project_capabilities`
+- `probe_project_lifecycle`
+- `probe_project_settings(keys?, try_write?, dry_run?)`
+- `safe_project_create(name, media_location_path?, dry_run?)`
+- `safe_project_export(name, path, with_stills_and_luts?, dry_run?)`
+- `safe_project_import(path, name, dry_run?)`
+- `safe_project_archive(name, path, src_media=false, render_cache=false, proxy_media=false, dry_run?)`
+- `safe_project_restore(path, name, dry_run?)`
+- `safe_project_delete(name, close_current?, dry_run?)`
+- `safe_set_project_settings(settings, restore?, dry_run?)`
+- `project_settings_snapshot(name?)`
+- `database_capabilities`
+- `safe_set_current_database(db_info, dry_run?, allow_switch?)`
+- `preset_lifecycle_probe`
+- `project_boundary_report`
+
+Safe project actions require `_mcp_` names and temp paths by default. Database
+switching dry-runs by default because Resolve closes open projects when
+switching databases. Archive source media/cache/proxy flags are rejected unless
+explicitly opted in.
+
 **`project_manager_folders`** — Navigate project folders.
 
 Key actions: `list`, `get_current`, `create(name)`, `open(name)`, `goto_root`,
