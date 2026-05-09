@@ -107,6 +107,7 @@ autoresearch/
 # Autoresearch artifacts
 run.log
 *.log.bak
+results.tsv
 
 # Local planning notes
 timeline-edit-kernel-gameplan.md

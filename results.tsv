@@ -1,7 +1,0 @@
-commit	tools_total	coverage_pct	status	category	description
-0000000	83	24.1	keep	baseline	baseline from v1.3.8 main - 83 tools, 17 verified working
-5a4ed78	146	42.3	keep	MediaStorage+Resolve+PM+Project	63 new tools: full MediaStorage, Resolve object, ProjectManager, Project render pipeline
-e492c8f	230	66.7	keep	MediaPool+Folder+MPI+Gallery+Graph+CG	84 new tools: complete MediaPool, Folder, MediaPoolItem, Gallery, GalleryStillAlbum, Graph, ColorGroup
-73ce5d3	337	97.7	keep	Timeline+TimelineItem	107 new tools: complete Timeline (47) and TimelineItem (60) coverage
-7c694e4	342	100.0	keep	FinalGaps+LayoutPresetFix	5 new tools + 5 fixed: AddRenderJob, LoadCloudProject, CreateTimelineFromClips, SetTimelineSetting, GetFusionCompByName + layout preset API fixes
-testing	342	100.0	keep	5-Phase Testing	319/324 API methods tested live (98.5%), 100% pass. 4 cloud-only, 1 needs HDR content. Phase1:204 Phase2:79 Phase3:20 Phase4:10 Phase5:6

@@ -1,55 +1,81 @@
-# Marker Examples
+# Marker And Review Annotation Examples
 
-This directory contains examples demonstrating how to work with markers in DaVinci Resolve timelines using the MCP server.
+These prompts use the review annotation kernel on `timeline_markers` plus the
+raw marker tools for timeline items and media pool items.
 
-## Available Examples
+## Probe Annotation Support
 
-### add_timecode_marker.py
-Shows how to add markers with timecode values at specified positions.
-
-### add_spaced_markers.py
-Demonstrates adding markers at regular intervals throughout a timeline.
-
-### alternating_markers.py
-Shows how to add markers with alternating colors and notes.
-
-### clear_add_markers.py
-Demonstrates how to clear all markers and then add new ones.
-
-### test_marker_frames.py
-A test script to verify marker placement at specific frames.
-
-## Running the Examples
-
-Ensure DaVinci Resolve is running and that you have a project open with at least one timeline.
-
-```bash
-# From the root directory of the repository
-python examples/markers/add_timecode_marker.py
+```text
+Probe annotation support for the current timeline. Include timeline markers,
+the current timeline item when available, media pool item annotations, marker
+custom data support, flags, and clip color. Do not change anything.
 ```
 
-## Marker Colors
+Expected actions:
 
-DaVinci Resolve supports the following marker colors that can be used in scripts:
-- Blue
-- Cyan 
-- Green
-- Yellow
-- Red
-- Pink
-- Purple
-- Fuchsia
-- Rose
-- Lavender
-- Sky
-- Mint
-- Lemon
-- Sand
-- Cocoa
-- Cream
+- `timeline_markers.annotation_capabilities`
+- `timeline_markers.probe_annotations`
+- `timeline_markers.annotation_boundary_report`
 
-## Common Issues
+## Add A Current-Playhead Review Marker
 
-- Make sure a timeline is open before trying to add markers
-- Markers can only be placed on valid frames that contain media
-- Some marker operations require specific permissions or project settings 
+```text
+Add a blue timeline marker at the current playhead named "Review" with the note
+"Check this moment". Use marker custom data starting with "mcp-demo:" so it can
+be found or cleaned up later.
+```
+
+Expected actions:
+
+- `timeline_markers.add`
+- `timeline_markers.get_all`
+
+## Normalize A Marker Payload Before Writing
+
+```text
+Normalize this marker payload before writing it: frame 120, color teal, name
+"Client note", note "Confirm title safe", duration 24, custom_data
+"mcp-demo:title-safe". Tell me if the color or frame input needs adjustment.
+```
+
+Expected actions:
+
+- `timeline_markers.normalize_marker_payload`
+
+## Copy Review Notes Between Scopes
+
+```text
+Copy the timeline marker with custom data "mcp-demo:title-safe" to the current
+timeline item. Preserve the note, name, color, duration, and custom data when
+the target scope supports them.
+```
+
+Expected actions:
+
+- `timeline_markers.copy_annotations`
+- `timeline_markers.probe_annotations`
+
+## Export A Review Report
+
+```text
+Export a read-only review report for the current timeline, including marker
+names, notes, colors, custom data, flags, clip color, and any scope limitations.
+Do not delete or modify markers.
+```
+
+Expected actions:
+
+- `timeline_markers.export_review_report`
+- `timeline_markers.annotation_boundary_report`
+
+## Safe Cleanup Prompt
+
+```text
+Find markers whose custom data starts with "mcp-demo:" and show me a dry-run
+cleanup plan. Wait for approval before deleting anything.
+```
+
+Expected actions:
+
+- `timeline_markers.get_by_custom_data`
+- `timeline_markers.clear_annotations_by_scope`

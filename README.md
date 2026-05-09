@@ -1294,14 +1294,14 @@ This MCP server controls DaVinci Resolve via its Scripting API. Some tools perfo
 davinci-resolve-mcp/
 ├── install.py                    # Universal installer (macOS/Windows/Linux)
 ├── src/
-│   ├── server.py                # Compound MCP server — 27 tools (default)
+│   ├── server.py                # Compound MCP server — 30 tools (default)
 │   ├── resolve_mcp_server.py    # Thin full-server entrypoint — 328 tools
 │   ├── granular/                # Modular full-server implementation
 │   └── utils/                   # Platform detection, Resolve connection helpers
 ├── tests/                       # 5-phase live API test suite + Resolve 20 delta (331/331 pass)
 ├── docs/
 │   └── resolve_scripting_api.txt # Official Resolve Scripting API reference
-└── examples/                    # Getting started, markers, media, timeline examples
+└── examples/                    # MCP prompt recipes for markers, media, and timeline workflows
 ```
 
 ## License

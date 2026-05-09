@@ -1,62 +1,53 @@
 # DaVinci Resolve MCP Examples
 
-This directory contains example scripts demonstrating how to use the DaVinci Resolve MCP server with different features of DaVinci Resolve.
+These examples are prompt recipes for MCP clients such as Claude, Cursor,
+Windsurf, Codex, and VS Code. The server exposes 30 compound MCP tools and 109
+higher-level kernel actions, so examples should be written as safe
+agent-facing workflows rather than legacy direct `DaVinciResolveScript` scripts.
 
-## Directory Structure
+## Before Running Examples
 
-- **markers/** - Examples related to timeline markers and marker operations
-- **timeline/** - Examples for timeline management and operations
-- **media/** - Examples for media pool operations and media management
-
-## How to Run Examples
-
-1. Make sure DaVinci Resolve is running
-2. Ensure the MCP server is set up (run `./scripts/check-resolve-ready.sh` first)
-3. Use a Python environment with the MCP SDK installed
-4. Run an example script with:
-
-```bash
-# Activate the virtual environment
-source venv/bin/activate  # macOS/Linux
-# or
-venv\Scripts\activate  # Windows
-
-# Run an example
-python examples/markers/add_timecode_marker.py
-```
+1. Open DaVinci Resolve Studio.
+2. Enable external scripting in Resolve preferences.
+3. Install or configure this MCP server with `python install.py`.
+4. Use disposable projects, synthetic media, or explicitly approved demo media.
+5. Never modify, transcode, proxy, relink, or create derivatives of source media
+   unless the user explicitly asks for that operation.
 
 ## Example Categories
 
-### Markers Examples
+| Directory | Focus |
+|-----------|-------|
+| `markers/` | Timeline, timeline item, and media pool item annotation workflows |
+| `timeline/` | Timeline inspection, edit kernel operations, conform reports, and render planning |
+| `media/` | Safe ingest, metadata normalization, media analysis, and source-integrity guardrails |
 
-Examples in `markers/` demonstrate how to:
-- Add markers at specific frames
-- Add markers with timecode values
-- Add markers at regular intervals
-- Test marker frame placement
-- Clear and replace markers
+## Getting Started Prompt
 
-### Timeline Examples
+Paste this into an MCP-enabled client:
 
-Examples in `timeline/` demonstrate how to:
-- Get information about timelines
-- Check timeline properties
-- Perform operations on timelines
+```text
+Check that DaVinci Resolve is connected. Report the Resolve version, current
+page, current project, current timeline, and the MCP kernel surfaces available
+for safe project, ingest, timeline, annotation, color, Fusion, audio, render,
+and extension workflows. Do not mutate anything yet.
+```
 
-### Media Examples
+Good first follow-up:
 
-Examples in `media/` demonstrate how to:
-- Import media into the media pool
-- Organize media in bins
-- Add media to timelines
+```text
+Create a disposable _mcp_demo_* project only if needed, then show me a dry-run
+plan before importing media, editing a timeline, changing render settings, or
+installing any extension files.
+```
 
-## Creating Your Own Examples
+## Creating New Examples
 
-When creating new examples, please follow these guidelines:
+New examples should be small prompt recipes with:
 
-1. Place them in the appropriate category folder
-2. Include clear comments explaining what the example does
-3. Handle errors gracefully
-4. Follow the code style of existing examples
-
-If you create an example that doesn't fit in an existing category, feel free to create a new directory. 
+- The intended Resolve state.
+- The exact prompt to paste into an MCP client.
+- The expected MCP tools/actions.
+- Safety notes, especially around source media, relinks, renders, archives, and
+  extension installs.
+- Cleanup steps for disposable projects or temp files.
