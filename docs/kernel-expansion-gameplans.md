@@ -466,6 +466,14 @@ Add `docs/color-grade-kernel.md` with:
 - Version workflow support map.
 - AI color tool classification.
 
+### Execution Status
+
+Implemented in v2.11.0. Final live probe on DaVinci Resolve Studio 20.3.2.9
+classified 25 surfaces as `supported`, two Gallery/DRX export surfaces as
+`version_or_page_dependent`, one DRX apply path as `not_applicable` because no
+DRX could be produced in that run, and zero surfaces as `error`. See
+`docs/color-grade-kernel.md`.
+
 ## 5. Fusion Composition Kernel
 
 ### Existing Surface

@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.10.0"
+VERSION = "2.11.0"
 
 import base64
 import os
@@ -5770,6 +5770,453 @@ def timeline_item_fusion(action: str, params: Optional[Dict[str, Any]] = None) -
 # TOOL 21: timeline_item_color
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_COLOR_GRADE_KERNEL_ACTIONS = [
+    "grade_capabilities",
+    "probe_grade_item",
+    "probe_node_graph",
+    "safe_set_cdl",
+    "safe_copy_grade",
+    "safe_apply_drx",
+    "safe_export_lut",
+    "grade_version_snapshot",
+    "grade_version_restore",
+    "color_group_capabilities",
+    "gallery_capabilities",
+    "grade_boundary_report",
+]
+
+_COLOR_ITEM_METHODS = [
+    "SetCDL",
+    "CopyGrades",
+    "AddVersion",
+    "GetCurrentVersion",
+    "GetVersionNameList",
+    "LoadVersionByName",
+    "RenameVersionByName",
+    "DeleteVersionByName",
+    "GetNodeGraph",
+    "GetColorGroup",
+    "AssignToColorGroup",
+    "RemoveFromColorGroup",
+    "ExportLUT",
+    "GetIsColorOutputCacheEnabled",
+    "SetColorOutputCache",
+    "GetIsFusionOutputCacheEnabled",
+    "SetFusionOutputCache",
+    "ResetAllNodeColors",
+    "Stabilize",
+    "SmartReframe",
+    "CreateMagicMask",
+    "RegenerateMagicMask",
+]
+
+_GRAPH_METHODS = [
+    "GetNumNodes",
+    "GetLUT",
+    "SetLUT",
+    "GetNodeCacheMode",
+    "SetNodeCacheMode",
+    "GetNodeLabel",
+    "GetToolsInNode",
+    "SetNodeEnabled",
+    "ApplyGradeFromDRX",
+    "ApplyArriCdlLut",
+    "ResetAllGrades",
+]
+
+_LUT_EXPORT_TYPES = {
+    "17": "EXPORT_LUT_17PTCUBE",
+    "17pt": "EXPORT_LUT_17PTCUBE",
+    "17ptcube": "EXPORT_LUT_17PTCUBE",
+    "export_lut_17ptcube": "EXPORT_LUT_17PTCUBE",
+    "33": "EXPORT_LUT_33PTCUBE",
+    "33pt": "EXPORT_LUT_33PTCUBE",
+    "33ptcube": "EXPORT_LUT_33PTCUBE",
+    "export_lut_33ptcube": "EXPORT_LUT_33PTCUBE",
+    "65": "EXPORT_LUT_65PTCUBE",
+    "65pt": "EXPORT_LUT_65PTCUBE",
+    "65ptcube": "EXPORT_LUT_65PTCUBE",
+    "export_lut_65ptcube": "EXPORT_LUT_65PTCUBE",
+    "panasonic": "EXPORT_LUT_PANASONICVLUT",
+    "panasonicvlut": "EXPORT_LUT_PANASONICVLUT",
+    "export_lut_panasonicvlut": "EXPORT_LUT_PANASONICVLUT",
+}
+
+
+def _grade_temp_path_ok(path):
+    return _render_temp_path_ok(path)
+
+
+def _resolve_lut_export_type(export_type, resolve_obj=None):
+    if isinstance(export_type, int) and not isinstance(export_type, bool):
+        return export_type, None
+    raw = str(export_type if export_type is not None else "33ptcube").strip()
+    key = raw.lower().replace("-", "").replace("_", "").replace(" ", "")
+    const_name = _LUT_EXPORT_TYPES.get(key)
+    if not const_name and raw.startswith("EXPORT_LUT_"):
+        const_name = raw
+    if not const_name:
+        return None, _err(f"Unknown LUT export type: {raw}")
+    if resolve_obj and hasattr(resolve_obj, const_name):
+        return getattr(resolve_obj, const_name), None
+    return const_name, None
+
+
+def _validate_cdl_payload(cdl):
+    if not isinstance(cdl, dict):
+        return None, _err("cdl must be an object")
+    errors = []
+    node_index = cdl.get("NodeIndex", 1)
+    if isinstance(node_index, bool):
+        errors.append("NodeIndex must be an integer")
+    else:
+        try:
+            node_index = int(node_index)
+            if node_index < 1:
+                errors.append("NodeIndex must be >= 1")
+        except (TypeError, ValueError):
+            errors.append("NodeIndex must be an integer")
+    normalized = dict(cdl)
+    normalized["NodeIndex"] = node_index
+    for key in ("Slope", "Offset", "Power"):
+        value = cdl.get(key, [1.0, 1.0, 1.0] if key != "Offset" else [0.0, 0.0, 0.0])
+        if isinstance(value, str):
+            parts = value.split()
+        elif isinstance(value, (list, tuple)):
+            parts = list(value)
+        else:
+            errors.append(f"{key} must be a 3-value list or space-separated string")
+            continue
+        if len(parts) != 3:
+            errors.append(f"{key} must contain exactly 3 values")
+            continue
+        try:
+            normalized[key] = [float(part) for part in parts]
+        except (TypeError, ValueError):
+            errors.append(f"{key} values must be numeric")
+    saturation = cdl.get("Saturation", 1.0)
+    try:
+        normalized["Saturation"] = float(saturation)
+    except (TypeError, ValueError):
+        errors.append("Saturation must be numeric")
+    return {"valid": not errors, "errors": errors, "cdl": normalized}, None
+
+
+def _graph_snapshot(g, *, include_nodes=True, max_nodes=3):
+    if not g:
+        return {"available": False}
+    out = {
+        "available": True,
+        "methods": _callable_method_names(g, _GRAPH_METHODS),
+        "num_nodes": None,
+        "nodes": [],
+        "errors": [],
+    }
+    try:
+        out["num_nodes"] = g.GetNumNodes()
+    except Exception as exc:
+        out["errors"].append({"method": "GetNumNodes", "error": str(exc)})
+        return out
+    if not include_nodes:
+        return out
+    try:
+        max_nodes = max(0, int(max_nodes))
+    except (TypeError, ValueError):
+        max_nodes = 3
+    for node_index in range(1, min(out["num_nodes"] or 0, max_nodes) + 1):
+        row = {"node_index": node_index}
+        for key, method_name in (
+            ("lut", "GetLUT"),
+            ("cache_mode", "GetNodeCacheMode"),
+            ("label", "GetNodeLabel"),
+            ("tools", "GetToolsInNode"),
+        ):
+            if not _has_method(g, method_name):
+                continue
+            try:
+                row[key] = _ser(getattr(g, method_name)(node_index))
+            except Exception as exc:
+                row.setdefault("errors", []).append({"method": method_name, "error": str(exc)})
+        out["nodes"].append(row)
+    return out
+
+
+def _color_graph_from_params(proj, item, p: Dict[str, Any]):
+    source = p.get("source", "item")
+    if source == "item":
+        graph = item.GetNodeGraph(p["layer_index"]) if "layer_index" in p else item.GetNodeGraph()
+        return graph, "item", None
+    if source == "timeline":
+        _, tl, err = _get_tl()
+        if err:
+            return None, source, err
+        return tl.GetNodeGraph(), "timeline", None
+    if source in ("color_group_pre", "color_group_post"):
+        group_name = p.get("group_name")
+        if not group_name:
+            return None, source, _err("group_name is required for color group graph sources")
+        for group in proj.GetColorGroupsList() or []:
+            if group.GetName() == group_name:
+                graph = group.GetPreClipNodeGraph() if source == "color_group_pre" else group.GetPostClipNodeGraph()
+                return graph, source, None
+        return None, source, _err(f"Color group '{group_name}' not found")
+    return None, source, _err(f"Unknown color graph source: {source}")
+
+
+def _grade_version_snapshot(item, p: Dict[str, Any]):
+    out = {"current": None, "local": [], "remote": [], "errors": []}
+    try:
+        out["current"] = _ser(item.GetCurrentVersion())
+    except Exception as exc:
+        out["errors"].append({"method": "GetCurrentVersion", "error": str(exc)})
+    for version_type, key in ((0, "local"), (1, "remote")):
+        try:
+            out[key] = _ser(item.GetVersionNameList(version_type) or [])
+        except Exception as exc:
+            out["errors"].append({"method": f"GetVersionNameList({version_type})", "error": str(exc)})
+    return out
+
+
+def _grade_item_snapshot(item, proj=None, p: Optional[Dict[str, Any]] = None):
+    p = p or {}
+    out = {
+        "name": None,
+        "id": None,
+        "methods": _callable_method_names(item, _COLOR_ITEM_METHODS),
+        "versions": _grade_version_snapshot(item, p),
+        "node_graph": None,
+        "color_group": None,
+        "cache": {},
+        "errors": [],
+    }
+    for key, method_name in (("name", "GetName"), ("id", "GetUniqueId")):
+        if _has_method(item, method_name):
+            try:
+                out[key] = getattr(item, method_name)()
+            except Exception as exc:
+                out["errors"].append({"method": method_name, "error": str(exc)})
+    try:
+        graph = item.GetNodeGraph(p["layer_index"]) if "layer_index" in p else item.GetNodeGraph()
+        out["node_graph"] = _graph_snapshot(graph, include_nodes=p.get("include_nodes", True), max_nodes=p.get("max_nodes", 3))
+    except Exception as exc:
+        out["node_graph"] = {"available": False, "error": str(exc)}
+    try:
+        group = item.GetColorGroup()
+        out["color_group"] = group.GetName() if group else None
+    except Exception as exc:
+        out["errors"].append({"method": "GetColorGroup", "error": str(exc)})
+    for key, method_name in (
+        ("color_output", "GetIsColorOutputCacheEnabled"),
+        ("fusion_output", "GetIsFusionOutputCacheEnabled"),
+    ):
+        if _has_method(item, method_name):
+            try:
+                out["cache"][key] = _ser(getattr(item, method_name)())
+            except Exception as exc:
+                out["errors"].append({"method": method_name, "error": str(exc)})
+    return out
+
+
+def _grade_capabilities(item, proj):
+    gallery = proj.GetGallery() if proj and _has_method(proj, "GetGallery") else None
+    groups = proj.GetColorGroupsList() if proj and _has_method(proj, "GetColorGroupsList") else []
+    return {
+        "item_methods": _callable_method_names(item, _COLOR_ITEM_METHODS),
+        "graph_sources": ["item", "timeline", "color_group_pre", "color_group_post"],
+        "graph_methods": _GRAPH_METHODS,
+        "lut_export_types": sorted(set(_LUT_EXPORT_TYPES.values())),
+        "version_types": {"local": 0, "remote": 1},
+        "grade_modes": {"no_keyframes": 0, "source_timecode_aligned": 1, "start_frames_aligned": 2},
+        "gallery_available": gallery is not None,
+        "color_group_count": len(groups or []),
+        "guards": {
+            "safe_export_lut_requires_temp_path": True,
+            "safe_apply_drx_requires_temp_path_by_default": True,
+            "safe_copy_grade_requires_target_timeline_item_ids": True,
+            "ai_tools_report_callability_but_are_not_forced_by_boundary_report": True,
+        },
+        "boundaries": [
+            "Node graph internals are only partially inspectable through Resolve's public API.",
+            "ApplyGradeFromDRX replaces the target graph; there is no append mode.",
+            "LUT export writes files and is guarded to temp paths by default.",
+            "Stabilize, Smart Reframe, and Magic Mask can be asynchronous and page dependent.",
+        ],
+    }
+
+
+def _probe_color_node_graph(proj, item, p: Dict[str, Any]):
+    graph, source, err = _color_graph_from_params(proj, item, p)
+    if err:
+        return err
+    snapshot = _graph_snapshot(
+        graph,
+        include_nodes=p.get("include_nodes", True),
+        max_nodes=p.get("max_nodes", 3),
+    )
+    snapshot["source"] = source
+    return snapshot
+
+
+def _safe_set_cdl(item, p: Dict[str, Any]):
+    validation, err = _validate_cdl_payload(p.get("cdl"))
+    if err:
+        return err
+    if not validation["valid"]:
+        return {"success": False, "validation": validation}
+    normalized = _normalize_cdl(validation["cdl"])
+    if p.get("dry_run"):
+        return _ok(validation=validation, normalized=normalized)
+    return {
+        "success": bool(item.SetCDL(normalized)),
+        "validation": validation,
+        "normalized": normalized,
+    }
+
+
+def _timeline_items_for_grade_copy(tl, target_ids):
+    targets = []
+    missing = set(target_ids or [])
+    if not target_ids:
+        return targets, []
+    for track_index in range(1, tl.GetTrackCount("video") + 1):
+        for candidate in (tl.GetItemListInTrack("video", track_index) or []):
+            item_id = candidate.GetUniqueId()
+            if item_id in missing:
+                targets.append(candidate)
+                missing.remove(item_id)
+    return targets, sorted(missing)
+
+
+def _safe_copy_grade(item, p: Dict[str, Any]):
+    target_ids = p.get("target_ids") or []
+    if not isinstance(target_ids, list) or not target_ids:
+        return _err("target_ids must be a non-empty list of timeline item IDs")
+    _, tl, err = _get_tl()
+    if err:
+        return err
+    targets, missing = _timeline_items_for_grade_copy(tl, target_ids)
+    target_summaries = [_timeline_item_summary(target) for target in targets]
+    if p.get("dry_run"):
+        return _ok(targets=target_summaries, missing=missing, would_copy=not missing)
+    if missing:
+        return {"success": False, "targets": target_summaries, "missing": missing}
+    return {"success": bool(item.CopyGrades(targets)), "targets": target_summaries, "missing": missing}
+
+
+def _safe_export_lut(item, p: Dict[str, Any]):
+    path = p.get("path")
+    if not path:
+        return _err("path is required")
+    if p.get("require_temp_path", True) and not _grade_temp_path_ok(path):
+        return _err("path must be under the system temp directory unless require_temp_path=False")
+    folder = os.path.dirname(os.path.abspath(path))
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    resolve_obj = get_resolve()
+    export_type, type_err = _resolve_lut_export_type(p.get("type", "33ptcube"), resolve_obj)
+    if type_err:
+        return type_err
+    if p.get("dry_run"):
+        return _ok(path=path, type=export_type, would_export=True)
+    before_exists = os.path.exists(path)
+    success = bool(item.ExportLUT(export_type, path))
+    return {
+        "success": success,
+        "path": path,
+        "type": export_type,
+        "file_exists": os.path.exists(path),
+        "size": os.path.getsize(path) if os.path.exists(path) else 0,
+        "overwrote_existing": before_exists and os.path.exists(path),
+    }
+
+
+def _safe_apply_drx(proj, item, p: Dict[str, Any]):
+    path = p.get("path")
+    if not path:
+        return _err("path is required")
+    if not os.path.isfile(path):
+        return _err(f"DRX file not found: {path}")
+    if p.get("require_temp_path", True) and not _grade_temp_path_ok(path):
+        return _err("DRX path must be under the system temp directory unless require_temp_path=False")
+    graph, source, err = _color_graph_from_params(proj, item, p)
+    if err:
+        return err
+    if not _has_method(graph, "ApplyGradeFromDRX"):
+        return _err(f"{source} graph does not expose ApplyGradeFromDRX")
+    if p.get("dry_run"):
+        return _ok(path=path, source=source, grade_mode=p.get("grade_mode", p.get("mode", 0)), would_apply=True)
+    success = bool(graph.ApplyGradeFromDRX(path, p.get("grade_mode", p.get("mode", 0))))
+    return {"success": success, "path": path, "source": source}
+
+
+def _grade_version_restore(item, p: Dict[str, Any]):
+    name = p.get("name")
+    if not name:
+        return _err("name is required")
+    version_type = p.get("type", 0)
+    snapshot = _grade_version_snapshot(item, p)
+    names = snapshot["local"] if version_type == 0 else snapshot["remote"]
+    if name not in names:
+        return {"success": False, "snapshot": snapshot, "error": f"Version '{name}' not found"}
+    if p.get("dry_run"):
+        return _ok(snapshot=snapshot, would_load=name, type=version_type)
+    return {"success": bool(item.LoadVersionByName(name, version_type)), "snapshot": snapshot}
+
+
+def _color_group_capabilities(proj):
+    groups = proj.GetColorGroupsList() or []
+    return {
+        "count": len(groups),
+        "groups": [
+            {
+                "name": group.GetName(),
+                "pre_clip_graph": _graph_snapshot(group.GetPreClipNodeGraph(), include_nodes=False),
+                "post_clip_graph": _graph_snapshot(group.GetPostClipNodeGraph(), include_nodes=False),
+            }
+            for group in groups
+        ],
+        "project_methods": _callable_method_names(proj, ["GetColorGroupsList", "AddColorGroup", "DeleteColorGroup"]),
+    }
+
+
+def _gallery_capabilities(proj):
+    gallery = proj.GetGallery()
+    if not gallery:
+        return {"available": False}
+    still_albums = gallery.GetGalleryStillAlbums() or []
+    power_albums = gallery.GetGalleryPowerGradeAlbums() or []
+    return {
+        "available": True,
+        "still_albums": [{"name": gallery.GetAlbumName(album), "index": index} for index, album in enumerate(still_albums)],
+        "power_grade_albums": [{"name": gallery.GetAlbumName(album), "index": index} for index, album in enumerate(power_albums)],
+        "current_album_available": gallery.GetCurrentStillAlbum() is not None,
+        "methods": _callable_method_names(
+            gallery,
+            [
+                "GetAlbumName",
+                "SetAlbumName",
+                "GetCurrentStillAlbum",
+                "SetCurrentStillAlbum",
+                "GetGalleryStillAlbums",
+                "GetGalleryPowerGradeAlbums",
+                "CreateGalleryStillAlbum",
+                "CreateGalleryPowerGradeAlbum",
+            ],
+        ),
+    }
+
+
+def _grade_boundary_report(proj, item, p: Dict[str, Any]):
+    report = {
+        "capabilities": _grade_capabilities(item, proj),
+        "item": _grade_item_snapshot(item, proj, p),
+        "color_groups": _color_group_capabilities(proj),
+        "gallery": _gallery_capabilities(proj),
+    }
+    if p.get("include_timeline_graph", True):
+        report["timeline_graph"] = _probe_color_node_graph(proj, item, {"source": "timeline", "include_nodes": False})
+    return report
+
 @mcp.tool()
 def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Color grading, versions, LUTs, cache, and AI tools on timeline items. Identify by track_type, track_index, item_index.
@@ -5797,6 +6244,18 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       smart_reframe(...) -> {success}
       create_magic_mask(mode, ...) -> {success}  — mode: "F" forward, "B" backward, "BI" bidirectional
       regenerate_magic_mask(...) -> {success}
+      grade_capabilities(...) -> {item_methods, graph_sources, lut_export_types, guards}
+      probe_grade_item(...) -> {methods, versions, node_graph, color_group, cache}
+      probe_node_graph(source?, max_nodes?, ...) -> {available, num_nodes, nodes}
+      safe_set_cdl(cdl, dry_run?, ...) -> {success, validation, normalized}
+      safe_copy_grade(target_ids, dry_run?, ...) -> {success, targets, missing}
+      safe_apply_drx(path, source?, grade_mode?, require_temp_path?) -> {success}
+      safe_export_lut(type?, path, require_temp_path?) -> {success, path, size}
+      grade_version_snapshot(...) -> {current, local, remote}
+      grade_version_restore(name, type?, dry_run?, ...) -> {success}
+      color_group_capabilities(...) -> {count, groups}
+      gallery_capabilities(...) -> {available, still_albums, power_grade_albums}
+      grade_boundary_report(...) -> {capabilities, item, color_groups, gallery}
 
     Default: track_type="video", track_index=1, item_index=0
     """
@@ -5807,7 +6266,31 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
 
     _, proj, _ = _check()
 
-    if action == "set_cdl":
+    if action == "grade_capabilities":
+        return _grade_capabilities(item, proj)
+    elif action == "probe_grade_item":
+        return _grade_item_snapshot(item, proj, p)
+    elif action == "probe_node_graph":
+        return _probe_color_node_graph(proj, item, p)
+    elif action == "safe_set_cdl":
+        return _safe_set_cdl(item, p)
+    elif action == "safe_copy_grade":
+        return _safe_copy_grade(item, p)
+    elif action == "safe_apply_drx":
+        return _safe_apply_drx(proj, item, p)
+    elif action == "safe_export_lut":
+        return _safe_export_lut(item, p)
+    elif action == "grade_version_snapshot":
+        return _grade_version_snapshot(item, p)
+    elif action == "grade_version_restore":
+        return _grade_version_restore(item, p)
+    elif action == "color_group_capabilities":
+        return _color_group_capabilities(proj)
+    elif action == "gallery_capabilities":
+        return _gallery_capabilities(proj)
+    elif action == "grade_boundary_report":
+        return _grade_boundary_report(proj, item, p)
+    elif action == "set_cdl":
         return {"success": bool(item.SetCDL(_normalize_cdl(p["cdl"])))}
     elif action == "copy_grades":
         # Find target items by IDs
@@ -5870,7 +6353,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
         return {"success": bool(item.CreateMagicMask(p.get("mode", "F")))}
     elif action == "regenerate_magic_mask":
         return {"success": bool(item.RegenerateMagicMask())}
-    return _unknown(action, ["set_cdl","copy_grades","add_version","get_current_version","get_version_names","load_version","rename_version","delete_version","get_node_graph","get_color_group","assign_color_group","remove_from_color_group","export_lut","get_color_cache","set_color_cache","get_fusion_cache","set_fusion_cache","reset_all_node_colors","stabilize","smart_reframe","create_magic_mask","regenerate_magic_mask"])
+    return _unknown(action, ["set_cdl","copy_grades","add_version","get_current_version","get_version_names","load_version","rename_version","delete_version","get_node_graph","get_color_group","assign_color_group","remove_from_color_group","export_lut","get_color_cache","set_color_cache","get_fusion_cache","set_fusion_cache","reset_all_node_colors","stabilize","smart_reframe","create_magic_mask","regenerate_magic_mask",*_COLOR_GRADE_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

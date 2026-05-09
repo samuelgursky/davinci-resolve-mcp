@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.10.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.11.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-30%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -13,7 +13,42 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
 
-### What's New in v2.10.0
+### What's New in v2.11.0
+
+Color / Grade kernel expansion - adding safe grade inspection, CDL validation,
+node graph probing, grade copy, LUT export, version restore, Gallery, and color
+group boundary reporting around Resolve's public Color API.
+
+**New `timeline_item_color` kernel actions**: added `grade_capabilities`,
+`probe_grade_item`, `probe_node_graph`, `safe_set_cdl`, `safe_copy_grade`,
+`safe_apply_drx`, `safe_export_lut`, `grade_version_snapshot`,
+`grade_version_restore`, `color_group_capabilities`, `gallery_capabilities`,
+and `grade_boundary_report`.
+
+**Grade and graph probing**: the kernel snapshots item grade versions, graph
+availability, node counts, node LUT/cache/label/tools metadata, color-group
+assignment, and cache state without guessing at opaque node internals.
+
+**Safe mutation helpers**: CDL payloads are validated and normalized before
+`SetCDL`; grade copy resolves target timeline item IDs first; LUT export is
+guarded to temp paths by default; DRX apply requires an existing DRX path and
+documents that it replaces the target graph.
+
+**Color groups and Gallery**: color-group capability probes cover project
+groups plus pre/post graph availability. Gallery capability probes report album
+state and classify still export as UI/page dependent when Resolve returns false.
+
+**Documented support map**: added
+[`docs/color-grade-kernel.md`](docs/color-grade-kernel.md) with graph, LUT, DRX,
+version, Gallery, color-group, and AI-tool boundaries.
+
+**Validation**: live validated against DaVinci Resolve Studio 20.3.2.9 with a
+generated synthetic color-bar timeline. Final probe result: 25 supported, 2
+version/page-dependent Gallery/DRX export boundaries, 1 not-applicable DRX apply
+path because no DRX could be produced in that run, and 0 errors. The disposable
+project, generated media, and temp LUT exports were cleaned up.
+
+### v2.10.0
 
 Review Annotation kernel expansion - adding a unified marker, custom data,
 flag, clip color, copy/move, and review report layer across timeline, timeline

@@ -335,6 +335,14 @@ Key actions:
 - `create_magic_mask(mode)` — mode: `"F"` forward, `"B"` backward, `"BI"` bidirectional
   (requires DaVinci Neural Engine and Color page)
 
+Color / Grade kernel actions (v2.11.0+) add safer grade inspection and
+boundary helpers: `grade_capabilities`, `probe_grade_item`,
+`probe_node_graph`, `safe_set_cdl`, `safe_copy_grade`, `safe_apply_drx`,
+`safe_export_lut`, `grade_version_snapshot`, `grade_version_restore`,
+`color_group_capabilities`, `gallery_capabilities`, and
+`grade_boundary_report`. See `docs/color-grade-kernel.md` for the live-tested
+support map.
+
 **`timeline_item_takes`** — Take management.
 
 Key actions: `add(clip_id, start_frame?, end_frame?)`, `get_count`,
@@ -552,7 +560,20 @@ generated media directory. See `docs/review-annotation-kernel.md`.
 resolve_control(action="open_page", params={"page": "color"})
 timeline_item_color(action="set_cdl", params={"cdl": {"NodeIndex": 1, "Slope": [1.1, 1.0, 0.9], "Offset": [0.0, 0.0, 0.0], "Power": [1.0, 1.0, 1.0], "Saturation": 1.0}, "track_type": "video", "track_index": 1, "item_index": 0})
 timeline_item_color(action="add_version", params={"name": "Grade v2", "track_type": "video", "track_index": 1, "item_index": 0})
+timeline_item_color(action="grade_boundary_report", params={"track_type": "video", "track_index": 1, "item_index": 0})
+timeline_item_color(action="safe_export_lut", params={"type": "33ptcube", "path": "/tmp/look.cube", "track_type": "video", "track_index": 1, "item_index": 0})
 ```
+
+For the Color / Grade boundary map, run:
+
+```
+python3.11 tests/live_color_grade_validation.py --output-dir /tmp/color-grade-probe
+```
+
+The harness creates a disposable project, generates synthetic color-bar media,
+probes grade, node graph, version, copy, LUT, Gallery, and color-group
+behavior, writes JSON and Markdown reports, deletes the project, and removes
+generated media and exported probe files. See `docs/color-grade-kernel.md`.
 
 ### 6. Grab a still and read the grade data
 
