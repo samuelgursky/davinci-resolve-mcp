@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.13.0"
+VERSION = "2.14.0"
 
 import base64
 import os
@@ -3153,6 +3153,375 @@ def _conform_boundary_report(tl, p: Dict[str, Any]):
     }
 
 
+_TIMELINE_AUDIO_KERNEL_ACTIONS = [
+    "audio_capabilities",
+    "probe_audio_item",
+    "probe_audio_track",
+    "safe_set_audio_properties",
+    "voice_isolation_capabilities",
+    "audio_mapping_report",
+    "safe_auto_sync_audio",
+    "transcription_capabilities",
+    "subtitle_generation_probe",
+    "fairlight_boundary_report",
+]
+
+_AUDIO_PROPERTY_KEYS = ["Volume", "Pan", "AudioSyncOffsetIsManual", "AudioSyncOffset"]
+
+
+def _audio_capabilities():
+    return {
+        "supported": {
+            "track_state": [
+                "audio track count, subtype, name, lock, and enable state",
+                "track add/delete through raw timeline actions",
+                "track-level voice isolation when Resolve exposes 20.1+ APIs",
+            ],
+            "item_state": [
+                "timeline item audio property readback",
+                "guarded audio property writes with restore",
+                "timeline item source audio channel mapping when exposed",
+                "item-level voice isolation when Resolve exposes 20.1+ APIs",
+            ],
+            "media_pool_audio": [
+                "MediaPoolItem audio mapping readback",
+                "AutoSyncAudio through a guarded wrapper",
+                "clip and folder transcription capability reporting",
+            ],
+            "timeline_ai": [
+                "subtitle generation dry-run planning by default",
+                "explicit subtitle generation when allow_generate=True",
+            ],
+            "fairlight": [
+                "Fairlight preset list when Resolve exposes 20.2.2+ APIs",
+                "ApplyFairlightPresetToCurrentTimeline through existing project_settings action",
+                "InsertAudioToCurrentTrackAtPlayhead through existing project_settings action",
+            ],
+        },
+        "partially_supported": {
+            "voice_isolation": "Track/item voice isolation depends on Resolve version, license, page state, and audio content.",
+            "transcription_subtitles": "Transcription and subtitle generation can be asynchronous and may require installed AI components.",
+            "audio_property_writes": "Some item types expose audio properties as read-only or reject writes despite returning readable values.",
+            "auto_sync": "AutoSyncAudio depends on media content, channel layout, and selected sync settings.",
+        },
+        "unsupported": {
+            "destructive_audio_media_processing": "The kernel does not transcode, render, proxy, or alter source audio files.",
+            "mix_automation_curves": "Resolve's public API does not expose full Fairlight mix automation curve editing.",
+            "plugin_parameter_graphs": "Fairlight plugin internals are not fully inspectable through the public scripting API.",
+        },
+    }
+
+
+def _audio_track_probe(tl, p: Dict[str, Any]):
+    track_index = int(p.get("track_index", 1))
+    track_count = int(tl.GetTrackCount("audio") or 0)
+    out = {"track_index": track_index, "track_count": track_count, "available": track_index <= track_count}
+    if track_index > track_count:
+        return out
+    for key, getter, args in (
+        ("sub_type", "GetTrackSubType", ("audio", track_index)),
+        ("name", "GetTrackName", ("audio", track_index)),
+        ("enabled", "GetIsTrackEnabled", ("audio", track_index)),
+        ("locked", "GetIsTrackLocked", ("audio", track_index)),
+    ):
+        method = getattr(tl, getter, None)
+        if callable(method):
+            try:
+                out[key] = _ser(method(*args))
+            except Exception as exc:
+                out[f"{key}_error"] = str(exc)
+    if _has_method(tl, "GetVoiceIsolationState"):
+        try:
+            out["voice_isolation"] = _ser(tl.GetVoiceIsolationState(track_index) or {"isEnabled": False, "amount": 0})
+        except Exception as exc:
+            out["voice_isolation_error"] = str(exc)
+    else:
+        out["voice_isolation_available"] = False
+    return out
+
+
+def _audio_item_from_params(tl, p: Dict[str, Any]):
+    track_type = p.get("track_type", "audio")
+    track_index = int(p.get("track_index", 1))
+    item_index = int(p.get("item_index", 0))
+    items = tl.GetItemListInTrack(track_type, track_index) or []
+    if item_index >= len(items):
+        return None, _err(f"No item at index {item_index} on {track_type} track {track_index}")
+    return items[item_index], None
+
+
+def _timeline_item_audio_snapshot(item):
+    props = {}
+    for key in _AUDIO_PROPERTY_KEYS:
+        try:
+            props[key] = item.GetProperty(key)
+        except Exception as exc:
+            props[key] = {"error": str(exc)}
+    source_mapping = None
+    source_mapping_error = None
+    if _has_method(item, "GetSourceAudioChannelMapping"):
+        try:
+            source_mapping = _ser(item.GetSourceAudioChannelMapping())
+        except Exception as exc:
+            source_mapping_error = str(exc)
+    voice = None
+    voice_error = None
+    if _has_method(item, "GetVoiceIsolationState"):
+        try:
+            voice = _ser(item.GetVoiceIsolationState() or {"isEnabled": False, "amount": 0})
+        except Exception as exc:
+            voice_error = str(exc)
+    return {
+        "summary": _timeline_item_summary(item),
+        "audio_properties": props,
+        "source_audio_mapping": {"value": source_mapping, "error": source_mapping_error} if source_mapping_error else source_mapping,
+        "voice_isolation": {"value": voice, "error": voice_error} if voice_error else voice,
+        "methods": _callable_method_names(
+            item,
+            ["GetProperty", "SetProperty", "GetSourceAudioChannelMapping", "GetVoiceIsolationState", "SetVoiceIsolationState"],
+        ),
+    }
+
+
+def _probe_audio_item(tl, p: Dict[str, Any]):
+    item, err = _audio_item_from_params(tl, p)
+    if err:
+        return err
+    return _timeline_item_audio_snapshot(item)
+
+
+def _safe_set_audio_properties(tl, p: Dict[str, Any]):
+    item, err = _audio_item_from_params(tl, p)
+    if err:
+        return err
+    properties = p.get("properties")
+    if properties is None:
+        properties = {key: p[key] for key in _AUDIO_PROPERTY_KEYS if key in p}
+    if not isinstance(properties, dict) or not properties:
+        return _err("properties must be a non-empty object or pass one of Volume, Pan, AudioSyncOffsetIsManual, AudioSyncOffset")
+    invalid = [key for key in properties if key not in _AUDIO_PROPERTY_KEYS]
+    if invalid:
+        return _err(f"Unsupported audio propertie(s): {', '.join(invalid)}")
+    original = {}
+    for key in properties:
+        try:
+            original[key] = item.GetProperty(key)
+        except Exception as exc:
+            original[key] = {"error": str(exc)}
+    if p.get("dry_run"):
+        return _ok(would_set=properties, original=original)
+    results = {}
+    for key, value in properties.items():
+        row = {"requested": value, "original": original.get(key)}
+        try:
+            row["write"] = bool(item.SetProperty(key, value))
+        except Exception as exc:
+            row["write"] = False
+            row["error"] = str(exc)
+        try:
+            row["readback"] = item.GetProperty(key)
+        except Exception as exc:
+            row["readback_error"] = str(exc)
+        if p.get("restore", True) and not isinstance(original.get(key), dict):
+            try:
+                row["restore"] = bool(item.SetProperty(key, original[key]))
+            except Exception as exc:
+                row["restore"] = False
+                row["restore_error"] = str(exc)
+        results[key] = row
+    return {"success": all(row.get("write") for row in results.values()), "results": results}
+
+
+def _voice_isolation_capabilities(tl, p: Dict[str, Any]):
+    out = {
+        "timeline_track": {
+            "get_available": _has_method(tl, "GetVoiceIsolationState"),
+            "set_available": _has_method(tl, "SetVoiceIsolationState"),
+        },
+        "item": None,
+    }
+    if out["timeline_track"]["get_available"]:
+        try:
+            out["timeline_track"]["state"] = _ser(tl.GetVoiceIsolationState(int(p.get("track_index", 1))) or {"isEnabled": False, "amount": 0})
+        except Exception as exc:
+            out["timeline_track"]["error"] = str(exc)
+    item, item_err = _audio_item_from_params(tl, p)
+    if item_err:
+        out["item"] = {"available": False, "error": item_err.get("error")}
+    else:
+        out["item"] = {
+            "get_available": _has_method(item, "GetVoiceIsolationState"),
+            "set_available": _has_method(item, "SetVoiceIsolationState"),
+        }
+        if out["item"]["get_available"]:
+            try:
+                out["item"]["state"] = _ser(item.GetVoiceIsolationState() or {"isEnabled": False, "amount": 0})
+            except Exception as exc:
+                out["item"]["error"] = str(exc)
+    return out
+
+
+def _audio_mapping_report(mp, tl, p: Dict[str, Any]):
+    root = mp.GetRootFolder()
+    timeline_items = []
+    for track_type in ("video", "audio"):
+        for track_index in range(1, int(tl.GetTrackCount(track_type) or 0) + 1):
+            for item_index, item in enumerate(tl.GetItemListInTrack(track_type, track_index) or []):
+                row = _timeline_item_summary(item, (track_type, track_index)) or {}
+                row["item_index"] = item_index
+                if _has_method(item, "GetSourceAudioChannelMapping"):
+                    try:
+                        row["source_audio_mapping"] = _ser(item.GetSourceAudioChannelMapping())
+                    except Exception as exc:
+                        row["source_audio_mapping_error"] = str(exc)
+                timeline_items.append(row)
+    clip_rows = []
+    ids = p.get("clip_ids")
+    clips = []
+    if ids:
+        if not isinstance(ids, list):
+            return _err("clip_ids must be a list")
+        clips = [_find_clip(root, str(clip_id)) for clip_id in ids]
+        clips = [clip for clip in clips if clip]
+    else:
+        seen = set()
+        for row in timeline_items:
+            clip_id = row.get("media_pool_item_id")
+            if clip_id and clip_id not in seen:
+                clip = _find_clip(root, clip_id)
+                if clip:
+                    clips.append(clip)
+                    seen.add(clip_id)
+    for clip in clips:
+        mapping, mapping_error = _safe_clip_call(clip, "GetAudioMapping")
+        clip_rows.append({
+            "summary": _media_pool_item_summary(clip),
+            "audio_mapping": {"value": mapping, "error": mapping_error} if mapping_error else mapping,
+        })
+    return {"timeline_items": timeline_items, "media_pool_items": clip_rows}
+
+
+def _safe_auto_sync_audio(mp, p: Dict[str, Any]):
+    root = mp.GetRootFolder()
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    settings = _normalize_auto_sync_settings(dict(p.get("settings") or {}), resolve)
+    if p.get("dry_run", True):
+        return _ok(would_auto_sync=True, clips=_clip_summaries(clips), missing=missing, settings=settings)
+    return {"success": bool(mp.AutoSyncAudio(clips, settings)), "count": len(clips), "missing": missing, "settings": settings}
+
+
+def _resolve_audio_constant(resolve_obj, name: str, fallback):
+    if resolve_obj is not None and hasattr(resolve_obj, name):
+        return getattr(resolve_obj, name)
+    return fallback
+
+
+def _normalize_auto_sync_settings(settings: Dict[str, Any], resolve_obj=None):
+    if not settings:
+        return settings
+    normalized = {}
+    mode_key = _resolve_audio_constant(resolve_obj, "AUDIO_SYNC_MODE", "syncMode")
+    channel_key = _resolve_audio_constant(resolve_obj, "AUDIO_SYNC_CHANNEL_NUMBER", "channelNumber")
+    retain_embedded_key = _resolve_audio_constant(resolve_obj, "AUDIO_SYNC_RETAIN_EMBEDDED_AUDIO", "retainEmbeddedAudio")
+    retain_metadata_key = _resolve_audio_constant(resolve_obj, "AUDIO_SYNC_RETAIN_VIDEO_METADATA", "retainVideoMetadata")
+    mode = settings.get("syncBy", settings.get("sync_by", settings.get("mode", settings.get(mode_key))))
+    if isinstance(mode, str):
+        mode_norm = mode.strip().lower()
+        if mode_norm in {"waveform", "audio_waveform", "audio_sync_waveform"}:
+            mode = _resolve_audio_constant(resolve_obj, "AUDIO_SYNC_WAVEFORM", mode)
+        elif mode_norm in {"timecode", "audio_sync_timecode"}:
+            mode = _resolve_audio_constant(resolve_obj, "AUDIO_SYNC_TIMECODE", mode)
+    if mode is not None:
+        normalized[mode_key] = mode
+    channel = settings.get("channelNumber", settings.get("channel_number", settings.get("channel", settings.get(channel_key))))
+    if isinstance(channel, str):
+        channel_norm = channel.strip().lower()
+        if channel_norm in {"auto", "automatic"}:
+            channel = _resolve_audio_constant(resolve_obj, "AUDIO_SYNC_CHANNEL_AUTOMATIC", -1)
+        elif channel_norm == "mix":
+            channel = _resolve_audio_constant(resolve_obj, "AUDIO_SYNC_CHANNEL_MIX", -2)
+    if channel is not None:
+        normalized[channel_key] = channel
+    for source_key, target_key in (
+        ("retainEmbeddedAudio", retain_embedded_key),
+        ("retain_embedded_audio", retain_embedded_key),
+        ("retainVideoMetadata", retain_metadata_key),
+        ("retain_video_metadata", retain_metadata_key),
+    ):
+        if source_key in settings:
+            normalized[target_key] = bool(settings[source_key])
+    for key, value in settings.items():
+        if key not in {"syncBy", "sync_by", "mode", "channelNumber", "channel_number", "channel", "retainEmbeddedAudio", "retain_embedded_audio", "retainVideoMetadata", "retain_video_metadata"}:
+            normalized.setdefault(key, value)
+    return normalized
+
+
+def _transcription_capabilities(mp, p: Dict[str, Any]):
+    root = mp.GetRootFolder()
+    clips = []
+    ids = p.get("clip_ids")
+    if ids:
+        if not isinstance(ids, list):
+            return _err("clip_ids must be a list")
+        clips = [_find_clip(root, str(clip_id)) for clip_id in ids]
+        clips = [clip for clip in clips if clip]
+    elif p.get("selected"):
+        clips = mp.GetSelectedClips() or []
+    current_folder = mp.GetCurrentFolder()
+    return {
+        "clip_methods": [
+            {
+                "summary": _media_pool_item_summary(clip),
+                "transcribe_audio": _has_method(clip, "TranscribeAudio"),
+                "clear_transcription": _has_method(clip, "ClearTranscription"),
+            }
+            for clip in clips
+        ],
+        "folder": {
+            "name": current_folder.GetName() if current_folder else None,
+            "transcribe_audio": _has_method(current_folder, "TranscribeAudio") if current_folder else False,
+            "clear_transcription": _has_method(current_folder, "ClearTranscription") if current_folder else False,
+        },
+        "notes": [
+            "This action reports capability only; use media_pool_item/folder transcription actions to mutate disposable or approved clips.",
+            "Transcription may require Resolve Studio AI components and can run asynchronously.",
+        ],
+    }
+
+
+def _subtitle_generation_probe(tl, p: Dict[str, Any]):
+    settings = dict(p.get("settings") or {})
+    if not p.get("allow_generate", False):
+        return _ok(would_generate=True, settings=settings, note="Pass allow_generate=True to call CreateSubtitlesFromAudio.")
+    if not _has_method(tl, "CreateSubtitlesFromAudio"):
+        return _err("CreateSubtitlesFromAudio unavailable")
+    return {"success": bool(tl.CreateSubtitlesFromAudio(settings)), "settings": settings}
+
+
+def _fairlight_boundary_report(proj, mp, tl, p: Dict[str, Any]):
+    fairlight_presets = None
+    preset_error = None
+    resolve_obj = resolve
+    if resolve_obj is not None and _has_method(resolve_obj, "GetFairlightPresets"):
+        try:
+            fairlight_presets = _ser(resolve_obj.GetFairlightPresets() or [])
+        except Exception as exc:
+            preset_error = str(exc)
+    return {
+        "capabilities": _audio_capabilities(),
+        "track": _audio_track_probe(tl, p),
+        "item": _probe_audio_item(tl, p) if int(tl.GetTrackCount(p.get("track_type", "audio")) or 0) else None,
+        "voice_isolation": _voice_isolation_capabilities(tl, p),
+        "audio_mapping": _audio_mapping_report(mp, tl, p),
+        "transcription": _transcription_capabilities(mp, p),
+        "fairlight_presets": {"value": fairlight_presets, "error": preset_error} if preset_error else fairlight_presets,
+        "project_methods": _callable_method_names(proj, ["InsertAudioToCurrentTrackAtPlayhead", "ApplyFairlightPresetToCurrentTimeline"]),
+    }
+
+
 _MEDIA_POOL_ITEM_METHODS = [
     "GetName",
     "SetName",
@@ -5515,6 +5884,16 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       detect_missing_media() -> {missing, missing_count}
       build_relink_plan(search_roots) -> {candidates}
       conform_boundary_report(...) -> {capabilities, timeline, gaps_overlaps, source_ranges, missing_media}
+      audio_capabilities() -> {supported, partially_supported, unsupported}
+      probe_audio_item(track_type?, track_index?, item_index?) -> {summary, audio_properties, source_audio_mapping}
+      probe_audio_track(track_index?) -> {track_count, enabled, locked, sub_type, voice_isolation}
+      safe_set_audio_properties(properties, restore?, dry_run?, track_type?, track_index?, item_index?) -> {success, results}
+      voice_isolation_capabilities(track_index?, track_type?, item_index?) -> {timeline_track, item}
+      audio_mapping_report(clip_ids?) -> {timeline_items, media_pool_items}
+      safe_auto_sync_audio(clip_ids|selected, settings?, dry_run?) -> {success}
+      transcription_capabilities(clip_ids?|selected?) -> {clip_methods, folder}
+      subtitle_generation_probe(settings?, allow_generate?) -> {success}
+      fairlight_boundary_report(...) -> {capabilities, track, item, audio_mapping, transcription}
     """
     p = params or {}
     pm, proj, err = _check()
@@ -5537,11 +5916,23 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _timeline_edit_kernel_capabilities()
     elif action == "conform_capabilities":
         return _conform_capabilities()
+    elif action == "audio_capabilities":
+        return _audio_capabilities()
     elif action == "import_timeline_checked":
         _, _, mp, mp_err = _get_mp()
         if mp_err:
             return mp_err
         return _import_timeline_checked(proj, mp, p)
+    elif action == "safe_auto_sync_audio":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _safe_auto_sync_audio(mp, p)
+    elif action == "transcription_capabilities":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _transcription_capabilities(mp, p)
     elif action == "compare_timelines" and isinstance(p.get("left_snapshot"), dict) and isinstance(p.get("right_snapshot"), dict):
         return _compare_timelines(proj, proj.GetCurrentTimeline(), p)
 
@@ -5857,7 +6248,39 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _build_relink_plan(tl, p)
     elif action == "conform_boundary_report":
         return _conform_boundary_report(tl, p)
-    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","edit_kernel_capabilities","probe_edit_kernel_item","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges",*_TIMELINE_CONFORM_KERNEL_ACTIONS])
+    elif action == "audio_capabilities":
+        return _audio_capabilities()
+    elif action == "probe_audio_item":
+        return _probe_audio_item(tl, p)
+    elif action == "probe_audio_track":
+        return _audio_track_probe(tl, p)
+    elif action == "safe_set_audio_properties":
+        return _safe_set_audio_properties(tl, p)
+    elif action == "voice_isolation_capabilities":
+        return _voice_isolation_capabilities(tl, p)
+    elif action == "audio_mapping_report":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _audio_mapping_report(mp, tl, p)
+    elif action == "safe_auto_sync_audio":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _safe_auto_sync_audio(mp, p)
+    elif action == "transcription_capabilities":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _transcription_capabilities(mp, p)
+    elif action == "subtitle_generation_probe":
+        return _subtitle_generation_probe(tl, p)
+    elif action == "fairlight_boundary_report":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _fairlight_boundary_report(proj, mp, tl, p)
+    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","edit_kernel_capabilities","probe_edit_kernel_item","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -170,8 +170,22 @@
   {
     "kernel": "audio_fairlight",
     "title": "Audio / Fairlight Kernel",
-    "status": "planned",
-    "passes": false,
+    "status": "implemented_live_validated",
+    "passes": true,
+    "evidence": {
+      "resolve": "DaVinci Resolve Studio 20.3.2.9",
+      "live_report": "/private/tmp/audio-fairlight-probe-20260509-release/audio-fairlight-probe.json",
+      "counts": {
+        "supported": 13,
+        "partially_supported": 3,
+        "unsupported": 0,
+        "version_or_page_dependent": 0,
+        "write_only_unverifiable": 0,
+        "read_only": 0,
+        "not_applicable": 0,
+        "error": 0
+      }
+    },
     "steps": [
       "Implement audio property, voice isolation, mapping, transcription, and subtitle capability helpers",
       "Add offline audio mapping and state classification tests",

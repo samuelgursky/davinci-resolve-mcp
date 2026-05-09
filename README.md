@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.13.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.14.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-30%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -13,7 +13,40 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
 
-### What's New in v2.13.0
+### What's New in v2.14.0
+
+Audio / Fairlight kernel expansion - adding audio track/item probes, source
+audio mapping reports, guarded audio property writes, voice isolation
+capabilities, auto-sync planning, transcription/subtitle probes, and Fairlight
+boundary reporting.
+
+**New `timeline` audio actions**: added `audio_capabilities`,
+`probe_audio_track`, `probe_audio_item`, `safe_set_audio_properties`,
+`voice_isolation_capabilities`, `audio_mapping_report`, `safe_auto_sync_audio`,
+`transcription_capabilities`, `subtitle_generation_probe`, and
+`fairlight_boundary_report`.
+
+**Audio state and mapping**: the kernel snapshots audio track state, timeline
+item audio properties, source audio channel mapping, MediaPoolItem audio
+mapping, and track/item voice isolation availability.
+
+**Guarded AI and sync surfaces**: auto-sync dry-runs by default and normalizes
+Resolve audio-sync constants. Subtitle generation dry-runs unless
+`allow_generate=True`; transcription capability reporting is read-only by
+default.
+
+**Documented support map**: added
+[`docs/audio-fairlight-kernel.md`](docs/audio-fairlight-kernel.md) with
+track/item state, voice isolation, mapping, transcription, subtitle, auto-sync,
+and Fairlight insertion boundaries.
+
+**Validation**: live validated against DaVinci Resolve Studio 20.3.2.9 with
+generated synthetic video and audio-only media. Final probe result: 13
+supported, 3 partially supported audio property/auto-sync/audio-insert
+boundaries, and 0 errors. The disposable project and generated media were
+cleaned up.
+
+### v2.13.0
 
 Timeline Conform / Interchange kernel expansion - adding timeline structure
 snapshots, source range reporting, gap/overlap detection, guarded interchange

@@ -269,6 +269,21 @@ structure, interchange, comparison, missing-media, and relink-planning helpers:
 - `build_relink_plan(search_roots)`
 - `conform_boundary_report`
 
+Audio / Fairlight kernel actions (v2.14.0+) add live-tested audio state,
+mapping, voice-isolation, sync, transcription, subtitle, and Fairlight boundary
+helpers:
+
+- `audio_capabilities`
+- `probe_audio_track(track_index?)`
+- `probe_audio_item(track_type?, track_index?, item_index?)`
+- `safe_set_audio_properties(properties, restore?, dry_run?, track_type?, track_index?, item_index?)`
+- `voice_isolation_capabilities(track_index?, track_type?, item_index?)`
+- `audio_mapping_report(clip_ids?)`
+- `safe_auto_sync_audio(clip_ids|selected, settings?, dry_run?)`
+- `transcription_capabilities(clip_ids?|selected?)`
+- `subtitle_generation_probe(settings?, allow_generate?)`
+- `fairlight_boundary_report`
+
 **`timeline_markers`** — Markers and playhead on the current timeline.
 
 Key actions: `add(frame|frame_id|timecode?, color?, name?, note?, duration?)`, `get_all`,
@@ -633,6 +648,18 @@ gapped timeline, probes structure, source ranges, gap/overlap detection,
 interchange export/import/round-trip behavior, synthetic missing-media relink
 planning, writes reports, deletes the project, and removes generated media.
 See `docs/timeline-conform-interchange-kernel.md`.
+
+For the Audio / Fairlight boundary map, run:
+
+```
+python3.11 tests/live_audio_fairlight_validation.py --output-dir /tmp/audio-fairlight-probe
+```
+
+The harness creates a disposable project, generates synthetic video and audio
+media, probes track/item audio state, mappings, voice isolation, property
+writes, auto-sync, transcription, subtitle generation, Fairlight preset listing,
+audio insertion, writes reports, deletes the project, and removes generated
+media. See `docs/audio-fairlight-kernel.md`.
 
 ### 8. Add and start a render job
 

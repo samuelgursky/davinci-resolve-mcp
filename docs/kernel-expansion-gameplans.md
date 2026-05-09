@@ -732,6 +732,13 @@ Add `docs/audio-fairlight-kernel.md` with:
 - Transcription/subtitle boundaries.
 - Auto-sync requirements.
 
+### Execution Status
+
+Implemented in v2.14.0. Final live probe on DaVinci Resolve Studio 20.3.2.9
+classified 13 surfaces as `supported`, three audio property/auto-sync/audio
+insert surfaces as `partially_supported`, and zero surfaces as `error`. See
+`docs/audio-fairlight-kernel.md`.
+
 ## 8. Project / Database / Archive Kernel
 
 ### Existing Surface
