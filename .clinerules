@@ -1,0 +1,17 @@
+# DaVinci Resolve MCP Server — Cline Rules
+
+## Project
+Python MCP server (30 compound tools, 328 granular tools in `--full` mode) for controlling DaVinci Resolve via its Scripting API. See `AGENTS.md` for full project overview and the README for the 109-action kernel coverage map.
+
+## Critical Rule: Source Media Integrity
+NEVER modify, transcode, convert, or create derivatives of source media files unless the user explicitly requests it. All analysis is read-only. See `docs/media-analysis-guide.md` for the complete media analysis workflow and rationale.
+
+## Media Analysis
+When working with media files, use FFprobe/FFmpeg to analyze (read-only) before taking actions in Resolve. The full guide is at `docs/media-analysis-guide.md`.
+
+## Key Files
+- `src/server.py` — Main compound MCP server (30 tools)
+- `src/resolve_mcp_server.py` — Full server (328 tools)
+- `src/utils/` — Platform detection, Resolve connection, helpers
+- `docs/media-analysis-guide.md` — Media analysis workflow guide
+- `install.py` — Universal installer for 10+ MCP clients

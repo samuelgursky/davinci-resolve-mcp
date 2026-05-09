@@ -1,0 +1,323 @@
+# Media Analysis Guide for DaVinci Resolve MCP
+
+This guide teaches AI coding assistants how to use FFprobe, FFmpeg, and Whisper to understand source media files — so the DaVinci Resolve MCP can operate with full context of what the footage actually is.
+
+This guide is tool-agnostic. It works with any AI assistant that can run shell commands alongside the MCP server.
+
+---
+
+## The First Rule: Never Touch the Source
+
+**This is the foundational, non-negotiable principle.**
+
+Your relationship to source media is **READ-ONLY**. Every department in a post-production pipeline depends on an unbroken chain from the camera original files (OCFs) through to final delivery.
+
+### NEVER do any of the following unless the user explicitly requests it:
+- Transcode, convert, or re-encode any media file
+- Create proxies, mezzanines, or lower-resolution copies
+- Export media from Resolve and reimport it
+- Apply LUTs, color transforms, or any processing to files on disk
+- Create rendered versions of timeline segments
+- Modify, rename, move, or reorganize source media files
+- Strip, modify, or rewrite metadata in source files
+- Change timecode in source files
+- Create "optimized" or "analysis-friendly" copies
+
+### ALWAYS limit yourself to:
+- Reading files with FFprobe (metadata extraction — zero disk writes)
+- Analyzing files with FFmpeg using `-f null -` output (read-through analysis — zero disk writes)
+- Writing analysis results to separate sidecar JSON files only
+- Running Whisper transcription that writes only to an analysis directory
+- Creating thumbnails/contact sheets only when the user explicitly approves visual analysis derivatives, and only in a designated analysis directory
+
+### Why This Matters
+
+- **Assistant Editor:** Every transcode introduces a generation loss. Every conversion makes assumptions about color space, bit depth, and timecode that may be wrong. An unauthorized proxy that doesn't match source timecode breaks the online conform.
+- **Editor:** The edit is discovered from the real footage. Analysis informs creative decisions without creating derivatives that confuse the media pool or timeline.
+- **Colorist:** The grade starts with every bit of dynamic range the camera captured. A transcode bakes in assumptions about color space and gamma. Once latitude is lost, it's gone forever.
+- **Online Editor:** The entire conform workflow traces back to OCFs. Exported-and-reimported media looks like the original but breaks the file path, media hash, and metadata chain.
+- **Producer:** Distributors trace chain of custody back to camera originals. Unauthorized derivatives risk QC failure, E&O issues, and delivery rejection.
+
+### The Only Exception
+
+If the user explicitly requests a derivative ("make me a proxy," "transcode this to ProRes"), then:
+- Confirm the request before executing
+- Clearly label the output as a derivative
+- Never overwrite or replace the original
+- Document what was created and where
+- Preserve all metadata including timecode
+
+---
+
+## Setup: First Interaction
+
+On first use, determine:
+
+### 1. Where should analysis files be saved?
+- **alongside** — Sidecar files next to each media file (e.g., `clip.mov` -> `clip.mov.analysis.json`)
+- **directory** — A central analysis directory (default: `~/resolve-media-analysis/`)
+- **project** — Inside a `.analysis/` folder within the Resolve project's media folder
+
+If source media is on read-only storage (camera cards, SAN volumes), use `directory` or `project`.
+
+### 2. What tools are available?
+
+Check automatically:
+```bash
+# Required
+which ffprobe && ffprobe -version 2>&1 | head -1
+
+# Optional — enhanced analysis
+which ffmpeg && ffmpeg -version 2>&1 | head -1
+
+# Optional — transcription
+which whisper 2>/dev/null || which whisper-cpp 2>/dev/null || python3 -c "import whisper" 2>/dev/null
+```
+
+FFprobe is required. If missing:
+- macOS: `brew install ffmpeg`
+- Linux: `sudo apt install ffmpeg` or `sudo dnf install ffmpeg`
+- Windows: Download from https://ffmpeg.org
+
+### 3. Analysis depth preference
+- **quick** — FFprobe metadata only (~1 second per file)
+- **standard** — Metadata + loudness + scene detection (~30-60 seconds per file)
+- **deep** — Metadata, read-through analysis, transcription, and optionally user-approved thumbnails/contact sheets (~2-5 minutes per file)
+
+---
+
+## Analysis Commands
+
+Every command below is read-only. None write to the source file.
+
+### FFprobe: Technical Metadata (Required)
+
+```bash
+ffprobe -v quiet -print_format json -show_format -show_streams -show_chapters "INPUT_FILE"
+```
+
+Extract and structure:
+- **Video**: codec, profile, level, pixel format, bit depth, resolution, frame rate, scan type (progressive/interlaced), color primaries, transfer characteristics, matrix coefficients, HDR metadata
+- **Audio**: codec, sample rate, channels, channel layout, bit depth
+- **Container**: format, duration, overall bitrate, timecode (if present)
+- **Chapters**: timestamps and titles
+
+For frame rate, distinguish between `r_frame_rate` (container) and `avg_frame_rate` (actual). Flag VFR if they differ significantly.
+
+### FFmpeg: Content Analysis (Optional)
+
+All commands use `-f null -` as output — read-through analysis, zero disk writes.
+
+**Loudness (EBU R128):**
+```bash
+ffmpeg -i "INPUT_FILE" -af ebur128=peak=true -f null - 2>&1 | tail -30
+```
+
+**Scene Detection:**
+```bash
+ffmpeg -i "INPUT_FILE" -filter:v "select='gt(scene,0.3)',showinfo" -f null - 2>&1 | grep "showinfo"
+```
+
+**Black Frame Detection:**
+```bash
+ffmpeg -i "INPUT_FILE" -vf blackdetect=d=0.5:pix_th=0.10 -f null - 2>&1 | grep "blackdetect"
+```
+
+**Silence Detection:**
+```bash
+ffmpeg -i "INPUT_FILE" -af silencedetect=noise=-50dB:d=1 -f null - 2>&1 | grep "silence"
+```
+
+**Interlace Detection:**
+```bash
+ffmpeg -i "INPUT_FILE" -vf idet -frames:v 500 -f null - 2>&1 | grep "idet"
+```
+
+**Thumbnail Extraction (explicit user approval required; writes to analysis directory ONLY):**
+```bash
+ffmpeg -i "INPUT_FILE" -vf "select=eq(n\,FRAME_NUM)" -frames:v 1 -q:v 2 "ANALYSIS_DIR/thumbnail.jpg"
+ffmpeg -i "INPUT_FILE" -vf "fps=1/INTERVAL,scale=320:-1,tile=4x4" -frames:v 1 "ANALYSIS_DIR/contact_sheet.jpg"
+```
+
+### Whisper: Transcription (Optional)
+
+```bash
+# OpenAI Whisper CLI
+whisper "INPUT_FILE" --model base --output_format json --output_dir "ANALYSIS_DIR"
+
+# Or whisper-cpp
+whisper-cpp -m /path/to/model -f "INPUT_FILE" --output-json
+
+# Or Python whisper
+python3 -c "
+import whisper, json, sys
+model = whisper.load_model('base')
+result = model.transcribe(sys.argv[1])
+print(json.dumps(result, indent=2))
+" "INPUT_FILE"
+```
+
+---
+
+## Analysis Output Format
+
+Save as JSON sidecar files:
+
+```json
+{
+  "analysis_version": "1.0",
+  "analyzed_at": "2026-03-09T12:00:00Z",
+  "source_file": "/path/to/clip.mov",
+  "source_file_size_bytes": 1234567890,
+  "source_file_modified": "2026-03-01T10:30:00Z",
+
+  "video": {
+    "codec": "prores",
+    "codec_long": "Apple ProRes 422 HQ",
+    "profile": "3",
+    "pixel_format": "yuv422p10le",
+    "bit_depth": 10,
+    "width": 3840,
+    "height": 2160,
+    "display_aspect_ratio": "16:9",
+    "frame_rate": "23.976",
+    "frame_rate_exact": "24000/1001",
+    "is_vfr": false,
+    "scan_type": "progressive",
+    "color_primaries": "bt709",
+    "transfer_characteristics": "bt709",
+    "matrix_coefficients": "bt709",
+    "hdr": null,
+    "duration_seconds": 125.5,
+    "frame_count": 3010,
+    "bitrate_mbps": 220.5
+  },
+
+  "audio": [
+    {
+      "stream_index": 1,
+      "codec": "pcm_s24le",
+      "sample_rate": 48000,
+      "channels": 2,
+      "channel_layout": "stereo",
+      "bit_depth": 24,
+      "duration_seconds": 125.5
+    }
+  ],
+
+  "container": {
+    "format": "mov",
+    "duration_seconds": 125.5,
+    "overall_bitrate_mbps": 225.3,
+    "timecode_start": "01:00:00:00",
+    "creation_time": "2026-03-01T10:30:00Z"
+  },
+
+  "loudness": {
+    "integrated_lufs": -23.1,
+    "loudness_range_lu": 12.5,
+    "true_peak_dbtp": -1.2
+  },
+
+  "scenes": [
+    {"time": 0.0, "score": 0.95},
+    {"time": 5.2, "score": 0.45},
+    {"time": 12.8, "score": 0.72}
+  ],
+
+  "transcription": {
+    "language": "en",
+    "text": "Full transcription text...",
+    "segments": [
+      {"start": 1.2, "end": 3.5, "text": "Hello and welcome..."}
+    ]
+  }
+}
+```
+
+---
+
+## Connecting Analysis to the MCP
+
+### Getting File Paths from Resolve
+
+Use MCP tools to get file paths from the current project, then analyze them externally:
+
+1. **From media pool clips:** `media_pool_item` -> `get_clip_property(clip_id)` returns `"File Path"`
+2. **From timeline items:** `timeline_item` -> `get_media_pool_item(item_id)` -> then get clip properties
+3. **From media storage:** `media_storage` -> `get_files(path)` lists files in a directory
+
+### Workflow: Analyze Before Acting
+
+1. **Identify the media** — Use MCP to get clip IDs and file paths
+2. **Check for existing analysis** — Look for sidecar JSON files
+3. **Analyze if needed** — Run FFprobe (+ optional tools) on the files
+4. **Act with context** — Use MCP tools with full knowledge of what the media is
+
+Analysis informs Resolve actions. At no point do we create intermediate files that enter the media pipeline.
+
+### Examples
+
+**"Set up my timeline for this footage"**
+- FFprobe reveals 4K ProRes 422 HQ, 23.976fps, Rec.709
+- Use `project_settings` to set timeline resolution, frame rate, and color science
+- Original files stay untouched
+
+**"Create markers at scene changes"**
+- Run FFmpeg scene detection (`-f null -` — no output file)
+- Use `timeline_markers` or `media_pool_item_markers` to add markers
+- Analysis writes nothing to source; markers live in Resolve's database
+
+**"What are my audio levels?"**
+- Run EBU R128 loudness analysis (`-f null -`)
+- Report current levels vs target (-24 LUFS broadcast, -14 LUFS streaming)
+- Suggest adjustments in Resolve's Fairlight page
+
+**"Help me set up color management"**
+- FFprobe reveals ARRI LogC3, wide gamut, 12-bit
+- Recommend ACES IDT or DaVinci Wide Gamut
+- Camera original retains full latitude
+
+---
+
+## What Analysis Enables
+
+| Task | Without Analysis | With Analysis |
+|------|-----------------|---------------|
+| Set timeline settings | Guess or ask user | Auto-detect from footage |
+| Color space setup | Default to Rec.709 | Match source (ARRI LogC, S-Log3, etc.) |
+| Audio normalization | Manual measurement | Report LUFS, suggest Fairlight adjustments |
+| Scene-based editing | Manual review | Auto-mark scene changes via MCP markers |
+| Subtitle creation | Use Resolve's built-in | Whisper transcription -> import via MCP |
+| QC checks | Visual inspection | Automated codec/bitrate/level verification |
+| Render settings | Generic defaults | Match source codec/colorspace for delivery |
+| Timecode sync | Manual entry | Extract embedded timecode for reference |
+| VFR detection | Unknown issues | Flag before problems occur in timeline |
+| Mixed-camera projects | Manual identification | Auto-detect cameras, suggest per-clip IDTs |
+
+---
+
+## Proactive Warnings
+
+When analysis reveals potential issues, always alert the user:
+
+- **VFR** — Variable frame rate detected; Resolve may interpret differently than expected
+- **Mismatched sample rates** — 44.1kHz audio in a 48kHz timeline causes drift
+- **HDR metadata** — HDR10/HLG/Dolby Vision present; color management must account for it
+- **Color space flags** — ARRI LogC3 / S-Log3 / V-Log etc. requires appropriate IDT
+- **Timecode discontinuity** — Multiple clips share starting TC; conform conflicts possible
+- **Interlaced content** — Set deinterlacing mode before editing
+- **Missing audio** — No audio streams detected
+- **Extremely high bitrate** — Verify storage can sustain real-time playback
+
+---
+
+## Key Principles
+
+- **The source is sacred.** Read from source files, write only to analysis sidecars unless the user explicitly approves visual analysis derivatives in a separate analysis directory.
+- **Respect file paths.** Use exact paths from Resolve or the filesystem.
+- **Cache analysis.** Skip re-analysis if the sidecar is newer than the source.
+- **Report clearly.** Present analysis to inform the user's next action within Resolve.
+- **Timecode matters.** Always extract and report TC — it's the foundation of conform, sync, and delivery.
+- **Handle errors gracefully.** If a file can't be analyzed, report and move on.
+- **Chain of custody is real.** This tool provides intelligence about the source — never creates alternatives to it.
