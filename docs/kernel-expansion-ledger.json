@@ -142,8 +142,22 @@
   {
     "kernel": "timeline_conform_interchange",
     "title": "Timeline Conform / Interchange Kernel",
-    "status": "planned",
-    "passes": false,
+    "status": "implemented_live_validated",
+    "passes": true,
+    "evidence": {
+      "resolve": "DaVinci Resolve Studio 20.3.2.9",
+      "live_report": "/private/tmp/timeline-conform-probe-20260509-release/timeline-conform-probe.json",
+      "counts": {
+        "supported": 17,
+        "partially_supported": 1,
+        "unsupported": 0,
+        "version_or_page_dependent": 0,
+        "write_only_unverifiable": 0,
+        "read_only": 0,
+        "not_applicable": 0,
+        "error": 0
+      }
+    },
     "steps": [
       "Implement timeline comparison, gap/overlap, source range, and relink-plan helpers",
       "Add offline conform diff and report tests",

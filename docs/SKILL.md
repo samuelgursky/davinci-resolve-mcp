@@ -254,6 +254,21 @@ Key actions:
   inclusive source frame ranges for current-timeline video clips, with fixed
   handles or gap-only auto handles when `handles=0`
 
+Timeline Conform / Interchange kernel actions (v2.13.0+) add live-tested
+structure, interchange, comparison, missing-media, and relink-planning helpers:
+
+- `conform_capabilities`
+- `probe_timeline_structure(track_types?, include_markers?, include_clip_properties?)`
+- `detect_gaps_overlaps(track_types?, min_gap?)`
+- `source_range_report(handles?, merge?)`
+- `export_timeline_checked(path, format?|type?, subtype?, require_temp_path?, dry_run?)`
+- `import_timeline_checked(path, options?, timeline_name?, import_source_clips?, require_temp_path?, dry_run?)`
+- `compare_timelines(right_timeline_id?|right_timeline_index?|left_snapshot?, right_snapshot?)`
+- `probe_interchange_roundtrip(format?, output_dir?, cleanup_imported?)`
+- `detect_missing_media`
+- `build_relink_plan(search_roots)`
+- `conform_boundary_report`
+
 **`timeline_markers`** — Markers and playhead on the current timeline.
 
 Key actions: `add(frame|frame_id|timecode?, color?, name?, note?, duration?)`, `get_all`,
@@ -602,7 +617,22 @@ image reflects the color-graded frame as Resolve sees it, not the raw source.
 ```
 timeline(action="export", params={"path": "/tmp/export.edl", "type": "EDL", "subtype": "CMX3600"})
 timeline(action="export", params={"path": "/tmp/export.fcpxml", "type": "FCPXML"})
+timeline(action="export_timeline_checked", params={"path": "/tmp/export.drt", "format": "drt"})
+timeline(action="detect_gaps_overlaps")
+timeline(action="conform_boundary_report", params={"handles": 8})
 ```
+
+For the Timeline Conform / Interchange boundary map, run:
+
+```
+python3.11 tests/live_timeline_conform_validation.py --output-dir /tmp/timeline-conform-probe
+```
+
+The harness creates a disposable project, generates synthetic media, builds a
+gapped timeline, probes structure, source ranges, gap/overlap detection,
+interchange export/import/round-trip behavior, synthetic missing-media relink
+planning, writes reports, deletes the project, and removes generated media.
+See `docs/timeline-conform-interchange-kernel.md`.
 
 ### 8. Add and start a render job
 

@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.12.0"
+VERSION = "2.13.0"
 
 import base64
 import os
@@ -2607,6 +2607,552 @@ def _timeline_probe_edit_kernel_item(tl, p: Dict[str, Any]):
     return out
 
 
+_TIMELINE_CONFORM_KERNEL_ACTIONS = [
+    "conform_capabilities",
+    "probe_timeline_structure",
+    "detect_gaps_overlaps",
+    "source_range_report",
+    "export_timeline_checked",
+    "import_timeline_checked",
+    "compare_timelines",
+    "probe_interchange_roundtrip",
+    "detect_missing_media",
+    "build_relink_plan",
+    "conform_boundary_report",
+]
+
+_TIMELINE_EXPORT_ALIASES = {
+    "aaf": ("EXPORT_AAF", "EXPORT_AAF_NEW", ".aaf"),
+    "drt": ("EXPORT_DRT", "EXPORT_NONE", ".drt"),
+    "edl": ("EXPORT_EDL", "EXPORT_NONE", ".edl"),
+    "edl_cdl": ("EXPORT_EDL", "EXPORT_CDL", ".edl"),
+    "edl_sdl": ("EXPORT_EDL", "EXPORT_SDL", ".edl"),
+    "edl_missing_clips": ("EXPORT_EDL", "EXPORT_MISSING_CLIPS", ".edl"),
+    "fcp7xml": ("EXPORT_FCP_7_XML", "EXPORT_NONE", ".xml"),
+    "fcpxml": ("EXPORT_FCPXML_1_10", "EXPORT_NONE", ".fcpxml"),
+    "fcpxml_1_8": ("EXPORT_FCPXML_1_8", "EXPORT_NONE", ".fcpxml"),
+    "fcpxml_1_9": ("EXPORT_FCPXML_1_9", "EXPORT_NONE", ".fcpxml"),
+    "fcpxml_1_10": ("EXPORT_FCPXML_1_10", "EXPORT_NONE", ".fcpxml"),
+    "otio": ("EXPORT_OTIO", "EXPORT_NONE", ".otio"),
+}
+
+
+def _conform_capabilities():
+    return {
+        "supported": {
+            "timeline_structure": [
+                "timeline identity, frame bounds, start timecode, and track counts",
+                "per-track item summaries across video, audio, and subtitle tracks",
+                "timeline marker snapshot",
+                "source MediaPoolItem identity and file path when Resolve exposes it",
+            ],
+            "analysis": [
+                "same-track gap detection",
+                "same-track overlap detection",
+                "source range summaries grouped by MediaPoolItem",
+                "missing-media detection from file path existence and status metadata",
+                "timeline snapshot comparison by track and item order",
+            ],
+            "interchange": [
+                "guarded timeline export to temp paths",
+                "guarded timeline import from temp paths",
+                "round-trip export/import/compare probe",
+                "FCPXML, DRT, EDL, AAF, OTIO, and FCP7 XML aliases when Resolve exposes the constants",
+            ],
+            "relink_planning": [
+                "read-only search-root scan by missing file basename",
+                "plan output that can be reviewed before media_pool.safe_relink executes",
+            ],
+            "source_media_integrity": [
+                "export/import probes write interchange files only under temp paths by default",
+                "missing-media and relink-plan helpers never transcode, proxy, or alter source media",
+            ],
+        },
+        "partially_supported": {
+            "interchange_roundtrip": "Export/import survival varies by format, Resolve build, timeline contents, and installed codecs.",
+            "timeline_item_semantics": "Generators, titles, compound clips, transitions, effects, Fusion comps, and grades may not survive every interchange format.",
+            "missing_media_status": "Resolve status fields vary; the kernel combines status text with local file existence when a file path is readable.",
+        },
+        "unsupported": {
+            "semantic_conform_decisions": "The public API does not decide creative conform intent; it can expose differences and relink candidates.",
+            "transition_roundtrip_guarantee": "Transition internals are not fully inspectable through the public timeline item API.",
+            "automatic_user_media_relink": "Relinking user media is not automatic. Plans are read-only unless the caller explicitly uses the existing safe relink API.",
+        },
+        "export_aliases": {
+            name: {"type": values[0], "subtype": values[1], "extension": values[2]}
+            for name, values in _TIMELINE_EXPORT_ALIASES.items()
+        },
+    }
+
+
+def _timeline_item_conform_summary(item, track_type: str, track_index: int, item_index: int):
+    summary = _timeline_item_summary(item, (track_type, track_index)) or {}
+    summary["item_index"] = item_index
+    media_pool_item = _timeline_item_media_pool_item(item)
+    file_path = None
+    clip_properties = None
+    media_status = None
+    if media_pool_item:
+        try:
+            clip_properties = _ser(media_pool_item.GetClipProperty(""))
+        except Exception:
+            clip_properties = None
+        if isinstance(clip_properties, dict):
+            file_path = clip_properties.get("File Path") or clip_properties.get("FilePath")
+            for key in ("Status", "Media Status", "Offline", "Online Status"):
+                if key in clip_properties:
+                    media_status = clip_properties.get(key)
+                    break
+    summary["file_path"] = file_path
+    summary["file_exists"] = bool(file_path and os.path.exists(str(file_path)))
+    summary["media_status"] = media_status
+    if clip_properties is not None:
+        summary["clip_properties"] = clip_properties
+    return summary
+
+
+def _timeline_conform_snapshot(tl, p: Optional[Dict[str, Any]] = None):
+    p = p or {}
+    include_markers = bool(p.get("include_markers", True))
+    include_clip_properties = bool(p.get("include_clip_properties", False))
+    track_types = p.get("track_types") or ["video", "audio", "subtitle"]
+    if not isinstance(track_types, list):
+        return _err("track_types must be a list")
+    tracks = {}
+    item_count = 0
+    for track_type in track_types:
+        try:
+            track_count = int(tl.GetTrackCount(track_type) or 0)
+        except Exception:
+            track_count = 0
+        track_rows = []
+        for track_index in range(1, track_count + 1):
+            items = []
+            for item_index, item in enumerate(tl.GetItemListInTrack(track_type, track_index) or []):
+                summary = _timeline_item_conform_summary(item, track_type, track_index, item_index)
+                if not include_clip_properties:
+                    summary.pop("clip_properties", None)
+                items.append(summary)
+            item_count += len(items)
+            track_rows.append({
+                "track_index": track_index,
+                "item_count": len(items),
+                "items": items,
+            })
+        tracks[track_type] = {"track_count": track_count, "tracks": track_rows}
+    markers = {}
+    if include_markers and _has_method(tl, "GetMarkers"):
+        try:
+            markers = _ser(tl.GetMarkers() or {})
+        except Exception as exc:
+            markers = {"error": str(exc)}
+    return {
+        "name": tl.GetName() or "",
+        "id": tl.GetUniqueId(),
+        "start_frame": tl.GetStartFrame(),
+        "end_frame": tl.GetEndFrame(),
+        "start_timecode": tl.GetStartTimecode(),
+        "item_count": item_count,
+        "tracks": tracks,
+        "markers": markers,
+    }
+
+
+def _detect_gaps_overlaps_from_snapshot(snapshot: Dict[str, Any], p: Optional[Dict[str, Any]] = None):
+    p = p or {}
+    track_types = p.get("track_types") or ["video", "audio"]
+    min_gap = int(p.get("min_gap", 1))
+    gaps = []
+    overlaps = []
+    tracks = snapshot.get("tracks", {})
+    for track_type in track_types:
+        for track in (tracks.get(track_type, {}) or {}).get("tracks", []):
+            items = sorted(
+                [item for item in track.get("items", []) if item.get("start") is not None and item.get("end") is not None],
+                key=lambda row: (row.get("start"), row.get("end")),
+            )
+            for prev, curr in zip(items, items[1:]):
+                prev_end = int(prev["end"])
+                curr_start = int(curr["start"])
+                if curr_start - prev_end >= min_gap:
+                    gaps.append({
+                        "track_type": track_type,
+                        "track_index": track.get("track_index"),
+                        "start": prev_end,
+                        "end": curr_start,
+                        "duration": curr_start - prev_end,
+                        "after": prev.get("timeline_item_id"),
+                        "before": curr.get("timeline_item_id"),
+                    })
+                elif curr_start < prev_end:
+                    overlaps.append({
+                        "track_type": track_type,
+                        "track_index": track.get("track_index"),
+                        "start": curr_start,
+                        "end": prev_end,
+                        "duration": prev_end - curr_start,
+                        "left": prev.get("timeline_item_id"),
+                        "right": curr.get("timeline_item_id"),
+                    })
+    return {"gaps": gaps, "overlaps": overlaps, "gap_count": len(gaps), "overlap_count": len(overlaps)}
+
+
+def _source_ranges_from_snapshot(snapshot: Dict[str, Any], p: Optional[Dict[str, Any]] = None):
+    p = p or {}
+    handles = int(p.get("handles", 0))
+    merge = bool(p.get("merge", True))
+    ranges: Dict[str, List[List[int]]] = {}
+    occurrences = []
+    for track_type, type_payload in (snapshot.get("tracks") or {}).items():
+        if track_type == "subtitle":
+            continue
+        for track in type_payload.get("tracks", []):
+            for item in track.get("items", []):
+                source_start = item.get("source_start")
+                source_end = item.get("source_end")
+                if source_start is None or source_end is None:
+                    continue
+                key = item.get("file_path") or item.get("media_pool_item_name") or item.get("name") or "unknown"
+                start = max(0, int(source_start) - handles)
+                end = int(source_end) + handles
+                ranges.setdefault(key, []).append([start, end])
+                occurrences.append({
+                    "key": key,
+                    "track_type": track_type,
+                    "track_index": track.get("track_index"),
+                    "timeline_item_id": item.get("timeline_item_id"),
+                    "timeline_range": [item.get("start"), item.get("end")],
+                    "source_range": [start, end],
+                })
+    if merge:
+        for key, key_ranges in list(ranges.items()):
+            ordered = sorted(key_ranges)
+            merged = []
+            for start, end in ordered:
+                if not merged or start > merged[-1][1]:
+                    merged.append([start, end])
+                else:
+                    merged[-1][1] = max(merged[-1][1], end)
+            ranges[key] = merged
+    return {"ranges": ranges, "occurrences": occurrences, "handles": handles, "merged": merge}
+
+
+def _timeline_export_value(value, resolve_obj=None):
+    raw = str(value or "").strip()
+    if not raw:
+        return "", None
+    const_name = raw if raw.startswith("EXPORT_") else None
+    if const_name and resolve_obj is not None and hasattr(resolve_obj, const_name):
+        return getattr(resolve_obj, const_name), const_name
+    if const_name:
+        return const_name, const_name
+    return raw, None
+
+
+def _timeline_export_spec(p: Dict[str, Any], resolve_obj=None):
+    requested = p.get("format") or p.get("type") or p.get("export_type") or "fcpxml"
+    key = str(requested).strip().lower().replace("-", "_").replace(" ", "_")
+    alias = _TIMELINE_EXPORT_ALIASES.get(key)
+    if alias:
+        type_name, subtype_name, ext = alias
+    else:
+        type_name = str(requested)
+        subtype_name = p.get("subtype") or p.get("export_subtype") or "EXPORT_NONE"
+        ext = p.get("extension") or ".timeline"
+    if p.get("subtype") or p.get("export_subtype"):
+        subtype_name = p.get("subtype") or p.get("export_subtype")
+    export_type, export_type_name = _timeline_export_value(type_name, resolve_obj)
+    export_subtype, export_subtype_name = _timeline_export_value(subtype_name, resolve_obj)
+    return {
+        "requested": requested,
+        "export_type": export_type,
+        "export_type_name": export_type_name or type_name,
+        "export_subtype": export_subtype,
+        "export_subtype_name": export_subtype_name or subtype_name,
+        "extension": ext,
+    }
+
+
+def _export_timeline_checked(tl, p: Dict[str, Any]):
+    path = p.get("path")
+    if not path:
+        return _err("path is required")
+    if p.get("require_temp_path", True) and not _render_temp_path_ok(path):
+        return _err("path must be under the system temp directory unless require_temp_path=False")
+    folder = os.path.dirname(os.path.abspath(path))
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    spec = _timeline_export_spec(p, resolve)
+    if p.get("dry_run"):
+        return _ok(path=path, would_export=True, spec={k: v for k, v in spec.items() if k != "export_type"})
+    success = bool(tl.Export(path, spec["export_type"], spec["export_subtype"]))
+    files = []
+    primary_file = path
+    if success and os.path.isdir(path):
+        for dirpath, _, filenames in os.walk(path):
+            for filename in filenames:
+                file_path = os.path.join(dirpath, filename)
+                files.append({"path": file_path, "size": os.path.getsize(file_path)})
+        preferred_exts = (".fcpxml", ".xml", ".edl", ".drt", ".aaf", ".otio")
+        for ext in preferred_exts:
+            match = next((row["path"] for row in files if row["path"].lower().endswith(ext)), None)
+            if match:
+                primary_file = match
+                break
+    size = 0
+    if success and os.path.exists(path):
+        if os.path.isdir(path):
+            size = sum(row["size"] for row in files)
+        else:
+            size = os.path.getsize(path)
+    return {
+        "success": success,
+        "path": path,
+        "primary_file": primary_file,
+        "is_directory": bool(success and os.path.isdir(path)),
+        "files": files,
+        "size": size,
+        "format": spec["requested"],
+        "export_type": spec["export_type_name"],
+        "export_subtype": spec["export_subtype_name"],
+    }
+
+
+def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
+    path = p.get("path")
+    if not path:
+        return _err("path is required")
+    if not os.path.exists(path):
+        return _err(f"path does not exist: {path}")
+    if p.get("require_temp_path", True) and not _render_temp_path_ok(path):
+        return _err("path must be under the system temp directory unless require_temp_path=False")
+    options = dict(p.get("options") or {})
+    if p.get("timeline_name") and "timelineName" not in options:
+        options["timelineName"] = p["timeline_name"]
+    if "import_source_clips" in p and "importSourceClips" not in options:
+        options["importSourceClips"] = bool(p["import_source_clips"])
+    if p.get("dry_run"):
+        return _ok(path=path, options=options, would_import=True)
+    before_ids = set()
+    for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
+        tl_existing = proj.GetTimelineByIndex(index)
+        if tl_existing:
+            before_ids.add(str(tl_existing.GetUniqueId()))
+    imported = mp.ImportTimelineFromFile(path, options)
+    if not imported:
+        return _err("Failed to import timeline")
+    imported_id = str(imported.GetUniqueId())
+    return _ok(
+        name=imported.GetName(),
+        id=imported_id,
+        created_new=imported_id not in before_ids,
+        timeline_count=proj.GetTimelineCount(),
+    )
+
+
+def _timeline_by_selector(proj, p: Dict[str, Any], *, prefix: str):
+    timeline_id = p.get(f"{prefix}_timeline_id") or p.get(f"{prefix}_id")
+    timeline_index = p.get(f"{prefix}_timeline_index") or p.get(f"{prefix}_index")
+    if timeline_id:
+        want = str(timeline_id)
+        for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
+            tl = proj.GetTimelineByIndex(index)
+            if tl and str(tl.GetUniqueId()) == want:
+                return tl, None
+        return None, _err(f"{prefix} timeline not found: {timeline_id}")
+    if timeline_index is not None:
+        try:
+            index = int(timeline_index)
+        except (TypeError, ValueError):
+            return None, _err(f"{prefix}_timeline_index must be an integer")
+        tl = proj.GetTimelineByIndex(index)
+        return (tl, None) if tl else (None, _err(f"No {prefix} timeline at index {index}"))
+    return proj.GetCurrentTimeline(), None
+
+
+def _compare_timeline_snapshots(left: Dict[str, Any], right: Dict[str, Any]):
+    differences = []
+    left_tracks = left.get("tracks", {})
+    right_tracks = right.get("tracks", {})
+    for track_type in sorted(set(left_tracks) | set(right_tracks)):
+        left_type = left_tracks.get(track_type, {})
+        right_type = right_tracks.get(track_type, {})
+        if left_type.get("track_count", 0) != right_type.get("track_count", 0):
+            differences.append({
+                "kind": "track_count",
+                "track_type": track_type,
+                "left": left_type.get("track_count", 0),
+                "right": right_type.get("track_count", 0),
+            })
+        left_track_map = {row.get("track_index"): row for row in left_type.get("tracks", [])}
+        right_track_map = {row.get("track_index"): row for row in right_type.get("tracks", [])}
+        for track_index in sorted(set(left_track_map) | set(right_track_map)):
+            left_items = left_track_map.get(track_index, {}).get("items", [])
+            right_items = right_track_map.get(track_index, {}).get("items", [])
+            if len(left_items) != len(right_items):
+                differences.append({
+                    "kind": "item_count",
+                    "track_type": track_type,
+                    "track_index": track_index,
+                    "left": len(left_items),
+                    "right": len(right_items),
+                })
+            for item_index, (left_item, right_item) in enumerate(zip(left_items, right_items)):
+                fields = ["name", "start", "end", "source_start", "source_end", "media_pool_item_name"]
+                changed = {
+                    field: {"left": left_item.get(field), "right": right_item.get(field)}
+                    for field in fields
+                    if left_item.get(field) != right_item.get(field)
+                }
+                if changed:
+                    differences.append({
+                        "kind": "item_mismatch",
+                        "track_type": track_type,
+                        "track_index": track_index,
+                        "item_index": item_index,
+                        "changes": changed,
+                    })
+    return {"match": len(differences) == 0, "difference_count": len(differences), "differences": differences}
+
+
+def _compare_timelines(proj, tl, p: Dict[str, Any]):
+    if isinstance(p.get("left_snapshot"), dict) and isinstance(p.get("right_snapshot"), dict):
+        left = p["left_snapshot"]
+        right = p["right_snapshot"]
+    else:
+        right_tl, err = _timeline_by_selector(proj, p, prefix="right")
+        if err:
+            return err
+        left = _timeline_conform_snapshot(tl, p)
+        right = _timeline_conform_snapshot(right_tl, p)
+    return {"left": {"name": left.get("name"), "id": left.get("id")}, "right": {"name": right.get("name"), "id": right.get("id")}, **_compare_timeline_snapshots(left, right)}
+
+
+def _probe_interchange_roundtrip(proj, mp, tl, p: Dict[str, Any]):
+    output_dir = p.get("output_dir") or tempfile.mkdtemp(prefix="mcp_conform_roundtrip_")
+    if p.get("require_temp_path", True) and not _render_temp_path_ok(output_dir):
+        return _err("output_dir must be under the system temp directory unless require_temp_path=False")
+    os.makedirs(output_dir, exist_ok=True)
+    spec = _timeline_export_spec(p, resolve)
+    base_name = p.get("name") or f"roundtrip_{str(spec['requested']).lower()}"
+    path = p.get("path") or os.path.join(output_dir, base_name + spec["extension"])
+    export_result = _export_timeline_checked(tl, {**p, "path": path, "require_temp_path": p.get("require_temp_path", True)})
+    if export_result.get("error") or not export_result.get("success"):
+        return {"success": False, "stage": "export", "export": export_result}
+    import_path = export_result.get("primary_file") or export_result.get("path") or path
+    import_options = dict(p.get("import_options") or {})
+    requested_key = str(spec["requested"]).lower()
+    if "drt" not in requested_key:
+        import_options.setdefault("timelineName", p.get("imported_timeline_name", f"{tl.GetName()} {spec['requested']} Roundtrip"))
+        import_options.setdefault("importSourceClips", bool(p.get("import_source_clips", False)))
+    import_result = _import_timeline_checked(
+        proj,
+        mp,
+        {
+            "path": import_path,
+            "options": import_options,
+            "require_temp_path": p.get("require_temp_path", True),
+        },
+    )
+    if import_result.get("error") or not import_result.get("success"):
+        return {"success": False, "stage": "import", "export": export_result, "import": import_result}
+    imported_tl = None
+    if import_result.get("id"):
+        imported_tl, _ = _timeline_by_selector(proj, {"right_timeline_id": import_result["id"]}, prefix="right")
+    comparison = None
+    if imported_tl:
+        comparison = _compare_timeline_snapshots(_timeline_conform_snapshot(tl, p), _timeline_conform_snapshot(imported_tl, p))
+    cleanup_result = None
+    if p.get("cleanup_imported", True) and imported_tl:
+        cleanup_result = {"success": bool(mp.DeleteTimelines([imported_tl]))}
+    return {
+        "success": True,
+        "format": spec["requested"],
+        "path": path,
+        "export": export_result,
+        "import": import_result,
+        "comparison": comparison,
+        "cleanup": cleanup_result,
+    }
+
+
+def _detect_missing_media_from_snapshot(snapshot: Dict[str, Any]):
+    missing = []
+    present = []
+    for track_type, type_payload in (snapshot.get("tracks") or {}).items():
+        for track in type_payload.get("tracks", []):
+            for item in track.get("items", []):
+                file_path = item.get("file_path")
+                status_text = str(item.get("media_status") or "").lower()
+                exists = bool(file_path and os.path.exists(str(file_path)))
+                is_missing = bool(file_path and not exists) or any(token in status_text for token in ("offline", "missing"))
+                row = {
+                    "track_type": track_type,
+                    "track_index": track.get("track_index"),
+                    "timeline_item_id": item.get("timeline_item_id"),
+                    "media_pool_item_id": item.get("media_pool_item_id"),
+                    "name": item.get("name"),
+                    "media_pool_item_name": item.get("media_pool_item_name"),
+                    "file_path": file_path,
+                    "file_exists": exists,
+                    "media_status": item.get("media_status"),
+                }
+                if is_missing:
+                    missing.append(row)
+                else:
+                    present.append(row)
+    return {"missing": missing, "present_count": len(present), "missing_count": len(missing)}
+
+
+def _detect_missing_media(tl, p: Dict[str, Any]):
+    snapshot = _timeline_conform_snapshot(tl, {**p, "include_clip_properties": True})
+    return _detect_missing_media_from_snapshot(snapshot)
+
+
+def _build_relink_plan(tl, p: Dict[str, Any]):
+    search_roots = p.get("search_roots") or p.get("roots") or []
+    if not isinstance(search_roots, list) or not search_roots:
+        return _err("search_roots must be a non-empty list")
+    invalid = [root for root in search_roots if not isinstance(root, str) or not os.path.isdir(root)]
+    if invalid:
+        return _err(f"search_roots must be existing directories: {invalid}")
+    missing_report = _detect_missing_media(tl, p)
+    candidates = []
+    for row in missing_report.get("missing", []):
+        wanted = os.path.basename(str(row.get("file_path") or row.get("media_pool_item_name") or row.get("name") or ""))
+        matches = []
+        if wanted:
+            for root in search_roots:
+                for dirpath, _, filenames in os.walk(root):
+                    if wanted in filenames:
+                        matches.append(os.path.join(dirpath, wanted))
+                        if not p.get("all_matches", False):
+                            break
+                if matches and not p.get("all_matches", False):
+                    break
+        candidates.append({**row, "wanted_basename": wanted, "candidate_paths": matches, "candidate_count": len(matches)})
+    return {
+        "success": True,
+        "dry_run": True,
+        "search_roots": search_roots,
+        "candidate_count": sum(1 for row in candidates if row["candidate_count"]),
+        "missing_count": missing_report.get("missing_count", 0),
+        "candidates": candidates,
+        "execution_note": "Review this plan, then use media_pool.safe_relink with explicit synthetic or approved paths if desired.",
+    }
+
+
+def _conform_boundary_report(tl, p: Dict[str, Any]):
+    snapshot = _timeline_conform_snapshot(tl, p)
+    return {
+        "capabilities": _conform_capabilities(),
+        "timeline": snapshot,
+        "gaps_overlaps": _detect_gaps_overlaps_from_snapshot(snapshot, p),
+        "source_ranges": _source_ranges_from_snapshot(snapshot, p),
+        "missing_media": _detect_missing_media_from_snapshot(snapshot),
+    }
+
+
 _MEDIA_POOL_ITEM_METHODS = [
     "GetName",
     "SetName",
@@ -4958,6 +5504,17 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         current timeline; clip name = basename of Media Pool File Path when set; skips audio extensions.
         source_range_final and frame_ranges tuples are inclusive/inclusive endpoints per that script.
         Default handles=24, gap_max=30. Use handles=0 for gap-only auto handles.
+      conform_capabilities() -> {supported, partially_supported, unsupported, export_aliases}
+      probe_timeline_structure(track_types?, include_markers?, include_clip_properties?) -> {tracks, markers}
+      detect_gaps_overlaps(track_types?, min_gap?) -> {gaps, overlaps}
+      source_range_report(handles?, merge?) -> {ranges, occurrences}
+      export_timeline_checked(path, format?|type?, subtype?, require_temp_path?, dry_run?) -> {success, path, size}
+      import_timeline_checked(path, options?, timeline_name?, import_source_clips?, require_temp_path?, dry_run?) -> {success, name, id}
+      compare_timelines(right_timeline_id?|right_timeline_index?|left_snapshot?, right_snapshot?) -> {match, differences}
+      probe_interchange_roundtrip(format?, output_dir?, cleanup_imported?) -> {success, export, import, comparison}
+      detect_missing_media() -> {missing, missing_count}
+      build_relink_plan(search_roots) -> {candidates}
+      conform_boundary_report(...) -> {capabilities, timeline, gaps_overlaps, source_ranges, missing_media}
     """
     p = params or {}
     pm, proj, err = _check()
@@ -4978,6 +5535,15 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return {"success": bool(proj.SetCurrentTimeline(tl))} if tl else _err(f"No timeline at index {p['index']}")
     elif action == "edit_kernel_capabilities":
         return _timeline_edit_kernel_capabilities()
+    elif action == "conform_capabilities":
+        return _conform_capabilities()
+    elif action == "import_timeline_checked":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _import_timeline_checked(proj, mp, p)
+    elif action == "compare_timelines" and isinstance(p.get("left_snapshot"), dict) and isinstance(p.get("right_snapshot"), dict):
+        return _compare_timelines(proj, proj.GetCurrentTimeline(), p)
 
     # Remaining actions need current timeline
     tl = proj.GetCurrentTimeline()
@@ -5263,7 +5829,35 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                 "current timeline). frame_ranges lists can be merged/overlapped per clip name."
             ),
         )
-    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","edit_kernel_capabilities","probe_edit_kernel_item","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges"])
+    elif action == "conform_capabilities":
+        return _conform_capabilities()
+    elif action == "probe_timeline_structure":
+        return _timeline_conform_snapshot(tl, p)
+    elif action == "detect_gaps_overlaps":
+        return _detect_gaps_overlaps_from_snapshot(_timeline_conform_snapshot(tl, p), p)
+    elif action == "source_range_report":
+        return _source_ranges_from_snapshot(_timeline_conform_snapshot(tl, p), p)
+    elif action == "export_timeline_checked":
+        return _export_timeline_checked(tl, p)
+    elif action == "import_timeline_checked":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _import_timeline_checked(proj, mp, p)
+    elif action == "compare_timelines":
+        return _compare_timelines(proj, tl, p)
+    elif action == "probe_interchange_roundtrip":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _probe_interchange_roundtrip(proj, mp, tl, p)
+    elif action == "detect_missing_media":
+        return _detect_missing_media(tl, p)
+    elif action == "build_relink_plan":
+        return _build_relink_plan(tl, p)
+    elif action == "conform_boundary_report":
+        return _conform_boundary_report(tl, p)
+    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","edit_kernel_capabilities","probe_edit_kernel_item","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges",*_TIMELINE_CONFORM_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

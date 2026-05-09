@@ -640,6 +640,13 @@ Add `docs/timeline-conform-interchange-kernel.md` with:
 - Relink safety rules.
 - Conform risk report schema.
 
+### Execution Status
+
+Implemented in v2.13.0. Final live probe on DaVinci Resolve Studio 20.3.2.9
+classified 17 surfaces as `supported`, one FCPXML round-trip survivability
+surface as `partially_supported`, and zero surfaces as `error`. See
+`docs/timeline-conform-interchange-kernel.md`.
+
 ## 7. Audio / Fairlight Kernel
 
 ### Existing Surface

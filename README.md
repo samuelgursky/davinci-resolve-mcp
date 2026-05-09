@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.12.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.13.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-30%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -13,7 +13,39 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
 
-### What's New in v2.12.0
+### What's New in v2.13.0
+
+Timeline Conform / Interchange kernel expansion - adding timeline structure
+snapshots, source range reporting, gap/overlap detection, guarded interchange
+export/import, round-trip comparison, missing-media detection, and relink
+planning around Resolve's public timeline APIs.
+
+**New `timeline` conform actions**: added `conform_capabilities`,
+`probe_timeline_structure`, `detect_gaps_overlaps`, `source_range_report`,
+`export_timeline_checked`, `import_timeline_checked`, `compare_timelines`,
+`probe_interchange_roundtrip`, `detect_missing_media`, `build_relink_plan`,
+and `conform_boundary_report`.
+
+**Interchange probing**: export aliases now cover FCPXML, DRT, EDL, AAF, OTIO,
+FCP 7 XML, and EDL subtype variants. FCPXML directory-style exports are
+normalized with a `primary_file` path for import.
+
+**Conform analysis**: the kernel reports track/item structure, same-track gaps
+and overlaps, source ranges with handles, missing/offline media, and relink
+candidates without mutating user source media.
+
+**Documented support map**: added
+[`docs/timeline-conform-interchange-kernel.md`](docs/timeline-conform-interchange-kernel.md)
+with export, round-trip, missing-media, relink planning, and format-survival
+boundaries.
+
+**Validation**: live validated against DaVinci Resolve Studio 20.3.2.9 with a
+generated synthetic gapped timeline. Final probe result: 17 supported, 1
+partially supported FCPXML round-trip survivability boundary, and 0 errors. The
+disposable project, generated media, and imported round-trip timelines were
+cleaned up.
+
+### v2.12.0
 
 Fusion Composition kernel expansion - adding safe Fusion graph inspection,
 tool creation, input writes, connection validation, scoped bulk writes, and
