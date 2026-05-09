@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.6.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.7.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-30%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -13,7 +13,55 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
 
-### What's New in v2.6.0
+### What's New in v2.7.0
+
+Timeline edit kernel expansion — turning the v2.6.0 duplicate helper into a
+broader, live-probed edit layer for clip duplication, linked audio, range edits,
+state copying, and capability reporting while preserving source media integrity.
+
+**Expanded `timeline.duplicate_clips` action**: duplication now supports
+`selected=True`, explicit `record_frame`, `track_offset`, and placement modes
+`same_time`, `offset`, `at_playhead`, `track_above`, `after_source`, and
+`next_gap`. `include_linked=True` duplicates linked audio and restores the
+video/audio link state. `copy_clips` is an alias for duplication, and
+`move_clips` duplicates successfully first before deleting the original source
+items.
+
+**Timeline range operations**: added `copy_range`, `duplicate_range`,
+`overwrite_range`, and `lift_range`. Range copies rebuild exact source segments
+with positioned append operations. `overwrite_range` deletes whole destination
+overlaps before appending. `lift_range` safely deletes whole matching items and
+requires explicit `allow_partial_item_delete=True` for whole-item deletion when
+a requested range only partially overlaps an item.
+
+**State copying groups**: duplicate/copy operations can now copy transform,
+crop, composite, audio, retime, dynamic zoom, scaling, stabilization, clip
+color, markers, flags, enabled state, cache, voice isolation, Fusion comps,
+grades, takes, and keyframes where Resolve exposes readable/writable item APIs.
+Transition cloning is accepted as a requested group but reported unsupported
+because Resolve's public scripting API does not expose transition cloning.
+
+**Capability and boundary probes**: added `timeline.edit_kernel_capabilities`
+for a maintained support map and `timeline.probe_edit_kernel_item` for read-only
+inspection of item methods, properties, keyframes, and linked items. Added
+`src/utils/timeline_kernel_live_probe.py` plus offline report/parser tests so
+future work can expand the technical boundary without guessing.
+
+**Documented limits**: added
+[`docs/timeline-edit-kernel.md`](docs/timeline-edit-kernel.md), which records
+the supported, partially supported, unsupported, and version/page-dependent
+surfaces. Known public-API boundaries include transition cloning, direct
+razor/split edits, true partial lifts, source-less item append cloning, and
+opaque speed-ramp internals.
+
+**Validation**: live validated against DaVinci Resolve Studio 20.3.2.9 with
+disposable projects and synthetic media. Final exhaustive probe result:
+255 supported, 4 partially supported, 138 unsupported, 4 version/page
+dependent, and 0 errors. Static/unit checks include `tests/test_import.py`,
+`scripts/audit_api_parity.py`, `git diff --check`, the focused timeline/helper
+unit suite, and the full live duplicate/range/probe harness.
+
+### v2.6.0
 
 Timeline clip duplication — adding an Alt-drag-style helper for duplicating
 existing video timeline items without creating proxy media, renders, or source

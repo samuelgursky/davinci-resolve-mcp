@@ -209,10 +209,33 @@ Key actions:
 - `add_track(track_type, sub_type?)` / `delete_track(track_type, index)`
 - `get_items(track_type, index)` — items on a track
 - `delete_clips(clip_ids, ripple?)` — IDs are unique IDs from `get_items`
-- `duplicate_clips(clip_ids, target_track_index?, record_frame_offset?)` —
+- `duplicate_clips(clip_ids?, selected?, target_track_index?, track_offset?, placement?, record_frame?, record_frame_offset?, copy_properties?, include_linked?)` —
   duplicate existing video timeline items by re-appending the same Media Pool
-  item with the same source trim; use `target_track_index` or a nonzero offset
-  to avoid placing the duplicate directly over the source item
+  item with the same source trim; `selected=True` uses Resolve's selected/current
+  item when available, `placement` supports `"same_time"`, `"offset"`,
+  `"at_playhead"`, `"track_above"`, `"after_source"`, and `"next_gap"`, and
+  `include_linked=True` duplicates linked audio and restores link state.
+  `copy_properties` can copy `transform`, `crop`, `composite`, `audio`,
+  `retime`, `dynamic_zoom`, `scaling`, `stabilization`, `clip_color`,
+  `markers`, `flags`, `enabled`, `cache`, `voice_isolation`, `fusion`,
+  `grades`, `takes`, and `keyframes`; `transitions` is accepted but reported
+  unsupported because Resolve's public scripting API does not expose transition
+  cloning. `copy_keyframes=True` adds the `keyframes` group.
+- `copy_clips(...)` / `move_clips(...)` — same safe append path; `move_clips`
+  deletes successfully duplicated source items afterward
+- `copy_range` / `duplicate_range` — copy exact video/audio source segments
+  from `start_frame`/`end_frame` or mark in/out to `record_frame`
+- `overwrite_range` — delete whole destination overlaps, then copy the exact
+  range segment
+- `lift_range` — delete whole items in a range; partial overlaps require
+  `allow_partial_item_delete=True` because Resolve does not expose a safe
+  partial lift primitive here
+- `edit_kernel_capabilities` — report supported, partially supported, and
+  unsupported timeline edit kernel behavior
+- `probe_edit_kernel_item(clip_ids? selected? timeline_item?)` — read-only
+  capability/property probe for timeline items, including available item
+  methods, `GetProperty()` values, known property keys, keyframe counts, and
+  linked item summaries
 - `export(path, type, subtype?)` — type: `"AAF"`, `"EDL"`, `"FCPXML"`, `"DRT"`, etc.
 - `insert_generator(name)`, `insert_title(name)`, `insert_fusion_title(name)`
 - `get_mark_in_out`, `set_mark_in_out(mark_in, mark_out, type?)`
@@ -438,11 +461,37 @@ timeline(action="get_items", params={"track_type": "video", "index": 1})
 timeline(action="duplicate_clips", params={
   "clip_ids": ["<timeline-item-uuid>"], "target_track_index": 2, "record_frame_offset": 120
 })
+timeline(action="duplicate_clips", params={
+  "selected": True,
+  "placement": "track_above",
+  "include_linked": True,
+  "copy_properties": ["transform", "crop", "composite", "audio", "dynamic_zoom", "scaling", "stabilization", "clip_color", "markers", "enabled"],
+  "copy_keyframes": True
+})
+timeline(action="probe_edit_kernel_item", params={"selected": True})
+timeline(action="copy_range", params={
+  "start_frame": 110, "end_frame": 130, "record_frame": 900,
+  "track_types": ["video", "audio"], "target_track_index": 2
+})
 timeline_item(action="get_name", params={"track_type": "video", "track_index": 1, "item_index": 0})
 timeline_item(action="get_property", params={"track_type": "video", "track_index": 1, "item_index": 0})
 timeline_markers(action="add", params={"color": "Blue", "note": "Review this"})
 timeline_item_markers(action="add", params={"frame": 100, "color": "Blue", "name": "Review", "note": "Check this", "duration": 1, "track_type": "video", "track_index": 1, "item_index": 0})
 ```
+
+For an exhaustive live boundary map of the timeline edit kernel, run:
+
+```
+python3.11 tests/live_duplicate_clips_validation.py --output-dir /tmp/timeline-kernel-probe
+```
+
+The live harness first validates duplicate/range edit behavior, then runs the
+exhaustive probe. It creates disposable projects with synthetic media, emits
+JSON and Markdown reports, and classifies each API surface as `supported`,
+`partially_supported`, `read_only`, `write_only_unverifiable`,
+`version_or_page_dependent`, `unsupported`, `not_applicable`, or `error`.
+See `docs/timeline-edit-kernel.md` for the maintained support map and current
+Resolve API limitations.
 
 ### 5. Color grading
 

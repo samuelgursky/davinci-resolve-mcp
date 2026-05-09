@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 
 import base64
 import os
@@ -709,6 +709,17 @@ def _safe_media_pool_item_id(mpi):
     return None
 
 
+def _safe_media_pool_item_name(mpi):
+    try:
+        get_name = getattr(mpi, "GetName", None)
+        if callable(get_name):
+            name = get_name()
+            return None if name is None else str(name)
+    except Exception:
+        return None
+    return None
+
+
 def _timeline_item_source_start(item):
     if _has_method(item, "GetSourceStartFrame"):
         try:
@@ -728,6 +739,64 @@ def _timeline_item_media_pool_item(item):
         return item.GetMediaPoolItem()
     except Exception:
         return None
+
+
+def _timeline_item_duration(item, start: Optional[int] = None, end: Optional[int] = None):
+    if _has_method(item, "GetDuration"):
+        try:
+            duration = _frame_int(item.GetDuration())
+            if duration is not None:
+                return duration
+        except Exception:
+            pass
+    if start is not None and end is not None:
+        return end - start
+    return None
+
+
+def _timeline_item_track_info(item):
+    try:
+        track_info = item.GetTrackTypeAndIndex()
+    except Exception as exc:
+        return None, _err(f"GetTrackTypeAndIndex: {exc}")
+    if not track_info or len(track_info) < 2:
+        return None, _err("GetTrackTypeAndIndex returned empty")
+    try:
+        return (str(track_info[0]).lower(), int(track_info[1])), None
+    except (TypeError, ValueError):
+        return None, _err("invalid source track index")
+
+
+def _timeline_item_summary(item, track_info=None):
+    if not item:
+        return None
+    start = end = duration = source_start = source_end = None
+    try:
+        start = _frame_int(item.GetStart())
+        end = _frame_int(item.GetEnd())
+    except Exception:
+        pass
+    duration = _timeline_item_duration(item, start, end)
+    source_start = _timeline_item_source_start(item)
+    if source_start is not None and duration is not None:
+        source_end = source_start + duration
+    if track_info is None:
+        track_info, _ = _timeline_item_track_info(item)
+    media_pool_item = _timeline_item_media_pool_item(item)
+    summary = {
+        "timeline_item_id": _safe_timeline_item_id(item),
+        "name": _safe_timeline_item_name(item),
+        "track_type": track_info[0] if track_info else None,
+        "track_index": track_info[1] if track_info else None,
+        "start": start,
+        "end": end,
+        "duration": duration,
+        "source_start": source_start,
+        "source_end": source_end,
+        "media_pool_item_id": _safe_media_pool_item_id(media_pool_item),
+        "media_pool_item_name": _safe_media_pool_item_name(media_pool_item),
+    }
+    return summary
 
 
 def _serialize_appended_timeline_item(item, index: int, *, allow_empty_timeline_item_id: bool = False):
@@ -756,7 +825,15 @@ def _serialize_appended_timeline_item(item, index: int, *, allow_empty_timeline_
     return {"timeline_item_id": str(item_id), "name": None if name is None else str(name)}, None
 
 
-def _append_clip_info_from_timeline_item(item, target_track_index: int, record_frame_offset: int):
+def _append_clip_info_from_timeline_item(
+    item,
+    target_track_index: int,
+    record_frame_offset: int = 0,
+    record_frame: Optional[int] = None,
+    media_type: int = 1,
+    source_start: Optional[int] = None,
+    source_end: Optional[int] = None,
+):
     """Build one MediaPool.AppendToTimeline clipInfo dict from a timeline item.
 
     Same pool media and source trim as the item; record at GetStart()+record_frame_offset
@@ -788,25 +865,27 @@ def _append_clip_info_from_timeline_item(item, target_track_index: int, record_f
         duration_tl = t_end_excl - t_start
     if duration_tl <= 0:
         return None, _err("invalid timeline duration")
-    source_start = _timeline_item_source_start(item)
-    if source_start is None:
+    src_start = _timeline_item_source_start(item) if source_start is None else _frame_int(source_start)
+    if src_start is None:
         return None, _err("could not read source trim (LeftOffset / GetSourceStartFrame)")
-    src_start = source_start
-    src_end_excl = src_start + duration_tl
-    record = t_start + int(record_frame_offset)
+    src_end_excl = _frame_int(source_end) if source_end is not None else src_start + duration_tl
+    if src_end_excl is None or src_end_excl <= src_start:
+        return None, _err("invalid source range")
+    record = int(record_frame) if record_frame is not None else t_start + int(record_frame_offset)
     return {
         "mediaPoolItem": mpi,
         "startFrame": src_start,
         "endFrame": src_end_excl,
         "recordFrame": record,
         "trackIndex": int(target_track_index),
-        "mediaType": 1,
+        "mediaType": int(media_type),
     }, None
 
 
 def _find_appended_timeline_item_summary(
     tl,
     *,
+    track_type: str = "video",
     target_track_index: int,
     record_frame: int,
     duration: int,
@@ -821,7 +900,7 @@ def _find_appended_timeline_item_summary(
     """
     source_media_id = _safe_media_pool_item_id(source_media_pool_item)
     try:
-        items = tl.GetItemListInTrack("video", target_track_index) or []
+        items = tl.GetItemListInTrack(track_type, target_track_index) or []
     except Exception:
         return None
     matches = []
@@ -860,6 +939,1406 @@ def _find_appended_timeline_item_summary(
         "timeline_item_id": _safe_timeline_item_id(item),
         "name": _safe_timeline_item_name(item),
     }
+
+
+_DUPLICATE_PLACEMENTS = {
+    "same_time",
+    "offset",
+    "at_playhead",
+    "track_above",
+    "after_source",
+    "next_gap",
+}
+
+_DUPLICATE_COPY_GROUP_ALIASES = {
+    "all": "all",
+    "all_supported": "all",
+    "audio": "audio",
+    "audio_properties": "audio",
+    "cache": "cache",
+    "color": "clip_color",
+    "color_grade": "grades",
+    "clipcolor": "clip_color",
+    "clip_color": "clip_color",
+    "enabled": "enabled",
+    "enabled_state": "enabled",
+    "flags": "flags",
+    "fusion": "fusion",
+    "fusion_comps": "fusion",
+    "dynamic_zoom": "dynamic_zoom",
+    "dynamiczoom": "dynamic_zoom",
+    "grade": "grades",
+    "grades": "grades",
+    "keyframe": "keyframes",
+    "keyframes": "keyframes",
+    "markers": "markers",
+    "marker": "markers",
+    "retime": "retime",
+    "retime_settings": "retime",
+    "scaling": "scaling",
+    "resize": "scaling",
+    "sizing": "scaling",
+    "stabilization": "stabilization",
+    "stabilisation": "stabilization",
+    "takes": "takes",
+    "take_selectors": "takes",
+    "transitions": "transitions",
+    "transition": "transitions",
+    "transform": "transform",
+    "crop": "crop",
+    "composite": "composite",
+    "voice_isolation": "voice_isolation",
+}
+
+_DUPLICATE_COPY_PROPERTY_KEYS = {
+    "transform": [
+        "Pan",
+        "Tilt",
+        "ZoomX",
+        "ZoomY",
+        "ZoomGang",
+        "RotationAngle",
+        "AnchorPointX",
+        "AnchorPointY",
+        "Pitch",
+        "Yaw",
+        "FlipX",
+        "FlipY",
+    ],
+    "crop": [
+        "CropLeft",
+        "CropRight",
+        "CropTop",
+        "CropBottom",
+        "CropSoftness",
+        "CropRetain",
+    ],
+    "composite": ["Opacity", "CompositeMode"],
+    "audio": [
+        "Volume",
+        "Pan",
+        "AudioSyncOffsetIsManual",
+        "AudioSyncOffset",
+        "EQEnable",
+        "NormalizeEnable",
+        "NormalizeLevel",
+    ],
+    "retime": ["Speed", "RetimeProcess", "MotionEstimation"],
+    "dynamic_zoom": ["DynamicZoomEnable", "DynamicZoomMode", "DynamicZoomEase"],
+    "scaling": ["Distortion", "Scaling", "ResizeFilter"],
+    "stabilization": ["StabilizationEnable", "StabilizationMethod", "StabilizationStrength"],
+}
+
+_DUPLICATE_KEYFRAME_PROPERTIES = []
+for _group_keys in _DUPLICATE_COPY_PROPERTY_KEYS.values():
+    for _key in _group_keys:
+        if _key not in _DUPLICATE_KEYFRAME_PROPERTIES:
+            _DUPLICATE_KEYFRAME_PROPERTIES.append(_key)
+
+_DUPLICATE_COPY_ALL = [
+    "transform",
+    "crop",
+    "composite",
+    "audio",
+    "retime",
+    "dynamic_zoom",
+    "scaling",
+    "stabilization",
+    "clip_color",
+    "markers",
+    "flags",
+    "enabled",
+    "cache",
+    "voice_isolation",
+    "fusion",
+    "grades",
+    "takes",
+    "keyframes",
+]
+
+
+def _normalize_duplicate_placement(raw, has_offset: bool):
+    placement = str(raw or ("offset" if has_offset else "same_time")).strip().lower()
+    if placement not in _DUPLICATE_PLACEMENTS:
+        return None, _err(f"placement must be one of: {', '.join(sorted(_DUPLICATE_PLACEMENTS))}")
+    return placement, None
+
+
+def _normalize_copy_properties(raw):
+    if raw in (None, False, ""):
+        return [], None
+    if raw is True:
+        return list(_DUPLICATE_COPY_ALL), None
+    if isinstance(raw, str):
+        if raw.strip().lower() in {"basic", "all", "all_supported", "supported"}:
+            return list(_DUPLICATE_COPY_ALL), None
+        raw_items = [part.strip() for part in raw.split(",") if part.strip()]
+    elif isinstance(raw, list):
+        raw_items = raw
+    else:
+        return None, _err("copy_properties must be a list, comma-separated string, boolean, or omitted")
+
+    groups = []
+    for item in raw_items:
+        key = str(item).strip().lower()
+        normalized = _DUPLICATE_COPY_GROUP_ALIASES.get(key)
+        if not normalized:
+            return None, _err(
+                "copy_properties entries must be one of: "
+                f"{', '.join(sorted(_DUPLICATE_COPY_GROUP_ALIASES))}"
+            )
+        if normalized == "all":
+            for group in _DUPLICATE_COPY_ALL:
+                if group not in groups:
+                    groups.append(group)
+            continue
+        if normalized not in groups:
+            groups.append(normalized)
+    return groups, None
+
+
+def _coerce_duplicate_int(raw, name: str):
+    try:
+        return int(raw), None
+    except (TypeError, ValueError):
+        return None, _err(f"{name} must be an integer")
+
+
+def _resolve_duplicate_track_index(src_track: int, placement: str, p: Dict[str, Any], track_type: str = "video"):
+    if track_type == "audio":
+        target_raw = p.get("target_audio_track_index", p.get("targetAudioTrackIndex"))
+        if target_raw is not None:
+            return _coerce_duplicate_int(target_raw, "target_audio_track_index")
+        track_offset_raw = p.get("audio_track_offset", p.get("audioTrackOffset", 0))
+        track_offset, offset_err = _coerce_duplicate_int(track_offset_raw, "audio_track_offset")
+        if offset_err:
+            return None, offset_err
+        return src_track + track_offset, None
+
+    target_raw = p.get("target_track_index", p.get("targetTrackIndex"))
+    if target_raw is not None:
+        return _coerce_duplicate_int(target_raw, "target_track_index")
+
+    track_offset_raw = p.get("track_offset", p.get("trackOffset"))
+    if track_offset_raw is None:
+        track_offset = 1 if placement == "track_above" else 0
+    else:
+        track_offset, offset_err = _coerce_duplicate_int(track_offset_raw, "track_offset")
+        if offset_err:
+            return None, offset_err
+    return src_track + track_offset, None
+
+
+def _track_items_sorted(tl, track_type: str, track_index: int):
+    try:
+        items = tl.GetItemListInTrack(track_type, track_index) or []
+    except Exception:
+        return []
+
+    sortable = []
+    for item in items:
+        try:
+            start = _frame_int(item.GetStart())
+            end = _frame_int(item.GetEnd())
+        except Exception:
+            continue
+        if start is None or end is None:
+            continue
+        sortable.append((start, end, item))
+    sortable.sort(key=lambda row: (row[0], row[1]))
+    return sortable
+
+
+def _find_next_gap_record_frame(
+    tl,
+    *,
+    track_type: str,
+    track_index: int,
+    duration: int,
+    search_start: int,
+    exclude_item_id: Optional[str] = None,
+):
+    cursor = int(search_start)
+    for start, end, item in _track_items_sorted(tl, track_type, track_index):
+        item_id = _safe_timeline_item_id(item)
+        if exclude_item_id and item_id == exclude_item_id:
+            continue
+        if end <= cursor:
+            continue
+        if start >= cursor + duration:
+            return cursor
+        cursor = max(cursor, end)
+    return cursor
+
+
+def _resolve_duplicate_record_frame(
+    tl,
+    item,
+    placement: str,
+    offset: int,
+    p: Dict[str, Any],
+    dest_track: int,
+    track_type: str = "video",
+):
+    source = _timeline_item_summary(item)
+    if not source or source["start"] is None or source["duration"] is None:
+        return None, _err("could not resolve source timeline position")
+
+    explicit_record = p.get("record_frame", p.get("recordFrame"))
+    if explicit_record is not None:
+        return _coerce_duplicate_int(explicit_record, "record_frame")
+
+    if placement == "at_playhead":
+        frame, frame_err = _current_timeline_frame_id(tl)
+        if frame_err:
+            return None, frame_err
+        return frame + offset, None
+
+    if placement == "after_source":
+        return int(source["start"]) + int(source["duration"]) + offset, None
+
+    if placement == "next_gap":
+        search_start = int(source["start"]) + int(source["duration"]) + offset
+        return _find_next_gap_record_frame(
+            tl,
+            track_type=track_type,
+            track_index=dest_track,
+            duration=int(source["duration"]),
+            search_start=search_start,
+            exclude_item_id=source["timeline_item_id"],
+        ), None
+
+    return int(source["start"]) + offset, None
+
+
+def _coerce_item_list(value):
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        iterable = value.values()
+    elif isinstance(value, (list, tuple, set)):
+        iterable = value
+    else:
+        iterable = [value]
+    return [item for item in iterable if item]
+
+
+def _get_selected_timeline_items(tl):
+    warnings = []
+    for method_name in ("GetSelectedTimelineItems", "GetSelectedItems", "GetSelectedClips"):
+        method = getattr(tl, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            items = _coerce_item_list(method())
+        except Exception as exc:
+            warnings.append(f"{method_name} failed: {exc}")
+            continue
+        if items:
+            return items, warnings
+
+    current_video = getattr(tl, "GetCurrentVideoItem", None)
+    if callable(current_video):
+        try:
+            item = current_video()
+        except Exception as exc:
+            return [], warnings + [f"GetCurrentVideoItem failed: {exc}"]
+        if item:
+            return [item], warnings + [
+                "Timeline selection API is unavailable; used current video item as selected source"
+            ]
+    return [], warnings
+
+
+def _copy_property_group(source_item, duplicate_item, keys: List[str]):
+    details = {}
+    for key in keys:
+        try:
+            value = source_item.GetProperty(key)
+        except Exception as exc:
+            details[key] = {"success": False, "error": f"GetProperty failed: {exc}"}
+            continue
+        if value is None:
+            details[key] = {"success": True, "copied": False, "reason": "source value is unavailable"}
+            continue
+        try:
+            details[key] = bool(duplicate_item.SetProperty(key, value))
+        except Exception as exc:
+            details[key] = {"success": False, "error": f"SetProperty failed: {exc}"}
+    success = all(value is True or (isinstance(value, dict) and value.get("success")) for value in details.values())
+    return {"success": success, "details": details}
+
+
+def _copy_clip_color(source_item, duplicate_item):
+    try:
+        color = source_item.GetClipColor()
+    except Exception as exc:
+        return {"success": False, "error": f"GetClipColor failed: {exc}"}
+    if not color:
+        return {"success": True, "color": None}
+    try:
+        set_ok = bool(duplicate_item.SetClipColor(color))
+    except Exception as exc:
+        return {"success": False, "color": color, "error": f"SetClipColor failed: {exc}"}
+    if not set_ok:
+        return {"success": False, "color": color, "error": "SetClipColor returned false"}
+    try:
+        actual = duplicate_item.GetClipColor()
+    except Exception:
+        actual = color
+    if actual != color:
+        return {
+            "success": False,
+            "color": color,
+            "actual": actual,
+            "error": "SetClipColor did not persist the requested color",
+        }
+    return {"success": True, "color": color}
+
+
+def _copy_enabled_state(source_item, duplicate_item):
+    try:
+        enabled = bool(source_item.GetClipEnabled())
+    except Exception as exc:
+        return {"success": False, "error": f"GetClipEnabled failed: {exc}"}
+    try:
+        return {"success": bool(duplicate_item.SetClipEnabled(enabled)), "enabled": enabled}
+    except Exception as exc:
+        return {"success": False, "enabled": enabled, "error": f"SetClipEnabled failed: {exc}"}
+
+
+def _marker_value(marker: Dict[str, Any], *keys, default=None):
+    for key in keys:
+        if key in marker:
+            return marker[key]
+    return default
+
+
+def _copy_timeline_item_markers(source_item, duplicate_item):
+    try:
+        markers = source_item.GetMarkers() or {}
+    except Exception as exc:
+        return {"success": False, "error": f"GetMarkers failed: {exc}"}
+    copied = 0
+    failed = []
+    for frame, marker in markers.items():
+        if not isinstance(marker, dict):
+            failed.append({"frame": frame, "error": "marker payload is not an object"})
+            continue
+        frame_id = _frame_int(frame)
+        if frame_id is None:
+            failed.append({"frame": frame, "error": "marker frame is not numeric"})
+            continue
+        result = _add_marker(
+            duplicate_item,
+            {
+                "frame": frame_id,
+                "color": _marker_value(marker, "color", "Color", default="Blue"),
+                "name": _marker_value(marker, "name", "Name", default="Marker"),
+                "note": _marker_value(marker, "note", "Note", default=""),
+                "duration": _frame_int(_marker_value(marker, "duration", "Duration", default=1)) or 1,
+                "custom_data": str(_marker_value(marker, "customData", "custom_data", "CustomData", default="") or ""),
+            },
+        )
+        if result.get("success"):
+            copied += 1
+        else:
+            failed.append({"frame": frame_id, "error": result.get("error") or result.get("reason") or "AddMarker failed"})
+    return {"success": not failed, "copied": copied, "failed": failed}
+
+
+def _copy_flags(source_item, duplicate_item):
+    try:
+        flags = source_item.GetFlagList() or []
+    except Exception as exc:
+        return {"success": False, "error": f"GetFlagList failed: {exc}"}
+    results = {}
+    for color in flags:
+        try:
+            results[str(color)] = bool(duplicate_item.AddFlag(color))
+        except Exception as exc:
+            results[str(color)] = {"success": False, "error": f"AddFlag failed: {exc}"}
+    return {
+        "success": all(value is True for value in results.values()),
+        "flags": list(flags),
+        "details": results,
+    }
+
+
+def _copy_cache_state(source_item, duplicate_item):
+    results = {}
+    pairs = [
+        ("color", "GetIsColorOutputCacheEnabled", "SetColorOutputCache"),
+        ("fusion", "GetIsFusionOutputCacheEnabled", "SetFusionOutputCache"),
+    ]
+    for label, getter_name, setter_name in pairs:
+        getter = getattr(source_item, getter_name, None)
+        setter = getattr(duplicate_item, setter_name, None)
+        if not callable(getter) or not callable(setter):
+            results[label] = {"success": True, "copied": False, "reason": "cache API unavailable"}
+            continue
+        try:
+            value = getter()
+        except Exception as exc:
+            results[label] = {"success": False, "error": f"{getter_name} failed: {exc}"}
+            continue
+        try:
+            results[label] = {"success": bool(setter(value)), "value": value}
+        except Exception as exc:
+            results[label] = {"success": False, "value": value, "error": f"{setter_name} failed: {exc}"}
+    return {"success": all(v.get("success") for v in results.values()), "details": results}
+
+
+def _copy_voice_isolation(source_item, duplicate_item):
+    getter = getattr(source_item, "GetVoiceIsolationState", None)
+    setter = getattr(duplicate_item, "SetVoiceIsolationState", None)
+    if not callable(getter) or not callable(setter):
+        return {"success": True, "copied": False, "reason": "voice isolation API unavailable"}
+    try:
+        state = getter()
+    except Exception as exc:
+        return {"success": False, "error": f"GetVoiceIsolationState failed: {exc}"}
+    if not state:
+        state = {"isEnabled": False, "amount": 0}
+    try:
+        return {"success": bool(setter(state)), "state": _ser(state)}
+    except Exception as exc:
+        return {"success": False, "state": _ser(state), "error": f"SetVoiceIsolationState failed: {exc}"}
+
+
+def _copy_fusion_comps(source_item, duplicate_item):
+    try:
+        count = int(source_item.GetFusionCompCount() or 0)
+    except Exception as exc:
+        return {"success": False, "error": f"GetFusionCompCount failed: {exc}"}
+    if count <= 0:
+        return {"success": True, "copied": 0}
+    copied = 0
+    failed = []
+    with tempfile.TemporaryDirectory(prefix="mcp_fusion_copy_") as tmp_dir:
+        for index in range(1, count + 1):
+            path = os.path.join(tmp_dir, f"fusion_comp_{index}.setting")
+            try:
+                exported = bool(source_item.ExportFusionComp(path, index))
+            except Exception as exc:
+                failed.append({"index": index, "error": f"ExportFusionComp failed: {exc}"})
+                continue
+            if not exported:
+                failed.append({"index": index, "error": "ExportFusionComp returned false"})
+                continue
+            try:
+                imported = duplicate_item.ImportFusionComp(path)
+            except Exception as exc:
+                failed.append({"index": index, "error": f"ImportFusionComp failed: {exc}"})
+                continue
+            if imported:
+                copied += 1
+            else:
+                failed.append({"index": index, "error": "ImportFusionComp returned no composition"})
+    return {"success": not failed, "copied": copied, "failed": failed}
+
+
+def _copy_grades(source_item, duplicate_item):
+    try:
+        return {"success": bool(source_item.CopyGrades([duplicate_item]))}
+    except Exception as exc:
+        return {"success": False, "error": f"CopyGrades failed: {exc}"}
+
+
+def _copy_takes(source_item, duplicate_item):
+    try:
+        count = int(source_item.GetTakesCount() or 0)
+    except Exception as exc:
+        return {"success": False, "error": f"GetTakesCount failed: {exc}"}
+    if count <= 0:
+        return {"success": True, "copied": 0}
+    copied = 0
+    failed = []
+    for index in range(1, count + 1):
+        try:
+            take = source_item.GetTakeByIndex(index)
+        except Exception as exc:
+            failed.append({"index": index, "error": f"GetTakeByIndex failed: {exc}"})
+            continue
+        if not isinstance(take, dict):
+            failed.append({"index": index, "error": "take payload is not an object"})
+            continue
+        clip = take.get("mediaPoolItem")
+        if not clip:
+            failed.append({"index": index, "error": "take has no mediaPoolItem"})
+            continue
+        try:
+            added = bool(duplicate_item.AddTake(clip, take.get("startFrame", 0), take.get("endFrame", 0)))
+        except Exception as exc:
+            failed.append({"index": index, "error": f"AddTake failed: {exc}"})
+            continue
+        if added:
+            copied += 1
+        else:
+            failed.append({"index": index, "error": "AddTake returned false"})
+    try:
+        selected = int(source_item.GetSelectedTakeIndex() or 0)
+        if selected > 0:
+            duplicate_item.SelectTakeByIndex(selected)
+    except Exception:
+        pass
+    return {"success": not failed, "copied": copied, "failed": failed}
+
+
+def _copy_keyframes(source_item, duplicate_item, properties: Optional[List[str]] = None):
+    properties = properties or list(_DUPLICATE_KEYFRAME_PROPERTIES)
+    copied = 0
+    failed = []
+    unavailable = []
+    for prop in properties:
+        try:
+            count = int(source_item.GetKeyframeCount(prop) or 0)
+        except Exception as exc:
+            unavailable.append({"property": prop, "error": f"GetKeyframeCount failed: {exc}"})
+            continue
+        for index in range(count):
+            try:
+                keyframe = source_item.GetKeyframeAtIndex(prop, index)
+                frame = keyframe.get("frame") if isinstance(keyframe, dict) else keyframe
+                value = source_item.GetPropertyAtKeyframeIndex(prop, index)
+            except Exception as exc:
+                failed.append({"property": prop, "index": index, "error": f"read keyframe failed: {exc}"})
+                continue
+            try:
+                added = bool(duplicate_item.AddKeyframe(prop, frame, value))
+            except Exception as exc:
+                failed.append({"property": prop, "frame": frame, "error": f"AddKeyframe failed: {exc}"})
+                continue
+            if added:
+                copied += 1
+            else:
+                failed.append({"property": prop, "frame": frame, "error": "AddKeyframe returned false"})
+    return {"success": not failed, "copied": copied, "failed": failed, "unavailable": unavailable}
+
+
+def _copy_duplicate_item_state(source_item, duplicate_item, groups: List[str]):
+    results = {}
+    copy_order = [
+        "transform",
+        "crop",
+        "composite",
+        "audio",
+        "retime",
+        "dynamic_zoom",
+        "scaling",
+        "stabilization",
+        "cache",
+        "voice_isolation",
+        "fusion",
+        "grades",
+        "takes",
+        "keyframes",
+        "transitions",
+        "clip_color",
+        "markers",
+        "flags",
+        "enabled",
+    ]
+    ordered_groups = [group for group in copy_order if group in groups]
+    ordered_groups.extend(group for group in groups if group not in ordered_groups)
+    for group in ordered_groups:
+        if group in _DUPLICATE_COPY_PROPERTY_KEYS:
+            results[group] = _copy_property_group(source_item, duplicate_item, _DUPLICATE_COPY_PROPERTY_KEYS[group])
+        elif group == "clip_color":
+            results[group] = _copy_clip_color(source_item, duplicate_item)
+        elif group == "enabled":
+            results[group] = _copy_enabled_state(source_item, duplicate_item)
+        elif group == "markers":
+            results[group] = _copy_timeline_item_markers(source_item, duplicate_item)
+        elif group == "flags":
+            results[group] = _copy_flags(source_item, duplicate_item)
+        elif group == "cache":
+            results[group] = _copy_cache_state(source_item, duplicate_item)
+        elif group == "voice_isolation":
+            results[group] = _copy_voice_isolation(source_item, duplicate_item)
+        elif group == "fusion":
+            results[group] = _copy_fusion_comps(source_item, duplicate_item)
+        elif group == "grades":
+            results[group] = _copy_grades(source_item, duplicate_item)
+        elif group == "takes":
+            results[group] = _copy_takes(source_item, duplicate_item)
+        elif group == "keyframes":
+            results[group] = _copy_keyframes(source_item, duplicate_item)
+        elif group == "transitions":
+            results[group] = {
+                "success": True,
+                "copied": False,
+                "reason": "Resolve's public scripting API does not expose timeline item transition cloning",
+            }
+    return results
+
+
+def _timeline_media_type(track_type: str):
+    if track_type == "video":
+        return 1
+    if track_type == "audio":
+        return 2
+    return None
+
+
+def _timeline_track_count(tl, track_type: str):
+    try:
+        return int(tl.GetTrackCount(track_type) or 0)
+    except Exception:
+        return 0
+
+
+def _timeline_item_ids(items):
+    ids = []
+    for item in items:
+        item_id = _safe_timeline_item_id(item)
+        if item_id:
+            ids.append(item_id)
+    return ids
+
+
+def _timeline_items_by_ids(tl, ids, track_types=("video", "audio", "subtitle")):
+    ids_set = {str(item_id) for item_id in ids if item_id is not None}
+    found = []
+    if not ids_set:
+        return found
+    for track_type in track_types:
+        for track_index in range(1, _timeline_track_count(tl, track_type) + 1):
+            for item in (tl.GetItemListInTrack(track_type, track_index) or []):
+                if _safe_timeline_item_id(item) in ids_set:
+                    found.append(item)
+    return found
+
+
+def _normalize_include_linked(raw):
+    if raw in (None, False, "", []):
+        return set()
+    if raw is True:
+        return {"audio"}
+    if isinstance(raw, str):
+        lowered = raw.strip().lower()
+        if lowered in {"all", "true", "yes"}:
+            return {"video", "audio"}
+        return {part.strip().lower() for part in lowered.split(",") if part.strip()}
+    if isinstance(raw, list):
+        return {str(part).strip().lower() for part in raw if str(part).strip()}
+    return {"audio"}
+
+
+def _linked_items_for_duplicate(item, include_types):
+    if not include_types:
+        return [], []
+    linked_method = getattr(item, "GetLinkedItems", None)
+    if not callable(linked_method):
+        return [], ["GetLinkedItems API unavailable; linked duplication skipped"]
+    try:
+        linked = linked_method() or []
+    except Exception as exc:
+        return [], [f"GetLinkedItems failed: {exc}"]
+
+    source_id = _safe_timeline_item_id(item)
+    out = []
+    warnings = []
+    seen = set()
+    for linked_item in linked:
+        linked_id = _safe_timeline_item_id(linked_item)
+        if linked_id and linked_id == source_id:
+            continue
+        if linked_id and linked_id in seen:
+            continue
+        track_info, track_err = _timeline_item_track_info(linked_item)
+        if track_err:
+            warnings.append(f"Linked item {linked_id or '<unknown>'}: {track_err.get('error', track_err)}")
+            continue
+        track_type, _ = track_info
+        if track_type not in include_types:
+            continue
+        if _timeline_media_type(track_type) is None:
+            warnings.append(f"Linked item {linked_id or '<unknown>'}: unsupported track type {track_type!r}")
+            continue
+        out.append(linked_item)
+        if linked_id:
+            seen.add(linked_id)
+    return out, warnings
+
+
+def _append_and_recover_timeline_item(
+    mp,
+    tl,
+    source_item,
+    *,
+    track_type: str,
+    dest_track: int,
+    record_frame: int,
+    copy_properties: List[str],
+    source_timeline_item_id: Optional[str] = None,
+    source_start: Optional[int] = None,
+    source_end: Optional[int] = None,
+):
+    media_type = _timeline_media_type(track_type)
+    if media_type is None:
+        return None, None, _err(f"Cannot append unsupported track type {track_type!r}")
+
+    source_track_info, _ = _timeline_item_track_info(source_item)
+    source_summary = _timeline_item_summary(source_item, track_info=source_track_info)
+    info, ierr = _append_clip_info_from_timeline_item(
+        source_item,
+        dest_track,
+        record_frame=record_frame,
+        media_type=media_type,
+        source_start=source_start,
+        source_end=source_end,
+    )
+    if ierr:
+        return None, None, ierr
+    try:
+        out = mp.AppendToTimeline([info])
+    except Exception as exc:
+        return None, None, _err(str(exc))
+    if not out or len(out) < 1:
+        return None, None, _err("AppendToTimeline returned no item")
+
+    ser, serr = _serialize_appended_timeline_item(out[0], 0, allow_empty_timeline_item_id=True)
+    if serr:
+        return None, None, serr
+    if not ser.get("timeline_item_id"):
+        recovered = _find_appended_timeline_item_summary(
+            tl,
+            track_type=track_type,
+            target_track_index=dest_track,
+            record_frame=int(info["recordFrame"]),
+            duration=int(info["endFrame"]) - int(info["startFrame"]),
+            source_media_pool_item=info["mediaPoolItem"],
+            source_timeline_item_id=source_timeline_item_id,
+        )
+        if recovered and recovered.get("timeline_item_id"):
+            ser = recovered
+
+    duplicate_item = None
+    if ser.get("timeline_item_id"):
+        duplicate_item = _find_timeline_item_by_id(tl, ser["timeline_item_id"])
+    if duplicate_item is None:
+        out_item_id = _safe_timeline_item_id(out[0])
+        if out_item_id:
+            duplicate_item = out[0]
+
+    duplicate_summary = _timeline_item_summary(duplicate_item, track_info=(track_type, dest_track)) if duplicate_item else {
+        "timeline_item_id": ser.get("timeline_item_id"),
+        "name": ser.get("name"),
+        "track_type": track_type,
+        "track_index": dest_track,
+        "start": int(info["recordFrame"]),
+        "end": int(info["recordFrame"]) + int(info["endFrame"]) - int(info["startFrame"]),
+        "duration": int(info["endFrame"]) - int(info["startFrame"]),
+        "source_start": int(info["startFrame"]),
+        "source_end": int(info["endFrame"]),
+        "media_pool_item_id": _safe_media_pool_item_id(info["mediaPoolItem"]),
+        "media_pool_item_name": _safe_media_pool_item_name(info["mediaPoolItem"]),
+    }
+
+    warnings = []
+    copied_properties = {}
+    if copy_properties:
+        if duplicate_item is None:
+            warnings.append("Could not reacquire duplicate item; copy_properties were skipped")
+        else:
+            copied_properties = _copy_duplicate_item_state(source_item, duplicate_item, copy_properties)
+
+    result = {
+        "clip_id": source_timeline_item_id,
+        "source_clip_id": source_timeline_item_id,
+        "success": True,
+        **ser,
+        "source": source_summary,
+        "duplicate": duplicate_summary,
+    }
+    if copied_properties:
+        result["copied_properties"] = copied_properties
+    if warnings:
+        result["warnings"] = warnings
+    return result, duplicate_item, None
+
+
+def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_sources: bool = False):
+    ids = p.get("clip_ids") or p.get("ids")
+    selected = bool(p.get("selected", False))
+    if ids is not None and not isinstance(ids, list):
+        return _err("duplicate_clips requires clip_ids (list of timeline item unique IDs)")
+    if not ids and not selected:
+        return _err("duplicate_clips requires clip_ids or selected=True")
+
+    has_offset = "record_frame_offset" in p or "recordFrameOffset" in p
+    placement, placement_err = _normalize_duplicate_placement(p.get("placement"), has_offset)
+    if placement_err:
+        return placement_err
+    copy_properties, copy_err = _normalize_copy_properties(p.get("copy_properties", p.get("copyProperties")))
+    if copy_err:
+        return copy_err
+    if p.get("copy_keyframes", p.get("copyKeyframes", False)) and "keyframes" not in copy_properties:
+        copy_properties.append("keyframes")
+    try:
+        offset = int(p.get("record_frame_offset", p.get("recordFrameOffset", 0)))
+    except (TypeError, ValueError):
+        return _err("record_frame_offset must be an integer")
+
+    mp = proj.GetMediaPool()
+    if not mp:
+        return _err("Failed to get MediaPool")
+
+    source_entries: List[Dict[str, Any]] = []
+    seen_ids = set()
+    if ids:
+        for cid in ids:
+            sid = str(cid)
+            source_entries.append({"clip_id": sid, "item": _find_timeline_item_by_id(tl, sid)})
+            seen_ids.add(sid)
+    selection_warnings: List[str] = []
+    if selected:
+        selected_items, selection_warnings = _get_selected_timeline_items(tl)
+        if not selected_items and not source_entries:
+            return _err("selected=True did not resolve any timeline items")
+        for item in selected_items:
+            sid = _safe_timeline_item_id(item)
+            if not sid:
+                source_entries.append({"clip_id": None, "item": item})
+                continue
+            if sid in seen_ids:
+                continue
+            source_entries.append({"clip_id": sid, "item": item})
+            seen_ids.add(sid)
+
+    include_types = _normalize_include_linked(p.get("include_linked", p.get("includeLinked")))
+    relink = bool(p.get("relink", p.get("restore_linked", p.get("restoreLinked", bool(include_types)))))
+    results: List[Dict[str, Any]] = []
+    source_delete_items = []
+
+    for entry in source_entries:
+        item = entry.get("item")
+        sid = entry.get("clip_id") or _safe_timeline_item_id(item)
+        if not sid:
+            results.append({"clip_id": None, "success": False, "error": "timeline item has no readable id"})
+            continue
+        if not item:
+            results.append({"clip_id": sid, "success": False, "error": "timeline item not found"})
+            continue
+
+        normalized_track_info, track_err = _timeline_item_track_info(item)
+        if track_err:
+            results.append({"clip_id": sid, "success": False, "error": track_err.get("error", str(track_err))})
+            continue
+        tt, src_track = normalized_track_info
+        if tt != "video":
+            results.append({
+                "clip_id": sid,
+                "success": False,
+                "error": f"primary duplicate item must be video (got {tt!r}); use include_linked from a linked video item for audio",
+            })
+            continue
+
+        dest_track, dest_err = _resolve_duplicate_track_index(src_track, placement, p, track_type="video")
+        if dest_err:
+            results.append({"clip_id": sid, "success": False, "error": dest_err.get("error", str(dest_err))})
+            continue
+        if dest_track < 1:
+            results.append({"clip_id": sid, "success": False, "error": "target_track_index must be >= 1"})
+            continue
+        video_track_count = _timeline_track_count(tl, "video")
+        if video_track_count and dest_track > video_track_count:
+            results.append({
+                "clip_id": sid,
+                "success": False,
+                "error": f"target video track {dest_track} does not exist",
+            })
+            continue
+
+        record_frame, record_err = _resolve_duplicate_record_frame(tl, item, placement, offset, p, dest_track, track_type="video")
+        if record_err:
+            results.append({"clip_id": sid, "success": False, "error": record_err.get("error", str(record_err))})
+            continue
+
+        primary_result, primary_duplicate, primary_err = _append_and_recover_timeline_item(
+            mp,
+            tl,
+            item,
+            track_type="video",
+            dest_track=dest_track,
+            record_frame=record_frame,
+            copy_properties=copy_properties,
+            source_timeline_item_id=sid,
+        )
+        if primary_err:
+            results.append({"clip_id": sid, "success": False, "error": primary_err.get("error", str(primary_err))})
+            continue
+
+        primary_result["placement"] = placement
+        source_start = _frame_int(item.GetStart())
+        base_delta = record_frame - source_start if source_start is not None else offset
+        linked_items, linked_warnings = _linked_items_for_duplicate(item, include_types)
+        linked_results = []
+        duplicate_link_items = [primary_duplicate] if primary_duplicate else []
+        original_link_items = [item]
+
+        for linked_item in linked_items:
+            linked_id = _safe_timeline_item_id(linked_item)
+            linked_track_info, linked_track_err = _timeline_item_track_info(linked_item)
+            if linked_track_err:
+                linked_results.append({
+                    "clip_id": linked_id,
+                    "success": False,
+                    "error": linked_track_err.get("error", str(linked_track_err)),
+                })
+                continue
+            linked_track_type, linked_src_track = linked_track_info
+            linked_dest_track, linked_dest_err = _resolve_duplicate_track_index(
+                linked_src_track,
+                placement,
+                p,
+                track_type=linked_track_type,
+            )
+            if linked_dest_err:
+                linked_results.append({
+                    "clip_id": linked_id,
+                    "success": False,
+                    "error": linked_dest_err.get("error", str(linked_dest_err)),
+                })
+                continue
+            track_count = _timeline_track_count(tl, linked_track_type)
+            if linked_dest_track < 1 or (track_count and linked_dest_track > track_count):
+                linked_results.append({
+                    "clip_id": linked_id,
+                    "success": False,
+                    "error": f"target {linked_track_type} track {linked_dest_track} does not exist",
+                })
+                continue
+            linked_start = _frame_int(linked_item.GetStart())
+            if linked_start is None:
+                linked_results.append({"clip_id": linked_id, "success": False, "error": "linked item start is unavailable"})
+                continue
+            linked_record_frame = linked_start + base_delta
+            linked_result, linked_duplicate, linked_err = _append_and_recover_timeline_item(
+                mp,
+                tl,
+                linked_item,
+                track_type=linked_track_type,
+                dest_track=linked_dest_track,
+                record_frame=linked_record_frame,
+                copy_properties=copy_properties,
+                source_timeline_item_id=linked_id,
+            )
+            if linked_err:
+                linked_results.append({"clip_id": linked_id, "success": False, "error": linked_err.get("error", str(linked_err))})
+                continue
+            linked_result["placement"] = placement
+            linked_results.append(linked_result)
+            original_link_items.append(linked_item)
+            if linked_duplicate:
+                duplicate_link_items.append(linked_duplicate)
+
+        if linked_results:
+            primary_result["linked_results"] = linked_results
+        if linked_warnings:
+            primary_result.setdefault("warnings", []).extend(linked_warnings)
+
+        if relink and len(duplicate_link_items) > 1:
+            try:
+                primary_result["linked"] = bool(tl.SetClipsLinked(duplicate_link_items, True))
+            except Exception as exc:
+                primary_result.setdefault("warnings", []).append(f"SetClipsLinked failed: {exc}")
+
+        if delete_sources:
+            source_delete_items.extend(original_link_items if include_types else [item])
+
+        results.append(primary_result)
+
+    out = {"results": results, "count": len(results), "placement": placement}
+    if selection_warnings:
+        out["warnings"] = selection_warnings
+    if delete_sources:
+        successful_source_ids = {
+            result.get("source_clip_id")
+            for result in results
+            if result.get("success") and result.get("source_clip_id")
+        }
+        delete_items = []
+        seen_delete_ids = set()
+        for item in source_delete_items:
+            item_id = _safe_timeline_item_id(item)
+            if not item_id or item_id in seen_delete_ids:
+                continue
+            if item_id in successful_source_ids or include_types:
+                delete_items.append(item)
+                seen_delete_ids.add(item_id)
+        if delete_items:
+            try:
+                out["deleted_sources"] = bool(tl.DeleteClips(delete_items, bool(p.get("ripple", False))))
+                out["deleted_source_ids"] = _timeline_item_ids(delete_items)
+            except Exception as exc:
+                out["deleted_sources"] = False
+                out["delete_error"] = str(exc)
+        else:
+            out["deleted_sources"] = False
+            out["delete_error"] = "No successfully duplicated source items to delete"
+    return out
+
+
+def _range_frames_from_params(tl, p: Dict[str, Any]):
+    if p.get("use_mark_in_out", p.get("useMarkInOut", False)):
+        mark = tl.GetMarkInOut() or {}
+        mark_type = p.get("mark_type", p.get("markType", "video"))
+        if mark_type not in mark:
+            mark_type = "video" if "video" in mark else "audio" if "audio" in mark else None
+        if not mark_type:
+            return None, None, _err("No timeline mark in/out is set")
+        return _frame_int(mark[mark_type].get("in")), _frame_int(mark[mark_type].get("out")), None
+    start = p.get("start_frame", p.get("startFrame"))
+    end = p.get("end_frame", p.get("endFrame"))
+    if start is None or end is None:
+        return None, None, _err("Range actions require start_frame/end_frame or use_mark_in_out=True")
+    start = _frame_int(start)
+    end = _frame_int(end)
+    if start is None or end is None:
+        return None, None, _err("start_frame and end_frame must be numeric")
+    if end <= start:
+        return None, None, _err("end_frame must be greater than start_frame")
+    return start, end, None
+
+
+def _range_track_types(p: Dict[str, Any]):
+    raw = p.get("track_types", p.get("trackTypes", p.get("track_type", p.get("trackType", "video"))))
+    if raw == "all":
+        return ["video", "audio"]
+    if isinstance(raw, str):
+        return [part.strip().lower() for part in raw.split(",") if part.strip()]
+    if isinstance(raw, list):
+        return [str(part).strip().lower() for part in raw if str(part).strip()]
+    return ["video"]
+
+
+def _range_track_indices(p: Dict[str, Any], track_type: str):
+    key = f"{track_type}_track_indices"
+    raw = p.get(key, p.get(f"{track_type}TrackIndices", p.get("track_indices", p.get("trackIndices"))))
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        return [raw]
+    if isinstance(raw, str):
+        return [int(part.strip()) for part in raw.split(",") if part.strip()]
+    return [int(part) for part in raw]
+
+
+def _collect_timeline_items_in_range(tl, p: Dict[str, Any]):
+    start, end, err = _range_frames_from_params(tl, p)
+    if err:
+        return None, None, None, err
+    items = []
+    for track_type in _range_track_types(p):
+        if track_type not in {"video", "audio"}:
+            return None, None, None, _err(f"Range actions support video/audio tracks, got {track_type!r}")
+        indices = _range_track_indices(p, track_type)
+        if indices is None:
+            indices = list(range(1, _timeline_track_count(tl, track_type) + 1))
+        for track_index in indices:
+            for item in (tl.GetItemListInTrack(track_type, track_index) or []):
+                item_start = _frame_int(item.GetStart())
+                item_end = _frame_int(item.GetEnd())
+                if item_start is None or item_end is None:
+                    continue
+                if item_start < end and item_end > start:
+                    items.append((track_type, track_index, item, max(item_start, start), min(item_end, end)))
+    return start, end, items, None
+
+
+def _timeline_copy_range_impl(proj, tl, p: Dict[str, Any], *, overwrite: bool = False):
+    start, end, items, err = _collect_timeline_items_in_range(tl, p)
+    if err:
+        return err
+    if not items:
+        return {"results": [], "count": 0, "range": {"start": start, "end": end}}
+    record_raw = p.get("record_frame", p.get("recordFrame"))
+    if record_raw is None:
+        return _err("copy_range/duplicate_range require record_frame for destination range start")
+    dest_start, dest_err = _coerce_duplicate_int(record_raw, "record_frame")
+    if dest_err:
+        return dest_err
+
+    copy_properties, copy_err = _normalize_copy_properties(p.get("copy_properties", p.get("copyProperties")))
+    if copy_err:
+        return copy_err
+    if p.get("copy_keyframes", p.get("copyKeyframes", False)) and "keyframes" not in copy_properties:
+        copy_properties.append("keyframes")
+    mp = proj.GetMediaPool()
+    if not mp:
+        return _err("Failed to get MediaPool")
+
+    duration = end - start
+    deleted = None
+    if overwrite:
+        dest_end = dest_start + duration
+        delete_targets = []
+        for track_type, _, _, _, _ in items:
+            for track_index in range(1, _timeline_track_count(tl, track_type) + 1):
+                for existing in (tl.GetItemListInTrack(track_type, track_index) or []):
+                    existing_start = _frame_int(existing.GetStart())
+                    existing_end = _frame_int(existing.GetEnd())
+                    if existing_start is None or existing_end is None:
+                        continue
+                    if existing_start < dest_end and existing_end > dest_start:
+                        delete_targets.append(existing)
+        if delete_targets:
+            deleted = bool(tl.DeleteClips(delete_targets, False))
+
+    results = []
+    for track_type, source_track, item, overlap_start, overlap_end in items:
+        media_type = _timeline_media_type(track_type)
+        if media_type is None:
+            results.append({"clip_id": _safe_timeline_item_id(item), "success": False, "error": f"unsupported track type {track_type!r}"})
+            continue
+        dest_track, track_err = _resolve_duplicate_track_index(source_track, "same_time", p, track_type=track_type)
+        if track_err:
+            results.append({"clip_id": _safe_timeline_item_id(item), "success": False, "error": track_err.get("error", str(track_err))})
+            continue
+        item_source_start = _timeline_item_source_start(item)
+        item_start = _frame_int(item.GetStart())
+        if item_source_start is None or item_start is None:
+            results.append({"clip_id": _safe_timeline_item_id(item), "success": False, "error": "could not resolve source trim"})
+            continue
+        source_start = item_source_start + (overlap_start - item_start)
+        source_end = source_start + (overlap_end - overlap_start)
+        record_frame = dest_start + (overlap_start - start)
+        result, _, append_err = _append_and_recover_timeline_item(
+            mp,
+            tl,
+            item,
+            track_type=track_type,
+            dest_track=dest_track,
+            record_frame=record_frame,
+            copy_properties=copy_properties,
+            source_timeline_item_id=_safe_timeline_item_id(item),
+            source_start=source_start,
+            source_end=source_end,
+        )
+        if append_err:
+            results.append({"clip_id": _safe_timeline_item_id(item), "success": False, "error": append_err.get("error", str(append_err))})
+            continue
+        result["range_source"] = {"start": overlap_start, "end": overlap_end}
+        result["range_destination"] = {"start": record_frame, "end": record_frame + (overlap_end - overlap_start)}
+        results.append(result)
+    out = {
+        "results": results,
+        "count": len(results),
+        "range": {"start": start, "end": end},
+        "destination_range": {"start": dest_start, "end": dest_start + duration},
+    }
+    if overwrite:
+        out["deleted_destination_overlaps"] = bool(deleted)
+    return out
+
+
+def _timeline_lift_range_impl(tl, p: Dict[str, Any]):
+    start, end, items, err = _collect_timeline_items_in_range(tl, p)
+    if err:
+        return err
+    allow_partial = bool(p.get("allow_partial_item_delete", p.get("allowPartialItemDelete", False)))
+    delete_items = []
+    blocked = []
+    for _, _, item, overlap_start, overlap_end in items:
+        item_start = _frame_int(item.GetStart())
+        item_end = _frame_int(item.GetEnd())
+        if not allow_partial and (overlap_start != item_start or overlap_end != item_end):
+            blocked.append({
+                "timeline_item_id": _safe_timeline_item_id(item),
+                "name": _safe_timeline_item_name(item),
+                "item_start": item_start,
+                "item_end": item_end,
+                "overlap_start": overlap_start,
+                "overlap_end": overlap_end,
+            })
+            continue
+        delete_items.append(item)
+    if blocked:
+        return {
+            "error": "Range partially overlaps timeline items; pass allow_partial_item_delete=True to delete whole overlapping items",
+            "blocked": blocked,
+        }
+    if not delete_items:
+        return {"success": True, "deleted": 0, "range": {"start": start, "end": end}}
+    deleted_ids = _timeline_item_ids(delete_items)
+    return {
+        "success": bool(tl.DeleteClips(delete_items, bool(p.get("ripple", False)))),
+        "deleted": len(delete_items),
+        "deleted_ids": deleted_ids,
+        "range": {"start": start, "end": end},
+    }
+
+
+def _timeline_edit_kernel_capabilities():
+    return {
+        "supported": {
+            "clip_duplication": [
+                "video timeline items with MediaPoolItem",
+                "linked audio duplication from a linked video source",
+                "selected/current video item fallback",
+                "same_time",
+                "offset",
+                "at_playhead",
+                "track_above",
+                "after_source",
+                "next_gap",
+            ],
+            "clip_operations": ["copy_clips", "move_clips"],
+            "range_operations": [
+                "copy_range",
+                "duplicate_range",
+                "overwrite_range by deleting whole destination overlaps",
+                "lift_range by deleting whole matching items",
+            ],
+            "copy_properties": list(_DUPLICATE_COPY_ALL) + ["transitions"],
+            "read_only_probe": [
+                "timeline item method availability",
+                "all GetProperty() values exposed by Resolve",
+                "known property-key values",
+                "keyframe counts for known properties",
+                "linked item summaries",
+            ],
+            "source_media_integrity": [
+                "references original MediaPoolItems",
+                "does not transcode, render, proxy, or create source derivatives",
+            ],
+        },
+        "partially_supported": {
+            "audio_properties": "Resolve may reject SetProperty on some timeline audio items/builds; failures are reported per property.",
+            "cache": "Color/Fusion cache state is copied only when Resolve exposes readable/writable cache APIs for the item.",
+            "voice_isolation": "Copied only when Resolve exposes item-level voice isolation APIs.",
+            "keyframes": "Copies keyframes for supported properties; interpolation readback is not exposed for full fidelity verification.",
+            "dynamic_zoom_scaling_stabilization": "Copied through exposed TimelineItem.GetProperty/SetProperty keys when a Resolve build returns writable values.",
+        },
+        "unsupported": {
+            "transition_cloning": "Resolve's public scripting API does not expose timeline item transition cloning.",
+            "razor_or_partial_lift": "Resolve's public scripting API does not expose a direct timeline split/razor primitive; partial range edits are represented by append-based copies or whole-item deletes.",
+            "source_less_items": "Titles, generators, Fusion compositions, and subtitles without a MediaPoolItem cannot be cloned through AppendToTimeline clipInfo.",
+            "deep_speed_ramp_semantics": "Only exposed Speed/RetimeProcess/MotionEstimation properties and supported keyframes are copied; opaque retime curves are not independently inspectable.",
+        },
+    }
+
+
+def _callable_method_names(obj, names: List[str]):
+    out = {}
+    for name in names:
+        out[name] = callable(getattr(obj, name, None))
+    return out
+
+
+def _safe_get_property(item, key: Optional[str] = None):
+    try:
+        if key is None:
+            return _ser(item.GetProperty()), None
+        return _ser(item.GetProperty(key)), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _probe_keyframes(item, properties: List[str]):
+    out = {}
+    for prop in properties:
+        try:
+            count = int(item.GetKeyframeCount(prop) or 0)
+        except Exception as exc:
+            out[prop] = {"available": False, "error": str(exc)}
+            continue
+        frames = []
+        for index in range(count):
+            try:
+                keyframe = item.GetKeyframeAtIndex(prop, index)
+                value = item.GetPropertyAtKeyframeIndex(prop, index)
+                frames.append({"keyframe": _ser(keyframe), "value": _ser(value)})
+            except Exception as exc:
+                frames.append({"error": str(exc)})
+        out[prop] = {"available": True, "count": count, "frames": frames}
+    return out
+
+
+def _timeline_item_probe(item):
+    known_property_keys = []
+    for keys in _DUPLICATE_COPY_PROPERTY_KEYS.values():
+        for key in keys:
+            if key not in known_property_keys:
+                known_property_keys.append(key)
+
+    all_properties, all_properties_error = _safe_get_property(item)
+    known_properties = {}
+    for key in known_property_keys:
+        value, err = _safe_get_property(item, key)
+        known_properties[key] = {"value": value, "error": err} if err else {"value": value}
+
+    linked = []
+    get_linked = getattr(item, "GetLinkedItems", None)
+    if callable(get_linked):
+        try:
+            linked = [_timeline_item_summary(linked_item) for linked_item in (get_linked() or [])]
+        except Exception as exc:
+            linked = [{"error": str(exc)}]
+
+    method_names = [
+        "GetMediaPoolItem",
+        "GetLinkedItems",
+        "GetProperty",
+        "SetProperty",
+        "GetKeyframeCount",
+        "GetKeyframeAtIndex",
+        "GetPropertyAtKeyframeIndex",
+        "AddKeyframe",
+        "SetKeyframeInterpolation",
+        "GetFusionCompCount",
+        "ExportFusionComp",
+        "ImportFusionComp",
+        "CopyGrades",
+        "GetTakesCount",
+        "AddTake",
+        "GetVoiceIsolationState",
+        "SetVoiceIsolationState",
+        "GetClipColor",
+        "SetClipColor",
+    ]
+
+    return {
+        "summary": _timeline_item_summary(item),
+        "methods": _callable_method_names(item, method_names),
+        "all_properties": all_properties,
+        "all_properties_error": all_properties_error,
+        "known_properties": known_properties,
+        "keyframes": _probe_keyframes(item, known_property_keys),
+        "linked_items": linked,
+    }
+
+
+def _timeline_probe_edit_kernel_item(tl, p: Dict[str, Any]):
+    ids = p.get("clip_ids") or p.get("ids")
+    selected = bool(p.get("selected", False))
+    items = []
+    if ids:
+        if not isinstance(ids, list):
+            return _err("probe_edit_kernel_item requires clip_ids as a list")
+        for item_id in ids:
+            item = _find_timeline_item_by_id(tl, item_id)
+            if item:
+                items.append(item)
+    if selected:
+        selected_items, warnings = _get_selected_timeline_items(tl)
+        items.extend(selected_items)
+    else:
+        warnings = []
+    if not items and p.get("timeline_item"):
+        _, item, item_err = _get_item(p["timeline_item"])
+        if item_err:
+            return item_err
+        items.append(item)
+    if not items:
+        return _err("probe_edit_kernel_item requires clip_ids, selected=True, or timeline_item scope")
+    probes = [_timeline_item_probe(item) for item in items]
+    out = {"items": probes, "count": len(probes)}
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 def _ser(obj):
@@ -1956,11 +3435,22 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       delete_clips(clip_ids, ripple?) -> {success}  — clip_ids: list of unique IDs
       set_clips_linked(clip_ids, linked) -> {success}
       duplicate(name?) -> {success, name}
-      duplicate_clips(clip_ids, target_track_index?, record_frame_offset?) -> {results, count}
-        — Video clips only. Re-places the same MediaPool media with the same source trim on the
+      duplicate_clips(clip_ids?, selected?, target_track_index?, track_offset?, placement?, record_frame?, record_frame_offset?, copy_properties?, include_linked?) -> {results, count}
+      — Video clips only. Re-places the same MediaPool media with the same source trim on the
         current timeline (like Alt-drag) via AppendToTimeline. clip_ids: timeline item unique IDs
-        from get_items / get_current_video_item. target_track_index: 1-based video track; defaults to
-        each clip's current track. record_frame_offset: added to the clip's record start (default 0).
+        from get_items / get_current_video_item; selected=True uses Resolve's selected/current item
+        when available. target_track_index overrides track_offset; placement supports same_time,
+        offset, at_playhead, track_above, after_source, and next_gap. copy_properties may include
+        transform, crop, composite, audio, retime, clip_color, markers, flags, enabled, cache,
+        voice_isolation, fusion, grades, takes, and transitions (reported unsupported by Resolve API).
+        include_linked=True duplicates linked audio and restores link state.
+      copy_clips(...) -> {results, count} — alias for duplicate_clips.
+      move_clips(...) -> {results, count, deleted_sources} — duplicate, then delete successfully duplicated sources.
+      copy_range/duplicate_range(start_frame, end_frame, record_frame, ...) -> {results, count}
+      overwrite_range(start_frame, end_frame, record_frame, ...) -> {results, count}
+      lift_range(start_frame, end_frame, allow_partial_item_delete?, ripple?) -> {success, deleted}
+      edit_kernel_capabilities() -> {supported, partially_supported, unsupported}
+      probe_edit_kernel_item(clip_ids? selected? timeline_item?) -> {items, count}
       create_compound_clip(clip_ids, info?) -> {success}
       create_fusion_clip(clip_ids) -> {success}
       import_into_timeline(path, options?) -> {success}
@@ -2006,6 +3496,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "set_current":
         tl = proj.GetTimelineByIndex(p["index"])
         return {"success": bool(proj.SetCurrentTimeline(tl))} if tl else _err(f"No timeline at index {p['index']}")
+    elif action == "edit_kernel_capabilities":
+        return _timeline_edit_kernel_capabilities()
 
     # Remaining actions need current timeline
     tl = proj.GetCurrentTimeline()
@@ -2082,93 +3574,21 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         dup = tl.DuplicateTimeline(p.get("name", tl.GetName() + " Copy"))
         return _ok(name=dup.GetName()) if dup else _err("Failed to duplicate")
     elif action == "duplicate_clips":
-        ids = p.get("clip_ids") or p.get("ids")
-        if not ids or not isinstance(ids, list):
-            return _err("duplicate_clips requires clip_ids (list of timeline item unique IDs)")
-        try:
-            offset = int(p.get("record_frame_offset", p.get("recordFrameOffset", 0)))
-        except (TypeError, ValueError):
-            return _err("record_frame_offset must be an integer")
-        target_raw = p.get("target_track_index", p.get("targetTrackIndex"))
-        mp = proj.GetMediaPool()
-        if not mp:
-            return _err("Failed to get MediaPool")
-        try:
-            video_track_count = int(tl.GetTrackCount("video") or 0)
-        except Exception:
-            video_track_count = 0
-        results: List[Dict[str, Any]] = []
-        for cid in ids:
-            sid = str(cid)
-            item = _find_timeline_item_by_id(tl, sid)
-            if not item:
-                results.append({"clip_id": sid, "success": False, "error": "timeline item not found"})
-                continue
-            try:
-                track_info = item.GetTrackTypeAndIndex()
-            except Exception as exc:
-                results.append({"clip_id": sid, "success": False, "error": f"GetTrackTypeAndIndex: {exc}"})
-                continue
-            if not track_info or len(track_info) < 2:
-                results.append({"clip_id": sid, "success": False, "error": "GetTrackTypeAndIndex returned empty"})
-                continue
-            tt = str(track_info[0]).lower()
-            if tt != "video":
-                results.append({
-                    "clip_id": sid,
-                    "success": False,
-                    "error": f"only video items supported (got {track_info[0]!r})",
-                })
-                continue
-            try:
-                src_track = int(track_info[1])
-            except (TypeError, ValueError):
-                results.append({"clip_id": sid, "success": False, "error": "invalid source track index"})
-                continue
-            try:
-                dest_track = int(target_raw) if target_raw is not None else src_track
-            except (TypeError, ValueError):
-                results.append({"clip_id": sid, "success": False, "error": "target_track_index must be an integer"})
-                continue
-            if dest_track < 1:
-                results.append({"clip_id": sid, "success": False, "error": "target_track_index must be >= 1"})
-                continue
-            if video_track_count and dest_track > video_track_count:
-                results.append({
-                    "clip_id": sid,
-                    "success": False,
-                    "error": f"target video track {dest_track} does not exist",
-                })
-                continue
-            info, ierr = _append_clip_info_from_timeline_item(item, dest_track, offset)
-            if ierr:
-                results.append({"clip_id": sid, "success": False, "error": ierr.get("error", str(ierr))})
-                continue
-            try:
-                out = mp.AppendToTimeline([info])
-            except Exception as exc:
-                results.append({"clip_id": sid, "success": False, "error": str(exc)})
-                continue
-            if not out or len(out) < 1:
-                results.append({"clip_id": sid, "success": False, "error": "AppendToTimeline returned no item"})
-                continue
-            ser, serr = _serialize_appended_timeline_item(out[0], 0, allow_empty_timeline_item_id=True)
-            if serr:
-                results.append({"clip_id": sid, "success": False, "error": serr.get("error", str(serr))})
-                continue
-            if not ser.get("timeline_item_id"):
-                recovered = _find_appended_timeline_item_summary(
-                    tl,
-                    target_track_index=dest_track,
-                    record_frame=int(info["recordFrame"]),
-                    duration=int(info["endFrame"]) - int(info["startFrame"]),
-                    source_media_pool_item=info["mediaPoolItem"],
-                    source_timeline_item_id=sid,
-                )
-                if recovered and recovered.get("timeline_item_id"):
-                    ser = recovered
-            results.append({"clip_id": sid, "success": True, **ser})
-        return {"results": results, "count": len(results)}
+        return _timeline_duplicate_clips_impl(proj, tl, p)
+    elif action == "copy_clips":
+        return _timeline_duplicate_clips_impl(proj, tl, p)
+    elif action == "move_clips":
+        return _timeline_duplicate_clips_impl(proj, tl, p, delete_sources=True)
+    elif action in {"copy_range", "duplicate_range"}:
+        return _timeline_copy_range_impl(proj, tl, p)
+    elif action == "overwrite_range":
+        return _timeline_copy_range_impl(proj, tl, p, overwrite=True)
+    elif action == "lift_range":
+        return _timeline_lift_range_impl(tl, p)
+    elif action == "edit_kernel_capabilities":
+        return _timeline_edit_kernel_capabilities()
+    elif action == "probe_edit_kernel_item":
+        return _timeline_probe_edit_kernel_item(tl, p)
     elif action == "create_compound_clip":
         ids_set = set(p["clip_ids"])
         found = []
@@ -2363,7 +3783,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                 "current timeline). frame_ranges lists can be merged/overlapped per clip name."
             ),
         )
-    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges"])
+    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","edit_kernel_capabilities","probe_edit_kernel_item","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
