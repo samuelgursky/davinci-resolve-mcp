@@ -10,7 +10,7 @@
 
 A Model Context Protocol (MCP) server providing **complete coverage** of the DaVinci Resolve Scripting API. Connect AI assistants (Claude, Cursor, Windsurf) to DaVinci Resolve and control every aspect of your post-production workflow through natural language.
 
-Release/version procedure: see [docs/release-process.md](docs/release-process.md). Media analysis workflow: see [docs/media-analysis-guide.md](docs/media-analysis-guide.md).
+Release/version procedure: see [docs/release-process.md](docs/release-process.md). Media analysis workflow: see [docs/media-analysis-guide.md](docs/media-analysis-guide.md). Demo video gameplan: see [docs/demo-video-gameplan.md](docs/demo-video-gameplan.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md), [Extension Authoring Kernel](docs/extension-authoring-kernel.md).
 
 ## Feature Highlights
