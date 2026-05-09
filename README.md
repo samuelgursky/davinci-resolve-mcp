@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.7.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.8.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-30%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -13,7 +13,41 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
 
-### What's New in v2.7.0
+### What's New in v2.8.0
+
+Media Pool / Ingest kernel expansion — applying the timeline edit kernel probe
+pattern to import, organization, metadata, annotation, and media-link boundary
+workflows while preserving source media integrity.
+
+**New `media_pool` kernel actions**: added `ingest_capabilities`,
+`probe_media_pool`, `probe_ingest_item`, `safe_import_media`,
+`safe_import_sequence`, `safe_import_folder`, `organize_clips`,
+`copy_metadata`, `normalize_metadata`, `probe_clip_properties`,
+`safe_relink`, `safe_unlink`, `link_proxy_checked`,
+`link_full_resolution_checked`, `set_clip_marks`, `clear_clip_marks`,
+`copy_clip_annotations`, and `media_pool_boundary_report`.
+
+**Safe ingest and organization**: safe import helpers validate paths, sequence
+patterns, frame ranges, and optional target folders before calling Resolve.
+`organize_clips` can move clips to existing folders or create missing folder
+paths explicitly. All helpers support dry-run where useful for planning.
+
+**Metadata and annotation workflows**: bulk metadata normalization, metadata
+copying, clip property probes, mark in/out bulk operations, and annotation copy
+now have agent-friendly wrappers over Resolve's lower-level clip APIs.
+
+**Documented support map**: added
+[`docs/media-pool-ingest-kernel.md`](docs/media-pool-ingest-kernel.md) and
+`docs/kernel-expansion-gameplans.md` / `docs/kernel-expansion-ledger.json` so
+future kernel waves can be tracked without relying on memory.
+
+**Validation**: live validated against DaVinci Resolve Studio 20.3.2.9 with
+generated synthetic video, audio, still, image sequence, and non-media
+fixtures. Final probe result: 56 supported, 1 expected unsupported non-media
+text import, and 0 errors. The disposable project and generated media were
+cleaned up after report generation.
+
+### v2.7.0
 
 Timeline edit kernel expansion — turning the v2.6.0 duplicate helper into a
 broader, live-probed edit layer for clip duplication, linked audio, range edits,

@@ -135,8 +135,10 @@ def render_markdown_report(report: Dict[str, Any]) -> str:
     records = report.get("records", [])
     artifacts = report.get("artifacts", {})
 
+    title = metadata.get("title", "Timeline Edit Kernel Capability Probe")
+
     lines = [
-        "# Timeline Edit Kernel Capability Probe",
+        f"# {title}",
         "",
         "## Run",
         "",

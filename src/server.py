@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 import base64
 import os
@@ -2341,6 +2341,765 @@ def _timeline_probe_edit_kernel_item(tl, p: Dict[str, Any]):
     return out
 
 
+_MEDIA_POOL_ITEM_METHODS = [
+    "GetName",
+    "SetName",
+    "GetMetadata",
+    "SetMetadata",
+    "GetThirdPartyMetadata",
+    "SetThirdPartyMetadata",
+    "GetMediaId",
+    "GetClipProperty",
+    "SetClipProperty",
+    "GetMarkers",
+    "AddMarker",
+    "GetMarkerByCustomData",
+    "UpdateMarkerCustomData",
+    "GetMarkerCustomData",
+    "DeleteMarkersByColor",
+    "DeleteMarkerAtFrame",
+    "DeleteMarkerByCustomData",
+    "AddFlag",
+    "GetFlagList",
+    "ClearFlags",
+    "GetClipColor",
+    "SetClipColor",
+    "ClearClipColor",
+    "LinkProxyMedia",
+    "UnlinkProxyMedia",
+    "ReplaceClip",
+    "LinkFullResolutionMedia",
+    "MonitorGrowingFile",
+    "ReplaceClipPreserveSubClip",
+    "TranscribeAudio",
+    "ClearTranscription",
+    "GetAudioMapping",
+    "GetMarkInOut",
+    "SetMarkInOut",
+    "ClearMarkInOut",
+]
+
+_MEDIA_POOL_METHODS = [
+    "GetRootFolder",
+    "AddSubFolder",
+    "CreateEmptyTimeline",
+    "CreateTimelineFromClips",
+    "ImportTimelineFromFile",
+    "DeleteTimelines",
+    "AppendToTimeline",
+    "GetCurrentFolder",
+    "SetCurrentFolder",
+    "DeleteFolders",
+    "DeleteClips",
+    "MoveClips",
+    "MoveFolders",
+    "RefreshFolders",
+    "RelinkClips",
+    "UnlinkClips",
+    "ImportMedia",
+    "ExportMetadata",
+    "GetUniqueId",
+    "CreateStereoClip",
+    "AutoSyncAudio",
+    "GetSelectedClips",
+    "SetSelectedClip",
+    "GetClipMatteList",
+    "GetTimelineMatteList",
+    "DeleteClipMattes",
+    "ImportFolderFromFile",
+]
+
+_MEDIA_POOL_KNOWN_CLIP_PROPERTIES = [
+    "File Path",
+    "Type",
+    "Format",
+    "FPS",
+    "Frames",
+    "Duration",
+    "Start TC",
+    "End TC",
+    "Resolution",
+    "Codec",
+    "Bit Depth",
+    "Audio Ch",
+    "Sample Rate",
+    "Data Level",
+    "PAR",
+    "Alpha mode",
+]
+
+_MEDIA_POOL_KERNEL_ACTIONS = [
+    "ingest_capabilities",
+    "probe_ingest_item",
+    "probe_media_pool",
+    "safe_import_media",
+    "safe_import_sequence",
+    "safe_import_folder",
+    "organize_clips",
+    "copy_metadata",
+    "normalize_metadata",
+    "probe_clip_properties",
+    "safe_relink",
+    "safe_unlink",
+    "link_proxy_checked",
+    "link_full_resolution_checked",
+    "set_clip_marks",
+    "clear_clip_marks",
+    "copy_clip_annotations",
+    "media_pool_boundary_report",
+]
+
+
+def _safe_clip_call(clip, method_name: str, *args):
+    method = getattr(clip, method_name, None)
+    if not callable(method):
+        return None, f"{method_name} unavailable"
+    try:
+        return _ser(method(*args)), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _media_pool_item_summary(clip):
+    if not clip:
+        return None
+    summary = {
+        "name": _safe_media_pool_item_name(clip),
+        "id": _safe_media_pool_item_id(clip),
+        "media_id": None,
+        "file_path": None,
+        "type": None,
+        "duration": None,
+    }
+    media_id, _ = _safe_clip_call(clip, "GetMediaId")
+    if media_id is not None:
+        summary["media_id"] = media_id
+    properties, _ = _safe_clip_call(clip, "GetClipProperty", "")
+    if isinstance(properties, dict):
+        summary["file_path"] = properties.get("File Path") or properties.get("FilePath")
+        summary["type"] = properties.get("Type")
+        summary["duration"] = properties.get("Duration")
+    return summary
+
+
+def _media_pool_item_probe(clip):
+    metadata, metadata_error = _safe_clip_call(clip, "GetMetadata", "")
+    third_party, third_party_error = _safe_clip_call(clip, "GetThirdPartyMetadata", "")
+    properties, properties_error = _safe_clip_call(clip, "GetClipProperty", "")
+    known_properties = {}
+    for key in _MEDIA_POOL_KNOWN_CLIP_PROPERTIES:
+        value, err = _safe_clip_call(clip, "GetClipProperty", key)
+        known_properties[key] = {"value": value, "error": err} if err else {"value": value}
+
+    color, color_error = _safe_clip_call(clip, "GetClipColor")
+    markers, markers_error = _safe_clip_call(clip, "GetMarkers")
+    flags, flags_error = _safe_clip_call(clip, "GetFlagList")
+    audio_mapping, audio_mapping_error = _safe_clip_call(clip, "GetAudioMapping")
+    mark, mark_error = _safe_clip_call(clip, "GetMarkInOut")
+
+    return {
+        "summary": _media_pool_item_summary(clip),
+        "methods": _callable_method_names(clip, _MEDIA_POOL_ITEM_METHODS),
+        "metadata": {"value": metadata, "error": metadata_error} if metadata_error else metadata,
+        "third_party_metadata": (
+            {"value": third_party, "error": third_party_error} if third_party_error else third_party
+        ),
+        "clip_properties": {"value": properties, "error": properties_error} if properties_error else properties,
+        "known_clip_properties": known_properties,
+        "clip_color": {"value": color, "error": color_error} if color_error else color,
+        "markers": {"value": markers, "error": markers_error} if markers_error else markers,
+        "flags": {"value": flags, "error": flags_error} if flags_error else flags,
+        "audio_mapping": (
+            {"value": audio_mapping, "error": audio_mapping_error} if audio_mapping_error else audio_mapping
+        ),
+        "mark_in_out": {"value": mark, "error": mark_error} if mark_error else mark,
+    }
+
+
+def _folder_probe(folder, depth: int = 1):
+    if not folder:
+        return None
+    clips = []
+    for clip in (folder.GetClipList() or []):
+        clips.append(_media_pool_item_summary(clip))
+    subfolders = []
+    if depth > 0:
+        for sub in (folder.GetSubFolderList() or []):
+            subfolders.append(_folder_probe(sub, depth - 1))
+    stale = None
+    try:
+        stale = bool(folder.GetIsFolderStale())
+    except Exception:
+        pass
+    return {
+        "name": folder.GetName(),
+        "id": folder.GetUniqueId(),
+        "stale": stale,
+        "clip_count": len(clips),
+        "clips": clips,
+        "subfolder_count": len(subfolders),
+        "subfolders": subfolders,
+    }
+
+
+def _media_pool_ingest_capabilities():
+    return {
+        "supported": {
+            "storage_browsing": ["get_volumes", "get_subfolders", "get_files"],
+            "imports": [
+                "media_storage.import_to_pool simple paths",
+                "media_storage.import_to_pool item_infos",
+                "media_pool.import_media simple paths",
+                "media_pool.import_media image sequence clip_infos",
+                "media_pool.import_folder",
+                "media_pool.safe_import_media with path validation and optional target folder",
+                "media_pool.safe_import_sequence with printf-pattern frame validation",
+                "media_pool.safe_import_folder with directory validation",
+            ],
+            "organization": [
+                "folder add/delete/move",
+                "clip move/delete",
+                "current folder set/get",
+                "selected clip get/set",
+                "media_pool.organize_clips with optional folder creation",
+            ],
+            "metadata": [
+                "metadata get/set scalar",
+                "metadata get/set dict",
+                "third-party metadata get/set",
+                "media_pool.copy_metadata across clips",
+                "media_pool.normalize_metadata bulk writes",
+                "clip property snapshot",
+                "clip property set when Resolve accepts the key",
+                "media_pool.probe_clip_properties read-only property snapshots",
+            ],
+            "annotations": [
+                "media pool item markers",
+                "media pool item custom marker data",
+                "flags",
+                "clip color",
+                "mark in/out",
+                "media_pool.set_clip_marks and clear_clip_marks",
+                "media_pool.copy_clip_annotations for markers, flags, and clip color",
+            ],
+            "media_links": [
+                "relink/unlink through Resolve MediaPool APIs",
+                "media_pool.safe_relink and safe_unlink with path/clip validation",
+                "proxy link/unlink through MediaPoolItem APIs",
+                "media_pool.link_proxy_checked with file validation",
+                "full-resolution media link where Resolve 20 exposes it",
+                "media_pool.link_full_resolution_checked with version/path validation",
+            ],
+            "read_only_probe": [
+                "media pool method availability",
+                "media pool folder summaries",
+                "media pool item method availability",
+                "metadata snapshots",
+                "third-party metadata snapshots",
+                "clip property snapshots",
+                "markers, flags, clip color, audio mapping, mark in/out",
+                "media_pool.media_pool_boundary_report",
+            ],
+            "source_media_integrity": [
+                "live validation uses generated synthetic media only",
+                "safe helpers must not transcode, render, proxy, or overwrite user source media",
+            ],
+        },
+        "partially_supported": {
+            "clip_properties": "Resolve accepts only some GetClipProperty/SetClipProperty keys by media type and build.",
+            "proxy_and_full_resolution_links": "Resolve may accept paths without deep compatibility validation; probes must use synthetic media.",
+            "audio_transcription": "Transcription availability depends on Resolve Studio features, installed components, media type, and page/build state.",
+            "image_sequences": "Sequence import behavior depends on FilePath pattern, frame range, and Resolve's still/sequence interpretation.",
+            "audio_mapping": "Readback is available on supported media, but mapping shape varies by clip type.",
+        },
+        "unsupported": {
+            "source_media_mutation": "The MCP kernel never edits, transcodes, proxies, or overwrites original source media unless explicitly requested by the user.",
+            "safe_destructive_replace": "ReplaceClip and ReplaceClipPreserveSubClip are exposed raw APIs; kernel probes must restrict them to disposable synthetic media.",
+            "guaranteed_metadata_schema": "Resolve does not guarantee every metadata key is writable or stable across versions/locales.",
+        },
+    }
+
+
+def _media_pool_probe(mp, p: Dict[str, Any]):
+    depth = p.get("depth", 1)
+    try:
+        depth = max(0, min(int(depth), 4))
+    except (TypeError, ValueError):
+        return _err("depth must be an integer")
+    root = mp.GetRootFolder()
+    current = mp.GetCurrentFolder()
+    selected = []
+    try:
+        selected = [_media_pool_item_summary(clip) for clip in (mp.GetSelectedClips() or [])]
+    except Exception as exc:
+        selected = [{"error": str(exc)}]
+    return {
+        "media_pool_id": mp.GetUniqueId(),
+        "methods": _callable_method_names(mp, _MEDIA_POOL_METHODS),
+        "root": _folder_probe(root, depth),
+        "current_folder": _folder_probe(current, 0) if current else None,
+        "selected_clips": selected,
+    }
+
+
+def _media_pool_probe_ingest_items(mp, p: Dict[str, Any]):
+    root = mp.GetRootFolder()
+    ids = p.get("clip_ids") or p.get("ids")
+    selected = bool(p.get("selected", False))
+    clips = []
+    warnings = []
+    if ids:
+        if not isinstance(ids, list):
+            return _err("probe_ingest_item requires clip_ids as a list")
+        for clip_id in ids:
+            clip = _find_clip(root, str(clip_id))
+            if clip:
+                clips.append(clip)
+            else:
+                warnings.append(f"Clip not found: {clip_id}")
+    if selected:
+        try:
+            clips.extend(mp.GetSelectedClips() or [])
+        except Exception as exc:
+            warnings.append(f"GetSelectedClips failed: {exc}")
+    if not clips:
+        return _err("probe_ingest_item requires clip_ids or selected=True")
+    out = {"items": [_media_pool_item_probe(clip) for clip in clips], "count": len(clips)}
+    if warnings:
+        out["warnings"] = warnings
+    return out
+
+
+def _path_error(path: str, *, must_be_dir: bool = False, must_be_file: bool = False):
+    if not path or not isinstance(path, str):
+        return "path must be a non-empty string"
+    if not os.path.exists(path):
+        return f"path does not exist: {path}"
+    if must_be_dir and not os.path.isdir(path):
+        return f"path is not a directory: {path}"
+    if must_be_file and not os.path.isfile(path):
+        return f"path is not a file: {path}"
+    return None
+
+
+def _string_list_param(p: Dict[str, Any], key: str):
+    value = p.get(key)
+    if not isinstance(value, list) or not value:
+        return None, _err(f"{key} must be a non-empty list")
+    cleaned = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item:
+            return None, _err(f"{key}[{index}] must be a non-empty string")
+        cleaned.append(item)
+    return cleaned, None
+
+
+def _clips_from_params(root, mp, p: Dict[str, Any], *, key: str = "clip_ids"):
+    ids = p.get(key) or p.get("ids")
+    selected = bool(p.get("selected", False))
+    clips = []
+    missing = []
+    if ids:
+        if not isinstance(ids, list):
+            return None, _err(f"{key} must be a list")
+        for clip_id in ids:
+            clip = _find_clip(root, str(clip_id))
+            if clip:
+                clips.append(clip)
+            else:
+                missing.append(str(clip_id))
+    if selected:
+        clips.extend(mp.GetSelectedClips() or [])
+    deduped = []
+    seen = set()
+    for clip in clips:
+        clip_id = _safe_media_pool_item_id(clip) or id(clip)
+        if clip_id in seen:
+            continue
+        seen.add(clip_id)
+        deduped.append(clip)
+    if not deduped:
+        return None, _err(f"Provide {key} or selected=True")
+    return (deduped, missing), None
+
+
+def _clip_summaries(clips):
+    return [_media_pool_item_summary(clip) for clip in clips]
+
+
+def _imported_clip_summaries(items):
+    return {
+        "imported": len(items) if items else 0,
+        "clips": _clip_summaries(items or []),
+    }
+
+
+def _format_sequence_path(pattern: str, index: int):
+    try:
+        return pattern % index
+    except (TypeError, ValueError):
+        return None
+
+
+def _missing_sequence_frames(pattern: str, start: int, end: int):
+    missing = []
+    unformattable = False
+    for index in range(start, end + 1):
+        path = _format_sequence_path(pattern, index)
+        if not path:
+            unformattable = True
+            break
+        if not os.path.exists(path):
+            missing.append(path)
+    return missing, unformattable
+
+
+def _set_current_folder_temporarily(mp, target_path: Optional[str]):
+    if not target_path:
+        return None, None
+    target = _navigate_folder(mp, target_path)
+    if not target:
+        return None, _err(f"Target folder not found: {target_path}")
+    previous = mp.GetCurrentFolder()
+    if not mp.SetCurrentFolder(target):
+        return None, _err(f"Failed to set current folder: {target_path}")
+    return previous, None
+
+
+def _restore_current_folder(mp, previous):
+    if previous:
+        try:
+            mp.SetCurrentFolder(previous)
+        except Exception:
+            pass
+
+
+def _ensure_folder_path(mp, path: str):
+    if not path or path in ("Master", "/", ""):
+        return mp.GetRootFolder(), None
+    existing = _navigate_folder(mp, path)
+    if existing:
+        return existing, None
+    parts = path.strip("/").split("/")
+    if parts and parts[0] == "Master":
+        parts = parts[1:]
+    current = mp.GetRootFolder()
+    built = ["Master"]
+    for part in parts:
+        built.append(part)
+        found = None
+        for sub in (current.GetSubFolderList() or []):
+            if sub.GetName() == part:
+                found = sub
+                break
+        if not found:
+            found = mp.AddSubFolder(current, part)
+            if not found:
+                return None, _err(f"Failed to create folder: {'/'.join(built)}")
+        current = found
+    return current, None
+
+
+def _safe_import_media(mp, p: Dict[str, Any]):
+    paths, err = _string_list_param(p, "paths")
+    if err:
+        return err
+    errors = []
+    for path in paths:
+        path_err = _path_error(path)
+        if path_err:
+            errors.append(path_err)
+    if errors:
+        return _err("; ".join(errors))
+    if p.get("dry_run"):
+        return _ok(would_import=paths, target_folder=p.get("target_folder"))
+    previous, folder_err = _set_current_folder_temporarily(mp, p.get("target_folder"))
+    if folder_err:
+        return folder_err
+    try:
+        return _ok(**_imported_clip_summaries(mp.ImportMedia(paths) or []))
+    finally:
+        _restore_current_folder(mp, previous)
+
+
+def _safe_import_sequence(mp, p: Dict[str, Any]):
+    pattern = p.get("FilePath") or p.get("file_path") or p.get("pattern")
+    if not pattern:
+        return _err("Provide FilePath, file_path, or pattern")
+    try:
+        start = int(p.get("StartIndex", p.get("start_index", 1)))
+        end = int(p.get("EndIndex", p.get("end_index", start)))
+    except (TypeError, ValueError):
+        return _err("StartIndex/EndIndex must be integers")
+    if end < start:
+        return _err("EndIndex must be greater than or equal to StartIndex")
+    missing, unformattable = _missing_sequence_frames(pattern, start, end)
+    if unformattable:
+        return _err("Sequence pattern must be printf-style, e.g. frame_%03d.png")
+    if missing:
+        sample = missing[:5]
+        suffix = "" if len(missing) <= 5 else f" (+{len(missing) - 5} more)"
+        return _err(f"Missing sequence frames: {sample}{suffix}")
+    info = {"FilePath": pattern, "StartIndex": start, "EndIndex": end}
+    if p.get("dry_run"):
+        return _ok(would_import=[info], target_folder=p.get("target_folder"))
+    previous, folder_err = _set_current_folder_temporarily(mp, p.get("target_folder"))
+    if folder_err:
+        return folder_err
+    try:
+        return _ok(**_imported_clip_summaries(mp.ImportMedia([info]) or []))
+    finally:
+        _restore_current_folder(mp, previous)
+
+
+def _safe_import_folder(mp, p: Dict[str, Any]):
+    path = p.get("path")
+    path_err = _path_error(path, must_be_dir=True)
+    if path_err:
+        return _err(path_err)
+    if p.get("dry_run"):
+        return _ok(would_import_folder=path, source_clips_path=p.get("source_clips_path", ""))
+    return {"success": bool(mp.ImportFolderFromFile(path, p.get("source_clips_path", "")))}
+
+
+def _organize_clips(mp, root, p: Dict[str, Any]):
+    target_path = p.get("target_path")
+    if not target_path:
+        return _err("target_path is required")
+    if p.get("create_missing"):
+        target, target_err = _ensure_folder_path(mp, target_path)
+    else:
+        target = _navigate_folder(mp, target_path)
+        target_err = None if target else _err(f"Target folder not found: {target_path}")
+    if target_err:
+        return target_err
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    if p.get("dry_run"):
+        return _ok(target_path=target_path, clips=_clip_summaries(clips), missing=missing)
+    return {"success": bool(mp.MoveClips(clips, target)), "moved": len(clips), "missing": missing}
+
+
+def _copy_metadata(root, p: Dict[str, Any]):
+    source = _find_clip(root, p.get("source_clip_id", ""))
+    if not source:
+        return _err(f"Source clip not found: {p.get('source_clip_id')}")
+    target_ids = p.get("target_clip_ids")
+    if not isinstance(target_ids, list) or not target_ids:
+        return _err("target_clip_ids must be a non-empty list")
+    metadata = source.GetMetadata("") or {}
+    if p.get("keys"):
+        keys = set(p["keys"])
+        metadata = {key: value for key, value in metadata.items() if key in keys}
+    third_party = {}
+    if p.get("include_third_party", True):
+        third_party = source.GetThirdPartyMetadata("") or {}
+    results = []
+    for target_id in target_ids:
+        target = _find_clip(root, str(target_id))
+        if not target:
+            results.append({"clip_id": target_id, "success": False, "error": "Clip not found"})
+            continue
+        if p.get("dry_run"):
+            results.append({"clip_id": target_id, "success": True, "metadata_keys": sorted(metadata.keys()), "third_party_keys": sorted(third_party.keys())})
+            continue
+        ok = bool(target.SetMetadata(metadata)) if metadata else True
+        third_party_ok = True
+        for key, value in third_party.items():
+            third_party_ok = bool(target.SetThirdPartyMetadata(key, value)) and third_party_ok
+        results.append({"clip_id": target_id, "success": ok and third_party_ok})
+    return {"success": all(row.get("success") for row in results), "results": results}
+
+
+def _normalize_metadata(root, mp, p: Dict[str, Any]):
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    metadata = p.get("metadata") or {}
+    third_party = p.get("third_party_metadata") or p.get("thirdPartyMetadata") or {}
+    if not isinstance(metadata, dict) or not isinstance(third_party, dict):
+        return _err("metadata and third_party_metadata must be objects")
+    if not metadata and not third_party:
+        return _err("Provide metadata or third_party_metadata")
+    results = []
+    for clip in clips:
+        clip_id = _safe_media_pool_item_id(clip)
+        if p.get("dry_run"):
+            results.append({"clip_id": clip_id, "success": True, "metadata_keys": sorted(metadata.keys()), "third_party_keys": sorted(third_party.keys())})
+            continue
+        ok = bool(clip.SetMetadata(metadata)) if metadata else True
+        third_party_ok = True
+        for key, value in third_party.items():
+            third_party_ok = bool(clip.SetThirdPartyMetadata(key, value)) and third_party_ok
+        results.append({"clip_id": clip_id, "success": ok and third_party_ok})
+    return {"success": all(row.get("success") for row in results), "count": len(results), "missing": missing, "results": results}
+
+
+def _probe_clip_properties(root, mp, p: Dict[str, Any]):
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    return {
+        "count": len(clips),
+        "missing": missing,
+        "items": [
+            {
+                "summary": _media_pool_item_summary(clip),
+                "properties": _safe_clip_call(clip, "GetClipProperty", "")[0],
+                "known_clip_properties": _media_pool_item_probe(clip)["known_clip_properties"],
+            }
+            for clip in clips
+        ],
+    }
+
+
+def _safe_relink(mp, root, p: Dict[str, Any]):
+    folder_path = p.get("folder_path")
+    path_err = _path_error(folder_path, must_be_dir=True)
+    if path_err:
+        return _err(path_err)
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    if p.get("dry_run"):
+        return _ok(folder_path=folder_path, clips=_clip_summaries(clips), missing=missing)
+    return {"success": bool(mp.RelinkClips(clips, folder_path)), "count": len(clips), "missing": missing}
+
+
+def _safe_unlink(mp, root, p: Dict[str, Any]):
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    if p.get("dry_run"):
+        return _ok(clips=_clip_summaries(clips), missing=missing)
+    return {"success": bool(mp.UnlinkClips(clips)), "count": len(clips), "missing": missing}
+
+
+def _link_proxy_checked(root, p: Dict[str, Any]):
+    clip = _find_clip(root, p.get("clip_id", ""))
+    if not clip:
+        return _err(f"Clip not found: {p.get('clip_id')}")
+    proxy_path = p.get("proxy_path") or p.get("path")
+    path_err = _path_error(proxy_path, must_be_file=True)
+    if path_err:
+        return _err(path_err)
+    if p.get("dry_run"):
+        return _ok(clip=_media_pool_item_summary(clip), proxy_path=proxy_path)
+    return {"success": bool(clip.LinkProxyMedia(proxy_path))}
+
+
+def _link_full_resolution_checked(root, p: Dict[str, Any]):
+    clip = _find_clip(root, p.get("clip_id", ""))
+    if not clip:
+        return _err(f"Clip not found: {p.get('clip_id')}")
+    missing = _requires_method(clip, "LinkFullResolutionMedia", "20.0")
+    if missing:
+        return missing
+    path = p.get("path") or p.get("full_res_media_path") or p.get("fullResMediaPath")
+    path_err = _path_error(path, must_be_file=True)
+    if path_err:
+        return _err(path_err)
+    if p.get("dry_run"):
+        return _ok(clip=_media_pool_item_summary(clip), path=path)
+    return {"success": bool(clip.LinkFullResolutionMedia(path))}
+
+
+def _set_clip_marks(root, mp, p: Dict[str, Any]):
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    try:
+        mark_in = int(p["mark_in"])
+        mark_out = int(p["mark_out"])
+    except (KeyError, TypeError, ValueError):
+        return _err("mark_in and mark_out must be integers")
+    results = []
+    for clip in clips:
+        clip_id = _safe_media_pool_item_id(clip)
+        if p.get("dry_run"):
+            results.append({"clip_id": clip_id, "success": True, "mark_in": mark_in, "mark_out": mark_out})
+            continue
+        results.append({"clip_id": clip_id, "success": bool(clip.SetMarkInOut(mark_in, mark_out, p.get("type", "all")))})
+    return {"success": all(row.get("success") for row in results), "count": len(results), "missing": missing, "results": results}
+
+
+def _clear_clip_marks(root, mp, p: Dict[str, Any]):
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    results = []
+    for clip in clips:
+        clip_id = _safe_media_pool_item_id(clip)
+        if p.get("dry_run"):
+            results.append({"clip_id": clip_id, "success": True})
+            continue
+        results.append({"clip_id": clip_id, "success": bool(clip.ClearMarkInOut(p.get("type", "all")))})
+    return {"success": all(row.get("success") for row in results), "count": len(results), "missing": missing, "results": results}
+
+
+def _copy_clip_annotations(root, p: Dict[str, Any]):
+    source = _find_clip(root, p.get("source_clip_id", ""))
+    if not source:
+        return _err(f"Source clip not found: {p.get('source_clip_id')}")
+    target_ids = p.get("target_clip_ids")
+    if not isinstance(target_ids, list) or not target_ids:
+        return _err("target_clip_ids must be a non-empty list")
+    markers = source.GetMarkers() or {}
+    flags = source.GetFlagList() or []
+    color = source.GetClipColor()
+    include_markers = p.get("include_markers", True)
+    include_flags = p.get("include_flags", True)
+    include_color = p.get("include_clip_color", True)
+    results = []
+    for target_id in target_ids:
+        target = _find_clip(root, str(target_id))
+        if not target:
+            results.append({"clip_id": target_id, "success": False, "error": "Clip not found"})
+            continue
+        if p.get("dry_run"):
+            results.append({"clip_id": target_id, "success": True, "markers": len(markers), "flags": len(flags), "clip_color": color})
+            continue
+        ok = True
+        if include_color and color:
+            ok = bool(target.SetClipColor(color)) and ok
+        if include_flags:
+            for flag in flags:
+                ok = bool(target.AddFlag(flag)) and ok
+        if include_markers:
+            for frame, marker in markers.items():
+                custom = marker.get("customData") or marker.get("custom_data") or ""
+                ok = bool(
+                    target.AddMarker(
+                        int(frame),
+                        marker.get("color", "Blue"),
+                        marker.get("name", ""),
+                        marker.get("note", ""),
+                        marker.get("duration", 1),
+                        custom,
+                    )
+                ) and ok
+        results.append({"clip_id": target_id, "success": ok})
+    return {"success": all(row.get("success") for row in results), "results": results}
+
+
+def _media_pool_boundary_report(mp, p: Dict[str, Any]):
+    report = {
+        "capabilities": _media_pool_ingest_capabilities(),
+        "media_pool": _media_pool_probe(mp, {"depth": p.get("depth", 1)}),
+    }
+    if p.get("clip_ids") or p.get("selected"):
+        report["items"] = _media_pool_probe_ingest_items(mp, p)
+    return report
+
+
 def _ser(obj):
     """Serialize Resolve API objects to JSON-safe values."""
     if obj is None:
@@ -2948,6 +3707,24 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       get_timeline_mattes(folder_path?) -> {mattes}
       delete_clip_mattes(clip_id, paths) -> {success}
       import_folder(path, source_clips_path?) -> {success}
+      ingest_capabilities() -> {supported, partially_supported, unsupported}
+      probe_media_pool(depth?) -> {media_pool_id, methods, root, current_folder, selected_clips}
+      probe_ingest_item(clip_ids? selected?) -> {items, count}
+      safe_import_media(paths, target_folder?, dry_run?) -> {success, imported, clips}
+      safe_import_sequence(FilePath|file_path|pattern, StartIndex?, EndIndex?, target_folder?, dry_run?) -> {success, imported, clips}
+      safe_import_folder(path, source_clips_path?, dry_run?) -> {success}
+      organize_clips(clip_ids|selected, target_path, create_missing?, dry_run?) -> {success}
+      copy_metadata(source_clip_id, target_clip_ids, keys?, include_third_party?, dry_run?) -> {success, results}
+      normalize_metadata(clip_ids|selected, metadata?, third_party_metadata?, dry_run?) -> {success, results}
+      probe_clip_properties(clip_ids|selected) -> {items, count}
+      safe_relink(clip_ids|selected, folder_path, dry_run?) -> {success}
+      safe_unlink(clip_ids|selected, dry_run?) -> {success}
+      link_proxy_checked(clip_id, proxy_path|path, dry_run?) -> {success}
+      link_full_resolution_checked(clip_id, path|full_res_media_path, dry_run?) -> {success}
+      set_clip_marks(clip_ids|selected, mark_in, mark_out, type?, dry_run?) -> {success, results}
+      clear_clip_marks(clip_ids|selected, type?, dry_run?) -> {success, results}
+      copy_clip_annotations(source_clip_id, target_clip_ids, include_markers?, include_flags?, include_clip_color?, dry_run?) -> {success, results}
+      media_pool_boundary_report(depth?, clip_ids?, selected?) -> {capabilities, media_pool, items?}
     """
     p = params or {}
     _, proj, mp, err = _get_mp()
@@ -3135,7 +3912,43 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         return {"success": bool(mp.DeleteClipMattes(clip, p["paths"]))}
     elif action == "import_folder":
         return {"success": bool(mp.ImportFolderFromFile(p["path"], p.get("source_clips_path", "")))}
-    return _unknown(action, ["get_root_folder","get_current_folder","set_current_folder","add_subfolder","delete_folders","move_folders","refresh","create_timeline","create_timeline_from_clips","import_timeline","delete_timelines","append_to_timeline","import_media","delete_clips","move_clips","relink","unlink","export_metadata","get_unique_id","create_stereo_clip","auto_sync_audio","get_selected","set_selected","get_clip_mattes","get_timeline_mattes","delete_clip_mattes","import_folder"])
+    elif action == "ingest_capabilities":
+        return _media_pool_ingest_capabilities()
+    elif action == "probe_media_pool":
+        return _media_pool_probe(mp, p)
+    elif action == "probe_ingest_item":
+        return _media_pool_probe_ingest_items(mp, p)
+    elif action == "safe_import_media":
+        return _safe_import_media(mp, p)
+    elif action == "safe_import_sequence":
+        return _safe_import_sequence(mp, p)
+    elif action == "safe_import_folder":
+        return _safe_import_folder(mp, p)
+    elif action == "organize_clips":
+        return _organize_clips(mp, root, p)
+    elif action == "copy_metadata":
+        return _copy_metadata(root, p)
+    elif action == "normalize_metadata":
+        return _normalize_metadata(root, mp, p)
+    elif action == "probe_clip_properties":
+        return _probe_clip_properties(root, mp, p)
+    elif action == "safe_relink":
+        return _safe_relink(mp, root, p)
+    elif action == "safe_unlink":
+        return _safe_unlink(mp, root, p)
+    elif action == "link_proxy_checked":
+        return _link_proxy_checked(root, p)
+    elif action == "link_full_resolution_checked":
+        return _link_full_resolution_checked(root, p)
+    elif action == "set_clip_marks":
+        return _set_clip_marks(root, mp, p)
+    elif action == "clear_clip_marks":
+        return _clear_clip_marks(root, mp, p)
+    elif action == "copy_clip_annotations":
+        return _copy_clip_annotations(root, p)
+    elif action == "media_pool_boundary_report":
+        return _media_pool_boundary_report(mp, p)
+    return _unknown(action, ["get_root_folder","get_current_folder","set_current_folder","add_subfolder","delete_folders","move_folders","refresh","create_timeline","create_timeline_from_clips","import_timeline","delete_timelines","append_to_timeline","import_media","delete_clips","move_clips","relink","unlink","export_metadata","get_unique_id","create_stereo_clip","auto_sync_audio","get_selected","set_selected","get_clip_mattes","get_timeline_mattes","delete_clip_mattes","import_folder",*_MEDIA_POOL_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

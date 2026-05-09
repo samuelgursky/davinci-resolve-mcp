@@ -171,6 +171,15 @@ Key actions: `get_root_folder`, `get_current_folder`, `set_current_folder(path)`
 `import_media(paths)`, `delete_clips(clip_ids)`, `move_clips(clip_ids, target_path)`,
 `get_selected`, `set_selected(clip_id)`, `export_metadata(path, clip_ids?)`
 
+Media Pool / Ingest kernel actions (v2.8.0+) add safer agent-facing workflows:
+`ingest_capabilities`, `probe_media_pool`, `probe_ingest_item`,
+`safe_import_media`, `safe_import_sequence`, `safe_import_folder`,
+`organize_clips`, `copy_metadata`, `normalize_metadata`,
+`probe_clip_properties`, `safe_relink`, `safe_unlink`, `link_proxy_checked`,
+`link_full_resolution_checked`, `set_clip_marks`, `clear_clip_marks`,
+`copy_clip_annotations`, and `media_pool_boundary_report`. See
+`docs/media-pool-ingest-kernel.md` for the live-tested support map.
+
 Note: `folder path` arguments use slash notation like `"Master/SubFolder"`.
 `"Master"` or `"/"` refers to the root folder.
 
@@ -448,6 +457,13 @@ media_pool(action="get_current_folder")
 media_pool(action="create_timeline", params={"name": "Assembly"})
 media_pool(action="get_selected")
 media_pool(action="append_to_timeline", params={"clip_ids": ["<uuid>", ...]})
+media_pool(action="safe_import_sequence", params={
+  "pattern": "/path/to/frames/shot_%04d.dpx",
+  "start_index": 1001,
+  "end_index": 1048,
+  "target_folder": "Master/Plates"
+})
+media_pool(action="media_pool_boundary_report", params={"selected": True, "depth": 2})
 # Positioned append (MediaPool.AppendToTimeline([{clipInfo}, ...])) — e.g. rebuild a subtitle row after delete_clips
 media_pool(action="append_to_timeline", params={"clip_infos": [
   {"clip_id": "<uuid>", "start_frame": 0, "end_frame": 100, "record_frame": 1200, "track_index": 4}
@@ -492,6 +508,17 @@ JSON and Markdown reports, and classifies each API surface as `supported`,
 `version_or_page_dependent`, `unsupported`, `not_applicable`, or `error`.
 See `docs/timeline-edit-kernel.md` for the maintained support map and current
 Resolve API limitations.
+
+For the Media Pool / Ingest boundary map, run:
+
+```
+python3.11 tests/live_media_pool_ingest_validation.py --output-dir /tmp/media-pool-ingest-probe
+```
+
+The harness creates a disposable project, generates synthetic video/audio/still
+and image-sequence fixtures, probes safe import/metadata/annotation/link
+helpers, writes JSON and Markdown reports, deletes the project, and removes the
+generated media directory. See `docs/media-pool-ingest-kernel.md`.
 
 ### 5. Color grading
 
