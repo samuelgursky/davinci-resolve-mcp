@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.8.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.9.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-30%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -13,7 +13,41 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
 
-### What's New in v2.8.0
+### What's New in v2.9.0
+
+Render / Deliver kernel expansion — adding a safer render planning, settings,
+format/codec compatibility, queue lifecycle, and Quick Export boundary layer.
+
+**New `render` kernel actions**: added `render_capabilities`,
+`probe_render_matrix`, `probe_render_settings`, `validate_render_settings`,
+`safe_set_render_settings`, `prepare_render_job`,
+`render_job_lifecycle_probe`, `quick_export_capabilities`,
+`safe_quick_export`, and `export_render_boundary_report`.
+
+**Render compatibility matrix**: `probe_render_matrix` walks available render
+formats, codecs, and resolutions so agents can choose what this specific
+Resolve install can actually deliver.
+
+**Job-safe rendering helpers**: render settings validation now checks documented
+setting keys, value types, frame ranges, and temp-target requirements.
+`prepare_render_job` creates queued jobs without starting renders, while
+`render_job_lifecycle_probe` validates add/status/delete behavior safely.
+
+**Guarded Quick Export**: `safe_quick_export` validates temp targets, forces
+`EnableUpload=False`, and requires `allow_render=True` before it can actually
+start Quick Export.
+
+**Documented support map**: added
+[`docs/render-deliver-kernel.md`](docs/render-deliver-kernel.md) with
+format/codec, settings, render job, and Quick Export boundaries.
+
+**Validation**: live validated against DaVinci Resolve Studio 20.3.2.9 with a
+two-second generated synthetic timeline. Final probe result: 23 supported, 1
+version/page-dependent `GetRenderSettings` readback boundary, and 0 errors. The
+probe rendered one tiny synthetic output, then cleaned up the disposable project
+and generated files.
+
+### v2.8.0
 
 Media Pool / Ingest kernel expansion — applying the timeline edit kernel probe
 pattern to import, organization, metadata, annotation, and media-link boundary

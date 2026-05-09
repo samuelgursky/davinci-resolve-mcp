@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 
 import base64
 import os
@@ -3499,6 +3499,374 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
 # TOOL 9: render
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_RENDER_METHODS = [
+    "AddRenderJob",
+    "DeleteRenderJob",
+    "DeleteAllRenderJobs",
+    "GetRenderJobList",
+    "GetRenderJobStatus",
+    "StartRendering",
+    "StopRendering",
+    "IsRenderingInProgress",
+    "GetRenderFormats",
+    "GetRenderCodecs",
+    "GetCurrentRenderFormatAndCodec",
+    "SetCurrentRenderFormatAndCodec",
+    "GetCurrentRenderMode",
+    "SetCurrentRenderMode",
+    "GetRenderResolutions",
+    "GetRenderSettings",
+    "SetRenderSettings",
+    "GetRenderPresetList",
+    "LoadRenderPreset",
+    "SaveAsNewRenderPreset",
+    "DeleteRenderPreset",
+    "GetQuickExportRenderPresets",
+    "RenderWithQuickExport",
+]
+
+_RENDER_SETTING_KEYS = [
+    "SelectAllFrames",
+    "MarkIn",
+    "MarkOut",
+    "TargetDir",
+    "CustomName",
+    "UniqueFilenameStyle",
+    "ExportVideo",
+    "ExportAudio",
+    "FormatWidth",
+    "FormatHeight",
+    "FrameRate",
+    "PixelAspectRatio",
+    "VideoQuality",
+    "AudioCodec",
+    "AudioBitDepth",
+    "AudioSampleRate",
+    "ColorSpaceTag",
+    "GammaTag",
+    "ExportAlpha",
+    "EncodingProfile",
+    "MultiPassEncode",
+    "AlphaMode",
+    "NetworkOptimization",
+    "ClipStartFrame",
+    "TimelineStartTimecode",
+    "ReplaceExistingFilesInPlace",
+    "ExportSubtitle",
+    "SubtitleFormat",
+]
+
+_RENDER_KERNEL_ACTIONS = [
+    "render_capabilities",
+    "probe_render_matrix",
+    "probe_render_settings",
+    "validate_render_settings",
+    "safe_set_render_settings",
+    "prepare_render_job",
+    "render_job_lifecycle_probe",
+    "quick_export_capabilities",
+    "safe_quick_export",
+    "export_render_boundary_report",
+]
+
+
+def _render_temp_path_ok(path: str) -> bool:
+    if not path:
+        return False
+    try:
+        target = os.path.abspath(path)
+        temp_roots = [
+            os.path.abspath(tempfile.gettempdir()),
+            os.path.abspath("/private/tmp"),
+            os.path.abspath("/tmp"),
+        ]
+        return any(os.path.commonpath([target, root]) == root for root in temp_roots)
+    except ValueError:
+        return False
+
+
+def _render_formats(proj):
+    formats = proj.GetRenderFormats() or {}
+    return _ser(formats)
+
+
+def _render_codecs(proj, fmt: str):
+    try:
+        return _ser(proj.GetRenderCodecs(fmt) or {})
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def _render_capabilities(proj):
+    formats = _render_formats(proj)
+    presets = _ser(proj.GetRenderPresetList() or [])
+    quick_presets = []
+    if _has_method(proj, "GetQuickExportRenderPresets"):
+        try:
+            quick_presets = _ser(proj.GetQuickExportRenderPresets() or [])
+        except Exception:
+            quick_presets = []
+    return {
+        "methods": _callable_method_names(proj, _RENDER_METHODS),
+        "formats": formats,
+        "format_count": len(formats) if isinstance(formats, dict) else 0,
+        "presets": presets,
+        "quick_export_presets": quick_presets,
+        "supported_settings": list(_RENDER_SETTING_KEYS),
+        "guards": {
+            "safe_quick_export_requires_allow_render": True,
+            "temp_target_required_for_lifecycle_probe": True,
+            "upload_disabled_for_safe_quick_export": True,
+        },
+    }
+
+
+def _probe_render_matrix(proj, p: Dict[str, Any]):
+    formats = _render_formats(proj)
+    if not isinstance(formats, dict):
+        return _err("GetRenderFormats did not return a format dictionary")
+    requested = p.get("formats")
+    if requested is not None and not isinstance(requested, list):
+        return _err("formats must be a list when provided")
+    max_pairs = p.get("max_pairs")
+    try:
+        max_pairs = int(max_pairs) if max_pairs is not None else None
+    except (TypeError, ValueError):
+        return _err("max_pairs must be an integer")
+    matrix = []
+    pair_count = 0
+    errors = []
+    for fmt, extension in formats.items():
+        if requested and fmt not in requested:
+            continue
+        codecs = _render_codecs(proj, fmt)
+        format_row = {"format": fmt, "extension": extension, "codecs": [], "codec_count": 0}
+        if isinstance(codecs, dict) and codecs.get("error"):
+            format_row["error"] = codecs["error"]
+            errors.append({"format": fmt, "error": codecs["error"]})
+            matrix.append(format_row)
+            continue
+        if isinstance(codecs, dict):
+            format_row["codec_count"] = len(codecs)
+            for label, codec in codecs.items():
+                if max_pairs is not None and pair_count >= max_pairs:
+                    break
+                row = {"label": label, "codec": codec}
+                try:
+                    row["resolutions"] = _ser(proj.GetRenderResolutions(fmt, codec) or [])
+                    row["resolution_count"] = len(row["resolutions"])
+                except Exception as exc:
+                    row["error"] = str(exc)
+                    errors.append({"format": fmt, "codec": codec, "error": str(exc)})
+                format_row["codecs"].append(row)
+                pair_count += 1
+        matrix.append(format_row)
+        if max_pairs is not None and pair_count >= max_pairs:
+            break
+    return {
+        "formats": len(matrix),
+        "format_total": len(formats),
+        "pairs_probed": pair_count,
+        "errors": errors,
+        "matrix": matrix,
+    }
+
+
+def _render_settings_snapshot(proj):
+    if _has_method(proj, "GetRenderSettings"):
+        settings = _ser(proj.GetRenderSettings())
+    else:
+        settings = {"error": "GetRenderSettings unavailable"}
+    return {
+        "format_and_codec": _ser(proj.GetCurrentRenderFormatAndCodec()),
+        "mode": _ser(proj.GetCurrentRenderMode()),
+        "settings": settings,
+        "jobs": _ser(proj.GetRenderJobList() or []),
+        "is_rendering": bool(proj.IsRenderingInProgress()),
+    }
+
+
+def _validate_render_settings_payload(settings: Dict[str, Any], *, require_temp_target: bool = False):
+    if not isinstance(settings, dict) or not settings:
+        return None, _err("settings must be a non-empty object")
+    unknown = sorted(key for key in settings if key not in _RENDER_SETTING_KEYS)
+    errors = []
+    target_dir = settings.get("TargetDir")
+    if target_dir is not None:
+        if not isinstance(target_dir, str) or not target_dir:
+            errors.append("TargetDir must be a non-empty string")
+        elif not os.path.isdir(target_dir):
+            errors.append(f"TargetDir does not exist: {target_dir}")
+        elif require_temp_target and not _render_temp_path_ok(target_dir):
+            errors.append("TargetDir must be under the system temp directory for this safe operation")
+    elif require_temp_target:
+        errors.append("TargetDir is required for this safe operation")
+    for key in ("FormatWidth", "FormatHeight", "MarkIn", "MarkOut", "AudioBitDepth", "AudioSampleRate"):
+        if key in settings and not isinstance(settings[key], int):
+            errors.append(f"{key} must be an integer")
+    for key in ("SelectAllFrames", "ExportVideo", "ExportAudio", "ExportAlpha", "MultiPassEncode", "NetworkOptimization", "ReplaceExistingFilesInPlace", "ExportSubtitle"):
+        if key in settings and not isinstance(settings[key], bool):
+            errors.append(f"{key} must be a boolean")
+    if "MarkIn" in settings and "MarkOut" in settings and settings["MarkOut"] < settings["MarkIn"]:
+        errors.append("MarkOut must be greater than or equal to MarkIn")
+    result = {"valid": not errors, "unknown_keys": unknown, "errors": errors, "settings": dict(settings)}
+    return result, None
+
+
+def _validate_render_settings_action(p: Dict[str, Any]):
+    validation, err = _validate_render_settings_payload(
+        p.get("settings"),
+        require_temp_target=bool(p.get("require_temp_target", False)),
+    )
+    if err:
+        return err
+    return validation
+
+
+def _settings_diff(requested: Dict[str, Any], applied: Dict[str, Any]):
+    if not isinstance(applied, dict):
+        return {"matched": [], "coerced_or_missing": sorted(requested.keys())}
+    matched = []
+    coerced = {}
+    for key, value in requested.items():
+        if applied.get(key) == value:
+            matched.append(key)
+        else:
+            coerced[key] = {"requested": value, "applied": applied.get(key)}
+    return {"matched": sorted(matched), "coerced_or_missing": coerced}
+
+
+def _safe_set_render_settings(proj, p: Dict[str, Any]):
+    settings = p.get("settings")
+    validation, err = _validate_render_settings_payload(
+        settings,
+        require_temp_target=bool(p.get("require_temp_target", False)),
+    )
+    if err:
+        return err
+    if not validation["valid"]:
+        return {"success": False, "validation": validation}
+    if p.get("dry_run"):
+        return _ok(validation=validation)
+    before = _render_settings_snapshot(proj)
+    success = bool(proj.SetRenderSettings(settings))
+    after_settings = _ser(proj.GetRenderSettings()) if _has_method(proj, "GetRenderSettings") else {}
+    result = {
+        "success": success,
+        "validation": validation,
+        "before": before,
+        "after": after_settings,
+        "diff": _settings_diff(settings, after_settings),
+    }
+    if p.get("restore") and isinstance(before.get("settings"), dict):
+        result["restore_success"] = bool(proj.SetRenderSettings(before["settings"]))
+    return result
+
+
+def _prepare_render_job(proj, p: Dict[str, Any]):
+    target_dir = p.get("target_dir") or (p.get("settings") or {}).get("TargetDir")
+    if not target_dir:
+        return _err("target_dir or settings.TargetDir is required")
+    if not os.path.isdir(target_dir):
+        return _err(f"target_dir does not exist: {target_dir}")
+    if p.get("require_temp_target", True) and not _render_temp_path_ok(target_dir):
+        return _err("target_dir must be under the system temp directory unless require_temp_target=False")
+    settings = dict(p.get("settings") or {})
+    settings.setdefault("TargetDir", target_dir)
+    if p.get("custom_name"):
+        settings["CustomName"] = p["custom_name"]
+    validation, err = _validate_render_settings_payload(settings, require_temp_target=p.get("require_temp_target", True))
+    if err:
+        return err
+    if not validation["valid"]:
+        return {"success": False, "validation": validation}
+    if p.get("dry_run"):
+        return _ok(validation=validation, format=p.get("format"), codec=p.get("codec"))
+    before = _render_settings_snapshot(proj)
+    format_success = None
+    if p.get("format") and p.get("codec"):
+        format_success = bool(proj.SetCurrentRenderFormatAndCodec(p["format"], p["codec"]))
+    settings_success = bool(proj.SetRenderSettings(settings))
+    job_id = proj.AddRenderJob() if settings_success else None
+    return {
+        "success": bool(job_id),
+        "job_id": job_id,
+        "format_success": format_success,
+        "settings_success": settings_success,
+        "before": before,
+        "settings": settings,
+    }
+
+
+def _render_job_lifecycle_probe(proj, p: Dict[str, Any]):
+    prepared = _prepare_render_job(proj, {**p, "dry_run": False, "require_temp_target": True})
+    if prepared.get("error") or not prepared.get("success"):
+        return prepared
+    job_id = prepared["job_id"]
+    status_before = _ser(proj.GetRenderJobStatus(job_id))
+    delete_success = bool(proj.DeleteRenderJob(job_id))
+    return {
+        "success": delete_success,
+        "job_id": job_id,
+        "status_before_delete": status_before,
+        "delete_success": delete_success,
+        "prepared": prepared,
+    }
+
+
+def _quick_export_capabilities(proj):
+    presets = []
+    if _has_method(proj, "GetQuickExportRenderPresets"):
+        presets = _ser(proj.GetQuickExportRenderPresets() or [])
+    return {
+        "presets": presets,
+        "preset_count": len(presets) if isinstance(presets, list) else 0,
+        "safe_params": ["TargetDir", "CustomName", "VideoQuality", "EnableUpload"],
+        "guards": {
+            "EnableUpload_forced_false": True,
+            "allow_render_required": True,
+            "temp_target_required": True,
+        },
+    }
+
+
+def _safe_quick_export(proj, p: Dict[str, Any]):
+    preset = p.get("preset")
+    if not preset:
+        return _err("preset is required")
+    params = dict(p.get("params") or {})
+    target_dir = params.get("TargetDir") or p.get("target_dir")
+    if target_dir:
+        params["TargetDir"] = target_dir
+    if p.get("custom_name"):
+        params["CustomName"] = p["custom_name"]
+    params["EnableUpload"] = False
+    validation, err = _validate_render_settings_payload(
+        {key: value for key, value in params.items() if key in _RENDER_SETTING_KEYS},
+        require_temp_target=bool(p.get("require_temp_target", True)),
+    )
+    if err:
+        return err
+    if not validation["valid"]:
+        return {"success": False, "validation": validation}
+    if p.get("dry_run") or not p.get("allow_render", False):
+        return _ok(would_render=False, preset=preset, params=params, validation=validation)
+    status = _ser(proj.RenderWithQuickExport(preset, params))
+    return {"success": not (isinstance(status, dict) and status.get("error")), "status": status, "params": params}
+
+
+def _export_render_boundary_report(proj, p: Dict[str, Any]):
+    report = {
+        "capabilities": _render_capabilities(proj),
+        "settings": _render_settings_snapshot(proj),
+    }
+    if p.get("include_matrix", True):
+        report["matrix"] = _probe_render_matrix(proj, {"max_pairs": p.get("max_pairs")})
+    if p.get("include_quick_export", True):
+        report["quick_export"] = _quick_export_capabilities(proj)
+    return report
+
+
 @mcp.tool()
 def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Render pipeline: jobs, presets, formats, codecs, and rendering.
@@ -3527,6 +3895,16 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       delete_preset(name) -> {success}
       quick_export_presets() -> {presets}
       quick_export(preset, params?) -> {status}
+      render_capabilities() -> {methods, formats, presets, quick_export_presets}
+      probe_render_matrix(formats?, max_pairs?) -> {matrix, errors}
+      probe_render_settings() -> {format_and_codec, mode, settings, jobs, is_rendering}
+      validate_render_settings(settings, require_temp_target?) -> {valid, errors, unknown_keys}
+      safe_set_render_settings(settings, dry_run?, restore?, require_temp_target?) -> {success, diff}
+      prepare_render_job(target_dir, settings?, format?, codec?, custom_name?, dry_run?) -> {success, job_id}
+      render_job_lifecycle_probe(target_dir, settings?, format?, codec?, custom_name?) -> {success, job_id, status_before_delete}
+      quick_export_capabilities() -> {presets, safe_params, guards}
+      safe_quick_export(preset, target_dir?|params?, custom_name?, dry_run?, allow_render?) -> {success, status}
+      export_render_boundary_report(include_matrix?, max_pairs?, include_quick_export?) -> {capabilities, settings, matrix?}
     """
     p = params or {}
     _, proj, err = _check()
@@ -3570,6 +3948,9 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     elif action == "get_resolutions":
         return {"resolutions": _ser(proj.GetRenderResolutions(p["format"], p["codec"]))}
     elif action == "get_settings":
+        missing = _requires_method(proj, "GetRenderSettings", "unknown")
+        if missing:
+            return missing
         return {"settings": _ser(proj.GetRenderSettings())}
     elif action == "set_settings":
         return {"success": bool(proj.SetRenderSettings(p["settings"]))}
@@ -3585,7 +3966,27 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return {"presets": proj.GetQuickExportRenderPresets()}
     elif action == "quick_export":
         return _ser(proj.RenderWithQuickExport(p["preset"], p.get("params", {})))
-    return _unknown(action, ["add_job","delete_job","delete_all_jobs","list_jobs","get_job_status","start","stop","is_rendering","get_formats","get_codecs","get_format_and_codec","set_format_and_codec","get_mode","set_mode","get_resolutions","get_settings","set_settings","list_presets","load_preset","save_preset","delete_preset","quick_export_presets","quick_export"])
+    elif action == "render_capabilities":
+        return _render_capabilities(proj)
+    elif action == "probe_render_matrix":
+        return _probe_render_matrix(proj, p)
+    elif action == "probe_render_settings":
+        return _render_settings_snapshot(proj)
+    elif action == "validate_render_settings":
+        return _validate_render_settings_action(p)
+    elif action == "safe_set_render_settings":
+        return _safe_set_render_settings(proj, p)
+    elif action == "prepare_render_job":
+        return _prepare_render_job(proj, p)
+    elif action == "render_job_lifecycle_probe":
+        return _render_job_lifecycle_probe(proj, p)
+    elif action == "quick_export_capabilities":
+        return _quick_export_capabilities(proj)
+    elif action == "safe_quick_export":
+        return _safe_quick_export(proj, p)
+    elif action == "export_render_boundary_report":
+        return _export_render_boundary_report(proj, p)
+    return _unknown(action, ["add_job","delete_job","delete_all_jobs","list_jobs","get_job_status","start","stop","is_rendering","get_formats","get_codecs","get_format_and_codec","set_format_and_codec","get_mode","set_mode","get_resolutions","get_settings","set_settings","list_presets","load_preset","save_preset","delete_preset","quick_export_presets","quick_export",*_RENDER_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

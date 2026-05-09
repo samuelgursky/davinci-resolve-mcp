@@ -280,6 +280,13 @@ Add `docs/render-deliver-kernel.md` with:
 - Safe render job lifecycle.
 - Quick Export boundaries.
 
+### Execution Status
+
+Implemented in v2.9.0. Final live probe on DaVinci Resolve Studio 20.3.2.9
+classified 23 surfaces as `supported`, one documented settings-readback surface
+as `version_or_page_dependent`, and zero surfaces as `error`. See
+`docs/render-deliver-kernel.md`.
+
 ## 3. Markers / Review Annotation Kernel
 
 ### Existing Surface

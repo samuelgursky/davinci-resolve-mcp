@@ -423,6 +423,14 @@ Key actions: `add_job`, `list_jobs`, `delete_job(job_id)`, `delete_all_jobs`,
 `list_presets`, `load_preset(name)`, `save_preset(name)`,
 `quick_export_presets`, `quick_export(preset, params?)`
 
+Render / Deliver kernel actions (v2.9.0+) add planning and safety layers:
+`render_capabilities`, `probe_render_matrix`, `probe_render_settings`,
+`validate_render_settings`, `safe_set_render_settings`,
+`prepare_render_job`, `render_job_lifecycle_probe`,
+`quick_export_capabilities`, `safe_quick_export`, and
+`export_render_boundary_report`. See `docs/render-deliver-kernel.md` for the
+live-tested format/codec, settings, job, and Quick Export boundary map.
+
 ---
 
 ## Common Workflows
@@ -550,12 +558,26 @@ timeline(action="export", params={"path": "/tmp/export.fcpxml", "type": "FCPXML"
 
 ```
 render(action="get_formats")
+render(action="probe_render_matrix")
 render(action="set_format_and_codec", params={"format": "QuickTime", "codec": "H.265 Master"})
+render(action="validate_render_settings", params={"settings": {"TargetDir": "/tmp/renders", "CustomName": "review", "SelectAllFrames": true}, "require_temp_target": true})
+render(action="prepare_render_job", params={"target_dir": "/tmp/renders", "settings": {"CustomName": "review", "SelectAllFrames": true}})
 render(action="add_job")
 render(action="list_jobs")
 render(action="start")
 render(action="is_rendering")
 ```
+
+For the Render / Deliver boundary map, run:
+
+```
+python3.11 tests/live_render_deliver_validation.py --output-dir /tmp/render-deliver-probe
+```
+
+The harness creates a disposable project, generates a synthetic timeline, probes
+format/codec/resolution compatibility, validates settings, runs a tiny temp
+render job, writes reports, deletes the project, and removes generated media and
+render outputs.
 
 ### 9. Apply a Fusion effect to a timeline item
 

@@ -30,8 +30,22 @@
   {
     "kernel": "render_deliver",
     "title": "Render / Deliver Kernel",
-    "status": "planned",
-    "passes": false,
+    "status": "implemented_live_validated",
+    "passes": true,
+    "evidence": {
+      "resolve": "DaVinci Resolve Studio 20.3.2.9",
+      "live_report": "/private/tmp/render-deliver-probe-20260509-release/render-deliver-probe.json",
+      "counts": {
+        "supported": 23,
+        "version_or_page_dependent": 1,
+        "unsupported": 0,
+        "partially_supported": 0,
+        "write_only_unverifiable": 0,
+        "read_only": 0,
+        "not_applicable": 0,
+        "error": 0
+      }
+    },
     "steps": [
       "Implement render compatibility and settings validation helpers",
       "Add offline render matrix/report tests",
