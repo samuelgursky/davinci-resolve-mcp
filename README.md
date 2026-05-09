@@ -11,7 +11,48 @@
 A Model Context Protocol (MCP) server providing **complete coverage** of the DaVinci Resolve Scripting API. Connect AI assistants (Claude, Cursor, Windsurf) to DaVinci Resolve and control every aspect of your post-production workflow through natural language.
 
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
-Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
+Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md), [Extension Authoring Kernel](docs/extension-authoring-kernel.md).
+
+## Feature Highlights
+
+The compound server now exposes 30 context-efficient tools: full Resolve API
+coverage plus guarded kernel workflows that probe, report, dry-run, and apply
+changes only when the active Resolve state supports them.
+
+| Area | Agent Workflows | Docs |
+|------|-----------------|------|
+| Timeline editing | Track/item probing, duplicate/copy/move helpers, state snapshots, transforms, audio, retime, crop, composite, and keyframe edits | [Timeline Edit Kernel](docs/timeline-edit-kernel.md) |
+| Media Pool / ingest | Safe media, sequence, and folder import; folder organization; metadata normalization; clip properties; marks; annotations; relink/proxy/full-res guards | [Media Pool / Ingest Kernel](docs/media-pool-ingest-kernel.md) |
+| Render / Deliver | Format/codec matrix probing, render settings validation, queued job lifecycle checks, guarded Quick Export, render boundary reports | [Render / Deliver Kernel](docs/render-deliver-kernel.md) |
+| Review annotations | Unified marker, custom data, flag, clip color, copy/move, sync, cleanup, and review report workflows across timeline, item, and clip scopes | [Review Annotation Kernel](docs/review-annotation-kernel.md) |
+| Color / Grade | Grade item snapshots, node graph probing, CDL validation, grade copy, DRX/LUT helpers, version restore, Gallery, and color group reporting | [Color / Grade Kernel](docs/color-grade-kernel.md) |
+| Fusion composition | Timeline-item Fusion comp targeting, safe tool creation, input writes, port inspection, connection validation, scoped bulk writes, comp export | [Fusion Composition Kernel](docs/fusion-composition-kernel.md) |
+| Conform / interchange | Timeline structure snapshots, gap/overlap detection, source ranges, checked exports/imports, round-trip comparison, missing media, relink plans | [Timeline Conform / Interchange Kernel](docs/timeline-conform-interchange-kernel.md) |
+| Audio / Fairlight | Audio track/item probes, source mapping reports, guarded audio property writes, voice isolation checks, auto-sync planning, transcription/subtitle probes | [Audio / Fairlight Kernel](docs/audio-fairlight-kernel.md) |
+| Project lifecycle | Disposable project CRUD, DRP import/export, archive/restore guards, settings snapshots, database dry-runs, preset lifecycle probes | [Project Lifecycle Kernel](docs/project-lifecycle-kernel.md) |
+| Extension authoring | Fuse, DCTL, ACES DCTL, and Resolve script lifecycle probes; safe MCP-marked install/remove; refresh/restart requirement classification | [Extension Authoring Kernel](docs/extension-authoring-kernel.md) |
+
+## Kernel Action Coverage
+
+Kernel actions are MCP workflow actions layered on top of the public DaVinci
+Resolve Scripting API. They are tracked separately from API method coverage:
+API coverage answers "can MCP reach every Blackmagic method?", while kernel
+coverage answers "which higher-level, guarded agent workflows are available?".
+
+Current kernel coverage: **109 actions** across **8 compound MCP tools**.
+
+| Kernel | MCP Tool | Actions |
+|--------|----------|---------|
+| Timeline edit | `timeline` | `duplicate_clips`, `copy_clips`, `move_clips`, `copy_range`, `duplicate_range`, `overwrite_range`, `lift_range`, `edit_kernel_capabilities`, `probe_edit_kernel_item` |
+| Media Pool / ingest | `media_pool` | `ingest_capabilities`, `probe_ingest_item`, `probe_media_pool`, `safe_import_media`, `safe_import_sequence`, `safe_import_folder`, `organize_clips`, `copy_metadata`, `normalize_metadata`, `probe_clip_properties`, `safe_relink`, `safe_unlink`, `link_proxy_checked`, `link_full_resolution_checked`, `set_clip_marks`, `clear_clip_marks`, `copy_clip_annotations`, `media_pool_boundary_report` |
+| Render / Deliver | `render` | `render_capabilities`, `probe_render_matrix`, `probe_render_settings`, `validate_render_settings`, `safe_set_render_settings`, `prepare_render_job`, `render_job_lifecycle_probe`, `quick_export_capabilities`, `safe_quick_export`, `export_render_boundary_report` |
+| Review annotations | `timeline_markers` | `annotation_capabilities`, `probe_annotations`, `normalize_marker_payload`, `copy_annotations`, `move_annotations`, `sync_marker_custom_data`, `clear_annotations_by_scope`, `export_review_report`, `annotation_boundary_report` |
+| Color / Grade | `timeline_item_color` | `grade_capabilities`, `probe_grade_item`, `probe_node_graph`, `safe_set_cdl`, `safe_copy_grade`, `safe_apply_drx`, `safe_export_lut`, `grade_version_snapshot`, `grade_version_restore`, `color_group_capabilities`, `gallery_capabilities`, `grade_boundary_report` |
+| Fusion composition | `fusion_comp` | `fusion_graph_capabilities`, `probe_fusion_comp`, `probe_fusion_tool`, `safe_add_tool`, `safe_set_inputs`, `safe_connect_tools`, `fusion_boundary_report` |
+| Conform / interchange | `timeline` | `conform_capabilities`, `probe_timeline_structure`, `detect_gaps_overlaps`, `source_range_report`, `export_timeline_checked`, `import_timeline_checked`, `compare_timelines`, `probe_interchange_roundtrip`, `detect_missing_media`, `build_relink_plan`, `conform_boundary_report` |
+| Audio / Fairlight | `timeline` | `audio_capabilities`, `probe_audio_item`, `probe_audio_track`, `safe_set_audio_properties`, `voice_isolation_capabilities`, `audio_mapping_report`, `safe_auto_sync_audio`, `transcription_capabilities`, `subtitle_generation_probe`, `fairlight_boundary_report` |
+| Project lifecycle | `project_manager` | `project_capabilities`, `probe_project_lifecycle`, `probe_project_settings`, `safe_project_create`, `safe_project_export`, `safe_project_import`, `safe_project_archive`, `safe_project_restore`, `safe_project_delete`, `safe_set_project_settings`, `project_settings_snapshot`, `database_capabilities`, `safe_set_current_database`, `preset_lifecycle_probe`, `project_boundary_report` |
+| Extension authoring | `script_plugin` | `extension_capabilities`, `probe_fuse_lifecycle`, `probe_dctl_lifecycle`, `probe_script_lifecycle`, `safe_install_extension`, `safe_remove_extension`, `refresh_or_restart_required`, `extension_boundary_report` |
 
 ### What's New in v2.16.0
 
@@ -586,7 +627,8 @@ API parity sweep — closing documented overloads and dropped parameters that th
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **27** compound (default) / **328** granular |
+| MCP Tools | **30** compound (default) / **328** granular |
+| Kernel Actions | **109** guarded MCP workflow actions across 8 compound tools |
 | API Methods Covered | **336/336** (100%) |
 | Methods Live Tested | **331/336** (98.5%) |
 | Live Test Pass Rate | **331/331** (100%) |
@@ -596,7 +638,7 @@ API parity sweep — closing documented overloads and dropped parameters that th
 
 ## API Coverage
 
-Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **27 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **328 individual tools** for power users. Both modes cover all 13 API object classes:
+Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **30 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **328 individual tools** for power users. Both modes cover all 13 API object classes. MCP-level kernel actions are tracked separately in [Kernel Action Coverage](#kernel-action-coverage).
 
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|
@@ -671,7 +713,7 @@ The MCP server comes in two modes:
 
 | Mode | File | Tools | Best For |
 |------|------|-------|----------|
-| **Compound** (default) | `src/server.py` | 27 | Most users — fast, clean, low context usage |
+| **Compound** (default) | `src/server.py` | 30 | Most users — fast, clean, low context usage |
 | **Full** | `src/resolve_mcp_server.py` | 328 | Power users who want one tool per API method |
 
 The compound server's `timeline_item` tool includes dedicated actions for common workflows:
@@ -734,6 +776,20 @@ Once connected, you can control DaVinci Resolve through natural language:
 "Export the timeline as an EDL"
 "Switch to the Color page and grab a still"
 "Create a Fusion composition on the selected clip"
+```
+
+Recent kernel workflows also support higher-level, state-aware requests:
+
+```
+"Probe this timeline for gaps, overlaps, missing media, and source frame ranges"
+"Safely import this image sequence, organize it into bins, and normalize clip metadata"
+"Build a render plan for ProRes 422 HQ, validate the settings, and queue the job without rendering"
+"Copy all review markers from the timeline to the selected clip and export a review report"
+"Snapshot this clip's grade, validate a CDL update, and export a temp LUT"
+"Create a Fusion TextPlus overlay on the selected clip and verify the graph connections"
+"Report audio channel mappings, voice isolation availability, and transcription/subtitle support"
+"Create a disposable _mcp_ project, export/import it, snapshot settings, then clean it up"
+"Install this MCP-marked DCTL or script, classify whether Resolve needs refresh or restart, then remove it"
 ```
 
 ## Test Results
