@@ -47,17 +47,33 @@ The `fuse_plugin`, `dctl`, and `script_plugin` compound tools (v2.5.0+) write
 Fuse plugin source, DCTL files, and Lua/Python scripts into Resolve's install
 directories. They are *authoring* tools — every other tool in this server wraps
 Resolve's scripting API, while these three emit and install plugin/script
-source. Status: live-verified in DaVinci Resolve Studio 20.3.2.9 (templates
-register and the `text_overlay` Fuse + Python `run_inline` Resolve-API queries
-were confirmed working). Use `docs/fuse-dctl-authoring.md` for the Fuse + DCTL
-coverage matrix and `docs/script-plugin-authoring.md` for the script DSL spec
-and the conversational-execution model.
+source. Status: lifecycle-verified in DaVinci Resolve Studio 20.3.2.9 for
+MCP-marked install/read/list/remove, regular DCTL `refresh_luts`, ACES/Fuse
+restart-required classification, Python installed-script execution, and
+Python/Lua `run_inline`. Use `docs/extension-authoring-kernel.md` for the
+kernel boundary map, `docs/fuse-dctl-authoring.md` for the Fuse + DCTL coverage
+matrix, and `docs/script-plugin-authoring.md` for the script DSL spec and the
+conversational-execution model.
+
+Extension Authoring kernel actions (v2.16.0+) are exposed through
+`script_plugin`:
+
+- `extension_capabilities`
+- `probe_fuse_lifecycle(name?, kind?, install?, cleanup?)`
+- `probe_dctl_lifecycle(name?, kind?, category?, install?, refresh_luts?, cleanup?)`
+- `probe_script_lifecycle(name?, language?, category?, install?, execute?, cleanup?)`
+- `safe_install_extension(extension_type, name, source?|kind?, dry_run?)`
+- `safe_remove_extension(extension_type, name, dry_run?)`
+- `refresh_or_restart_required(extension_type, category?)`
+- `extension_boundary_report(include_template_matrix?)`
 
 Key behavioral notes for `script_plugin`:
 - `run_inline(source, language)` runs ad-hoc Lua/Python in Resolve and returns
   stdout + result — use this for one-off conversational queries against the
   Resolve API instead of building+installing a script.
-- `execute(name, category, language)` runs an installed script the same way.
+- `execute(name, category, language)` runs an installed script; Python stdout
+  and stderr are captured, while installed Lua execution can return false from
+  the Python bridge even when install/read/list/remove worked.
 - Lua scripts: `fusion.Execute()` from the Python bridge is a no-op in
   Resolve 20.x — `_run_inline_lua` works around this with `RunScript` against
   a temp file plus completion-sentinel polling on `app:SetData/GetData`.

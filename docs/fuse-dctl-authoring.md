@@ -5,12 +5,14 @@ install Fusion Fuse plugins and DCTL color-transform files. They are the first
 *authoring* tools in this MCP — every other tool wraps Resolve's scripting API,
 while these two write source files into Resolve's plugin/LUT directories.
 
-**Status: experimental.** Templates pass parser-level validation (Lua via
-`luac -p` for Fuses, structural checks for DCTL) but have not been live-tested
-in DaVinci Resolve at the time of this release. Community feedback on which
-templates work, which silently fail, and which need patches is explicitly
-welcome — please open an issue with the template kind, your Resolve version
-and platform, and any console output from Resolve's Workspace → Console.
+**Status: lifecycle-tested, runtime rendering still experimental.** The v2.16.0
+Extension Authoring kernel live-tested template generation, validation,
+install/read/list/remove, LUT refresh for regular DCTLs, and restart-required
+classification for Fuse and ACES DCTL surfaces. It does not prove every Fuse
+renders correctly after a restart or that every DCTL compiles on every GPU
+backend. Community feedback on runtime behavior is still welcome — please open
+an issue with the template kind, your Resolve version and platform, and any
+console output from Resolve's Workspace → Console.
 
 ## What's covered
 
@@ -124,15 +126,18 @@ ACES parametric V1/V2 details.
 - All 8 DCTL templates produce a valid entry-point signature
 - Filesystem round-trip (install → list → read → remove) for both tools across
   all install categories (LUT, ACES IDT, ACES ODT)
+- Live v2.16.0 lifecycle probe confirmed generated Fuse install/read/list/remove,
+  regular DCTL install/read/list/refresh/remove, and ACES IDT
+  install/read/list/remove on Resolve Studio 20.3.2.9
 - `list_templates` enumeration for both tools
 - Path-traversal and name-regex rejection paths
 - Subdir handling with traversal guards (no `..`, no hidden dirs)
 - `view_lut` parameter types: `float`, `vec2`, `vec3_rgb`, `vec4_rgba`
 
-**Not tested:**
-- Loading any generated Fuse into a running Resolve and confirming it appears
-  in the Fusion tool list
-- Confirming any template renders correctly at runtime (e.g. does
+**Still not fully proven:**
+- Restarting Resolve and confirming every generated Fuse appears in the Fusion
+  tool list
+- Confirming every template renders correctly at runtime (e.g. does
   `color_matrix` brightness actually shift values? does `text_overlay` draw
   glyphs? does `point_modifier` drive a Merge Center input?)
 - The Modifier templates — `CT_Modifier` is barely covered in the Fuse SDK
@@ -141,8 +146,8 @@ ACES parametric V1/V2 details.
 - GLSL `view_lut` shader compilation (we only check braces and the
   `ShadePixel` substring; `glslangValidator` would be needed for full GLSL
   parsing)
-- DCTL templates compiling on Resolve's GPU backend (Metal/CUDA/OpenCL each
-  have edge cases)
+- Every DCTL template compiling on every Resolve GPU backend (Metal/CUDA/OpenCL
+  each have edge cases)
 - `variable_blur` SAT-based pattern — `UseSAT()`/`SampleAreaW()`/`RecycleSAT()`
   are documented but unverified in this combination
 - `source_generator` `CT_SourceTool` registration — the `REG_Source_*Ctrls`

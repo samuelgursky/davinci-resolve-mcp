@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.15.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.16.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](#api-coverage)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-30%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](#test-results)
@@ -13,7 +13,33 @@ A Model Context Protocol (MCP) server providing **complete coverage** of the DaV
 Release/version procedure: see [docs/release-process.md](docs/release-process.md).
 Resolve developer package notes: [Workflow Integrations](docs/workflow-integrations.md), [OpenFX](docs/openfx-notes.md), [LUTs](docs/lut-notes.md), [Fusion Templates](docs/fusion-template-notes.md), [DCTL](docs/dctl-notes.md), [Codec Plugins](docs/codec-plugin-notes.md), [Fuse + DCTL Authoring (experimental)](docs/fuse-dctl-authoring.md), [Script Plugin Authoring + Conversational Lua/Python](docs/script-plugin-authoring.md).
 
-### What's New in v2.15.0
+### What's New in v2.16.0
+
+Extension Authoring kernel expansion - adding lifecycle-aware Fuse, DCTL, ACES
+DCTL, and Resolve-page script probes around the existing authoring tools.
+
+**New `script_plugin` extension actions**: added `extension_capabilities`,
+`probe_fuse_lifecycle`, `probe_dctl_lifecycle`, `probe_script_lifecycle`,
+`safe_install_extension`, `safe_remove_extension`,
+`refresh_or_restart_required`, and `extension_boundary_report`.
+
+**Lifecycle and cleanup guards**: safe extension installs require `_mcp_` names
+and MCP markers by default. Safe removal refuses to delete unmarked files unless
+explicitly overridden. The kernel classifies Fuse and ACES DCTL installs as
+restart-required, regular LUT DCTLs as `refresh_luts`-driven, and Resolve-page
+scripts as menu-refresh-only.
+
+**Documented support map**: added
+[`docs/extension-authoring-kernel.md`](docs/extension-authoring-kernel.md) and
+updated the Fuse/DCTL and script authoring docs with live lifecycle findings.
+
+**Validation**: live validated against DaVinci Resolve Studio 20.3.2.9 with
+MCP-marked `_mcp_` extension files only. Final probe result: 14 supported, 1
+partially supported installed-Lua-script execution boundary, 1 intentional
+unsupported unmarked-source guard, and 0 errors. All generated extension files
+and the disposable project were cleaned up.
+
+### v2.15.0
 
 Project / Database / Archive kernel expansion - adding disposable project
 lifecycle guards, settings snapshots and write/restore probes, database switch

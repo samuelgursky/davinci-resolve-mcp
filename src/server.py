@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.15.0"
+VERSION = "2.16.0"
 
 import base64
 import os
@@ -8990,7 +8990,7 @@ def _validate_lua_syntax(source: str) -> Dict[str, Any]:
     if luac is None:
         return {"valid": True, "errors": None, "checker": "unavailable"}
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".lua", delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".lua", delete=False, encoding="utf-8") as f:
         f.write(source)
         tmp = f.name
     try:
@@ -9704,6 +9704,471 @@ def _run_inline_lua(source: str) -> Dict[str, Any]:
     return response
 
 
+_EXTENSION_KERNEL_ACTIONS = [
+    "extension_capabilities",
+    "probe_fuse_lifecycle",
+    "probe_dctl_lifecycle",
+    "probe_script_lifecycle",
+    "safe_install_extension",
+    "safe_remove_extension",
+    "refresh_or_restart_required",
+    "extension_boundary_report",
+]
+
+_EXTENSION_TYPES = ("fuse", "dctl", "script")
+
+
+def _extension_safe_name(name: Any, *, allow_non_mcp_name: bool = False) -> Optional[Dict[str, Any]]:
+    if allow_non_mcp_name:
+        if isinstance(name, str) and name:
+            return None
+        return _err("name must be a non-empty string")
+    if not isinstance(name, str) or not name.startswith("_mcp_") or len(name) <= len("_mcp_"):
+        return _err("name must start with '_mcp_' unless allow_non_mcp_name=True")
+    return None
+
+
+def _extension_template_name(prefix: str, kind: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9_]", "_", kind)
+    return f"_mcp_{prefix}_{clean}"
+
+
+def _source_has_marker(source: str, marker: str) -> bool:
+    return marker in source[:2048]
+
+
+def _file_has_marker(path: str, marker: str) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return marker in handle.read(4096)
+    except OSError:
+        return False
+
+
+def _extension_type(p: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+    extension_type = p.get("extension_type", p.get("type", ""))
+    if extension_type not in _EXTENSION_TYPES:
+        return _err(f"extension_type must be one of: {', '.join(_EXTENSION_TYPES)}"), ""
+    return None, extension_type
+
+
+def _refresh_or_restart_required(p: Dict[str, Any]) -> Dict[str, Any]:
+    err, extension_type = _extension_type(p)
+    if err:
+        return err
+    category = p.get("category", "lut")
+    if extension_type == "fuse":
+        return {
+            "extension_type": "fuse",
+            "refresh_luts": False,
+            "restart_required": True,
+            "live_reload": "Existing Fuses can be reloaded from Fusion Inspector UI; new Fuses require Resolve restart.",
+            "mcp_can_trigger_reload": False,
+        }
+    if extension_type == "dctl" and category == "lut":
+        return {
+            "extension_type": "dctl",
+            "category": "lut",
+            "refresh_luts": True,
+            "restart_required": False,
+            "live_reload": "Call project_settings(action='refresh_luts') after install.",
+        }
+    if extension_type == "dctl" and category in {"aces_idt", "aces_odt"}:
+        return {
+            "extension_type": "dctl",
+            "category": category,
+            "refresh_luts": False,
+            "restart_required": True,
+            "live_reload": "ACES transform folders are scanned only at Resolve startup.",
+        }
+    if extension_type == "script":
+        return {
+            "extension_type": "script",
+            "category": p.get("script_category", p.get("category", "Utility")),
+            "refresh_luts": False,
+            "restart_required": False,
+            "live_reload": "Workspace Scripts menu refreshes when opened.",
+        }
+    return _err(f"Unsupported refresh/restart category for {extension_type}: {category}")
+
+
+def _extension_template_matrix() -> Dict[str, Any]:
+    matrix: Dict[str, Any] = {"fuse": {}, "dctl": {}, "script": {}}
+    for kind, generator in sorted(fuse_templates.TEMPLATES.items()):
+        name = _extension_template_name("fuse", kind)
+        row: Dict[str, Any] = {"name": name}
+        try:
+            source = generator(name, {})
+            row["has_marker"] = _source_has_marker(source, _FUSE_MARKER)
+            row["validation"] = _validate_lua_syntax(source)
+        except Exception as exc:
+            row["error"] = str(exc)
+        matrix["fuse"][kind] = row
+    for kind, generator in sorted(dctl_templates.TEMPLATES.items()):
+        name = _extension_template_name("dctl", kind)
+        row = {
+            "name": name,
+            "suggested_category": dctl_templates.KIND_CATEGORY.get(kind, "lut"),
+        }
+        try:
+            source = generator(name, {})
+            row["has_marker"] = _source_has_marker(source, _DCTL_MARKER)
+            row["validation"] = _validate_dctl_source(source)
+        except Exception as exc:
+            row["error"] = str(exc)
+        matrix["dctl"][kind] = row
+    for kind, generator in sorted(script_templates.TEMPLATES.items()):
+        matrix["script"][kind] = {}
+        for language in _SCRIPT_VALID_LANG:
+            name = _extension_template_name(f"script_{language}", kind)
+            row = {"name": name, "language": language}
+            try:
+                source = generator(name, {"language": language})
+                row["has_marker"] = _source_has_marker(source, _SCRIPT_MARKER)
+                row["validation"] = _validate_script_source(source, language)
+            except Exception as exc:
+                row["error"] = str(exc)
+            matrix["script"][kind][language] = row
+    return matrix
+
+
+def _extension_capabilities() -> Dict[str, Any]:
+    paths = get_resolve_plugin_paths()
+    return {
+        "kernel_actions": list(_EXTENSION_KERNEL_ACTIONS),
+        "paths": {
+            "fuses_dir": _fuses_dir(),
+            "dctl_lut_dir": _dctl_dir("lut"),
+            "aces_idt_dir": _dctl_dir("aces_idt"),
+            "aces_odt_dir": _dctl_dir("aces_odt"),
+            "scripts_root": paths["scripts_root"],
+            "script_categories": list(paths["scripts_categories"]),
+        },
+        "templates": {
+            "fuse": sorted(fuse_templates.TEMPLATES.keys()),
+            "dctl": sorted(dctl_templates.TEMPLATES.keys()),
+            "script": sorted(script_templates.TEMPLATES.keys()),
+        },
+        "markers": {
+            "fuse": _FUSE_MARKER,
+            "dctl": _DCTL_MARKER,
+            "script": _SCRIPT_MARKER,
+        },
+        "lifecycle": {
+            "fuse": _refresh_or_restart_required({"extension_type": "fuse"}),
+            "dctl_lut": _refresh_or_restart_required({"extension_type": "dctl", "category": "lut"}),
+            "dctl_aces_idt": _refresh_or_restart_required({"extension_type": "dctl", "category": "aces_idt"}),
+            "dctl_aces_odt": _refresh_or_restart_required({"extension_type": "dctl", "category": "aces_odt"}),
+            "script": _refresh_or_restart_required({"extension_type": "script", "category": "Utility"}),
+        },
+        "safe_guards": {
+            "mcp_name_prefix": "_mcp_",
+            "marker_required_for_safe_remove": True,
+            "marker_required_for_provided_source": True,
+            "aces_installs_restart_required": True,
+            "fuse_new_installs_restart_required": True,
+        },
+    }
+
+
+def _script_install_source(name: str, source: str, category: str, language: str, overwrite: bool = False) -> Dict[str, Any]:
+    invalid = _validate_script_name(name)
+    if invalid:
+        return invalid
+    invalid = _validate_script_language(language)
+    if invalid:
+        return invalid
+    try:
+        target_dir = _scripts_dir(category)
+    except ValueError as exc:
+        return _err(str(exc))
+    os.makedirs(target_dir, exist_ok=True)
+    path = os.path.join(target_dir, f"{name}{_SCRIPT_LANG_EXT[language]}")
+    if os.path.exists(path) and not overwrite:
+        return _err(f"Script '{name}{_SCRIPT_LANG_EXT[language]}' already exists at {path}. Pass overwrite=true to replace it.")
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(source)
+    except OSError as exc:
+        return _err(f"Failed to write script: {exc}")
+    return _ok(
+        path=path,
+        category=category,
+        language=language,
+        note="Resolve picks up new scripts without a restart. Open Workspace → Scripts → " + category + " to run.",
+    )
+
+
+def _safe_install_extension(p: Dict[str, Any]) -> Dict[str, Any]:
+    err, extension_type = _extension_type(p)
+    if err:
+        return err
+    name = p.get("name") or _extension_template_name(extension_type, p.get("kind", "lifecycle"))
+    invalid = _extension_safe_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    if invalid:
+        return invalid
+    source = p.get("source")
+    kind = p.get("kind")
+    options = p.get("options") or {}
+    if source is None:
+        if not kind:
+            return _err("Provide source or kind")
+        try:
+            if extension_type == "fuse":
+                generator = fuse_templates.TEMPLATES[kind]
+                source = generator(name, options)
+            elif extension_type == "dctl":
+                generator = dctl_templates.TEMPLATES[kind]
+                source = generator(name, options)
+            else:
+                language = p.get("language", options.get("language", "lua"))
+                generator = script_templates.TEMPLATES[kind]
+                source = generator(name, {**options, "language": language})
+        except KeyError:
+            return _err(f"Unknown {extension_type} template kind '{kind}'")
+        except (ValueError, TypeError) as exc:
+            return _err(f"Template generation failed: {exc}")
+    if not isinstance(source, str) or not source.strip():
+        return _err("source must be a non-empty string")
+    marker = {"fuse": _FUSE_MARKER, "dctl": _DCTL_MARKER, "script": _SCRIPT_MARKER}[extension_type]
+    if p.get("require_marker", True) and not _source_has_marker(source, marker):
+        return _err(f"source must include {marker} unless require_marker=False")
+    if p.get("dry_run"):
+        return _ok(
+            would_install=True,
+            extension_type=extension_type,
+            name=name,
+            lifecycle=_refresh_or_restart_required({
+                "extension_type": extension_type,
+                "category": p.get("category", "lut"),
+            }),
+        )
+    if extension_type == "fuse":
+        return fuse_plugin("install", {"name": name, "source": source, "overwrite": p.get("overwrite", False)})
+    if extension_type == "dctl":
+        category = p.get("category") or dctl_templates.KIND_CATEGORY.get(kind, "lut")
+        return dctl("install", {
+            "name": name,
+            "source": source,
+            "category": category,
+            "subdir": p.get("subdir"),
+            "ext": p.get("ext", ".dctl"),
+            "overwrite": p.get("overwrite", False),
+        })
+    language = p.get("language", options.get("language", "lua"))
+    category = p.get("script_category", p.get("category", "Utility"))
+    invalid = _validate_script_language(language)
+    if invalid:
+        return invalid
+    validation = _validate_script_source(source, language)
+    if validation.get("valid") is False:
+        return _err(f"Script validation failed: {validation.get('errors')}")
+    return _script_install_source(name, source, category, language, p.get("overwrite", False))
+
+
+def _safe_remove_extension(p: Dict[str, Any]) -> Dict[str, Any]:
+    err, extension_type = _extension_type(p)
+    if err:
+        return err
+    name = p.get("name")
+    invalid = _extension_safe_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    if invalid:
+        return invalid
+    if extension_type == "fuse":
+        invalid = _validate_fuse_name(name)
+        if invalid:
+            return invalid
+        path = _fuse_path(name)
+        marker = _FUSE_MARKER
+    elif extension_type == "dctl":
+        invalid = _validate_dctl_name(name)
+        if invalid:
+            return invalid
+        ext = p.get("ext", ".dctl")
+        if ext not in _DCTL_VALID_EXT:
+            return _err(f"ext must be one of {list(_DCTL_VALID_EXT)}")
+        category = p.get("category", "lut")
+        if category not in _DCTL_VALID_CATEGORIES:
+            return _err(f"Invalid category '{category}'. Valid: {list(_DCTL_VALID_CATEGORIES)}")
+        try:
+            path = _dctl_path(name, p.get("subdir"), ext, category)
+        except ValueError as exc:
+            return _err(str(exc))
+        marker = _DCTL_MARKER
+    else:
+        invalid = _validate_script_name(name)
+        if invalid:
+            return invalid
+        language = p.get("language", "lua")
+        invalid = _validate_script_language(language)
+        if invalid:
+            return invalid
+        category = p.get("script_category", p.get("category", "Utility"))
+        try:
+            path = _script_path(name, category, language)
+        except ValueError as exc:
+            return _err(str(exc))
+        marker = _SCRIPT_MARKER
+    if not os.path.isfile(path):
+        return _err(f"No {extension_type} extension named '{name}' at {path}")
+    if p.get("require_marker", True) and not _file_has_marker(path, marker):
+        return _err(f"Refusing to remove unmarked file at {path}; pass require_marker=False only if you intend this")
+    if p.get("dry_run"):
+        return _ok(would_remove=True, extension_type=extension_type, name=name, path=path)
+    try:
+        os.unlink(path)
+    except OSError as exc:
+        return _err(f"Failed to remove {extension_type} extension: {exc}")
+    return _ok(path=path, extension_type=extension_type, name=name)
+
+
+def _probe_fuse_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
+    name = p.get("name", "_mcp_fuse_lifecycle_probe")
+    kind = p.get("kind", "color_matrix")
+    out: Dict[str, Any] = {
+        "extension_type": "fuse",
+        "name": name,
+        "kind": kind,
+        "path": _fuse_path(name),
+        "lifecycle": _refresh_or_restart_required({"extension_type": "fuse"}),
+    }
+    template = fuse_plugin("template", {"kind": kind, "name": name, "options": p.get("options")})
+    out["template"] = {k: v for k, v in template.items() if k != "source"} if isinstance(template, dict) else template
+    source = template.get("source") if isinstance(template, dict) else None
+    if isinstance(source, str):
+        out["has_marker"] = _source_has_marker(source, _FUSE_MARKER)
+        out["validation"] = fuse_plugin("validate", {"source": source})
+    if p.get("include_template_matrix"):
+        out["template_matrix"] = _extension_template_matrix()["fuse"]
+    if p.get("install"):
+        install = _safe_install_extension({
+            "extension_type": "fuse",
+            "name": name,
+            "source": source,
+            "overwrite": p.get("overwrite", True),
+        })
+        out["install"] = install
+        out["read"] = fuse_plugin("read", {"name": name}) if install.get("success") else None
+        out["list"] = fuse_plugin("list")
+        if p.get("cleanup", True):
+            out["remove"] = _safe_remove_extension({"extension_type": "fuse", "name": name})
+    return out
+
+
+def _probe_dctl_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
+    name = p.get("name", "_mcp_dctl_lifecycle_probe")
+    kind = p.get("kind", "transform")
+    category = p.get("category") or dctl_templates.KIND_CATEGORY.get(kind, "lut")
+    subdir = p.get("subdir", "MCP")
+    out: Dict[str, Any] = {
+        "extension_type": "dctl",
+        "name": name,
+        "kind": kind,
+        "category": category,
+        "subdir": subdir,
+        "path": _dctl_path(name, subdir, p.get("ext", ".dctl"), category),
+        "lifecycle": _refresh_or_restart_required({"extension_type": "dctl", "category": category}),
+    }
+    template = dctl("template", {"kind": kind, "name": name, "options": p.get("options")})
+    out["template"] = {k: v for k, v in template.items() if k != "source"} if isinstance(template, dict) else template
+    source = template.get("source") if isinstance(template, dict) else None
+    if isinstance(source, str):
+        out["has_marker"] = _source_has_marker(source, _DCTL_MARKER)
+        out["validation"] = dctl("validate", {"source": source})
+    if p.get("include_template_matrix"):
+        out["template_matrix"] = _extension_template_matrix()["dctl"]
+    if p.get("install"):
+        install = _safe_install_extension({
+            "extension_type": "dctl",
+            "name": name,
+            "source": source,
+            "category": category,
+            "subdir": subdir,
+            "overwrite": p.get("overwrite", True),
+        })
+        out["install"] = install
+        out["read"] = dctl("read", {"name": name, "category": category, "subdir": subdir}) if install.get("success") else None
+        out["list"] = dctl("list", {"category": category, "subdir": subdir})
+        if p.get("refresh_luts") and category == "lut":
+            out["refresh_luts"] = project_settings("refresh_luts")
+        if p.get("cleanup", True):
+            out["remove"] = _safe_remove_extension({"extension_type": "dctl", "name": name, "category": category, "subdir": subdir})
+    return out
+
+
+def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
+    name = p.get("name", "_mcp_script_lifecycle_probe")
+    kind = p.get("kind", "scaffold")
+    language = p.get("language", "py")
+    category = p.get("script_category", p.get("category", "Utility"))
+    out: Dict[str, Any] = {
+        "extension_type": "script",
+        "name": name,
+        "kind": kind,
+        "language": language,
+        "category": category,
+        "path": _script_path(name, category, language),
+        "lifecycle": _refresh_or_restart_required({"extension_type": "script", "category": category}),
+    }
+    template = script_plugin("template", {"kind": kind, "name": name, "options": {"language": language}})
+    out["template"] = {k: v for k, v in template.items() if k != "source"} if isinstance(template, dict) else template
+    source = template.get("source") if isinstance(template, dict) else None
+    if isinstance(source, str):
+        out["has_marker"] = _source_has_marker(source, _SCRIPT_MARKER)
+        out["validation"] = script_plugin("validate", {"source": source, "language": language})
+    if p.get("include_template_matrix"):
+        out["template_matrix"] = _extension_template_matrix()["script"]
+    if p.get("install"):
+        install = _safe_install_extension({
+            "extension_type": "script",
+            "name": name,
+            "source": source,
+            "category": category,
+            "language": language,
+            "overwrite": p.get("overwrite", True),
+        })
+        out["install"] = install
+        out["read"] = script_plugin("read", {"name": name, "category": category, "language": language}) if install.get("success") else None
+        out["list"] = script_plugin("list", {"category": category, "language": language})
+        if p.get("execute") and install.get("success"):
+            out["execute"] = script_plugin("execute", {
+                "name": name,
+                "category": category,
+                "language": language,
+                "timeout": p.get("timeout", 120),
+            })
+        if p.get("cleanup", True):
+            out["remove"] = _safe_remove_extension({
+                "extension_type": "script",
+                "name": name,
+                "category": category,
+                "language": language,
+            })
+    return out
+
+
+def _extension_boundary_report(p: Dict[str, Any]) -> Dict[str, Any]:
+    include_matrix = p.get("include_template_matrix", True)
+    return {
+        "capabilities": _extension_capabilities(),
+        "refresh_restart": {
+            "fuse": _refresh_or_restart_required({"extension_type": "fuse"}),
+            "dctl_lut": _refresh_or_restart_required({"extension_type": "dctl", "category": "lut"}),
+            "dctl_aces_idt": _refresh_or_restart_required({"extension_type": "dctl", "category": "aces_idt"}),
+            "dctl_aces_odt": _refresh_or_restart_required({"extension_type": "dctl", "category": "aces_odt"}),
+            "script": _refresh_or_restart_required({"extension_type": "script", "category": "Utility"}),
+        },
+        "template_matrix": _extension_template_matrix() if include_matrix else None,
+        "dry_run_probes": {
+            "fuse": _probe_fuse_lifecycle({"include_template_matrix": False}),
+            "dctl_lut": _probe_dctl_lifecycle({"include_template_matrix": False}),
+            "dctl_aces_idt": _probe_dctl_lifecycle({"kind": "aces_idt", "category": "aces_idt", "include_template_matrix": False}),
+            "script_py": _probe_script_lifecycle({"language": "py", "include_template_matrix": False}),
+            "script_lua": _probe_script_lifecycle({"language": "lua", "include_template_matrix": False}),
+        },
+    }
+
+
 @mcp.tool()
 def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install Resolve-page Lua/Python scripts (Workspace → Scripts menu).
@@ -9751,8 +10216,33 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
           pre-bound, runs as subprocess, captures stdout/stderr.
         — Lua: fusion.Execute(source); return value comes back as `result`.
         — Use this for ad-hoc one-shot queries without persisting a file.
+      extension_capabilities() -> {paths, templates, lifecycle, safe_guards}
+      probe_fuse_lifecycle(name?, kind?, install?, cleanup?) -> {template, validation, install?, remove?}
+      probe_dctl_lifecycle(name?, kind?, category?, install?, refresh_luts?, cleanup?) -> {template, validation, install?, remove?}
+      probe_script_lifecycle(name?, language?, category?, install?, execute?, cleanup?) -> {template, validation, install?, execute?, remove?}
+      safe_install_extension(extension_type, name, source?|kind?, dry_run?) -> {success}
+      safe_remove_extension(extension_type, name, dry_run?) -> {success}
+      refresh_or_restart_required(extension_type, category?) -> {refresh_luts, restart_required}
+      extension_boundary_report(include_template_matrix?) -> {capabilities, template_matrix, dry_run_probes}
     """
     p = params or {}
+
+    if action == "extension_capabilities":
+        return _extension_capabilities()
+    if action == "probe_fuse_lifecycle":
+        return _probe_fuse_lifecycle(p)
+    if action == "probe_dctl_lifecycle":
+        return _probe_dctl_lifecycle(p)
+    if action == "probe_script_lifecycle":
+        return _probe_script_lifecycle(p)
+    if action == "safe_install_extension":
+        return _safe_install_extension(p)
+    if action == "safe_remove_extension":
+        return _safe_remove_extension(p)
+    if action == "refresh_or_restart_required":
+        return _refresh_or_restart_required(p)
+    if action == "extension_boundary_report":
+        return _extension_boundary_report(p)
 
     if action == "categories":
         paths = get_resolve_plugin_paths()
@@ -9973,7 +10463,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 
     return _unknown(action, ["path", "categories", "list", "install", "remove",
                              "read", "validate", "template", "list_templates",
-                             "execute", "run_inline"])
+                             "execute", "run_inline", *_EXTENSION_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -226,8 +226,22 @@
   {
     "kernel": "extension_authoring",
     "title": "Extension Authoring Kernel",
-    "status": "planned",
-    "passes": false,
+    "status": "implemented_live_validated",
+    "passes": true,
+    "evidence": {
+      "resolve": "DaVinci Resolve Studio 20.3.2.9",
+      "live_report": "/private/tmp/extension-authoring-probe-20260509-release/extension-authoring-probe.json",
+      "counts": {
+        "supported": 14,
+        "partially_supported": 1,
+        "unsupported": 1,
+        "not_applicable": 0,
+        "version_or_page_dependent": 0,
+        "write_only_unverifiable": 0,
+        "read_only": 0,
+        "error": 0
+      }
+    },
     "steps": [
       "Implement lifecycle-aware extension capability helpers",
       "Add offline template, path guard, and restart/refresh classification tests",

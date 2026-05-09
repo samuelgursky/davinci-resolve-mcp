@@ -158,11 +158,13 @@ familiar for data-heavy workflows. The same RULES table syntax works in both
 Verified on DaVinci Resolve Studio 20.3.2.9, macOS:
 
 - ✅ Scripts appear in Workspace → Scripts → \<category\> after install (no restart needed)
-- ✅ Lua scripts execute via `fusion.RunScript()`
+- ⚠️ Installed Lua script execution via `fusion.RunScript(path)` can return
+  `False` from the Python bridge even when install/read/list/remove work. Use
+  `run_inline(language="lua")` when captured output or return values matter.
 - ✅ Python scripts execute via subprocess with full stdout/stderr capture
 - ✅ `run_inline` Lua: stdout captured (with tabs), return value captured, errors trapped with line numbers
 - ✅ `run_inline` Python: full Resolve API access, project + media-pool + timeline pre-bound
-- ✅ Both engines (Lua and Python) compile and run without errors
+- ✅ Both engines (Lua and Python) compile without errors
 - ✅ DSL coverage tests confirm every documented source/action/target/transform/strategy is present in both engines
 
 ## Implementation notes (for maintainers)
