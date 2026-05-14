@@ -52,7 +52,7 @@ def import_media(
             Example: [{"FilePath": "frame_%03d.dpx", "StartIndex": 1, "EndIndex": 100}]
         file_path: Single-path convenience for backward compatibility.
     """
-    _, mp, err = _get_mp()
+    project, mp, err = _get_mp()
     if err:
         return err
     if clip_infos is not None:
@@ -91,8 +91,10 @@ def append_to_timeline(
         clip_ids: Simple form — list of MediaPoolItem unique IDs to append in order.
         clip_infos: Positioned form — list of dicts with keys clip_id (or
             media_pool_item_id), start_frame, end_frame, record_frame, track_index,
-            and optional media_type (1=video only, 2=audio only). Returns
-            timeline_item_id per appended item.
+            and optional media_type (1=video only, 2=audio only). record_frame is
+            relative to the current timeline start frame by default; pass
+            record_frame_mode="absolute" for raw Resolve recordFrame values.
+            Returns timeline_item_id per appended item.
     """
     _, mp, err = _get_mp()
     if err:
@@ -101,9 +103,11 @@ def append_to_timeline(
         if not isinstance(clip_infos, list) or not clip_infos:
             return {"error": "clip_infos must be a non-empty list"}
         root = mp.GetRootFolder()
+        current_timeline = project.GetCurrentTimeline() if project else None
+        timeline_start = _timeline_start_frame(current_timeline)
         built = []
         for i, ci in enumerate(clip_infos):
-            row, row_err = _build_append_clip_info_dict(root, ci, i)
+            row, row_err = _build_append_clip_info_dict(root, ci, i, timeline_start)
             if row_err:
                 return row_err
             built.append(row)

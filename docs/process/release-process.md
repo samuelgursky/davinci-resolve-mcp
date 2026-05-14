@@ -26,7 +26,8 @@ Every release bump must update all version surfaces:
 - `src/granular/common.py`
 - `install.py`
 - README version badge
-- README "What's New" section
+- README current stats or latest-release summary when they changed
+- `CHANGELOG.md` latest release entry
 - `docs/SKILL.md` when tool discovery, examples, or behavior changed
 - Git tag, e.g. `v2.4.1`
 - GitHub Release notes
@@ -82,7 +83,7 @@ should say that no behavior changed.
 1. Start from a clean tracked worktree. Leave unrelated untracked user files
    alone.
 2. Merge or land the feature/fix commit.
-3. Update all version surfaces and README release notes.
+3. Update all version surfaces, README current stats, and `CHANGELOG.md`.
 4. Run required static checks, focused unit tests, and live Resolve validation
    when behavior changed.
 5. Commit the release bump with a conventional commit, for example:

@@ -9,6 +9,9 @@ from src.granular.common import (
     _build_append_clip_info_dict,
     _build_audio_sync_settings,
 )
+from src.server import (
+    _build_append_clip_info_dict as compound_build_append_clip_info_dict,
+)
 from src.utils.cloud_operations import _build_cloud_settings
 
 
@@ -225,6 +228,50 @@ class GranularAppendClipInfoBuilderTest(unittest.TestCase):
         self.assertEqual(out["startFrame"], 0)
         self.assertEqual(out["trackIndex"], 1)
         self.assertNotIn("mediaType", out)
+
+    def test_record_frame_defaults_to_timeline_relative(self):
+        out, err = _build_append_clip_info_dict(
+            self.root,
+            {"media_pool_item_id": "abc", "start_frame": 0, "end_frame": 24,
+             "record_frame": 0, "track_index": 1},
+            1,
+            timeline_start_frame=108000,
+        )
+        self.assertIsNone(err)
+        self.assertEqual(out["recordFrame"], 108000)
+
+    def test_record_frame_absolute_mode_bypasses_timeline_start(self):
+        out, err = _build_append_clip_info_dict(
+            self.root,
+            {"media_pool_item_id": "abc", "start_frame": 0, "end_frame": 24,
+             "record_frame": 108000, "record_frame_mode": "absolute", "track_index": 1},
+            1,
+            timeline_start_frame=108000,
+        )
+        self.assertIsNone(err)
+        self.assertEqual(out["recordFrame"], 108000)
+
+    def test_record_frame_auto_mode_preserves_absolute_values(self):
+        out, err = _build_append_clip_info_dict(
+            self.root,
+            {"media_pool_item_id": "abc", "start_frame": 0, "end_frame": 24,
+             "record_frame": 108024, "record_frame_mode": "auto", "track_index": 1},
+            1,
+            timeline_start_frame=108000,
+        )
+        self.assertIsNone(err)
+        self.assertEqual(out["recordFrame"], 108024)
+
+    def test_compound_record_frame_defaults_to_timeline_relative(self):
+        out, err = compound_build_append_clip_info_dict(
+            self.root,
+            {"media_pool_item_id": "abc", "start_frame": 0, "end_frame": 24,
+             "record_frame": 0, "track_index": 1},
+            1,
+            timeline_start_frame=108000,
+        )
+        self.assertIsNone(err)
+        self.assertEqual(out["recordFrame"], 108000)
 
     def test_missing_track_index(self):
         _, err = _build_append_clip_info_dict(

@@ -173,7 +173,7 @@ class ResolveStub:
 class ProjectLifecycleProbeTest(unittest.TestCase):
     def test_safe_project_create_requires_disposable_name(self):
         pm = ProjectManagerStub()
-        result = _safe_project_create(pm, ResolveStub(), {"name": "Client Show"})
+        result = _safe_project_create(pm, ResolveStub(), {"name": "Example Project"})
 
         self.assertIn("error", result)
         self.assertFalse(pm.created)

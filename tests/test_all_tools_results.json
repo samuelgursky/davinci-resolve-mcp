@@ -247,11 +247,11 @@
     },
     {
       "name": "MS.GetMountedVolumeList",
-      "value": "['/Users/samuelgursky/Movies', '/Volumes/IH_Runner_v02', '/Volumes/Macintosh HD'"
+      "value": "['/Users/<UserName>/Movies', '/Volumes/ExampleMedia01', '/Volumes/Macintosh HD'"
     },
     {
       "name": "MS.GetSubFolderList",
-      "value": "['/Users/samuelgursky/Movies/Resolve Project Backups', '/Users/samuelgursky/Movi"
+      "value": "['/Users/<UserName>/Movies/Resolve Project Backups', '/Users/<UserName>/Movi"
     },
     {
       "name": "MS.GetFileList",

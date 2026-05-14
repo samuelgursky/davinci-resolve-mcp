@@ -1,7 +1,7 @@
 # DaVinci Resolve MCP Examples
 
 These examples are prompt recipes for MCP clients such as Claude, Cursor,
-Windsurf, Codex, and VS Code. The server exposes 30 compound MCP tools and 109
+Windsurf, Codex, and VS Code. The server exposes 31 compound MCP tools and 128
 higher-level kernel actions, so examples should be written as safe
 agent-facing workflows rather than legacy direct `DaVinciResolveScript` scripts.
 

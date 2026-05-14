@@ -112,3 +112,16 @@ results.tsv
 # Local planning notes
 timeline-edit-kernel-gameplan.md
 docs/demo-video-gameplan.md
+operational-client-safety-hardening-gameplan.md
+docs/_scratch/
+docs/_design/
+docs/*gameplan*.md
+docs/*ledger*.json
+docs/*review-log*.md
+docs/*session*.md
+
+# Resolve MCP media analysis artifacts
+.davinci-resolve-mcp-analysis/
+davinci-resolve-mcp-analysis/
+**/.davinci-resolve-mcp-analysis/
+**/davinci-resolve-mcp-analysis/

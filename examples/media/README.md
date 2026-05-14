@@ -8,7 +8,7 @@ analysis sidecars only when explicitly requested.
 
 Never modify, transcode, proxy, relink, rename, move, or create derivatives of
 source media unless the user explicitly requests that operation. See
-`docs/media-analysis-guide.md` for the full workflow.
+`docs/guides/media-analysis-guide.md` for the full workflow.
 
 ## Probe The Media Pool
 

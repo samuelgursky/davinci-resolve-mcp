@@ -13,7 +13,7 @@ Workspace → Scripts menu. Two template kinds:
                     targets, actions, conditions, dry-run, external CSV/
                     JSON data, and per-rule metadata.
 
-See docs/script-plugin-authoring.md for the full DSL spec.
+See docs/authoring/script-plugin-authoring.md for the full DSL spec.
 """
 
 from typing import Any, Dict, Optional
@@ -266,7 +266,7 @@ local LOG_LEVEL          = "normal"  -- "quiet" | "normal" | "verbose"
 local LIMIT_TO_FIRST_N   = nil       -- e.g. 5 to test on only first 5 items
 local BACKUP_BEFORE_RUN  = false     -- true = export project before mutating
 
--- Optional external data (CSV/JSON); see docs/script-plugin-authoring.md
+-- Optional external data (CSV/JSON); see docs/authoring/script-plugin-authoring.md
 local EXTERNAL_DATA = nil
 -- EXAMPLE:
 -- local EXTERNAL_DATA = {{
@@ -330,7 +330,7 @@ LOG_LEVEL         = "normal"              # "quiet" | "normal" | "verbose"
 LIMIT_TO_FIRST_N  = None                  # e.g. 5 to test on first 5 only
 BACKUP_BEFORE_RUN = False                 # True = export project before mutating
 
-# Optional external data (CSV/JSON); see docs/script-plugin-authoring.md
+# Optional external data (CSV/JSON); see docs/authoring/script-plugin-authoring.md
 EXTERNAL_DATA = None
 # EXAMPLE:
 # EXTERNAL_DATA = {{

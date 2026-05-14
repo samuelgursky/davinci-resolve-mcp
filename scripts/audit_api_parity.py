@@ -6,7 +6,7 @@ Catches three regressions that have shipped in past releases:
 1. **Broken imports** — `from api.X import Y` patterns that crash on first call
    (the bug class fixed in v2.3.2 by removing 25 broken granular tools).
 2. **Undocumented Resolve methods** — wrappers around methods that don't appear
-   in `docs/resolve_scripting_api.txt` (the bug class fixed in v2.3.2/v2.3.3
+   in `docs/reference/resolve_scripting_api.txt` (the bug class fixed in v2.3.2/v2.3.3
    by removing wrappers for ExportProjectToCloud, AddUserToCloudProject, etc.).
 3. **Documented methods missing from both layers** — Resolve API methods that
    are documented but exposed neither in compound (`src/server.py`) nor
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DOCS_PATH = REPO_ROOT / "docs" / "resolve_scripting_api.txt"
+DOCS_PATH = REPO_ROOT / "docs" / "reference" / "resolve_scripting_api.txt"
 SERVER_PATH = REPO_ROOT / "src" / "server.py"
 GRANULAR_DIR = REPO_ROOT / "src" / "granular"
 
@@ -135,7 +135,7 @@ def find_methods_missing_from_source(
 # Methods that ARE real Resolve API surface but are documented elsewhere
 # (Fusion compositing API, UIManager, internal type-discrimination helpers).
 # These should NOT be flagged as suspicious even though they don't appear
-# in docs/resolve_scripting_api.txt.
+# in docs/reference/resolve_scripting_api.txt.
 ALLOWLIST_UNDOCUMENTED: Set[str] = {
     # Fusion API (documented in Blackmagic's Fusion scripting docs, not in
     # the Resolve scripting README that ships alongside Resolve)

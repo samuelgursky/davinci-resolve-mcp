@@ -3,7 +3,7 @@
 
 DCTL is a C-like, GPU-compiled pixel shader language used by Resolve as
 programmable color transforms, the ResolveFX DCTL plugin, DCTL transitions,
-and custom ACES IDT/ODT transforms. See docs/dctl-notes.md for the full
+and custom ACES IDT/ODT transforms. See docs/notes/dctl-notes.md for the full
 spec; this module just emits ready-to-install source.
 
 After installing a DCTL, call project_settings(action='refresh_luts') to make
@@ -225,7 +225,7 @@ def lut_apply(name: str, options: Optional[Dict[str, Any]] = None) -> str:
         params:   optional UI param list (mix amount, etc.).
         body:     transform body. Default applies the LUT directly.
 
-    Reference: docs/dctl-notes.md → "LUTs Inside DCTL". Use APPLY_LUT(r, g, b,
+    Reference: docs/notes/dctl-notes.md → "LUTs Inside DCTL". Use APPLY_LUT(r, g, b,
     name) to apply either an external cube or an inline DEFINE_CUBE_LUT.
     """
     options = options or {}
@@ -261,7 +261,7 @@ def aces_idt(name: str, options: Optional[Dict[str, Any]] = None) -> str:
         body:       transform body. Default passes through.
 
     ACES DCTLs are scanned at Resolve startup, NOT through RefreshLUTList().
-    Install requires a Resolve restart. See docs/dctl-notes.md → "DCTL And ACES".
+    Install requires a Resolve restart. See docs/notes/dctl-notes.md → "DCTL And ACES".
     """
     options = options or {}
     parametric = bool(options.get("parametric", False))
@@ -317,7 +317,7 @@ def kernel(name: str, options: Optional[Dict[str, Any]] = None) -> str:
     """
     options = options or {}
     return header(name, "kernel") + f'''// TODO: Replace with your transform implementation.
-// Reference: docs/dctl-notes.md
+// Reference: docs/notes/dctl-notes.md
 //
 // Useful globals:
 //   __RESOLVE_VER_MAJOR__, __RESOLVE_VER_MINOR__

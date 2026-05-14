@@ -98,6 +98,32 @@ class GranularCreateClipInfoBuilderTest(unittest.TestCase):
         self.assertEqual(out["endFrame"], 24)
         self.assertEqual(out["recordFrame"], 0)
 
+    def test_record_frame_defaults_to_timeline_relative(self):
+        out, err = _build_create_clip_info_dict(
+            self.root,
+            {"media_pool_item_id": "abc", "start_frame": 0, "end_frame": 24, "record_frame": 0},
+            1,
+            timeline_start_frame=108000,
+        )
+        self.assertIsNone(err)
+        self.assertEqual(out["recordFrame"], 108000)
+
+    def test_record_frame_absolute_mode_bypasses_timeline_start(self):
+        out, err = _build_create_clip_info_dict(
+            self.root,
+            {
+                "media_pool_item_id": "abc",
+                "start_frame": 0,
+                "end_frame": 24,
+                "record_frame": 108000,
+                "record_frame_mode": "absolute",
+            },
+            1,
+            timeline_start_frame=108000,
+        )
+        self.assertIsNone(err)
+        self.assertEqual(out["recordFrame"], 108000)
+
     def test_does_not_pass_track_index_or_media_type(self):
         out, err = _build_create_clip_info_dict(
             self.root,
@@ -150,6 +176,16 @@ class CompoundCreateClipInfoBuilderTest(unittest.TestCase):
         )
         self.assertIsNone(err)
         self.assertEqual(set(out.keys()), {"mediaPoolItem", "startFrame", "endFrame", "recordFrame"})
+
+    def test_record_frame_defaults_to_timeline_relative(self):
+        out, err = compound_build_create_clip_info_dict(
+            self.root,
+            {"clip_id": "abc", "start_frame": 0, "end_frame": 24, "record_frame": 0},
+            0,
+            timeline_start_frame=108000,
+        )
+        self.assertIsNone(err)
+        self.assertEqual(out["recordFrame"], 108000)
 
     def test_missing_record_frame_uses_err_helper(self):
         _, err = compound_build_create_clip_info_dict(

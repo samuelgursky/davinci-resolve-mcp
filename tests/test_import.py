@@ -37,7 +37,16 @@ def test_utils_syntax():
 
 def test_compound_tool_count():
     source = (PROJECT_ROOT / "src" / "server.py").read_text()
-    assert source.count("@mcp.tool()") == 30
+    assert source.count("@mcp.tool()") == 31
+
+
+def test_prompt_registrations():
+    source = (PROJECT_ROOT / "src" / "server.py").read_text()
+    assert source.count("@mcp.prompt") == 2
+    assert 'name="analyze_media"' in source
+    assert "def analyze_media(" in source
+    assert "include_visuals: bool = True" in source
+    assert "include_visuals=false" in source
 
 
 def test_granular_tool_count():

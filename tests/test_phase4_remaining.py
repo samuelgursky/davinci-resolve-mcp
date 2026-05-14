@@ -231,6 +231,6 @@ for name, reason in results["skip"]:
     print(f"  SKIP: {name} — {reason}")
 print("="*60)
 
-# Save results
-with open("/Users/samuelgursky/davinci-resolve-mcp/tests/test_phase4_results.json", "w") as f:
+# Save results beside this script without embedding a workstation-specific path.
+with open(os.path.join(os.path.dirname(__file__), "test_phase4_results.json"), "w") as f:
     json.dump(results, f, indent=2, default=str)

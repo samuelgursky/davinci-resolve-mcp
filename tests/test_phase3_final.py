@@ -36,12 +36,22 @@ orig_project_name = project.GetName()
 orig_db = pm.GetCurrentDatabase()
 tmpdir = tempfile.mkdtemp()
 
-# Media paths
-VIDEO_DIR = "/Volumes/Sam Joybubbles Drive Mirrored 12:1:26/00 JOYBUBBLES/03 PRODUCTION MEDIA/01 INTERVIEWSxxx/01_VIDEO/INTV STEVEN GIBB/VideoFiles_Steven_Day1"
-AUDIO_DIR = "/Volumes/Sam Joybubbles Drive Mirrored 12:1:26/00 JOYBUBBLES/03 PRODUCTION MEDIA/01 INTERVIEWSxxx/02_AUDIO/AudioFiles_StevenGibb1aiff"
-VIDEO_FILE = os.path.join(VIDEO_DIR, "StevenGibb_000.MOV")
-VIDEO_FILE_2 = os.path.join(VIDEO_DIR, "StevenGibb_001.MOV")
-AUDIO_FILE = os.path.join(AUDIO_DIR, "StevenGibb-000.aiff")
+# Media paths can be supplied by the local live-test environment. Defaults stay
+# generic so this script never embeds project-specific source media paths.
+VIDEO_DIR = os.environ.get("RESOLVE_MCP_PHASE3_VIDEO_DIR", "/Volumes/ExampleMedia/video")
+AUDIO_DIR = os.environ.get("RESOLVE_MCP_PHASE3_AUDIO_DIR", "/Volumes/ExampleMedia/audio")
+VIDEO_FILE = os.environ.get(
+    "RESOLVE_MCP_PHASE3_VIDEO_FILE",
+    os.path.join(VIDEO_DIR, "example_video_000.mov"),
+)
+VIDEO_FILE_2 = os.environ.get(
+    "RESOLVE_MCP_PHASE3_VIDEO_FILE_2",
+    os.path.join(VIDEO_DIR, "example_video_001.mov"),
+)
+AUDIO_FILE = os.environ.get(
+    "RESOLVE_MCP_PHASE3_AUDIO_FILE",
+    os.path.join(AUDIO_DIR, "example_audio_000.aiff"),
+)
 
 print(f"Project: {orig_project_name}")
 print(f"Timeline: {tl.GetName() if tl else 'None'}")

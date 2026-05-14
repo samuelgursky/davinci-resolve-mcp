@@ -18,29 +18,29 @@ using"** set to **Local**. The server auto-launches Resolve if it is not running
 but that first connection can take up to 60 seconds.
 
 Workflow Integration plugins/scripts are a separate Resolve-hosted UI mechanism.
-They are not required for this MCP server, but `docs/workflow-integrations.md`
+They are not required for this MCP server, but `docs/integrations/workflow-integrations.md`
 summarizes when they are useful for optional in-Resolve panels, UIManager
 scripts, and render callback companions.
 
 OpenFX plugins are native C++ image-effect plugins, not an MCP control surface.
-Use `docs/openfx-notes.md` when diagnosing `insert_ofx_generator` failures or
+Use `docs/notes/openfx-notes.md` when diagnosing `insert_ofx_generator` failures or
 discussing optional OFX plugin development.
 
 LUT files are directly relevant to Color-page graph actions. Use
-`docs/lut-notes.md` when diagnosing `graph.set_lut` failures, validating `.cube`
+`docs/notes/lut-notes.md` when diagnosing `graph.set_lut` failures, validating `.cube`
 files, or explaining `project_settings.refresh_luts`.
 
 Fusion templates are relevant to Edit/Cut page insertion actions. Use
-`docs/fusion-template-notes.md` when diagnosing `insert_fusion_generator` or
+`docs/notes/fusion-template-notes.md` when diagnosing `insert_fusion_generator` or
 `insert_fusion_title` failures, template paths, `.setting` files, or `.drfx`
 bundles.
 
 DCTL files are programmable color transforms/effects adjacent to LUT and OpenFX
-workflows. Use `docs/dctl-notes.md` when diagnosing `.dctl`/`.dctle` discovery,
+workflows. Use `docs/notes/dctl-notes.md` when diagnosing `.dctl`/`.dctle` discovery,
 ResolveFX DCTL plugin behavior, ACES DCTL IDT/ODT setup, or DCTL-as-LUT usage.
 
 Codec plugins are native IO encode plugins that extend Deliver-page render
-formats/codecs. Use `docs/codec-plugin-notes.md` when diagnosing missing custom
+formats/codecs. Use `docs/notes/codec-plugin-notes.md` when diagnosing missing custom
 render formats/codecs, `.dvcp.bundle` packaging, or IOPlugins install paths.
 
 The `fuse_plugin`, `dctl`, and `script_plugin` compound tools (v2.5.0+) write
@@ -50,9 +50,9 @@ Resolve's scripting API, while these three emit and install plugin/script
 source. Status: lifecycle-verified in DaVinci Resolve Studio 20.3.2.9 for
 MCP-marked install/read/list/remove, regular DCTL `refresh_luts`, ACES/Fuse
 restart-required classification, Python installed-script execution, and
-Python/Lua `run_inline`. Use `docs/extension-authoring-kernel.md` for the
-kernel boundary map, `docs/fuse-dctl-authoring.md` for the Fuse + DCTL coverage
-matrix, and `docs/script-plugin-authoring.md` for the script DSL spec and the
+Python/Lua `run_inline`. Use `docs/kernels/extension-authoring-kernel.md` for the
+kernel boundary map, `docs/authoring/fuse-dctl-authoring.md` for the Fuse + DCTL coverage
+matrix, and `docs/authoring/script-plugin-authoring.md` for the script DSL spec and the
 conversational-execution model.
 
 Extension Authoring kernel actions (v2.16.0+) are exposed through
@@ -71,6 +71,8 @@ Key behavioral notes for `script_plugin`:
 - `run_inline(source, language)` runs ad-hoc Lua/Python in Resolve and returns
   stdout + result — use this for one-off conversational queries against the
   Resolve API instead of building+installing a script.
+- `language` accepts `lua`, `py`, or the human-facing aliases `python` and
+  `python3`.
 - `execute(name, category, language)` runs an installed script; Python stdout
   and stderr are captured, while installed Lua execution can return false from
   the Python bridge even when install/read/list/remove worked.
@@ -91,11 +93,123 @@ Key behavioral notes for `script_plugin`:
 
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
-| Compound (default) | `src/server.py` | 30 tools | Most workflows — keeps context lean |
+| Compound (default) | `src/server.py` | 31 tools | Most workflows — keeps context lean |
 | Granular (full) | `src/server.py --full` | 328 tools | Power users needing one tool per API method |
 
 This skill document covers the **compound server** (the default). Each compound
 tool accepts an `action` string and an optional `params` object.
+
+The compound server also registers MCP prompts. Use `davinci_resolve_workflow`
+as the compact operating brief, and use `analyze_media` as a slash-command style
+entry point for read-only project, selected-clip, bin, or file analysis. The
+Analyze Media prompt defaults to chat-context visual analysis when the MCP
+client supports sampling/image messages, while allowing `include_visuals=false`
+for technical-only or privacy-sensitive runs. It also encodes session-only
+defaults, optional transcription, and finished-video editorial guardrails.
+
+---
+
+## Editorial Memory And Decision-Making
+
+When the user asks for cutting, pacing, story shape, suspense, comedy timing, or
+tonal reframing, operate like an editor, not just a metadata scanner. Use
+`docs/guides/editorial-decision-guide.md` as the project-owned craft reference. The
+short version: emotion and story come first, then clarity, rhythm, eye trace,
+screen geography, continuity, and coverage variety.
+
+Before analyzing or rebuilding anything, check whether the active project already
+contains useful evidence:
+
+- `media_analysis(action="summarize")`
+- `media_analysis(action="get_report")` when a manifest or report path is known
+- `timeline(action="list")`
+- `timeline(action="get_current")`
+- `timeline(action="probe_timeline_structure")`
+- `timeline(action="source_range_report")`
+- `timeline_markers(action="get_all")`
+- `media_analysis(action="review_timeline_markers")` when marker imagery matters
+
+Reuse prior analysis unless it is stale, incomplete, or missing the modality the
+user is asking for. For example, do not re-run visual analysis just because the
+edit task is new if a current report already has keyframes, motion variance, and
+usable visual descriptions. Add transcription, chat-context vision, marker
+review, or source range checks only when that missing evidence changes the
+decision. Use `force_refresh=true` only when the user asks for a fresh read or
+when cache signatures show the source, prompt, depth, or requested modality has
+changed.
+
+For finished-video editorial work, scene detection and motion variance are
+guardrails, not story. Use them to avoid black frames, flash frames, corrupt
+ranges, and accidental cut points. Let transcript, sound events, complete
+thoughts, reactions, and decisive visual frames drive the actual edit.
+
+After creating or modifying a timeline variant, do a second pass before calling
+the work done:
+
+- `timeline(action="detect_gaps_overlaps")`
+- `timeline(action="source_range_report")`
+- `timeline_markers(action="get_thumbnail_image")` at important markers and cuts
+- Compare each marker name against the Resolve-rendered frame; revise the marker
+  or edit if the image contradicts the plan.
+
+Do not depend on personal, external, or workstation-specific editorial context.
+For this project, keep the editorial craft reference self-contained in
+`docs/guides/editorial-decision-guide.md` and keep this `SKILL.md` focused on
+operational use of the MCP.
+
+---
+
+## Color Memory And Decision-Making
+
+When the user asks for color correction, shot matching, look development, LUTs,
+DCTLs, DRX grades, Gallery stills, or color-group workflows, use
+`docs/guides/color-decision-guide.md` as the project-owned color reference.
+
+Be explicit about the API boundary:
+
+- Directly creatable/control surfaces: CDL values on an existing node, grade
+  versions, color-group assignment, LUT assignment on existing nodes, node
+  enable/cache state, LUT/DCTL assets, Gallery still import/export, and grade
+  copy/export helpers.
+- Opaque full-grade surfaces: copied grades, imported/exported `.drx` stills,
+  and manually built Resolve node graphs. These can carry full grades, but the
+  MCP applies or copies them as packages.
+- Not directly creatable from structured params: new node trees, Lift/Gamma/Gain
+  wheel values, log/HDR palette values, curves, qualifiers, power windows,
+  tracking, Color Warper, and detailed ResolveFX/OFX parameter edits.
+
+For safe color work, start with `timeline_item_color(action="grade_boundary_report")`,
+`timeline_item_color(action="grade_version_snapshot")`,
+`timeline_item_color(action="probe_node_graph")`, and a Resolve-rendered frame
+reference for the target shot or shots. Use thumbnails, contact sheets, Gallery
+stills, marker frames, or existing visual analysis reports before writing a
+grade, and cite the inspected frames in the response. When the API can safely
+provide them, compare matched untreated/bypass, current, and after frames at the
+same timecodes, then restore the previous active version or node-enabled state
+after any temporary bypass capture. Treat untreated frames as diagnostic
+evidence, not as permission to discard an existing creative grade.
+
+Prefer `safe_set_cdl` for small reversible primary corrections. Use DRX/stills
+or grade copy only when the user accepts whole-grade replacement/transfer
+semantics. Use DCTL/LUT authoring only for reusable mathematical transforms, not
+as a substitute for hand-built windows, qualifiers, or tracked secondaries. Do
+not apply blind/global grades unless the user explicitly asks for that. When the
+user asks to build on or adjust an existing grade, preserve the current
+grade/version as the starting point, create or switch to a recoverable
+adjustment version, and apply only incremental changes through supported
+controls. Do not reset grades, replace graphs, or apply DRX/copy-grade
+whole-grade artifacts unless replacement or transfer semantics are explicitly
+accepted. Distinguish Resolve's default one-node graph from an existing creative
+grade; only describe a creative grade when active tools, LUTs, or other grade
+state are present.
+
+For sequence-wide looks, prefer a duplicated timeline, batch creation of
+reference/current/look versions across all target clips, and one bulk Resolve
+script for repeated version, group, or CDL operations. Use color groups for shared
+scene-level intent only when they fit the work: group pre-clip for shared
+normalization, clip versions for shot-specific matching, and group post-clip for
+the creative look. Sampling can guide a first pass, but final handoff should
+state the reviewed scope; short sequences should be checked shot by shot.
 
 ---
 
@@ -218,7 +332,7 @@ Media Pool / Ingest kernel actions (v2.8.0+) add safer agent-facing workflows:
 `probe_clip_properties`, `safe_relink`, `safe_unlink`, `link_proxy_checked`,
 `link_full_resolution_checked`, `set_clip_marks`, `clear_clip_marks`,
 `copy_clip_annotations`, and `media_pool_boundary_report`. See
-`docs/media-pool-ingest-kernel.md` for the live-tested support map.
+`docs/kernels/media-pool-ingest-kernel.md` for the live-tested support map.
 
 Note: `folder path` arguments use slash notation like `"Master/SubFolder"`.
 `"Master"` or `"/"` refers to the root folder.
@@ -243,6 +357,53 @@ All actions require a `clip_id`.
 
 Key actions: `add(frame, color, name, note, duration)`, `get_all`, `delete_by_color(color)`,
 `delete_at_frame(frame)`, `add_flag(color)`, `get_flags`, `set_name(name)`
+
+**`media_analysis`** — Project-scoped read-only media intelligence.
+
+Media Analysis and editorial-assist actions (v2.17.0+) add source-safe planning,
+report reuse, session-only execution, chat-context visual review, and
+timeline-level editorial helpers.
+
+Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
+`analyze_file`, `analyze_clip`, `analyze_bin`, `analyze_project`, `summarize`,
+`get_report`, `review_timeline_markers`, and `cleanup_artifacts`. The tool never
+installs dependencies and validates that outputs stay under
+`davinci-resolve-mcp-analysis` project roots rather than beside source media.
+Executed file/clip analysis defaults to session-only: scratch artifacts are
+removed after structured reports are returned to the MCP response. `persist=true`
+keeps reports under the project analysis root, and `keep_artifacts=true`
+preserves a session scratch run for inspection. `quick` uses ffprobe metadata;
+`standard` adds ffmpeg read-through checks, motion/variance scoring, analysis
+keyframes, and sidecar reports.
+By default, planning checks the active project's analysis root for existing
+reports and marks matching clips `skip_execution=true` when those reports already
+contain the requested technical, motion, transcription, and vision layers.
+Reports include cache signatures with source stat, depth, frame budget, prompt
+hash, and requested modalities. Use `force_refresh=true` for a fresh read,
+`max_report_age_days` for freshness limits, and `reuse_policy="fresh"` when
+unsigned older reports should not be reused. Pass `reuse_existing=false` only
+when the user explicitly wants to ignore memory.
+Transcription requires explicit opt-in. The `analyze_media` prompt opts into
+visual analysis by default and uses `vision.provider="chat_context"` when the
+MCP client supports sampling; pass `include_visuals=false` to opt out. For
+direct `media_analysis` tool calls, set `vision.enabled=true` explicitly when
+visual interpretation is needed. Sampled frames are sent to the current
+chat/sampling model and the response is stored in the default structured JSON
+shape. If chat-context vision is unavailable, continue with technical/motion
+analysis and ask whether the user wants setup steps or a no-visual run. The
+local mock providers are for tests and do not send frames off-machine.
+`review_timeline_markers` creates a labeled
+Resolve-rendered marker contact sheet plus JSON sidecar, and can request
+chat-context vision for marker/frame mismatch review.
+
+Before calling `analyze_*`, prefer `summarize` and `get_report` to discover
+existing reports for the active project. If reports exist, use them as the
+working memory for edit decisions and only request fresh analysis when a missing
+layer changes the decision. If a user is
+making story or audio-spine decisions and transcription is available but disabled,
+tell them that transcript analysis may materially improve the edit instead of
+silently skipping it. Resolve-native transcription changes project state; use it
+only when that mutation is intentional.
 
 ---
 
@@ -279,6 +440,17 @@ Key actions:
 - `lift_range` — delete whole items in a range; partial overlaps require
   `allow_partial_item_delete=True` because Resolve does not expose a safe
   partial lift primitive here
+- `story_spine_report` — read markers, source ranges, and audio/video structure
+  into an editor-facing beat report
+- `create_variant_from_ranges(name, ranges, markers?, cdl?, dry_run?)` — create
+  a guarded timeline variant from declarative source ranges, optional markers,
+  transforms, and CDL
+- `bulk_set_item_properties(ops, dry_run?, readback?)` — apply transforms,
+  crop/composite/audio/property groups to many timeline items in one call
+- `apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?)` — apply a
+  normalized CDL and/or copy a source grade to multiple video items
+- `thumbnail_contact_sheet` / `marker_thumbnail_review` — sample Resolve-rendered
+  thumbnails under the project analysis root for visual verification
 - `edit_kernel_capabilities` — report supported, partially supported, and
   unsupported timeline edit kernel behavior
 - `probe_edit_kernel_item(clip_ids? selected? timeline_item?)` — read-only
@@ -317,6 +489,7 @@ helpers:
 - `probe_audio_track(track_index?)`
 - `probe_audio_item(track_type?, track_index?, item_index?)`
 - `safe_set_audio_properties(properties, restore?, dry_run?, track_type?, track_index?, item_index?)`
+- `audio_mix_capability_report(...)`
 - `voice_isolation_capabilities(track_index?, track_type?, item_index?)`
 - `audio_mapping_report(clip_ids?)`
 - `safe_auto_sync_audio(clip_ids|selected, settings?, dry_run?)`
@@ -328,14 +501,14 @@ helpers:
 
 Key actions: `add(frame|frame_id|timecode?, color?, name?, note?, duration?)`, `get_all`,
 `get_current_timecode`, `set_current_timecode(timecode)`,
-`get_current_video_item`, `get_thumbnail`
+`get_current_video_item`, `get_thumbnail`, `get_thumbnail_image`
 
 Review Annotation kernel actions (v2.10.0+) add a unified review layer across
 timeline, timeline item, and media pool item scopes: `annotation_capabilities`,
 `probe_annotations`, `normalize_marker_payload`, `copy_annotations`,
 `move_annotations`, `sync_marker_custom_data`, `clear_annotations_by_scope`,
 `export_review_report`, and `annotation_boundary_report`. See
-`docs/review-annotation-kernel.md` for the live-tested scope and boundary map.
+`docs/kernels/review-annotation-kernel.md` for the live-tested scope and boundary map.
 
 For `add`, omit `frame`/`timecode` to create the marker at the current playhead.
 The compound tool accepts `frame`, `frame_id`, and `frameId` aliases.
@@ -345,6 +518,10 @@ The dictionary includes `data` (raw bytes as a Python bytes-like object),
 `format`, `width`, `height`, `noOfComponents`, and `depth`. This reflects the
 current frame as rendered by Resolve — including any color grading or effects
 applied — which is different from reading the source file directly.
+
+Use `get_thumbnail_image` when the MCP client can display image content directly.
+It converts the same Resolve thumbnail payload to PNG bytes without writing a
+file to disk.
 
 **`timeline_ai`** — AI/ML analysis on the current timeline.
 
@@ -410,8 +587,9 @@ boundary helpers: `grade_capabilities`, `probe_grade_item`,
 `probe_node_graph`, `safe_set_cdl`, `safe_copy_grade`, `safe_apply_drx`,
 `safe_export_lut`, `grade_version_snapshot`, `grade_version_restore`,
 `color_group_capabilities`, `gallery_capabilities`, and
-`grade_boundary_report`. See `docs/color-grade-kernel.md` for the live-tested
-support map.
+`grade_boundary_report`. See `docs/kernels/color-grade-kernel.md` for the live-tested
+support map, and `docs/guides/color-decision-guide.md` for the practical distinction
+between direct API color controls and opaque full-grade artifacts.
 
 **`timeline_item_takes`** — Take management.
 
@@ -524,7 +702,7 @@ Render / Deliver kernel actions (v2.9.0+) add planning and safety layers:
 `validate_render_settings`, `safe_set_render_settings`,
 `prepare_render_job`, `render_job_lifecycle_probe`,
 `quick_export_capabilities`, `safe_quick_export`, and
-`export_render_boundary_report`. See `docs/render-deliver-kernel.md` for the
+`export_render_boundary_report`. See `docs/kernels/render-deliver-kernel.md` for the
 live-tested format/codec, settings, job, and Quick Export boundary map.
 
 ---
@@ -610,7 +788,7 @@ exhaustive probe. It creates disposable projects with synthetic media, emits
 JSON and Markdown reports, and classifies each API surface as `supported`,
 `partially_supported`, `read_only`, `write_only_unverifiable`,
 `version_or_page_dependent`, `unsupported`, `not_applicable`, or `error`.
-See `docs/timeline-edit-kernel.md` for the maintained support map and current
+See `docs/kernels/timeline-edit-kernel.md` for the maintained support map and current
 Resolve API limitations.
 
 For the Media Pool / Ingest boundary map, run:
@@ -622,7 +800,7 @@ python3.11 tests/live_media_pool_ingest_validation.py --output-dir /tmp/media-po
 The harness creates a disposable project, generates synthetic video/audio/still
 and image-sequence fixtures, probes safe import/metadata/annotation/link
 helpers, writes JSON and Markdown reports, deletes the project, and removes the
-generated media directory. See `docs/media-pool-ingest-kernel.md`.
+generated media directory. See `docs/kernels/media-pool-ingest-kernel.md`.
 
 For the Review Annotation boundary map, run:
 
@@ -633,7 +811,7 @@ python3.11 tests/live_review_annotation_validation.py --output-dir /tmp/review-a
 The harness creates a disposable project, generates synthetic video/audio media,
 probes timeline, timeline item, and media pool item marker/flag/color/report
 behavior, writes JSON and Markdown reports, deletes the project, and removes the
-generated media directory. See `docs/review-annotation-kernel.md`.
+generated media directory. See `docs/kernels/review-annotation-kernel.md`.
 
 ### 5. Color grading
 
@@ -654,7 +832,7 @@ python3.11 tests/live_color_grade_validation.py --output-dir /tmp/color-grade-pr
 The harness creates a disposable project, generates synthetic color-bar media,
 probes grade, node graph, version, copy, LUT, Gallery, and color-group
 behavior, writes JSON and Markdown reports, deletes the project, and removes
-generated media and exported probe files. See `docs/color-grade-kernel.md`.
+generated media and exported probe files. See `docs/kernels/color-grade-kernel.md`.
 
 ### 6. Grab a still and read the grade data
 
@@ -687,7 +865,7 @@ The harness creates a disposable project, generates synthetic media, builds a
 gapped timeline, probes structure, source ranges, gap/overlap detection,
 interchange export/import/round-trip behavior, synthetic missing-media relink
 planning, writes reports, deletes the project, and removes generated media.
-See `docs/timeline-conform-interchange-kernel.md`.
+See `docs/kernels/timeline-conform-interchange-kernel.md`.
 
 For the Audio / Fairlight boundary map, run:
 
@@ -699,7 +877,7 @@ The harness creates a disposable project, generates synthetic video and audio
 media, probes track/item audio state, mappings, voice isolation, property
 writes, auto-sync, transcription, subtitle generation, Fairlight preset listing,
 audio insertion, writes reports, deletes the project, and removes generated
-media. See `docs/audio-fairlight-kernel.md`.
+media. See `docs/kernels/audio-fairlight-kernel.md`.
 
 ### 8. Add and start a render job
 
@@ -745,7 +923,7 @@ The harness creates a disposable project, generates synthetic video media,
 probes timeline item comp creation, safe tool creation, input writes, graph
 inspection, connections, bulk writes, frame range, and comp export, writes
 reports, deletes the project, and removes generated media. See
-`docs/fusion-composition-kernel.md`.
+`docs/kernels/fusion-composition-kernel.md`.
 
 ---
 
@@ -767,7 +945,7 @@ reports, deletes the project, and removes generated media. See
 When a tool returns `{"success": False}` without an error key, the underlying
 Resolve API returned `False`. This usually means a precondition was not met
 (wrong page, wrong state, context missing). Check the API reference in
-`docs/resolve_scripting_api.txt` for the specific method.
+`docs/reference/resolve_scripting_api.txt` for the specific method.
 
 ---
 
@@ -831,11 +1009,12 @@ clip's comp, always pass `clip_id`, `timeline_item_id`, or `timeline_item`.
 The server provides two mechanisms to inspect a frame as Resolve has processed it,
 including color grading, effects, and compositing — not just the raw source file.
 
-**`timeline_markers(action="get_thumbnail")`** — Returns the thumbnail image at
-the current playhead position. The response is a dictionary with keys `data`
-(raw pixel bytes), `format`, `width`, `height`, `noOfComponents`, and `depth`.
-This is the fastest way to get a frame preview, but the raw `data` field requires
-client-side decoding.
+**`timeline_markers(action="get_thumbnail")`** — Returns raw thumbnail data at
+the current playhead position. The response is a dictionary with keys `data`,
+`format`, `width`, `height`, `noOfComponents`, and `depth`.
+
+**`timeline_markers(action="get_thumbnail_image")`** — Converts the same current
+frame thumbnail to PNG bytes and returns MCP image content without writing a file.
 
 **`gallery_stills(action="grab_and_export", params={...})`** — Grabs a still from
 the current frame on the Color page and returns the image encoded as base64 in the
@@ -896,4 +1075,4 @@ setups:
 | `ProjectManager.RestoreCloudProject` | Resolve cloud infrastructure |
 | `Timeline.AnalyzeDolbyVision` | HDR / Dolby Vision content |
 
-The full API reference is in `docs/resolve_scripting_api.txt`.
+The full API reference is in `docs/reference/resolve_scripting_api.txt`.

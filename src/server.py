@@ -2,7 +2,7 @@
 """
 DaVinci Resolve MCP Server (Compound Tools)
 
-30 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
+31 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
 plus Fusion Fuse, DCTL, and Resolve-page Script authoring tools.
 Each tool groups related operations via an 'action' parameter.
 
@@ -11,18 +11,22 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.16.0"
+VERSION = "2.17.0"
 
 import base64
 import os
 import sys
 import json
 import logging
+import math
 import platform
 import re
+import struct
 import subprocess
 import tempfile
+import threading
 import time
+import zlib
 from typing import Dict, Any, Optional, List, Tuple
 
 # ─── Path Setup ───────────────────────────────────────────────────────────────
@@ -38,6 +42,19 @@ for p in [current_dir, project_dir]:
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.mcp_stdio import run_fastmcp_stdio
+from src.utils.media_analysis import (
+    CHAT_CONTEXT_VISION_PROVIDERS,
+    DEFAULT_VISION_ANALYSIS_PROMPT,
+    build_plan as build_media_analysis_plan,
+    cleanup_artifacts as cleanup_media_analysis_artifacts,
+    detect_capabilities as detect_media_analysis_capabilities,
+    execute_plan_async as execute_media_analysis_plan_async,
+    install_guidance as media_analysis_install_guidance,
+    load_report as load_media_analysis_report,
+    resolve_output_root as resolve_media_analysis_output_root,
+    slugify,
+    summarize_reports as summarize_media_analysis_reports,
+)
 from src.utils.platform import get_resolve_paths, get_resolve_plugin_paths
 from src.utils import fuse_templates, dctl_templates, script_templates
 
@@ -65,7 +82,8 @@ logger = logging.getLogger("resolve-mcp")
 
 # ─── MCP Server ───────────────────────────────────────────────────────────────
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP, Image
+from mcp import types as mcp_types
 mcp = FastMCP(
     "DaVinciResolveMCP",
     instructions=(
@@ -74,6 +92,110 @@ mcp = FastMCP(
         "If a tool returns a connection error, Resolve Studio may not be installed or external scripting is disabled."
     ),
 )
+
+
+@mcp.prompt()
+def davinci_resolve_workflow() -> str:
+    """Recommended agent workflow for this DaVinci Resolve MCP server."""
+    return """Use this DaVinci Resolve MCP server as a guarded post-production control surface.
+
+Core pattern:
+- Prefer the 31 compound tools and their action names over raw scripting.
+- Start by probing state: resolve_control.get_version/get_page, project_manager.get_current, timeline.get_current, and media_pool.probe_media_pool.
+- Before mutating timelines, media pools, render settings, grades, projects, databases, or extensions, prefer the matching probe, capabilities, boundary_report, safe_*, or dry_run action when one exists.
+- Preserve source media integrity. Never transcode, proxy, rewrite, move, rename, or create derivatives of source media unless the user explicitly asks. Analysis output belongs in sidecars or analysis directories.
+
+Visual feedback:
+- For the current Color-page frame, use timeline_markers(action="get_thumbnail_image") when the client can display MCP images.
+- Use timeline_markers(action="get_thumbnail") when raw Resolve thumbnail data is needed for tooling.
+- Use project_settings(action="export_frame_as_still") only when a file export is explicitly useful, and write to a temp/stills location rather than near source media.
+
+High-value workflows:
+- Media analysis: use the analyze_media prompt or media_analysis.capabilities/install_guidance, then plan or analyze file/clip/bin/project targets with session-only defaults.
+- Timeline editing: use timeline.probe_edit_kernel_item, duplicate_clips/copy_clips/move_clips, copy_range/overwrite_range/lift_range, and detect_gaps_overlaps.
+- Media ingest: use media_pool.ingest_capabilities, safe_import_media/safe_import_sequence, organize_clips, normalize_metadata, and relink planning actions.
+- Color: use timeline_item_color.grade_boundary_report, probe_node_graph, safe_set_cdl, safe_apply_drx, grade_version_snapshot/restore, and gallery/color-group capability actions.
+- Fusion: use fusion_comp.fusion_boundary_report, probe_fusion_comp, safe_add_tool, safe_set_inputs, and safe_connect_tools.
+- Audio/Fairlight: use timeline.fairlight_boundary_report, probe_audio_track/item, voice_isolation_capabilities, safe_auto_sync_audio, and subtitle_generation_probe.
+- Render/deliver: use render.export_render_boundary_report, validate_render_settings, safe_set_render_settings, prepare_render_job, and safe_quick_export.
+- Project lifecycle: use project_manager.project_boundary_report and safe project/database/archive actions. Keep destructive work scoped to disposable _mcp_ projects unless the user explicitly approves otherwise.
+- Extension authoring: use script_plugin.extension_boundary_report and safe_install_extension/safe_remove_extension. Respect refresh/restart requirements.
+
+For one-off scripting:
+- Prefer script_plugin(action="run_inline") over arbitrary persistent code changes. Use it to inspect Resolve state, then move durable behavior into guarded compound actions when it proves valuable.
+"""
+
+
+@mcp.prompt(
+    name="analyze_media",
+    title="Analyze Media",
+    description="Run a read-only DaVinci Resolve media-analysis workflow for a file, selected clip, bin, or whole project.",
+)
+def analyze_media(
+    target: str = "project",
+    depth: str = "standard",
+    finished_video: bool = False,
+    include_visuals: bool = True,
+    include_transcription: bool = False,
+    persist: bool = False,
+) -> str:
+    """Slash-command style prompt for guided media analysis."""
+    return f"""Analyze Resolve media with the DaVinci Resolve MCP attached.
+
+Requested shape:
+- target: {target}
+- depth: {depth}
+- finished_video: {finished_video}
+- include_visuals: {include_visuals}
+- include_transcription: {include_transcription}
+- persist: {persist}
+
+Workflow:
+1. Confirm the MCP is live with resolve_control(action="get_version") and project_manager(action="get_current").
+2. Call media_analysis(action="capabilities") and media_analysis(action="install_guidance"). Do not install anything automatically.
+3. Resolve the target:
+   - "project": use media_analysis(action="analyze_project").
+   - "selected" or "selected clip": use media_analysis(action="analyze_clip", params={{"selected": true}}).
+   - "bin:<path>": use media_analysis(action="analyze_bin", params={{"path": "<path>", "recursive": true}}).
+   - An absolute file path: use media_analysis(action="analyze_file", params={{"path": "<path>"}}).
+4. Before running new analysis, check memory:
+   - media_analysis(action="summarize") to find existing reports for the active project.
+   - media_analysis(action="get_report") when a manifest/report already exists.
+   - timeline(action="list"), timeline(action="get_current"), timeline(action="probe_timeline_structure"), and timeline_markers(action="get_all") when an edit already exists.
+   Reuse existing evidence instead of re-analyzing unless the old report is stale, cache-incompatible, or missing the requested modality.
+5. For bin or project targets, dry-run first so the user can see clip count, estimated time, missing capabilities, and output behavior. For one selected clip or one file, execution is fine when the user asked to analyze.
+6. Prefer session-only execution unless persist is true. Use persist=true only when the user wants reusable reports under davinci-resolve-mcp-analysis.
+7. Visual analysis defaults on for this prompt. If include_visuals is true, request vision={{"enabled": true, "provider": "chat_context"}} so the current MCP client/chat model can inspect sampled frames when supported. If include_visuals is false, run a technical/audio/metadata-only analysis and do not request vision.
+8. If chat-context sampling is unavailable while include_visuals is true, continue with technical/motion analysis, report that visual analysis was skipped, and offer the user two next steps: continue without visuals or get setup steps for a supported in-chat/sampling vision path.
+9. If include_transcription is true, use an available local transcription backend only when it is already installed and the user has explicitly approved any model download. Resolve-native transcription mutates project state, so use it only when that mutation is explicitly desired.
+10. If the task is about an existing edit, markers, or a finished video, call media_analysis(action="review_timeline_markers", params={{"vision": {{"enabled": {str(include_visuals).lower()}, "provider": "chat_context"}}}}) when marker/frame alignment affects the decision.
+
+Recommended execution params:
+{{
+  "dry_run": false,
+  "depth": "{depth}",
+  "session_only": {str(not persist).lower()},
+  "persist": {str(persist).lower()},
+  "reuse_existing": true,
+  "force_refresh": false,
+  "reuse_policy": "compatible",
+  "max_analysis_frames": 8,
+  "vision": {{"enabled": {str(include_visuals).lower()}, "provider": "chat_context"}},
+  "transcription": {{"enabled": {str(include_transcription).lower()}}}
+}}
+
+Interpretation rules learned from live Resolve sessions:
+- Preserve source media integrity. Do not modify, transcode, proxy, rename, move, or write beside source media.
+- Users can opt out of in-chat visual analysis by setting include_visuals=false. Do not send sampled frames to chat-context vision when they opt out.
+- Use the project-owned editorial craft reference in docs/guides/editorial-decision-guide.md; do not rely on personal or external editor skills.
+- When the user asks for cutting, pacing, story structure, suspense, comedy, or tonal reframing, use the editor craft lens: emotion and story outrank coverage; sound leads picture; find blink points and decisive frames; cut on reaction when meaning matters.
+- Treat scene/cut detection as guardrails, not story. If the source is a finished video, use black/flash ranges and likely cut points to avoid bad edit regions, but let transcript, sound, and complete thoughts drive editorial decisions.
+- For short-form edit recommendations, build an audio-first spine: premise, setup, turn, and button. Sacrifice visual variety when clarity or the joke needs it.
+- After a rough variant is assembled, verify it frame-by-frame: probe gaps/overlaps, inspect thumbnails at markers and cut points, compare marker intent against what Resolve actually shows, then revise marker names/source ranges if the image contradicts the plan.
+- Watch for Resolve timeline start-frame offsets. Positioned appends should anchor record_frame to the timeline start frame, often 108000 for 01:00:00:00.
+- Summarize results as editor-usable intelligence: technical state, warnings, motion/variance, visual content, transcript/sound notes, avoid ranges, best moments, and concrete next actions.
+
+When finished, report exactly which media_analysis call was made, whether artifacts were session-only or persisted, and whether chat-context visual analysis succeeded."""
 
 # ─── Python Version Check ────────────────────────────────────────────────────
 
@@ -90,6 +212,7 @@ if _py_ver >= (3, 13):
 sys.path.insert(0, RESOLVE_MODULES_PATH)
 resolve = None
 dvr_script = None
+_resolve_lock = threading.RLock()
 
 try:
     import DaVinciResolveScript as dvr_script
@@ -112,20 +235,21 @@ def _is_resolve_handle_live(candidate) -> bool:
 def _try_connect():
     """Attempt to connect to Resolve once. Returns resolve object or None."""
     global resolve
-    if dvr_script is None:
-        return None
-    try:
-        candidate = dvr_script.scriptapp("Resolve")
-        if candidate and _is_resolve_handle_live(candidate):
-            resolve = candidate
-            logger.info(f"Connected: {resolve.GetProductName()} {resolve.GetVersionString()}")
-        else:
+    with _resolve_lock:
+        if dvr_script is None:
+            return None
+        try:
+            candidate = dvr_script.scriptapp("Resolve")
+            if candidate and _is_resolve_handle_live(candidate):
+                resolve = candidate
+                logger.info(f"Connected: {resolve.GetProductName()} {resolve.GetVersionString()}")
+            else:
+                resolve = None
+            return resolve
+        except Exception as e:
+            logger.error(f"Connection error: {e}")
             resolve = None
-        return resolve
-    except Exception as e:
-        logger.error(f"Connection error: {e}")
-        resolve = None
-        return None
+            return None
 
 def _launch_resolve():
     """Launch DaVinci Resolve and wait for it to become available."""
@@ -162,16 +286,17 @@ def _launch_resolve():
 def get_resolve():
     """Lazy connection to Resolve — connects on first tool call, auto-launches if needed."""
     global resolve
-    if resolve is not None and _is_resolve_handle_live(resolve):
+    with _resolve_lock:
+        if resolve is not None and _is_resolve_handle_live(resolve):
+            return resolve
+        resolve = None
+        # Try to connect to an already-running Resolve.
+        if _try_connect():
+            return resolve
+        # Not running — launch it automatically.
+        logger.info("Resolve not running, attempting to launch automatically...")
+        _launch_resolve()
         return resolve
-    resolve = None
-    # Try to connect to an already-running Resolve
-    if _try_connect():
-        return resolve
-    # Not running — launch it automatically
-    logger.info("Resolve not running, attempting to launch automatically...")
-    _launch_resolve()
-    return resolve
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -303,6 +428,22 @@ def _timeline_timecode_to_frame_id(tl, timecode):
     if err:
         return None, err
     return _timecode_to_frame_id(timecode, fps)
+
+
+def _frame_id_to_timecode(frame: int, fps: float, separator: str = ":") -> str:
+    nominal_fps = max(1, int(round(float(fps))))
+    frame = max(0, int(frame))
+    total_seconds, frames = divmod(frame, nominal_fps)
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}{separator}{frames:02d}"
+
+
+def _timeline_frame_id_to_timecode(tl, frame: int) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    fps, err = _timeline_fps(tl)
+    if err:
+        return None, err
+    return _frame_id_to_timecode(int(frame), fps), None
 
 
 def _current_timeline_frame_id(tl):
@@ -677,6 +818,8 @@ def _check():
     if resolve is None:
         return None, None, _err("Not connected to DaVinci Resolve. Is Resolve running?")
     pm = resolve.GetProjectManager()
+    if pm is None:
+        return None, None, _err("Could not get ProjectManager from Resolve")
     proj = pm.GetCurrentProject()
     if not proj:
         return pm, None, _err("No project open")
@@ -855,10 +998,58 @@ def _navigate_folder(mp, path):
     return current
 
 
-def _build_append_clip_info_dict(root, ci: Dict[str, Any], index: int):
+def _normalize_record_frame(
+    ci: Dict[str, Any],
+    index: int,
+    timeline_start_frame: Optional[int] = None,
+):
+    """Translate wrapper record_frame offsets into Resolve absolute frames."""
+    rf = _frame_int(ci.get("recordFrame", ci.get("record_frame")))
+    if rf is None:
+        return None, _err(f"clip_infos[{index}] record_frame/recordFrame must be numeric")
+
+    mode_raw = ci.get("recordFrameMode", ci.get("record_frame_mode", "relative"))
+    mode = str(mode_raw or "relative").strip().lower()
+    mode_aliases = {
+        "relative": "relative",
+        "timeline_relative": "relative",
+        "offset": "relative",
+        "absolute": "absolute",
+        "timeline_absolute": "absolute",
+        "auto": "auto",
+    }
+    mode = mode_aliases.get(mode)
+    if not mode:
+        return None, _err(
+            f"clip_infos[{index}] record_frame_mode must be 'relative', 'absolute', or 'auto'"
+        )
+
+    start = _frame_int(timeline_start_frame)
+    if start in (None, 0) or mode == "absolute":
+        return rf, None
+    if mode == "auto":
+        return (start + rf) if rf < start else rf, None
+    return start + rf, None
+
+
+def _timeline_start_frame(tl) -> Optional[int]:
+    if not tl:
+        return None
+    try:
+        return _frame_int(tl.GetStartFrame())
+    except Exception:
+        return None
+
+
+def _build_append_clip_info_dict(
+    root,
+    ci: Dict[str, Any],
+    index: int,
+    timeline_start_frame: Optional[int] = None,
+):
     """Build one MediaPool.AppendToTimeline clipInfo map (Python API uses camelCase keys).
 
-    See docs/resolve_scripting_api.txt: mediaPoolItem, startFrame, endFrame,
+    See docs/reference/resolve_scripting_api.txt: mediaPoolItem, startFrame, endFrame,
     optional mediaType, trackIndex, recordFrame.
     """
     if not isinstance(ci, dict):
@@ -881,6 +1072,9 @@ def _build_append_clip_info_dict(root, ci: Dict[str, Any], index: int):
         return None, _err(
             f"clip_infos[{index}] requires record_frame/recordFrame (timeline record frame)"
         )
+    rf, rf_err = _normalize_record_frame(ci, index, timeline_start_frame)
+    if rf_err:
+        return None, rf_err
     ti = ci.get("trackIndex", ci.get("track_index"))
     if ti is None:
         return None, _err(
@@ -899,10 +1093,15 @@ def _build_append_clip_info_dict(root, ci: Dict[str, Any], index: int):
     return out, None
 
 
-def _build_create_clip_info_dict(root, ci: Dict[str, Any], index: int):
+def _build_create_clip_info_dict(
+    root,
+    ci: Dict[str, Any],
+    index: int,
+    timeline_start_frame: Optional[int] = None,
+):
     """Build one MediaPool.CreateTimelineFromClips clipInfo map.
 
-    See docs/resolve_scripting_api.txt line 224: 4 keys only — mediaPoolItem,
+    See docs/reference/resolve_scripting_api.txt line 224: 4 keys only — mediaPoolItem,
     startFrame, endFrame, recordFrame. No trackIndex, no mediaType.
     """
     if not isinstance(ci, dict):
@@ -925,6 +1124,9 @@ def _build_create_clip_info_dict(root, ci: Dict[str, Any], index: int):
         return None, _err(
             f"clip_infos[{index}] requires record_frame/recordFrame (timeline record frame)"
         )
+    rf, rf_err = _normalize_record_frame(ci, index, timeline_start_frame)
+    if rf_err:
+        return None, rf_err
     return {
         "mediaPoolItem": mp_item,
         "startFrame": sf,
@@ -2837,6 +3039,678 @@ def _source_ranges_from_snapshot(snapshot: Dict[str, Any], p: Optional[Dict[str,
     return {"ranges": ranges, "occurrences": occurrences, "handles": handles, "merged": merge}
 
 
+def _timeline_marker_rows_from_snapshot(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
+    markers = snapshot.get("markers") or {}
+    rows = []
+    if not isinstance(markers, dict):
+        return rows
+    for frame, marker in markers.items():
+        if not isinstance(marker, dict):
+            continue
+        frame_id = _frame_int(frame)
+        rows.append({
+            "frame": frame_id,
+            "color": _marker_value(marker, "color", "Color"),
+            "name": _marker_value(marker, "name", "Name", default="Marker"),
+            "note": _marker_value(marker, "note", "Note", default=""),
+            "duration": _marker_value(marker, "duration", "Duration", default=1),
+            "custom_data": _marker_value(marker, "customData", "custom_data", "CustomData", default=""),
+        })
+    rows.sort(key=lambda row: (row["frame"] is None, row["frame"] or 0))
+    return rows
+
+
+def _story_spine_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    markers = _timeline_marker_rows_from_snapshot(snapshot)
+    tracks = snapshot.get("tracks") or {}
+    track_summaries = []
+    for track_type in ("video", "audio", "subtitle"):
+        for track in ((tracks.get(track_type) or {}).get("tracks") or []):
+            items = track.get("items") or []
+            if not items:
+                continue
+            starts = [item.get("start") for item in items if item.get("start") is not None]
+            ends = [item.get("end") for item in items if item.get("end") is not None]
+            track_summaries.append({
+                "track_type": track_type,
+                "track_index": track.get("track_index"),
+                "item_count": len(items),
+                "first_frame": min(starts) if starts else None,
+                "last_frame": max(ends) if ends else None,
+                "items": [
+                    {
+                        "timeline_item_id": item.get("timeline_item_id"),
+                        "name": item.get("name"),
+                        "start": item.get("start"),
+                        "end": item.get("end"),
+                        "source_range": [item.get("source_start"), item.get("source_end")],
+                        "media_pool_item_name": item.get("media_pool_item_name"),
+                    }
+                    for item in items
+                ],
+            })
+    named_beats = [
+        {
+            "frame": marker.get("frame"),
+            "name": marker.get("name"),
+            "note": marker.get("note"),
+            "color": marker.get("color"),
+        }
+        for marker in markers
+    ]
+    audio_items = sum(row["item_count"] for row in track_summaries if row["track_type"] == "audio")
+    video_items = sum(row["item_count"] for row in track_summaries if row["track_type"] == "video")
+    return {
+        "timeline": {
+            "name": snapshot.get("name"),
+            "id": snapshot.get("id"),
+            "start_frame": snapshot.get("start_frame"),
+            "end_frame": snapshot.get("end_frame"),
+            "start_timecode": snapshot.get("start_timecode"),
+        },
+        "marker_count": len(markers),
+        "beats": named_beats,
+        "track_summaries": track_summaries,
+        "source_ranges": _source_ranges_from_snapshot(snapshot, {"handles": 0, "merge": True}),
+        "audio_spine": {
+            "present": audio_items > 0,
+            "audio_item_count": audio_items,
+            "video_item_count": video_items,
+            "marker_guided": len(markers) > 0,
+        },
+        "editorial_notes": [
+            "Use marker beats as intent, not proof; verify important beats with Resolve-rendered thumbnails.",
+            "For short-form variants, preserve a clear audio spine before adding visual variety.",
+            "Run detect_gaps_overlaps after creating or changing a variant.",
+        ],
+    }
+
+
+def _timeline_story_spine_report(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = _timeline_conform_snapshot(tl, {
+        "track_types": p.get("track_types") or ["video", "audio", "subtitle"],
+        "include_markers": True,
+        "include_clip_properties": bool(p.get("include_clip_properties", False)),
+    })
+    if isinstance(snapshot, dict) and snapshot.get("error"):
+        return snapshot
+    return _story_spine_from_snapshot(snapshot)
+
+
+def _timeline_items_by_ids_report(tl, ids: List[Any], track_types=("video", "audio")) -> Tuple[List[Any], List[str]]:
+    found = _timeline_items_by_ids(tl, ids, track_types=track_types)
+    found_ids = {_safe_timeline_item_id(item) for item in found}
+    missing = [str(item_id) for item_id in ids if str(item_id) not in found_ids]
+    return found, missing
+
+
+def _merge_property_groups(p: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    for group in ("properties", "transform", "crop", "composite", "audio"):
+        payload = p.get(group)
+        if isinstance(payload, dict):
+            merged.update(payload)
+    for key in _DUPLICATE_KEYFRAME_PROPERTIES:
+        if key in p:
+            merged[key] = p[key]
+    return merged
+
+
+def _timeline_bulk_set_item_properties(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    ops = p.get("ops")
+    if not isinstance(ops, list) or not ops:
+        return _err("bulk_set_item_properties requires params.ops: non-empty list of objects")
+    dry_run = bool(p.get("dry_run", False))
+    readback = bool(p.get("readback", False))
+    results = []
+    for index, op in enumerate(ops):
+        if not isinstance(op, dict):
+            results.append({"index": index, "success": False, "error": "op must be an object"})
+            continue
+        item = None
+        item_id = op.get("timeline_item_id") or op.get("clip_id")
+        if item_id:
+            item = _find_timeline_item_by_id(tl, item_id)
+        elif "timeline_item" in op:
+            _, item, item_err = _get_item(op["timeline_item"])
+            if item_err:
+                results.append({"index": index, "success": False, "error": item_err.get("error")})
+                continue
+        if item is None:
+            results.append({"index": index, "success": False, "error": f"timeline item not found: {item_id}"})
+            continue
+        properties = _merge_property_groups(op)
+        if not properties:
+            results.append({"index": index, "success": False, "error": "op requires properties, transform, crop, composite, audio, or direct property keys"})
+            continue
+        item_result = {
+            "index": index,
+            "timeline_item_id": _safe_timeline_item_id(item),
+            "name": _safe_timeline_item_name(item),
+            "properties": {},
+        }
+        if dry_run:
+            item_result.update({"success": True, "would_set": properties})
+            results.append(item_result)
+            continue
+        for key, value in properties.items():
+            row = {"requested": value}
+            try:
+                row["success"] = bool(item.SetProperty(key, value))
+            except Exception as exc:
+                row["success"] = False
+                row["error"] = str(exc)
+            if readback:
+                try:
+                    row["readback"] = item.GetProperty(key)
+                except Exception as exc:
+                    row["readback_error"] = str(exc)
+            item_result["properties"][key] = row
+        if "clip_color" in op:
+            try:
+                item_result["clip_color"] = bool(item.SetClipColor(op["clip_color"]))
+            except Exception as exc:
+                item_result["clip_color"] = {"success": False, "error": str(exc)}
+        if "enabled" in op:
+            try:
+                item_result["enabled"] = bool(item.SetClipEnabled(bool(op["enabled"])))
+            except Exception as exc:
+                item_result["enabled"] = {"success": False, "error": str(exc)}
+        item_result["success"] = all(row.get("success") for row in item_result["properties"].values())
+        results.append(item_result)
+    return {"success": all(row.get("success") for row in results), "results": results, "op_count": len(ops)}
+
+
+def _timeline_apply_look_to_items(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    target_ids = p.get("target_ids") or p.get("timeline_item_ids") or []
+    if not isinstance(target_ids, list) or not target_ids:
+        return _err("apply_look_to_items requires target_ids: non-empty list of video timeline item IDs")
+    targets, missing = _timeline_items_by_ids_report(tl, target_ids, track_types=("video",))
+    target_summaries = [_timeline_item_summary(item) for item in targets]
+    dry_run = bool(p.get("dry_run", False))
+    out: Dict[str, Any] = {
+        "targets": target_summaries,
+        "missing": missing,
+        "dry_run": dry_run,
+    }
+    cdl = p.get("cdl")
+    if cdl is not None:
+        validation, err = _validate_cdl_payload(cdl)
+        if err:
+            return err
+        if not validation["valid"]:
+            return {"success": False, "validation": validation, "targets": target_summaries, "missing": missing}
+        normalized = _normalize_cdl(validation["cdl"])
+        out["cdl"] = {"validation": validation, "normalized": normalized}
+    source_item = None
+    source_id = p.get("copy_from_item_id") or p.get("source_item_id")
+    if source_id:
+        source_item = _find_timeline_item_by_id(tl, source_id)
+        out["copy_from_item_id"] = source_id
+        if not source_item:
+            out["source_error"] = f"source item not found: {source_id}"
+    if dry_run:
+        out["success"] = not missing and not out.get("source_error")
+        out["would_apply_cdl"] = cdl is not None
+        out["would_copy_grade"] = source_item is not None
+        return out
+    if missing or out.get("source_error"):
+        out["success"] = False
+        return out
+    results = []
+    if cdl is not None:
+        normalized = out["cdl"]["normalized"]
+        for item in targets:
+            try:
+                results.append({
+                    "timeline_item_id": _safe_timeline_item_id(item),
+                    "set_cdl": bool(item.SetCDL(normalized)),
+                })
+            except Exception as exc:
+                results.append({
+                    "timeline_item_id": _safe_timeline_item_id(item),
+                    "set_cdl": False,
+                    "error": str(exc),
+                })
+    out["cdl_results"] = results
+    if source_item is not None:
+        try:
+            out["copy_grades"] = bool(source_item.CopyGrades(targets))
+        except Exception as exc:
+            out["copy_grades"] = False
+            out["copy_grades_error"] = str(exc)
+    out["success"] = (
+        all(row.get("set_cdl", True) for row in results)
+        and (source_item is None or bool(out.get("copy_grades")))
+    )
+    return out
+
+
+def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    ranges = p.get("ranges") or p.get("clip_infos")
+    if not isinstance(ranges, list) or not ranges:
+        return _err("create_variant_from_ranges requires ranges: non-empty list of source range objects")
+    name = p.get("name")
+    if not name:
+        return _err("create_variant_from_ranges requires name")
+    mp = proj.GetMediaPool()
+    if not mp:
+        return _err("Failed to get MediaPool")
+    root = mp.GetRootFolder()
+    start_frame = _frame_int(p.get("record_frame_start", p.get("recordFrameStart")))
+    if start_frame is None:
+        try:
+            start_frame = int(source_tl.GetStartFrame())
+        except Exception:
+            start_frame = 0
+    built = []
+    cursor_by_track: Dict[Tuple[int, int], int] = {}
+    max_tracks = {"video": 1, "audio": 1}
+    for index, row in enumerate(ranges):
+        if not isinstance(row, dict):
+            return _err(f"ranges[{index}] must be an object")
+        track_type = str(row.get("track_type", row.get("trackType", "video"))).lower()
+        media_type = row.get("media_type", row.get("mediaType"))
+        if media_type is None:
+            media_type = _timeline_media_type(track_type)
+        if media_type not in (1, 2):
+            return _err(f"ranges[{index}] track_type/media_type must resolve to video or audio")
+        track_index = int(row.get("track_index", row.get("trackIndex", 1)))
+        if media_type == 1:
+            max_tracks["video"] = max(max_tracks["video"], track_index)
+        else:
+            max_tracks["audio"] = max(max_tracks["audio"], track_index)
+        start = _frame_int(row.get("start_frame", row.get("startFrame")))
+        end = _frame_int(row.get("end_frame", row.get("endFrame")))
+        if start is None or end is None or end <= start:
+            return _err(f"ranges[{index}] requires valid start_frame/end_frame")
+        record_frame = _frame_int(row.get("record_frame", row.get("recordFrame")))
+        key = (int(media_type), track_index)
+        if record_frame is None:
+            record_frame = cursor_by_track.get(key, start_frame)
+        cursor_by_track[key] = record_frame + (end - start)
+        built.append({
+            "clip_id": row.get("clip_id") or row.get("media_pool_item_id"),
+            "start_frame": start,
+            "end_frame": end,
+            "record_frame": record_frame,
+            "track_index": track_index,
+            "media_type": int(media_type),
+            "_source_row": row,
+            "_index": index,
+        })
+    if p.get("dry_run", False):
+        return {
+            "success": True,
+            "dry_run": True,
+            "name": name,
+            "ranges": [
+                {key: value for key, value in row.items() if not key.startswith("_")}
+                for row in built
+            ],
+            "markers": p.get("markers") or [],
+            "would_create_timeline": True,
+        }
+    new_tl = mp.CreateEmptyTimeline(name)
+    if not new_tl:
+        return _err(f"Failed to create timeline: {name}")
+    proj.SetCurrentTimeline(new_tl)
+    if p.get("start_timecode"):
+        try:
+            new_tl.SetStartTimecode(p["start_timecode"])
+        except Exception:
+            pass
+    for track_type, needed in max_tracks.items():
+        while int(new_tl.GetTrackCount(track_type) or 0) < needed:
+            if not new_tl.AddTrack(track_type):
+                break
+    append_infos = []
+    for row in built:
+        clip_info, clip_err = _build_append_clip_info_dict(root, row, row["_index"])
+        if clip_err:
+            return clip_err
+        append_infos.append(clip_info)
+    appended = mp.AppendToTimeline(append_infos)
+    if not appended:
+        return _err("AppendToTimeline returned no items for variant")
+    items_out = []
+    for index, item in enumerate(appended):
+        item_out, item_err = _serialize_appended_timeline_item(item, index, allow_empty_timeline_item_id=True)
+        if item_err:
+            return item_err
+        item_out["range"] = {key: value for key, value in built[index].items() if not key.startswith("_")}
+        transform = built[index]["_source_row"].get("transform")
+        if isinstance(transform, dict):
+            item_out["transform"] = {}
+            for key, value in transform.items():
+                try:
+                    item_out["transform"][key] = bool(item.SetProperty(key, value))
+                except Exception as exc:
+                    item_out["transform"][key] = {"success": False, "error": str(exc)}
+        items_out.append(item_out)
+    marker_results = []
+    for marker in p.get("markers") or []:
+        if not isinstance(marker, dict):
+            marker_results.append({"success": False, "error": "marker must be an object"})
+            continue
+        marker_payload, marker_err = _marker_add_payload(marker, tl=new_tl)
+        if marker_err:
+            marker_results.append(marker_err)
+            continue
+        marker_results.append(_add_marker(new_tl, marker_payload))
+    look_result = None
+    if p.get("cdl"):
+        target_ids = [row.get("timeline_item_id") for row in items_out if row.get("timeline_item_id") and row.get("range", {}).get("media_type") == 1]
+        look_result = _timeline_apply_look_to_items(new_tl, {"target_ids": target_ids, "cdl": p.get("cdl")})
+    return {
+        "success": True,
+        "name": new_tl.GetName(),
+        "id": new_tl.GetUniqueId(),
+        "items": items_out,
+        "markers": marker_results,
+        "look": look_result,
+        "gaps_overlaps": _detect_gaps_overlaps_from_snapshot(_timeline_conform_snapshot(new_tl, {}), {}),
+    }
+
+
+def _thumbnail_raw_rgb(thumbnail_data: Dict[str, Any]) -> Tuple[int, int, bytes]:
+    width = int(thumbnail_data.get("width") or 0)
+    height = int(thumbnail_data.get("height") or 0)
+    components = int(thumbnail_data.get("noOfComponents") or thumbnail_data.get("components") or thumbnail_data.get("channels") or 3)
+    data = thumbnail_data.get("data")
+    if isinstance(data, str):
+        raw = base64.b64decode(data)
+    elif isinstance(data, bytes):
+        raw = data
+    elif isinstance(data, bytearray):
+        raw = bytes(data)
+    elif isinstance(data, list):
+        raw = bytes(data)
+    else:
+        raise ValueError(f"Unsupported thumbnail data type: {type(data).__name__}")
+    if width <= 0 or height <= 0 or components not in (3, 4):
+        raise ValueError("Unsupported thumbnail shape")
+    expected = width * height * components
+    if len(raw) < expected:
+        raise ValueError("Thumbnail data is shorter than expected")
+    raw = raw[:expected]
+    if components == 3:
+        return width, height, raw
+    rgb = bytearray()
+    for index in range(0, len(raw), 4):
+        rgb.extend(raw[index:index + 3])
+    return width, height, bytes(rgb)
+
+
+def _rgb_to_png_bytes(width: int, height: int, raw_rgb: bytes) -> bytes:
+    row_size = width * 3
+    filtered_rows = bytearray()
+    for y in range(height):
+        filtered_rows.append(0)
+        start = y * row_size
+        filtered_rows.extend(raw_rgb[start:start + row_size])
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", zlib.compress(bytes(filtered_rows)))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+_TINY_FONT = {
+    "A": ("111", "101", "111", "101", "101"), "B": ("110", "101", "110", "101", "110"),
+    "C": ("111", "100", "100", "100", "111"), "D": ("110", "101", "101", "101", "110"),
+    "E": ("111", "100", "110", "100", "111"), "F": ("111", "100", "110", "100", "100"),
+    "G": ("111", "100", "101", "101", "111"), "H": ("101", "101", "111", "101", "101"),
+    "I": ("111", "010", "010", "010", "111"), "J": ("001", "001", "001", "101", "111"),
+    "K": ("101", "101", "110", "101", "101"), "L": ("100", "100", "100", "100", "111"),
+    "M": ("101", "111", "111", "101", "101"), "N": ("101", "111", "111", "111", "101"),
+    "O": ("111", "101", "101", "101", "111"), "P": ("111", "101", "111", "100", "100"),
+    "Q": ("111", "101", "101", "111", "001"), "R": ("111", "101", "111", "110", "101"),
+    "S": ("111", "100", "111", "001", "111"), "T": ("111", "010", "010", "010", "010"),
+    "U": ("101", "101", "101", "101", "111"), "V": ("101", "101", "101", "101", "010"),
+    "W": ("101", "101", "111", "111", "101"), "X": ("101", "101", "010", "101", "101"),
+    "Y": ("101", "101", "010", "010", "010"), "Z": ("111", "001", "010", "100", "111"),
+    "0": ("111", "101", "101", "101", "111"), "1": ("010", "110", "010", "010", "111"),
+    "2": ("111", "001", "111", "100", "111"), "3": ("111", "001", "111", "001", "111"),
+    "4": ("101", "101", "111", "001", "001"), "5": ("111", "100", "111", "001", "111"),
+    "6": ("111", "100", "111", "101", "111"), "7": ("111", "001", "010", "010", "010"),
+    "8": ("111", "101", "111", "101", "111"), "9": ("111", "101", "111", "001", "111"),
+    ":": ("0", "1", "0", "1", "0"), ".": ("0", "0", "0", "0", "1"),
+    "-": ("000", "000", "111", "000", "000"), "_": ("000", "000", "000", "000", "111"),
+    "/": ("001", "001", "010", "100", "100"), "#": ("101", "111", "101", "111", "101"),
+    " ": ("0", "0", "0", "0", "0"),
+}
+
+
+def _draw_rect_rgb(canvas: bytearray, canvas_w: int, canvas_h: int, x: int, y: int, w: int, h: int, color: Tuple[int, int, int]) -> None:
+    x0 = max(0, x)
+    y0 = max(0, y)
+    x1 = min(canvas_w, x + w)
+    y1 = min(canvas_h, y + h)
+    for yy in range(y0, y1):
+        for xx in range(x0, x1):
+            idx = (yy * canvas_w + xx) * 3
+            canvas[idx:idx + 3] = bytes(color)
+
+
+def _draw_tiny_text_rgb(canvas: bytearray, canvas_w: int, canvas_h: int, x: int, y: int, text: str, *, scale: int = 2, color: Tuple[int, int, int] = (235, 235, 235)) -> None:
+    cursor = x
+    for char in str(text).upper():
+        glyph = _TINY_FONT.get(char, ("111", "101", "101", "101", "111"))
+        glyph_w = max(len(row) for row in glyph)
+        for gy, row in enumerate(glyph):
+            for gx, bit in enumerate(row):
+                if bit != "1":
+                    continue
+                _draw_rect_rgb(canvas, canvas_w, canvas_h, cursor + gx * scale, y + gy * scale, scale, scale, color)
+        cursor += (glyph_w + 1) * scale
+
+
+def _contact_sheet_sample_label(sample: Dict[str, Any], index: int) -> str:
+    marker = sample.get("marker") or {}
+    name = marker.get("name") or marker.get("note") or sample.get("source") or "frame"
+    basis = sample.get("timecode") or f"f{sample.get('frame')}"
+    label = f"{index:02d} {basis} {name}"
+    label = re.sub(r"[^A-Za-z0-9:._/# -]+", " ", str(label))
+    return re.sub(r"\s+", " ", label).strip()
+
+
+def _contact_sheet_png_bytes(samples: List[Dict[str, Any]], columns: int = 4, padding: int = 8, label_height: int = 24) -> Tuple[int, int, bytes]:
+    thumbs = [sample for sample in samples if sample.get("thumbnail_rgb")]
+    if not thumbs:
+        raise ValueError("No thumbnails available for contact sheet")
+    thumb_w, thumb_h = thumbs[0]["thumbnail_rgb"][0], thumbs[0]["thumbnail_rgb"][1]
+    columns = max(1, min(columns, len(thumbs)))
+    rows = int(math.ceil(len(thumbs) / columns))
+    label_height = max(0, int(label_height or 0))
+    cell_h = thumb_h + label_height
+    width = columns * thumb_w + (columns + 1) * padding
+    height = rows * cell_h + (rows + 1) * padding
+    canvas = bytearray([24, 24, 24] * width * height)
+    for sample_index, sample in enumerate(thumbs):
+        thumb_w, thumb_h, raw = sample["thumbnail_rgb"]
+        col = sample_index % columns
+        row = sample_index // columns
+        x0 = padding + col * (thumb_w + padding)
+        y0 = padding + row * (cell_h + padding)
+        for y in range(thumb_h):
+            src = y * thumb_w * 3
+            dst = ((y0 + y) * width + x0) * 3
+            canvas[dst:dst + thumb_w * 3] = raw[src:src + thumb_w * 3]
+        if label_height:
+            label = sample.get("label") or _contact_sheet_sample_label(sample, sample_index + 1)
+            sample["label"] = label
+            _draw_rect_rgb(canvas, width, height, x0, y0 + thumb_h, thumb_w, label_height, (12, 12, 12))
+            max_chars = max(4, (thumb_w - 8) // 8)
+            _draw_tiny_text_rgb(canvas, width, height, x0 + 4, y0 + thumb_h + 5, label[:max_chars], scale=2)
+    return width, height, _rgb_to_png_bytes(width, height, bytes(canvas))
+
+
+def _timeline_contact_sheet_samples(tl, p: Dict[str, Any]) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]]:
+    max_samples = max(1, int(p.get("max_samples", p.get("maxSamples", 12))))
+    frames = p.get("frames")
+    samples = []
+    if frames is not None:
+        if not isinstance(frames, list):
+            return None, _err("frames must be a list")
+        for frame in frames[:max_samples]:
+            frame_id = _frame_int(frame)
+            if frame_id is not None:
+                samples.append({"frame": frame_id, "source": "frame"})
+    else:
+        markers = _timeline_marker_rows_from_snapshot(_timeline_conform_snapshot(tl, {"track_types": [], "include_markers": True}))
+        for marker in markers[:max_samples]:
+            if marker.get("frame") is not None:
+                samples.append({"frame": marker["frame"], "source": "marker", "marker": marker})
+    return samples, None
+
+
+def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    samples, sample_err = _timeline_contact_sheet_samples(tl, p)
+    if sample_err:
+        return sample_err
+    if not samples:
+        return _err("No frames or timeline markers available for thumbnail contact sheet")
+    project_name, project_id = _project_name_and_id(proj)
+    root = resolve_media_analysis_output_root(
+        project_name=project_name,
+        project_id=project_id,
+        analysis_root=p.get("analysis_root"),
+        source_paths=[],
+        create=True,
+    )
+    if not root.get("success"):
+        return root
+    original_timecode = None
+    try:
+        original_timecode = tl.GetCurrentTimecode()
+    except Exception:
+        pass
+    sampled = []
+    try:
+        for sample in samples:
+            timecode, tc_err = _timeline_frame_id_to_timecode(tl, int(sample["frame"]))
+            if tc_err:
+                sample["error"] = tc_err.get("error")
+                sampled.append(sample)
+                continue
+            try:
+                tl.SetCurrentTimecode(timecode)
+                thumbnail = tl.GetCurrentClipThumbnailImage()
+                if not thumbnail:
+                    sample["error"] = "No thumbnail available at frame"
+                else:
+                    sample["timecode"] = timecode
+                    sample["thumbnail_rgb"] = _thumbnail_raw_rgb(thumbnail)
+                    sample["thumbnail_available"] = True
+            except Exception as exc:
+                sample["error"] = str(exc)
+            sampled.append(sample)
+    finally:
+        if original_timecode:
+            try:
+                tl.SetCurrentTimecode(original_timecode)
+            except Exception:
+                pass
+    sheet_samples = [sample for sample in sampled if sample.get("thumbnail_rgb")]
+    if not sheet_samples:
+        return {"success": False, "samples": sampled, "error": "No thumbnails could be sampled"}
+    for index, sample in enumerate(sheet_samples, 1):
+        sample["label"] = _contact_sheet_sample_label(sample, index)
+    width, height, png_bytes = _contact_sheet_png_bytes(
+        sheet_samples,
+        columns=int(p.get("columns", 4)),
+        padding=int(p.get("padding", 8)),
+        label_height=int(p.get("label_height", p.get("labelHeight", 24))),
+    )
+    sheet_dir = os.path.join(root["project_root"], "timeline-contact-sheets")
+    os.makedirs(sheet_dir, exist_ok=True)
+    filename = f"{slugify(tl.GetName() or 'timeline')}-{int(time.time())}.png"
+    path = os.path.join(sheet_dir, filename)
+    with open(path, "wb") as handle:
+        handle.write(png_bytes)
+    for sample in sampled:
+        sample.pop("thumbnail_rgb", None)
+    metadata_path = os.path.splitext(path)[0] + ".json"
+    metadata = {
+        "success": True,
+        "kind": "timeline_thumbnail_contact_sheet",
+        "timeline_name": tl.GetName(),
+        "image_path": path,
+        "width": width,
+        "height": height,
+        "sample_count": len(sheet_samples),
+        "samples": sampled,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "review_guidance": [
+            "Use the labels as locators only; verify the visible frame against marker intent.",
+            "Treat contact sheets as review evidence, not final visual analysis.",
+        ],
+    }
+    with open(metadata_path, "w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+    return {
+        "success": True,
+        "path": path,
+        "metadata_path": metadata_path,
+        "width": width,
+        "height": height,
+        "sample_count": len(sheet_samples),
+        "samples": sampled,
+        "project_root": root["project_root"],
+    }
+
+
+def _timeline_marker_thumbnail_review(proj, tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    review = _timeline_thumbnail_contact_sheet(proj, tl, {**p, "frames": None})
+    if not review.get("success"):
+        return review
+    review["review_guidance"] = [
+        "Compare each marker name/note with the sampled Resolve-rendered frame.",
+        "If the image contradicts marker intent, update the marker before using it as edit evidence.",
+        "This helper samples frames only; rich descriptions require chat-context vision or the assistant viewing the generated sheet.",
+    ]
+    review["review_prompt"] = {
+        "task": "Review the marker contact sheet for editorial accuracy.",
+        "schema": {
+            "success": True,
+            "timeline_summary": "What the marker frames suggest about the cut.",
+            "marker_checks": [
+                {
+                    "label": "Contact-sheet label",
+                    "matches_marker_intent": "yes|no|unclear",
+                    "visible_evidence": "What the frame actually shows.",
+                    "recommended_action": "keep|rename_marker|move_marker|review_cut|ignore",
+                }
+            ],
+            "editorial_risks": [],
+            "next_actions": [],
+        },
+    }
+    return review
+
+
+def _audio_mix_capability_report(proj, mp, tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    report = _fairlight_boundary_report(proj, mp, tl, p)
+    item = report.get("item") or {}
+    audio_props = item.get("audio_properties") or {}
+    unavailable = [key for key, value in audio_props.items() if value is None or isinstance(value, dict)]
+    report["mix_recommendations"] = {
+        "item_property_writes": "probe_with_safe_set_audio_properties_before relying on item-level Volume/Pan changes",
+        "unavailable_or_readonly_probe_values": unavailable,
+        "fallbacks": [
+            "Use track enable/lock/name and voice-isolation helpers where available.",
+            "Use project_settings.apply_fairlight_preset when an approved Fairlight preset exists.",
+            "Use manual Fairlight mixing for detailed levels, pans, automation curves, and plugin parameters.",
+            "Add separate sound-design assets only when the user explicitly requests imports or media changes.",
+        ],
+    }
+    return report
+
+
 def _timeline_export_value(value, resolve_obj=None):
     raw = str(value or "").strip()
     if not raw:
@@ -3663,6 +4537,485 @@ def _media_pool_item_summary(clip):
     return summary
 
 
+def _project_name_and_id(project) -> Tuple[Optional[str], Optional[str]]:
+    name = project_id = None
+    if project and _has_method(project, "GetName"):
+        try:
+            name = project.GetName()
+        except Exception:
+            name = None
+    if project and _has_method(project, "GetUniqueId"):
+        try:
+            project_id = project.GetUniqueId()
+        except Exception:
+            project_id = None
+    return name, project_id
+
+
+def _media_analysis_clip_record(clip, bin_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not clip:
+        return None
+    props, props_error = _safe_clip_call(clip, "GetClipProperty", "")
+    props = props if isinstance(props, dict) else {}
+    file_path = props.get("File Path") or props.get("FilePath")
+    return {
+        "clip_id": _safe_media_pool_item_id(clip),
+        "clip_name": _safe_media_pool_item_name(clip),
+        "bin_path": bin_path,
+        "file_path": file_path,
+        "media_id": _safe_clip_call(clip, "GetMediaId")[0],
+        "duration": props.get("Duration"),
+        "fps": props.get("FPS"),
+        "resolution": props.get("Resolution"),
+        "media_type": props.get("Type"),
+        "clip_properties_error": props_error,
+    }
+
+
+def _media_analysis_folder_records(folder, bin_path: str = "Master", recursive: bool = True) -> Tuple[List[Dict[str, Any]], List[str]]:
+    records: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    if not folder:
+        return records, ["Folder unavailable"]
+
+    try:
+        clips = folder.GetClipList() or []
+    except Exception as exc:
+        return records, [f"GetClipList failed for {bin_path}: {exc}"]
+    for clip in clips:
+        record = _media_analysis_clip_record(clip, bin_path)
+        if not record:
+            continue
+        if not record.get("file_path"):
+            warnings.append(f"Skipping clip without file path: {record.get('clip_name')}")
+            continue
+        records.append(record)
+
+    if recursive:
+        try:
+            subfolders = folder.GetSubFolderList() or []
+        except Exception as exc:
+            warnings.append(f"GetSubFolderList failed for {bin_path}: {exc}")
+            subfolders = []
+        for sub in subfolders:
+            try:
+                sub_name = sub.GetName()
+            except Exception:
+                sub_name = "Unnamed"
+            child_records, child_warnings = _media_analysis_folder_records(
+                sub,
+                f"{bin_path}/{sub_name}",
+                recursive=True,
+            )
+            records.extend(child_records)
+            warnings.extend(child_warnings)
+
+    return records, warnings
+
+
+def _media_analysis_dedupe_records(records: List[Dict[str, Any]], include_duplicates: bool = False) -> Tuple[List[Dict[str, Any]], int]:
+    if include_duplicates:
+        return records, 0
+    seen = set()
+    deduped = []
+    duplicate_count = 0
+    for record in records:
+        key = record.get("file_path") or record.get("media_id") or record.get("clip_id")
+        if key in seen:
+            duplicate_count += 1
+            continue
+        seen.add(key)
+        deduped.append(record)
+    return deduped, duplicate_count
+
+
+def _media_analysis_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def _media_analysis_target_dict(raw_target: Any, p: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    p = p or {}
+    if raw_target is None:
+        return {}
+    if isinstance(raw_target, dict):
+        return dict(raw_target)
+    if isinstance(raw_target, str):
+        value = raw_target.strip()
+        if not value:
+            return {}
+        lower = value.lower()
+        if lower in {"project", "all", "all_media", "all media"}:
+            return {"type": "project", "recursive": True}
+        if lower in {"selected", "selected_clip", "selected clip", "current", "current clip"}:
+            return {"type": "clip", "selected": True}
+        if lower.startswith("bin:"):
+            path = value.split(":", 1)[1].strip() or "Master"
+            return {"type": "bin", "path": path, "recursive": True}
+        if lower in {"bin", "folder"}:
+            return {
+                "type": "bin",
+                "path": p.get("bin_path") or p.get("path") or "Master",
+                "recursive": True,
+            }
+        if lower in {"clip", "file"}:
+            return {"type": lower}
+        expanded = os.path.expanduser(value)
+        if os.path.isabs(expanded):
+            return {"type": "file", "path": expanded}
+        return {
+            "_invalid_target": (
+                "Unsupported media_analysis target string. Use 'project', "
+                "'selected', 'bin:<path>', or an absolute file path."
+            )
+        }
+    return {"_invalid_target": f"target must be an object or string, got {type(raw_target).__name__}"}
+
+
+def _media_analysis_extract_json_text(text: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end <= start:
+            return None, "Sampling response did not contain a JSON object"
+        try:
+            payload = json.loads(raw[start:end + 1])
+        except json.JSONDecodeError as exc:
+            return None, f"Sampling response JSON parse failed: {exc}"
+    if not isinstance(payload, dict):
+        return None, "Sampling response JSON must be an object"
+    return payload, None
+
+
+def _media_analysis_sampling_capability(ctx: Optional[Context], *, context: bool = False) -> bool:
+    if ctx is None:
+        return False
+    try:
+        sampling = (
+            mcp_types.SamplingCapability(context=mcp_types.SamplingContextCapability())
+            if context
+            else mcp_types.SamplingCapability()
+        )
+        return bool(ctx.request_context.session.check_client_capability(
+            mcp_types.ClientCapabilities(sampling=sampling)
+        ))
+    except Exception:
+        return False
+
+
+def _media_analysis_sampling_context(ctx: Optional[Context], requested: Any) -> Optional[str]:
+    include_context = str(requested or "allServers")
+    if include_context not in {"none", "thisServer", "allServers"}:
+        include_context = "allServers"
+    if include_context == "none":
+        return "none"
+    if _media_analysis_sampling_capability(ctx, context=True):
+        return include_context
+    return None
+
+
+async def _media_analysis_chat_context_vision(
+    record: Dict[str, Any],
+    motion: Dict[str, Any],
+    options: Dict[str, Any],
+    artifacts: Dict[str, Any],
+    capabilities: Dict[str, Any],
+    ctx: Optional[Context],
+) -> Dict[str, Any]:
+    vision = options.get("vision") or {}
+    provider = vision.get("provider") or capabilities.get("vision", {}).get("provider") or "chat_context"
+    if not _media_analysis_sampling_capability(ctx):
+        return {
+            "success": False,
+            "status": "skipped",
+            "provider": provider,
+            "reason": "The MCP client for this request does not advertise sampling/createMessage support.",
+        }
+
+    keyframes = [
+        row for row in motion.get("analysis_keyframes", [])
+        if row.get("frame_path") and os.path.isfile(row.get("frame_path"))
+    ]
+    max_frames = int(vision.get("max_frames") or 6)
+    keyframes = keyframes[:max(1, min(max_frames, 12))]
+    if not keyframes:
+        return {
+            "success": False,
+            "status": "skipped",
+            "provider": provider,
+            "reason": "No sampled analysis frames were available for chat-context vision.",
+        }
+
+    content: List[Any] = [
+        mcp_types.TextContent(
+            type="text",
+            text=json.dumps({
+                "task": "Analyze these representative frames for editing decisions.",
+                "clip": record,
+                "motion_summary": {
+                    "overall_motion_level": motion.get("overall_motion_level"),
+                    "average_frame_delta": motion.get("average_frame_delta"),
+                    "max_frame_delta": motion.get("max_frame_delta"),
+                },
+                "frame_count": len(keyframes),
+            }, indent=2, ensure_ascii=False),
+        )
+    ]
+    for index, frame in enumerate(keyframes, 1):
+        frame_path = frame.get("frame_path")
+        with open(frame_path, "rb") as f:
+            image_data = base64.b64encode(f.read()).decode("ascii")
+        content.append(mcp_types.TextContent(
+            type="text",
+            text=(
+                f"Frame {index}: time_seconds={frame.get('time_seconds')}, "
+                f"selection_reason={frame.get('selection_reason')}, "
+                f"delta_from_previous={frame.get('delta_from_previous')}"
+            ),
+        ))
+        content.append(mcp_types.ImageContent(type="image", data=image_data, mimeType="image/jpeg"))
+
+    model_name = vision.get("model")
+    model_preferences = None
+    if model_name:
+        model_preferences = mcp_types.ModelPreferences(
+            hints=[mcp_types.ModelHint(name=str(model_name))],
+            intelligencePriority=0.8,
+            speedPriority=0.2,
+        )
+
+    result = await ctx.request_context.session.create_message(
+        [
+            mcp_types.SamplingMessage(
+                role="user",
+                content=content,
+            )
+        ],
+        max_tokens=int(vision.get("max_tokens") or 1800),
+        system_prompt=str(vision.get("prompt") or DEFAULT_VISION_ANALYSIS_PROMPT),
+        include_context=_media_analysis_sampling_context(ctx, vision.get("include_context")),
+        temperature=float(vision.get("temperature", 0.2)),
+        model_preferences=model_preferences,
+        related_request_id=ctx.request_id,
+    )
+    response_content = result.content
+    if not isinstance(response_content, mcp_types.TextContent):
+        return {
+            "success": False,
+            "status": "skipped",
+            "provider": provider,
+            "reason": f"Sampling returned non-text content: {type(response_content).__name__}",
+        }
+    payload, err = _media_analysis_extract_json_text(response_content.text)
+    if err:
+        return {
+            "success": False,
+            "status": "invalid_response",
+            "provider": provider,
+            "reason": err,
+            "raw_response": response_content.text[:4000],
+        }
+    payload.setdefault("success", True)
+    payload["provider"] = "chat_context"
+    return payload
+
+
+DEFAULT_TIMELINE_MARKER_REVIEW_PROMPT = """Return only strict JSON for Resolve marker/contact-sheet review.
+
+Use the provided metadata plus the contact-sheet image. Check whether marker
+names/notes match what the rendered Resolve frames actually show. Be precise,
+editorial, and source-safe.
+
+Use this schema:
+{
+  "success": true,
+  "provider": "chat_context",
+  "timeline_summary": "Concise editorial read of the marker frames.",
+  "marker_checks": [
+    {
+      "label": "Contact-sheet label or timecode.",
+      "matches_marker_intent": "yes|no|unclear",
+      "visible_evidence": "What the frame shows.",
+      "recommended_action": "keep|rename_marker|move_marker|review_cut|ignore"
+    }
+  ],
+  "editorial_risks": [],
+  "next_actions": [],
+  "confidence": "low|medium|high"
+}
+Do not include markdown fences, prose outside JSON, or keys outside this schema."""
+
+
+async def _media_analysis_chat_context_image_review(
+    image_path: str,
+    metadata: Dict[str, Any],
+    vision: Dict[str, Any],
+    ctx: Optional[Context],
+) -> Dict[str, Any]:
+    provider = vision.get("provider") or "chat_context"
+    if not _media_analysis_sampling_capability(ctx):
+        return {
+            "success": False,
+            "status": "skipped",
+            "provider": provider,
+            "reason": "The MCP client for this request does not advertise sampling/createMessage support.",
+        }
+    if not image_path or not os.path.isfile(image_path):
+        return {
+            "success": False,
+            "status": "skipped",
+            "provider": provider,
+            "reason": f"Review image not found: {image_path}",
+        }
+
+    with open(image_path, "rb") as handle:
+        image_data = base64.b64encode(handle.read()).decode("ascii")
+    content: List[Any] = [
+        mcp_types.TextContent(
+            type="text",
+            text=json.dumps({
+                "task": "Review this Resolve contact sheet for marker/editing accuracy.",
+                "metadata": metadata,
+            }, indent=2, ensure_ascii=False),
+        ),
+        mcp_types.ImageContent(type="image", data=image_data, mimeType="image/png"),
+    ]
+    model_name = vision.get("model")
+    model_preferences = None
+    if model_name:
+        model_preferences = mcp_types.ModelPreferences(
+            hints=[mcp_types.ModelHint(name=str(model_name))],
+            intelligencePriority=0.75,
+            speedPriority=0.25,
+        )
+    result = await ctx.request_context.session.create_message(
+        [
+            mcp_types.SamplingMessage(
+                role="user",
+                content=content,
+            )
+        ],
+        max_tokens=int(vision.get("max_tokens") or 1500),
+        system_prompt=str(vision.get("prompt") or DEFAULT_TIMELINE_MARKER_REVIEW_PROMPT),
+        include_context=_media_analysis_sampling_context(ctx, vision.get("include_context")),
+        temperature=float(vision.get("temperature", 0.2)),
+        model_preferences=model_preferences,
+        related_request_id=ctx.request_id,
+    )
+    response_content = result.content
+    if not isinstance(response_content, mcp_types.TextContent):
+        return {
+            "success": False,
+            "status": "skipped",
+            "provider": provider,
+            "reason": f"Sampling returned non-text content: {type(response_content).__name__}",
+        }
+    payload, err = _media_analysis_extract_json_text(response_content.text)
+    if err:
+        return {
+            "success": False,
+            "status": "invalid_response",
+            "provider": provider,
+            "reason": err,
+            "raw_response": response_content.text[:4000],
+        }
+    payload.setdefault("success", True)
+    payload["provider"] = "chat_context"
+    return payload
+
+
+def _media_analysis_records_from_target(mp, p: Dict[str, Any]) -> Tuple[Optional[List[Dict[str, Any]]], Dict[str, Any], List[str], Optional[Dict[str, Any]]]:
+    target = _media_analysis_target_dict(p.get("target"), p)
+    if target.get("_invalid_target"):
+        return None, target, [], _err(target["_invalid_target"])
+    target_type = str(target.get("type") or p.get("target_type") or "clip").strip().lower()
+    warnings: List[str] = []
+
+    if target_type == "file":
+        file_path = target.get("path") or p.get("path") or p.get("file_path") or p.get("filePath")
+        if not file_path:
+            return None, target, warnings, _err("file target requires path or file_path")
+        file_path = os.path.realpath(os.path.abspath(os.path.expanduser(str(file_path))))
+        if not os.path.isfile(file_path):
+            return None, target, warnings, _err(f"Media file not found: {file_path}")
+        target.update({"type": "file", "path": file_path})
+        return ([{
+            "clip_id": None,
+            "clip_name": os.path.basename(file_path),
+            "bin_path": None,
+            "file_path": file_path,
+            "media_id": None,
+            "duration": None,
+            "fps": None,
+            "resolution": None,
+            "media_type": "file",
+        }], target, warnings, None)
+
+    if mp is None:
+        return None, target, warnings, _err("Resolve Media Pool is required for clip, bin, and project targets")
+
+    if target_type == "clip":
+        clip_id = target.get("clip_id") or p.get("clip_id")
+        selected = bool(target.get("selected") or p.get("selected"))
+        clips = []
+        if selected:
+            try:
+                clips = mp.GetSelectedClips() or []
+            except Exception as exc:
+                return None, target, warnings, _err(f"GetSelectedClips failed: {exc}")
+            if not clips:
+                return None, target, warnings, _err("No Media Pool clips are selected")
+        else:
+            if not clip_id:
+                return None, target, warnings, _err("clip target requires clip_id or selected=true")
+            clip = _find_clip(mp.GetRootFolder(), clip_id)
+            if not clip:
+                return None, target, warnings, _err(f"Clip not found: {clip_id}")
+            clips = [clip]
+        records = []
+        for clip in clips:
+            record = _media_analysis_clip_record(clip)
+            if record and record.get("file_path"):
+                records.append(record)
+            elif record:
+                warnings.append(f"Skipping clip without file path: {record.get('clip_name')}")
+        target.update({"type": "clip", "selected": selected, "clip_id": clip_id})
+    elif target_type == "bin":
+        path = target.get("path") or p.get("bin_path") or p.get("path") or "Master"
+        recursive = bool(target.get("recursive", p.get("recursive", True)))
+        folder = _navigate_folder(mp, path)
+        if not folder:
+            return None, target, warnings, _err(f"Folder not found: {path}")
+        records, folder_warnings = _media_analysis_folder_records(folder, path if path else "Master", recursive)
+        warnings.extend(folder_warnings)
+        target.update({"type": "bin", "path": path, "recursive": recursive})
+    elif target_type == "project":
+        recursive = bool(target.get("recursive", True))
+        records, folder_warnings = _media_analysis_folder_records(mp.GetRootFolder(), "Master", recursive=recursive)
+        warnings.extend(folder_warnings)
+        target.update({"type": "project", "recursive": recursive})
+    else:
+        return None, target, warnings, _err("target.type must be one of file, clip, bin, project")
+
+    records, duplicate_count = _media_analysis_dedupe_records(records, bool(p.get("include_duplicates", target.get("include_duplicates", False))))
+    if duplicate_count:
+        warnings.append(f"Deduped {duplicate_count} repeated source media reference(s)")
+    if not records:
+        return None, target, warnings, _err("No analyzable media with file paths found for target")
+    return records, target, warnings, None
+
+
 def _media_pool_item_probe(clip):
     metadata, metadata_error = _safe_clip_call(clip, "GetMetadata", "")
     third_party, third_party_error = _safe_clip_call(clip, "GetThirdPartyMetadata", "")
@@ -4293,6 +5646,71 @@ def _ser(obj):
         return [_ser(v) for v in obj]
     # Resolve API object — return repr
     return str(obj)
+
+def _png_chunk(chunk_type: bytes, chunk_data: bytes) -> bytes:
+    payload = chunk_type + chunk_data
+    crc = struct.pack(">I", zlib.crc32(payload) & 0xFFFFFFFF)
+    return struct.pack(">I", len(chunk_data)) + payload + crc
+
+def _thumbnail_data_to_png_bytes(thumbnail_data: Dict[str, Any]) -> bytes:
+    """Convert Resolve's raw thumbnail dict into PNG bytes."""
+    if not isinstance(thumbnail_data, dict):
+        raise ValueError("thumbnail_data must be a dict")
+
+    width = int(thumbnail_data.get("width") or 0)
+    height = int(thumbnail_data.get("height") or 0)
+    components = int(
+        thumbnail_data.get("noOfComponents")
+        or thumbnail_data.get("components")
+        or thumbnail_data.get("channels")
+        or 3
+    )
+    depth = int(thumbnail_data.get("depth") or 8)
+    data = thumbnail_data.get("data")
+
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Invalid thumbnail dimensions: {width}x{height}")
+    if components not in (3, 4):
+        raise ValueError(f"Unsupported thumbnail component count: {components}")
+    if depth != 8:
+        raise ValueError(f"Unsupported thumbnail bit depth: {depth}")
+    if not data:
+        raise ValueError("Thumbnail data is empty")
+
+    if isinstance(data, str):
+        raw = base64.b64decode(data)
+    elif isinstance(data, bytes):
+        raw = data
+    elif isinstance(data, bytearray):
+        raw = bytes(data)
+    elif isinstance(data, list):
+        raw = bytes(data)
+    else:
+        raise ValueError(f"Unsupported thumbnail data type: {type(data).__name__}")
+
+    row_size = width * components
+    expected_size = row_size * height
+    if len(raw) < expected_size:
+        raise ValueError(
+            f"Thumbnail data too short: got {len(raw)} bytes, expected "
+            f"{expected_size} for {width}x{height}x{components}"
+        )
+    raw = raw[:expected_size]
+
+    filtered_rows = bytearray()
+    for y in range(height):
+        filtered_rows.append(0)
+        start = y * row_size
+        filtered_rows.extend(raw[start:start + row_size])
+
+    color_type = 2 if components == 3 else 6
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", zlib.compress(bytes(filtered_rows)))
+        + _png_chunk(b"IEND", b"")
+    )
 
 def _unknown(action, valid):
     return _err(f"Unknown action '{action}'. Valid actions: {', '.join(valid)}")
@@ -5846,7 +7264,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       create_timeline_from_clips(name, clip_infos) -> {success, name, id}
         — positioned: params.clip_infos is a list of {clip_id or media_pool_item_id,
           start_frame & end_frame (or startFrame/endFrame), record_frame/recordFrame}.
-          Matches MediaPool.CreateTimelineFromClips(name, [{clipInfo}, ...]).
+          record_frame is relative to the created timeline start frame by default;
+          pass record_frame_mode="absolute" for raw Resolve recordFrame values.
       import_timeline(path, options?) -> {success, name}
       delete_timelines(timeline_ids) -> {success}
       append_to_timeline(clip_ids) -> {success, count}
@@ -5855,7 +7274,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         — positioned: params.clip_infos is a list of {clip_id or media_pool_item_id,
           start_frame & end_frame (or startFrame/endFrame), record_frame/recordFrame,
           track_index/trackIndex (1-based), optional media_type/mediaType (1=video, 2=audio)}.
-          Matches MediaPool.AppendToTimeline([{clipInfo}, ...]). Returns timeline_item_id per item.
+          record_frame is relative to the current timeline start frame by default;
+          pass record_frame_mode="absolute" for raw Resolve recordFrame values.
+          Returns timeline_item_id per item.
       import_media(paths) -> {imported}
         — simple: params.paths is a list of file/folder paths
       import_media(clip_infos) -> {imported}
@@ -5945,14 +7366,30 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 return _err("clip_infos must be a list")
             if not raw:
                 return _err("clip_infos must be a non-empty list")
+            for i, ci in enumerate(raw):
+                _, row_err = _build_create_clip_info_dict(root, ci, i)
+                if row_err:
+                    return row_err
+            tl = mp.CreateEmptyTimeline(p["name"])
+            if not tl:
+                return _err("Failed to create timeline from clip_infos")
+            try:
+                proj.SetCurrentTimeline(tl)
+            except Exception:
+                pass
+            timeline_start = _timeline_start_frame(tl)
             built = []
             for i, ci in enumerate(raw):
-                row, row_err = _build_create_clip_info_dict(root, ci, i)
+                append_ci = dict(ci)
+                append_ci.setdefault("track_index", append_ci.get("trackIndex", 1))
+                row, row_err = _build_append_clip_info_dict(root, append_ci, i, timeline_start)
                 if row_err:
                     return row_err
                 built.append(row)
-            tl = mp.CreateTimelineFromClips(p["name"], built)
-            return _ok(name=tl.GetName(), id=tl.GetUniqueId()) if tl else _err("Failed to create timeline from clip_infos")
+            appended = mp.AppendToTimeline(built)
+            if not appended:
+                return _err("Failed to append clip_infos to created timeline")
+            return _ok(name=tl.GetName(), id=tl.GetUniqueId())
         clip_ids = p.get("clip_ids")
         if not clip_ids:
             return _err("Provide clip_ids (simple) or clip_infos (positioned)")
@@ -5980,9 +7417,10 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 return _err("clip_infos must be a list")
             if not raw:
                 return _err("clip_infos must be a non-empty list")
+            timeline_start = _timeline_start_frame(proj.GetCurrentTimeline())
             built = []
             for i, ci in enumerate(raw):
-                row, row_err = _build_append_clip_info_dict(root, ci, i)
+                row, row_err = _build_append_clip_info_dict(root, ci, i, timeline_start)
                 if row_err:
                     return row_err
                 built.append(row)
@@ -6383,7 +7821,221 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TOOL 15: timeline
+# TOOL 15: media_analysis
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """Project-scoped read-only media analysis.
+
+    Actions:
+      capabilities() -> {tools, transcription, vision}
+      install_guidance() -> {missing}  — guidance only; never installs anything
+      resolve_output_root(analysis_root?, source_paths?) -> {project_root}
+      plan(target, depth?, analysis_root?, transcription?, vision?, dry_run?) -> {clips, artifacts}
+      analyze_file(path|file_path, dry_run?, session_only?, persist?) -> {clips, manifest}
+      analyze_clip(clip_id|selected, dry_run?, session_only?, persist?) -> {clips, manifest}
+      analyze_bin(path|bin_path, recursive?, dry_run?, session_only?, persist?) -> {clips, manifest}
+      analyze_project(recursive?, dry_run?, session_only?, persist?) -> {clips, manifest}
+      review_timeline_markers(max_samples?, analysis_root?, vision?) -> {path, samples, vision_review?}
+      summarize(analysis_root?) -> project summary from existing clip reports
+      get_report(report_path?) -> load manifest or a report under the analysis root
+      cleanup_artifacts(frames_only=true) -> remove generated frame artifacts only
+
+    All planned outputs stay under a davinci-resolve-mcp-analysis project root
+    and are validated so they are never written beside source media. Executed
+    file/clip analysis defaults to session-only: scratch artifacts are removed
+    after structured reports are returned unless persist=true or keep_artifacts=true.
+    Set vision={enabled:true, provider:"chat_context"} to request visual
+    analysis from the MCP client's current chat/sampling model when supported.
+    """
+    p = dict(params or {})
+
+    if action == "capabilities":
+        caps = detect_media_analysis_capabilities()
+        caps.setdefault("vision", {})["chat_context"] = {
+            "available": _media_analysis_sampling_capability(ctx),
+            "requires": "MCP client sampling/createMessage support on the active request",
+            "provider": "chat_context",
+        }
+        return caps
+    if action == "install_guidance":
+        caps = detect_media_analysis_capabilities()
+        guidance = media_analysis_install_guidance(caps)
+        if _media_analysis_sampling_capability(ctx):
+            guidance.get("missing", {}).pop("vision", None)
+        guidance["chat_context_vision"] = {
+            "available": _media_analysis_sampling_capability(ctx),
+            "requires": "No package install; the MCP client must support sampling/createMessage.",
+            "provider": "chat_context",
+        }
+        return guidance
+
+    pm, proj, err = _check()
+    if err:
+        return err
+    project_name, project_id = _project_name_and_id(proj)
+
+    if action == "resolve_output_root":
+        return resolve_media_analysis_output_root(
+            project_name=project_name,
+            project_id=project_id,
+            analysis_root=p.get("analysis_root"),
+            source_paths=p.get("source_paths") or p.get("sourcePaths") or [],
+            create=bool(p.get("create", False)),
+        )
+
+    if action in {"summarize", "get_report", "cleanup_artifacts"}:
+        root = resolve_media_analysis_output_root(
+            project_name=project_name,
+            project_id=project_id,
+            analysis_root=p.get("analysis_root"),
+            source_paths=[],
+            create=bool(p.get("create", False)),
+        )
+        if not root.get("success"):
+            return root
+        project_root = root["project_root"]
+        if action == "summarize":
+            return summarize_media_analysis_reports(project_root)
+        if action == "get_report":
+            return load_media_analysis_report(
+                project_root,
+                report_path=p.get("report_path") or p.get("path"),
+                clip_dir=p.get("clip_dir"),
+            )
+        return cleanup_media_analysis_artifacts(project_root, frames_only=bool(p.get("frames_only", True)))
+
+    if action == "review_timeline_markers":
+        tl = proj.GetCurrentTimeline()
+        if not tl:
+            return _err("No current timeline")
+        review = _timeline_marker_thumbnail_review(proj, tl, p)
+        if not review.get("success"):
+            return review
+        vision = p.get("vision") or {}
+        if _media_analysis_bool(vision.get("enabled"), default=False):
+            provider = vision.get("provider") or "chat_context"
+            if provider in CHAT_CONTEXT_VISION_PROVIDERS:
+                review["vision_review"] = await _media_analysis_chat_context_image_review(
+                    review.get("path"),
+                    {
+                        "timeline": {"name": tl.GetName(), "id": tl.GetUniqueId()},
+                        "samples": review.get("samples", []),
+                        "review_prompt": review.get("review_prompt"),
+                    },
+                    vision,
+                    ctx,
+                )
+            else:
+                review["vision_review"] = {
+                    "success": False,
+                    "status": "skipped",
+                    "provider": provider,
+                    "reason": "Timeline marker image review currently supports chat-context vision only.",
+                }
+        return review
+
+    if action in {"analyze_file", "analyze_clip", "analyze_bin", "analyze_project"}:
+        dry_run_default = action in {"analyze_bin", "analyze_project"}
+        p["dry_run"] = _media_analysis_bool(p.get("dry_run"), dry_run_default)
+        target = _media_analysis_target_dict(p.get("target"), p)
+        if target.get("_invalid_target"):
+            return _err(target["_invalid_target"])
+        if action == "analyze_file":
+            target.update({"type": "file", "path": p.get("path") or p.get("file_path") or p.get("filePath") or target.get("path")})
+        elif action == "analyze_clip":
+            target.update({"type": "clip", "clip_id": p.get("clip_id") or target.get("clip_id"), "selected": p.get("selected", target.get("selected", False))})
+        elif action == "analyze_bin":
+            target.update({"type": "bin", "path": p.get("bin_path") or p.get("path") or target.get("path") or "Master", "recursive": p.get("recursive", target.get("recursive", True))})
+        elif action == "analyze_project":
+            target.update({"type": "project", "recursive": p.get("recursive", target.get("recursive", True))})
+        p["target"] = target
+        action = "plan"
+
+    if action == "plan":
+        p["dry_run"] = _media_analysis_bool(p.get("dry_run"), True)
+        persist = _media_analysis_bool(p.get("persist"), False)
+        if "session_only" in p:
+            p["session_only"] = _media_analysis_bool(p.get("session_only"), False)
+        else:
+            p["session_only"] = (not p["dry_run"]) and (not persist)
+        if persist:
+            p["session_only"] = False
+        if p["session_only"] and not p["dry_run"]:
+            p["cleanup_frames"] = _media_analysis_bool(p.get("cleanup_frames"), True)
+            if not p.get("analysis_root"):
+                p["_reuse_default_analysis_root"] = True
+                session_root = tempfile.mkdtemp(prefix="davinci-resolve-mcp-analysis-session-")
+                p["analysis_root"] = session_root
+                p["_session_temp_base_root"] = session_root
+
+        target = _media_analysis_target_dict(p.get("target"), p)
+        if target.get("_invalid_target"):
+            return _err(target["_invalid_target"])
+        target_type = str(target.get("type") or p.get("target_type") or "clip").strip().lower()
+        mp = None
+        if target_type != "file":
+            mp = proj.GetMediaPool()
+            if not mp:
+                return _err("Failed to get MediaPool")
+        records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p)
+        if target_err:
+            if warnings:
+                target_err["warnings"] = warnings
+            return target_err
+        plan = build_media_analysis_plan(
+            project_name=project_name,
+            project_id=project_id,
+            records=records or [],
+            target=normalized_target,
+            params=p,
+            capabilities=detect_media_analysis_capabilities(),
+        )
+        if warnings:
+            plan["warnings"] = warnings
+        if not bool(p.get("dry_run", True)):
+            async def vision_runner(record, motion, options, artifacts, capabilities):
+                return await _media_analysis_chat_context_vision(
+                    record,
+                    motion,
+                    options,
+                    artifacts,
+                    capabilities,
+                    ctx,
+                )
+
+            executed = await execute_media_analysis_plan_async(
+                plan,
+                params=p,
+                capabilities=detect_media_analysis_capabilities(),
+                vision_runner=vision_runner,
+            )
+            return {
+                "success": bool(executed.get("success")),
+                "plan": plan,
+                "manifest": executed,
+            }
+        return plan
+
+    return _unknown(action, [
+        "capabilities",
+        "install_guidance",
+        "resolve_output_root",
+        "plan",
+        "analyze_file",
+        "analyze_clip",
+        "analyze_bin",
+        "analyze_project",
+        "review_timeline_markers",
+        "summarize",
+        "get_report",
+        "cleanup_artifacts",
+    ])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOOL 16: timeline
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
@@ -6431,6 +8083,12 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       copy_range/duplicate_range(start_frame, end_frame, record_frame, ...) -> {results, count}
       overwrite_range(start_frame, end_frame, record_frame, ...) -> {results, count}
       lift_range(start_frame, end_frame, allow_partial_item_delete?, ripple?) -> {success, deleted}
+      story_spine_report() -> {beats, track_summaries, source_ranges, audio_spine}
+      create_variant_from_ranges(name, ranges, markers?, cdl?, dry_run?) -> {success, id, items}
+      bulk_set_item_properties(ops, dry_run?, readback?) -> {results, op_count}
+      apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?) -> {success}
+      thumbnail_contact_sheet(frames?|max_samples?, analysis_root?) -> {path, samples}
+      marker_thumbnail_review(max_samples?, analysis_root?) -> {path, samples, review_guidance}
       edit_kernel_capabilities() -> {supported, partially_supported, unsupported}
       probe_edit_kernel_item(clip_ids? selected? timeline_item?) -> {items, count}
       create_compound_clip(clip_ids, info?) -> {success}
@@ -6475,6 +8133,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       probe_audio_item(track_type?, track_index?, item_index?) -> {summary, audio_properties, source_audio_mapping}
       probe_audio_track(track_index?) -> {track_count, enabled, locked, sub_type, voice_isolation}
       safe_set_audio_properties(properties, restore?, dry_run?, track_type?, track_index?, item_index?) -> {success, results}
+      audio_mix_capability_report(...) -> {capabilities, mix_recommendations}
       voice_isolation_capabilities(track_index?, track_type?, item_index?) -> {timeline_track, item}
       audio_mapping_report(clip_ids?) -> {timeline_items, media_pool_items}
       safe_auto_sync_audio(clip_ids|selected, settings?, dry_run?) -> {success}
@@ -6609,6 +8268,18 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _timeline_copy_range_impl(proj, tl, p, overwrite=True)
     elif action == "lift_range":
         return _timeline_lift_range_impl(tl, p)
+    elif action == "story_spine_report":
+        return _timeline_story_spine_report(tl, p)
+    elif action == "create_variant_from_ranges":
+        return _timeline_create_variant_from_ranges(proj, tl, p)
+    elif action == "bulk_set_item_properties":
+        return _timeline_bulk_set_item_properties(tl, p)
+    elif action == "apply_look_to_items":
+        return _timeline_apply_look_to_items(tl, p)
+    elif action == "thumbnail_contact_sheet":
+        return _timeline_thumbnail_contact_sheet(proj, tl, p)
+    elif action == "marker_thumbnail_review":
+        return _timeline_marker_thumbnail_review(proj, tl, p)
     elif action == "edit_kernel_capabilities":
         return _timeline_edit_kernel_capabilities()
     elif action == "probe_edit_kernel_item":
@@ -6843,6 +8514,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _audio_track_probe(tl, p)
     elif action == "safe_set_audio_properties":
         return _safe_set_audio_properties(tl, p)
+    elif action == "audio_mix_capability_report":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _audio_mix_capability_report(proj, mp, tl, p)
     elif action == "voice_isolation_capabilities":
         return _voice_isolation_capabilities(tl, p)
     elif action == "audio_mapping_report":
@@ -6867,7 +8543,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if mp_err:
             return mp_err
         return _fairlight_boundary_report(proj, mp, tl, p)
-    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","edit_kernel_capabilities","probe_edit_kernel_item","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
+    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","story_spine_report","create_variant_from_ranges","bulk_set_item_properties","apply_look_to_items","thumbnail_contact_sheet","marker_thumbnail_review","edit_kernel_capabilities","probe_edit_kernel_item","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges","audio_mix_capability_report",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -6875,7 +8551,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
     """Markers and playhead operations on the current timeline.
 
     Actions:
@@ -6892,6 +8568,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Di
       set_current_timecode(timecode) -> {success}
       get_current_video_item() -> {name, id}
       get_thumbnail() -> {thumbnail}
+      get_thumbnail_image() -> MCP image content for the current Color-page frame
       annotation_capabilities() -> {scopes, marker_colors, frame_aliases}
       probe_annotations(scope?, ...) -> {scopes, count}
       normalize_marker_payload(frame|timecode?, color?, name?, note?, duration?, custom_data?) -> {marker}
@@ -6944,6 +8621,14 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Di
         return {"name": it.GetName(), "id": it.GetUniqueId()} if it else {"name": None, "id": None}
     elif action == "get_thumbnail":
         return _ser(tl.GetCurrentClipThumbnailImage())
+    elif action == "get_thumbnail_image":
+        thumbnail = tl.GetCurrentClipThumbnailImage()
+        if not thumbnail:
+            return _err("No thumbnail available. Open the Color page with a current clip selected.")
+        try:
+            return Image(data=_thumbnail_data_to_png_bytes(thumbnail), format="png")
+        except ValueError as exc:
+            return _err(str(exc))
     elif action == "annotation_capabilities":
         return _annotation_capabilities()
     elif action == "probe_annotations":
@@ -6962,7 +8647,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Di
         return _export_review_report(tl, p)
     elif action == "annotation_boundary_report":
         return _annotation_boundary_report(tl, p)
-    return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","get_current_timecode","set_current_timecode","get_current_video_item","get_thumbnail",*_ANNOTATION_KERNEL_ACTIONS])
+    return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","get_current_timecode","set_current_timecode","get_current_video_item","get_thumbnail","get_thumbnail_image",*_ANNOTATION_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -9043,7 +10728,7 @@ def fuse_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       template(kind, name, options?) -> {source, kind, name}
         — Returns generated source. Pass it to install() to write to disk.
         — kind: one of the keys returned by list_templates(). See
-          docs/fuse-dctl-authoring.md for the per-kind option spec.
+          docs/authoring/fuse-dctl-authoring.md for the per-kind option spec.
       list_templates() -> {kinds}
     """
     p = params or {}
@@ -9221,7 +10906,7 @@ def _validate_dctl_source(source: str) -> Dict[str, Any]:
 
     Verifies a transform() or transition() entry point is present, brace
     balance is intact, and warns about float literals missing the `f` suffix
-    (a common cause of unhelpful build errors per docs/dctl-notes.md).
+    (a common cause of unhelpful build errors per docs/notes/dctl-notes.md).
     """
     warnings = []
     has_transform = "transform(" in source and "__DEVICE__" in source
@@ -9268,7 +10953,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
     and are scanned only at Resolve startup — install requires a Resolve
     restart, NOT a LUT refresh.
 
-    See docs/dctl-notes.md for the full spec and docs/fuse-dctl-authoring.md
+    See docs/notes/dctl-notes.md for the full spec and docs/authoring/fuse-dctl-authoring.md
     for the experimental-tools coverage matrix.
 
     Actions:
@@ -9475,6 +11160,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
 _SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_ \-]{0,127}$")
 _SCRIPT_MARKER = "@mcp-script"
 _SCRIPT_VALID_LANG = ("lua", "py")
+_SCRIPT_LANG_ALIASES = {"python": "py", "python3": "py"}
 _SCRIPT_LANG_EXT = {"lua": ".lua", "py": ".py"}
 
 
@@ -9493,19 +11179,30 @@ def _validate_script_name(name: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _normalize_script_language(language: Any, default: str = "lua") -> str:
+    if language is None:
+        language = default
+    if not isinstance(language, str):
+        return str(language)
+    value = language.strip().lower()
+    return _SCRIPT_LANG_ALIASES.get(value, value)
+
+
 def _validate_script_language(language: str) -> Optional[Dict[str, Any]]:
     if language not in _SCRIPT_VALID_LANG:
         return _err(f"Invalid language '{language}'. "
-                    f"Valid: {list(_SCRIPT_VALID_LANG)}")
+                    f"Valid: {list(_SCRIPT_VALID_LANG)}; aliases: ['python', 'python3']")
     return None
 
 
 def _script_path(name: str, category: str, language: str) -> str:
+    language = _normalize_script_language(language)
     return os.path.join(_scripts_dir(category), f"{name}{_SCRIPT_LANG_EXT[language]}")
 
 
 def _validate_script_source(source: str, language: str) -> Dict[str, Any]:
     """Cheap syntax check. Lua → luac -p if available; Python → compile()."""
+    language = _normalize_script_language(language)
     if language == "py":
         try:
             compile(source, "<script>", "exec")
@@ -9872,6 +11569,7 @@ def _extension_capabilities() -> Dict[str, Any]:
 
 
 def _script_install_source(name: str, source: str, category: str, language: str, overwrite: bool = False) -> Dict[str, Any]:
+    language = _normalize_script_language(language)
     invalid = _validate_script_name(name)
     if invalid:
         return invalid
@@ -9921,7 +11619,7 @@ def _safe_install_extension(p: Dict[str, Any]) -> Dict[str, Any]:
                 generator = dctl_templates.TEMPLATES[kind]
                 source = generator(name, options)
             else:
-                language = p.get("language", options.get("language", "lua"))
+                language = _normalize_script_language(p.get("language", options.get("language", "lua")))
                 generator = script_templates.TEMPLATES[kind]
                 source = generator(name, {**options, "language": language})
         except KeyError:
@@ -9955,7 +11653,7 @@ def _safe_install_extension(p: Dict[str, Any]) -> Dict[str, Any]:
             "ext": p.get("ext", ".dctl"),
             "overwrite": p.get("overwrite", False),
         })
-    language = p.get("language", options.get("language", "lua"))
+    language = _normalize_script_language(p.get("language", options.get("language", "lua")))
     category = p.get("script_category", p.get("category", "Utility"))
     invalid = _validate_script_language(language)
     if invalid:
@@ -9999,7 +11697,7 @@ def _safe_remove_extension(p: Dict[str, Any]) -> Dict[str, Any]:
         invalid = _validate_script_name(name)
         if invalid:
             return invalid
-        language = p.get("language", "lua")
+        language = _normalize_script_language(p.get("language", "lua"))
         invalid = _validate_script_language(language)
         if invalid:
             return invalid
@@ -10099,7 +11797,10 @@ def _probe_dctl_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
 def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
     name = p.get("name", "_mcp_script_lifecycle_probe")
     kind = p.get("kind", "scaffold")
-    language = p.get("language", "py")
+    language = _normalize_script_language(p.get("language", "py"))
+    invalid = _validate_script_language(language)
+    if invalid:
+        return invalid
     category = p.get("script_category", p.get("category", "Utility"))
     out: Dict[str, Any] = {
         "extension_type": "script",
@@ -10191,7 +11892,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 
     Both languages (Lua and Python) generate fully self-contained scripts.
 
-    See docs/script-plugin-authoring.md for the DSL spec.
+    See docs/authoring/script-plugin-authoring.md for the DSL spec.
 
     Actions:
       path(category) -> {scripts_dir}
@@ -10262,10 +11963,10 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 
     if action == "list":
         category = p.get("category")
-        language_filter = p.get("language")
+        language_filter = _normalize_script_language(p.get("language"), default="") if p.get("language") else None
         if language_filter and language_filter not in _SCRIPT_VALID_LANG:
             return _err(f"Invalid language '{language_filter}'. "
-                        f"Valid: {list(_SCRIPT_VALID_LANG)}")
+                        f"Valid: {list(_SCRIPT_VALID_LANG)}; aliases: ['python', 'python3']")
         show_all = bool(p.get("all", False))
 
         paths = get_resolve_plugin_paths()
@@ -10317,7 +12018,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         category = p.get("category")
         if not category:
             return _err("install requires a 'category'.")
-        language = p.get("language", "lua")
+        language = _normalize_script_language(p.get("language", "lua"))
         invalid = _validate_script_language(language)
         if invalid:
             return invalid
@@ -10348,7 +12049,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         category = p.get("category")
         if not category:
             return _err("remove requires a 'category'.")
-        language = p.get("language", "lua")
+        language = _normalize_script_language(p.get("language", "lua"))
         invalid = _validate_script_language(language)
         if invalid:
             return invalid
@@ -10372,7 +12073,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         category = p.get("category")
         if not category:
             return _err("read requires a 'category'.")
-        language = p.get("language", "lua")
+        language = _normalize_script_language(p.get("language", "lua"))
         invalid = _validate_script_language(language)
         if invalid:
             return invalid
@@ -10393,7 +12094,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         source = p.get("source")
         if not isinstance(source, str):
             return _err("validate requires a 'source' string.")
-        language = p.get("language", "lua")
+        language = _normalize_script_language(p.get("language", "lua"))
         invalid = _validate_script_language(language)
         if invalid:
             return invalid
@@ -10410,12 +12111,12 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             return _err(f"Unknown template kind '{kind}'. Valid: "
                         f"{sorted(script_templates.TEMPLATES.keys())}")
         opts = p.get("options") or {}
-        language = opts.get("language", "lua")
+        language = _normalize_script_language(opts.get("language", "lua"))
         invalid = _validate_script_language(language)
         if invalid:
             return invalid
         try:
-            source = gen(name, opts)
+            source = gen(name, {**opts, "language": language})
         except (ValueError, KeyError, TypeError) as e:
             return _err(f"Template generation failed: {e}")
         return {"source": source, "kind": kind, "name": name,
@@ -10429,7 +12130,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         category = p.get("category")
         if not category:
             return _err("execute requires a 'category'.")
-        language = p.get("language", "lua")
+        language = _normalize_script_language(p.get("language", "lua"))
         invalid = _validate_script_language(language)
         if invalid:
             return invalid
@@ -10452,7 +12153,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         source = p.get("source")
         if not isinstance(source, str) or not source.strip():
             return _err("run_inline requires a non-empty 'source' string.")
-        language = p.get("language", "lua")
+        language = _normalize_script_language(p.get("language", "lua"))
         invalid = _validate_script_language(language)
         if invalid:
             return invalid
@@ -10480,5 +12181,5 @@ if __name__ == "__main__":
         run_fastmcp_stdio(granular_mcp)
         sys.exit(0)
 
-    logger.info(f"Starting DaVinci Resolve MCP Server (30 compound tools)")
+    logger.info(f"Starting DaVinci Resolve MCP Server (31 compound tools)")
     run_fastmcp_stdio(mcp)

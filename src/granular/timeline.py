@@ -1001,23 +1001,41 @@ def create_timeline_from_clips(
         clip_ids: Simple form — list of MediaPoolItem unique IDs to append end-to-end.
         clip_infos: Positioned form — list of dicts with keys clip_id (or
             media_pool_item_id), start_frame, end_frame, record_frame.
-            Mirrors MediaPool.CreateTimelineFromClips(name, [{clipInfo}, ...]).
+            record_frame is relative to the created timeline start frame by
+            default; pass record_frame_mode="absolute" for raw Resolve values.
         If both are None, uses the currently selected media pool clips.
     """
-    _, mp, err = _get_mp()
+    project, mp, err = _get_mp()
     if err:
         return err
     if clip_infos is not None:
         if not isinstance(clip_infos, list) or not clip_infos:
             return {"error": "clip_infos must be a non-empty list"}
         root = mp.GetRootFolder()
+        for i, ci in enumerate(clip_infos):
+            _, row_err = _build_create_clip_info_dict(root, ci, i)
+            if row_err:
+                return row_err
+        tl = mp.CreateEmptyTimeline(name)
+        if not tl:
+            return {"success": False, "error": "Failed to create timeline"}
+        try:
+            if project:
+                project.SetCurrentTimeline(tl)
+        except Exception:
+            pass
+        timeline_start = _timeline_start_frame(tl)
         built = []
         for i, ci in enumerate(clip_infos):
-            row, row_err = _build_create_clip_info_dict(root, ci, i)
+            append_ci = dict(ci)
+            append_ci.setdefault("track_index", append_ci.get("trackIndex", 1))
+            row, row_err = _build_append_clip_info_dict(root, append_ci, i, timeline_start)
             if row_err:
                 return row_err
             built.append(row)
-        tl = mp.CreateTimelineFromClips(name, built)
+        appended = mp.AppendToTimeline(built)
+        if not appended:
+            return {"success": False, "error": "Failed to append clip_infos to created timeline"}
     elif clip_ids:
         root = mp.GetRootFolder()
         clips = []

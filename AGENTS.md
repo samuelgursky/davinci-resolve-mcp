@@ -1,97 +1,83 @@
-# DaVinci Resolve MCP Server — AI Agent Instructions
+# DaVinci Resolve MCP Server — Agent Instructions
 
-This file provides instructions for any AI coding assistant working with this project.
+This is the canonical short operating brief for AI coding agents working in this
+repository. Keep it durable: do not duplicate version numbers, tool counts,
+kernel-action counts, release notes, or long reference tables here.
 
-## Project Overview
+## Non-Negotiable Source Media Safety
 
-Python MCP server providing 30 compound tools (or 328 granular tools in `--full` mode) for controlling DaVinci Resolve via its Scripting API. 100% API coverage, 98.5% live-tested, with 109 guarded kernel workflow actions.
+Never modify, transcode, convert, proxy, relink, replace, or create derivatives
+of source media unless the user explicitly asks for that exact operation.
+
+Analysis workflows may read source media, but outputs must go to sidecar files,
+session scratch space, or the configured `davinci-resolve-mcp-analysis` project
+root. Preserve the chain from camera original to final delivery.
+
+See `docs/guides/media-analysis-guide.md` for the full source-safe workflow.
+
+## Frame-Referenced Color Work
+
+Before applying a grade, look, shot match, LUT, CDL, DRX, or copied grade to an
+existing Resolve timeline, inspect representative Resolve-rendered frames for
+the target shot or shots. Use thumbnails, contact sheets, Gallery stills, marker
+frames, or visual analysis reports written only to scratch/analysis locations.
+When the API can safely provide them, compare matched untreated/bypass, current,
+and after frames at the same timecodes; restore the previous active version or
+node-enabled state after any temporary bypass capture.
+
+Do not grade only from clip metadata, graph availability, or a requested style
+label unless the user explicitly asks for a blind/global pass. Preserve or create
+a recoverable grade version, and report which frame references informed the
+change. Do not describe Resolve's default one-node graph as an existing creative
+grade unless active grade tools, LUTs, or other grade state are present.
+
+When the user asks to build on or adjust an existing grade, treat the current
+grade as creative work to preserve. Inspect the active grade version and node
+graph first, create or switch to a recoverable adjustment version, and make
+incremental changes only through supported controls. Do not reset grades, replace
+graphs, or apply whole-grade artifacts unless the user explicitly asks for that
+semantics.
+
+## Source Of Truth
+
+- Public overview, current stats, and docs map: `README.md`
+- Historical release notes: `CHANGELOG.md`
+- AI assistant operating reference: `docs/SKILL.md`
+- Release checklist and validation rules: `docs/process/release-process.md`
+- Kernel workflow support maps: `docs/kernels/`
+- API coverage and live-test status: `docs/reference/api-coverage.md`
+- Bundled Resolve API text: `docs/reference/resolve_scripting_api.txt`
 
 ## Key Paths
 
-- Main server: `src/server.py` (compound, 30 tools — recommended)
-- Full server: `src/resolve_mcp_server.py` (granular, 328 tools)
+- Compound server: `src/server.py`
+- Granular server entrypoint: `src/resolve_mcp_server.py`
+- Granular implementation: `src/granular/`
 - Utilities: `src/utils/`
-- Tests: `tests/` (5-phase live API test suite)
-- Installer: `install.py` (supports 10+ MCP clients)
-- API reference: `docs/resolve_scripting_api.txt`
+- Installer: `install.py`
+- Tests: `tests/`
+- Examples: `examples/`
 
-## Running
+## Common Commands
 
 ```bash
-python src/server.py          # Compound server (recommended)
-python src/server.py --full   # Full 328-tool server
+python src/server.py
+python src/server.py --full
+python install.py
+venv/bin/python tests/test_import.py
+venv/bin/python scripts/audit_api_parity.py
 ```
 
-## Source Media Integrity — Non-Negotiable
+Python 3.10-3.12 is recommended for Resolve scripting compatibility.
 
-**Never modify, transcode, convert, create proxies of, or create any derivative of source media files unless the user explicitly requests it.**
+## Development Notes
 
-This applies to all tools, workflows, and automation in this project:
-
-- Analysis tools (FFprobe, FFmpeg) read source files — they never write to them
-- All analysis output goes to designated sidecar files or analysis directories
-- No export-and-reimport cycles — always reference the original
-- The chain from camera original to final delivery must remain unbroken
-- If a user needs proxies, transcodes, or conversions, they will ask
-
-For the full rationale from every post-production department, see `docs/media-analysis-guide.md`.
-
-## Media Analysis Guide
-
-This project includes a guide for using FFprobe, FFmpeg, and Whisper to analyze source media so the MCP can operate with full context. Read `docs/media-analysis-guide.md` for:
-
-- Read-only analysis commands (FFprobe metadata, FFmpeg loudness/scene detection, Whisper transcription)
-- JSON sidecar output format
-- How to connect analysis results to MCP actions
-- Proactive warnings for VFR, HDR, interlaced content, timecode issues
-- Setup workflow for first interaction
-
-## MCP Tool Categories
-
-The 30 compound tools cover:
-
-| Tool | Purpose |
-|------|---------|
-| `resolve_control` | App control, version, pages |
-| `project_manager` | Project CRUD and management |
-| `project_manager_folders` | Project Manager folder navigation and CRUD |
-| `project_manager_database` | Project database listing and switching |
-| `project_manager_cloud` | Cloud project create/load/import/restore wrappers |
-| `project_settings` | Project properties and metadata |
-| `media_storage` | Volume browsing, media import |
-| `media_pool` | Folders, clips, timelines |
-| `folder` | Media Pool folder clip listing, export, transcription |
-| `media_pool_item` | Clip metadata, properties, transcription |
-| `media_pool_item_markers` | Clip markers, flags, custom data, clip color |
-| `timeline` | Timeline structure, generators, titles |
-| `timeline_markers` | Timeline marker operations |
-| `timeline_ai` | Subtitles, scene cuts, Dolby Vision |
-| `timeline_item` | Item properties, transforms, keyframes |
-| `timeline_item_markers` | Timeline item markers, flags, custom data, clip color |
-| `timeline_item_color` | Grading, LUTs, versions, AI tools |
-| `timeline_item_fusion` | Fusion composition management on timeline items |
-| `timeline_item_takes` | Timeline item take management |
-| `render` | Render pipeline, jobs, formats |
-| `render_presets` | Render and burn-in preset import/export |
-| `gallery` / `gallery_stills` | Still albums and power grades |
-| `graph` | Node graph operations |
-| `color_group` | Color group names, clips, pre/post clip graphs |
-| `fusion_comp` | Fusion composition node graph operations |
-| `fuse_plugin` | Fusion Fuse authoring and lifecycle helpers |
-| `dctl` | DCTL and ACES transform authoring helpers |
-| `script_plugin` | Resolve-page script authoring and execution helpers |
-| `layout_presets` | Resolve UI layout preset management |
-
-Each tool uses an `action` parameter to select the specific operation.
-
-## Kernel Action Coverage
-
-The README tracks 109 higher-level kernel actions across 8 compound tools. These are MCP workflow actions layered on top of the public Resolve API for timeline editing, ingest, render/deliver, review annotation, color/grade, Fusion composition, conform/interchange, audio/Fairlight, project lifecycle, and extension authoring.
-
-## Development Guidelines
-
-- Python 3.10+ required (3.11 or 3.12 recommended; 3.13+ may have ABI issues with Resolve)
-- Uses `mcp` and `fastmcp` packages (installed in venv)
-- All tools return dict responses with consistent error format
-- Lazy connection to Resolve (auto-launches if not running)
-- Platform-specific paths handled in `src/utils/platform.py`
+- Prefer the compound server unless a task specifically needs granular tools.
+- Use existing action-dispatch patterns and helper functions before adding new
+  abstractions.
+- All Resolve-facing temp or export paths should use the repo's safe path
+  helpers; do not invent ad hoc temp paths for files Resolve writes.
+- For changes touching Resolve behavior, update focused tests and follow the
+  live-validation guidance in `docs/process/release-process.md`.
+- For docs changes, keep the README concise and move durable detail into
+  dedicated files under `docs/`.

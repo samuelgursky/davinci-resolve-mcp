@@ -114,7 +114,7 @@ Install locations:
 Subdir support is available within any category for organization (e.g.
 `subdir='MCP'` puts a generated DCTL under `LUT/MCP/`).
 
-See `docs/dctl-notes.md` for the full DCTL language reference, custom UI
+See `docs/notes/dctl-notes.md` for the full DCTL language reference, custom UI
 parameter syntax (`DCTLUI_SLIDER_FLOAT`, `DCTLUI_COLOR_PICKER`, etc.), and
 ACES parametric V1/V2 details.
 

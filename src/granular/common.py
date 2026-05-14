@@ -79,7 +79,7 @@ if not logging.getLogger().handlers:
         handlers=[logging.StreamHandler()],
     )
 
-VERSION = "2.16.0"
+VERSION = "2.17.0"
 logger = logging.getLogger("davinci-resolve-mcp")
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
@@ -367,7 +367,54 @@ def _build_subtitle_settings(resolve_obj, language=None, preset=None,
     return settings, None
 
 
-def _build_append_clip_info_dict(root, ci, index):
+def _frame_int(value):
+    if value is None:
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _timeline_start_frame(timeline):
+    if not timeline:
+        return None
+    try:
+        return _frame_int(timeline.GetStartFrame())
+    except Exception:
+        return None
+
+
+def _normalize_record_frame(ci, index, timeline_start_frame=None):
+    rf = _frame_int(ci.get("recordFrame", ci.get("record_frame")))
+    if rf is None:
+        return None, {"error": f"clip_infos[{index}] record_frame/recordFrame must be numeric"}
+
+    mode_raw = ci.get("recordFrameMode", ci.get("record_frame_mode", "relative"))
+    mode = str(mode_raw or "relative").strip().lower()
+    mode_aliases = {
+        "relative": "relative",
+        "timeline_relative": "relative",
+        "offset": "relative",
+        "absolute": "absolute",
+        "timeline_absolute": "absolute",
+        "auto": "auto",
+    }
+    mode = mode_aliases.get(mode)
+    if not mode:
+        return None, {
+            "error": f"clip_infos[{index}] record_frame_mode must be 'relative', 'absolute', or 'auto'"
+        }
+
+    start = _frame_int(timeline_start_frame)
+    if start in (None, 0) or mode == "absolute":
+        return rf, None
+    if mode == "auto":
+        return (start + rf) if rf < start else rf, None
+    return start + rf, None
+
+
+def _build_append_clip_info_dict(root, ci, index, timeline_start_frame=None):
     """Build one MediaPool.AppendToTimeline clipInfo map (6 keys per docs line 221).
 
     Required: clip_id (or media_pool_item_id), start_frame, end_frame,
@@ -388,6 +435,9 @@ def _build_append_clip_info_dict(root, ci, index):
     rf = ci.get("recordFrame", ci.get("record_frame"))
     if rf is None:
         return None, {"error": f"clip_infos[{index}] requires record_frame/recordFrame"}
+    rf, rf_err = _normalize_record_frame(ci, index, timeline_start_frame)
+    if rf_err:
+        return None, rf_err
     ti = ci.get("trackIndex", ci.get("track_index"))
     if ti is None:
         return None, {"error": f"clip_infos[{index}] requires track_index/trackIndex"}
@@ -446,10 +496,10 @@ def _build_audio_sync_settings(resolve_obj, sync_mode=None, channel_number=None,
     return settings, None
 
 
-def _build_create_clip_info_dict(root, ci, index):
+def _build_create_clip_info_dict(root, ci, index, timeline_start_frame=None):
     """Build one MediaPool.CreateTimelineFromClips clipInfo map.
 
-    See docs/resolve_scripting_api.txt line 224: 4 keys — mediaPoolItem,
+    See docs/reference/resolve_scripting_api.txt line 224: 4 keys — mediaPoolItem,
     startFrame, endFrame, recordFrame.
     """
     if not isinstance(ci, dict):
@@ -467,6 +517,9 @@ def _build_create_clip_info_dict(root, ci, index):
     rf = ci.get("recordFrame", ci.get("record_frame"))
     if rf is None:
         return None, {"error": f"clip_infos[{index}] requires record_frame/recordFrame"}
+    rf, rf_err = _normalize_record_frame(ci, index, timeline_start_frame)
+    if rf_err:
+        return None, rf_err
     return {
         "mediaPoolItem": mp_item,
         "startFrame": sf,

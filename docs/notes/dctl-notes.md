@@ -140,7 +140,7 @@ Rules:
 - 3D LUTs use the project's 3D LUT interpolation setting: trilinear or
   tetrahedral.
 
-See `docs/lut-notes.md` for the cube file format itself.
+See `docs/notes/lut-notes.md` for the cube file format itself.
 
 ## Custom UI
 

@@ -953,7 +953,7 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
             "source_start": _source_start(source_item),
         }
 
-        api_text = Path("docs/resolve_scripting_api.txt").read_text(encoding="utf-8")
+        api_text = Path("docs/reference/resolve_scripting_api.txt").read_text(encoding="utf-8")
         documented_property_keys = parse_timeline_item_property_keys(api_text)
         local_property_keys = []
         for keys in server._DUPLICATE_COPY_PROPERTY_KEYS.values():

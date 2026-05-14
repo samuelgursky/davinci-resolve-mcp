@@ -319,6 +319,19 @@ class TestScriptPluginAction(unittest.TestCase):
                                         'language': 'py'})
         self.assertTrue(r['valid'])
 
+    def test_validate_python_alias_good(self):
+        r = script_plugin('validate', {'source': 'def f(): return 1',
+                                        'language': 'python'})
+        self.assertTrue(r['valid'])
+        self.assertEqual(r['checker'], 'python-compile')
+
+    def test_template_python_alias_normalizes_to_py(self):
+        r = script_plugin('template', {'kind': 'scaffold',
+                                       'name': 'AliasPy',
+                                       'options': {'language': 'python'}})
+        self.assertEqual(r['language'], 'py')
+        self.assertIn('@mcp-script', r['source'])
+
     def test_validate_python_bad(self):
         r = script_plugin('validate', {'source': 'def f(:\n  pass',
                                         'language': 'py'})

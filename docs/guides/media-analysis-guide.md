@@ -28,7 +28,10 @@ Your relationship to source media is **READ-ONLY**. Every department in a post-p
 - Analyzing files with FFmpeg using `-f null -` output (read-through analysis — zero disk writes)
 - Writing analysis results to separate sidecar JSON files only
 - Running Whisper transcription that writes only to an analysis directory
-- Creating thumbnails/contact sheets only when the user explicitly approves visual analysis derivatives, and only in a designated analysis directory
+- Creating sampled frames/contact sheets only for visual analysis workflows, only
+  in a designated analysis directory. The `analyze_media` prompt defaults
+  visual analysis on when chat-context vision is supported; pass
+  `include_visuals=false` to opt out.
 
 ### Why This Matters
 
@@ -314,7 +317,7 @@ When analysis reveals potential issues, always alert the user:
 
 ## Key Principles
 
-- **The source is sacred.** Read from source files, write only to analysis sidecars unless the user explicitly approves visual analysis derivatives in a separate analysis directory.
+- **The source is sacred.** Read from source files, write only to analysis sidecars unless a visual analysis workflow needs sampled frames/contact sheets in a separate analysis directory. `analyze_media` can opt out with `include_visuals=false`.
 - **Respect file paths.** Use exact paths from Resolve or the filesystem.
 - **Cache analysis.** Skip re-analysis if the sidecar is newer than the source.
 - **Report clearly.** Present analysis to inform the user's next action within Resolve.
