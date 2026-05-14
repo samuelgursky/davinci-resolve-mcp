@@ -18,6 +18,41 @@ from typing import Dict, Any, Optional, Union, List
 
 # Configure logging
 logger = logging.getLogger("davinci-resolve-mcp.app_control")
+APP_CONTROL_TIMEOUT_SECONDS = 10
+
+
+def _run_app_command(
+    cmd: List[str],
+    description: str,
+    timeout: int = APP_CONTROL_TIMEOUT_SECONDS,
+) -> bool:
+    """Run a platform app-control command with a bounded wait."""
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("%s timed out after %ss: %s", description, timeout, cmd)
+        return False
+    except OSError as exc:
+        logger.error("%s failed to launch: %s", description, exc)
+        return False
+
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        logger.warning(
+            "%s exited with code %s%s",
+            description,
+            result.returncode,
+            f": {stderr}" if stderr else "",
+        )
+        return False
+    return True
+
 
 def quit_resolve_app(resolve_obj, force: bool = False, save_project: bool = True) -> bool:
     """
@@ -72,26 +107,35 @@ def quit_resolve_app(resolve_obj, force: bool = False, save_project: bool = True
                     '-e', 'tell application "DaVinci Resolve" to quit with saving'
                 ]
             
-            subprocess.run(cmd)
-            return True
+            return _run_app_command(cmd, "macOS Resolve quit command")
             
         elif sys_platform == 'windows':
             # Windows - use taskkill
             logger.info("Using taskkill to quit Resolve on Windows")
             if force:
-                subprocess.run(['taskkill', '/F', '/IM', 'Resolve.exe'])
+                return _run_app_command(
+                    ['taskkill', '/F', '/IM', 'Resolve.exe'],
+                    "Windows Resolve force-quit command",
+                )
             else:
-                subprocess.run(['taskkill', '/IM', 'Resolve.exe'])
-            return True
+                return _run_app_command(
+                    ['taskkill', '/IM', 'Resolve.exe'],
+                    "Windows Resolve quit command",
+                )
             
         elif sys_platform == 'linux':
             # Linux - use pkill
             logger.info("Using pkill to quit Resolve on Linux")
             if force:
-                subprocess.run(['pkill', '-9', 'resolve'])
+                return _run_app_command(
+                    ['pkill', '-9', 'resolve'],
+                    "Linux Resolve force-quit command",
+                )
             else:
-                subprocess.run(['pkill', 'resolve'])
-            return True
+                return _run_app_command(
+                    ['pkill', 'resolve'],
+                    "Linux Resolve quit command",
+                )
             
         # If all methods fail, return False
         logger.error("Failed to quit Resolve via any method")
@@ -122,17 +166,18 @@ def get_app_state(resolve_obj) -> Dict[str, Any]:
     if resolve_obj:
         try:
             state["version"] = resolve_obj.GetVersionString()
-        except:
-            pass
+        except Exception:
+            logger.debug("Could not read Resolve version string", exc_info=True)
             
         try:
             state["product_name"] = resolve_obj.GetProductName()
-        except:
-            pass
+        except Exception:
+            logger.debug("Could not read Resolve product name", exc_info=True)
             
         try:
             state["current_page"] = resolve_obj.GetCurrentPage()
-        except:
+        except Exception:
+            logger.debug("Could not read Resolve current page", exc_info=True)
             state["current_page"] = "Unknown"
             
         # Get project manager and project information
@@ -271,4 +316,4 @@ def open_preferences(resolve_obj) -> bool:
         return False  # Keyboard shortcuts not implemented yet
     except Exception as e:
         logger.error(f"Error opening preferences: {str(e)}")
-        return False 
+        return False

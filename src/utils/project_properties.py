@@ -119,11 +119,13 @@ def get_project_property(project_obj, property_name: str) -> Any:
                 try:
                     value = int(value)
                 except (ValueError, TypeError):
+                    # Keep Resolve's raw value when it cannot be safely coerced.
                     pass
             elif property_type == "float" and not isinstance(value, float):
                 try:
                     value = float(value)
                 except (ValueError, TypeError):
+                    # Keep Resolve's raw value when it cannot be safely coerced.
                     pass
             elif property_type == "bool" and not isinstance(value, bool):
                 # Convert string representations of boolean
@@ -596,4 +598,4 @@ def get_project_info(project_obj) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"Error getting project info: {str(e)}")
-        return {"error": f"Error getting project info: {str(e)}"} 
+        return {"error": f"Error getting project info: {str(e)}"}

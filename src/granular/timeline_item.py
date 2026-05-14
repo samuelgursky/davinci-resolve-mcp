@@ -188,7 +188,7 @@ def get_timeline_items() -> List[Dict[str, Any]]:
         return [{"error": f"Error listing timeline items: {str(e)}"}]
 
 
-@mcp.tool()
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
 def set_timeline_item_transform(timeline_item_id: str, 
                                property_name: str, 
                                property_value: float) -> str:

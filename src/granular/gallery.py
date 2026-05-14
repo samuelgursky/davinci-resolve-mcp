@@ -4,7 +4,7 @@ from src.granular.common import *  # noqa: F401,F403
 
 resolve = ResolveProxy()
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY_TOOL)
 def get_gallery_album_name() -> Dict[str, Any]:
     """Get the name of the current gallery album."""
     resolve = get_resolve()

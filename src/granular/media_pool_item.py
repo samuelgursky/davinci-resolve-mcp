@@ -4,7 +4,7 @@ from src.granular.common import *  # noqa: F401,F403
 
 resolve = ResolveProxy()
 
-@mcp.tool()
+@mcp.tool(annotations=EXTERNAL_DESTRUCTIVE_TOOL)
 def link_proxy_media(clip_name: str, proxy_file_path: str) -> str:
     """Link a proxy media file to a clip.
     

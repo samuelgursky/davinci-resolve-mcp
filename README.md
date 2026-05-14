@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.17.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.17.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-31%20(328%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](docs/reference/api-coverage.md#test-results)
@@ -65,6 +65,10 @@ The compound server is recommended unless you specifically need the granular one
 
 This project treats camera originals and source media as immutable. Analysis tools read source files and write reports only to sidecar or project analysis directories. The server must not modify, transcode, proxy, or create derivatives of source media unless the user explicitly asks for that. See [Media Analysis Guide](docs/guides/media-analysis-guide.md) for the detailed source-safe workflow.
 
+## Security Posture
+
+The default server is a local stdio process launched by your MCP client; it does not expose a network listener or built-in multi-user auth surface. Tool metadata includes MCP client-safety hints for read-only, destructive, idempotent, and external-resource operations. See [Security Policy](SECURITY.md) for operational boundaries, confirmation guidance, and vulnerability reporting.
+
 ## Key Stats
 
 | Metric | Value |
@@ -92,6 +96,7 @@ For method-by-method status, see [API Coverage and Test Results](docs/reference/
 | [Editorial Decision Guide](docs/guides/editorial-decision-guide.md) | Project-owned editorial craft guidance for analysis and timeline decisions |
 | [Color Decision Guide](docs/guides/color-decision-guide.md) | Project-owned color correction guidance and Resolve color API boundaries |
 | [Contributing and Project Layout](docs/contributing.md) | Contribution workflow, platform support, security notes, repository structure |
+| [Security Policy](SECURITY.md) | Local stdio trust boundary, tool metadata, confirmation guidance, reporting |
 | [Release Process](docs/process/release-process.md) | Maintainer release checklist, version surfaces, validation, tags, and release notes |
 | [Changelog](CHANGELOG.md) | Historical release notes |
 

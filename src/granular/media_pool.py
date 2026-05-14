@@ -35,7 +35,7 @@ def list_media_pool_clips() -> List[Dict[str, Any]]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=EXTERNAL_WRITE_TOOL)
 def import_media(
     paths: Optional[List[str]] = None,
     clip_infos: Optional[List[Dict[str, Any]]] = None,
@@ -96,7 +96,7 @@ def append_to_timeline(
             record_frame_mode="absolute" for raw Resolve recordFrame values.
             Returns timeline_item_id per appended item.
     """
-    _, mp, err = _get_mp()
+    project, mp, err = _get_mp()
     if err:
         return err
     if clip_infos is not None:
@@ -472,6 +472,7 @@ def get_selected_clips() -> Dict[str, Any]:
             try:
                 result.append({"name": clip.GetName(), "unique_id": clip.GetUniqueId()})
             except Exception:
+                logger.debug("Could not read selected clip identity", exc_info=True)
                 result.append({"name": "Unknown"})
         return {"selected_clips": result}
     return {"selected_clips": []}

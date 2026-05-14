@@ -87,6 +87,13 @@ Key behavioral notes for `script_plugin`:
   to register; new DCTLs need `project_settings(action='refresh_luts')`
   (regular LUT category) or a restart (ACES IDT/ODT category).
 
+Tool metadata (v2.17.1+) includes MCP `ToolAnnotations` for read-only,
+destructive, idempotent, and external-resource hints. Treat compound tool
+annotations as conservative because a single compound tool may expose both probe
+and mutation actions behind its `action` parameter. Continue to prefer
+`safe_*`, `dry_run`, `probe_*`, `capabilities`, and `boundary_report` actions
+before mutating Resolve state.
+
 ---
 
 ## Two Server Modes

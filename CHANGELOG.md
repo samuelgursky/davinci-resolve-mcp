@@ -2,6 +2,43 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.17.1
+
+Operational and client-safety hardening for the v2.17 media-analysis release.
+
+**MCP tool metadata**: compound and granular tools now publish MCP
+`ToolAnnotations` with conservative read-only, destructive, idempotent, and
+external-resource hints. Compound tool annotations are intentionally conservative
+because each tool groups multiple actions behind an `action` parameter.
+
+**MCPSafe report cleanup**: explicitly annotated the granular tools highlighted
+by the public MCPSafe report, including project settings, media import, page
+switching, proxy linking, Gallery album reads, and timeline-item transforms.
+
+**Operational guardrails**: Resolve app-control subprocess fallbacks now use
+bounded timeouts and report non-zero exits. Best-effort Resolve object
+inspection and state probes now log swallowed exceptions at debug level instead
+of failing silently.
+
+**Correctness fix**: fixed the granular
+`media_pool.append_to_timeline(clip_infos=...)` path so it retains the current
+project handle while normalizing positioned appends against the active timeline
+start frame.
+
+**Documentation**: added `SECURITY.md` with the local stdio trust boundary,
+confirmation guidance for destructive tools, source-media safety boundaries, and
+private vulnerability reporting guidance. The README now links the security
+policy and summarizes the local-only auth posture.
+
+**Validation**: static/import checks, API parity audit, compileall, and 161
+focused unit tests passed. Live validated against DaVinci Resolve Studio 20.3.2.9
+with a direct external-scripting smoke test, `tests/live_v233_validation.py`
+passing 10/10 checks, and a v2.17.1 disposable-project
+`media_pool.append_to_timeline(clip_infos=...)` normalization probe passing 2/2
+checks. The v2.17.1 probe used synthetic media only and verified the default
+relative `record_frame` path landed at timeline start frame 86400 + 12 = 86412,
+while `record_frame_mode="absolute"` preserved frame 86484.
+
 ## What's New in v2.17.0
 
 Media analysis and editorial-assist expansion - `media_analysis` now reuses

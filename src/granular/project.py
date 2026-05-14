@@ -60,7 +60,7 @@ def get_project_setting(setting_name: str) -> Dict[str, Any]:
         return {"error": f"Failed to get project setting '{setting_name}': {str(e)}"}
 
 
-@mcp.tool()
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
 def set_project_setting(setting_name: str, setting_value: Any) -> str:
     """Set a project setting to the specified value.
     
@@ -230,8 +230,8 @@ def save_project() -> str:
                     try:
                         if os.path.exists(temp_file):
                             os.remove(temp_file)
-                    except:
-                        pass
+                    except OSError:
+                        logger.debug("Could not remove temporary project export %s", temp_file, exc_info=True)
                     success = True
             except Exception as e:
                 logger.error(f"Error in export method: {str(e)}")

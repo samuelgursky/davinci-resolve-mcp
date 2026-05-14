@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.17.0"
+VERSION = "2.17.1"
 
 import base64
 import os
@@ -92,6 +92,126 @@ mcp = FastMCP(
         "If a tool returns a connection error, Resolve Studio may not be installed or external scripting is disabled."
     ),
 )
+
+READ_ONLY_TOOL = mcp_types.ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+WRITE_TOOL = mcp_types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+IDEMPOTENT_WRITE_TOOL = mcp_types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+DESTRUCTIVE_TOOL = mcp_types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+EXTERNAL_READ_TOOL = mcp_types.ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
+EXTERNAL_WRITE_TOOL = mcp_types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+EXTERNAL_DESTRUCTIVE_TOOL = mcp_types.ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+
+
+def _annotations_for_tool_name(tool_name: str) -> mcp_types.ToolAnnotations:
+    """Infer conservative MCP client-safety hints for compound action tools."""
+    name = (tool_name or "").lower()
+    external_tools = (
+        "layout_presets",
+        "render_presets",
+        "render",
+        "media_storage",
+        "media_pool",
+        "folder",
+        "media_pool_item",
+        "gallery_stills",
+        "fuse_plugin",
+        "dctl",
+        "script_plugin",
+    )
+    destructive_tools = (
+        "resolve_control",
+        "project_manager",
+        "project_manager_folders",
+        "project_manager_cloud",
+        "project_manager_database",
+        "project_settings",
+        "timeline",
+        "timeline_markers",
+        "timeline_ai",
+        "timeline_item",
+        "timeline_item_markers",
+        "timeline_item_fusion",
+        "timeline_item_color",
+        "timeline_item_takes",
+        "gallery",
+        "graph",
+        "color_group",
+        "fusion_comp",
+    )
+    if name == "media_analysis":
+        return EXTERNAL_WRITE_TOOL
+    if name in external_tools:
+        return EXTERNAL_DESTRUCTIVE_TOOL
+    if name in destructive_tools:
+        return DESTRUCTIVE_TOOL
+    return WRITE_TOOL
+
+
+_original_mcp_tool = mcp.tool
+
+
+def _tool_with_default_annotations(
+    name=None,
+    title=None,
+    description=None,
+    annotations=None,
+    icons=None,
+    meta=None,
+    structured_output=None,
+):
+    """Default unannotated compound tools to explicit MCP safety hints."""
+
+    def decorator(func):
+        tool_name = name or getattr(func, "__name__", "")
+        return _original_mcp_tool(
+            name=name,
+            title=title,
+            description=description,
+            annotations=annotations or _annotations_for_tool_name(tool_name),
+            icons=icons,
+            meta=meta,
+            structured_output=structured_output,
+        )(func)
+
+    return decorator
+
+
+mcp.tool = _tool_with_default_annotations
 
 
 @mcp.prompt()

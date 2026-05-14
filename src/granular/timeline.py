@@ -714,6 +714,7 @@ def timeline_export(file_path: str, export_type: str, export_subtype: str = "EXP
         etype = getattr(resolve, export_type) if hasattr(resolve, export_type) else export_type
         esub = getattr(resolve, export_subtype) if hasattr(resolve, export_subtype) else export_subtype
     except Exception:
+        logger.debug("Could not resolve timeline export constants", exc_info=True)
         etype = export_type
         esub = export_subtype
     result = tl.Export(file_path, etype, esub)
@@ -1023,7 +1024,7 @@ def create_timeline_from_clips(
             if project:
                 project.SetCurrentTimeline(tl)
         except Exception:
-            pass
+            logger.debug("Could not set newly created timeline current", exc_info=True)
         timeline_start = _timeline_start_frame(tl)
         built = []
         for i, ci in enumerate(clip_infos):

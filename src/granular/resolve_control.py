@@ -22,7 +22,7 @@ def get_current_page() -> str:
     return resolve.GetCurrentPage()
 
 
-@mcp.tool()
+@mcp.tool(annotations=IDEMPOTENT_WRITE_TOOL)
 def switch_page(page: str) -> str:
     """Switch to a specific page in DaVinci Resolve.
     

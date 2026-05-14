@@ -25,7 +25,7 @@ from pathlib import Path
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.17.0"
+VERSION = "2.17.1"
 
 # ─── Colors (disabled on Windows cmd without ANSI support) ────────────────────
 
@@ -290,8 +290,8 @@ def get_python_base_install(python_path):
         base_prefix = result.stdout.strip()
         if result.returncode == 0 and base_prefix:
             return base_prefix
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"Warning: Could not query Python base prefix: {exc}")
 
     resolved = Path(python_path).resolve()
     if resolved.parent.name.lower() in {"scripts", "bin"}:

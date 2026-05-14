@@ -161,8 +161,8 @@ def get_lua_table_keys(lua_table: Any) -> List[str]:
         try:
             # Some DaVinci Resolve objects have a GetKeyList() method
             return lua_table.GetKeyList()
-        except:
-            pass
+        except Exception:
+            logger.debug("Lua table GetKeyList() lookup failed", exc_info=True)
             
     # Try different iteration methods that might work with Lua tables
     try:
@@ -170,8 +170,8 @@ def get_lua_table_keys(lua_table: Any) -> List[str]:
         for key in lua_table:
             keys.append(key)
         return keys
-    except:
-        pass
+    except Exception:
+        logger.debug("Lua table direct iteration failed", exc_info=True)
         
     # Try manual iteration with pairs-like behavior (if available)
     # This is a fallback for APIs that don't support Python-style iteration
@@ -209,7 +209,8 @@ def convert_lua_to_python(lua_obj: Any) -> Any:
                     value = lua_obj[key]
                     # Recursively convert nested Lua objects
                     result[key] = convert_lua_to_python(value)
-                except:
+                except Exception:
+                    logger.debug("Failed to convert Lua table key %r", key, exc_info=True)
                     result[key] = None
             return result
         
@@ -223,14 +224,15 @@ def convert_lua_to_python(lua_obj: Any) -> Any:
                     value = lua_obj[index]
                     result.append(convert_lua_to_python(value))
                     index += 1
-                except:
+                except Exception:
+                    logger.debug("Lua numeric iteration stopped at index %s", index, exc_info=True)
                     break
             
             # If we found items, return as list
             if result:
                 return result
-        except:
-            pass
+        except Exception:
+            logger.debug("Lua numeric-indexed conversion failed", exc_info=True)
     
     # If conversion failed, return string representation
     return str(lua_obj)
@@ -282,4 +284,4 @@ def print_object_help(obj: Any) -> str:
             type_name = info.get("type", "")
             help_text.append(f"{name}: {type_name} = {value}")
     
-    return "\n".join(help_text) 
+    return "\n".join(help_text)

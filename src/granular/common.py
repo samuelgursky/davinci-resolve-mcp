@@ -18,6 +18,7 @@ for path in (SRC_DIR, PROJECT_DIR):
         sys.path.insert(0, path)
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from src.utils.app_control import (
     get_app_state,
@@ -79,7 +80,7 @@ if not logging.getLogger().handlers:
         handlers=[logging.StreamHandler()],
     )
 
-VERSION = "2.17.0"
+VERSION = "2.17.1"
 logger = logging.getLogger("davinci-resolve-mcp")
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
@@ -87,6 +88,144 @@ logger.info(f"Using Resolve API path: {RESOLVE_API_PATH}")
 logger.info(f"Using Resolve library path: {RESOLVE_LIB_PATH}")
 
 mcp = FastMCP("DaVinciResolveMCP")
+
+READ_ONLY_TOOL = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+WRITE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+IDEMPOTENT_WRITE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+DESTRUCTIVE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+EXTERNAL_READ_TOOL = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
+EXTERNAL_WRITE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+EXTERNAL_DESTRUCTIVE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+
+
+def _annotations_for_tool_name(tool_name: str) -> ToolAnnotations:
+    """Infer conservative MCP client-safety hints for legacy granular tools."""
+    name = (tool_name or "").lower()
+    read_prefixes = (
+        "get_",
+        "list_",
+        "inspect_",
+        "probe_",
+        "validate_",
+        "compare_",
+        "detect_",
+        "summarize_",
+        "review_",
+        "is_",
+        "has_",
+    )
+    destructive_prefixes = (
+        "delete_",
+        "remove_",
+        "clear_",
+        "reset_",
+        "replace_",
+        "unlink_",
+        "quit",
+        "restart",
+        "close_",
+        "stop_",
+        "overwrite_",
+        "lift_",
+        "set_",
+        "load_",
+        "switch_",
+    )
+    write_prefixes = (
+        "add_",
+        "append_",
+        "apply_",
+        "assign_",
+        "copy_",
+        "create_",
+        "duplicate_",
+        "export_",
+        "import_",
+        "insert_",
+        "link_",
+        "move_",
+        "open_",
+        "render_",
+        "rename_",
+        "save_",
+        "start_",
+        "sync_",
+        "transcribe_",
+    )
+    if name.startswith(read_prefixes):
+        return READ_ONLY_TOOL
+    if name.startswith(destructive_prefixes):
+        return DESTRUCTIVE_TOOL
+    if name.startswith(write_prefixes):
+        return WRITE_TOOL
+    return WRITE_TOOL
+
+
+_original_mcp_tool = mcp.tool
+
+
+def _tool_with_default_annotations(
+    name=None,
+    title=None,
+    description=None,
+    annotations=None,
+    icons=None,
+    meta=None,
+    structured_output=None,
+):
+    """Default unannotated granular tools to explicit MCP safety hints."""
+
+    def decorator(func):
+        tool_name = name or getattr(func, "__name__", "")
+        return _original_mcp_tool(
+            name=name,
+            title=title,
+            description=description,
+            annotations=annotations or _annotations_for_tool_name(tool_name),
+            icons=icons,
+            meta=meta,
+            structured_output=structured_output,
+        )(func)
+
+    return decorator
+
+
+mcp.tool = _tool_with_default_annotations
 
 resolve = None
 dvr_script = None
