@@ -128,6 +128,11 @@ map for supported, partially supported, and unsupported behavior.
 reports method availability, `GetProperty()` output, known property values,
 keyframe counts, and linked item summaries.
 
+`timeline(action="title_property_scan")` inspects undocumented title and
+generator `TimelineItem.GetProperty()` keys for the selected item scope.
+`set_title_text` and `bulk_set_title_text` use explicit or scanned keys when a
+Resolve build accepts `SetProperty()` writes for title text payloads.
+
 ## Partial Support
 
 The probe classifies a feature as partially supported when Resolve exposes a
@@ -140,6 +145,9 @@ Current partial areas:
   Resolve Studio 20.3.2.9.
 - Dynamic zoom, scaling, and stabilization: copied through exposed
   `TimelineItem.GetProperty`/`SetProperty` keys when the build accepts writes.
+- Edit-page title and generator text: `title_property_scan` can expose
+  undocumented Text+ keys, but key names and write acceptance vary by item type,
+  page, and Resolve build.
 - Cache and voice isolation: copied only when item-level read/write APIs are
   callable for the item.
 - Keyframes: copied for exposed properties, but Resolve does not expose enough

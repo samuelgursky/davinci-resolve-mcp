@@ -2,6 +2,15 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.18.0
+
+**Edit-page title / Text+ text (undocumented keys)** — `timeline.title_property_scan`,
+`timeline.set_title_text`, and `timeline.bulk_set_title_text` use
+`TimelineItem.GetProperty` / `SetProperty` to discover and update generator Text+
+payloads when `GetFusionCompCount()` is zero (no Fusion comp for `fusion_comp`).
+Heuristic key ranking and a minimal styled-text XML fallback are included; callers
+should confirm keys with `title_property_scan` on their Resolve build.
+
 ## What's New in v2.17.1
 
 Operational and client-safety hardening for the v2.17 media-analysis release.
