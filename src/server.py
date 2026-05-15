@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 328-tool granular server instead
 """
 
-VERSION = "2.17.1"
+VERSION = "2.17.2"
 
 import base64
 import os
@@ -57,6 +57,11 @@ from src.utils.media_analysis import (
 )
 from src.utils.platform import get_resolve_paths, get_resolve_plugin_paths
 from src.utils import fuse_templates, dctl_templates, script_templates
+from src.utils.timeline_title_text import (
+    candidate_title_property_keys as _candidate_title_property_keys,
+    plain_to_minimal_styled_xml as _plain_to_minimal_styled_xml,
+    timeline_item_get_property_map as _timeline_item_get_property_map,
+)
 
 paths = get_resolve_paths()
 RESOLVE_API_PATH = paths["api_path"]
@@ -232,7 +237,7 @@ Visual feedback:
 
 High-value workflows:
 - Media analysis: use the analyze_media prompt or media_analysis.capabilities/install_guidance, then plan or analyze file/clip/bin/project targets with session-only defaults.
-- Timeline editing: use timeline.probe_edit_kernel_item, duplicate_clips/copy_clips/move_clips, copy_range/overwrite_range/lift_range, and detect_gaps_overlaps.
+- Timeline editing: use timeline.probe_edit_kernel_item, timeline.title_property_scan / timeline.set_title_text for Edit-page Text+ keys, duplicate_clips/copy_clips/move_clips, copy_range/overwrite_range/lift_range, and detect_gaps_overlaps.
 - Media ingest: use media_pool.ingest_capabilities, safe_import_media/safe_import_sequence, organize_clips, normalize_metadata, and relink planning actions.
 - Color: use timeline_item_color.grade_boundary_report, probe_node_graph, safe_set_cdl, safe_apply_drx, grade_version_snapshot/restore, and gallery/color-group capability actions.
 - Fusion: use fusion_comp.fusion_boundary_report, probe_fusion_comp, safe_add_tool, safe_set_inputs, and safe_connect_tools.
@@ -2927,6 +2932,133 @@ def _timeline_probe_edit_kernel_item(tl, p: Dict[str, Any]):
     if warnings:
         out["warnings"] = warnings
     return out
+
+
+def _timeline_resolve_item_optional(tl, p: Dict[str, Any]):
+    """Resolve a single timeline item from clip_id, timeline_item_id, or timeline_item scope."""
+    item_id = p.get("clip_id") or p.get("timeline_item_id")
+    if item_id:
+        item = _find_timeline_item_by_id(tl, item_id)
+        if not item:
+            return None, _err(f"No timeline item with clip_id/timeline_item_id={item_id!r}")
+        return item, None
+    if p.get("timeline_item"):
+        _, item, item_err = _get_item(p["timeline_item"])
+        if item_err:
+            return None, item_err
+        return item, None
+    return None, _err("requires clip_id, timeline_item_id, or timeline_item={track_type, track_index, item_index}")
+
+
+def _timeline_title_property_scan(tl, p: Dict[str, Any]):
+    item, err = _timeline_resolve_item_optional(tl, p)
+    if err:
+        return err
+    flat, exc_text = _timeline_item_get_property_map(item, _ser)
+    if exc_text and not flat:
+        return _err(f"GetProperty failed: {exc_text}")
+    fusion_count = None
+    try:
+        fusion_count = int(item.GetFusionCompCount() or 0)
+    except Exception:
+        pass
+    return {
+        "summary": _timeline_item_summary(item),
+        "fusion_comp_count": fusion_count,
+        "properties": flat,
+        "text_key_candidates": _candidate_title_property_keys(flat),
+        "note": (
+            "Generator / Text+ fields are undocumented in the public Scripting API; "
+            "run this scan, inspect `text_key_candidates`, then call set_title_text with `property_key`."
+        ),
+    }
+
+
+def _timeline_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    item, err = _timeline_resolve_item_optional(tl, p)
+    if err:
+        return err
+    text = p.get("text")
+    if text is None or not isinstance(text, str):
+        return _err("set_title_text requires params.text (string)")
+
+    property_key = p.get("property_key") or p.get("key")
+    as_styled_xml = bool(p.get("as_styled_xml", p.get("styled", False)))
+    try_plain_first = bool(p.get("try_plain_first", True))
+    readback = bool(p.get("readback", False))
+    try_heuristic_keys = bool(p.get("try_heuristic_keys", not bool(property_key)))
+
+    if as_styled_xml:
+        payload_modes = [(text, "as_given")]
+    elif try_plain_first:
+        payload_modes = [(text, "plain"), (_plain_to_minimal_styled_xml(text), "minimal_xml")]
+    else:
+        payload_modes = [(_plain_to_minimal_styled_xml(text), "minimal_xml"), (text, "plain")]
+
+    keys: List[str] = []
+    if property_key:
+        keys.append(str(property_key))
+    if try_heuristic_keys:
+        flat, exc_text = _timeline_item_get_property_map(item, _ser)
+        if exc_text and not flat:
+            return _err(f"GetProperty failed: {exc_text}")
+        for row in _candidate_title_property_keys(flat):
+            k = row["key"]
+            if k not in keys:
+                keys.append(k)
+    if not keys:
+        keys = ["Styled Text", "StyledText", "Text", "Rich Text"]
+
+    attempts: List[Dict[str, Any]] = []
+    for key in keys:
+        for payload, mode in payload_modes:
+            rec: Dict[str, Any] = {"property_key": key, "mode": mode}
+            try:
+                ok = bool(item.SetProperty(key, payload))
+            except Exception as exc:
+                rec["success"] = False
+                rec["error"] = str(exc)
+                attempts.append(rec)
+                continue
+            rec["success"] = ok
+            if readback and ok:
+                try:
+                    rec["readback"] = item.GetProperty(key)
+                except Exception as exc:
+                    rec["readback_error"] = str(exc)
+            attempts.append(rec)
+            if ok:
+                return {
+                    "success": True,
+                    "timeline_item_id": _safe_timeline_item_id(item),
+                    "property_key": key,
+                    "mode": mode,
+                    "attempts": attempts,
+                }
+
+    return {
+        "success": False,
+        "error": "SetProperty did not succeed; run title_property_scan, copy a real key from `properties`, "
+        "and pass `property_key` (see `attempts` for diagnostics).",
+        "attempts": attempts,
+    }
+
+
+def _timeline_bulk_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    ops = p.get("ops")
+    if not isinstance(ops, list) or not ops:
+        return _err("bulk_set_title_text requires params.ops: non-empty list")
+    results: List[Dict[str, Any]] = []
+    for index, op in enumerate(ops):
+        if not isinstance(op, dict):
+            results.append({"index": index, "success": False, "error": "op must be an object"})
+            continue
+        merged = {**p, **op}
+        merged.pop("ops", None)
+        out = _timeline_set_title_text(tl, merged)
+        out["index"] = index
+        results.append(out)
+    return {"results": results, "op_count": len(ops)}
 
 
 _TIMELINE_CONFORM_KERNEL_ACTIONS = [
@@ -8211,6 +8343,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       marker_thumbnail_review(max_samples?, analysis_root?) -> {path, samples, review_guidance}
       edit_kernel_capabilities() -> {supported, partially_supported, unsupported}
       probe_edit_kernel_item(clip_ids? selected? timeline_item?) -> {items, count}
+      title_property_scan(clip_id|timeline_item_id|timeline_item) -> {properties, text_key_candidates, fusion_comp_count, ...}
+        — Undocumented generator/Text+ GetProperty map on an item (keys are not in public API docs).
+      set_title_text(clip_id|..., text, property_key?, as_styled_xml?, try_plain_first?, try_heuristic_keys?, readback?) -> {success, property_key?, attempts}
+        — SetProperty on a heuristic or explicit key; tries plain string then minimal styled XML unless as_styled_xml=True.
+      bulk_set_title_text(ops, ...) -> {results, op_count}  — list of set_title_text payloads (same params per op).
       create_compound_clip(clip_ids, info?) -> {success}
       create_fusion_clip(clip_ids) -> {success}
       import_into_timeline(path, options?) -> {success}
@@ -8404,6 +8541,12 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _timeline_edit_kernel_capabilities()
     elif action == "probe_edit_kernel_item":
         return _timeline_probe_edit_kernel_item(tl, p)
+    elif action == "title_property_scan":
+        return _timeline_title_property_scan(tl, p)
+    elif action == "set_title_text":
+        return _timeline_set_title_text(tl, p)
+    elif action == "bulk_set_title_text":
+        return _timeline_bulk_set_title_text(tl, p)
     elif action == "create_compound_clip":
         ids_set = set(p["clip_ids"])
         found = []
@@ -8663,7 +8806,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if mp_err:
             return mp_err
         return _fairlight_boundary_report(proj, mp, tl, p)
-    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","story_spine_report","create_variant_from_ranges","bulk_set_item_properties","apply_look_to_items","thumbnail_contact_sheet","marker_thumbnail_review","edit_kernel_capabilities","probe_edit_kernel_item","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges","audio_mix_capability_report",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
+    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","story_spine_report","create_variant_from_ranges","bulk_set_item_properties","apply_look_to_items","thumbnail_contact_sheet","marker_thumbnail_review","edit_kernel_capabilities","probe_edit_kernel_item","title_property_scan","set_title_text","bulk_set_title_text","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges","audio_mix_capability_report",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
