@@ -2,7 +2,7 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
-## What's New in v2.17.2
+## What's New in v2.18.0
 
 **Edit-page title / Text+ text (undocumented keys)** — `timeline.title_property_scan`,
 `timeline.set_title_text`, and `timeline.bulk_set_title_text` use
