@@ -19,6 +19,15 @@ class PropItemStub:
         return self._props.get(key)
 
 
+class NoArgPropertyMapStub:
+    def GetProperty(self, key=None):
+        if key is None:
+            return {"Styled Text": "<x/>", "Pan": 0.0}
+        if key == "":
+            return None
+        return None
+
+
 class TimelineTitleTextUtilsTest(unittest.TestCase):
     def test_flatten(self):
         self.assertEqual(flatten_timeline_item_properties({"a": 1}), {"a": 1})
@@ -27,6 +36,11 @@ class TimelineTitleTextUtilsTest(unittest.TestCase):
     def test_get_property_map(self):
         item = PropItemStub({"Styled Text": "<x/>", "Pan": 0.0})
         flat, err = timeline_item_get_property_map(item, lambda x: x)
+        self.assertIsNone(err)
+        self.assertIn("Styled Text", flat)
+
+    def test_get_property_map_prefers_documented_no_arg_call(self):
+        flat, err = timeline_item_get_property_map(NoArgPropertyMapStub(), lambda x: x)
         self.assertIsNone(err)
         self.assertIn("Styled Text", flat)
 

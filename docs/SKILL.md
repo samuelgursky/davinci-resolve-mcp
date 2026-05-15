@@ -464,6 +464,11 @@ Key actions:
   capability/property probe for timeline items, including available item
   methods, `GetProperty()` values, known property keys, keyframe counts, and
   linked item summaries
+- `title_property_scan(clip_id|timeline_item_id|timeline_item)` — inspect
+  undocumented Edit-page title/generator `TimelineItem.GetProperty()` keys
+- `set_title_text(clip_id|..., text, property_key?, as_styled_xml?, try_plain_first?, try_heuristic_keys?, readback?)`
+  / `bulk_set_title_text(ops, ...)` — update title text via explicit or scanned
+  keys when the current Resolve build accepts the `SetProperty()` write
 - `export(path, type, subtype?)` — type: `"AAF"`, `"EDL"`, `"FCPXML"`, `"DRT"`, etc.
 - `insert_generator(name)`, `insert_title(name)`, `insert_fusion_title(name)`
 - `get_mark_in_out`, `set_mark_in_out(mark_in, mark_out, type?)`

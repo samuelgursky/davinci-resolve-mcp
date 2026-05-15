@@ -26,7 +26,8 @@ def timeline_item_get_property_map(
     item: Any, serialize_fn: Callable[[Any], Any]
 ) -> Tuple[Dict[str, Any], Optional[str]]:
     last_err: Optional[str] = None
-    for getter in (lambda: item.GetProperty(""), lambda: item.GetProperty()):
+    saw_empty_success = False
+    for getter in (lambda: item.GetProperty(), lambda: item.GetProperty("")):
         try:
             raw = getter()
         except TypeError:
@@ -34,8 +35,11 @@ def timeline_item_get_property_map(
         except Exception as exc:
             last_err = str(exc)
             continue
-        return flatten_timeline_item_properties(serialize_fn(raw)), None
-    return {}, last_err or "GetProperty failed"
+        flat = flatten_timeline_item_properties(serialize_fn(raw))
+        if flat:
+            return flat, None
+        saw_empty_success = True
+    return {}, None if saw_empty_success else last_err or "GetProperty failed"
 
 
 def candidate_title_property_keys(flat: Dict[str, Any]) -> List[Dict[str, Any]]:
