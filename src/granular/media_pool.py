@@ -1,8 +1,74 @@
 """Media pool operations and MediaPool API tools."""
 
 from src.granular.common import *  # noqa: F401,F403
+from src.utils.multicam import build_multicam_setup_plan
 
 resolve = ResolveProxy()
+
+
+def _ensure_timeline_tracks_for_multicam(timeline, track_type: str, needed: int, audio_type: str = "stereo"):
+    needed = max(0, int(needed or 0))
+    added = 0
+    try:
+        current = int(timeline.GetTrackCount(track_type) or 0)
+    except Exception as exc:
+        return {"success": False, "error": f"GetTrackCount({track_type}) failed: {exc}"}
+    while current < needed:
+        try:
+            if track_type == "audio":
+                ok = timeline.AddTrack(track_type, {"audioType": audio_type})
+            else:
+                ok = timeline.AddTrack(track_type)
+        except TypeError:
+            ok = timeline.AddTrack(track_type)
+        except Exception as exc:
+            return {"success": False, "error": f"AddTrack({track_type}) failed: {exc}"}
+        if not ok:
+            return {"success": False, "error": f"AddTrack({track_type}) returned false at track {current + 1}"}
+        current += 1
+        added += 1
+    return {"success": True, "existing": current - added, "added": added, "count": current}
+
+
+def _set_multicam_track_names(timeline, plan):
+    results = []
+    for angle in plan.get("angles") or []:
+        angle_name = angle.get("angle_name") or f"Angle {angle.get('angle_index')}"
+        video_track = angle.get("video_track_index")
+        if video_track:
+            try:
+                results.append({
+                    "track_type": "video",
+                    "track_index": video_track,
+                    "name": angle_name,
+                    "success": bool(timeline.SetTrackName("video", int(video_track), str(angle_name))),
+                })
+            except Exception as exc:
+                results.append({"track_type": "video", "track_index": video_track, "success": False, "error": str(exc)})
+        audio_track = angle.get("audio_track_index")
+        if audio_track:
+            try:
+                results.append({
+                    "track_type": "audio",
+                    "track_index": audio_track,
+                    "name": angle_name,
+                    "success": bool(timeline.SetTrackName("audio", int(audio_track), str(angle_name))),
+                })
+            except Exception as exc:
+                results.append({"track_type": "audio", "track_index": audio_track, "success": False, "error": str(exc)})
+    return results
+
+
+def _appended_item_summary(item):
+    try:
+        item_id = item.GetUniqueId()
+    except Exception:
+        item_id = None
+    try:
+        name = item.GetName()
+    except Exception:
+        name = None
+    return {"timeline_item_id": item_id, "name": name}
 
 @mcp.resource("resolve://media-pool-clips")
 def list_media_pool_clips() -> List[Dict[str, Any]]:
@@ -136,6 +202,124 @@ def append_to_timeline(
         return {"error": "No valid clips found"}
     result = mp.AppendToTimeline(clips)
     return {"success": True, "count": len(result) if result else 0}
+
+
+@mcp.tool()
+def setup_multicam_timeline(
+    name: str = "Multicam Setup",
+    clip_ids: Optional[List[str]] = None,
+    angles: Optional[List[Dict[str, Any]]] = None,
+    sync_mode: str = "stack_start",
+    include_audio: bool = False,
+    audio_track_mode: str = "matching",
+    start_timecode: Optional[str] = None,
+    timeline_start_timecode: Optional[str] = None,
+    record_frame_start: int = 0,
+    frame_rate: Optional[Any] = None,
+    audio_type: str = "stereo",
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Create a stacked multicam prep timeline from Media Pool clips.
+
+    This does not create a native Resolve multicam clip because the public
+    scripting API does not expose native multicam creation. It creates a prep
+    timeline with one angle per video track and optional matching audio tracks.
+
+    Args:
+        name: Name for the setup timeline.
+        clip_ids: Simple list of MediaPoolItem unique IDs, one per angle.
+        angles: Detailed angle rows with clip_id, optional angle_name,
+            start_frame/end_frame, record_frame, source_timecode, track_index.
+        sync_mode: 'stack_start', 'record_frame', or 'source_timecode'.
+        include_audio: Also append audio-only rows.
+        audio_track_mode: 'matching' for per-angle audio tracks, or 'first'.
+        start_timecode: Optional timeline start timecode to set after creation.
+        timeline_start_timecode: Base timecode for source_timecode sync math.
+        record_frame_start: Timeline-relative start frame for stack_start mode.
+        frame_rate: Fallback frame rate for duration/timecode parsing.
+        audio_type: Resolve audio track type when tracks must be added.
+        dry_run: Return the plan without creating a timeline.
+    """
+    project, mp, err = _get_mp()
+    if err:
+        return err
+    root = mp.GetRootFolder()
+    params = {
+        "name": name,
+        "clip_ids": clip_ids,
+        "angles": angles,
+        "sync_mode": sync_mode,
+        "include_audio": include_audio,
+        "audio_track_mode": audio_track_mode,
+        "start_timecode": start_timecode,
+        "timeline_start_timecode": timeline_start_timecode,
+        "record_frame_start": record_frame_start,
+        "frame_rate": frame_rate,
+        "audio_type": audio_type,
+        "dry_run": dry_run,
+    }
+    plan, plan_err = build_multicam_setup_plan(root, params, _find_clip_by_id)
+    if plan_err:
+        return plan_err
+    if dry_run:
+        return {
+            **plan,
+            "dry_run": True,
+            "would_create_timeline": True,
+            "would_append": len(plan.get("append_rows") or []),
+        }
+
+    timeline = mp.CreateEmptyTimeline(plan["name"])
+    if not timeline:
+        return {"error": f"Failed to create multicam setup timeline: {plan['name']}"}
+    try:
+        project.SetCurrentTimeline(timeline)
+    except Exception:
+        pass
+    if plan.get("start_timecode"):
+        try:
+            timeline.SetStartTimecode(plan["start_timecode"])
+        except Exception:
+            pass
+
+    video_tracks = _ensure_timeline_tracks_for_multicam(timeline, "video", plan.get("max_video_track", 0))
+    if not video_tracks.get("success"):
+        return video_tracks
+    audio_tracks = _ensure_timeline_tracks_for_multicam(
+        timeline,
+        "audio",
+        plan.get("max_audio_track", 0),
+        audio_type=audio_type,
+    )
+    if not audio_tracks.get("success"):
+        return audio_tracks
+    track_names = _set_multicam_track_names(timeline, plan)
+
+    timeline_start = _timeline_start_frame(timeline)
+    append_rows = plan.get("append_rows") or []
+    append_infos = []
+    for index, row in enumerate(append_rows):
+        clip_info, clip_err = _build_append_clip_info_dict(root, row, index, timeline_start)
+        if clip_err:
+            return clip_err
+        append_infos.append(clip_info)
+    appended = mp.AppendToTimeline(append_infos)
+    if not appended:
+        return {"error": "AppendToTimeline returned no items for multicam setup"}
+
+    items = []
+    for index, item in enumerate(appended):
+        summary = _appended_item_summary(item)
+        summary["setup_row"] = append_rows[index]
+        items.append(summary)
+    return {
+        **plan,
+        "dry_run": False,
+        "timeline_name": timeline.GetName(),
+        "timeline_id": timeline.GetUniqueId(),
+        "items": items,
+        "track_setup": {"video": video_tracks, "audio": audio_tracks, "names": track_names},
+    }
 
 
 @mcp.tool()

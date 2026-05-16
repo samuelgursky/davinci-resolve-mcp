@@ -6,8 +6,8 @@ Complete Resolve scripting API coverage, live-test status, and method-by-method 
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **31** compound (default) / **328** granular |
-| Kernel Actions | **128** guarded MCP workflow actions across 9 compound tools |
+| MCP Tools | **31** compound (default) / **329** granular |
+| Kernel Actions | **132** guarded MCP workflow actions across 9 compound tools |
 | API Methods Covered | **336/336** (100%) |
 | Methods Live Tested | **331/336** (98.5%) |
 | Live Test Pass Rate | **331/331** (100%) |
@@ -17,7 +17,12 @@ Complete Resolve scripting API coverage, live-test status, and method-by-method 
 
 ## API Coverage
 
-Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **31 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **328 individual tools** for power users. Both modes cover all 13 API object classes. MCP-level kernel actions are tracked separately in [Kernel Action Coverage](../kernels/README.md).
+Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **31 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **329 individual tools** for power users. Both modes cover all 13 API object classes. MCP-level kernel actions are tracked separately in [Kernel Action Coverage](../kernels/README.md).
+
+Workflow helpers can go beyond one-to-one API method coverage while still using
+only public Resolve calls. For example, `media_pool.setup_multicam_timeline`
+prepares a stacked timeline for Resolve's multicam UI, but native multicam clip
+creation itself is not exposed by the scripting API.
 
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|

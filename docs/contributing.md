@@ -64,7 +64,7 @@ davinci-resolve-mcp/
 ├── install.py                    # Universal installer (macOS/Windows/Linux)
 ├── src/
 │   ├── server.py                # Compound MCP server — 31 tools (default)
-│   ├── resolve_mcp_server.py    # Thin full-server entrypoint — 328 tools
+│   ├── resolve_mcp_server.py    # Thin full-server entrypoint — 329 tools
 │   ├── granular/                # Modular full-server implementation
 │   └── utils/                   # Platform detection, Resolve connection helpers
 ├── tests/                       # 5-phase live API test suite + Resolve 20 delta (331/331 pass)

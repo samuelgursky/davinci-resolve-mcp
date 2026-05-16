@@ -101,7 +101,7 @@ before mutating Resolve state.
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
 | Compound (default) | `src/server.py` | 31 tools | Most workflows — keeps context lean |
-| Granular (full) | `src/server.py --full` | 328 tools | Power users needing one tool per API method |
+| Granular (full) | `src/server.py --full` | 329 tools | Power users needing one tool per API method |
 
 This skill document covers the **compound server** (the default). Each compound
 tool accepts an `action` string and an optional `params` object.
@@ -330,6 +330,7 @@ Key actions: `get_volumes`, `get_subfolders(path)`, `get_files(path)`,
 Key actions: `get_root_folder`, `get_current_folder`, `set_current_folder(path)`,
 `add_subfolder(name)`, `create_timeline(name)`, `import_timeline(path, options?)`,
 `import_media(paths)`, `delete_clips(clip_ids)`, `move_clips(clip_ids, target_path)`,
+`setup_multicam_timeline(name, clip_ids|angles, sync_mode?, include_audio?, dry_run?)`,
 `get_selected`, `set_selected(clip_id)`, `export_metadata(path, clip_ids?)`
 
 Media Pool / Ingest kernel actions (v2.8.0+) add safer agent-facing workflows:
@@ -338,8 +339,16 @@ Media Pool / Ingest kernel actions (v2.8.0+) add safer agent-facing workflows:
 `organize_clips`, `copy_metadata`, `normalize_metadata`,
 `probe_clip_properties`, `safe_relink`, `safe_unlink`, `link_proxy_checked`,
 `link_full_resolution_checked`, `set_clip_marks`, `clear_clip_marks`,
-`copy_clip_annotations`, and `media_pool_boundary_report`. See
+`copy_clip_annotations`, `setup_multicam_timeline`, and
+`media_pool_boundary_report`. See
 `docs/kernels/media-pool-ingest-kernel.md` for the live-tested support map.
+
+`setup_multicam_timeline` is a helper, not a native multicam API wrapper. It
+creates a source-safe stacked prep timeline with one angle per video track,
+optional matching audio tracks, and `stack_start`, `source_timecode`, or
+explicit `record_frame` placement. Native multicam clip creation, angle
+switching, and flattening remain Resolve UI workflows; see
+`docs/guides/multicam-setup-guide.md`.
 
 Note: `folder path` arguments use slash notation like `"Master/SubFolder"`.
 `"Master"` or `"/"` refers to the root folder.

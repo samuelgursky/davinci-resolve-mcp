@@ -2,6 +2,21 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.19.0
+
+**Multicam setup support** — `media_pool.setup_multicam_timeline` creates a
+source-safe stacked prep timeline from Media Pool clips, with one angle per video
+track, optional matching audio tracks, and stack-start, manual record-frame, or
+source-timecode planning. Native multicam clip conversion remains a Resolve UI
+step because the public scripting API does not expose a multicam-create method;
+the current UI workflow is documented in the DaVinci Resolve 20 Manual,
+Edit > Chapter 42, "Multicam Editing."
+
+**Documentation**: added `docs/guides/multicam-setup-guide.md` and linked the
+helper from the README, docs index, AI skill reference, kernel coverage, ingest
+kernel, and API coverage notes so it is clearly listed as a helper rather than
+a native API feature.
+
 ## What's New in v2.18.0
 
 **Edit-page title / Text+ text (undocumented keys)** — `timeline.title_property_scan`,

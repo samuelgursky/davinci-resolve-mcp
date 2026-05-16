@@ -14,6 +14,8 @@ ignored scratch folders such as `docs/_scratch/`.
   the compound MCP server.
 - [Media Analysis Guide](guides/media-analysis-guide.md) — source-safe FFprobe, FFmpeg,
   Whisper, sidecar, and analysis-root workflows.
+- [Multicam Setup Helper Guide](guides/multicam-setup-guide.md) — source-safe
+  stacked timeline prep, helper/API boundary, and Resolve UI conversion steps.
 - [Editorial Decision Guide](guides/editorial-decision-guide.md) — project-owned
   editorial craft guidance for analysis and edit decisions.
 - [Color Decision Guide](guides/color-decision-guide.md) — project-owned color

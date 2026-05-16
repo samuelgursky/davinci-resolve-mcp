@@ -22,6 +22,7 @@ All actions are under `media_pool(action=...)`.
 | `safe_import_media` | Supported | Validates existing paths, optionally targets a Media Pool folder, supports dry-run, then calls `ImportMedia(paths)`. |
 | `safe_import_sequence` | Supported | Validates printf-style sequence patterns and frame ranges before calling `ImportMedia([{clipInfo}])`. |
 | `safe_import_folder` | Supported dry-run | Validates folder paths before `ImportFolderFromFile`; dry-run is recommended unless importing Resolve folder exports intentionally. |
+| `setup_multicam_timeline` | Supported setup helper | Creates a stacked multicam prep timeline from Media Pool clips, with one angle per video track and optional matching audio tracks. |
 | `organize_clips` | Supported | Moves clips to an existing or optionally created Media Pool folder. |
 | `copy_metadata` | Supported | Copies Resolve metadata and optional third-party metadata from one clip to target clips. |
 | `normalize_metadata` | Supported | Bulk-writes explicit metadata and third-party metadata to clip IDs or selected clips. |
@@ -35,6 +36,27 @@ All actions are under `media_pool(action=...)`.
 | `copy_clip_annotations` | Supported | Copies clip color, flags, and media-pool item markers from one clip to targets. |
 | `media_pool_boundary_report` | Supported | Combines capabilities, Media Pool probe, and optional item probes. |
 
+## Multicam Setup Helper
+
+`setup_multicam_timeline` is intentionally documented as a helper tool rather
+than API coverage. It prepares the timeline structure Resolve's multicam UI can
+consume, while leaving native conversion to Resolve.
+
+Supported planning inputs:
+
+- `clip_ids`: simple one-angle-per-clip setup.
+- `angles`: explicit rows with `clip_id`, `angle_name`, source range, track
+  index, audio track index, source timecode, record frame, or record offset.
+- `sync_mode`: `stack_start`, `source_timecode`, or `record_frame`.
+- `include_audio`: append audio-only rows for each angle.
+- `dry_run`: return the planned append rows without creating a timeline.
+
+After the helper creates the setup timeline, verify sync in Resolve, duplicate
+the timeline if it should remain recoverable, then use the Media Pool context
+menu command "Convert Compound Clips (Timelines) to Multicam Clips." See
+`docs/guides/multicam-setup-guide.md` for examples and the Resolve 20 manual
+reference.
+
 ## Supported Boundaries
 
 - Media Storage browsing: volumes, subfolders, and file listing.
@@ -42,6 +64,9 @@ All actions are under `media_pool(action=...)`.
 - Safe import helpers with path validation and dry-run support.
 - Media Pool organization: folder creation, current folder switching, selected
   clip get/set, and clip moves.
+- Multicam setup timelines: source-safe placement of existing Media Pool clips
+  on per-angle tracks via `AppendToTimeline([{clipInfo}])`, with stack-start,
+  manual record-frame, or source-timecode planning.
 - Metadata: scalar and dict metadata writes, third-party metadata writes,
   metadata copy, and explicit normalization.
 - Clip property probing: full snapshot plus known keys such as `File Path`,
@@ -80,6 +105,11 @@ All actions are under `media_pool(action=...)`.
   remain raw explicit clip actions and are not used by the kernel probe.
 - Resolve does not guarantee a stable writable metadata schema across versions
   or locales.
+- Native multicam clip creation, angle switching, and multicam flattening are
+  not exposed by the public Resolve scripting API. The setup helper prepares a
+  timeline that can be converted to a native multicam clip in Resolve's UI. See
+  the installed DaVinci Resolve 20 Manual, Edit > Chapter 42, "Multicam
+  Editing," for the current UI workflow.
 
 ## Live Evidence
 
