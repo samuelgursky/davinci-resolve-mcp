@@ -76,6 +76,29 @@ def _require_success(label: str, result: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _require_imported_clips(server, expected_names: List[str]) -> List[str]:
+    imported = server.media_pool("import_media", {"paths": expected_names})
+    if not isinstance(imported, dict) or imported.get("imported") != len(expected_names):
+        raise AssertionError(f"media_pool.import_media failed: {imported!r}")
+    print("  [PASS] media_pool.import_media")
+
+    current_clips = server.folder("get_clips")
+    clips = current_clips.get("clips") if isinstance(current_clips, dict) else None
+    if not isinstance(clips, list):
+        raise AssertionError(f"folder.get_clips failed after import: {current_clips!r}")
+
+    expected_basenames = {Path(path).name for path in expected_names}
+    clip_ids = [
+        clip.get("id")
+        for clip in clips
+        if clip.get("name") in expected_basenames and clip.get("id")
+    ]
+    if len(clip_ids) != len(expected_names):
+        raise AssertionError(f"expected imported clip ids for {expected_basenames}, got {current_clips!r}")
+    print("  [PASS] folder.get_clips returned imported clip ids")
+    return clip_ids
+
+
 def _cleanup_project(server, project_name: str) -> Dict[str, Any]:
     resolve = server.get_resolve()
     if not resolve:
@@ -114,10 +137,7 @@ def main() -> int:
         paths = _make_synthetic_media(work_dir)
         print(f"Generated synthetic media under: {work_dir}")
 
-        imported = _require_success("media_pool.import_media", server.media_pool("import_media", {"paths": paths}))
-        clip_ids = [clip.get("id") for clip in imported.get("clips", []) if clip.get("id")]
-        if len(clip_ids) != 2:
-            raise AssertionError(f"expected 2 imported clip ids, got {imported!r}")
+        clip_ids = _require_imported_clips(server, paths)
 
         dry_run = _require_success(
             "media_pool.setup_multicam_timeline dry_run",
