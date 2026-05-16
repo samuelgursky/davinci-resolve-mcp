@@ -381,9 +381,10 @@ report reuse, session-only execution, chat-context visual review, and
 timeline-level editorial helpers.
 
 Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
-`analyze_file`, `analyze_clip`, `analyze_bin`, `analyze_project`, `summarize`,
-`get_report`, `review_timeline_markers`, and `cleanup_artifacts`. The tool never
-installs dependencies and validates that outputs stay under
+`analyze_file`, `analyze_clip`, `analyze_bin`, `analyze_project`,
+`detect_sync_events`, `add_sync_event_markers`, `summarize`, `get_report`,
+`review_timeline_markers`, and `cleanup_artifacts`. The tool never installs
+dependencies and validates that outputs stay under
 `davinci-resolve-mcp-analysis` project roots rather than beside source media.
 Executed file/clip analysis defaults to session-only: scratch artifacts are
 removed after structured reports are returned to the MCP response. `persist=true`
@@ -408,6 +409,12 @@ chat/sampling model and the response is stored in the default structured JSON
 shape. If chat-context vision is unavailable, continue with technical/motion
 analysis and ask whether the user wants setup steps or a no-visual run. The
 local mock providers are for tests and do not send frames off-machine.
+Use `detect_sync_events` before multicam setup, deliverable QC, or single-camera
+sync review when the user needs likely 2-pop or slate-clap locations. It reads
+source audio through FFmpeg/FFprobe only, returns advisory frames/timecodes and
+per-file `record_offset` suggestions, and never installs FFmpeg automatically.
+It also returns marker suggestions; only call `add_sync_event_markers` after the
+user explicitly approves marker writes, and pass `confirm=true`.
 `review_timeline_markers` creates a labeled
 Resolve-rendered marker contact sheet plus JSON sidecar, and can request
 chat-context vision for marker/frame mismatch review.

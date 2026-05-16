@@ -2,6 +2,16 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## Unreleased
+
+**Sync event detection helper** — `media_analysis.detect_sync_events` detects
+likely audio 2-pops and slate claps with FFprobe/FFmpeg, returns advisory
+frame/timecode positions, and suggests per-file `record_offset` values for
+`media_pool.setup_multicam_timeline(sync_mode="record_frame")`. The helper is
+source-safe and never installs FFmpeg automatically. It also returns marker
+suggestions; `media_analysis.add_sync_event_markers` writes Media Pool item
+markers only when called separately with `confirm=true`.
+
 ## What's New in v2.19.0
 
 **Multicam setup support** — `media_pool.setup_multicam_timeline` creates a

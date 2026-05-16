@@ -37,6 +37,7 @@ The compound server is recommended unless you specifically need the granular one
 "List all projects and open the one called 'My Film'"
 "Create a timeline called 'Assembly Cut' from all clips in the current bin"
 "Build a multicam prep timeline from selected camera angles and preserve source media"
+"Detect 2-pops or slate claps and suggest record offsets for sync prep"
 "Probe this timeline for gaps, overlaps, missing media, and source frame ranges"
 "Safely import this image sequence, organize it into bins, and normalize clip metadata"
 "Build a ProRes 422 HQ render plan, validate the settings, and queue the job"
@@ -53,7 +54,7 @@ The compound server is recommended unless you specifically need the granular one
 |------|-----------------------------------|
 | App and project control | Launch/reconnect, page switching, project CRUD, project folders, databases, cloud project wrappers, settings, presets, archives |
 | Media pool and ingest | Safe import, image sequences, multicam prep timelines, bin organization, metadata normalization, marks, annotations, relink/proxy/full-resolution guards |
-| Media analysis | Read-only file/clip/bin/project analysis, session-only defaults, existing-report reuse, chat-context visual analysis by default in `analyze_media` with opt-out, optional transcription |
+| Media analysis | Read-only file/clip/bin/project analysis, 2-pop/slate-clap sync-event detection, session-only defaults, existing-report reuse, chat-context visual analysis by default in `analyze_media` with opt-out, optional transcription |
 | Timeline editing and conform | Track/item probing, title text key scans/writes, copy/move/duplicate helpers, range operations, gaps/overlaps, source ranges, checked interchange exports/imports |
 | Review annotations | Timeline/item/clip markers, custom data, flags, clip color, copy/move/sync cleanup, review reports, marker thumbnail review |
 | Color and grading | Node graph probing, CDL validation, grade copy, DRX/LUT helpers, versions, Gallery stills, color groups |
@@ -75,7 +76,7 @@ The default server is a local stdio process launched by your MCP client; it does
 | Metric | Value |
 |--------|-------|
 | MCP Tools | **31** compound / **329** granular |
-| Kernel Actions | **132** guarded workflow actions across 9 compound tools |
+| Kernel Actions | **134** guarded workflow actions across 9 compound tools |
 | API Methods Covered | **336/336** (100%) |
 | Methods Live Tested | **331/336** (98.5%) |
 | Live Test Pass Rate | **331/331** (100%) |

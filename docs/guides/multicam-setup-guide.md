@@ -31,8 +31,9 @@ creates derivatives of source media.
 - It does not run Resolve's "Create Multicam Clip Using Selected Clips" dialog.
 - It does not switch angles in an edited multicam clip.
 - It does not flatten multicam clips.
-- It does not perform waveform/audio correlation. Audio-derived offset planning
-  would be a separate read-only analysis layer that feeds this helper.
+- It does not perform waveform/audio correlation internally. Use
+  `media_analysis(action="detect_sync_events")` as a separate read-only analysis
+  layer when 2-pops or slate claps should feed this helper.
 
 ## Sync Modes
 
@@ -122,9 +123,15 @@ When asked to prepare multicam:
    conversion is a Resolve UI step.
 
 For audio-derived alignment, first run a separate source-safe analysis pass
-against source paths with `ffprobe`/`ffmpeg` if available, produce explicit
-per-angle `record_frame` values, then call this helper with
+against source paths with `media_analysis(action="detect_sync_events")`. Use
+the returned `alignment.suggestions[].suggested_record_offset_frames` values as
+per-angle `record_offset` values, then call this helper with
 `sync_mode="record_frame"`.
+
+If sync markers would help the user verify the setup, show the returned marker
+suggestions and ask first. Only after approval, call
+`media_analysis(action="add_sync_event_markers", params={"confirm": true, ...})`
+to write Media Pool item markers.
 
 Do not install FFmpeg automatically. If `ffmpeg` or `ffprobe` is missing, report
 that the optional audio-analysis layer is unavailable and suggest installing

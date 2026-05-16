@@ -55,6 +55,7 @@ from src.utils.media_analysis import (
     slugify,
     summarize_reports as summarize_media_analysis_reports,
 )
+from src.utils.sync_detection import detect_sync_events_for_records as detect_media_sync_events
 from src.utils.platform import get_resolve_paths, get_resolve_plugin_paths
 from src.utils import fuse_templates, dctl_templates, script_templates
 from src.utils.timeline_title_text import (
@@ -5389,6 +5390,139 @@ def _media_analysis_records_from_target(mp, p: Dict[str, Any]) -> Tuple[Optional
     return records, target, warnings, None
 
 
+def _media_analysis_sync_event_records(proj, p: Dict[str, Any]):
+    paths = p.get("paths") or p.get("file_paths") or p.get("filePaths")
+    warnings: List[str] = []
+    normalized_target: Dict[str, Any] = {"type": "paths"} if paths else _media_analysis_target_dict(p.get("target"), p)
+    if paths:
+        if isinstance(paths, str):
+            paths = [paths]
+        if not isinstance(paths, list) or not paths:
+            return None, normalized_target, warnings, _err("paths must be a non-empty string or list")
+        records = []
+        for index, path in enumerate(paths):
+            expanded = os.path.realpath(os.path.abspath(os.path.expanduser(str(path))))
+            if not os.path.isfile(expanded):
+                return None, normalized_target, warnings, _err(f"Media file not found: {expanded}")
+            records.append({
+                "clip_id": None,
+                "clip_name": os.path.basename(expanded),
+                "bin_path": None,
+                "file_path": expanded,
+                "media_id": None,
+                "duration": None,
+                "fps": p.get("fps"),
+                "resolution": None,
+                "media_type": "file",
+                "source_index": index,
+            })
+        normalized_target["paths"] = [record["file_path"] for record in records]
+        return records, normalized_target, warnings, None
+
+    if not p.get("target") and (p.get("path") or p.get("file_path") or p.get("filePath")):
+        p["target"] = {
+            "type": "file",
+            "path": p.get("path") or p.get("file_path") or p.get("filePath"),
+        }
+    mp = proj.GetMediaPool()
+    if not mp:
+        return None, normalized_target, warnings, _err("Failed to get MediaPool")
+    records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p)
+    return records, normalized_target, warnings, target_err
+
+
+def _media_analysis_confirmed(p: Dict[str, Any]) -> bool:
+    return _media_analysis_bool(
+        p.get("confirm", p.get("confirmed", p.get("apply", p.get("write_markers")))),
+        False,
+    )
+
+
+def _media_analysis_sync_marker_suggestions(detection: Dict[str, Any]) -> List[Dict[str, Any]]:
+    suggestions = []
+    for file_result in detection.get("files") or []:
+        suggestions.extend(file_result.get("marker_suggestions") or [])
+    return suggestions
+
+
+def _apply_sync_event_markers(proj, detection: Dict[str, Any], p: Dict[str, Any]) -> Dict[str, Any]:
+    if not _media_analysis_confirmed(p):
+        return {
+            "success": False,
+            "confirmation_required": True,
+            "message": "Review marker_suggestions, ask the user, then call again with confirm=true to add markers.",
+            "preview": detection,
+        }
+
+    mp = proj.GetMediaPool()
+    if not mp:
+        return _err("Failed to get MediaPool")
+    root = mp.GetRootFolder()
+    suggestions = _media_analysis_sync_marker_suggestions(detection)
+    eligible = [suggestion for suggestion in suggestions if suggestion.get("eligible")]
+    skipped = []
+    added = []
+    failed = []
+    replace_existing = _media_analysis_bool(p.get("replace_existing"), False)
+
+    if not eligible:
+        return {
+            "success": True,
+            "added": 0,
+            "skipped": suggestions,
+            "message": "No eligible marker suggestions. Analyze Media Pool clips, not raw file paths, to add Resolve clip markers.",
+            "detection": detection,
+        }
+
+    for suggestion in eligible:
+        clip_id = suggestion.get("clip_id")
+        clip = _find_clip(root, clip_id)
+        if not clip:
+            failed.append({"clip_id": clip_id, "reason": "Clip not found"})
+            continue
+        marker = dict(suggestion.get("marker") or {})
+        color, color_err = _normalize_marker_color(marker.get("color"))
+        if color_err:
+            failed.append({"clip_id": clip_id, "marker": marker, "result": color_err})
+            continue
+        marker["color"] = color
+        marker["frame"] = int(marker["frame"])
+        marker["duration"] = max(1, int(marker.get("duration") or 1))
+        custom_data = marker.get("custom_data") or marker.get("customData") or ""
+        if custom_data and _has_method(clip, "GetMarkerByCustomData"):
+            try:
+                existing = clip.GetMarkerByCustomData(custom_data)
+            except Exception:
+                existing = None
+            if existing and not replace_existing:
+                skipped.append({"clip_id": clip_id, "frame": marker["frame"], "reason": "Marker already exists", "custom_data": custom_data})
+                continue
+            if existing and replace_existing and _has_method(clip, "DeleteMarkerByCustomData"):
+                clip.DeleteMarkerByCustomData(custom_data)
+        result = _add_marker(clip, marker)
+        if result.get("success"):
+            added.append({
+                "clip_id": clip_id,
+                "clip_name": suggestion.get("clip_name"),
+                "frame": result.get("frame"),
+                "name": marker.get("name"),
+                "custom_data": custom_data,
+            })
+        else:
+            failed.append({"clip_id": clip_id, "marker": marker, "result": result})
+
+    ineligible = [suggestion for suggestion in suggestions if not suggestion.get("eligible")]
+    skipped.extend(ineligible)
+    return {
+        "success": not failed,
+        "added": len(added),
+        "markers": added,
+        "skipped": skipped,
+        "failed": failed,
+        "detection": detection,
+    }
+
+
 def _media_pool_item_probe(clip):
     metadata, metadata_error = _safe_clip_call(clip, "GetMetadata", "")
     third_party, third_party_error = _safe_clip_call(clip, "GetThirdPartyMetadata", "")
@@ -8215,6 +8349,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       analyze_clip(clip_id|selected, dry_run?, session_only?, persist?) -> {clips, manifest}
       analyze_bin(path|bin_path, recursive?, dry_run?, session_only?, persist?) -> {clips, manifest}
       analyze_project(recursive?, dry_run?, session_only?, persist?) -> {clips, manifest}
+      detect_sync_events(paths?|target?, event_types?, windows?) -> {files, alignment}
+      add_sync_event_markers(target?|paths?|detections?, confirm?) -> {added, skipped}
       review_timeline_markers(max_samples?, analysis_root?, vision?) -> {path, samples, vision_review?}
       summarize(analysis_root?) -> project summary from existing clip reports
       get_report(report_path?) -> load manifest or a report under the analysis root
@@ -8314,6 +8450,34 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 }
         return review
 
+    if action == "detect_sync_events":
+        records, normalized_target, warnings, target_err = _media_analysis_sync_event_records(proj, p)
+        if target_err:
+            if warnings:
+                target_err["warnings"] = warnings
+            return target_err
+        result = detect_media_sync_events(records or [], p)
+        result["target"] = normalized_target
+        if warnings:
+            result.setdefault("warnings", [])
+            result["warnings"] = warnings + list(result.get("warnings") or [])
+        return result
+
+    if action == "add_sync_event_markers":
+        detection = p.get("detection") or p.get("detections")
+        if not isinstance(detection, dict):
+            records, normalized_target, warnings, target_err = _media_analysis_sync_event_records(proj, p)
+            if target_err:
+                if warnings:
+                    target_err["warnings"] = warnings
+                return target_err
+            detection = detect_media_sync_events(records or [], p)
+            detection["target"] = normalized_target
+            if warnings:
+                detection.setdefault("warnings", [])
+                detection["warnings"] = warnings + list(detection.get("warnings") or [])
+        return _apply_sync_event_markers(proj, detection, p)
+
     if action in {"analyze_file", "analyze_clip", "analyze_bin", "analyze_project"}:
         dry_run_default = action in {"analyze_bin", "analyze_project"}
         p["dry_run"] = _media_analysis_bool(p.get("dry_run"), dry_run_default)
@@ -8405,6 +8569,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "analyze_clip",
         "analyze_bin",
         "analyze_project",
+        "detect_sync_events",
+        "add_sync_event_markers",
         "review_timeline_markers",
         "summarize",
         "get_report",

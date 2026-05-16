@@ -131,6 +131,77 @@ ffmpeg -i "INPUT_FILE" -vf blackdetect=d=0.5:pix_th=0.10 -f null - 2>&1 | grep "
 ffmpeg -i "INPUT_FILE" -af silencedetect=noise=-50dB:d=1 -f null - 2>&1 | grep "silence"
 ```
 
+### Sync Event Detection
+
+Use `media_analysis(action="detect_sync_events")` when the task is to find
+advisory sync points in deliverables, single-camera footage, dual-system sound,
+or multicam source clips.
+
+The detector is source-safe:
+
+- It uses FFprobe for metadata and FFmpeg to decode source audio to in-memory
+  mono samples.
+- It writes no media files, proxies, renders, or derivatives.
+- It returns likely 1 kHz 2-pops, slate-clap transients, frame/timecode
+  positions when frame rate/timecode are known, and per-file record-offset
+  suggestions.
+- It returns marker suggestions for Media Pool clips, but never writes markers
+  during detection.
+- It does not install FFmpeg automatically. If `ffmpeg` or `ffprobe` is missing,
+  report the missing optional dependency and suggest installing FFmpeg.
+
+Analyze explicit files:
+
+```json
+{
+  "action": "detect_sync_events",
+  "params": {
+    "paths": ["/path/to/camera_a.mov", "/path/to/camera_b.mov"],
+    "fps": 24,
+    "event_types": ["two_pop", "slate_clap"],
+    "scan_start_seconds": 30,
+    "scan_tail_seconds": 30,
+    "prefer_event_type": "slate_clap"
+  }
+}
+```
+
+Analyze selected Media Pool clips:
+
+```json
+{
+  "action": "detect_sync_events",
+  "params": {
+    "target": "selected",
+    "prefer_event_type": "slate_clap"
+  }
+}
+```
+
+For multicam prep, use `alignment.suggestions[].suggested_record_offset_frames`
+as per-angle `record_offset` values with
+`media_pool(action="setup_multicam_timeline", sync_mode="record_frame")`, then
+verify sync in Resolve before converting the setup timeline to a native multicam
+clip.
+
+To add source-frame Media Pool markers from detected sync events, first show the
+user the marker suggestions. Only after the user approves, call:
+
+```json
+{
+  "action": "add_sync_event_markers",
+  "params": {
+    "target": "selected",
+    "prefer_event_type": "slate_clap",
+    "confirm": true
+  }
+}
+```
+
+If you already have a detection result, pass it back as `detection` with
+`confirm=true`. Raw file-path detections cannot be marked in Resolve unless
+they are tied to Media Pool clips.
+
 **Interlace Detection:**
 ```bash
 ffmpeg -i "INPUT_FILE" -vf idet -frames:v 500 -f null - 2>&1 | grep "idet"

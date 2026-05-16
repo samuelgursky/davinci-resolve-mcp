@@ -7,7 +7,7 @@ Complete Resolve scripting API coverage, live-test status, and method-by-method 
 | Metric | Value |
 |--------|-------|
 | MCP Tools | **31** compound (default) / **329** granular |
-| Kernel Actions | **132** guarded MCP workflow actions across 9 compound tools |
+| Kernel Actions | **134** guarded MCP workflow actions across 9 compound tools |
 | API Methods Covered | **336/336** (100%) |
 | Methods Live Tested | **331/336** (98.5%) |
 | Live Test Pass Rate | **331/331** (100%) |
@@ -22,7 +22,11 @@ Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The
 Workflow helpers can go beyond one-to-one API method coverage while still using
 only public Resolve calls. For example, `media_pool.setup_multicam_timeline`
 prepares a stacked timeline for Resolve's multicam UI, but native multicam clip
-creation itself is not exposed by the scripting API.
+creation itself is not exposed by the scripting API. Similarly,
+`media_analysis.detect_sync_events` is a source-safe FFmpeg/FFprobe helper for
+advisory 2-pop and slate-clap sync points; it is not a Resolve API method.
+`media_analysis.add_sync_event_markers` is a guarded marker-write helper and
+requires explicit confirmation.
 
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|

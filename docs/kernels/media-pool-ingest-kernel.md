@@ -57,6 +57,13 @@ menu command "Convert Compound Clips (Timelines) to Multicam Clips." See
 `docs/guides/multicam-setup-guide.md` for examples and the Resolve 20 manual
 reference.
 
+For 2-pop or slate-clap assisted sync, run
+`media_analysis(action="detect_sync_events")` first and pass its suggested
+`record_offset` values into `setup_multicam_timeline(sync_mode="record_frame")`.
+If the detected sync points should become Resolve markers, ask the user first;
+the guarded write step is `media_analysis(action="add_sync_event_markers",
+params={"confirm": true, ...})`.
+
 ## Supported Boundaries
 
 - Media Storage browsing: volumes, subfolders, and file listing.

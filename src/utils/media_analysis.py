@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from src.utils.sync_detection import detect_sync_event_capabilities
+
 
 ANALYSIS_DIR_NAME = "davinci-resolve-mcp-analysis"
 HIDDEN_ANALYSIS_DIR_NAME = ".davinci-resolve-mcp-analysis"
@@ -211,6 +213,8 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     cv2 = importlib.util.find_spec("cv2") is not None
     provider = env.get("DAVINCI_RESOLVE_MCP_VISION_PROVIDER")
 
+    sync_events = detect_sync_event_capabilities()
+
     return {
         "success": True,
         "analysis_version": ANALYSIS_VERSION,
@@ -243,6 +247,13 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
                 "The 'mock' provider is local-only for tests and never sends frames."
             ),
         },
+        "sync_events": {
+            "available": bool(sync_events.get("available")),
+            "event_types": sync_events.get("event_types", []),
+            "source_safe": True,
+            "requires": ["ffmpeg", "ffprobe"],
+            "note": "Detects likely audio 2-pops and slate claps for advisory sync offset planning.",
+        },
     }
 
 
@@ -253,7 +264,12 @@ def install_guidance(capabilities: Optional[Dict[str, Any]] = None) -> Dict[str,
 
     if not tools.get("ffprobe", {}).get("available") or not tools.get("ffmpeg", {}).get("available"):
         missing["ffmpeg_suite"] = {
-            "required_for": ["technical metadata", "scene detection", "motion and variance analysis"],
+            "required_for": [
+                "technical metadata",
+                "scene detection",
+                "motion and variance analysis",
+                "2-pop and slate-clap sync detection",
+            ],
             "macos": "Ask the user before running: brew install ffmpeg",
             "linux": "Ask the user to install ffmpeg with their distribution package manager.",
             "windows": "Ask the user to install ffmpeg and add ffmpeg/ffprobe to PATH.",
