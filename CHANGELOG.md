@@ -2,7 +2,7 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
-## Unreleased
+## What's New in v2.20.0
 
 **Sync event detection helper** — `media_analysis.detect_sync_events` detects
 likely audio 2-pops and slate claps with FFprobe/FFmpeg, returns advisory
@@ -11,6 +11,12 @@ frame/timecode positions, and suggests per-file `record_offset` values for
 source-safe and never installs FFmpeg automatically. It also returns marker
 suggestions; `media_analysis.add_sync_event_markers` writes Media Pool item
 markers only when called separately with `confirm=true`.
+
+**Validation**: static/import checks, API parity audit, focused media-analysis
+and multicam unit tests, and `tests/live_sync_event_validation.py` passed. The
+live run used DaVinci Resolve Studio 20.3.2.9, a disposable project, and
+synthetic audio only; it verified detection, confirmation refusal, confirmed
+Media Pool marker writes, and cleanup.
 
 ## What's New in v2.19.0
 
