@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.20.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.21.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-31%20(329%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](docs/reference/api-coverage.md#test-results)
@@ -22,6 +22,8 @@ Before connecting, open DaVinci Resolve Studio and set **Preferences > General >
 
 For platform paths, client-specific config, and manual setup, see [Installation and Configuration](docs/install.md).
 
+The installer and server check the latest GitHub release for MCP updates. Checks are best-effort, throttled, and informational only; no code is installed automatically.
+
 ## Server Modes
 
 | Mode | Entry point | Tools | Best for |
@@ -38,6 +40,7 @@ The compound server is recommended unless you specifically need the granular one
 "Create a timeline called 'Assembly Cut' from all clips in the current bin"
 "Build a multicam prep timeline from selected camera angles and preserve source media"
 "Detect 2-pops or slate claps and suggest record offsets for sync prep"
+"Publish analysis summaries, keywords, people, and slate hints into Resolve clip metadata"
 "Probe this timeline for gaps, overlaps, missing media, and source frame ranges"
 "Safely import this image sequence, organize it into bins, and normalize clip metadata"
 "Build a ProRes 422 HQ render plan, validate the settings, and queue the job"
@@ -54,7 +57,7 @@ The compound server is recommended unless you specifically need the granular one
 |------|-----------------------------------|
 | App and project control | Launch/reconnect, page switching, project CRUD, project folders, databases, cloud project wrappers, settings, presets, archives |
 | Media pool and ingest | Safe import, image sequences, multicam prep timelines, bin organization, metadata normalization, marks, annotations, relink/proxy/full-resolution guards |
-| Media analysis | Read-only file/clip/bin/project analysis, 2-pop/slate-clap sync-event detection, session-only defaults, existing-report reuse, chat-context visual analysis by default in `analyze_media` with opt-out, optional transcription |
+| Media analysis | Source-safe file/clip/bin/project analysis, 2-pop/slate-clap sync-event detection, confirmed Resolve metadata publishing, session-only defaults, existing-report reuse, chat-context visual analysis by default in `analyze_media` with opt-out, optional transcription |
 | Timeline editing and conform | Track/item probing, title text key scans/writes, copy/move/duplicate helpers, range operations, gaps/overlaps, source ranges, checked interchange exports/imports |
 | Review annotations | Timeline/item/clip markers, custom data, flags, clip color, copy/move/sync cleanup, review reports, marker thumbnail review |
 | Color and grading | Node graph probing, CDL validation, grade copy, DRX/LUT helpers, versions, Gallery stills, color groups |
@@ -65,7 +68,7 @@ The compound server is recommended unless you specifically need the granular one
 
 ## Source Media Safety
 
-This project treats camera originals and source media as immutable. Analysis tools read source files and write reports only to sidecar or project analysis directories. The server must not modify, transcode, proxy, or create derivatives of source media unless the user explicitly asks for that. See [Media Analysis Guide](docs/guides/media-analysis-guide.md) for the detailed source-safe workflow.
+This project treats camera originals and source media as immutable. Analysis tools read source files and write reports only to sidecar, scratch, or project analysis directories; confirmed metadata publishing writes only to Resolve's project database. The server must not modify, transcode, proxy, or create derivatives of source media unless the user explicitly asks for that. See [Media Analysis Guide](docs/guides/media-analysis-guide.md) for the detailed source-safe workflow.
 
 ## Security Posture
 
@@ -76,7 +79,7 @@ The default server is a local stdio process launched by your MCP client; it does
 | Metric | Value |
 |--------|-------|
 | MCP Tools | **31** compound / **329** granular |
-| Kernel Actions | **134** guarded workflow actions across 9 compound tools |
+| Kernel Actions | **135** guarded workflow actions across 9 compound tools |
 | API Methods Covered | **336/336** (100%) |
 | Methods Live Tested | **331/336** (98.5%) |
 | Live Test Pass Rate | **331/331** (100%) |
@@ -84,7 +87,7 @@ The default server is a local stdio process launched by your MCP client; it does
 
 For method-by-method status, see [API Coverage and Test Results](docs/reference/api-coverage.md). For current workflow support, see [Kernel Action Coverage](docs/kernels/README.md).
 
-`analyze_media` uses in-chat visual analysis by default when the MCP client supports sampling/image messages. Pass `include_visuals=false` for technical-only or privacy-sensitive runs. If in-chat vision is unavailable, analysis continues with local technical/motion evidence and reports the skipped visual layer.
+`analyze_media` uses in-chat visual analysis by default when the MCP client supports sampling/image messages. Pass `include_visuals=false` for technical-only or privacy-sensitive runs. If in-chat vision is unavailable, analysis continues with local technical/motion evidence and reports the skipped visual layer. `media_analysis.publish_clip_metadata` can publish confirmed analysis summaries, comments, keywords, people, and high-confidence slate fields back to Resolve clip metadata while preserving existing human-entered fields by default.
 
 ## Documentation
 

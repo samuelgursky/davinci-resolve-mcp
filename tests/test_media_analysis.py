@@ -6,7 +6,12 @@ import subprocess
 import tempfile
 import unittest
 
-from src.server import _media_analysis_records_from_target
+from src.server import (
+    _media_analysis_merge_metadata_field,
+    _media_analysis_provenance_metadata,
+    _media_analysis_records_from_target,
+    _media_analysis_report_metadata_candidates,
+)
 from src.utils.media_analysis import (
     analysis_request_signature,
     build_plan,
@@ -149,6 +154,114 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertTrue(caps["success"])
         self.assertTrue(caps["no_auto_install"])
         self.assertFalse(caps["vision"]["enabled_by_default"])
+
+    def test_publish_metadata_candidates_map_visual_report_to_resolve_fields(self):
+        report = {
+            "analysis_version": "0.1",
+            "summary": "Fallback summary",
+            "clip": {"clip_id": "clip-123", "clip_name": "A001_C001.mov"},
+            "technical_warnings": ["interlace analysis did not complete"],
+            "analysis_signature": {"signature_hash": "abc123"},
+            "visual": {
+                "clip_summary": "Interview shot with Taylor at the kitchen table.",
+                "editorial_classification": {
+                    "primary_use": "interview",
+                    "select_potential": "high",
+                    "reason": "Clean eye-line and usable delivery.",
+                },
+                "content": {
+                    "people": ["Taylor"],
+                    "actions": ["speaking"],
+                    "objects": ["coffee mug"],
+                    "visible_text": ["Scene 12A Take 3"],
+                },
+                "editing_notes": {
+                    "best_moments": ["00:00:04 strong answer"],
+                    "qc_flags": ["minor background noise"],
+                    "search_tags": ["kitchen", "answer"],
+                },
+            },
+        }
+        detection = {
+            "files": [{
+                "clip_id": "clip-123",
+                "events": [{"type": "slate_clap", "time_seconds": 4.0, "frame": 96, "confidence": 0.91}],
+            }],
+        }
+
+        proposal = _media_analysis_report_metadata_candidates(report, detection=detection)
+
+        self.assertEqual(proposal["fields"]["Description"], "Interview shot with Taylor at the kitchen table.")
+        self.assertIn("kitchen", proposal["fields"]["Keywords"])
+        self.assertIn("slate clap", proposal["fields"]["Keywords"])
+        self.assertEqual(proposal["fields"]["People"], ["Taylor"])
+        self.assertIn("Likely slate clap", proposal["fields"]["Comments"])
+        self.assertIn("minor background noise", proposal["fields"]["Comments"])
+
+    def test_publish_metadata_candidates_gate_slate_fields_by_confidence(self):
+        report = {
+            "clip": {"clip_id": "clip-123"},
+            "visual": {"clip_summary": "Slate shot."},
+        }
+        fields = ["Scene", "Shot", "Take", "Camera #"]
+        low = _media_analysis_report_metadata_candidates(
+            report,
+            fields=fields,
+            slate_review={
+                "fields": {"scene": "12A", "take": "3", "camera": "B"},
+                "confidence": {"overall": "medium"},
+            },
+        )
+        high = _media_analysis_report_metadata_candidates(
+            report,
+            fields=fields,
+            slate_review={
+                "fields": {"scene": "12A", "take": "3", "camera": "B"},
+                "confidence": {"overall": "high"},
+            },
+        )
+
+        self.assertEqual(low["fields"]["Scene"], "")
+        self.assertEqual(high["fields"]["Scene"], "12A")
+        self.assertEqual(high["fields"]["Take"], "3")
+        self.assertEqual(high["fields"]["Camera #"], "B")
+
+    def test_publish_metadata_merge_updates_owned_blocks_and_dedupes_lists(self):
+        comments = _media_analysis_merge_metadata_field(
+            "Comments",
+            "Assistant note\n\n[DaVinci Resolve MCP Analysis]\nold\n[/DaVinci Resolve MCP Analysis]",
+            "Summary: new analysis",
+            {},
+        )
+        keywords = _media_analysis_merge_metadata_field(
+            "Keywords",
+            "kitchen, interview",
+            ["Interview", "answer"],
+            {},
+        )
+        scene = _media_analysis_merge_metadata_field("Scene", "12B", "12A", {})
+
+        self.assertTrue(comments["changed"])
+        self.assertIn("Assistant note", comments["value"])
+        self.assertIn("Summary: new analysis", comments["value"])
+        self.assertEqual(keywords["value"], "kitchen, interview, answer")
+        self.assertEqual(keywords["added"], ["answer"])
+        self.assertFalse(scene["changed"])
+        self.assertEqual(scene["reason"], "preserved_existing_fill_empty_field")
+
+    def test_publish_metadata_provenance_uses_namespaced_third_party_keys(self):
+        provenance = _media_analysis_provenance_metadata(
+            {
+                "analysis_version": "0.1",
+                "analysis_signature": {"signature_hash": "abc123"},
+            },
+            "/tmp/analysis.json",
+            ["Description", "Keywords"],
+        )
+
+        self.assertEqual(provenance["davinci_resolve_mcp.analysis_signature"], "abc123")
+        self.assertEqual(provenance["davinci_resolve_mcp.analysis_report_path"], "/tmp/analysis.json")
+        self.assertIn("Description", provenance["davinci_resolve_mcp.changed_fields"])
 
     def test_build_plan_reports_artifacts_under_project_root(self):
         with tempfile.TemporaryDirectory() as tmp:

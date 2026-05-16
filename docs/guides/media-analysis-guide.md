@@ -202,6 +202,66 @@ If you already have a detection result, pass it back as `detection` with
 `confirm=true`. Raw file-path detections cannot be marked in Resolve unless
 they are tied to Media Pool clips.
 
+### Publishing Analysis Back To Resolve Metadata
+
+Use `media_analysis(action="publish_clip_metadata")` when analysis should become
+searchable and usable inside Resolve's own Media Pool metadata views, smart bins,
+and filters.
+
+The publish step is a separate Resolve-project mutation. It does not modify
+source media, but it does write to the Resolve project database, so it defaults
+to `dry_run=true` and requires `confirm=true` before writing.
+
+Recommended dry-run:
+
+```json
+{
+  "action": "publish_clip_metadata",
+  "params": {
+    "target": "selected",
+    "fields": ["Description", "Comments", "Keywords", "People"],
+    "merge_policy": "append_relevant",
+    "vision": {"enabled": true, "provider": "chat_context"},
+    "slate_detection": {"enabled": true, "use_vision": true},
+    "dry_run": true
+  }
+}
+```
+
+After reviewing the proposed field changes, confirm only if the target clips and
+merge results are correct:
+
+```json
+{
+  "action": "publish_clip_metadata",
+  "params": {
+    "target": "selected",
+    "fields": ["Description", "Comments", "Keywords", "People", "Scene", "Shot", "Take", "Camera #"],
+    "merge_policy": "append_relevant",
+    "slate_detection": {"enabled": true, "use_vision": true},
+    "dry_run": false,
+    "confirm": true
+  }
+}
+```
+
+Field policies are conservative by default:
+
+- `Description` and `Comments` preserve existing text and update an MCP-owned
+  analysis block.
+- `Keywords` and `People` are list-merged with case-insensitive de-duplication.
+- `Scene`, `Shot`, `Take`, `Camera #`, and `Roll/Card` are fill-empty fields
+  unless the caller explicitly requests overwrite behavior.
+- Machine provenance is written to third-party metadata using
+  `davinci_resolve_mcp.*` keys so future runs can check report path, signature,
+  publish timestamp, publisher version, and changed fields.
+
+When slate detection is enabled, the helper first looks for likely slate claps
+with the source-safe sync detector. If a clap is found and chat-context vision is
+available, it samples temporary frames around the clap and extracts slate text.
+Only high-confidence slate values are proposed for structured fields; lower
+confidence reads stay in `Comments`.
+
 **Interlace Detection:**
 ```bash
 ffmpeg -i "INPUT_FILE" -vf idet -frames:v 500 -f null - 2>&1 | grep "idet"
@@ -388,7 +448,7 @@ When analysis reveals potential issues, always alert the user:
 
 ## Key Principles
 
-- **The source is sacred.** Read from source files, write only to analysis sidecars unless a visual analysis workflow needs sampled frames/contact sheets in a separate analysis directory. `analyze_media` can opt out with `include_visuals=false`.
+- **The source is sacred.** Read from source files, write only to analysis sidecars unless a visual analysis workflow needs sampled frames/contact sheets in a separate analysis directory. Confirmed metadata publishing writes to Resolve's project database, not source media. `analyze_media` can opt out with `include_visuals=false`.
 - **Respect file paths.** Use exact paths from Resolve or the filesystem.
 - **Cache analysis.** Skip re-analysis if the sidecar is newer than the source.
 - **Report clearly.** Present analysis to inform the user's next action within Resolve.

@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.21.0
+
+**Resolve metadata publishing from analysis** —
+`media_analysis.publish_clip_metadata` turns source-safe analysis reports into
+Resolve-native clip metadata. It proposes field-specific merges for
+`Description`, `Comments`, `Keywords`, `People`, and optional slate-derived
+fields, preserves existing human metadata by default, writes provenance to
+third-party metadata, and requires `confirm=true` before mutating Resolve.
+
+**Slate-aware metadata proposals** — Metadata publishing can reuse
+`detect_sync_events` slate-clap evidence and, when chat-context sampling is
+available, inspect frames around the clap for high-confidence slate fields before
+proposing `Scene`, `Shot`, `Take`, `Camera #`, and `Roll/Card` writes.
+
+**MCP update visibility** — The installer and both MCP server entrypoints now
+perform a best-effort GitHub release check, cache the result under `logs/`, and
+surface the local MCP version plus last update-check status from
+`resolve_control.get_version`. Checks are informational only and never install
+code automatically.
+
+**Validation**: static/import checks, API parity audit, focused media-analysis,
+sync-event, and update-check unit tests passed. Live validation used DaVinci
+Resolve Studio 20.3.2.9 through the active Resolve script runner with disposable
+projects and synthetic media only. `tests/live_metadata_publish_validation.py`
+verified dry-run previews, confirmed metadata writes, human metadata
+preservation, keyword merging, third-party provenance, and cleanup;
+`tests/live_sync_event_validation.py` revalidated 2-pop/slate-clap detection and
+confirmed marker writes.
+
 ## What's New in v2.20.0
 
 **Sync event detection helper** — `media_analysis.detect_sync_events` detects

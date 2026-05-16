@@ -23,9 +23,11 @@ import sys
 import textwrap
 from pathlib import Path
 
+from src.utils.update_check import check_for_updates
+
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.20.0"
+VERSION = "2.21.0"
 
 # ─── Colors (disabled on Windows cmd without ANSI support) ────────────────────
 
@@ -531,6 +533,30 @@ def print_step(num, total, text):
     print(f"  {'─' * 50}")
 
 
+def print_update_status(project_dir):
+    """Best-effort installer update notice."""
+    result = check_for_updates(VERSION, project_dir, timeout=2.0)
+    status = result.get("status")
+    if status == "update_available":
+        version_note = dim(
+            f"v{result.get('current_version')} -> v{result.get('latest_version')}"
+        )
+        release_note = dim(f"Latest release: {result.get('release_url')}")
+        print(
+            f"  MCP Update: {yellow('Available')} "
+            f"{version_note}"
+        )
+        print(f"  {release_note}")
+    elif status == "up_to_date":
+        print(f"  MCP Update: {green('Up to date')} {dim(f'v{VERSION}')}")
+    elif status == "current_ahead":
+        print(f"  MCP Update: {green('Local build ahead of latest release')} {dim(f'v{VERSION}')}")
+    elif status == "disabled":
+        print(f"  MCP Update: {dim('Check disabled')}")
+    elif status == "error":
+        print(f"  MCP Update: {yellow('Could not check')} {dim(str(result.get('error', '')))}")
+
+
 def prompt_yes_no(question, default=True):
     """Prompt for yes/no with a default."""
     suffix = "[Y/n]" if default else "[y/N]"
@@ -651,6 +677,7 @@ def main():
         print_step(1, total_steps, "Detecting Platform & DaVinci Resolve")
 
     print(f"  Platform:  {bold(platform_name())} ({platform.machine()})")
+    print_update_status(project_dir)
 
     api_path, lib_path = find_resolve_paths()
 

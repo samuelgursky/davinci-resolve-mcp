@@ -23,6 +23,8 @@ python install.py
 
 The universal installer auto-detects your platform, finds your DaVinci Resolve installation, creates a virtual environment, and configures your MCP client — all in one step.
 
+The installer and MCP server perform a best-effort update check against the latest GitHub release. The server check runs in the background, is throttled to once every 24 hours, and never installs code automatically. Set `DAVINCI_RESOLVE_MCP_UPDATE_CHECK=0` to disable it, or `DAVINCI_RESOLVE_MCP_UPDATE_INTERVAL_HOURS` to adjust the interval.
+
 ### Supported MCP Clients
 
 The installer can automatically configure any of these clients:
@@ -100,6 +102,8 @@ If you prefer to set things up yourself, add to your MCP client config:
 ```
 
 On Windows, installer-generated configs also include `PYTHONHOME`. That scopes Resolve's Python binding to the selected interpreter and avoids the Resolve 20.3 multi-Python crash reported in [Issue #26](https://github.com/samuelgursky/davinci-resolve-mcp/issues/26).
+
+When the compound server is running, `resolve_control(action="get_version")` includes the local MCP version and the last update-check status under the `mcp` key.
 
 Platform-specific paths:
 

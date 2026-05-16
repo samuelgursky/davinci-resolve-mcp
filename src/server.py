@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 329-tool granular server instead
 """
 
-VERSION = "2.20.0"
+VERSION = "2.21.0"
 
 import base64
 import os
@@ -21,6 +21,7 @@ import logging
 import math
 import platform
 import re
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -42,6 +43,10 @@ for p in [current_dir, project_dir]:
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.mcp_stdio import run_fastmcp_stdio
+from src.utils.update_check import (
+    get_cached_update_status,
+    start_background_update_check,
+)
 from src.utils.media_analysis import (
     CHAT_CONTEXT_VISION_PROVIDERS,
     DEFAULT_VISION_ANALYSIS_PROMPT,
@@ -5523,6 +5528,734 @@ def _apply_sync_event_markers(proj, detection: Dict[str, Any], p: Dict[str, Any]
     }
 
 
+_MCP_METADATA_BLOCK_START = "[DaVinci Resolve MCP Analysis]"
+_MCP_METADATA_BLOCK_END = "[/DaVinci Resolve MCP Analysis]"
+_MCP_METADATA_PROVENANCE_PREFIX = "davinci_resolve_mcp."
+_MEDIA_ANALYSIS_DEFAULT_PUBLISH_FIELDS = ["Description", "Comments", "Keywords", "People"]
+_MEDIA_ANALYSIS_LIST_FIELDS = {"Keywords", "People"}
+_MEDIA_ANALYSIS_FILL_EMPTY_FIELDS = {"Scene", "Shot", "Take", "Camera #", "Camera", "Roll/Card", "Reel"}
+
+
+def _media_analysis_metadata_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    return str(value).strip()
+
+
+def _media_analysis_as_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw_items = value
+    else:
+        raw_items = re.split(r"[,;\n]+", str(value))
+    out: List[str] = []
+    seen = set()
+    for item in raw_items:
+        text = str(item).strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
+def _media_analysis_merge_lists(existing: Any, proposed: Any) -> Tuple[str, List[str]]:
+    existing_items = _media_analysis_as_list(existing)
+    merged = list(existing_items)
+    seen = {item.casefold() for item in merged}
+    added = []
+    for item in _media_analysis_as_list(proposed):
+        key = item.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+        added.append(item)
+    return ", ".join(merged), added
+
+
+def _media_analysis_replace_owned_block(existing: Any, body: Any) -> str:
+    existing_text = _media_analysis_metadata_text(existing)
+    body_text = _media_analysis_metadata_text(body)
+    block = f"{_MCP_METADATA_BLOCK_START}\n{body_text}\n{_MCP_METADATA_BLOCK_END}"
+    pattern = (
+        re.escape(_MCP_METADATA_BLOCK_START)
+        + r".*?"
+        + re.escape(_MCP_METADATA_BLOCK_END)
+    )
+    if re.search(pattern, existing_text, flags=re.DOTALL):
+        return re.sub(pattern, block, existing_text, flags=re.DOTALL).strip()
+    return f"{existing_text}\n\n{block}".strip() if existing_text else block
+
+
+def _media_analysis_confidence_rank(value: Any) -> int:
+    raw = str(value or "").strip().lower()
+    return {"none": 0, "low": 1, "medium": 2, "high": 3}.get(raw, 0)
+
+
+def _media_analysis_pick_nested(payload: Dict[str, Any], *paths: Tuple[str, ...]) -> Any:
+    for path in paths:
+        current: Any = payload
+        for key in path:
+            if not isinstance(current, dict) or key not in current:
+                current = None
+                break
+            current = current[key]
+        if current not in (None, "", [], {}):
+            return current
+    return None
+
+
+def _media_analysis_best_sync_event(detection: Optional[Dict[str, Any]], clip_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not isinstance(detection, dict):
+        return None
+    best = None
+    best_score = -1.0
+    for file_result in detection.get("files") or []:
+        if clip_id and file_result.get("clip_id") not in (None, clip_id):
+            continue
+        for event in file_result.get("events") or []:
+            if event.get("type") != "slate_clap":
+                continue
+            try:
+                score = float(event.get("confidence") or 0)
+            except (TypeError, ValueError):
+                score = 0.0
+            if score > best_score:
+                best_score = score
+                best = dict(event)
+                best["clip_id"] = file_result.get("clip_id")
+                best["clip_name"] = file_result.get("clip_name")
+    return best
+
+
+def _media_analysis_collect_slate_fields(report: Dict[str, Any], slate_review: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    slate_sources = []
+    if isinstance(slate_review, dict):
+        slate_sources.extend([
+            slate_review,
+            slate_review.get("fields") if isinstance(slate_review.get("fields"), dict) else {},
+            slate_review.get("slate") if isinstance(slate_review.get("slate"), dict) else {},
+        ])
+    visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
+    slate_sources.extend([
+        report.get("slate") if isinstance(report.get("slate"), dict) else {},
+        visual.get("slate") if isinstance(visual.get("slate"), dict) else {},
+    ])
+
+    field_aliases = {
+        "Scene": ("scene", "scene_number", "sceneNumber"),
+        "Shot": ("shot", "shot_number", "shotNumber"),
+        "Take": ("take", "take_number", "takeNumber"),
+        "Camera #": ("camera", "camera_id", "cameraId", "camera_number", "cameraNumber"),
+        "Roll/Card": ("roll", "reel", "card", "roll_card", "rollCard"),
+    }
+    collected: Dict[str, Any] = {}
+    confidence = _media_analysis_pick_nested(
+        slate_review or {},
+        ("confidence", "overall"),
+        ("confidence",),
+    ) or _media_analysis_pick_nested(
+        report,
+        ("slate", "confidence"),
+        ("visual", "slate", "confidence"),
+    )
+    collected["_confidence"] = confidence or "unknown"
+    for resolve_field, aliases in field_aliases.items():
+        for source in slate_sources:
+            if not isinstance(source, dict):
+                continue
+            for alias in aliases:
+                if source.get(alias) not in (None, ""):
+                    collected[resolve_field] = source.get(alias)
+                    break
+            if resolve_field in collected:
+                break
+    visible_text = _media_analysis_pick_nested(
+        slate_review or {},
+        ("visible_text",),
+        ("visibleText",),
+        ("slate", "visible_text"),
+        ("slate", "visibleText"),
+    ) or _media_analysis_pick_nested(report, ("visual", "content", "visible_text"))
+    if visible_text:
+        collected["_visible_text"] = visible_text
+    return collected
+
+
+def _media_analysis_report_metadata_candidates(
+    report: Dict[str, Any],
+    *,
+    detection: Optional[Dict[str, Any]] = None,
+    slate_review: Optional[Dict[str, Any]] = None,
+    fields: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    requested_fields = fields or list(_MEDIA_ANALYSIS_DEFAULT_PUBLISH_FIELDS)
+    visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
+    content = visual.get("content") if isinstance(visual.get("content"), dict) else {}
+    classification = visual.get("editorial_classification") if isinstance(visual.get("editorial_classification"), dict) else {}
+    editing_notes = visual.get("editing_notes") if isinstance(visual.get("editing_notes"), dict) else {}
+    shot_style = visual.get("shot_and_style") if isinstance(visual.get("shot_and_style"), dict) else {}
+    transcript = report.get("transcription") if isinstance(report.get("transcription"), dict) else {}
+
+    summary = (
+        visual.get("clip_summary")
+        or report.get("summary")
+        or (report.get("clip") or {}).get("clip_name")
+        or "Analyzed media clip"
+    )
+    comments = [f"Summary: {summary}"]
+    primary_use = classification.get("primary_use")
+    select_potential = classification.get("select_potential")
+    if primary_use and primary_use != "unknown":
+        use_line = f"Editorial use: {primary_use}"
+        if select_potential and select_potential != "unknown":
+            use_line += f" ({select_potential} select potential)"
+        comments.append(use_line)
+    if classification.get("reason"):
+        comments.append(f"Reason: {classification['reason']}")
+    best_moments = editing_notes.get("best_moments") or []
+    if best_moments:
+        comments.append("Best moments: " + "; ".join(_media_analysis_as_list(best_moments)[:4]))
+    qc_flags = list(report.get("technical_warnings") or []) + list(editing_notes.get("qc_flags") or [])
+    if qc_flags:
+        comments.append("Warnings: " + "; ".join(_media_analysis_as_list(qc_flags)[:6]))
+    visible_text = content.get("visible_text") or []
+    if visible_text:
+        comments.append("Visible text: " + "; ".join(_media_analysis_as_list(visible_text)[:5]))
+    if transcript.get("text"):
+        comments.append("Transcript excerpt: " + str(transcript["text"]).strip()[:240])
+
+    sync_event = _media_analysis_best_sync_event(detection, (report.get("clip") or {}).get("clip_id"))
+    if sync_event:
+        comments.append(
+            "Likely slate clap: "
+            f"{sync_event.get('time_seconds')}s"
+            + (f", frame {sync_event.get('frame')}" if sync_event.get("frame") is not None else "")
+            + (f", confidence {sync_event.get('confidence')}" if sync_event.get("confidence") is not None else "")
+        )
+
+    slate = _media_analysis_collect_slate_fields(report, slate_review)
+    if any(key in slate for key in ("Scene", "Shot", "Take", "Camera #")):
+        slate_bits = [
+            f"{key}: {slate[key]}"
+            for key in ("Scene", "Shot", "Take", "Camera #", "Roll/Card")
+            if slate.get(key) not in (None, "")
+        ]
+        comments.append("Slate read: " + ", ".join(slate_bits))
+    if slate.get("_visible_text"):
+        comments.append("Slate visible text: " + "; ".join(_media_analysis_as_list(slate["_visible_text"])[:5]))
+
+    keywords: List[Any] = []
+    keywords.extend(editing_notes.get("search_tags") or [])
+    if primary_use and primary_use != "unknown":
+        keywords.append(primary_use)
+    for key in ("actions", "objects", "locations", "notable_audio_context"):
+        keywords.extend(_media_analysis_as_list(content.get(key)))
+    keywords.extend(_media_analysis_as_list(shot_style.get("shot_sizes")))
+    keywords.extend(_media_analysis_as_list(shot_style.get("camera_motion")))
+    if sync_event:
+        keywords.append("slate clap")
+
+    people: List[Any] = []
+    for key in ("people", "people_names", "named_people", "identified_people"):
+        people.extend(_media_analysis_as_list(content.get(key)))
+    people.extend(_media_analysis_as_list(visual.get("people")))
+
+    candidates: Dict[str, Any] = {}
+    if "Description" in requested_fields:
+        candidates["Description"] = _media_analysis_metadata_text(summary)
+    if "Comments" in requested_fields:
+        candidates["Comments"] = "\n".join(_media_analysis_metadata_text(line) for line in comments if _media_analysis_metadata_text(line))
+    if "Keywords" in requested_fields:
+        candidates["Keywords"] = _media_analysis_as_list(keywords)
+    if "People" in requested_fields:
+        candidates["People"] = _media_analysis_as_list(people)
+    slate_confidence = slate.get("_confidence")
+    high_confidence_slate = _media_analysis_confidence_rank(slate_confidence) >= 3
+    for field in ("Scene", "Shot", "Take", "Camera #", "Roll/Card"):
+        if field in requested_fields and slate.get(field) not in (None, ""):
+            candidates[field] = _media_analysis_metadata_text(slate[field]) if high_confidence_slate else ""
+    return {
+        "fields": candidates,
+        "evidence": {
+            "summary": summary,
+            "sync_event": sync_event,
+            "slate": slate,
+            "slate_confidence": slate_confidence,
+        },
+    }
+
+
+def _media_analysis_merge_metadata_field(field: str, existing: Any, proposed: Any, p: Dict[str, Any]) -> Dict[str, Any]:
+    proposed_text = _media_analysis_metadata_text(proposed)
+    existing_text = _media_analysis_metadata_text(existing)
+    overwrite = _media_analysis_bool(p.get("overwrite"), False)
+    merge_policy = str(p.get("merge_policy") or p.get("mergePolicy") or "append_relevant").strip().lower()
+
+    if field in _MEDIA_ANALYSIS_LIST_FIELDS:
+        merged, added = _media_analysis_merge_lists(existing, proposed)
+        return {
+            "field": field,
+            "existing": existing_text,
+            "proposed": proposed,
+            "value": merged,
+            "changed": bool(added),
+            "reason": "deduped_append" if added else "no_new_values",
+            "added": added,
+        }
+
+    if not proposed_text:
+        return {
+            "field": field,
+            "existing": existing_text,
+            "proposed": proposed_text,
+            "value": existing_text,
+            "changed": False,
+            "reason": "no_confident_proposal",
+        }
+
+    if overwrite:
+        return {
+            "field": field,
+            "existing": existing_text,
+            "proposed": proposed_text,
+            "value": proposed_text,
+            "changed": proposed_text != existing_text,
+            "reason": "overwrite",
+        }
+
+    if field in _MEDIA_ANALYSIS_FILL_EMPTY_FIELDS:
+        if existing_text:
+            return {
+                "field": field,
+                "existing": existing_text,
+                "proposed": proposed_text,
+                "value": existing_text,
+                "changed": False,
+                "reason": "preserved_existing_fill_empty_field",
+            }
+        return {
+            "field": field,
+            "existing": existing_text,
+            "proposed": proposed_text,
+            "value": proposed_text,
+            "changed": True,
+            "reason": "filled_empty_field",
+        }
+
+    if field in {"Comments", "Description"} and (merge_policy in {"append_relevant", "append", "update_block"} or existing_text):
+        merged = _media_analysis_replace_owned_block(existing_text, proposed_text)
+        return {
+            "field": field,
+            "existing": existing_text,
+            "proposed": proposed_text,
+            "value": merged,
+            "changed": merged != existing_text,
+            "reason": "updated_mcp_block",
+        }
+
+    if existing_text:
+        return {
+            "field": field,
+            "existing": existing_text,
+            "proposed": proposed_text,
+            "value": existing_text,
+            "changed": False,
+            "reason": "preserved_existing",
+        }
+    return {
+        "field": field,
+        "existing": existing_text,
+        "proposed": proposed_text,
+        "value": proposed_text,
+        "changed": True,
+        "reason": "filled_empty_field",
+    }
+
+
+def _media_analysis_provenance_metadata(report: Dict[str, Any], report_path: Optional[str], changed_fields: List[str]) -> Dict[str, str]:
+    signature = report.get("analysis_signature") if isinstance(report.get("analysis_signature"), dict) else {}
+    payload = {
+        "analysis_report_path": report_path or "",
+        "analysis_signature": signature.get("signature_hash") or "",
+        "analysis_version": str(report.get("analysis_version") or ""),
+        "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "publisher_version": VERSION,
+        "changed_fields": ",".join(changed_fields),
+    }
+    return {
+        f"{_MCP_METADATA_PROVENANCE_PREFIX}{key}": value
+        for key, value in payload.items()
+        if value not in (None, "")
+    }
+
+
+async def _media_analysis_chat_context_slate_review(
+    record: Dict[str, Any],
+    sync_event: Optional[Dict[str, Any]],
+    slate_detection: Dict[str, Any],
+    ctx: Optional[Context],
+) -> Dict[str, Any]:
+    if not sync_event:
+        return {"success": True, "status": "skipped", "reason": "No slate-clap event detected."}
+    vision = slate_detection.get("vision") or {}
+    if not _media_analysis_bool(slate_detection.get("use_vision", slate_detection.get("useVision", vision.get("enabled"))), False):
+        return {"success": True, "status": "skipped", "reason": "Slate vision disabled."}
+    if not _media_analysis_sampling_capability(ctx):
+        return {
+            "success": False,
+            "status": "skipped",
+            "provider": vision.get("provider") or "chat_context",
+            "reason": "The MCP client for this request does not advertise sampling/createMessage support.",
+        }
+    source = record.get("file_path")
+    if not source or not os.path.isfile(source):
+        return {"success": False, "status": "skipped", "reason": f"Source media not found: {source}"}
+    if not shutil.which("ffmpeg"):
+        return {"success": False, "status": "skipped", "reason": "ffmpeg is required to sample slate frames."}
+
+    event_time = sync_event.get("time_seconds")
+    try:
+        event_time = float(event_time)
+    except (TypeError, ValueError):
+        return {"success": False, "status": "skipped", "reason": "Slate event did not include a numeric time_seconds."}
+
+    offsets = slate_detection.get("frame_offsets_seconds") or slate_detection.get("frameOffsetsSeconds") or [-1.0, -0.5, 0.0, 0.25]
+    if not isinstance(offsets, list):
+        offsets = [-1.0, -0.5, 0.0, 0.25]
+    temp_dir = tempfile.mkdtemp(prefix="davinci-resolve-mcp-slate-")
+    frame_payloads = []
+    try:
+        for index, offset in enumerate(offsets[:8]):
+            try:
+                offset_float = float(offset)
+            except (TypeError, ValueError):
+                continue
+            sample_time = max(0.0, event_time + offset_float)
+            frame_path = os.path.join(temp_dir, f"slate_{index:02d}.jpg")
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                f"{sample_time:.3f}",
+                "-i",
+                source,
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                frame_path,
+            ]
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+            if proc.returncode == 0 and os.path.isfile(frame_path):
+                with open(frame_path, "rb") as handle:
+                    frame_payloads.append({
+                        "time_seconds": sample_time,
+                        "offset_seconds": offset_float,
+                        "data": base64.b64encode(handle.read()).decode("ascii"),
+                    })
+        if not frame_payloads:
+            return {"success": False, "status": "skipped", "reason": "No slate frames could be sampled."}
+
+        content: List[Any] = [
+            mcp_types.TextContent(
+                type="text",
+                text=json.dumps({
+                    "task": "Check these frames around a detected slate clap. Read production slate text only when visible.",
+                    "clip": record,
+                    "sync_event": sync_event,
+                    "frame_count": len(frame_payloads),
+                }, indent=2, ensure_ascii=False),
+            )
+        ]
+        for index, frame in enumerate(frame_payloads, 1):
+            content.append(mcp_types.TextContent(
+                type="text",
+                text=(
+                    f"Slate sample {index}: time_seconds={frame['time_seconds']:.3f}, "
+                    f"offset_seconds={frame['offset_seconds']:.3f}"
+                ),
+            ))
+            content.append(mcp_types.ImageContent(type="image", data=frame["data"], mimeType="image/jpeg"))
+
+        prompt = str(slate_detection.get("prompt") or """Return only strict JSON.
+
+Inspect the provided frames around a detected slate clap. If a production slate
+or clapper is visible, transcribe only clearly visible text and extract fields.
+Do not guess unclear values.
+
+Use this schema:
+{
+  "success": true,
+  "provider": "chat_context",
+  "slate_visible": true,
+  "fields": {
+    "scene": "",
+    "shot": "",
+    "take": "",
+    "camera": "",
+    "roll": "",
+    "date": "",
+    "production": ""
+  },
+  "visible_text": [],
+  "confidence": {
+    "overall": "low|medium|high",
+    "scene": "low|medium|high",
+    "shot": "low|medium|high",
+    "take": "low|medium|high",
+    "camera": "low|medium|high"
+  },
+  "notes": ""
+}
+Do not include markdown fences or prose outside JSON.""")
+        result = await ctx.request_context.session.create_message(
+            [mcp_types.SamplingMessage(role="user", content=content)],
+            max_tokens=int(slate_detection.get("max_tokens") or 1000),
+            system_prompt=prompt,
+            include_context=_media_analysis_sampling_context(ctx, slate_detection.get("include_context")),
+            temperature=float(slate_detection.get("temperature", 0.1)),
+            related_request_id=ctx.request_id,
+        )
+        response_content = result.content
+        if not isinstance(response_content, mcp_types.TextContent):
+            return {
+                "success": False,
+                "status": "skipped",
+                "provider": "chat_context",
+                "reason": f"Sampling returned non-text content: {type(response_content).__name__}",
+            }
+        payload, err = _media_analysis_extract_json_text(response_content.text)
+        if err:
+            return {
+                "success": False,
+                "status": "invalid_response",
+                "provider": "chat_context",
+                "reason": err,
+                "raw_response": response_content.text[:4000],
+            }
+        payload.setdefault("success", True)
+        payload["provider"] = "chat_context"
+        payload["sync_event"] = sync_event
+        return payload
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+async def _publish_clip_metadata_from_analysis(
+    proj,
+    p: Dict[str, Any],
+    ctx: Optional[Context],
+) -> Dict[str, Any]:
+    mp = proj.GetMediaPool()
+    if not mp:
+        return _err("Failed to get MediaPool")
+    target = _media_analysis_target_dict(p.get("target"), p)
+    if str(target.get("type") or p.get("target_type") or "clip").strip().lower() == "file":
+        return _err("publish_clip_metadata requires Resolve Media Pool clips, not raw file targets")
+
+    records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p)
+    if target_err:
+        if warnings:
+            target_err["warnings"] = warnings
+        return target_err
+    assert records is not None
+
+    dry_run = _media_analysis_bool(p.get("dry_run"), True)
+    if not dry_run and not _media_analysis_confirmed(p):
+        dry_run = True
+        confirmation_required = True
+    else:
+        confirmation_required = False
+
+    project_name, project_id = _project_name_and_id(proj)
+    analysis_params = dict(p)
+    analysis_params["target"] = normalized_target
+    analysis_params["dry_run"] = False
+    if "persist" not in analysis_params and "session_only" not in analysis_params:
+        analysis_params["session_only"] = dry_run
+        analysis_params["persist"] = not dry_run
+    if dry_run and "cleanup_frames" not in analysis_params:
+        analysis_params["cleanup_frames"] = True
+
+    caps = detect_media_analysis_capabilities()
+    plan = build_media_analysis_plan(
+        project_name=project_name,
+        project_id=project_id,
+        records=records,
+        target=normalized_target,
+        params=analysis_params,
+        capabilities=caps,
+    )
+    if not plan.get("success"):
+        return plan
+    if plan.get("capability_gaps"):
+        return {
+            "success": False,
+            "error": "Cannot publish metadata because analysis has missing required capabilities",
+            "capability_gaps": plan.get("capability_gaps"),
+            "install_guidance": plan.get("install_guidance"),
+            "plan": plan,
+        }
+
+    async def vision_runner(record, motion, options, artifacts, capabilities):
+        return await _media_analysis_chat_context_vision(
+            record,
+            motion,
+            options,
+            artifacts,
+            capabilities,
+            ctx,
+        )
+
+    manifest = await execute_media_analysis_plan_async(
+        plan,
+        params=analysis_params,
+        capabilities=caps,
+        vision_runner=vision_runner,
+    )
+    if not manifest.get("success"):
+        return {"success": False, "manifest": manifest, "plan": plan}
+
+    reports_by_clip_id: Dict[str, Tuple[Dict[str, Any], Optional[str]]] = {}
+    for report in manifest.get("reports") or []:
+        clip_id = ((report.get("clip") or {}).get("clip_id"))
+        if clip_id:
+            reports_by_clip_id[str(clip_id)] = (report, None)
+    for row in manifest.get("clips") or []:
+        report_path = row.get("analysis_json")
+        if manifest.get("session_only") and manifest.get("artifacts_cleaned_up") and report_path and not os.path.isfile(report_path):
+            report_path = None
+        record = row.get("record") or {}
+        clip_id = record.get("clip_id")
+        if clip_id and str(clip_id) in reports_by_clip_id:
+            existing_report, _ = reports_by_clip_id[str(clip_id)]
+            reports_by_clip_id[str(clip_id)] = (existing_report, report_path)
+            continue
+        if clip_id and report_path and os.path.isfile(report_path):
+            try:
+                with open(report_path, "r", encoding="utf-8") as handle:
+                    reports_by_clip_id[str(clip_id)] = (json.load(handle), report_path)
+            except (OSError, json.JSONDecodeError):
+                pass
+
+    detection = None
+    slate_detection = dict(p.get("slate_detection") or p.get("slateDetection") or {})
+    if "vision" not in slate_detection and isinstance(p.get("vision"), dict):
+        slate_detection["vision"] = p.get("vision")
+    if _media_analysis_bool(slate_detection.get("enabled"), False):
+        detection_params = dict(p)
+        detection_params.update(slate_detection)
+        detection_params["target"] = normalized_target
+        detection_params.setdefault("prefer_event_type", "slate_clap")
+        detection = detect_media_sync_events(records, detection_params)
+
+    fields = p.get("fields") or list(_MEDIA_ANALYSIS_DEFAULT_PUBLISH_FIELDS)
+    if not isinstance(fields, list):
+        return _err("fields must be a list of Resolve metadata field names")
+    fields = [str(field) for field in fields if str(field).strip()]
+    include_provenance = _media_analysis_bool(p.get("include_provenance", p.get("includeProvenance")), True)
+    root = mp.GetRootFolder()
+    results = []
+    write_failures = []
+
+    for record in records:
+        clip_id = str(record.get("clip_id") or "")
+        clip = _find_clip(root, clip_id)
+        if not clip:
+            results.append({"clip_id": clip_id, "success": False, "error": "Clip not found for metadata write"})
+            write_failures.append(clip_id)
+            continue
+        report, report_path = reports_by_clip_id.get(clip_id, ({}, None))
+        if not report:
+            results.append({"clip_id": clip_id, "success": False, "error": "Analysis report not available"})
+            write_failures.append(clip_id)
+            continue
+
+        metadata, metadata_error = _safe_clip_call(clip, "GetMetadata", "")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        third_party, third_party_error = _safe_clip_call(clip, "GetThirdPartyMetadata", "")
+        third_party = third_party if isinstance(third_party, dict) else {}
+
+        sync_event = _media_analysis_best_sync_event(detection, clip_id)
+        slate_review = None
+        if sync_event and _media_analysis_bool(slate_detection.get("enabled"), False):
+            slate_review = await _media_analysis_chat_context_slate_review(record, sync_event, slate_detection, ctx)
+
+        candidate_payload = _media_analysis_report_metadata_candidates(
+            report,
+            detection=detection,
+            slate_review=slate_review,
+            fields=fields,
+        )
+        proposed_fields = candidate_payload["fields"]
+        field_results = []
+        writes: Dict[str, str] = {}
+        for field in fields:
+            merged = _media_analysis_merge_metadata_field(field, metadata.get(field, ""), proposed_fields.get(field), p)
+            field_results.append(merged)
+            if merged.get("changed"):
+                writes[field] = str(merged["value"])
+
+        provenance = _media_analysis_provenance_metadata(report, report_path, sorted(writes.keys())) if include_provenance else {}
+        row = {
+            "clip_id": clip_id,
+            "clip_name": record.get("clip_name"),
+            "success": True,
+            "dry_run": dry_run,
+            "metadata_error": metadata_error,
+            "third_party_metadata_error": third_party_error,
+            "analysis_report": report_path,
+            "fields": field_results,
+            "metadata_writes": writes,
+            "third_party_metadata_writes": provenance,
+            "evidence": candidate_payload.get("evidence"),
+            "slate_review": slate_review,
+        }
+        if not dry_run:
+            metadata_ok = True
+            third_party_ok = True
+            for field, value in writes.items():
+                try:
+                    metadata_ok = bool(clip.SetMetadata(field, value)) and metadata_ok
+                except Exception as exc:
+                    metadata_ok = False
+                    row.setdefault("write_errors", []).append({"field": field, "error": str(exc)})
+            for key, value in provenance.items():
+                try:
+                    third_party_ok = bool(clip.SetThirdPartyMetadata(key, value)) and third_party_ok
+                except Exception as exc:
+                    third_party_ok = False
+                    row.setdefault("write_errors", []).append({"third_party_key": key, "error": str(exc)})
+            row["success"] = metadata_ok and third_party_ok
+            if not row["success"]:
+                write_failures.append(clip_id)
+        results.append(row)
+
+    return {
+        "success": not write_failures,
+        "dry_run": dry_run,
+        "confirmation_required": confirmation_required,
+        "target": normalized_target,
+        "clip_count": len(records),
+        "changed_clip_count": sum(1 for row in results if row.get("metadata_writes")),
+        "results": results,
+        "warnings": warnings,
+        "analysis_manifest": manifest,
+        "sync_detection": detection,
+    }
+
+
 def _media_pool_item_probe(clip):
     metadata, metadata_error = _safe_clip_call(clip, "GetMetadata", "")
     third_party, third_party_error = _safe_clip_call(clip, "GetThirdPartyMetadata", "")
@@ -6261,7 +6994,15 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return _err("Could not connect to DaVinci Resolve after auto-launch attempt. Check that Resolve Studio is installed.")
 
     if action == "get_version":
-        return {"product": r.GetProductName(), "version": r.GetVersion(), "version_string": r.GetVersionString()}
+        return {
+            "product": r.GetProductName(),
+            "version": r.GetVersion(),
+            "version_string": r.GetVersionString(),
+            "mcp": {
+                "version": VERSION,
+                "update": get_cached_update_status(project_dir, VERSION),
+            },
+        }
     elif action == "get_page":
         return {"page": r.GetCurrentPage()}
     elif action == "open_page":
@@ -8338,7 +9079,7 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
 
 @mcp.tool()
 async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, ctx: Optional[Context] = None) -> Dict[str, Any]:
-    """Project-scoped read-only media analysis.
+    """Project-scoped media analysis and guarded metadata publishing.
 
     Actions:
       capabilities() -> {tools, transcription, vision}
@@ -8351,15 +9092,17 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       analyze_project(recursive?, dry_run?, session_only?, persist?) -> {clips, manifest}
       detect_sync_events(paths?|target?, event_types?, windows?) -> {files, alignment}
       add_sync_event_markers(target?|paths?|detections?, confirm?) -> {added, skipped}
+      publish_clip_metadata(target?, fields?, slate_detection?, dry_run?, confirm?) -> {results}
       review_timeline_markers(max_samples?, analysis_root?, vision?) -> {path, samples, vision_review?}
       summarize(analysis_root?) -> project summary from existing clip reports
       get_report(report_path?) -> load manifest or a report under the analysis root
       cleanup_artifacts(frames_only=true) -> remove generated frame artifacts only
 
-    All planned outputs stay under a davinci-resolve-mcp-analysis project root
+    Analysis outputs stay under a davinci-resolve-mcp-analysis project root
     and are validated so they are never written beside source media. Executed
     file/clip analysis defaults to session-only: scratch artifacts are removed
     after structured reports are returned unless persist=true or keep_artifacts=true.
+    publish_clip_metadata is a separate confirmed Resolve-project metadata write.
     Set vision={enabled:true, provider:"chat_context"} to request visual
     analysis from the MCP client's current chat/sampling model when supported.
     """
@@ -8478,6 +9221,9 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 detection["warnings"] = warnings + list(detection.get("warnings") or [])
         return _apply_sync_event_markers(proj, detection, p)
 
+    if action == "publish_clip_metadata":
+        return await _publish_clip_metadata_from_analysis(proj, p, ctx)
+
     if action in {"analyze_file", "analyze_clip", "analyze_bin", "analyze_project"}:
         dry_run_default = action in {"analyze_bin", "analyze_project"}
         p["dry_run"] = _media_analysis_bool(p.get("dry_run"), dry_run_default)
@@ -8571,6 +9317,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "analyze_project",
         "detect_sync_events",
         "add_sync_event_markers",
+        "publish_clip_metadata",
         "review_timeline_markers",
         "summarize",
         "get_report",
@@ -12727,6 +13474,8 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    start_background_update_check(VERSION, project_dir, logger)
+
     # Support --full flag to run the 329-tool granular server instead
     if "--full" in sys.argv:
         logger.info("Starting full 329-tool granular server...")

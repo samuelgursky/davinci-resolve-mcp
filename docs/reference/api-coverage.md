@@ -7,7 +7,7 @@ Complete Resolve scripting API coverage, live-test status, and method-by-method 
 | Metric | Value |
 |--------|-------|
 | MCP Tools | **31** compound (default) / **329** granular |
-| Kernel Actions | **134** guarded MCP workflow actions across 9 compound tools |
+| Kernel Actions | **135** guarded MCP workflow actions across 9 compound tools |
 | API Methods Covered | **336/336** (100%) |
 | Methods Live Tested | **331/336** (98.5%) |
 | Live Test Pass Rate | **331/331** (100%) |
@@ -26,7 +26,9 @@ creation itself is not exposed by the scripting API. Similarly,
 `media_analysis.detect_sync_events` is a source-safe FFmpeg/FFprobe helper for
 advisory 2-pop and slate-clap sync points; it is not a Resolve API method.
 `media_analysis.add_sync_event_markers` is a guarded marker-write helper and
-requires explicit confirmation.
+requires explicit confirmation. `media_analysis.publish_clip_metadata` bridges
+source-safe analysis reports back into Resolve clip metadata with dry-run
+previews, field-specific merge policies, and confirmed writes.
 
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|

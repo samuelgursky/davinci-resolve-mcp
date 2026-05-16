@@ -374,7 +374,7 @@ All actions require a `clip_id`.
 Key actions: `add(frame, color, name, note, duration)`, `get_all`, `delete_by_color(color)`,
 `delete_at_frame(frame)`, `add_flag(color)`, `get_flags`, `set_name(name)`
 
-**`media_analysis`** — Project-scoped read-only media intelligence.
+**`media_analysis`** — Project-scoped media intelligence and guarded metadata publishing.
 
 Media Analysis and editorial-assist actions (v2.17.0+) add source-safe planning,
 report reuse, session-only execution, chat-context visual review, and
@@ -382,8 +382,9 @@ timeline-level editorial helpers.
 
 Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
 `analyze_file`, `analyze_clip`, `analyze_bin`, `analyze_project`,
-`detect_sync_events`, `add_sync_event_markers`, `summarize`, `get_report`,
-`review_timeline_markers`, and `cleanup_artifacts`. The tool never installs
+`detect_sync_events`, `add_sync_event_markers`, `publish_clip_metadata`,
+`summarize`, `get_report`, `review_timeline_markers`, and `cleanup_artifacts`.
+The tool never installs
 dependencies and validates that outputs stay under
 `davinci-resolve-mcp-analysis` project roots rather than beside source media.
 Executed file/clip analysis defaults to session-only: scratch artifacts are
@@ -415,6 +416,11 @@ source audio through FFmpeg/FFprobe only, returns advisory frames/timecodes and
 per-file `record_offset` suggestions, and never installs FFmpeg automatically.
 It also returns marker suggestions; only call `add_sync_event_markers` after the
 user explicitly approves marker writes, and pass `confirm=true`.
+Use `publish_clip_metadata` when the user wants analysis to become searchable
+inside Resolve. It analyzes or reuses reports, proposes field-specific merges
+for `Description`, `Comments`, `Keywords`, `People`, and optional slate-derived
+fields, stores provenance in third-party metadata, defaults to `dry_run=true`,
+and writes Resolve metadata only when called with `confirm=true`.
 `review_timeline_markers` creates a labeled
 Resolve-rendered marker contact sheet plus JSON sidecar, and can request
 chat-context vision for marker/frame mismatch review.
