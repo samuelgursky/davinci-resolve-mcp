@@ -61,7 +61,7 @@ The MCP server comes in two modes:
 
 | Mode | File | Tools | Best For |
 |------|------|-------|----------|
-| **Compound** (default) | `src/server.py` | 31 | Most users — fast, clean, low context usage |
+| **Compound** (default) | `src/server.py` | 32 | Most users — fast, clean, low context usage |
 | **Full** | `src/resolve_mcp_server.py` | 329 | Power users who want one tool per API method |
 
 The compound server's `timeline_item` tool includes dedicated actions for common workflows:
@@ -103,7 +103,51 @@ If you prefer to set things up yourself, add to your MCP client config:
 
 On Windows, installer-generated configs also include `PYTHONHOME`. That scopes Resolve's Python binding to the selected interpreter and avoids the Resolve 20.3 multi-Python crash reported in [Issue #26](https://github.com/samuelgursky/davinci-resolve-mcp/issues/26).
 
-When the compound server is running, `resolve_control(action="get_version")` includes the local MCP version and the last update-check status under the `mcp` key.
+When the compound server is running, `resolve_control(action="get_version")`
+includes the local MCP version, the last update-check status, and the current
+update decision under the `mcp` key. `resolve_control(action="mcp_update_status",
+params={"force_check": true})` performs an explicit foreground check.
+
+### MCP Update Policy
+
+The server keeps update checks non-interactive so MCP stdio startup remains safe
+for every client. The installer is the human-facing prompt surface: when a newer
+GitHub release is available, interactive installs can update now, continue,
+snooze for 24 hours, ignore that release, enable safe auto-update, or disable
+checks for the checkout.
+
+Safe auto-update only runs for clean git checkouts with a configured upstream,
+and applies `git fetch --tags --prune` followed by `git pull --ff-only`. If the
+checkout has local changes, no upstream, or a non-fast-forward update, the
+installer continues with the current build.
+
+Installer flags:
+
+```bash
+python install.py --update-now
+python install.py --update-policy prompt
+python install.py --update-policy auto
+python install.py --update-policy notify
+python install.py --update-policy never
+python install.py --clear-update-preferences
+```
+
+The same local defaults are available from chat through
+`setup(action="get_defaults")` and `setup(action="set_defaults")`. For example,
+`{"defaults":{"updates":{"mode":"notify"}}}` changes the MCP update policy
+without rerunning the installer. `updates.check_interval_hours` and
+`updates.snooze_hours` can also be set from the same setup tool; environment
+variables still take precedence when present.
+
+Environment controls:
+
+```bash
+DAVINCI_RESOLVE_MCP_UPDATE_CHECK=0
+DAVINCI_RESOLVE_MCP_UPDATE_MODE=prompt|auto|notify|never
+DAVINCI_RESOLVE_MCP_UPDATE_INTERVAL_HOURS=24
+DAVINCI_RESOLVE_MCP_UPDATE_SNOOZE_HOURS=24
+DAVINCI_RESOLVE_MCP_UPDATE_STATE=/path/to/update-check.json
+```
 
 Platform-specific paths:
 

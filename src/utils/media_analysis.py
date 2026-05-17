@@ -30,12 +30,20 @@ HIDDEN_ANALYSIS_DIR_NAME = ".davinci-resolve-mcp-analysis"
 ANALYSIS_VERSION = "0.1"
 COMMAND_TIMEOUT_SECONDS = 300
 CHAT_CONTEXT_VISION_PROVIDERS = {"chat_context", "mcp_sampling", "host_chat", "current_chat"}
+MARKER_PLAN_DEFAULT_COLORS = {
+    "shot": "Blue",
+    "best_moment": "Green",
+    "qc_warning": "Red",
+    "black_or_title": "Red",
+}
 
 DEFAULT_VISION_ANALYSIS_PROMPT = """Return only strict JSON for editorial media analysis.
 
 Use the full sequence of sampled keyframes plus the computed motion/variance
 evidence. Describe what changes across the clip; do not treat one frame as the
-whole clip unless only one frame was provided.
+whole clip unless only one frame was provided. If a slate or clapper is visible
+in any sampled frame, confirm it in the slate block and extract only clearly
+readable details. Do not infer slate fields from audio cues alone.
 
 Use this schema:
 {
@@ -61,6 +69,24 @@ Use this schema:
     "composition_notes": "",
     "lighting_mood": "",
     "color_mood": ""
+  },
+  "slate": {
+    "slate_visible": false,
+    "scene": "",
+    "shot": "",
+    "take": "",
+    "camera": "",
+    "roll": "",
+    "date": "",
+    "production": "",
+    "visible_text": [],
+    "confidence": {
+      "overall": "low|medium|high",
+      "scene": "low|medium|high",
+      "shot": "low|medium|high",
+      "take": "low|medium|high",
+      "camera": "low|medium|high"
+    }
   },
   "motion": {
     "overall_level": "low|medium|high|unknown",
@@ -367,6 +393,7 @@ def analysis_request_signature(
     """Return the cache signature for a requested analysis profile."""
     transcription = options.get("transcription") or {}
     vision = options.get("vision") or {}
+    marker_plan = options.get("marker_plan") or {}
     vision_prompt = vision.get("prompt") or DEFAULT_VISION_ANALYSIS_PROMPT
     return {
         "analysis_version": ANALYSIS_VERSION,
@@ -388,6 +415,11 @@ def analysis_request_signature(
                 "provider": vision.get("provider"),
                 "prompt_hash": _stable_json_hash(vision_prompt),
             },
+            "marker_plan": {
+                "enabled": _coerce_bool(marker_plan.get("enabled"), default=True),
+                "min_shot_duration_seconds": marker_plan.get("min_shot_duration_seconds"),
+                "colors_hash": _stable_json_hash(marker_plan.get("colors") or {}),
+            },
         },
         "signature_hash": _stable_json_hash({
             "analysis_version": ANALYSIS_VERSION,
@@ -404,6 +436,11 @@ def analysis_request_signature(
                 "enabled": _coerce_bool(vision.get("enabled"), default=False),
                 "provider": vision.get("provider"),
                 "prompt_hash": _stable_json_hash(vision_prompt),
+            },
+            "marker_plan": {
+                "enabled": _coerce_bool(marker_plan.get("enabled"), default=True),
+                "min_shot_duration_seconds": marker_plan.get("min_shot_duration_seconds"),
+                "colors_hash": _stable_json_hash(marker_plan.get("colors") or {}),
             },
         }),
     }
@@ -448,6 +485,7 @@ def _artifact_paths(project_root: str, record: Dict[str, Any], depth: str, optio
         "clip_dir": clip_dir,
         "analysis_json": os.path.join(clip_dir, "analysis.json"),
         "technical_json": os.path.join(clip_dir, "technical.json"),
+        "marker_plan_json": os.path.join(clip_dir, "clip_analysis_markers.json"),
     }
 
     if depth in {"standard", "deep", "custom"}:
@@ -524,6 +562,7 @@ def build_plan(
     options = {
         "transcription": params.get("transcription") or {},
         "vision": params.get("vision") or {},
+        "marker_plan": params.get("marker_plan") or params.get("markerPlan") or {},
     }
     gaps = _required_capability_gaps(depth, options, caps)
     frame_count = _bounded_frame_count(depth, params.get("max_analysis_frames"))
@@ -1132,6 +1171,8 @@ def _report_missing_layers(report: Dict[str, Any], depth: str, options: Dict[str
     missing = []
     if not report.get("technical"):
         missing.append("technical")
+    if not report.get("clip_analysis_markers"):
+        missing.append("marker_plan")
     if depth in {"standard", "deep", "custom"}:
         motion = report.get("motion") or {}
         readthrough = report.get("readthrough") or {}
@@ -1280,28 +1321,63 @@ def find_reusable_report(
     }
 
 
+def _normalize_word_timestamps(raw_words: Any) -> List[Dict[str, Any]]:
+    words: List[Dict[str, Any]] = []
+    if not isinstance(raw_words, list):
+        return words
+    for raw_word in raw_words:
+        if not isinstance(raw_word, dict):
+            continue
+        text = str(raw_word.get("word", raw_word.get("text", ""))).strip()
+        start = _parse_float(raw_word.get("start"))
+        end = _parse_float(raw_word.get("end"))
+        word: Dict[str, Any] = {
+            "word": text,
+            "start": start,
+            "end": end if end is not None else start,
+        }
+        for key in ("probability", "confidence", "score"):
+            value = _parse_float(raw_word.get(key))
+            if value is not None:
+                word[key] = value
+        words.append({key: value for key, value in word.items() if value not in (None, "")})
+    return words
+
+
 def _normalize_transcript_payload(raw: Dict[str, Any], backend: str, language: Optional[str] = None) -> Dict[str, Any]:
     segments = []
+    all_words: List[Dict[str, Any]] = []
     for segment in raw.get("segments") or []:
         start = _parse_float(segment.get("start")) or 0.0
         end = _parse_float(segment.get("end"))
         if end is None:
             end = start
-        segments.append({
+        normalized_segment = {
             "start": start,
             "end": end,
             "text": str(segment.get("text", "")).strip(),
-        })
+        }
+        words = _normalize_word_timestamps(segment.get("words"))
+        if words:
+            normalized_segment["words"] = words
+            all_words.extend(words)
+        segments.append(normalized_segment)
+    top_level_words = _normalize_word_timestamps(raw.get("words"))
+    if top_level_words:
+        all_words = top_level_words
     text = raw.get("text")
     if text is None:
         text = " ".join(segment.get("text", "") for segment in segments).strip()
-    return {
+    payload = {
         "success": True,
         "backend": backend,
         "language": raw.get("language") or language or "unknown",
         "text": text,
         "segments": segments,
     }
+    if all_words:
+        payload["words"] = all_words
+    return payload
 
 
 def _write_transcript_artifacts(payload: Dict[str, Any], artifacts: Dict[str, Any]) -> None:
@@ -1488,6 +1564,400 @@ def _vision_analysis(record: Dict[str, Any], motion: Dict[str, Any], options: Di
     return payload
 
 
+def _analysis_fps(record: Dict[str, Any], technical: Dict[str, Any]) -> float:
+    raw = record.get("fps") or record.get("frame_rate") or record.get("frameRate")
+    if raw not in (None, ""):
+        if isinstance(raw, str):
+            fraction = _fraction_to_float(raw)
+            if fraction:
+                return fraction
+            match = re.search(r"\d+(?:\.\d+)?", raw)
+            if match:
+                parsed = _parse_float(match.group(0))
+                if parsed:
+                    return parsed
+        parsed = _parse_float(raw)
+        if parsed:
+            return parsed
+    summary = technical.get("summary") if isinstance(technical.get("summary"), dict) else {}
+    for video in summary.get("video") or []:
+        parsed = _parse_float(video.get("frame_rate"))
+        if parsed:
+            return parsed
+    return 24.0
+
+
+def _seconds_to_frame(seconds: Optional[float], fps: float) -> Optional[int]:
+    if seconds is None:
+        return None
+    try:
+        return int(round(max(0.0, float(seconds)) * max(float(fps), 1.0)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _duration_frames(start_seconds: Optional[float], end_seconds: Optional[float], fps: float, *, fallback: int = 1) -> int:
+    if start_seconds is None or end_seconds is None:
+        return fallback
+    start_frame = _seconds_to_frame(start_seconds, fps)
+    end_frame = _seconds_to_frame(end_seconds, fps)
+    if start_frame is None or end_frame is None:
+        return fallback
+    return max(1, end_frame - start_frame)
+
+
+def _time_seconds_from_text(value: Any) -> Optional[float]:
+    if isinstance(value, dict):
+        for key in ("time_seconds", "timeSeconds", "start", "start_seconds", "startSeconds"):
+            parsed = _parse_float(value.get(key))
+            if parsed is not None:
+                return parsed
+        value = value.get("text") or value.get("note") or value.get("description")
+    raw = str(value or "")
+    colon = re.search(r"\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})([.,]\d+)?\b", raw)
+    if colon:
+        hours = int(colon.group(1) or 0)
+        minutes = int(colon.group(2))
+        seconds = int(colon.group(3))
+        fraction = float((colon.group(4) or "0").replace(",", "."))
+        return hours * 3600 + minutes * 60 + seconds + fraction
+    seconds_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds)\b", raw, flags=re.IGNORECASE)
+    if seconds_match:
+        return _parse_float(seconds_match.group(1))
+    return None
+
+
+def _trim_text(value: Any, limit: int = 280) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "..."
+
+
+def _ranges_overlap(
+    start_a: Optional[float],
+    end_a: Optional[float],
+    start_b: Optional[float],
+    end_b: Optional[float],
+) -> bool:
+    if start_a is None:
+        start_a = 0.0
+    if start_b is None:
+        start_b = 0.0
+    if end_a is None:
+        end_a = start_a
+    if end_b is None:
+        end_b = start_b
+    return max(start_a, start_b) <= min(end_a, end_b)
+
+
+def _transcript_words_from_payload(transcript: Dict[str, Any]) -> List[Dict[str, Any]]:
+    words = transcript.get("words") if isinstance(transcript.get("words"), list) else []
+    if words:
+        return [word for word in words if isinstance(word, dict)]
+    out: List[Dict[str, Any]] = []
+    segments = transcript.get("segments") if isinstance(transcript.get("segments"), list) else []
+    for segment in segments:
+        if isinstance(segment, dict) and isinstance(segment.get("words"), list):
+            out.extend(word for word in segment["words"] if isinstance(word, dict))
+    return out
+
+
+def _transcript_excerpt_for_range(transcript: Dict[str, Any], start: Optional[float], end: Optional[float]) -> str:
+    words = _transcript_words_from_payload(transcript)
+    if words:
+        selected_words = []
+        for word in words:
+            if not isinstance(word, dict):
+                continue
+            word_start = _parse_float(word.get("start"))
+            word_end = _parse_float(word.get("end"))
+            if _ranges_overlap(start, end, word_start, word_end):
+                selected_words.append(str(word.get("word") or "").strip())
+        if selected_words:
+            return _trim_text(" ".join(word for word in selected_words if word), 280)
+
+    segments = transcript.get("segments") if isinstance(transcript.get("segments"), list) else []
+    selected_segments = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        seg_start = _parse_float(segment.get("start"))
+        seg_end = _parse_float(segment.get("end"))
+        if _ranges_overlap(start, end, seg_start, seg_end):
+            selected_segments.append(str(segment.get("text") or "").strip())
+    return _trim_text(" ".join(text for text in selected_segments if text), 280)
+
+
+def _visual_description_for_time(vision: Dict[str, Any], start: Optional[float], end: Optional[float]) -> str:
+    keyframes = vision.get("analysis_keyframes") if isinstance(vision.get("analysis_keyframes"), list) else []
+    midpoint = None
+    if start is not None and end is not None:
+        midpoint = (float(start) + float(end)) / 2.0
+    elif start is not None:
+        midpoint = float(start)
+    best = None
+    best_distance = None
+    for keyframe in keyframes:
+        if not isinstance(keyframe, dict):
+            continue
+        description = keyframe.get("description") or keyframe.get("visual_description")
+        if not description:
+            continue
+        frame_time = _parse_float(keyframe.get("time_seconds"))
+        distance = abs((frame_time or 0.0) - (midpoint or frame_time or 0.0))
+        if best_distance is None or distance < best_distance:
+            best = description
+            best_distance = distance
+    if best:
+        return _trim_text(best, 360)
+    if vision.get("clip_summary"):
+        return _trim_text(vision.get("clip_summary"), 360)
+    return "Visual description unavailable from this analysis pass."
+
+
+def _shot_ranges_from_scenes(
+    duration: Optional[float],
+    scene_items: List[Dict[str, Any]],
+    *,
+    min_duration_seconds: float = 0.75,
+) -> List[Dict[str, Any]]:
+    scene_times = []
+    for item in scene_items:
+        if not isinstance(item, dict):
+            continue
+        t = _parse_float(item.get("time_seconds"))
+        if t is None or t <= 0:
+            continue
+        if duration is not None and t >= duration:
+            continue
+        scene_times.append(t)
+    scene_times = sorted(set(round(t, 3) for t in scene_times))
+
+    if duration is not None and duration > 0:
+        boundaries = [0.0]
+        for t in scene_times:
+            if t - boundaries[-1] >= min_duration_seconds:
+                boundaries.append(t)
+        if duration - boundaries[-1] >= 0.05:
+            boundaries.append(float(duration))
+        if len(boundaries) < 2:
+            boundaries = [0.0, float(duration)]
+        return [
+            {"index": index + 1, "start": boundaries[index], "end": boundaries[index + 1]}
+            for index in range(len(boundaries) - 1)
+        ]
+
+    if scene_times:
+        starts = [0.0] + scene_times
+        return [
+            {"index": index + 1, "start": start, "end": starts[index + 1] if index + 1 < len(starts) else None}
+            for index, start in enumerate(starts)
+        ]
+    return [{"index": 1, "start": 0.0, "end": duration}]
+
+
+def _marker_sound_note(transcript: Dict[str, Any], readthrough: Dict[str, Any], start: Optional[float], end: Optional[float]) -> Tuple[str, str]:
+    transcript_text = _transcript_excerpt_for_range(transcript, start, end)
+    if transcript_text:
+        return f"Transcript: {transcript_text}", transcript_text
+    silence_items = ((readthrough.get("silence") or {}).get("items") or []) if isinstance(readthrough.get("silence"), dict) else []
+    for item in silence_items:
+        if isinstance(item, dict) and _ranges_overlap(start, end, _parse_float(item.get("start")), _parse_float(item.get("end"))):
+            return "Sound: detected silence or very low-level audio in this range.", ""
+    return "Sound: no transcript excerpt available for this range.", ""
+
+
+def _build_marker_entry(
+    *,
+    marker_id: str,
+    marker_type: str,
+    color: str,
+    name: str,
+    start: Optional[float],
+    end: Optional[float],
+    fps: float,
+    visual_description: str,
+    sound_note: str,
+    transcript_text: str = "",
+    source: str,
+    confidence: str = "computed",
+    subtype: Optional[str] = None,
+) -> Dict[str, Any]:
+    payload = {
+        "id": marker_id,
+        "type": marker_type,
+        "subtype": subtype,
+        "color": color,
+        "name": name,
+        "start_seconds": start,
+        "end_seconds": end,
+        "start_frame": _seconds_to_frame(start, fps),
+        "duration_frames": _duration_frames(start, end, fps),
+        "visual_description": visual_description,
+        "sound_note": sound_note,
+        "transcript_text": transcript_text,
+        "source": source,
+        "confidence": confidence,
+        "write_to_resolve": False,
+    }
+    return {key: value for key, value in payload.items() if value not in (None, "")}
+
+
+def _build_clip_marker_plan(
+    record: Dict[str, Any],
+    technical: Dict[str, Any],
+    readthrough: Dict[str, Any],
+    motion: Dict[str, Any],
+    transcript: Dict[str, Any],
+    vision: Dict[str, Any],
+    *,
+    options: Dict[str, Any],
+    analysis_signature: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    fps = _analysis_fps(record, technical)
+    duration = _media_duration_seconds(record, technical)
+    marker_options = options.get("marker_plan") if isinstance(options.get("marker_plan"), dict) else {}
+    min_shot_duration = _parse_float(marker_options.get("min_shot_duration_seconds"))
+    if min_shot_duration is None:
+        min_shot_duration = 0.75
+    color_scheme = {
+        **MARKER_PLAN_DEFAULT_COLORS,
+        **({
+            str(key): str(value)
+            for key, value in marker_options.get("colors", {}).items()
+            if value not in (None, "")
+        } if isinstance(marker_options.get("colors"), dict) else {}),
+    }
+    markers: List[Dict[str, Any]] = []
+    untimed_notes: List[Dict[str, Any]] = []
+    scene_items = ((readthrough.get("scenes") or {}).get("items") or []) if isinstance(readthrough.get("scenes"), dict) else []
+    for shot in _shot_ranges_from_scenes(duration, scene_items, min_duration_seconds=float(min_shot_duration)):
+        start = _parse_float(shot.get("start"))
+        end = _parse_float(shot.get("end"))
+        sound_note, transcript_text = _marker_sound_note(transcript, readthrough, start, end)
+        markers.append(_build_marker_entry(
+            marker_id=f"shot-{int(shot['index']):03d}",
+            marker_type="shot",
+            color=color_scheme["shot"],
+            name=f"Shot {int(shot['index']):03d}",
+            start=start,
+            end=end,
+            fps=fps,
+            visual_description=_visual_description_for_time(vision, start, end),
+            sound_note=sound_note,
+            transcript_text=transcript_text,
+            source="scene_detection",
+        ))
+
+    black_items = ((readthrough.get("black_frames") or {}).get("items") or []) if isinstance(readthrough.get("black_frames"), dict) else []
+    for index, item in enumerate(black_items, 1):
+        if not isinstance(item, dict):
+            continue
+        start = _parse_float(item.get("start"))
+        end = _parse_float(item.get("end"))
+        sound_note, transcript_text = _marker_sound_note(transcript, readthrough, start, end)
+        markers.append(_build_marker_entry(
+            marker_id=f"black-or-title-{index:03d}",
+            marker_type="qc_warning",
+            subtype="black_or_title",
+            color=color_scheme["black_or_title"],
+            name="QC: Black/Very Dark Range",
+            start=start,
+            end=end,
+            fps=fps,
+            visual_description=(
+                "Detected black or very dark picture. Review as true black, scanned tape black, "
+                "dropout, or title fade before using as an edit point."
+            ),
+            sound_note=sound_note,
+            transcript_text=transcript_text,
+            source="blackdetect",
+            confidence="computed",
+        ))
+
+    editing_notes = vision.get("editing_notes") if isinstance(vision.get("editing_notes"), dict) else {}
+    for index, item in enumerate(editing_notes.get("best_moments") or [], 1):
+        start = _time_seconds_from_text(item)
+        if start is None:
+            untimed_notes.append({"type": "best_moment", "note": _trim_text(item), "reason": "missing_time"})
+            continue
+        end = min(start + 1.0, duration) if duration else start + 1.0
+        sound_note, transcript_text = _marker_sound_note(transcript, readthrough, start, end)
+        markers.append(_build_marker_entry(
+            marker_id=f"best-moment-{index:03d}",
+            marker_type="best_moment",
+            color=color_scheme["best_moment"],
+            name="Best Moment",
+            start=start,
+            end=end,
+            fps=fps,
+            visual_description=_visual_description_for_time(vision, start, end),
+            sound_note=sound_note or _trim_text(item),
+            transcript_text=transcript_text,
+            source="visual_editing_notes",
+            confidence="model_suggested",
+        ))
+
+    qc_sources = list(technical.get("summary", {}).get("warnings") or []) + list(editing_notes.get("qc_flags") or [])
+    for index, item in enumerate(qc_sources, 1):
+        start = _time_seconds_from_text(item)
+        if start is None:
+            untimed_notes.append({"type": "qc_warning", "note": _trim_text(item), "reason": "missing_time"})
+            continue
+        end = min(start + 1.0, duration) if duration else start + 1.0
+        sound_note, transcript_text = _marker_sound_note(transcript, readthrough, start, end)
+        markers.append(_build_marker_entry(
+            marker_id=f"qc-warning-{index:03d}",
+            marker_type="qc_warning",
+            color=color_scheme["qc_warning"],
+            name="QC Warning",
+            start=start,
+            end=end,
+            fps=fps,
+            visual_description=_visual_description_for_time(vision, start, end),
+            sound_note=sound_note,
+            transcript_text=transcript_text,
+            source="analysis_warning",
+            confidence="model_suggested",
+        ))
+
+    markers.sort(key=lambda row: (float(row.get("start_seconds") or 0.0), row.get("type") or "", row.get("id") or ""))
+    words = _transcript_words_from_payload(transcript)
+    return {
+        "success": True,
+        "schema": "davinci_resolve_mcp.clip_analysis_markers.v1",
+        "analysis_version": ANALYSIS_VERSION,
+        "analysis_signature": analysis_signature or {},
+        "clip": record,
+        "fps": fps,
+        "duration_seconds": duration,
+        "color_scheme": color_scheme,
+        "write_to_resolve_default": False,
+        "resolve_marker_writeback": {
+            "optional": True,
+            "enabled": False,
+            "write_action": "publish_clip_metadata",
+            "required_flags": {"write_markers": True, "confirm": True, "dry_run": False},
+        },
+        "transcript_index": {
+            "available": bool(transcript.get("text") or transcript.get("segments")),
+            "segments": len(transcript.get("segments") or []),
+            "word_timestamps": bool(words),
+            "words": len(words),
+        },
+        "timeline_occurrences": record.get("timeline_occurrences") or [],
+        "marker_count": len(markers),
+        "markers": markers,
+        "untimed_notes": untimed_notes,
+        "motion_summary": {
+            "overall_motion_level": motion.get("overall_motion_level"),
+            "average_frame_delta": motion.get("average_frame_delta"),
+            "max_frame_delta": motion.get("max_frame_delta"),
+        },
+    }
+
+
 def _synthesize_analysis(
     record: Dict[str, Any],
     technical: Dict[str, Any],
@@ -1500,6 +1970,7 @@ def _synthesize_analysis(
     options: Optional[Dict[str, Any]] = None,
     frame_count: int = 0,
     analysis_signature: Optional[Dict[str, Any]] = None,
+    marker_plan: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     warnings = []
     if technical.get("summary", {}).get("warnings"):
@@ -1537,6 +2008,7 @@ def _synthesize_analysis(
         "transcription": transcript,
         "visual": vision,
         "analysis_keyframes": motion.get("analysis_keyframes", []),
+        "clip_analysis_markers": marker_plan or {},
     }
 
 
@@ -1583,6 +2055,7 @@ async def execute_plan_async(
     options = {
         "transcription": params.get("transcription") or {},
         "vision": params.get("vision") or {},
+        "marker_plan": params.get("marker_plan") or params.get("markerPlan") or {},
     }
     keep_frame_artifacts_for_vision = vision_uses_chat_context(options, caps)
     depth = plan.get("depth", DEFAULT_DEPTH)
@@ -1652,6 +2125,19 @@ async def execute_plan_async(
         transcript = _transcribe(source, artifacts, options, caps)
         vision = await _maybe_run_vision_analysis(record, motion, options, artifacts, caps, vision_runner)
         frame_count = int(clip_plan.get("analysis_keyframe_budget") or 0)
+        marker_plan = _build_clip_marker_plan(
+            record,
+            technical,
+            readthrough,
+            motion,
+            transcript,
+            vision,
+            options=options,
+            analysis_signature=clip_plan.get("analysis_signature"),
+        )
+        if artifacts.get("marker_plan_json"):
+            marker_plan["path"] = artifacts["marker_plan_json"]
+            _write_json(artifacts["marker_plan_json"], marker_plan)
         analysis = _synthesize_analysis(
             record,
             technical,
@@ -1663,11 +2149,17 @@ async def execute_plan_async(
             options=options,
             frame_count=frame_count,
             analysis_signature=clip_plan.get("analysis_signature"),
+            marker_plan=marker_plan,
         )
         _write_json(artifacts["analysis_json"], analysis)
         if _coerce_bool(params.get("cleanup_frames"), default=False) and artifacts.get("frames_dir"):
             shutil.rmtree(artifacts["frames_dir"], ignore_errors=True)
-        clip_result.update({"success": True, "analysis_json": artifacts["analysis_json"]})
+        clip_result.update({
+            "success": True,
+            "analysis_json": artifacts["analysis_json"],
+            "marker_plan_json": artifacts.get("marker_plan_json"),
+            "marker_count": marker_plan.get("marker_count"),
+        })
         manifest["clips"].append(clip_result)
 
     manifest["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

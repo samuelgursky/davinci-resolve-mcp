@@ -72,14 +72,65 @@ class UpdateCheckTests(unittest.TestCase):
 
     def test_check_for_updates_can_be_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "update.json"
             result = update_check.check_for_updates(
                 "2.20.0",
                 tmp,
-                env={update_check.ENV_ENABLED: "false"},
+                env={
+                    update_check.ENV_ENABLED: "false",
+                    update_check.ENV_STATE_PATH: str(state_path),
+                },
                 now=1000,
             )
 
-        self.assertEqual(result["status"], "disabled")
+            self.assertEqual(result["status"], "disabled")
+            self.assertFalse(state_path.exists())
+
+    def test_persisted_never_mode_disables_update_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "update.json"
+            env = {update_check.ENV_STATE_PATH: str(state_path)}
+            update_check.set_update_mode(tmp, "never", env=env, now=1000)
+
+            result = update_check.check_for_updates(
+                "2.20.0",
+                tmp,
+                env=env,
+                now=1001,
+            )
+
+            self.assertEqual(result["status"], "disabled")
+            self.assertEqual(result["update_mode"], "never")
+            self.assertEqual(json.loads(state_path.read_text())["update_mode"], "never")
+
+    def test_update_prompt_decision_respects_ignore_snooze_and_auto(self):
+        base = {
+            "status": "update_available",
+            "current_version": "2.20.0",
+            "latest_version": "2.21.0",
+            "latest_tag": "v2.21.0",
+            "update_mode": "prompt",
+        }
+
+        self.assertEqual(update_check.update_prompt_decision(base, now=1000)["action"], "prompt")
+        self.assertEqual(
+            update_check.update_prompt_decision(
+                {**base, "ignored_version": "2.21.0"},
+                now=1000,
+            )["reason"],
+            "ignored",
+        )
+        self.assertEqual(
+            update_check.update_prompt_decision(
+                {**base, "snooze_until": 2000},
+                now=1000,
+            )["reason"],
+            "snoozed",
+        )
+        self.assertEqual(
+            update_check.update_prompt_decision({**base, "update_mode": "auto"}, now=1000)["action"],
+            "auto",
+        )
 
     def test_network_error_preserves_last_success(self):
         with tempfile.TemporaryDirectory() as tmp:

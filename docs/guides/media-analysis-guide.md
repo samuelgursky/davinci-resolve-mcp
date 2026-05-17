@@ -250,17 +250,96 @@ Field policies are conservative by default:
 - `Description` and `Comments` preserve existing text and update an MCP-owned
   analysis block.
 - `Keywords` and `People` are list-merged with case-insensitive de-duplication.
-- `Scene`, `Shot`, `Take`, `Camera #`, and `Roll/Card` are fill-empty fields
+- `Scene`, `Shot`, `Take`, `Camera #`, and roll/card fields are fill-empty fields
   unless the caller explicitly requests overwrite behavior.
 - Machine provenance is written to third-party metadata using
   `davinci_resolve_mcp.*` keys so future runs can check report path, signature,
   publish timestamp, publisher version, and changed fields.
+- Source-time observations can optionally be written as Media Pool clip markers
+  by calling `publish_clip_metadata` with `write_markers=true`. This is off by
+  default; without that flag, best moments, sync events, and warnings remain in
+  the analysis JSON and metadata text rather than becoming Resolve markers.
+- If no timed-marker choice or saved default exists, `publish_clip_metadata`
+  returns a `timed_marker_prompt` with four choices: `yes`, `no`,
+  `default_yes`, and `default_no`. The default choices persist locally for
+  future publishes; actual Resolve writes still require `confirm=true`.
+- Conversation-level defaults can also be managed through
+  `setup(action="get_defaults")` and `setup(action="set_defaults")`. For
+  example, pass
+  `{"defaults":{"media_analysis":{"timed_markers_default":"default_no"}}}` to
+  make timed markers opt-in without waiting for the next publish prompt.
+  The setup tool also stores defaults for slate detection, chat-context vision,
+  transcription, session-only vs persisted reports, metadata field lists,
+  metadata overwrite policy, timed-marker types/colors/counts, confidence/time
+  note reporting, summary style, report format, preferred analysis roots,
+  generated-media folders, post-operation page preference, marker custom-data
+  style, and dry-run-first behavior. These defaults shape future analysis calls
+  but do not remove the `confirm=true` requirement for Resolve project writes.
 
-When slate detection is enabled, the helper first looks for likely slate claps
-with the source-safe sync detector. If a clap is found and chat-context vision is
-available, it samples temporary frames around the clap and extracts slate text.
-Only high-confidence slate values are proposed for structured fields; lower
-confidence reads stay in `Comments`.
+When slate detection is enabled, the helper first looks for likely audio clap
+cues with the source-safe sync detector, then checks temporary frames around the
+cue before publishing slate-specific metadata or markers. Audio-only detections
+remain sync evidence; they do not become slate keywords, slate comments, slate
+fields, or slate markers unless visual review confirms that a slate or clapper
+is actually present. Only high-confidence visual slate reads are proposed for
+structured fields; lower-confidence reads stay out of structured writeback.
+
+When visual analysis is requested for metadata publishing, `Description` and
+editorial `Comments` are generated from successful visual analysis rather than
+falling back to filename/duration/motion summaries. If the MCP client cannot
+provide chat-context vision for that request, the publish result reports the
+visual skip and leaves those descriptive fields unchanged.
+
+### Clip Marker JSON And Sequence Analysis
+
+Executed media analysis writes `clip_analysis_markers.json` beside each
+`analysis.json` report under the project analysis root. This JSON is the durable
+edit-intelligence layer: shot ranges, black/title/QC ranges, best moments, visual
+descriptions, sound notes, transcript excerpts, word-timestamp availability,
+color intent, and timeline occurrences when the clip came from a sequence.
+
+Resolve Media Pool clip markers are optional writeback, not the source of truth.
+Only `publish_clip_metadata` with marker writeback enabled and confirmed should
+add markers to the Resolve project. Analysis itself should produce JSON marker
+plans without mutating the project.
+
+Use `media_analysis(action="analyze_bin")` for a bin of source clips. Use
+`media_analysis(action="analyze_sequence")` or target `"sequence"`/`"timeline"`
+when the task is to understand an existing edit; the sequence target analyzes
+the distinct Media Pool assets used on the timeline and records each timeline
+occurrence as structured data for later cutdown, adjustment, or recommendation
+work.
+
+### Mapping Resolve Metadata Fields
+
+Use `media_pool(action="metadata_field_inventory")` before expanding metadata
+writeback beyond the default analysis fields. The probe is read-only and reports
+three distinct surfaces for selected or explicit Media Pool clips:
+
+- `GetMetadata("")`: project metadata values that have been explicitly written
+  or are otherwise exposed through Resolve's metadata API.
+- `GetClipProperty("")`: the larger clip-property map that usually mirrors the
+  fields visible in Resolve's Metadata panel.
+- Inferred Metadata-panel groups such as `Shot & Scene`, `Camera`, `Audio`,
+  `Production`, and `Reviewed By`.
+
+Resolve does not expose a guaranteed public schema for the Metadata panel group
+layout, and field names can differ subtly between the UI and scripting surfaces.
+For example, the UI may show `Keywords` while `GetClipProperty("")` exposes
+`Keyword`; live validation on Resolve Studio 20.3 showed that writeback should
+still call `SetMetadata("Keywords", value)`. Likewise, slate roll/card values
+should write to `Roll Card #` even when older helper code or UI/property maps use
+`Roll/Card`. The probe reports aliases and marks this group map as best-effort.
+
+For live validation against a disposable synthetic project, run:
+
+```bash
+venv/bin/python tests/live_metadata_field_inventory_validation.py --output-dir /tmp/resolve-metadata-field-probe
+```
+
+That harness compares `metadata_field_inventory`, `MediaPool.ExportMetadata()`,
+and `SetMetadata()` readback without touching user source media. Use a Resolve
+scripting-compatible Python 3.10-3.12 environment for the live run.
 
 **Interlace Detection:**
 ```bash

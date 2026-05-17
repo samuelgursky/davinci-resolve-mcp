@@ -100,7 +100,7 @@ before mutating Resolve state.
 
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
-| Compound (default) | `src/server.py` | 31 tools | Most workflows — keeps context lean |
+| Compound (default) | `src/server.py` | 32 tools | Most workflows — keeps context lean |
 | Granular (full) | `src/server.py --full` | 329 tools | Power users needing one tool per API method |
 
 This skill document covers the **compound server** (the default). Each compound
@@ -337,9 +337,10 @@ Media Pool / Ingest kernel actions (v2.8.0+) add safer agent-facing workflows:
 `ingest_capabilities`, `probe_media_pool`, `probe_ingest_item`,
 `safe_import_media`, `safe_import_sequence`, `safe_import_folder`,
 `organize_clips`, `copy_metadata`, `normalize_metadata`,
-`probe_clip_properties`, `safe_relink`, `safe_unlink`, `link_proxy_checked`,
-`link_full_resolution_checked`, `set_clip_marks`, `clear_clip_marks`,
-`copy_clip_annotations`, `setup_multicam_timeline`, and
+`probe_clip_properties`, `metadata_field_inventory`, `safe_relink`,
+`safe_unlink`, `link_proxy_checked`, `link_full_resolution_checked`,
+`set_clip_marks`, `clear_clip_marks`, `copy_clip_annotations`,
+`setup_multicam_timeline`, and
 `media_pool_boundary_report`. See
 `docs/kernels/media-pool-ingest-kernel.md` for the live-tested support map.
 
@@ -748,11 +749,20 @@ live-tested format/codec, settings, job, and Quick Export boundary map.
 ```
 resolve_control(action="launch")
 resolve_control(action="get_version")
+resolve_control(action="mcp_update_status")
+setup(action="get_defaults")
 resolve_control(action="get_page")
 ```
 
 Always call `launch` first in a new session. It is safe to call when Resolve is
 already running.
+
+Use `setup(action="schema")`, `setup(action="get_defaults")`, and
+`setup(action="set_defaults")` when the user wants durable conversation
+defaults for media analysis, metadata publishing, timed markers, report style,
+or MCP update behavior. Setup defaults may shape future tool parameters, but
+confirmed Resolve project writes still require the relevant action's explicit
+confirmation flag.
 
 ### 2. Open a project and navigate timelines
 

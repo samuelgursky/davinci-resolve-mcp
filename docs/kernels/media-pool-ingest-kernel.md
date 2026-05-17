@@ -27,6 +27,7 @@ All actions are under `media_pool(action=...)`.
 | `copy_metadata` | Supported | Copies Resolve metadata and optional third-party metadata from one clip to target clips. |
 | `normalize_metadata` | Supported | Bulk-writes explicit metadata and third-party metadata to clip IDs or selected clips. |
 | `probe_clip_properties` | Supported | Read-only full and known-key clip property snapshots. |
+| `metadata_field_inventory` | Supported | Read-only metadata, clip-property, and inferred Metadata-panel group inventory for selected or explicit clips. |
 | `safe_relink` | Supported | Validates clip IDs and target directory before `RelinkClips`; supports dry-run. |
 | `safe_unlink` | Supported | Validates clip IDs before `UnlinkClips`; supports dry-run. |
 | `link_proxy_checked` | Supported | Validates clip ID and proxy file path before `LinkProxyMedia`. |
@@ -75,7 +76,8 @@ params={"confirm": true, ...})`.
   on per-angle tracks via `AppendToTimeline([{clipInfo}])`, with stack-start,
   manual record-frame, or source-timecode planning.
 - Metadata: scalar and dict metadata writes, third-party metadata writes,
-  metadata copy, and explicit normalization.
+  metadata copy, explicit normalization, and field inventory for mapping
+  analysis writeback targets to Resolve metadata/clip-property surfaces.
 - Clip property probing: full snapshot plus known keys such as `File Path`,
   `Type`, `FPS`, `Duration`, `Resolution`, `Codec`, and audio fields.
 - Media Pool item annotations: markers, custom marker data, flags, clip color,

@@ -2,7 +2,7 @@
 """
 DaVinci Resolve MCP Server (Compound Tools)
 
-31 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
+32 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
 plus Fusion Fuse, DCTL, and Resolve-page Script authoring tools.
 Each tool groups related operations via an 'action' parameter.
 
@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 329-tool granular server instead
 """
 
-VERSION = "2.21.0"
+VERSION = "2.22.0"
 
 import base64
 import os
@@ -44,8 +44,16 @@ for p in [current_dir, project_dir]:
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.update_check import (
+    check_for_updates,
+    clear_update_prompt_preferences,
     get_cached_update_status,
+    get_update_mode,
+    ignore_update_version,
+    set_update_mode,
+    snooze_update_prompt,
     start_background_update_check,
+    update_prompt_decision,
+    update_state_path,
 )
 from src.utils.media_analysis import (
     CHAT_CONTEXT_VISION_PROVIDERS,
@@ -232,7 +240,7 @@ def davinci_resolve_workflow() -> str:
     return """Use this DaVinci Resolve MCP server as a guarded post-production control surface.
 
 Core pattern:
-- Prefer the 31 compound tools and their action names over raw scripting.
+- Prefer the 32 compound tools and their action names over raw scripting.
 - Start by probing state: resolve_control.get_version/get_page, project_manager.get_current, timeline.get_current, and media_pool.probe_media_pool.
 - Before mutating timelines, media pools, render settings, grades, projects, databases, or extensions, prefer the matching probe, capabilities, boundary_report, safe_*, or dry_run action when one exists.
 - Preserve source media integrity. Never transcode, proxy, rewrite, move, rename, or create derivatives of source media unless the user explicitly asks. Analysis output belongs in sidecars or analysis directories.
@@ -261,7 +269,7 @@ For one-off scripting:
 @mcp.prompt(
     name="analyze_media",
     title="Analyze Media",
-    description="Run a read-only DaVinci Resolve media-analysis workflow for a file, selected clip, bin, or whole project.",
+    description="Run a read-only DaVinci Resolve media-analysis workflow for a file, selected clip, bin, sequence/timeline, or whole project.",
 )
 def analyze_media(
     target: str = "project",
@@ -288,6 +296,7 @@ Workflow:
 3. Resolve the target:
    - "project": use media_analysis(action="analyze_project").
    - "selected" or "selected clip": use media_analysis(action="analyze_clip", params={{"selected": true}}).
+   - "timeline" or "sequence": use media_analysis(action="analyze_sequence", params={{"track_types": ["video", "audio"]}}).
    - "bin:<path>": use media_analysis(action="analyze_bin", params={{"path": "<path>", "recursive": true}}).
    - An absolute file path: use media_analysis(action="analyze_file", params={{"path": "<path>"}}).
 4. Before running new analysis, check memory:
@@ -4754,6 +4763,7 @@ _MEDIA_POOL_KERNEL_ACTIONS = [
     "copy_metadata",
     "normalize_metadata",
     "probe_clip_properties",
+    "metadata_field_inventory",
     "safe_relink",
     "safe_unlink",
     "link_proxy_checked",
@@ -5008,6 +5018,99 @@ def _media_analysis_dedupe_records(records: List[Dict[str, Any]], include_duplic
     return deduped, duplicate_count
 
 
+def _media_analysis_sequence_track_types(raw: Any) -> List[str]:
+    if raw in (None, "", []):
+        return ["video", "audio"]
+    if isinstance(raw, str):
+        values = re.split(r"[\s,]+", raw.strip())
+    elif isinstance(raw, list):
+        values = [str(value).strip() for value in raw]
+    else:
+        values = [str(raw).strip()]
+    out: List[str] = []
+    for value in values:
+        lower = value.lower()
+        if lower in {"all", "*"}:
+            return ["video", "audio", "subtitle"]
+        if lower in {"video", "audio", "subtitle"} and lower not in out:
+            out.append(lower)
+    return out or ["video", "audio"]
+
+
+def _media_analysis_timeline_records(project, target: Dict[str, Any], p: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any], List[str], Optional[Dict[str, Any]]]:
+    warnings: List[str] = []
+    if project is None:
+        return [], {}, warnings, _err("Resolve project is required for sequence/timeline targets")
+
+    timeline_index = target.get("timeline_index") or target.get("timelineIndex") or p.get("timeline_index") or p.get("timelineIndex")
+    if timeline_index not in (None, ""):
+        try:
+            tl = project.GetTimelineByIndex(int(timeline_index))
+        except Exception as exc:
+            return [], {}, warnings, _err(f"GetTimelineByIndex failed: {exc}")
+    else:
+        try:
+            tl = project.GetCurrentTimeline()
+        except Exception as exc:
+            return [], {}, warnings, _err(f"GetCurrentTimeline failed: {exc}")
+    if not tl:
+        return [], {}, warnings, _err("No current timeline for sequence analysis")
+
+    track_types = _media_analysis_sequence_track_types(
+        target.get("track_types") or target.get("trackTypes") or p.get("track_types") or p.get("trackTypes")
+    )
+    records_by_key: Dict[str, Dict[str, Any]] = {}
+    occurrence_count = 0
+    for track_type in track_types:
+        try:
+            track_count = int(tl.GetTrackCount(track_type) or 0)
+        except Exception as exc:
+            warnings.append(f"GetTrackCount failed for {track_type}: {exc}")
+            continue
+        for track_index in range(1, track_count + 1):
+            try:
+                items = tl.GetItemListInTrack(track_type, track_index) or []
+            except Exception as exc:
+                warnings.append(f"GetItemListInTrack failed for {track_type} {track_index}: {exc}")
+                continue
+            for item_index, item in enumerate(items):
+                occurrence_count += 1
+                media_pool_item = _timeline_item_media_pool_item(item)
+                summary = _timeline_item_summary(item, track_info=(track_type, track_index)) or {}
+                summary["item_index"] = item_index
+                if not media_pool_item:
+                    warnings.append(f"Skipping timeline item without Media Pool source: {summary.get('name') or summary.get('timeline_item_id')}")
+                    continue
+                record = _media_analysis_clip_record(media_pool_item)
+                if not record:
+                    continue
+                if not record.get("file_path"):
+                    warnings.append(f"Skipping timeline source without file path: {record.get('clip_name')}")
+                    continue
+                key = str(record.get("file_path") or record.get("media_id") or record.get("clip_id"))
+                if key not in records_by_key:
+                    record["timeline_occurrences"] = []
+                    records_by_key[key] = record
+                records_by_key[key].setdefault("timeline_occurrences", []).append(summary)
+
+    timeline_info = {
+        "name": None,
+        "id": None,
+        "track_types": track_types,
+        "occurrence_count": occurrence_count,
+        "asset_count": len(records_by_key),
+    }
+    try:
+        timeline_info["name"] = tl.GetName()
+    except Exception:
+        pass
+    try:
+        timeline_info["id"] = tl.GetUniqueId()
+    except Exception:
+        pass
+    return list(records_by_key.values()), timeline_info, warnings, None
+
+
 def _media_analysis_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -5031,6 +5134,8 @@ def _media_analysis_target_dict(raw_target: Any, p: Optional[Dict[str, Any]] = N
         lower = value.lower()
         if lower in {"project", "all", "all_media", "all media"}:
             return {"type": "project", "recursive": True}
+        if lower in {"timeline", "sequence", "current_timeline", "current timeline", "current_sequence", "current sequence"}:
+            return {"type": "sequence"}
         if lower in {"selected", "selected_clip", "selected clip", "current", "current clip"}:
             return {"type": "clip", "selected": True}
         if lower.startswith("bin:"):
@@ -5050,7 +5155,7 @@ def _media_analysis_target_dict(raw_target: Any, p: Optional[Dict[str, Any]] = N
         return {
             "_invalid_target": (
                 "Unsupported media_analysis target string. Use 'project', "
-                "'selected', 'bin:<path>', or an absolute file path."
+                "'selected', 'timeline', 'sequence', 'bin:<path>', or an absolute file path."
             )
         }
     return {"_invalid_target": f"target must be an object or string, got {type(raw_target).__name__}"}
@@ -5314,7 +5419,7 @@ async def _media_analysis_chat_context_image_review(
     return payload
 
 
-def _media_analysis_records_from_target(mp, p: Dict[str, Any]) -> Tuple[Optional[List[Dict[str, Any]]], Dict[str, Any], List[str], Optional[Dict[str, Any]]]:
+def _media_analysis_records_from_target(mp, p: Dict[str, Any], project=None) -> Tuple[Optional[List[Dict[str, Any]]], Dict[str, Any], List[str], Optional[Dict[str, Any]]]:
     target = _media_analysis_target_dict(p.get("target"), p)
     if target.get("_invalid_target"):
         return None, target, [], _err(target["_invalid_target"])
@@ -5341,10 +5446,16 @@ def _media_analysis_records_from_target(mp, p: Dict[str, Any]) -> Tuple[Optional
             "media_type": "file",
         }], target, warnings, None)
 
-    if mp is None:
-        return None, target, warnings, _err("Resolve Media Pool is required for clip, bin, and project targets")
+    if target_type in {"sequence", "timeline", "current_timeline", "current_sequence"}:
+        records, timeline_info, timeline_warnings, timeline_err = _media_analysis_timeline_records(project, target, p)
+        warnings.extend(timeline_warnings)
+        if timeline_err:
+            return None, target, warnings, timeline_err
+        target.update({"type": "sequence", "timeline": timeline_info})
+    elif mp is None:
+        return None, target, warnings, _err("Resolve Media Pool is required for clip, bin, project, and sequence targets")
 
-    if target_type == "clip":
+    elif target_type == "clip":
         clip_id = target.get("clip_id") or p.get("clip_id")
         selected = bool(target.get("selected") or p.get("selected"))
         clips = []
@@ -5385,7 +5496,7 @@ def _media_analysis_records_from_target(mp, p: Dict[str, Any]) -> Tuple[Optional
         warnings.extend(folder_warnings)
         target.update({"type": "project", "recursive": recursive})
     else:
-        return None, target, warnings, _err("target.type must be one of file, clip, bin, project")
+        return None, target, warnings, _err("target.type must be one of file, clip, bin, project, sequence, timeline")
 
     records, duplicate_count = _media_analysis_dedupe_records(records, bool(p.get("include_duplicates", target.get("include_duplicates", False))))
     if duplicate_count:
@@ -5432,7 +5543,7 @@ def _media_analysis_sync_event_records(proj, p: Dict[str, Any]):
     mp = proj.GetMediaPool()
     if not mp:
         return None, normalized_target, warnings, _err("Failed to get MediaPool")
-    records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p)
+    records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p, project=proj)
     return records, normalized_target, warnings, target_err
 
 
@@ -5441,6 +5552,387 @@ def _media_analysis_confirmed(p: Dict[str, Any]) -> bool:
         p.get("confirm", p.get("confirmed", p.get("apply", p.get("write_markers")))),
         False,
     )
+
+
+def _media_analysis_publish_confirmed(p: Dict[str, Any]) -> bool:
+    return _media_analysis_bool(p.get("confirm", p.get("confirmed", p.get("apply"))), False)
+
+
+_MEDIA_ANALYSIS_PREFS_ENV = "DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"
+_SETUP_CHOICE_CLEAR_VALUES = {"", "ask", "prompt", "clear", "default", "none", "null", "unset"}
+_SETUP_YES_NO_VALUES = {"yes", "no"}
+_MEDIA_ANALYSIS_DEFAULT_MARKER_TYPES = ["slate_clap", "best_moments", "qc_warnings"]
+_MEDIA_ANALYSIS_DEFAULT_MARKER_COLORS = {
+    "slate_clap": "Cyan",
+    "sync_events": "Cyan",
+    "best_moments": "Green",
+    "qc_warnings": "Red",
+}
+_MEDIA_ANALYSIS_MARKER_TYPE_ALIASES = {
+    "slate": "slate_clap",
+    "slate_claps": "slate_clap",
+    "slate_clap": "slate_clap",
+    "slate-clap": "slate_clap",
+    "sync": "sync_events",
+    "sync_event": "sync_events",
+    "sync_events": "sync_events",
+    "best": "best_moments",
+    "best_moment": "best_moments",
+    "best_moments": "best_moments",
+    "qc": "qc_warnings",
+    "qc_flag": "qc_warnings",
+    "qc_flags": "qc_warnings",
+    "qc_warning": "qc_warnings",
+    "qc_warnings": "qc_warnings",
+}
+_MEDIA_ANALYSIS_DEFAULT_PREFS = {
+    "slate_detection_default": "ask",
+    "vision_default": "on",
+    "transcription_default": "no",
+    "analysis_persistence": "session_only",
+    "metadata_publish_fields": ["Description", "Comments", "Keywords", "People"],
+    "metadata_overwrite_policy": "preserve_human",
+    "timed_marker_types": list(_MEDIA_ANALYSIS_DEFAULT_MARKER_TYPES),
+    "timed_marker_colors": dict(_MEDIA_ANALYSIS_DEFAULT_MARKER_COLORS),
+    "max_timed_markers_per_clip": 12,
+    "include_confidence_scores": True,
+    "include_source_time_notes": True,
+    "analysis_summary_style": "concise",
+    "report_format": "compact",
+    "preferred_analysis_root": None,
+    "preferred_generated_media_folder": None,
+    "default_post_operation_page": "stay_put",
+    "marker_custom_data": "namespaced",
+    "ask_before_metadata_publish": True,
+    "dry_run_first_default": True,
+}
+
+
+def _media_analysis_preferences_path() -> str:
+    override = os.environ.get(_MEDIA_ANALYSIS_PREFS_ENV)
+    if override:
+        return os.path.realpath(os.path.abspath(os.path.expanduser(override)))
+    return os.path.join(project_dir, "logs", "media-analysis-preferences.json")
+
+
+def _read_media_analysis_preferences() -> Dict[str, Any]:
+    path = _media_analysis_preferences_path()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_media_analysis_preferences(preferences: Dict[str, Any]) -> None:
+    path = _media_analysis_preferences_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(preferences, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+def _setup_text_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _normalize_yes_no_ask(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    raw = _setup_text_key(value)
+    if raw in {"1", "true", "y", "yes", "on", "enable", "enabled"}:
+        return "yes"
+    if raw in {"0", "false", "n", "no", "off", "disable", "disabled"}:
+        return "no"
+    if raw in {"ask", "prompt", "ask_me", "ask_user"}:
+        return "ask"
+    if raw in _SETUP_CHOICE_CLEAR_VALUES:
+        return "ask"
+    return None
+
+
+def _normalize_vision_default(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    raw = _setup_text_key(value)
+    aliases = {
+        "1": "on",
+        "true": "on",
+        "yes": "on",
+        "on": "on",
+        "enable": "on",
+        "enabled": "on",
+        "chat": "on",
+        "chat_context": "on",
+        "0": "off",
+        "false": "off",
+        "no": "off",
+        "off": "off",
+        "disable": "off",
+        "disabled": "off",
+        "technical": "technical_only",
+        "technical_only": "technical_only",
+        "technicalonly": "technical_only",
+        "ask": "ask",
+        "prompt": "ask",
+    }
+    return aliases.get(raw)
+
+
+def _normalize_analysis_persistence(value: Any) -> Optional[str]:
+    raw = _setup_text_key(value)
+    aliases = {
+        "": "session_only",
+        "session": "session_only",
+        "session_only": "session_only",
+        "scratch": "session_only",
+        "temporary": "session_only",
+        "keep": "keep_reports",
+        "persist": "keep_reports",
+        "persistent": "keep_reports",
+        "reports": "keep_reports",
+        "keep_reports": "keep_reports",
+        "keep_report": "keep_reports",
+        "artifacts": "keep_artifacts",
+        "keep_artifacts": "keep_artifacts",
+        "keep_frames": "keep_artifacts",
+        "frames": "keep_artifacts",
+    }
+    return aliases.get(raw)
+
+
+def _normalize_metadata_overwrite_policy(value: Any) -> Optional[str]:
+    raw = _setup_text_key(value)
+    aliases = {
+        "preserve": "preserve_human",
+        "preserve_human": "preserve_human",
+        "preserve_existing": "preserve_human",
+        "safe": "preserve_human",
+        "fill": "fill_empty",
+        "fill_empty": "fill_empty",
+        "empty_only": "fill_empty",
+        "owned": "overwrite_owned_blocks",
+        "owned_blocks": "overwrite_owned_blocks",
+        "overwrite_owned": "overwrite_owned_blocks",
+        "overwrite_owned_blocks": "overwrite_owned_blocks",
+        "overwrite": "overwrite_all",
+        "overwrite_all": "overwrite_all",
+        "replace": "overwrite_all",
+    }
+    return aliases.get(raw)
+
+
+def _normalize_setup_choice(value: Any, allowed: List[str], aliases: Optional[Dict[str, str]] = None) -> Optional[str]:
+    raw = _setup_text_key(value)
+    if aliases and raw in aliases:
+        raw = aliases[raw]
+    return raw if raw in set(allowed) else None
+
+
+def _normalize_setup_list(value: Any, aliases: Optional[Dict[str, str]] = None, allowed: Optional[List[str]] = None) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = [part.strip() for part in re.split(r"[,;]", value) if part.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        parts = [str(part).strip() for part in value if str(part).strip()]
+    else:
+        parts = [str(value).strip()]
+    normalized = []
+    allowed_set = set(allowed or [])
+    for part in parts:
+        key = _setup_text_key(part)
+        if aliases and key in aliases:
+            key = aliases[key]
+        if allowed_set and key not in allowed_set:
+            continue
+        if key and key not in normalized:
+            normalized.append(key)
+    return normalized
+
+
+def _setup_positive_int(value: Any, default: int, min_value: int = 0, max_value: int = 9999) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(min_value, min(parsed, max_value))
+
+
+def _setup_positive_float(value: Any, default: float, min_value: float = 0.1, max_value: float = 8760.0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(min_value, min(parsed, max_value))
+
+
+def _normalize_marker_colors(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    colors: Dict[str, str] = {}
+    for raw_key, raw_color in value.items():
+        marker_type = _MEDIA_ANALYSIS_MARKER_TYPE_ALIASES.get(_setup_text_key(raw_key), _setup_text_key(raw_key))
+        color, color_err = _normalize_marker_color(raw_color)
+        if color_err:
+            continue
+        colors[marker_type] = color
+    return colors
+
+
+def _media_analysis_effective_preferences() -> Dict[str, Any]:
+    preferences = _read_media_analysis_preferences()
+    effective = dict(_MEDIA_ANALYSIS_DEFAULT_PREFS)
+    for key, value in preferences.items():
+        if key in effective:
+            effective[key] = value
+
+    timed_default = _normalize_timed_marker_choice(preferences.get("timed_markers_default"))
+    effective["timed_markers_default"] = timed_default if timed_default in {"yes", "no"} else None
+    effective["slate_detection_default"] = _normalize_yes_no_ask(effective.get("slate_detection_default")) or "ask"
+    effective["vision_default"] = _normalize_vision_default(effective.get("vision_default")) or "on"
+    effective["transcription_default"] = _normalize_yes_no_ask(effective.get("transcription_default")) or "no"
+    effective["analysis_persistence"] = _normalize_analysis_persistence(effective.get("analysis_persistence")) or "session_only"
+    effective["metadata_overwrite_policy"] = _normalize_metadata_overwrite_policy(effective.get("metadata_overwrite_policy")) or "preserve_human"
+    effective["timed_marker_types"] = _normalize_setup_list(
+        effective.get("timed_marker_types"),
+        aliases=_MEDIA_ANALYSIS_MARKER_TYPE_ALIASES,
+        allowed=["slate_clap", "sync_events", "best_moments", "qc_warnings"],
+    ) or list(_MEDIA_ANALYSIS_DEFAULT_MARKER_TYPES)
+    effective["timed_marker_colors"] = {
+        **_MEDIA_ANALYSIS_DEFAULT_MARKER_COLORS,
+        **_normalize_marker_colors(effective.get("timed_marker_colors")),
+    }
+    effective["max_timed_markers_per_clip"] = _setup_positive_int(effective.get("max_timed_markers_per_clip"), 12, 0, 250)
+    effective["metadata_publish_fields"] = [
+        str(field).strip()
+        for field in _media_analysis_as_list(effective.get("metadata_publish_fields"))
+        if str(field).strip()
+    ] or list(_MEDIA_ANALYSIS_DEFAULT_PUBLISH_FIELDS)
+    effective["include_confidence_scores"] = _media_analysis_bool(effective.get("include_confidence_scores"), True)
+    effective["include_source_time_notes"] = _media_analysis_bool(effective.get("include_source_time_notes"), True)
+    effective["analysis_summary_style"] = _normalize_setup_choice(
+        effective.get("analysis_summary_style"),
+        ["concise", "assistant_editor", "qc", "producer", "full"],
+        aliases={"assistant": "assistant_editor", "editor": "assistant_editor"},
+    ) or "concise"
+    effective["report_format"] = _normalize_setup_choice(effective.get("report_format"), ["compact", "full", "machine_readable"]) or "compact"
+    effective["default_post_operation_page"] = _normalize_setup_choice(
+        effective.get("default_post_operation_page"),
+        ["stay_put", "media", "cut", "edit", "fusion", "color", "fairlight", "deliver"],
+        aliases={"media_pool": "media", "none": "stay_put"},
+    ) or "stay_put"
+    effective["marker_custom_data"] = _normalize_setup_choice(effective.get("marker_custom_data"), ["namespaced", "minimal"]) or "namespaced"
+    effective["ask_before_metadata_publish"] = _media_analysis_bool(effective.get("ask_before_metadata_publish"), True)
+    effective["dry_run_first_default"] = _media_analysis_bool(effective.get("dry_run_first_default"), True)
+    return effective
+
+
+def _normalize_timed_marker_choice(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = _first_param(value, "choice", "timed_markers", "timedMarkers", "enabled", "write_markers", "writeMarkers")
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    raw = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in {"1", "true", "y", "yes", "on", "enable", "enabled"}:
+        return "yes"
+    if raw in {"0", "false", "n", "no", "off", "disable", "disabled"}:
+        return "no"
+    if raw in {"default_yes", "yes_default", "always_yes", "yes_always"}:
+        return "default_yes"
+    if raw in {"default_no", "no_default", "always_no", "no_always"}:
+        return "default_no"
+    if raw in {"ask", "prompt", "ask_me", "ask_user"}:
+        return "ask"
+    return None
+
+
+def _timed_marker_choice_from_params(p: Dict[str, Any]) -> Optional[str]:
+    raw = _first_param(
+        p,
+        "timed_markers",
+        "timedMarkers",
+        "timed_marker_choice",
+        "timedMarkerChoice",
+        "marker_choice",
+        "markerChoice",
+        "write_markers",
+        "writeMarkers",
+        "marker_writeback",
+        "markerWriteback",
+        "add_markers",
+        "addMarkers",
+    )
+    if raw is None and isinstance(p.get("markers"), dict):
+        raw = _first_param(
+            p["markers"],
+            "timed_markers",
+            "timedMarkers",
+            "choice",
+            "enabled",
+            "write_markers",
+            "writeMarkers",
+        )
+    return _normalize_timed_marker_choice(raw)
+
+
+def _media_analysis_timed_marker_prompt() -> Dict[str, Any]:
+    return {
+        "question": "Do you want source-time analysis notes written as Media Pool clip markers?",
+        "default_behavior": "No timed markers until a choice or saved default is provided.",
+        "options": [
+            {"id": "yes", "label": "Yes", "description": "Write timed markers for this publish only.", "params": {"timed_markers": "yes"}},
+            {"id": "no", "label": "No", "description": "Skip timed markers for this publish only.", "params": {"timed_markers": "no"}},
+            {"id": "default_yes", "label": "Default Yes", "description": "Write timed markers now and save yes as the future default.", "params": {"timed_markers": "default_yes"}},
+            {"id": "default_no", "label": "Default No", "description": "Skip timed markers now and save no as the future default.", "params": {"timed_markers": "default_no"}},
+        ],
+    }
+
+
+def _media_analysis_timed_marker_decision(p: Dict[str, Any]) -> Dict[str, Any]:
+    if isinstance(p.get("_timed_marker_decision"), dict):
+        return p["_timed_marker_decision"]
+
+    choice = _timed_marker_choice_from_params(p)
+    preferences = _read_media_analysis_preferences()
+    saved_default = _media_analysis_effective_preferences().get("timed_markers_default")
+    source = "explicit"
+    saved = None
+
+    if choice in {"default_yes", "default_no"}:
+        saved = "yes" if choice == "default_yes" else "no"
+        preferences["timed_markers_default"] = saved
+        preferences["timed_markers_default_updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _write_media_analysis_preferences(preferences)
+        enabled = saved == "yes"
+    elif choice in {"yes", "no"}:
+        enabled = choice == "yes"
+    elif choice == "ask":
+        enabled = False
+    elif saved_default in {"yes", "no"}:
+        source = "saved_default"
+        choice = saved_default
+        enabled = saved_default == "yes"
+    else:
+        source = "prompt_required"
+        choice = "ask"
+        enabled = False
+
+    return {
+        "enabled": enabled,
+        "choice": choice,
+        "source": source,
+        "prompt_required": source == "prompt_required" or choice == "ask",
+        "saved_default": saved or (saved_default if saved_default in {"yes", "no"} else None),
+        "preferences_path": _media_analysis_preferences_path(),
+    }
 
 
 def _media_analysis_sync_marker_suggestions(detection: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -5485,6 +5977,17 @@ def _apply_sync_event_markers(proj, detection: Dict[str, Any], p: Dict[str, Any]
         if not clip:
             failed.append({"clip_id": clip_id, "reason": "Clip not found"})
             continue
+        if suggestion.get("event_type") == "slate_clap" and not _media_analysis_slate_visual_confirmed(
+            {"slate": suggestion.get("slate") if isinstance(suggestion.get("slate"), dict) else {}},
+            suggestion.get("slate_review") if isinstance(suggestion.get("slate_review"), dict) else None,
+        ):
+            skipped.append({
+                "clip_id": clip_id,
+                "frame": suggestion.get("event_frame"),
+                "reason": "slate_not_visually_confirmed",
+                "custom_data": (suggestion.get("marker") or {}).get("custom_data"),
+            })
+            continue
         marker = dict(suggestion.get("marker") or {})
         color, color_err = _normalize_marker_color(marker.get("color"))
         if color_err:
@@ -5528,12 +6031,484 @@ def _apply_sync_event_markers(proj, detection: Dict[str, Any], p: Dict[str, Any]
     }
 
 
+def _media_analysis_marker_writeback_enabled(p: Dict[str, Any]) -> bool:
+    return bool(_media_analysis_timed_marker_decision(p).get("enabled"))
+
+
+def _media_analysis_marker_options(p: Dict[str, Any]) -> Dict[str, Any]:
+    defaults = _media_analysis_effective_preferences()
+    raw = p.get("markers")
+    options = {
+        "marker_types": defaults.get("timed_marker_types"),
+        "marker_colors": defaults.get("timed_marker_colors"),
+        "max_markers": defaults.get("max_timed_markers_per_clip"),
+        "custom_data_mode": defaults.get("marker_custom_data"),
+    }
+    if isinstance(raw, dict):
+        options.update(raw)
+    for key in (
+        "write_markers",
+        "writeMarkers",
+        "marker_writeback",
+        "markerWriteback",
+        "add_markers",
+        "addMarkers",
+        "marker_color",
+        "markerColor",
+        "marker_duration",
+        "markerDuration",
+        "max_markers",
+        "maxMarkers",
+        "marker_types",
+        "markerTypes",
+        "marker_colors",
+        "markerColors",
+        "marker_custom_data",
+        "markerCustomData",
+        "custom_data_mode",
+        "customDataMode",
+        "replace_existing",
+        "replaceExisting",
+    ):
+        if key in p:
+            if key in {"marker_custom_data", "markerCustomData"}:
+                options["custom_data_mode"] = p[key]
+            else:
+                options[key] = p[key]
+    return options
+
+
+def _media_analysis_float(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value))
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def _media_analysis_report_fps(record: Dict[str, Any], report: Dict[str, Any]) -> Optional[float]:
+    candidates = [
+        record.get("fps"),
+        _media_analysis_pick_nested(report, ("clip", "fps")),
+        _media_analysis_pick_nested(report, ("technical", "video", 0, "frame_rate")),
+    ]
+    technical = report.get("technical") if isinstance(report.get("technical"), dict) else {}
+    video = technical.get("video") if isinstance(technical.get("video"), list) else []
+    if video and isinstance(video[0], dict):
+        candidates.extend([video[0].get("frame_rate"), video[0].get("avg_frame_rate"), video[0].get("r_frame_rate")])
+    for candidate in candidates:
+        if isinstance(candidate, str) and "/" in candidate:
+            num, _, den = candidate.partition("/")
+            try:
+                den_float = float(den)
+                if den_float:
+                    return float(num) / den_float
+            except ValueError:
+                continue
+        value = _media_analysis_float(candidate)
+        if value and value > 0:
+            return value
+    return None
+
+
+def _media_analysis_time_to_frame(value: Any, fps: Optional[float]) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        for key in ("frame", "frame_id", "frameId", "frame_num", "frameNum"):
+            frame = _frame_int(value.get(key))
+            if frame is not None:
+                return frame
+        for key in ("timecode", "time_code", "tc", "time_seconds", "timeSeconds", "seconds"):
+            frame = _media_analysis_time_to_frame(value.get(key), fps)
+            if frame is not None:
+                return frame
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(round(float(value) * fps)) if fps else int(round(float(value)))
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    tc_match = re.search(r"(?<!\d)(\d{1,2}:\d{2}(?::\d{2})?(?::\d{1,2})?)(?!\d)", text)
+    if tc_match and fps:
+        parts = [int(part) for part in tc_match.group(1).split(":")]
+        if len(parts) == 4:
+            hours, minutes, seconds, frames = parts
+            return int(round(((hours * 3600) + (minutes * 60) + seconds) * fps)) + frames
+        if len(parts) == 3:
+            hours, minutes, seconds = parts
+            return int(round(((hours * 3600) + (minutes * 60) + seconds) * fps))
+        if len(parts) == 2:
+            minutes, seconds = parts
+            return int(round(((minutes * 60) + seconds) * fps))
+
+    seconds_match = re.search(r"(?<!\w)(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b", text, flags=re.IGNORECASE)
+    if seconds_match and fps:
+        return int(round(float(seconds_match.group(1)) * fps))
+    return None
+
+
+def _media_analysis_marker_note(value: Any, fallback: str) -> str:
+    if isinstance(value, dict):
+        for key in ("note", "description", "text", "label", "reason", "summary"):
+            text = _media_analysis_metadata_text(value.get(key))
+            if text:
+                return text
+        return fallback
+    text = _media_analysis_metadata_text(value)
+    return text or fallback
+
+
+def _media_analysis_note_items(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [item for item in value if item not in (None, "", [], {})]
+    return _media_analysis_as_list(value)
+
+
+def _media_analysis_make_marker(
+    *,
+    frame: int,
+    color: str,
+    name: str,
+    note: str,
+    duration: int,
+    source: str,
+    report_path: Optional[str],
+    extra: Optional[Dict[str, Any]] = None,
+    custom_data_mode: str = "namespaced",
+) -> Dict[str, Any]:
+    payload = {"source": source}
+    if custom_data_mode != "minimal":
+        payload["namespace"] = "davinci_resolve_mcp.analysis"
+    if report_path and custom_data_mode != "minimal":
+        payload["analysis_report_path"] = report_path
+    if extra:
+        payload.update({key: value for key, value in extra.items() if value not in (None, "", [], {})})
+    return {
+        "frame": int(frame),
+        "color": color,
+        "name": name,
+        "note": note,
+        "duration": max(1, int(duration or 1)),
+        "custom_data": json.dumps(payload, sort_keys=True, ensure_ascii=False),
+    }
+
+
+def _media_analysis_marker_candidates_from_report(
+    report: Dict[str, Any],
+    record: Dict[str, Any],
+    sync_event: Optional[Dict[str, Any]],
+    report_path: Optional[str],
+    p: Dict[str, Any],
+    slate_review: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    options = _media_analysis_marker_options(p)
+    fps = _media_analysis_report_fps(record, report)
+    max_markers = _setup_positive_int(options.get("max_markers", options.get("maxMarkers", 12)), 12, 0, 250)
+    duration = _setup_positive_int(options.get("marker_duration", options.get("markerDuration", 1)), 1, 1, 999)
+    marker_types = _normalize_setup_list(
+        options.get("marker_types", options.get("markerTypes")),
+        aliases=_MEDIA_ANALYSIS_MARKER_TYPE_ALIASES,
+        allowed=["slate_clap", "sync_events", "best_moments", "qc_warnings"],
+    ) or list(_MEDIA_ANALYSIS_DEFAULT_MARKER_TYPES)
+    marker_colors = {
+        **_MEDIA_ANALYSIS_DEFAULT_MARKER_COLORS,
+        **_normalize_marker_colors(options.get("marker_colors", options.get("markerColors"))),
+    }
+    custom_data_mode = _normalize_setup_choice(options.get("custom_data_mode", options.get("customDataMode")), ["namespaced", "minimal"]) or "namespaced"
+    default_color, color_err = _normalize_marker_color(options.get("marker_color", options.get("markerColor", "Blue")))
+    if color_err:
+        default_color = "Blue"
+    markers: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+
+    slate_visual_confirmed = _media_analysis_slate_visual_confirmed(report, slate_review)
+    if sync_event and ("slate_clap" in marker_types or "sync_events" in marker_types):
+        frame = _media_analysis_time_to_frame(sync_event, fps)
+        if frame is None:
+            skipped.append({"source": "sync_event", "reason": "missing_frame_or_fps", "item": sync_event})
+        elif not slate_visual_confirmed:
+            skipped.append({
+                "source": "sync_event",
+                "frame": frame,
+                "reason": "slate_not_visually_confirmed",
+                "item": sync_event,
+            })
+        else:
+            confidence = sync_event.get("confidence")
+            note = "Visually confirmed slate clap"
+            if sync_event.get("time_seconds") is not None:
+                note += f" at {sync_event.get('time_seconds')}s"
+            if confidence is not None:
+                note += f", confidence {confidence}"
+            markers.append(_media_analysis_make_marker(
+                frame=frame,
+                color=marker_colors.get("slate_clap") or marker_colors.get("sync_events") or "Cyan",
+                name="Slate Clap",
+                note=note,
+                duration=duration,
+                source="sync_event",
+                report_path=report_path,
+                extra={"confidence": confidence, "time_seconds": sync_event.get("time_seconds")},
+                custom_data_mode=custom_data_mode,
+            ))
+
+    visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
+    editing_notes = visual.get("editing_notes") if isinstance(visual.get("editing_notes"), dict) else {}
+    if "best_moments" in marker_types:
+        for item in _media_analysis_note_items(editing_notes.get("best_moments")):
+            frame = _media_analysis_time_to_frame(item, fps)
+            if frame is None:
+                skipped.append({"source": "best_moment", "reason": "missing_timecode_or_fps", "item": item})
+                continue
+            markers.append(_media_analysis_make_marker(
+                frame=frame,
+                color=marker_colors.get("best_moments") or "Green",
+                name="Best Moment",
+                note=_media_analysis_marker_note(item, "Best moment"),
+                duration=duration,
+                source="best_moment",
+                report_path=report_path,
+                custom_data_mode=custom_data_mode,
+            ))
+
+    if "qc_warnings" in marker_types:
+        timed_warnings = _media_analysis_note_items(report.get("technical_warnings")) + _media_analysis_note_items(editing_notes.get("qc_flags"))
+        for item in timed_warnings:
+            frame = _media_analysis_time_to_frame(item, fps)
+            if frame is None:
+                continue
+            markers.append(_media_analysis_make_marker(
+                frame=frame,
+                color=marker_colors.get("qc_warnings") or "Yellow",
+                name="QC Warning",
+                note=_media_analysis_marker_note(item, "QC warning"),
+                duration=duration,
+                source="qc_warning",
+                report_path=report_path,
+                custom_data_mode=custom_data_mode,
+            ))
+
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for marker in markers:
+        key = (marker["frame"], marker["name"], marker["note"])
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(deduped) >= max_markers:
+            skipped.append({"source": marker.get("name"), "frame": marker.get("frame"), "reason": "max_markers_reached"})
+            continue
+        if marker.get("color") == "Blue":
+            marker["color"] = default_color
+        deduped.append(marker)
+    return {
+        "enabled": _media_analysis_marker_writeback_enabled(p),
+        "fps": fps,
+        "markers": deduped,
+        "skipped": skipped,
+    }
+
+
+def _apply_media_analysis_clip_markers(clip, markers: List[Dict[str, Any]], p: Dict[str, Any]) -> Dict[str, Any]:
+    replace_existing = _media_analysis_bool(p.get("replace_existing", p.get("replaceExisting")), False)
+    added = []
+    skipped = []
+    failed = []
+    for marker in markers:
+        custom_data = marker.get("custom_data") or ""
+        if custom_data and _has_method(clip, "GetMarkerByCustomData"):
+            try:
+                existing = clip.GetMarkerByCustomData(custom_data)
+            except Exception:
+                existing = None
+            if existing and not replace_existing:
+                skipped.append({"frame": marker.get("frame"), "name": marker.get("name"), "reason": "Marker already exists", "custom_data": custom_data})
+                continue
+            if existing and replace_existing and _has_method(clip, "DeleteMarkerByCustomData"):
+                clip.DeleteMarkerByCustomData(custom_data)
+        result = _add_marker(clip, marker)
+        if result.get("success"):
+            added.append({"frame": result.get("frame"), "name": marker.get("name"), "custom_data": custom_data})
+        elif result.get("reason") and "already exists" in str(result.get("reason")).lower():
+            skipped.append({"frame": marker.get("frame"), "name": marker.get("name"), "reason": result.get("reason")})
+        else:
+            failed.append({"marker": marker, "result": result})
+    return {"success": not failed, "added": added, "skipped": skipped, "failed": failed}
+
+
 _MCP_METADATA_BLOCK_START = "[DaVinci Resolve MCP Analysis]"
 _MCP_METADATA_BLOCK_END = "[/DaVinci Resolve MCP Analysis]"
 _MCP_METADATA_PROVENANCE_PREFIX = "davinci_resolve_mcp."
 _MEDIA_ANALYSIS_DEFAULT_PUBLISH_FIELDS = ["Description", "Comments", "Keywords", "People"]
-_MEDIA_ANALYSIS_LIST_FIELDS = {"Keywords", "People"}
-_MEDIA_ANALYSIS_FILL_EMPTY_FIELDS = {"Scene", "Shot", "Take", "Camera #", "Camera", "Roll/Card", "Reel"}
+_MEDIA_ANALYSIS_LIST_FIELDS = {"Keywords", "Keyword", "People"}
+_MEDIA_ANALYSIS_FILL_EMPTY_FIELDS = {"Scene", "Shot", "Take", "Camera #", "Camera", "Roll/Card", "Roll Card #", "Reel"}
+
+_METADATA_PANEL_GROUP_ORDER = [
+    "All Groups",
+    "Shot & Scene",
+    "Clip Details",
+    "Camera",
+    "Tech Details",
+    "Stereo3D & VFX",
+    "Audio",
+    "Audio Tracks",
+    "Production",
+    "Production Crew",
+    "Reviewed By",
+    "Immersive",
+    "Custom",
+]
+
+_METADATA_PANEL_GROUP_FIELD_HINTS = {
+    "Shot & Scene": {
+        "Description", "Comments", "Keyword", "Keywords", "People", "Clip Color",
+        "Shot", "Scene", "Take", "Angle", "Move", "Day / Night", "Environment",
+        "Shot Type", "Flags", "Good Take", "Shoot Day", "Date Recorded",
+        "Camera #", "Roll/Card", "Roll Card #", "Reel Name", "Reel Number",
+        "Clip Number", "Program Name", "Episode #", "Episode Name",
+        "Shot During Ep", "Location", "Unit Name", "Setup",
+    },
+    "Clip Details": {
+        "Clip Name", "File Name", "File Path", "Clip Directory", "Type", "Format",
+        "Duration", "Frames", "FPS", "Start", "End", "In", "Out", "Start TC",
+        "End TC", "Slate TC", "Start KeyKode", "EDL Clip Name", "Date Added",
+        "Date Created", "Date Modified", "Media Type", "Online Status", "Proxy",
+        "Proxy Media Path", "Cloud Sync",
+    },
+    "Camera": {
+        "Camera #", "Camera ID", "Camera Type", "Camera Manufacturer",
+        "Camera Model", "Camera Serial #", "Camera Firmware", "Camera Format",
+        "Camera FPS", "Camera TC Type", "Camera Notes", "Camera Operator",
+        "Camera Assistant", "Camera Position", "Camera Pan Angle",
+        "Camera Tilt Angle", "Camera Roll Angle", "Camera Aperture",
+        "Camera Aperture Type", "Sensor", "Sensor Area Captured", "ISO",
+        "ND Filter", "Shutter Angle", "Shutter Speed", "Shutter Type",
+        "White Balance Tint", "White Point (Kelvin)", "Focal Point (mm)",
+        "Distance", "Focus Puller", "Lens Type", "Lens Number", "Lens Notes",
+        "Lens Chart", "Framing Chart", "Safe Area", "Color Chart", "Grey Chart",
+    },
+    "Tech Details": {
+        "Alpha mode", "Aspect Ratio Notes", "Audio Bit Depth", "Bit Depth",
+        "Bit Rate", "Codec", "Codec Bitrate", "Compression Ratio", "Data Level",
+        "Drop frame", "Enable Deinterlacing", "Field Dominance", "Filter",
+        "Format", "FPS", "Frames", "H-FLIP", "Input Color Space", "Input LUT",
+        "Input Sizing Preset", "Mon Color Space", "Monitor LUT", "PAR",
+        "PAR Notes", "RAW", "Resolution", "Shot Frame Rate", "Super Scale",
+        "SuperScale Noise Reduction", "SuperScale Sharpness", "Time-lapse Interval",
+        "Transcription Status", "V-FLIP", "Video Codec", "Color Space Notes",
+        "Gamma Notes", "Data Level", "IDT", "LUT 1", "LUT 2", "LUT 3",
+        "LUT Used", "LUT Used On Set", "CDL SAT", "CDL SOP", "Sharpness",
+        "Noise Reduction",
+    },
+    "Stereo3D & VFX": {
+        "3D Rig ID #", "3D Rig Type", "BG (m)", "CV (m)", "Convergence Adj",
+        "FG (m)", "IA (mm)", "ILPD", "Projection", "Rig Inverted", "S3D Eye",
+        "S3D Notes", "S3D Shot", "S3D Sync", "VFX Grey Ball", "VFX Markers",
+        "VFX Mirror Ball", "VFX Notes", "VFX Shot #", "VFX Svsr Reviewed",
+    },
+    "Audio": {
+        "Audio Bit Depth", "Audio Ch", "Audio Codec", "Audio Duration TC",
+        "Audio End TC", "Audio File Type", "Audio FPS", "Audio Media",
+        "Audio Notes", "Audio Offset", "Audio Recorder", "Audio Start TC",
+        "Audio TC Type", "Dialog Duration", "Dialog Notes", "Dialog Starts As",
+        "Embedded Audio", "End Dialog TC", "Sample Rate", "Sample Rate (KHz)",
+        "Sound Mixer", "Sound Roll #", "Start Dialog TC", "Synced Audio",
+    },
+    "Production": {
+        "Assistant Director", "Assistant Producer", "Category", "Episode #",
+        "Episode Name", "Genre", "Line Producer", "Location", "Post Producer",
+        "Producer", "Production Company", "Production Name", "Program Name",
+        "Series #", "Setup", "Shoot Day", "Shot During Ep", "Subcategory",
+        "Unit Manager", "Unit Name",
+    },
+    "Production Crew": {
+        "2nd Asst", "2nd Continuity", "2nd DIT", "2nd DOP", "2nd Dir",
+        "2nd Dir Asst", "Assistant Director", "Camera Assistant",
+        "Camera Operator", "Colorist", "Colorist Assistant", "Continuity",
+        "DOP", "Dailies Colorist", "Data Wrangler", "Digital Technician",
+        "Director", "Editing Assistant", "Editor", "Focus Puller", "Key Grip",
+        "Production Asst", "Script Supervisor", "Sound Mixer",
+    },
+    "Reviewed By": {
+        "2nd DOP Reviewed", "2nd Dir Reviewed", "Colorist Reviewed",
+        "Continuity Reviewed", "DOP Reviewed", "Director Reviewed",
+        "Focus Reviewed", "Sound Reviewed", "VFX Svsr Reviewed",
+        "Wardrobe Reviewed",
+    },
+    "Immersive": {
+        "Immersive ID",
+    },
+    "Custom": {
+        "Aux 1", "Aux 2", "FSD", "Lab Roll #", "Offline Reference",
+        "Reviewers Notes", "Send to", "Send to Studio", "Tone", "Uploaded From",
+        "Usage",
+    },
+}
+
+_METADATA_FIELD_PROPERTY_ALIASES = {
+    "Keywords": ("Keyword",),
+    "Roll/Card": ("Roll Card #",),
+}
+
+_METADATA_FIELD_WRITE_ALIASES = {
+    "Keyword": "Keywords",
+    "Roll/Card": "Roll Card #",
+}
+
+
+def _metadata_clip_property_key_for_field(field: str, properties: Dict[str, Any]) -> Optional[str]:
+    if field in properties:
+        return field
+    for alias in _METADATA_FIELD_PROPERTY_ALIASES.get(field, ()):
+        if alias in properties:
+            return alias
+    return None
+
+
+def _metadata_write_field_for_field(field: str) -> str:
+    return _METADATA_FIELD_WRITE_ALIASES.get(field, field)
+
+
+def _metadata_panel_group_for_field(field: str) -> str:
+    for group, fields in _METADATA_PANEL_GROUP_FIELD_HINTS.items():
+        if field in fields:
+            return group
+    if re.fullmatch(r"Track\s+\d+", field or ""):
+        return "Audio Tracks"
+    if field.startswith("Audio "):
+        return "Audio"
+    if field.startswith("Camera "):
+        return "Camera"
+    if field.startswith("VFX ") or field.startswith("S3D ") or field.startswith("3D "):
+        return "Stereo3D & VFX"
+    if field.endswith(" Reviewed"):
+        return "Reviewed By"
+    return "Unclassified"
+
+
+def _metadata_panel_group_inventory(fields: List[str]) -> List[Dict[str, Any]]:
+    grouped: Dict[str, List[str]] = {"All Groups": list(fields)}
+    for field in fields:
+        grouped.setdefault(_metadata_panel_group_for_field(field), []).append(field)
+
+    ordered_names = list(_METADATA_PANEL_GROUP_ORDER)
+    if grouped.get("Unclassified"):
+        ordered_names.append("Unclassified")
+    return [
+        {"name": name, "field_count": len(grouped.get(name, [])), "fields": grouped.get(name, [])}
+        for name in ordered_names
+        if name == "All Groups" or grouped.get(name)
+    ]
 
 
 def _media_analysis_metadata_text(value: Any) -> str:
@@ -5635,19 +6610,86 @@ def _media_analysis_best_sync_event(detection: Optional[Dict[str, Any]], clip_id
     return best
 
 
-def _media_analysis_collect_slate_fields(report: Dict[str, Any], slate_review: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    slate_sources = []
+def _media_analysis_visual_analysis_succeeded(report: Dict[str, Any]) -> bool:
+    visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
+    if str(visual.get("status") or "").strip().lower() in {"skipped", "disabled"}:
+        return False
+    has_visual_content = bool(
+        visual.get("clip_summary")
+        or visual.get("content")
+        or visual.get("editing_notes")
+        or visual.get("analysis_keyframes")
+        or visual.get("slate")
+    )
+    if visual.get("success") is False and not has_visual_content:
+        return False
+    return has_visual_content
+
+
+def _media_analysis_slate_visible(source: Any) -> bool:
+    if not isinstance(source, dict):
+        return False
+    value = _first_param(
+        source,
+        "slate_visible",
+        "slateVisible",
+        "visible",
+        "is_slate",
+        "isSlate",
+        "has_slate",
+        "hasSlate",
+    )
+    if value is None:
+        return False
+    return _media_analysis_bool(value, False)
+
+
+def _media_analysis_slate_visual_confirmed(
+    report: Dict[str, Any],
+    slate_review: Optional[Dict[str, Any]] = None,
+) -> bool:
+    sources: List[Any] = []
     if isinstance(slate_review, dict):
-        slate_sources.extend([
+        sources.extend([
             slate_review,
-            slate_review.get("fields") if isinstance(slate_review.get("fields"), dict) else {},
             slate_review.get("slate") if isinstance(slate_review.get("slate"), dict) else {},
         ])
     visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
-    slate_sources.extend([
+    sources.extend([
         report.get("slate") if isinstance(report.get("slate"), dict) else {},
         visual.get("slate") if isinstance(visual.get("slate"), dict) else {},
     ])
+    return any(_media_analysis_slate_visible(source) for source in sources)
+
+
+def _media_analysis_confirmed_slate_sources(
+    report: Dict[str, Any],
+    slate_review: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    sources: List[Dict[str, Any]] = []
+
+    def add_confirmed(container: Any) -> None:
+        if not isinstance(container, dict):
+            return
+        nested_slate = container.get("slate") if isinstance(container.get("slate"), dict) else {}
+        if not (_media_analysis_slate_visible(container) or _media_analysis_slate_visible(nested_slate)):
+            return
+        sources.append(container)
+        fields = container.get("fields") if isinstance(container.get("fields"), dict) else {}
+        if fields:
+            sources.append(fields)
+        if nested_slate:
+            sources.append(nested_slate)
+
+    add_confirmed(slate_review)
+    add_confirmed(report.get("slate") if isinstance(report.get("slate"), dict) else {})
+    visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
+    add_confirmed(visual.get("slate") if isinstance(visual.get("slate"), dict) else {})
+    return sources
+
+
+def _media_analysis_collect_slate_fields(report: Dict[str, Any], slate_review: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    slate_sources = _media_analysis_confirmed_slate_sources(report, slate_review)
 
     field_aliases = {
         "Scene": ("scene", "scene_number", "sceneNumber"),
@@ -5657,15 +6699,11 @@ def _media_analysis_collect_slate_fields(report: Dict[str, Any], slate_review: O
         "Roll/Card": ("roll", "reel", "card", "roll_card", "rollCard"),
     }
     collected: Dict[str, Any] = {}
-    confidence = _media_analysis_pick_nested(
-        slate_review or {},
-        ("confidence", "overall"),
-        ("confidence",),
-    ) or _media_analysis_pick_nested(
-        report,
-        ("slate", "confidence"),
-        ("visual", "slate", "confidence"),
-    )
+    confidence = None
+    for source in slate_sources:
+        confidence = _media_analysis_pick_nested(source, ("confidence", "overall"), ("confidence",))
+        if confidence:
+            break
     collected["_confidence"] = confidence or "unknown"
     for resolve_field, aliases in field_aliases.items():
         for source in slate_sources:
@@ -5677,13 +6715,11 @@ def _media_analysis_collect_slate_fields(report: Dict[str, Any], slate_review: O
                     break
             if resolve_field in collected:
                 break
-    visible_text = _media_analysis_pick_nested(
-        slate_review or {},
-        ("visible_text",),
-        ("visibleText",),
-        ("slate", "visible_text"),
-        ("slate", "visibleText"),
-    ) or _media_analysis_pick_nested(report, ("visual", "content", "visible_text"))
+    visible_text = None
+    for source in slate_sources:
+        visible_text = _media_analysis_pick_nested(source, ("visible_text",), ("visibleText",))
+        if visible_text:
+            break
     if visible_text:
         collected["_visible_text"] = visible_text
     return collected
@@ -5695,6 +6731,8 @@ def _media_analysis_report_metadata_candidates(
     detection: Optional[Dict[str, Any]] = None,
     slate_review: Optional[Dict[str, Any]] = None,
     fields: Optional[List[str]] = None,
+    require_visual_description: bool = False,
+    require_visual_slate: bool = True,
 ) -> Dict[str, Any]:
     requested_fields = fields or list(_MEDIA_ANALYSIS_DEFAULT_PUBLISH_FIELDS)
     visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
@@ -5702,15 +6740,16 @@ def _media_analysis_report_metadata_candidates(
     classification = visual.get("editorial_classification") if isinstance(visual.get("editorial_classification"), dict) else {}
     editing_notes = visual.get("editing_notes") if isinstance(visual.get("editing_notes"), dict) else {}
     shot_style = visual.get("shot_and_style") if isinstance(visual.get("shot_and_style"), dict) else {}
-    transcript = report.get("transcription") if isinstance(report.get("transcription"), dict) else {}
+    visual_succeeded = _media_analysis_visual_analysis_succeeded(report)
 
-    summary = (
-        visual.get("clip_summary")
-        or report.get("summary")
-        or (report.get("clip") or {}).get("clip_name")
-        or "Analyzed media clip"
-    )
-    comments = [f"Summary: {summary}"]
+    summary = visual.get("clip_summary") if visual_succeeded else None
+    if not summary and not require_visual_description:
+        summary = (
+            report.get("summary")
+            or (report.get("clip") or {}).get("clip_name")
+            or "Analyzed media clip"
+        )
+    comments = [f"Summary: {summary}"] if summary else []
     primary_use = classification.get("primary_use")
     select_potential = classification.get("select_potential")
     if primary_use and primary_use != "unknown":
@@ -5729,13 +6768,12 @@ def _media_analysis_report_metadata_candidates(
     visible_text = content.get("visible_text") or []
     if visible_text:
         comments.append("Visible text: " + "; ".join(_media_analysis_as_list(visible_text)[:5]))
-    if transcript.get("text"):
-        comments.append("Transcript excerpt: " + str(transcript["text"]).strip()[:240])
-
     sync_event = _media_analysis_best_sync_event(detection, (report.get("clip") or {}).get("clip_id"))
-    if sync_event:
+    slate_visual_confirmed = _media_analysis_slate_visual_confirmed(report, slate_review)
+    if sync_event and (slate_visual_confirmed or not require_visual_slate):
+        slate_label = "Confirmed slate clap" if slate_visual_confirmed else "Likely slate clap"
         comments.append(
-            "Likely slate clap: "
+            f"{slate_label}: "
             f"{sync_event.get('time_seconds')}s"
             + (f", frame {sync_event.get('frame')}" if sync_event.get("frame") is not None else "")
             + (f", confidence {sync_event.get('confidence')}" if sync_event.get("confidence") is not None else "")
@@ -5760,7 +6798,7 @@ def _media_analysis_report_metadata_candidates(
         keywords.extend(_media_analysis_as_list(content.get(key)))
     keywords.extend(_media_analysis_as_list(shot_style.get("shot_sizes")))
     keywords.extend(_media_analysis_as_list(shot_style.get("camera_motion")))
-    if sync_event:
+    if sync_event and (slate_visual_confirmed or not require_visual_slate):
         keywords.append("slate clap")
 
     people: List[Any] = []
@@ -5769,24 +6807,32 @@ def _media_analysis_report_metadata_candidates(
     people.extend(_media_analysis_as_list(visual.get("people")))
 
     candidates: Dict[str, Any] = {}
-    if "Description" in requested_fields:
+    if "Description" in requested_fields and summary:
         candidates["Description"] = _media_analysis_metadata_text(summary)
-    if "Comments" in requested_fields:
+    if "Comments" in requested_fields and comments:
         candidates["Comments"] = "\n".join(_media_analysis_metadata_text(line) for line in comments if _media_analysis_metadata_text(line))
-    if "Keywords" in requested_fields:
-        candidates["Keywords"] = _media_analysis_as_list(keywords)
+    keyword_field = "Keywords" if "Keywords" in requested_fields else ("Keyword" if "Keyword" in requested_fields else None)
+    if keyword_field:
+        candidates[keyword_field] = _media_analysis_as_list(keywords)
     if "People" in requested_fields:
         candidates["People"] = _media_analysis_as_list(people)
     slate_confidence = slate.get("_confidence")
     high_confidence_slate = _media_analysis_confidence_rank(slate_confidence) >= 3
     for field in ("Scene", "Shot", "Take", "Camera #", "Roll/Card"):
-        if field in requested_fields and slate.get(field) not in (None, ""):
-            candidates[field] = _media_analysis_metadata_text(slate[field]) if high_confidence_slate else ""
+        target_field = field
+        if field == "Roll/Card" and field not in requested_fields and "Roll Card #" in requested_fields:
+            target_field = "Roll Card #"
+        if target_field in requested_fields and slate.get(field) not in (None, ""):
+            candidates[target_field] = _media_analysis_metadata_text(slate[field]) if high_confidence_slate else ""
     return {
         "fields": candidates,
         "evidence": {
             "summary": summary,
             "sync_event": sync_event,
+            "visual_analysis_required": bool(require_visual_description),
+            "visual_analysis_succeeded": visual_succeeded,
+            "slate_visual_required": bool(require_visual_slate),
+            "slate_visual_confirmed": slate_visual_confirmed,
             "slate": slate,
             "slate_confidence": slate_confidence,
         },
@@ -5829,6 +6875,16 @@ def _media_analysis_merge_metadata_field(field: str, existing: Any, proposed: An
             "value": proposed_text,
             "changed": proposed_text != existing_text,
             "reason": "overwrite",
+        }
+
+    if merge_policy in {"fill_empty", "empty_only"} and existing_text:
+        return {
+            "field": field,
+            "existing": existing_text,
+            "proposed": proposed_text,
+            "value": existing_text,
+            "changed": False,
+            "reason": "preserved_existing_fill_empty_policy",
         }
 
     if field in _MEDIA_ANALYSIS_FILL_EMPTY_FIELDS:
@@ -5895,6 +6951,105 @@ def _media_analysis_provenance_metadata(report: Dict[str, Any], report_path: Opt
         for key, value in payload.items()
         if value not in (None, "")
     }
+
+
+def _has_any_param(p: Dict[str, Any], *keys: str) -> bool:
+    return any(key in p and p[key] is not None for key in keys)
+
+
+def _media_analysis_apply_setup_defaults(action: str, p: Dict[str, Any]) -> Dict[str, Any]:
+    prefs = _media_analysis_effective_preferences()
+    applied: Dict[str, Any] = {}
+    out = dict(p)
+
+    preferred_root = prefs.get("preferred_analysis_root")
+    if preferred_root and not _has_any_param(out, "analysis_root", "analysisRoot"):
+        out["analysis_root"] = preferred_root
+        applied["preferred_analysis_root"] = preferred_root
+
+    if not _has_any_param(out, "include_confidence_scores", "includeConfidenceScores"):
+        out["include_confidence_scores"] = prefs.get("include_confidence_scores")
+        applied["include_confidence_scores"] = prefs.get("include_confidence_scores")
+    if not _has_any_param(out, "include_source_time_notes", "includeSourceTimeNotes"):
+        out["include_source_time_notes"] = prefs.get("include_source_time_notes")
+        applied["include_source_time_notes"] = prefs.get("include_source_time_notes")
+    if not _has_any_param(out, "analysis_summary_style", "analysisSummaryStyle"):
+        out["analysis_summary_style"] = prefs.get("analysis_summary_style")
+        applied["analysis_summary_style"] = prefs.get("analysis_summary_style")
+    if not _has_any_param(out, "report_format", "reportFormat"):
+        out["report_format"] = prefs.get("report_format")
+        applied["report_format"] = prefs.get("report_format")
+
+    if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "review_timeline_markers", "publish_clip_metadata"}:
+        if not _has_any_param(out, "vision", "include_visuals", "includeVisuals"):
+            vision_default = prefs.get("vision_default")
+            if vision_default == "on":
+                out["vision"] = {"enabled": True, "provider": "chat_context"}
+                applied["vision_default"] = vision_default
+            elif vision_default in {"off", "technical_only"}:
+                out["vision"] = {"enabled": False}
+                applied["vision_default"] = vision_default
+        if not _has_any_param(out, "transcription", "include_transcription", "includeTranscription"):
+            transcription_default = prefs.get("transcription_default")
+            if transcription_default in {"yes", "no"}:
+                out["transcription"] = {"enabled": transcription_default == "yes"}
+                applied["transcription_default"] = transcription_default
+
+    if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "publish_clip_metadata"}:
+        persistence = prefs.get("analysis_persistence")
+        if persistence == "keep_reports":
+            if not _has_any_param(out, "persist"):
+                out["persist"] = True
+            if not _has_any_param(out, "session_only", "sessionOnly"):
+                out["session_only"] = False
+            if not _has_any_param(out, "cleanup_frames", "cleanupFrames"):
+                out["cleanup_frames"] = True
+            applied["analysis_persistence"] = persistence
+        elif persistence == "keep_artifacts":
+            if not _has_any_param(out, "persist"):
+                out["persist"] = True
+            if not _has_any_param(out, "session_only", "sessionOnly"):
+                out["session_only"] = False
+            if not _has_any_param(out, "keep_artifacts", "keepArtifacts"):
+                out["keep_artifacts"] = True
+            if not _has_any_param(out, "cleanup_frames", "cleanupFrames"):
+                out["cleanup_frames"] = False
+            applied["analysis_persistence"] = persistence
+
+    if action == "publish_clip_metadata":
+        if not _has_any_param(out, "fields"):
+            out["fields"] = list(prefs.get("metadata_publish_fields") or _MEDIA_ANALYSIS_DEFAULT_PUBLISH_FIELDS)
+            applied["metadata_publish_fields"] = out["fields"]
+
+        policy = prefs.get("metadata_overwrite_policy")
+        if policy == "overwrite_all" and not _has_any_param(out, "overwrite"):
+            out["overwrite"] = True
+            applied["metadata_overwrite_policy"] = policy
+        elif policy == "fill_empty" and not _has_any_param(out, "merge_policy", "mergePolicy"):
+            out["merge_policy"] = "fill_empty"
+            applied["metadata_overwrite_policy"] = policy
+        elif policy == "overwrite_owned_blocks" and not _has_any_param(out, "merge_policy", "mergePolicy"):
+            out["merge_policy"] = "update_block"
+            applied["metadata_overwrite_policy"] = policy
+        elif policy == "preserve_human" and not _has_any_param(out, "merge_policy", "mergePolicy"):
+            out["merge_policy"] = "append_relevant"
+            applied["metadata_overwrite_policy"] = policy
+
+        if not _has_any_param(out, "slate_detection", "slateDetection"):
+            slate_default = prefs.get("slate_detection_default")
+            if slate_default in {"yes", "no"}:
+                out["slate_detection"] = {
+                    "enabled": slate_default == "yes",
+                    "use_vision": slate_default == "yes" and (prefs.get("vision_default") == "on"),
+                }
+                applied["slate_detection_default"] = slate_default
+        if not _has_any_param(out, "dry_run", "dryRun") and not prefs.get("dry_run_first_default") and _media_analysis_publish_confirmed(out):
+            out["dry_run"] = False
+            applied["dry_run_first_default"] = False
+
+    if applied:
+        out["_setup_defaults_applied"] = applied
+    return out
 
 
 async def _media_analysis_chat_context_slate_review(
@@ -5992,7 +7147,8 @@ async def _media_analysis_chat_context_slate_review(
 
 Inspect the provided frames around a detected slate clap. If a production slate
 or clapper is visible, transcribe only clearly visible text and extract fields.
-Do not guess unclear values.
+If no slate or clapper is visible, set slate_visible to false and leave fields
+empty. Do not guess unclear values or infer slate details from the audio cue.
 
 Use this schema:
 {
@@ -6064,15 +7220,21 @@ async def _publish_clip_metadata_from_analysis(
     if str(target.get("type") or p.get("target_type") or "clip").strip().lower() == "file":
         return _err("publish_clip_metadata requires Resolve Media Pool clips, not raw file targets")
 
-    records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p)
+    records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p, project=proj)
     if target_err:
         if warnings:
             target_err["warnings"] = warnings
         return target_err
     assert records is not None
 
+    marker_decision = _media_analysis_timed_marker_decision(p)
+    p = dict(p)
+    p["_timed_marker_decision"] = marker_decision
     dry_run = _media_analysis_bool(p.get("dry_run"), True)
-    if not dry_run and not _media_analysis_confirmed(p):
+    if not dry_run and not _media_analysis_publish_confirmed(p):
+        dry_run = True
+        confirmation_required = True
+    elif not dry_run and marker_decision.get("prompt_required"):
         dry_run = True
         confirmation_required = True
     else:
@@ -6165,6 +7327,7 @@ async def _publish_clip_metadata_from_analysis(
         return _err("fields must be a list of Resolve metadata field names")
     fields = [str(field) for field in fields if str(field).strip()]
     include_provenance = _media_analysis_bool(p.get("include_provenance", p.get("includeProvenance")), True)
+    marker_writeback_enabled = bool(marker_decision.get("enabled"))
     root = mp.GetRootFolder()
     results = []
     write_failures = []
@@ -6197,34 +7360,52 @@ async def _publish_clip_metadata_from_analysis(
             detection=detection,
             slate_review=slate_review,
             fields=fields,
+            require_visual_description=_media_analysis_bool((p.get("vision") or {}).get("enabled"), False),
+            require_visual_slate=True,
         )
         proposed_fields = candidate_payload["fields"]
         field_results = []
         writes: Dict[str, str] = {}
         for field in fields:
-            merged = _media_analysis_merge_metadata_field(field, metadata.get(field, ""), proposed_fields.get(field), p)
+            write_field = _metadata_write_field_for_field(field)
+            existing_value = metadata.get(write_field, metadata.get(field, ""))
+            merged = _media_analysis_merge_metadata_field(field, existing_value, proposed_fields.get(field), p)
+            if write_field != field:
+                merged["write_field"] = write_field
             field_results.append(merged)
             if merged.get("changed"):
-                writes[field] = str(merged["value"])
+                writes[write_field] = str(merged["value"])
 
         provenance = _media_analysis_provenance_metadata(report, report_path, sorted(writes.keys())) if include_provenance else {}
+        marker_writeback = _media_analysis_marker_candidates_from_report(
+            report,
+            record,
+            sync_event,
+            report_path,
+            p,
+            slate_review=slate_review,
+        )
         row = {
             "clip_id": clip_id,
             "clip_name": record.get("clip_name"),
             "success": True,
             "dry_run": dry_run,
+            "timed_marker_decision": marker_decision,
+            "marker_writeback_enabled": marker_writeback_enabled,
             "metadata_error": metadata_error,
             "third_party_metadata_error": third_party_error,
             "analysis_report": report_path,
             "fields": field_results,
             "metadata_writes": writes,
             "third_party_metadata_writes": provenance,
+            "marker_writes": marker_writeback if marker_writeback_enabled else {"enabled": False},
             "evidence": candidate_payload.get("evidence"),
             "slate_review": slate_review,
         }
         if not dry_run:
             metadata_ok = True
             third_party_ok = True
+            markers_ok = True
             for field, value in writes.items():
                 try:
                     metadata_ok = bool(clip.SetMetadata(field, value)) and metadata_ok
@@ -6237,7 +7418,12 @@ async def _publish_clip_metadata_from_analysis(
                 except Exception as exc:
                     third_party_ok = False
                     row.setdefault("write_errors", []).append({"third_party_key": key, "error": str(exc)})
-            row["success"] = metadata_ok and third_party_ok
+            if marker_writeback_enabled:
+                marker_result = _apply_media_analysis_clip_markers(clip, marker_writeback.get("markers") or [], p)
+                marker_writeback["result"] = marker_result
+                row["marker_writes"] = marker_writeback
+                markers_ok = marker_result.get("success") is True
+            row["success"] = metadata_ok and third_party_ok and markers_ok
             if not row["success"]:
                 write_failures.append(clip_id)
         results.append(row)
@@ -6245,6 +7431,10 @@ async def _publish_clip_metadata_from_analysis(
     return {
         "success": not write_failures,
         "dry_run": dry_run,
+        "setup_defaults_applied": p.get("_setup_defaults_applied", {}),
+        "marker_writeback_enabled": marker_writeback_enabled,
+        "timed_marker_decision": marker_decision,
+        "timed_marker_prompt": _media_analysis_timed_marker_prompt() if marker_decision.get("prompt_required") else None,
         "confirmation_required": confirmation_required,
         "target": normalized_target,
         "clip_count": len(records),
@@ -6371,6 +7561,7 @@ def _media_pool_ingest_capabilities():
                 "metadata snapshots",
                 "third-party metadata snapshots",
                 "clip property snapshots",
+                "metadata field inventory with inferred Resolve Metadata-panel group hints",
                 "markers, flags, clip color, audio mapping, mark in/out",
                 "media_pool.media_pool_boundary_report",
             ],
@@ -6731,6 +7922,95 @@ def _probe_clip_properties(root, mp, p: Dict[str, Any]):
     }
 
 
+def _metadata_field_inventory(root, mp, p: Dict[str, Any]):
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    include_values = _media_analysis_bool(p.get("include_values", p.get("includeValues")), False)
+    analysis_fields = list(p.get("analysis_fields") or p.get("analysisFields") or _MEDIA_ANALYSIS_DEFAULT_PUBLISH_FIELDS)
+    slate_fields = ["Scene", "Shot", "Take", "Camera #", "Roll/Card"]
+    optional_fields = list(p.get("optional_fields") or p.get("optionalFields") or slate_fields)
+
+    items = []
+    for clip in clips:
+        metadata, metadata_error = _safe_clip_call(clip, "GetMetadata", "")
+        third_party, third_party_error = _safe_clip_call(clip, "GetThirdPartyMetadata", "")
+        properties, properties_error = _safe_clip_call(clip, "GetClipProperty", "")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        third_party = third_party if isinstance(third_party, dict) else {}
+        properties = properties if isinstance(properties, dict) else {}
+        property_fields = list(properties.keys())
+        metadata_fields = list(metadata.keys())
+
+        def field_status(field: str) -> Dict[str, Any]:
+            clip_property_key = _metadata_clip_property_key_for_field(field, properties)
+            metadata_write_key = _metadata_write_field_for_field(field)
+            row = {
+                "field": field,
+                "in_get_metadata": field in metadata,
+                "in_clip_properties": clip_property_key is not None,
+                "inferred_ui_group": _metadata_panel_group_for_field(field),
+            }
+            if metadata_write_key != field:
+                row["metadata_write_key"] = metadata_write_key
+            if clip_property_key:
+                row["clip_property_key"] = clip_property_key
+            if include_values:
+                if field in metadata:
+                    row["metadata_value"] = metadata.get(field)
+                if clip_property_key:
+                    row["clip_property_value"] = properties.get(clip_property_key)
+            return row
+
+        item = {
+            "summary": _media_pool_item_summary(clip),
+            "metadata": {
+                "field_count": len(metadata_fields),
+                "fields": metadata_fields,
+            },
+            "third_party_metadata": {
+                "field_count": len(third_party),
+                "fields": list(third_party.keys()),
+            },
+            "clip_properties": {
+                "field_count": len(property_fields),
+                "fields": property_fields,
+            },
+            "metadata_panel_groups": _metadata_panel_group_inventory(property_fields),
+            "analysis_writeback_fields": {
+                "default": [field_status(str(field)) for field in analysis_fields],
+                "optional_slate": [field_status(str(field)) for field in optional_fields],
+            },
+        }
+        if metadata_error:
+            item["metadata"]["error"] = metadata_error
+        if third_party_error:
+            item["third_party_metadata"]["error"] = third_party_error
+        if properties_error:
+            item["clip_properties"]["error"] = properties_error
+        if include_values:
+            item["metadata"]["values"] = metadata
+            item["third_party_metadata"]["values"] = third_party
+            item["clip_properties"]["values"] = properties
+        items.append(item)
+
+    return {
+        "success": True,
+        "count": len(items),
+        "missing": missing,
+        "group_source": "best_effort_from_GetClipProperty_keys_and_Resolve_20_metadata_panel_labels",
+        "ui_group_names": list(_METADATA_PANEL_GROUP_ORDER),
+        "notes": [
+            "Read-only probe: no SetMetadata or SetClipProperty calls were made.",
+            "Resolve does not expose a guaranteed UI metadata-group schema through the public scripting API.",
+            "Unfilled clips may return an empty GetMetadata() dict while GetClipProperty('') still exposes metadata-panel-style fields.",
+            "metadata_panel_groups is an inferred grouping of the observed clip-property keys, not a Resolve-authored schema.",
+        ],
+        "items": items,
+    }
+
+
 def _safe_relink(mp, root, p: Dict[str, Any]):
     folder_path = p.get("folder_path")
     path_err = _path_error(folder_path, must_be_dir=True)
@@ -6965,6 +8245,651 @@ def _normalize_cdl(cdl):
 # TOOL 1: resolve
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _mcp_update_status_payload(force: bool = False, timeout: float = 3.0) -> Dict[str, Any]:
+    update_env = _setup_update_env()
+    if force:
+        update = check_for_updates(VERSION, project_dir, env=update_env, timeout=timeout, force=True)
+    else:
+        update = get_cached_update_status(project_dir, VERSION, env=update_env)
+    return {
+        "version": VERSION,
+        "update": update,
+        "decision": update_prompt_decision(update, env=update_env),
+    }
+
+
+_SETUP_UPDATE_MODES = {"prompt", "auto", "notify", "never"}
+_SETUP_CLEAR_VALUES = {"", "ask", "prompt", "clear", "default", "none", "null", "unset"}
+
+
+def _setup_update_state() -> Dict[str, Any]:
+    try:
+        with open(update_state_path(project_dir), "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _setup_update_env() -> Dict[str, str]:
+    env = dict(os.environ)
+    state = _setup_update_state()
+    if state.get("check_interval_hours") is not None and "DAVINCI_RESOLVE_MCP_UPDATE_INTERVAL_HOURS" not in env:
+        env["DAVINCI_RESOLVE_MCP_UPDATE_INTERVAL_HOURS"] = str(state["check_interval_hours"])
+    if state.get("snooze_hours") is not None and "DAVINCI_RESOLVE_MCP_UPDATE_SNOOZE_HOURS" not in env:
+        env["DAVINCI_RESOLVE_MCP_UPDATE_SNOOZE_HOURS"] = str(state["snooze_hours"])
+    return env
+
+
+def _setup_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
+def _setup_nested(params: Dict[str, Any], *keys: str) -> Dict[str, Any]:
+    for key in keys:
+        value = params.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _setup_normalize_timed_marker_default(value: Any) -> Tuple[Optional[str], Optional[str], bool]:
+    if value is None:
+        return None, None, False
+    if not isinstance(value, bool) and str(value).strip().lower().replace("-", "_").replace(" ", "_") in _SETUP_CLEAR_VALUES:
+        return None, None, True
+    choice = _normalize_timed_marker_choice(value)
+    if choice in {"default_yes", "default_no"}:
+        return ("yes" if choice == "default_yes" else "no"), None, False
+    if choice in {"yes", "no"}:
+        return choice, None, False
+    if choice == "ask":
+        return None, None, True
+    return None, f"Unsupported timed markers default: {value!r}. Use yes, no, ask, default_yes, or default_no.", False
+
+
+def _setup_media_analysis_defaults() -> Dict[str, Any]:
+    effective = _media_analysis_effective_preferences()
+    return {
+        **effective,
+        "preferences_path": _media_analysis_preferences_path(),
+        "options": {
+            "yes_no_ask": ["yes", "no", "ask"],
+            "timed_markers": ["yes", "no", "ask", "default_yes", "default_no"],
+            "vision_default": ["on", "off", "technical_only", "ask"],
+            "analysis_persistence": ["session_only", "keep_reports", "keep_artifacts"],
+            "metadata_overwrite_policy": ["preserve_human", "fill_empty", "overwrite_owned_blocks", "overwrite_all"],
+            "timed_marker_types": ["slate_clap", "sync_events", "best_moments", "qc_warnings"],
+            "analysis_summary_style": ["concise", "assistant_editor", "qc", "producer", "full"],
+            "report_format": ["compact", "full", "machine_readable"],
+            "default_post_operation_page": ["stay_put", "media", "cut", "edit", "fusion", "color", "fairlight", "deliver"],
+        },
+    }
+
+
+def _setup_updates_defaults() -> Dict[str, Any]:
+    update_env = _setup_update_env()
+    state = _setup_update_state()
+    mode = get_update_mode(project_dir, update_env)
+    update = get_cached_update_status(project_dir, VERSION, env=update_env)
+    update["update_mode"] = mode
+    return {
+        "mode": mode,
+        "check_interval_hours": _setup_positive_float(state.get("check_interval_hours"), 24.0, 0.1, 8760.0),
+        "snooze_hours": _setup_positive_float(state.get("snooze_hours"), 24.0, 0.1, 8760.0),
+        "state_path": str(update_state_path(project_dir)),
+        "options": sorted(_SETUP_UPDATE_MODES),
+        "update": update,
+        "decision": update_prompt_decision(update, env=update_env),
+    }
+
+
+def _setup_defaults_snapshot() -> Dict[str, Any]:
+    return {
+        "media_analysis": _setup_media_analysis_defaults(),
+        "updates": _setup_updates_defaults(),
+    }
+
+
+def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: bool) -> Dict[str, Any]:
+    if not media_defaults:
+        return {"changed": False, "recognized": False}
+
+    alias_to_key = {
+        "timed_markers_default": "timed_markers_default",
+        "timedmarkersdefault": "timed_markers_default",
+        "timed_markers": "timed_markers_default",
+        "timedmarkers": "timed_markers_default",
+        "write_markers": "timed_markers_default",
+        "writemarkers": "timed_markers_default",
+        "slate_detection_default": "slate_detection_default",
+        "slatedetectiondefault": "slate_detection_default",
+        "slate_detection": "slate_detection_default",
+        "slatedetection": "slate_detection_default",
+        "vision_default": "vision_default",
+        "visiondefault": "vision_default",
+        "vision": "vision_default",
+        "transcription_default": "transcription_default",
+        "transcriptiondefault": "transcription_default",
+        "transcription": "transcription_default",
+        "analysis_persistence": "analysis_persistence",
+        "analysispersistence": "analysis_persistence",
+        "persistence": "analysis_persistence",
+        "metadata_publish_fields": "metadata_publish_fields",
+        "metadatapublishfields": "metadata_publish_fields",
+        "fields": "metadata_publish_fields",
+        "metadata_fields": "metadata_publish_fields",
+        "metadata_overwrite_policy": "metadata_overwrite_policy",
+        "metadataoverwritepolicy": "metadata_overwrite_policy",
+        "overwrite_policy": "metadata_overwrite_policy",
+        "overwritepolicy": "metadata_overwrite_policy",
+        "timed_marker_types": "timed_marker_types",
+        "timedmarkertypes": "timed_marker_types",
+        "marker_types": "timed_marker_types",
+        "markertypes": "timed_marker_types",
+        "timed_marker_colors": "timed_marker_colors",
+        "timedmarkercolors": "timed_marker_colors",
+        "marker_colors": "timed_marker_colors",
+        "markercolors": "timed_marker_colors",
+        "max_timed_markers_per_clip": "max_timed_markers_per_clip",
+        "maxtimedmarkersperclip": "max_timed_markers_per_clip",
+        "max_markers": "max_timed_markers_per_clip",
+        "maxmarkers": "max_timed_markers_per_clip",
+        "include_confidence_scores": "include_confidence_scores",
+        "includeconfidencescores": "include_confidence_scores",
+        "include_source_time_notes": "include_source_time_notes",
+        "includesourcetimenotes": "include_source_time_notes",
+        "analysis_summary_style": "analysis_summary_style",
+        "analysissummarystyle": "analysis_summary_style",
+        "summary_style": "analysis_summary_style",
+        "summarystyle": "analysis_summary_style",
+        "report_format": "report_format",
+        "reportformat": "report_format",
+        "preferred_analysis_root": "preferred_analysis_root",
+        "preferredanalysisroot": "preferred_analysis_root",
+        "analysis_root": "preferred_analysis_root",
+        "analysisroot": "preferred_analysis_root",
+        "preferred_generated_media_folder": "preferred_generated_media_folder",
+        "preferredgeneratedmediafolder": "preferred_generated_media_folder",
+        "generated_media_folder": "preferred_generated_media_folder",
+        "generatedmediafolder": "preferred_generated_media_folder",
+        "default_post_operation_page": "default_post_operation_page",
+        "defaultpostoperationpage": "default_post_operation_page",
+        "post_operation_page": "default_post_operation_page",
+        "postoperationpage": "default_post_operation_page",
+        "marker_custom_data": "marker_custom_data",
+        "markercustomdata": "marker_custom_data",
+        "ask_before_metadata_publish": "ask_before_metadata_publish",
+        "askbeforemetadatapublish": "ask_before_metadata_publish",
+        "dry_run_first_default": "dry_run_first_default",
+        "dryrunfirstdefault": "dry_run_first_default",
+        "dry_run_first": "dry_run_first_default",
+        "dryrunfirst": "dry_run_first_default",
+    }
+
+    requested: Dict[str, Any] = {}
+    for key, value in media_defaults.items():
+        normalized_key = alias_to_key.get(_setup_text_key(key).replace("_", ""))
+        if not normalized_key:
+            normalized_key = alias_to_key.get(_setup_text_key(key))
+        if normalized_key:
+            requested[normalized_key] = value
+    if not requested:
+        return {"changed": False, "recognized": False}
+
+    preferences = _read_media_analysis_preferences()
+    before = _media_analysis_effective_preferences()
+    next_preferences = dict(preferences)
+    updates: Dict[str, Dict[str, Any]] = {}
+
+    def clear_requested(raw: Any) -> bool:
+        return raw is None or (not isinstance(raw, bool) and _setup_text_key(raw) in _SETUP_CHOICE_CLEAR_VALUES)
+
+    def set_or_clear(key: str, raw: Any, value: Any, *, allow_clear: bool = True) -> None:
+        if allow_clear and clear_requested(raw):
+            next_preferences.pop(key, None)
+            next_preferences.pop(f"{key}_updated_at", None)
+            updates[key] = {"before": before.get(key), "after": _MEDIA_ANALYSIS_DEFAULT_PREFS.get(key), "cleared": True}
+        else:
+            next_preferences[key] = value
+            updates[key] = {"before": before.get(key), "after": value}
+
+    for key, raw_value in requested.items():
+        if key == "timed_markers_default":
+            normalized, error, clear = _setup_normalize_timed_marker_default(raw_value)
+            if error:
+                return _err(error)
+            if clear:
+                next_preferences.pop("timed_markers_default", None)
+                next_preferences.pop("timed_markers_default_updated_at", None)
+                updates[key] = {"before": before.get(key), "after": None, "cleared": True}
+            else:
+                next_preferences["timed_markers_default"] = normalized
+                updates[key] = {"before": before.get(key), "after": normalized}
+        elif clear_requested(raw_value):
+            set_or_clear(key, raw_value, _MEDIA_ANALYSIS_DEFAULT_PREFS.get(key))
+        elif key in {"slate_detection_default", "transcription_default"}:
+            normalized = _normalize_yes_no_ask(raw_value)
+            if normalized is None:
+                return _err(f"Unsupported {key}: {raw_value!r}. Use yes, no, or ask.")
+            set_or_clear(key, raw_value, normalized)
+        elif key == "vision_default":
+            normalized = _normalize_vision_default(raw_value)
+            if normalized is None:
+                return _err("Unsupported vision_default. Use on, off, technical_only, or ask.")
+            set_or_clear(key, raw_value, normalized)
+        elif key == "analysis_persistence":
+            normalized = _normalize_analysis_persistence(raw_value)
+            if normalized is None:
+                return _err("Unsupported analysis_persistence. Use session_only, keep_reports, or keep_artifacts.")
+            set_or_clear(key, raw_value, normalized)
+        elif key == "metadata_publish_fields":
+            fields = [str(field).strip() for field in _media_analysis_as_list(raw_value) if str(field).strip()]
+            if not fields and not clear_requested(raw_value):
+                return _err("metadata_publish_fields must be a non-empty list or comma-separated string.")
+            set_or_clear(key, raw_value, fields)
+        elif key == "metadata_overwrite_policy":
+            normalized = _normalize_metadata_overwrite_policy(raw_value)
+            if normalized is None:
+                return _err("Unsupported metadata_overwrite_policy. Use preserve_human, fill_empty, overwrite_owned_blocks, or overwrite_all.")
+            set_or_clear(key, raw_value, normalized)
+        elif key == "timed_marker_types":
+            marker_types = _normalize_setup_list(
+                raw_value,
+                aliases=_MEDIA_ANALYSIS_MARKER_TYPE_ALIASES,
+                allowed=["slate_clap", "sync_events", "best_moments", "qc_warnings"],
+            )
+            if not marker_types and not clear_requested(raw_value):
+                return _err("timed_marker_types must include slate_clap, sync_events, best_moments, or qc_warnings.")
+            set_or_clear(key, raw_value, marker_types)
+        elif key == "timed_marker_colors":
+            colors = _normalize_marker_colors(raw_value)
+            if not colors and not clear_requested(raw_value):
+                return _err("timed_marker_colors must be an object of marker type to Resolve marker color.")
+            set_or_clear(key, raw_value, colors)
+        elif key == "max_timed_markers_per_clip":
+            set_or_clear(key, raw_value, _setup_positive_int(raw_value, 12, 0, 250))
+        elif key in {"include_confidence_scores", "include_source_time_notes", "ask_before_metadata_publish", "dry_run_first_default"}:
+            set_or_clear(key, raw_value, _media_analysis_bool(raw_value, _MEDIA_ANALYSIS_DEFAULT_PREFS[key]))
+        elif key == "analysis_summary_style":
+            normalized = _normalize_setup_choice(
+                raw_value,
+                ["concise", "assistant_editor", "qc", "producer", "full"],
+                aliases={"assistant": "assistant_editor", "editor": "assistant_editor"},
+            )
+            if normalized is None:
+                return _err("Unsupported analysis_summary_style. Use concise, assistant_editor, qc, producer, or full.")
+            set_or_clear(key, raw_value, normalized)
+        elif key == "report_format":
+            normalized = _normalize_setup_choice(raw_value, ["compact", "full", "machine_readable"])
+            if normalized is None:
+                return _err("Unsupported report_format. Use compact, full, or machine_readable.")
+            set_or_clear(key, raw_value, normalized)
+        elif key == "default_post_operation_page":
+            normalized = _normalize_setup_choice(
+                raw_value,
+                ["stay_put", "media", "cut", "edit", "fusion", "color", "fairlight", "deliver"],
+                aliases={"media_pool": "media", "none": "stay_put"},
+            )
+            if normalized is None:
+                return _err("Unsupported default_post_operation_page.")
+            set_or_clear(key, raw_value, normalized)
+        elif key == "marker_custom_data":
+            normalized = _normalize_setup_choice(raw_value, ["namespaced", "minimal"])
+            if normalized is None:
+                return _err("Unsupported marker_custom_data. Use namespaced or minimal.")
+            set_or_clear(key, raw_value, normalized)
+        elif key in {"preferred_analysis_root", "preferred_generated_media_folder"}:
+            path = None if clear_requested(raw_value) else os.path.realpath(os.path.abspath(os.path.expanduser(str(raw_value))))
+            set_or_clear(key, raw_value, path)
+
+    if dry_run:
+        return {
+            "changed": True,
+            "recognized": True,
+            "updates": updates,
+            "before": before,
+            "after": {**before, **{key: row.get("after") for key, row in updates.items()}},
+            "dry_run": True,
+        }
+
+    updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    for key, row in updates.items():
+        if row.get("cleared"):
+            next_preferences.pop(f"{key}_updated_at", None)
+        else:
+            next_preferences[f"{key}_updated_at"] = updated_at
+    _write_media_analysis_preferences(next_preferences)
+    after = _media_analysis_effective_preferences()
+    return {
+        "changed": before != after,
+        "recognized": True,
+        "updates": updates,
+        "before": before,
+        "after": after,
+        "updated_at": updated_at,
+        "preferences_path": _media_analysis_preferences_path(),
+    }
+
+
+def _setup_set_updates_defaults(update_defaults: Dict[str, Any], dry_run: bool) -> Dict[str, Any]:
+    mode = _first_param(
+        update_defaults,
+        "mode",
+        "update_mode",
+        "updateMode",
+        "policy",
+        "update_policy",
+        "updatePolicy",
+        default=None,
+    )
+    interval = _first_param(
+        update_defaults,
+        "check_interval_hours",
+        "checkIntervalHours",
+        "interval_hours",
+        "intervalHours",
+        "update_interval_hours",
+        "updateIntervalHours",
+        default=None,
+    )
+    snooze = _first_param(
+        update_defaults,
+        "snooze_hours",
+        "snoozeHours",
+        "update_snooze_hours",
+        "updateSnoozeHours",
+        default=None,
+    )
+    if mode is None and interval is None and snooze is None:
+        return {"changed": False, "recognized": False}
+
+    before = _setup_updates_defaults()
+    state = _setup_update_state()
+    updates: Dict[str, Dict[str, Any]] = {}
+    if mode is not None:
+        normalized = str(mode).strip().lower().replace("-", "_")
+        if normalized == "manual":
+            normalized = "prompt"
+        if normalized not in _SETUP_UPDATE_MODES:
+            return _err("Unsupported update mode. Use prompt, auto, notify, or never.")
+        updates["mode"] = {"before": before.get("mode"), "after": normalized}
+    if interval is not None:
+        normalized_interval = _setup_positive_float(interval, 24.0, 0.1, 8760.0)
+        updates["check_interval_hours"] = {"before": before.get("check_interval_hours"), "after": normalized_interval}
+    if snooze is not None:
+        normalized_snooze = _setup_positive_float(snooze, 24.0, 0.1, 8760.0)
+        updates["snooze_hours"] = {"before": before.get("snooze_hours"), "after": normalized_snooze}
+
+    if dry_run:
+        return {"changed": True, "recognized": True, "updates": updates, "before": before, "dry_run": True}
+
+    if "mode" in updates:
+        set_update_mode(project_dir, updates["mode"]["after"], env=_setup_update_env())
+        state = _setup_update_state()
+    updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if "check_interval_hours" in updates:
+        state["check_interval_hours"] = updates["check_interval_hours"]["after"]
+    if "snooze_hours" in updates:
+        state["snooze_hours"] = updates["snooze_hours"]["after"]
+    if updates:
+        state["setup_defaults_updated_at"] = updated_at
+        with open(update_state_path(project_dir), "w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+    return {
+        "changed": bool(updates),
+        "recognized": True,
+        "updates": updates,
+        "before": before,
+        "after": _setup_updates_defaults(),
+        "state_path": str(update_state_path(project_dir)),
+    }
+
+
+def _setup_clear_defaults(keys: Any, dry_run: bool) -> Dict[str, Any]:
+    if keys is None:
+        normalized_keys = {"all"}
+    elif isinstance(keys, str):
+        normalized_keys = {part.strip().lower() for part in keys.split(",") if part.strip()}
+    elif isinstance(keys, list):
+        normalized_keys = {str(part).strip().lower() for part in keys if str(part).strip()}
+    else:
+        return _err("keys must be a string, list, or omitted")
+
+    clear_all = not normalized_keys or "all" in normalized_keys
+    result: Dict[str, Any] = {"dry_run": dry_run, "cleared": []}
+
+    media_clear_keys = {
+        "timed_markers_default": "media_analysis.timed_markers_default",
+        "slate_detection_default": "media_analysis.slate_detection_default",
+        "vision_default": "media_analysis.vision_default",
+        "transcription_default": "media_analysis.transcription_default",
+        "analysis_persistence": "media_analysis.analysis_persistence",
+        "metadata_publish_fields": "media_analysis.metadata_publish_fields",
+        "metadata_overwrite_policy": "media_analysis.metadata_overwrite_policy",
+        "timed_marker_types": "media_analysis.timed_marker_types",
+        "timed_marker_colors": "media_analysis.timed_marker_colors",
+        "max_timed_markers_per_clip": "media_analysis.max_timed_markers_per_clip",
+        "include_confidence_scores": "media_analysis.include_confidence_scores",
+        "include_source_time_notes": "media_analysis.include_source_time_notes",
+        "analysis_summary_style": "media_analysis.analysis_summary_style",
+        "report_format": "media_analysis.report_format",
+        "preferred_analysis_root": "media_analysis.preferred_analysis_root",
+        "preferred_generated_media_folder": "media_analysis.preferred_generated_media_folder",
+        "default_post_operation_page": "media_analysis.default_post_operation_page",
+        "marker_custom_data": "media_analysis.marker_custom_data",
+        "ask_before_metadata_publish": "media_analysis.ask_before_metadata_publish",
+        "dry_run_first_default": "media_analysis.dry_run_first_default",
+    }
+    media_payload: Dict[str, Any] = {}
+    if clear_all or "media_analysis" in normalized_keys:
+        media_payload = {key: "clear" for key in media_clear_keys}
+    else:
+        for key, label in media_clear_keys.items():
+            if key in normalized_keys or label in normalized_keys:
+                media_payload[key] = "clear"
+    if media_payload:
+        result["media_analysis"] = _setup_set_media_analysis_defaults(media_payload, dry_run)
+        if result["media_analysis"].get("error"):
+            return result["media_analysis"]
+        result["cleared"].extend(media_clear_keys[key] for key in media_payload)
+
+    if clear_all or normalized_keys & {"updates", "updates.mode", "update_mode", "mcp_update_policy"}:
+        result["updates"] = _setup_set_updates_defaults({"mode": "prompt"}, dry_run)
+        if result["updates"].get("error"):
+            return result["updates"]
+        result["cleared"].append("updates.mode")
+
+    if clear_all or normalized_keys & {"updates.check_interval_hours", "check_interval_hours", "update_interval_hours"}:
+        state = _setup_update_state()
+        if dry_run:
+            result["update_check_interval_hours"] = {"changed": True, "dry_run": True}
+        else:
+            state.pop("check_interval_hours", None)
+            with open(update_state_path(project_dir), "w", encoding="utf-8") as handle:
+                json.dump(state, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            result["update_check_interval_hours"] = {"changed": True, "state_path": str(update_state_path(project_dir))}
+        result["cleared"].append("updates.check_interval_hours")
+
+    if clear_all or normalized_keys & {"updates.snooze_hours", "snooze_hours", "update_snooze_hours"}:
+        state = _setup_update_state()
+        if dry_run:
+            result["update_snooze_hours"] = {"changed": True, "dry_run": True}
+        else:
+            state.pop("snooze_hours", None)
+            with open(update_state_path(project_dir), "w", encoding="utf-8") as handle:
+                json.dump(state, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            result["update_snooze_hours"] = {"changed": True, "state_path": str(update_state_path(project_dir))}
+        result["cleared"].append("updates.snooze_hours")
+
+    if clear_all or normalized_keys & {"updates.prompt_preferences", "updates.snooze", "updates.ignore", "update_prompt_preferences"}:
+        if dry_run:
+            result["update_prompt_preferences"] = {"changed": True, "dry_run": True}
+        else:
+            clear_update_prompt_preferences(project_dir)
+            result["update_prompt_preferences"] = {"changed": True, "state_path": str(update_state_path(project_dir))}
+        result["cleared"].append("updates.prompt_preferences")
+
+    if not result["cleared"]:
+        return _err("No known setup defaults matched keys")
+    result["defaults"] = _setup_defaults_snapshot()
+    return _ok(**result)
+
+
+@mcp.tool()
+def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Configure MCP conversational defaults and setup preferences.
+
+    Actions:
+      schema() -> {defaults, actions}
+      get_defaults() -> {defaults}
+      set_defaults(defaults?|media_analysis?|updates?|dry_run?) -> {defaults, changes}
+      clear_defaults(keys?, dry_run?) -> {defaults, cleared}
+
+    Current defaults:
+      media_analysis.*: analysis, metadata, marker, reporting, and workflow defaults
+      updates.*: MCP update policy, interval, and snooze defaults
+    """
+    p = params or {}
+    if action in {"schema", "capabilities", "options"}:
+        return {
+            "actions": ["schema", "get_defaults", "set_defaults", "clear_defaults"],
+            "defaults": {
+                "media_analysis.timed_markers_default": {
+                    "description": "Default answer for writing source-time analysis notes as Media Pool clip markers.",
+                    "values": ["yes", "no", "ask", "default_yes", "default_no"],
+                    "storage": _media_analysis_preferences_path(),
+                },
+                "media_analysis.slate_detection_default": {"values": ["yes", "no", "ask"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.vision_default": {"values": ["on", "off", "technical_only", "ask"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.transcription_default": {"values": ["yes", "no", "ask"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.analysis_persistence": {"values": ["session_only", "keep_reports", "keep_artifacts"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.metadata_publish_fields": {"values": "list of Resolve metadata field names", "storage": _media_analysis_preferences_path()},
+                "media_analysis.metadata_overwrite_policy": {"values": ["preserve_human", "fill_empty", "overwrite_owned_blocks", "overwrite_all"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.timed_marker_types": {"values": ["slate_clap", "sync_events", "best_moments", "qc_warnings"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.timed_marker_colors": {"values": "object mapping marker type to Resolve marker color", "storage": _media_analysis_preferences_path()},
+                "media_analysis.max_timed_markers_per_clip": {"values": "integer 0-250", "storage": _media_analysis_preferences_path()},
+                "media_analysis.include_confidence_scores": {"values": [True, False], "storage": _media_analysis_preferences_path()},
+                "media_analysis.include_source_time_notes": {"values": [True, False], "storage": _media_analysis_preferences_path()},
+                "media_analysis.analysis_summary_style": {"values": ["concise", "assistant_editor", "qc", "producer", "full"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.report_format": {"values": ["compact", "full", "machine_readable"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.preferred_analysis_root": {"values": "absolute or expandable path", "storage": _media_analysis_preferences_path()},
+                "media_analysis.preferred_generated_media_folder": {"values": "absolute or expandable path", "storage": _media_analysis_preferences_path()},
+                "media_analysis.default_post_operation_page": {"values": ["stay_put", "media", "cut", "edit", "fusion", "color", "fairlight", "deliver"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.marker_custom_data": {"values": ["namespaced", "minimal"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.ask_before_metadata_publish": {"values": [True, False], "storage": _media_analysis_preferences_path()},
+                "media_analysis.dry_run_first_default": {"values": [True, False], "storage": _media_analysis_preferences_path()},
+                "updates.mode": {
+                    "description": "Local MCP update policy.",
+                    "values": sorted(_SETUP_UPDATE_MODES),
+                    "storage": str(update_state_path(project_dir)),
+                },
+                "updates.check_interval_hours": {"values": "number >= 0.1", "storage": str(update_state_path(project_dir))},
+                "updates.snooze_hours": {"values": "number >= 0.1", "storage": str(update_state_path(project_dir))},
+            },
+        }
+
+    if action in {"get_defaults", "get", "status"}:
+        return _ok(defaults=_setup_defaults_snapshot())
+
+    dry_run = _setup_bool(p.get("dry_run", p.get("dryRun")), False)
+
+    if action in {"set_defaults", "set", "configure"}:
+        defaults = p.get("defaults") if isinstance(p.get("defaults"), dict) else {}
+        merged = {**defaults, **{k: v for k, v in p.items() if k != "defaults"}}
+        media_defaults = {
+            **_setup_nested(merged, "media_analysis", "mediaAnalysis"),
+            **{
+                key: value
+                for key, value in merged.items()
+                if key not in {"updates", "mcp_updates", "mcpUpdates", "dry_run", "dryRun"}
+            },
+            **({
+                "timed_markers_default": _first_param(
+                    merged,
+                    "timed_markers_default",
+                    "timedMarkersDefault",
+                    "timed_markers",
+                    "timedMarkers",
+                    "write_markers",
+                    "writeMarkers",
+                    default=None,
+                )
+            } if any(key in merged for key in ("timed_markers_default", "timedMarkersDefault", "timed_markers", "timedMarkers", "write_markers", "writeMarkers")) else {}),
+        }
+        update_defaults = {
+            **_setup_nested(merged, "updates", "mcp_updates", "mcpUpdates"),
+            **({
+                "mode": _first_param(
+                    merged,
+                    "update_mode",
+                    "updateMode",
+                    "update_policy",
+                    "updatePolicy",
+                    "mcp_update_policy",
+                    "mcpUpdatePolicy",
+                    default=None,
+                )
+            } if any(key in merged for key in ("update_mode", "updateMode", "update_policy", "updatePolicy", "mcp_update_policy", "mcpUpdatePolicy")) else {}),
+            **({
+                "check_interval_hours": _first_param(
+                    merged,
+                    "check_interval_hours",
+                    "checkIntervalHours",
+                    "update_interval_hours",
+                    "updateIntervalHours",
+                    default=None,
+                )
+            } if any(key in merged for key in ("check_interval_hours", "checkIntervalHours", "update_interval_hours", "updateIntervalHours")) else {}),
+            **({
+                "snooze_hours": _first_param(
+                    merged,
+                    "snooze_hours",
+                    "snoozeHours",
+                    "update_snooze_hours",
+                    "updateSnoozeHours",
+                    default=None,
+                )
+            } if any(key in merged for key in ("snooze_hours", "snoozeHours", "update_snooze_hours", "updateSnoozeHours")) else {}),
+        }
+
+        media_result = _setup_set_media_analysis_defaults(media_defaults, dry_run)
+        if media_result.get("error"):
+            return media_result
+        update_result = _setup_set_updates_defaults(update_defaults, dry_run)
+        if update_result.get("error"):
+            return update_result
+        recognized = bool(media_result.get("recognized")) or bool(update_result.get("recognized"))
+        if not recognized:
+            return _err("set_defaults did not receive a recognized default to set")
+
+        return _ok(
+            dry_run=dry_run,
+            changes={
+                "media_analysis": media_result,
+                "updates": update_result,
+            },
+            defaults=_setup_defaults_snapshot(),
+        )
+
+    if action in {"clear_defaults", "clear", "reset"}:
+        return _setup_clear_defaults(p.get("keys"), dry_run)
+
+    return _unknown(action, ["schema", "get_defaults", "set_defaults", "clear_defaults"])
+
+
 @mcp.tool()
 def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """App-level DaVinci Resolve operations.
@@ -6972,6 +8897,11 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     Actions:
       launch() -> {success, message}  — Launch DaVinci Resolve if not running. Call this FIRST if any tool returns a 'Not connected' error.
       get_version() -> {product, version, version_string}
+      mcp_update_status(force_check?) -> {version, update, decision}
+      set_mcp_update_policy(mode) -> {success, version, update, decision}
+      ignore_mcp_update() -> {success, version, update, decision}
+      snooze_mcp_update(hours?) -> {success, version, update, decision}
+      clear_mcp_update_preferences() -> {success, version, update, decision}
       get_page() -> {page}
       open_page(page) -> {success}  — page: edit, cut, color, fusion, fairlight, deliver
       get_keyframe_mode() -> {mode}
@@ -6981,6 +8911,30 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       set_high_priority() -> {success}
     """
     p = params or {}
+
+    if action == "mcp_update_status":
+        return _mcp_update_status_payload(
+            force=_media_analysis_bool(p.get("force_check", p.get("forceCheck")), False),
+            timeout=float(p.get("timeout", 3.0)),
+        )
+    elif action == "set_mcp_update_policy":
+        mode = str(p.get("mode") or "").strip().lower()
+        if mode not in {"prompt", "auto", "notify", "never"}:
+            return _err("set_mcp_update_policy requires mode: prompt, auto, notify, or never")
+        set_update_mode(project_dir, mode, env=_setup_update_env())
+        return _ok(**_mcp_update_status_payload())
+    elif action == "ignore_mcp_update":
+        update = get_cached_update_status(project_dir, VERSION, env=_setup_update_env())
+        if update.get("status") != "update_available":
+            return _err("No available MCP update is cached to ignore.")
+        ignore_update_version(project_dir, update, env=_setup_update_env())
+        return _ok(**_mcp_update_status_payload())
+    elif action == "snooze_mcp_update":
+        snooze_update_prompt(project_dir, hours=p.get("hours"), env=_setup_update_env())
+        return _ok(**_mcp_update_status_payload())
+    elif action == "clear_mcp_update_preferences":
+        clear_update_prompt_preferences(project_dir, env=_setup_update_env())
+        return _ok(**_mcp_update_status_payload())
 
     # launch works even when Resolve is not connected
     if action == "launch":
@@ -6994,13 +8948,16 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return _err("Could not connect to DaVinci Resolve after auto-launch attempt. Check that Resolve Studio is installed.")
 
     if action == "get_version":
+        update_env = _setup_update_env()
+        mcp_update = get_cached_update_status(project_dir, VERSION, env=update_env)
         return {
             "product": r.GetProductName(),
             "version": r.GetVersion(),
             "version_string": r.GetVersionString(),
             "mcp": {
                 "version": VERSION,
-                "update": get_cached_update_status(project_dir, VERSION),
+                "update": mcp_update,
+                "update_decision": update_prompt_decision(mcp_update, env=update_env),
             },
         }
     elif action == "get_page":
@@ -7024,7 +8981,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"presets": _ser(r.GetFairlightPresets())}
     elif action == "set_high_priority":
         return {"success": bool(r.SetHighPriority())}
-    return _unknown(action, ["launch","get_version","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority"])
+    return _unknown(action, ["launch","get_version","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -8558,6 +10515,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       copy_metadata(source_clip_id, target_clip_ids, keys?, include_third_party?, dry_run?) -> {success, results}
       normalize_metadata(clip_ids|selected, metadata?, third_party_metadata?, dry_run?) -> {success, results}
       probe_clip_properties(clip_ids|selected) -> {items, count}
+      metadata_field_inventory(clip_ids|selected, include_values?) -> {items, ui_group_names}
       safe_relink(clip_ids|selected, folder_path, dry_run?) -> {success}
       safe_unlink(clip_ids|selected, dry_run?) -> {success}
       link_proxy_checked(clip_id, proxy_path|path, dry_run?) -> {success}
@@ -8792,6 +10750,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         return _normalize_metadata(root, mp, p)
     elif action == "probe_clip_properties":
         return _probe_clip_properties(root, mp, p)
+    elif action == "metadata_field_inventory":
+        return _metadata_field_inventory(root, mp, p)
     elif action == "safe_relink":
         return _safe_relink(mp, root, p)
     elif action == "safe_unlink":
@@ -9090,9 +11050,11 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       analyze_clip(clip_id|selected, dry_run?, session_only?, persist?) -> {clips, manifest}
       analyze_bin(path|bin_path, recursive?, dry_run?, session_only?, persist?) -> {clips, manifest}
       analyze_project(recursive?, dry_run?, session_only?, persist?) -> {clips, manifest}
+      analyze_sequence(timeline_index?, track_types?, dry_run?, session_only?, persist?) -> {clips, manifest}
+      analyze_timeline(...) -> alias for analyze_sequence on the current timeline
       detect_sync_events(paths?|target?, event_types?, windows?) -> {files, alignment}
       add_sync_event_markers(target?|paths?|detections?, confirm?) -> {added, skipped}
-      publish_clip_metadata(target?, fields?, slate_detection?, dry_run?, confirm?) -> {results}
+      publish_clip_metadata(target?, fields?, slate_detection?, timed_markers?|write_markers?, dry_run?, confirm?) -> {results}
       review_timeline_markers(max_samples?, analysis_root?, vision?) -> {path, samples, vision_review?}
       summarize(analysis_root?) -> project summary from existing clip reports
       get_report(report_path?) -> load manifest or a report under the analysis root
@@ -9103,10 +11065,13 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
     file/clip analysis defaults to session-only: scratch artifacts are removed
     after structured reports are returned unless persist=true or keep_artifacts=true.
     publish_clip_metadata is a separate confirmed Resolve-project metadata write.
+    Time-based Media Pool clip markers are opt-in. If no timed marker choice or
+    saved default exists, publish_clip_metadata returns a timed_marker_prompt
+    with yes, no, default_yes, and default_no choices.
     Set vision={enabled:true, provider:"chat_context"} to request visual
     analysis from the MCP client's current chat/sampling model when supported.
     """
-    p = dict(params or {})
+    p = _media_analysis_apply_setup_defaults(action, dict(params or {}))
 
     if action == "capabilities":
         caps = detect_media_analysis_capabilities()
@@ -9224,8 +11189,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
     if action == "publish_clip_metadata":
         return await _publish_clip_metadata_from_analysis(proj, p, ctx)
 
-    if action in {"analyze_file", "analyze_clip", "analyze_bin", "analyze_project"}:
-        dry_run_default = action in {"analyze_bin", "analyze_project"}
+    if action in {"analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence"}:
+        dry_run_default = action in {"analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence"}
         p["dry_run"] = _media_analysis_bool(p.get("dry_run"), dry_run_default)
         target = _media_analysis_target_dict(p.get("target"), p)
         if target.get("_invalid_target"):
@@ -9238,6 +11203,12 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             target.update({"type": "bin", "path": p.get("bin_path") or p.get("path") or target.get("path") or "Master", "recursive": p.get("recursive", target.get("recursive", True))})
         elif action == "analyze_project":
             target.update({"type": "project", "recursive": p.get("recursive", target.get("recursive", True))})
+        elif action in {"analyze_timeline", "analyze_sequence"}:
+            target.update({
+                "type": "sequence",
+                "timeline_index": p.get("timeline_index") or p.get("timelineIndex") or target.get("timeline_index") or target.get("timelineIndex"),
+                "track_types": p.get("track_types") or p.get("trackTypes") or target.get("track_types") or target.get("trackTypes"),
+            })
         p["target"] = target
         action = "plan"
 
@@ -9267,7 +11238,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             mp = proj.GetMediaPool()
             if not mp:
                 return _err("Failed to get MediaPool")
-        records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p)
+        records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p, project=proj)
         if target_err:
             if warnings:
                 target_err["warnings"] = warnings
@@ -9280,6 +11251,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             params=p,
             capabilities=detect_media_analysis_capabilities(),
         )
+        if p.get("_setup_defaults_applied"):
+            plan["setup_defaults_applied"] = p.get("_setup_defaults_applied")
         if warnings:
             plan["warnings"] = warnings
         if not bool(p.get("dry_run", True)):
@@ -9315,6 +11288,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "analyze_clip",
         "analyze_bin",
         "analyze_project",
+        "analyze_sequence",
+        "analyze_timeline",
         "detect_sync_events",
         "add_sync_event_markers",
         "publish_clip_metadata",
@@ -13474,7 +15449,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    start_background_update_check(VERSION, project_dir, logger)
+    start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
 
     # Support --full flag to run the 329-tool granular server instead
     if "--full" in sys.argv:
@@ -13485,5 +15460,5 @@ if __name__ == "__main__":
         run_fastmcp_stdio(granular_mcp)
         sys.exit(0)
 
-    logger.info(f"Starting DaVinci Resolve MCP Server (31 compound tools)")
+    logger.info(f"Starting DaVinci Resolve MCP Server (32 compound tools)")
     run_fastmcp_stdio(mcp)

@@ -2,6 +2,52 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.22.0
+
+**Configurable MCP update prompting** — Update checks now carry a persisted
+policy: `prompt`, `auto`, `notify`, or `never`. The server still never blocks
+MCP stdio startup, but the installer can prompt users to update, continue,
+snooze for 24 hours, ignore the current release, enable safe auto-update, or
+disable checks. Safe auto-update is opt-in and only attempts a clean git
+fast-forward from checkouts with no local changes and a configured upstream.
+
+**MCP update controls** — `resolve_control.mcp_update_status` reports the local
+MCP version, cached or forced update status, and the current prompt decision.
+`set_mcp_update_policy`, `ignore_mcp_update`, `snooze_mcp_update`, and
+`clear_mcp_update_preferences` expose the same policy state through the
+compound server without requiring Resolve to be connected.
+
+**Conversation setup defaults** — New `setup` compound tool centralizes
+conversation-configurable defaults. It can read, set, dry-run, and clear
+preferences for media-analysis modality, slate detection, transcription,
+analysis persistence, metadata publish fields and overwrite policy, timed marker
+types/colors/counts, report style, preferred analysis roots, post-operation page
+behavior, and MCP update interval/snooze policy. These defaults shape future
+tool calls while preserving explicit confirmation for Resolve project writes.
+
+**Metadata field inventory** — `media_pool.metadata_field_inventory` gives
+assistant editors and metadata workflows a read-only map of clip metadata,
+clip-property keys, default analysis writeback fields, optional slate fields,
+and inferred Resolve Metadata-panel groups. This helps bridge analysis
+publishing to the fields Resolve actually exposes on a given clip/build.
+
+**Optional timed analysis markers** — `media_analysis.publish_clip_metadata`
+can now write source-frame Media Pool clip markers for slate claps, best
+moments, and QC warnings when the user opts in. If no marker preference exists,
+the tool returns a prompt with yes/no/default-yes/default-no choices rather than
+silently writing markers.
+
+**Validation**: static import checks, API parity audit, `git diff --check`, and
+focused update-check, media-analysis, and media-pool ingest unit tests passed.
+Media-pool ingest tests cover the new metadata inventory and Metadata-panel
+group hints. Live validation used DaVinci Resolve Studio 20.3.2.9 through the
+connected MCP server with a disposable project and synthetic media only. It
+verified `metadata_field_inventory`, `MediaPool.ExportMetadata()` header
+comparison, default analysis writeback field mapping, and `SetMetadata()`
+readback for analysis and slate fields. The standalone live metadata inventory
+harness is included for future release validation with a Resolve-compatible
+Python 3.10-3.12 interpreter.
+
 ## What's New in v2.21.0
 
 **Resolve metadata publishing from analysis** —

@@ -17,15 +17,29 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 DEFAULT_REPO = "samuelgursky/davinci-resolve-mcp"
 DEFAULT_INTERVAL_HOURS = 24.0
 DEFAULT_TIMEOUT_SECONDS = 3.0
+DEFAULT_SNOOZE_HOURS = 24.0
 
 ENV_ENABLED = "DAVINCI_RESOLVE_MCP_UPDATE_CHECK"
 ENV_INTERVAL_HOURS = "DAVINCI_RESOLVE_MCP_UPDATE_INTERVAL_HOURS"
+ENV_MODE = "DAVINCI_RESOLVE_MCP_UPDATE_MODE"
 ENV_REPO = "DAVINCI_RESOLVE_MCP_UPDATE_REPO"
+ENV_SNOOZE_HOURS = "DAVINCI_RESOLVE_MCP_UPDATE_SNOOZE_HOURS"
 ENV_URL = "DAVINCI_RESOLVE_MCP_UPDATE_URL"
 ENV_STATE_PATH = "DAVINCI_RESOLVE_MCP_UPDATE_STATE"
 
 _FALSE_VALUES = {"0", "false", "no", "off", "disabled"}
+_TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
+_UPDATE_MODES = {"prompt", "auto", "notify", "never"}
 _SUCCESS_STATUSES = {"up_to_date", "update_available", "current_ahead"}
+_PERSISTENT_STATE_KEYS = (
+    "update_mode",
+    "ignored_version",
+    "ignored_tag",
+    "ignored_at",
+    "ignored_at_iso",
+    "snooze_until",
+    "snooze_until_iso",
+)
 _started_lock = threading.Lock()
 _started = False
 _cached_lock = threading.Lock()
@@ -36,7 +50,41 @@ def update_check_enabled(env: Optional[Mapping[str, str]] = None) -> bool:
     """Return whether startup update checks are enabled."""
     values = os.environ if env is None else env
     raw = str(values.get(ENV_ENABLED, "1")).strip().lower()
-    return raw not in _FALSE_VALUES
+    return raw not in _FALSE_VALUES and _normalize_update_mode(values.get(ENV_MODE)) != "never"
+
+
+def get_update_mode(
+    project_dir: Optional[os.PathLike[str] | str] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> str:
+    """Return the configured update policy mode.
+
+    Modes:
+    - prompt: check and let human-facing callers prompt.
+    - auto: human-facing callers may apply a safe update automatically.
+    - notify: check and report only.
+    - never: do not check for updates.
+    """
+    values = os.environ if env is None else env
+    if not update_check_enabled(values):
+        return "never"
+
+    env_mode = _normalize_update_mode(values.get(ENV_MODE))
+    if env_mode:
+        return env_mode
+
+    legacy_auto = str(values.get("DAVINCI_RESOLVE_MCP_AUTO_UPDATE", "")).strip().lower()
+    if legacy_auto in _TRUE_VALUES:
+        return "auto"
+    if legacy_auto in _FALSE_VALUES:
+        return "prompt"
+
+    if project_dir is not None:
+        state = _read_state(update_state_path(project_dir, values))
+        state_mode = _normalize_update_mode(state.get("update_mode"))
+        if state_mode:
+            return state_mode
+    return "prompt"
 
 
 def parse_version(value: Any) -> Tuple[int, ...]:
@@ -92,10 +140,13 @@ def get_cached_update_status(
     if state:
         if current_version and "current_version" not in state:
             state["current_version"] = current_version
+        if "update_mode" not in state:
+            state["update_mode"] = get_update_mode(project_dir, env)
         return state
     result = {"status": "unknown"}
     if current_version:
         result["current_version"] = current_version
+    result["update_mode"] = get_update_mode(project_dir, env)
     return result
 
 
@@ -116,18 +167,23 @@ def check_for_updates(
     values = os.environ if env is None else env
     checked_at = time.time() if now is None else float(now)
     state_path = update_state_path(project_dir, values)
+    previous = _read_state(state_path)
+    update_mode = get_update_mode(project_dir, values)
 
-    if not update_check_enabled(values):
+    if update_mode == "never":
         result = {
             "status": "disabled",
             "current_version": current_version,
+            "update_mode": "never",
             "checked_at": checked_at,
             "checked_at_iso": _format_timestamp(checked_at),
         }
+        result = _merge_persistent_state(previous, result)
+        if update_check_enabled(values):
+            _write_state(state_path, result)
         _set_cached_status(result)
         return result
 
-    previous = _read_state(state_path)
     interval_seconds = _interval_seconds(values)
     if (
         not force
@@ -136,6 +192,7 @@ def check_for_updates(
     ):
         cached = dict(previous)
         cached["cached"] = True
+        cached["update_mode"] = update_mode
         cached["next_check_at"] = float(previous.get("checked_at", 0)) + interval_seconds
         cached["next_check_at_iso"] = _format_timestamp(cached["next_check_at"])
         _set_cached_status(cached)
@@ -166,6 +223,8 @@ def check_for_updates(
                 if key in previous
             }
 
+    result["update_mode"] = update_mode
+    result = _merge_persistent_state(previous, result)
     _write_state(state_path, result)
     _set_cached_status(result)
     return result
@@ -182,10 +241,11 @@ def start_background_update_check(
     """Start a daemon thread that checks for updates without blocking stdio."""
     global _started
     values = os.environ if env is None else env
-    if not update_check_enabled(values):
+    if get_update_mode(project_dir, values) == "never":
         result = {
             "status": "disabled",
             "current_version": current_version,
+            "update_mode": "never",
             "checked_at": time.time(),
         }
         _set_cached_status(result)
@@ -213,6 +273,210 @@ def start_background_update_check(
     )
     thread.start()
     return thread
+
+
+def update_prompt_decision(
+    result: Mapping[str, Any],
+    *,
+    env: Optional[Mapping[str, str]] = None,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Return whether a human-facing caller should prompt, auto-update, or skip."""
+    values = os.environ if env is None else env
+    timestamp = time.time() if now is None else float(now)
+    env_mode = _normalize_update_mode(values.get(ENV_MODE))
+    mode = env_mode or _normalize_update_mode(result.get("update_mode")) or get_update_mode(env=values)
+    if not update_check_enabled(values):
+        mode = "never"
+    latest_version = str(result.get("latest_version") or "").strip()
+    latest_tag = str(result.get("latest_tag") or "").strip()
+
+    if result.get("status") != "update_available":
+        return {"action": "none", "reason": "no_update", "update_mode": mode}
+    if mode == "never":
+        return {"action": "none", "reason": "never", "update_mode": mode}
+    if mode == "notify":
+        return {"action": "notify", "reason": "notify_only", "update_mode": mode}
+    if _matches_ignored_version(result):
+        return {"action": "none", "reason": "ignored", "update_mode": mode}
+
+    snooze_until = _float_or_none(result.get("snooze_until"))
+    if snooze_until and snooze_until > timestamp:
+        return {
+            "action": "none",
+            "reason": "snoozed",
+            "update_mode": mode,
+            "snooze_until": snooze_until,
+            "snooze_until_iso": _format_timestamp(snooze_until),
+        }
+
+    if mode == "auto":
+        return {"action": "auto", "reason": "auto", "update_mode": mode}
+    return {
+        "action": "prompt",
+        "reason": "update_available",
+        "update_mode": mode,
+        "latest_version": latest_version,
+        "latest_tag": latest_tag,
+    }
+
+
+def set_update_mode(
+    project_dir: os.PathLike[str] | str,
+    mode: str,
+    *,
+    env: Optional[Mapping[str, str]] = None,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Persist the local update mode in the update-check state file."""
+    normalized = _normalize_update_mode(mode)
+    if not normalized:
+        raise ValueError(f"Unsupported update mode: {mode!r}")
+    state_path = update_state_path(project_dir, env)
+    state = _read_state(state_path)
+    state["update_mode"] = normalized
+    state["updated_at"] = time.time() if now is None else float(now)
+    state["updated_at_iso"] = _format_timestamp(state["updated_at"])
+    _write_state(state_path, state)
+    _set_cached_status(state or {"status": "unknown", "update_mode": normalized})
+    return state
+
+
+def ignore_update_version(
+    project_dir: os.PathLike[str] | str,
+    result: Mapping[str, Any],
+    *,
+    env: Optional[Mapping[str, str]] = None,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Persist an ignored release version/tag for future prompts."""
+    timestamp = time.time() if now is None else float(now)
+    state_path = update_state_path(project_dir, env)
+    state = _read_state(state_path)
+    if result.get("latest_version"):
+        state["ignored_version"] = result.get("latest_version")
+    if result.get("latest_tag"):
+        state["ignored_tag"] = result.get("latest_tag")
+    state["ignored_at"] = timestamp
+    state["ignored_at_iso"] = _format_timestamp(timestamp)
+    state.pop("snooze_until", None)
+    state.pop("snooze_until_iso", None)
+    _write_state(state_path, state)
+    _set_cached_status(state or {"status": "unknown"})
+    return state
+
+
+def snooze_update_prompt(
+    project_dir: os.PathLike[str] | str,
+    *,
+    hours: Optional[float] = None,
+    env: Optional[Mapping[str, str]] = None,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Persist a temporary update-prompt snooze."""
+    values = os.environ if env is None else env
+    timestamp = time.time() if now is None else float(now)
+    snooze_hours = _snooze_hours(values, hours)
+    snooze_until = timestamp + snooze_hours * 60 * 60
+    state_path = update_state_path(project_dir, values)
+    state = _read_state(state_path)
+    state["snooze_until"] = snooze_until
+    state["snooze_until_iso"] = _format_timestamp(snooze_until)
+    _write_state(state_path, state)
+    _set_cached_status(state or {"status": "unknown"})
+    return state
+
+
+def clear_update_prompt_preferences(
+    project_dir: os.PathLike[str] | str,
+    *,
+    env: Optional[Mapping[str, str]] = None,
+) -> Dict[str, Any]:
+    """Clear ignored-version and snooze state while preserving check results."""
+    state_path = update_state_path(project_dir, env)
+    state = _read_state(state_path)
+    for key in (
+        "ignored_version",
+        "ignored_tag",
+        "ignored_at",
+        "ignored_at_iso",
+        "snooze_until",
+        "snooze_until_iso",
+    ):
+        state.pop(key, None)
+    _write_state(state_path, state)
+    _set_cached_status(state or {"status": "unknown"})
+    return state
+
+
+def _normalize_update_mode(value: Any) -> Optional[str]:
+    text = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "": "",
+        "ask": "prompt",
+        "manual": "prompt",
+        "prompt": "prompt",
+        "auto": "auto",
+        "automatic": "auto",
+        "autoupdate": "auto",
+        "auto-update": "auto",
+        "check": "notify",
+        "check-only": "notify",
+        "inform": "notify",
+        "informational": "notify",
+        "notify": "notify",
+        "off": "never",
+        "disable": "never",
+        "disabled": "never",
+        "never": "never",
+        "none": "never",
+    }
+    normalized = aliases.get(text, text)
+    return normalized if normalized in _UPDATE_MODES else None
+
+
+def _merge_persistent_state(
+    previous: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> Dict[str, Any]:
+    merged = dict(result)
+    for key in _PERSISTENT_STATE_KEYS:
+        if key in previous and key not in merged:
+            merged[key] = previous[key]
+    return merged
+
+
+def _matches_ignored_version(result: Mapping[str, Any]) -> bool:
+    ignored_version = str(result.get("ignored_version") or "").strip()
+    ignored_tag = str(result.get("ignored_tag") or "").strip()
+    latest_version = str(result.get("latest_version") or "").strip()
+    latest_tag = str(result.get("latest_tag") or "").strip()
+    return bool(
+        (ignored_version and ignored_version == latest_version)
+        or (ignored_tag and ignored_tag == latest_tag)
+    )
+
+
+def _float_or_none(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _snooze_hours(env: Mapping[str, str], override: Optional[float]) -> float:
+    if override is not None:
+        try:
+            return max(float(override), 0.1)
+        except (TypeError, ValueError):
+            return DEFAULT_SNOOZE_HOURS
+    raw = env.get(ENV_SNOOZE_HOURS)
+    if raw is None:
+        return DEFAULT_SNOOZE_HOURS
+    try:
+        return max(float(raw), 0.1)
+    except (TypeError, ValueError):
+        return DEFAULT_SNOOZE_HOURS
 
 
 def _interval_seconds(env: Mapping[str, str]) -> float:

@@ -7,11 +7,20 @@ import tempfile
 import unittest
 
 from src.server import (
+    _apply_media_analysis_clip_markers,
+    _apply_sync_event_markers,
+    _media_analysis_apply_setup_defaults,
+    _media_analysis_effective_preferences,
     _media_analysis_merge_metadata_field,
+    _media_analysis_marker_candidates_from_report,
+    _media_analysis_publish_confirmed,
+    _media_analysis_timed_marker_decision,
     _media_analysis_provenance_metadata,
     _media_analysis_records_from_target,
     _media_analysis_report_metadata_candidates,
+    setup,
 )
+from src.utils import update_check
 from src.utils.media_analysis import (
     analysis_request_signature,
     build_plan,
@@ -55,6 +64,55 @@ class ClipStub:
         return props
 
 
+class MarkerClipStub:
+    def __init__(self, clip_id="clip-123"):
+        self.clip_id = clip_id
+        self.markers = {}
+
+    def GetUniqueId(self):
+        return self.clip_id
+
+    def AddMarker(self, frame, color, name, note, duration, custom_data=""):
+        self.markers[frame] = {
+            "color": color,
+            "name": name,
+            "note": note,
+            "duration": duration,
+            "customData": custom_data,
+        }
+        return True
+
+    def GetMarkers(self):
+        return self.markers
+
+
+class MarkerFolderStub:
+    def __init__(self, clips):
+        self.clips = clips
+
+    def GetClipList(self):
+        return self.clips
+
+    def GetSubFolderList(self):
+        return []
+
+
+class MarkerMediaPoolStub:
+    def __init__(self, clips):
+        self.root = MarkerFolderStub(clips)
+
+    def GetRootFolder(self):
+        return self.root
+
+
+class MarkerProjectStub:
+    def __init__(self, clips):
+        self.media_pool = MarkerMediaPoolStub(clips)
+
+    def GetMediaPool(self):
+        return self.media_pool
+
+
 class FolderStub:
     def __init__(self, name, clips=None, subfolders=None):
         self.name = name
@@ -84,6 +142,66 @@ class MediaPoolStub:
 
     def GetSelectedClips(self):
         return self.selected
+
+
+class TimelineItemStub:
+    def __init__(self, name, item_id, clip, start=0, end=24, source_start=0):
+        self.name = name
+        self.item_id = item_id
+        self.clip = clip
+        self.start = start
+        self.end = end
+        self.source_start = source_start
+
+    def GetName(self):
+        return self.name
+
+    def GetUniqueId(self):
+        return self.item_id
+
+    def GetStart(self):
+        return self.start
+
+    def GetEnd(self):
+        return self.end
+
+    def GetDuration(self):
+        return self.end - self.start
+
+    def GetSourceStartFrame(self):
+        return self.source_start
+
+    def GetMediaPoolItem(self):
+        return self.clip
+
+
+class TimelineStub:
+    def __init__(self, video_tracks=None, audio_tracks=None):
+        self.tracks = {
+            "video": video_tracks or {},
+            "audio": audio_tracks or {},
+            "subtitle": {},
+        }
+
+    def GetName(self):
+        return "Edit Timeline"
+
+    def GetUniqueId(self):
+        return "timeline-123"
+
+    def GetTrackCount(self, track_type):
+        return max(self.tracks.get(track_type, {}).keys() or [0])
+
+    def GetItemListInTrack(self, track_type, track_index):
+        return self.tracks.get(track_type, {}).get(track_index, [])
+
+
+class TimelineProjectStub:
+    def __init__(self, timeline):
+        self.timeline = timeline
+
+    def GetCurrentTimeline(self):
+        return self.timeline
 
 
 class MediaAnalysisPlanningTests(unittest.TestCase):
@@ -175,6 +293,11 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "objects": ["coffee mug"],
                     "visible_text": ["Scene 12A Take 3"],
                 },
+                "slate": {
+                    "slate_visible": True,
+                    "visible_text": ["Scene 12A Take 3"],
+                    "confidence": {"overall": "medium"},
+                },
                 "editing_notes": {
                     "best_moments": ["00:00:04 strong answer"],
                     "qc_flags": ["minor background noise"],
@@ -195,8 +318,91 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertIn("kitchen", proposal["fields"]["Keywords"])
         self.assertIn("slate clap", proposal["fields"]["Keywords"])
         self.assertEqual(proposal["fields"]["People"], ["Taylor"])
-        self.assertIn("Likely slate clap", proposal["fields"]["Comments"])
+        self.assertIn("Confirmed slate clap", proposal["fields"]["Comments"])
         self.assertIn("minor background noise", proposal["fields"]["Comments"])
+
+    def test_publish_metadata_candidates_require_visual_confirmation_for_slate(self):
+        report = {
+            "analysis_version": "0.1",
+            "summary": "Fallback summary",
+            "clip": {"clip_id": "clip-123", "clip_name": "A001_C001.mov"},
+            "visual": {
+                "success": True,
+                "clip_summary": "Wide shot in a driveway.",
+                "content": {"actions": ["walking"]},
+                "editing_notes": {"search_tags": ["driveway"]},
+            },
+        }
+        detection = {
+            "files": [{
+                "clip_id": "clip-123",
+                "events": [{"type": "slate_clap", "time_seconds": 4.0, "frame": 96, "confidence": 0.91}],
+            }],
+        }
+
+        audio_only = _media_analysis_report_metadata_candidates(report, detection=detection)
+        self.assertNotIn("slate clap", audio_only["fields"]["Keywords"])
+        self.assertNotIn("slate clap", audio_only["fields"]["Comments"])
+        self.assertFalse(audio_only["evidence"]["slate_visual_confirmed"])
+
+        confirmed = _media_analysis_report_metadata_candidates(
+            report,
+            detection=detection,
+            slate_review={"slate_visible": True, "confidence": {"overall": "high"}},
+        )
+        self.assertIn("slate clap", confirmed["fields"]["Keywords"])
+        self.assertIn("Confirmed slate clap", confirmed["fields"]["Comments"])
+        self.assertTrue(confirmed["evidence"]["slate_visual_confirmed"])
+
+    def test_publish_metadata_candidates_require_visual_summary_when_requested(self):
+        report = {
+            "analysis_version": "0.1",
+            "summary": "Fallback summary",
+            "clip": {"clip_id": "clip-123", "clip_name": "A001_C001.mov"},
+            "visual": {
+                "success": False,
+                "status": "skipped",
+                "reason": "Sampling unavailable.",
+            },
+        }
+
+        proposal = _media_analysis_report_metadata_candidates(
+            report,
+            fields=["Description", "Comments"],
+            require_visual_description=True,
+        )
+
+        self.assertNotIn("Description", proposal["fields"])
+        self.assertNotIn("Comments", proposal["fields"])
+        self.assertFalse(proposal["evidence"]["visual_analysis_succeeded"])
+
+    def test_publish_metadata_candidates_do_not_put_transcript_in_comments(self):
+        report = {
+            "analysis_version": "0.1",
+            "clip": {"clip_id": "clip-123", "clip_name": "A001_C001.mov"},
+            "visual": {
+                "success": True,
+                "clip_summary": "Interview close-up with a clean answer.",
+                "content": {"people": ["Taylor"]},
+            },
+            "transcription": {
+                "success": True,
+                "backend": "mock",
+                "language": "en",
+                "text": "This is the readable answer that should appear in metadata comments.",
+                "segments": [
+                    {"start": 0.0, "end": 1.2, "text": "This is the readable answer."},
+                    {"start": 1.2, "end": 2.4, "text": "It should appear in metadata comments."},
+                ],
+            },
+        }
+
+        proposal = _media_analysis_report_metadata_candidates(report, fields=["Description", "Comments", "People"])
+
+        self.assertEqual(proposal["fields"]["Description"], "Interview close-up with a clean answer.")
+        self.assertNotIn("Transcript excerpt", proposal["fields"]["Comments"])
+        self.assertNotIn("readable answer", proposal["fields"]["Comments"])
+        self.assertEqual(proposal["fields"]["People"], ["Taylor"])
 
     def test_publish_metadata_candidates_gate_slate_fields_by_confidence(self):
         report = {
@@ -208,6 +414,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             report,
             fields=fields,
             slate_review={
+                "slate_visible": True,
                 "fields": {"scene": "12A", "take": "3", "camera": "B"},
                 "confidence": {"overall": "medium"},
             },
@@ -216,6 +423,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             report,
             fields=fields,
             slate_review={
+                "slate_visible": True,
                 "fields": {"scene": "12A", "take": "3", "camera": "B"},
                 "confidence": {"overall": "high"},
             },
@@ -225,6 +433,232 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertEqual(high["fields"]["Scene"], "12A")
         self.assertEqual(high["fields"]["Take"], "3")
         self.assertEqual(high["fields"]["Camera #"], "B")
+
+    def test_publish_metadata_candidates_support_metadata_write_alias_fields(self):
+        report = {
+            "clip": {"clip_id": "clip-123"},
+            "visual": {
+                "clip_summary": "Slate shot.",
+                "content": {"actions": ["clap"]},
+                "editing_notes": {"search_tags": ["sync"]},
+            },
+        }
+        proposal = _media_analysis_report_metadata_candidates(
+            report,
+            fields=["Keyword", "Roll Card #"],
+            slate_review={
+                "slate_visible": True,
+                "fields": {"roll": "A001"},
+                "confidence": {"overall": "high"},
+            },
+        )
+
+        self.assertIn("sync", proposal["fields"]["Keyword"])
+        self.assertEqual(proposal["fields"]["Roll Card #"], "A001")
+
+    def test_publish_metadata_marker_writeback_is_opt_in_and_source_framed(self):
+        report = {
+            "clip": {"clip_id": "clip-123"},
+            "visual": {
+                "editing_notes": {
+                    "best_moments": ["00:00:04 strong answer"],
+                    "qc_flags": ["00:00:05:12 small audio pop"],
+                },
+            },
+        }
+        record = {"clip_id": "clip-123", "fps": "24"}
+        sync_event = {"type": "slate_clap", "time_seconds": 1.25, "frame": 30, "confidence": 0.91}
+
+        disabled = _media_analysis_marker_candidates_from_report(
+            report,
+            record,
+            sync_event,
+            None,
+            {"timed_markers": "no"},
+            slate_review={"slate_visible": True, "confidence": {"overall": "high"}},
+        )
+        unconfirmed = _media_analysis_marker_candidates_from_report(report, record, sync_event, "/tmp/report.json", {"write_markers": True})
+        enabled = _media_analysis_marker_candidates_from_report(
+            report,
+            record,
+            sync_event,
+            "/tmp/report.json",
+            {"write_markers": True},
+            slate_review={"slate_visible": True, "confidence": {"overall": "high"}},
+        )
+
+        self.assertFalse(disabled["enabled"])
+        self.assertEqual([marker["name"] for marker in unconfirmed["markers"]], ["Best Moment", "QC Warning"])
+        self.assertEqual(unconfirmed["skipped"][0]["reason"], "slate_not_visually_confirmed")
+        self.assertTrue(enabled["enabled"])
+        self.assertEqual([marker["frame"] for marker in enabled["markers"]], [30, 96, 132])
+        self.assertEqual(enabled["markers"][0]["name"], "Slate Clap")
+        self.assertFalse(_media_analysis_publish_confirmed({"write_markers": True, "dry_run": False}))
+
+        clip = MarkerClipStub()
+        applied = _apply_media_analysis_clip_markers(clip, enabled["markers"], {})
+        self.assertTrue(applied["success"])
+        self.assertEqual(len(clip.GetMarkers()), 3)
+
+    def test_sync_event_marker_write_requires_visual_slate_confirmation(self):
+        clip = MarkerClipStub("clip-123")
+        project = MarkerProjectStub([clip])
+        slate_suggestion = {
+            "scope": "media_pool_item",
+            "clip_id": "clip-123",
+            "clip_name": "A001_C001.mov",
+            "event_type": "slate_clap",
+            "event_time_seconds": 1.0,
+            "event_frame": 24,
+            "confidence": 0.95,
+            "eligible": True,
+            "requires_confirmation": True,
+            "marker": {
+                "frame": 24,
+                "color": "Cyan",
+                "name": "Sync: slate clap",
+                "note": "Detected slate clap at 1.0s.",
+                "duration": 1,
+                "custom_data": "mcp.sync_event:clip-123:slate_clap:24",
+            },
+        }
+        detection = {"files": [{"marker_suggestions": [slate_suggestion]}]}
+
+        unconfirmed = _apply_sync_event_markers(project, detection, {"confirm": True})
+        self.assertTrue(unconfirmed["success"])
+        self.assertEqual(unconfirmed["added"], 0)
+        self.assertEqual(unconfirmed["skipped"][0]["reason"], "slate_not_visually_confirmed")
+        self.assertEqual(clip.GetMarkers(), {})
+
+        confirmed_suggestion = dict(slate_suggestion)
+        confirmed_suggestion["slate_review"] = {"slate_visible": True, "confidence": {"overall": "high"}}
+        confirmed = _apply_sync_event_markers(
+            project,
+            {"files": [{"marker_suggestions": [confirmed_suggestion]}]},
+            {"confirm": True},
+        )
+        self.assertTrue(confirmed["success"])
+        self.assertEqual(confirmed["added"], 1)
+        self.assertIn(24, clip.GetMarkers())
+
+    def test_timed_marker_prompt_choices_and_defaults_are_explicit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = os.environ.get("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS")
+            os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = os.path.join(tmp, "prefs.json")
+            try:
+                prompt = _media_analysis_timed_marker_decision({})
+                self.assertTrue(prompt["prompt_required"])
+                self.assertFalse(prompt["enabled"])
+
+                yes = _media_analysis_timed_marker_decision({"timed_markers": "yes"})
+                self.assertFalse(yes["prompt_required"])
+                self.assertTrue(yes["enabled"])
+
+                default_yes = _media_analysis_timed_marker_decision({"timed_markers": "default_yes"})
+                self.assertTrue(default_yes["enabled"])
+                self.assertEqual(default_yes["saved_default"], "yes")
+
+                saved = _media_analysis_timed_marker_decision({})
+                self.assertFalse(saved["prompt_required"])
+                self.assertTrue(saved["enabled"])
+                self.assertEqual(saved["source"], "saved_default")
+
+                default_no = _media_analysis_timed_marker_decision({"timed_markers": "default_no"})
+                self.assertFalse(default_no["enabled"])
+                self.assertEqual(default_no["saved_default"], "no")
+            finally:
+                if previous is None:
+                    os.environ.pop("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS", None)
+                else:
+                    os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = previous
+
+    def test_setup_tool_sets_conversation_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous_analysis = os.environ.get("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS")
+            previous_updates = os.environ.get(update_check.ENV_STATE_PATH)
+            os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = os.path.join(tmp, "analysis-prefs.json")
+            os.environ[update_check.ENV_STATE_PATH] = os.path.join(tmp, "update-state.json")
+            try:
+                configured = setup("set_defaults", {
+                    "defaults": {
+                        "media_analysis": {
+                            "timed_markers_default": "default_yes",
+                            "slate_detection_default": "yes",
+                            "vision_default": "technical_only",
+                            "transcription_default": "no",
+                            "analysis_persistence": "keep_reports",
+                            "metadata_publish_fields": ["Description", "Comments", "Scene"],
+                            "metadata_overwrite_policy": "fill_empty",
+                            "timed_marker_types": ["best_moments"],
+                            "timed_marker_colors": {"best_moments": "Pink"},
+                            "max_timed_markers_per_clip": 2,
+                            "include_confidence_scores": False,
+                            "include_source_time_notes": False,
+                            "analysis_summary_style": "qc",
+                            "report_format": "full",
+                            "preferred_analysis_root": os.path.join(tmp, "analysis"),
+                            "preferred_generated_media_folder": os.path.join(tmp, "generated"),
+                            "default_post_operation_page": "edit",
+                            "marker_custom_data": "minimal",
+                            "ask_before_metadata_publish": True,
+                            "dry_run_first_default": False,
+                        },
+                        "updates": {"mode": "notify", "check_interval_hours": 6, "snooze_hours": 3},
+                    },
+                })
+                self.assertTrue(configured["success"])
+                self.assertEqual(configured["defaults"]["media_analysis"]["timed_markers_default"], "yes")
+                self.assertEqual(configured["defaults"]["media_analysis"]["slate_detection_default"], "yes")
+                self.assertEqual(configured["defaults"]["media_analysis"]["vision_default"], "technical_only")
+                self.assertEqual(configured["defaults"]["media_analysis"]["analysis_persistence"], "keep_reports")
+                self.assertEqual(configured["defaults"]["media_analysis"]["metadata_publish_fields"], ["Description", "Comments", "Scene"])
+                self.assertEqual(configured["defaults"]["media_analysis"]["metadata_overwrite_policy"], "fill_empty")
+                self.assertEqual(configured["defaults"]["media_analysis"]["timed_marker_types"], ["best_moments"])
+                self.assertEqual(configured["defaults"]["media_analysis"]["timed_marker_colors"]["best_moments"], "Pink")
+                self.assertEqual(configured["defaults"]["media_analysis"]["max_timed_markers_per_clip"], 2)
+                self.assertFalse(configured["defaults"]["media_analysis"]["include_confidence_scores"])
+                self.assertEqual(configured["defaults"]["updates"]["mode"], "notify")
+                self.assertEqual(configured["defaults"]["updates"]["check_interval_hours"], 6)
+                self.assertEqual(configured["defaults"]["updates"]["snooze_hours"], 3)
+
+                applied = _media_analysis_apply_setup_defaults("publish_clip_metadata", {"confirm": True})
+                self.assertEqual(applied["fields"], ["Description", "Comments", "Scene"])
+                self.assertEqual(applied["merge_policy"], "fill_empty")
+                self.assertFalse(applied["dry_run"])
+                self.assertEqual(applied["slate_detection"]["enabled"], True)
+                self.assertEqual(applied["vision"]["enabled"], False)
+
+                report = {
+                    "clip": {"clip_id": "clip-123"},
+                    "visual": {"editing_notes": {"best_moments": ["00:00:04 strong answer"], "qc_flags": ["00:00:05:12 pop"]}},
+                }
+                markers = _media_analysis_marker_candidates_from_report(report, {"clip_id": "clip-123", "fps": "24"}, {"frame": 12, "confidence": 0.8}, "/tmp/report.json", applied)
+                self.assertEqual(len(markers["markers"]), 1)
+                self.assertEqual(markers["markers"][0]["name"], "Best Moment")
+                self.assertEqual(markers["markers"][0]["color"], "Pink")
+                self.assertNotIn("analysis_report_path", markers["markers"][0]["custom_data"])
+
+                cleared = setup("clear_defaults", {
+                    "keys": ["media_analysis", "updates.mode", "updates.check_interval_hours", "updates.snooze_hours"],
+                })
+                self.assertTrue(cleared["success"])
+                self.assertIsNone(cleared["defaults"]["media_analysis"]["timed_markers_default"])
+                self.assertEqual(cleared["defaults"]["media_analysis"]["vision_default"], _media_analysis_effective_preferences()["vision_default"])
+                self.assertEqual(cleared["defaults"]["updates"]["mode"], "prompt")
+                self.assertEqual(cleared["defaults"]["updates"]["check_interval_hours"], 24.0)
+                self.assertEqual(cleared["defaults"]["updates"]["snooze_hours"], 24.0)
+
+                unknown = setup("set_defaults", {"defaults": {"not_a_real_default": True}})
+                self.assertIn("error", unknown)
+            finally:
+                if previous_analysis is None:
+                    os.environ.pop("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS", None)
+                else:
+                    os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = previous_analysis
+                if previous_updates is None:
+                    os.environ.pop(update_check.ENV_STATE_PATH, None)
+                else:
+                    os.environ[update_check.ENV_STATE_PATH] = previous_updates
 
     def test_publish_metadata_merge_updates_owned_blocks_and_dedupes_lists(self):
         comments = _media_analysis_merge_metadata_field(
@@ -292,6 +726,9 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertTrue(plan["success"])
         artifact = plan["clips"][0]["artifacts"]["analysis_json"]
         self.assertTrue(artifact.startswith(plan["output_root"]["project_root"]))
+        marker_artifact = plan["clips"][0]["artifacts"]["marker_plan_json"]
+        self.assertTrue(marker_artifact.startswith(plan["output_root"]["project_root"]))
+        self.assertTrue(marker_artifact.endswith("clip_analysis_markers.json"))
         self.assertEqual(plan["analysis_keyframe_budget_per_clip"], 8)
 
     def test_build_plan_allows_chat_context_vision_without_external_provider_env(self):
@@ -387,6 +824,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "motion": {"success": True, "analysis_keyframes": []},
                     "transcription": {"success": True, "status": "skipped"},
                     "visual": {"success": True, "status": "skipped"},
+                    "clip_analysis_markers": {"success": True, "marker_count": 1, "markers": []},
                 }, f)
             params = {
                 "analysis_root": os.path.join(tmp, "analysis"),
@@ -461,6 +899,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "motion": {"success": True, "analysis_keyframes": []},
                     "transcription": {"success": True, "status": "skipped"},
                     "visual": {"success": True, "status": "skipped"},
+                    "clip_analysis_markers": {"success": True, "marker_count": 1, "markers": []},
                 }, f)
             plan = build_plan(
                 project_name="Example Project",
@@ -517,6 +956,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "motion": {"success": True, "analysis_keyframes": []},
                     "transcription": {"success": True, "status": "skipped"},
                     "visual": {"success": True, "status": "skipped"},
+                    "clip_analysis_markers": {"success": True, "marker_count": 1, "markers": []},
                 }, f)
             plan = build_plan(
                 project_name="Example Project",
@@ -573,6 +1013,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "motion": {"success": True, "analysis_keyframes": []},
                     "transcription": {"success": True, "status": "skipped"},
                     "visual": {"success": True, "status": "skipped"},
+                    "clip_analysis_markers": {"success": True, "marker_count": 1, "markers": []},
                 }, f)
             plan = build_plan(
                 project_name="Example Project",
@@ -649,6 +1090,36 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertTrue(target["selected"])
         self.assertEqual(len(records), 1)
 
+    def test_sequence_target_collects_used_assets_and_occurrences(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path_a = os.path.join(tmp, "A001_C001.mov")
+            path_b = os.path.join(tmp, "A001_C002.wav")
+            clip_a = ClipStub("A001_C001.mov", "clip-1", path_a)
+            clip_a_duplicate = ClipStub("A001_C001 copy.mov", "clip-2", path_a)
+            clip_b = ClipStub("A001_C002.wav", "clip-3", path_b)
+            timeline = TimelineStub(
+                video_tracks={1: [
+                    TimelineItemStub("A001_C001", "item-1", clip_a, start=0, end=48),
+                    TimelineItemStub("A001_C001 alt", "item-2", clip_a_duplicate, start=72, end=96),
+                ]},
+                audio_tracks={1: [TimelineItemStub("A001_C002", "item-3", clip_b, start=0, end=96)]},
+            )
+            records, target, warnings, err = _media_analysis_records_from_target(
+                MediaPoolStub(FolderStub("Master")),
+                {"target": "sequence"},
+                project=TimelineProjectStub(timeline),
+            )
+
+        self.assertIsNone(err)
+        self.assertEqual(warnings, [])
+        self.assertEqual(target["type"], "sequence")
+        self.assertEqual(target["timeline"]["occurrence_count"], 3)
+        self.assertEqual(target["timeline"]["asset_count"], 2)
+        self.assertEqual(len(records), 2)
+        record_a = next(record for record in records if record["file_path"] == path_a)
+        self.assertEqual(len(record_a["timeline_occurrences"]), 2)
+        self.assertEqual(record_a["timeline_occurrences"][0]["timeline_item_id"], "item-1")
+
     def test_invalid_scalar_target_returns_clean_error(self):
         records, target, warnings, err = _media_analysis_records_from_target(
             None,
@@ -684,7 +1155,15 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 "transcription": {
                     "enabled": True,
                     "backend": "mock",
-                    "segments": [{"start": 0, "end": 1.5, "text": "Synthetic tone."}],
+                    "segments": [{
+                        "start": 0,
+                        "end": 1.5,
+                        "text": "Synthetic tone.",
+                        "words": [
+                            {"start": 0.0, "end": 0.7, "word": "Synthetic"},
+                            {"start": 0.7, "end": 1.2, "word": "tone."},
+                        ],
+                    }],
                 },
                 "vision": {"enabled": True, "provider": "mock"},
             }
@@ -699,7 +1178,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             )
             manifest = execute_plan(plan, params=params, capabilities=caps)
             summary = summarize_reports(plan["output_root"]["project_root"])
-            report = load_report(plan["output_root"]["project_root"])
+            manifest_report = load_report(plan["output_root"]["project_root"])
             self.assertTrue(plan["success"])
             self.assertEqual(plan["capability_gaps"], [])
             self.assertTrue(manifest["success"])
@@ -710,10 +1189,35 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertTrue(os.path.exists(artifacts["motion_json"]))
             self.assertTrue(os.path.exists(artifacts["transcript_json"]))
             self.assertTrue(os.path.exists(artifacts["transcript_srt"]))
+            self.assertTrue(os.path.exists(artifacts["transcript_vtt"]))
             self.assertTrue(os.path.exists(artifacts["visual_json"]))
+            self.assertTrue(os.path.exists(artifacts["marker_plan_json"]))
             self.assertTrue(summary["success"])
             self.assertEqual(summary["clip_reports"], 1)
-            self.assertTrue(report["success"])
+            self.assertTrue(manifest_report["success"])
+            clip_report = load_report(plan["output_root"]["project_root"], report_path=artifacts["analysis_json"])["report"]
+            self.assertEqual(clip_report["transcription"]["text"], "Synthetic tone.")
+            self.assertEqual(clip_report["transcription"]["segments"][0]["text"], "Synthetic tone.")
+            self.assertGreaterEqual(clip_report["clip_analysis_markers"]["marker_count"], 1)
+            self.assertFalse(clip_report["clip_analysis_markers"]["write_to_resolve_default"])
+            with open(artifacts["transcript_json"], "r", encoding="utf-8") as handle:
+                transcript_json = json.load(handle)
+            self.assertEqual(transcript_json["text"], "Synthetic tone.")
+            self.assertEqual(transcript_json["segments"][0]["text"], "Synthetic tone.")
+            self.assertEqual(transcript_json["segments"][0]["words"][0]["word"], "Synthetic")
+            with open(artifacts["marker_plan_json"], "r", encoding="utf-8") as handle:
+                marker_plan_json = json.load(handle)
+            self.assertEqual(marker_plan_json["schema"], "davinci_resolve_mcp.clip_analysis_markers.v1")
+            self.assertFalse(marker_plan_json["resolve_marker_writeback"]["enabled"])
+            self.assertEqual(marker_plan_json["color_scheme"]["qc_warning"], "Red")
+            with open(artifacts["transcript_srt"], "r", encoding="utf-8") as handle:
+                transcript_srt = handle.read()
+            self.assertIn("00:00:00,000 --> 00:00:01,500", transcript_srt)
+            self.assertIn("Synthetic tone.", transcript_srt)
+            with open(artifacts["transcript_vtt"], "r", encoding="utf-8") as handle:
+                transcript_vtt = handle.read()
+            self.assertIn("WEBVTT", transcript_vtt)
+            self.assertIn("00:00:00.000 --> 00:00:01.500", transcript_vtt)
             cleanup = cleanup_artifacts(plan["output_root"]["project_root"])
             self.assertTrue(cleanup["success"])
             self.assertEqual(sorted(os.listdir(source_dir)), ["synthetic_motion.mp4"])
@@ -767,6 +1271,8 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertEqual(manifest["successful_clip_count"], 1)
             self.assertEqual(len(manifest["reports"]), 1)
             self.assertEqual(manifest["reports"][0]["clip"]["clip_id"], "clip-session")
+            self.assertIn("clip_analysis_markers", manifest["reports"][0])
+            self.assertGreaterEqual(manifest["reports"][0]["clip_analysis_markers"]["marker_count"], 1)
             self.assertEqual(manifest["project_summary"]["clip_reports"], 1)
             self.assertFalse(os.path.exists(plan["output_root"]["project_root"]))
             self.assertEqual(sorted(os.listdir(source_dir)), ["synthetic_session.mp4"])

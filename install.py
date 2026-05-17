@@ -23,11 +23,18 @@ import sys
 import textwrap
 from pathlib import Path
 
-from src.utils.update_check import check_for_updates
+from src.utils.update_check import (
+    clear_update_prompt_preferences,
+    check_for_updates,
+    ignore_update_version,
+    set_update_mode,
+    snooze_update_prompt,
+    update_prompt_decision,
+)
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.21.0"
+VERSION = "2.22.0"
 
 # ─── Colors (disabled on Windows cmd without ANSI support) ────────────────────
 
@@ -518,7 +525,7 @@ def verify_resolve_connection(python_path, api_path, lib_path):
 
 def print_banner():
     title = f"DaVinci Resolve MCP Server — Installer v{VERSION}"
-    subtitle = "31 compound · 329 full · 3 platforms"
+    subtitle = "32 compound · 329 full · 3 platforms"
     print()
     print(bold("  ╔══════════════════════════════════════════════════════╗"))
     print(bold(f"  ║{title:^54}║"))
@@ -533,9 +540,9 @@ def print_step(num, total, text):
     print(f"  {'─' * 50}")
 
 
-def print_update_status(project_dir):
+def print_update_status(project_dir, *, force=False):
     """Best-effort installer update notice."""
-    result = check_for_updates(VERSION, project_dir, timeout=2.0)
+    result = check_for_updates(VERSION, project_dir, timeout=2.0, force=force)
     status = result.get("status")
     if status == "update_available":
         version_note = dim(
@@ -555,6 +562,154 @@ def print_update_status(project_dir):
         print(f"  MCP Update: {dim('Check disabled')}")
     elif status == "error":
         print(f"  MCP Update: {yellow('Could not check')} {dim(str(result.get('error', '')))}")
+    return result
+
+
+def _run_git(project_dir, args, timeout=45):
+    try:
+        return subprocess.run(
+            ["git", "-C", str(project_dir), *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired as exc:
+        return exc
+
+
+def _git_failure_message(result, fallback):
+    if result is None:
+        return "git is not available on PATH"
+    if isinstance(result, subprocess.TimeoutExpired):
+        return "git command timed out"
+    output = (result.stderr or result.stdout or "").strip()
+    return output or fallback
+
+
+def apply_safe_self_update(project_dir, dry_run=False):
+    """Apply a guarded git fast-forward update for clean checkouts only."""
+    inside = _run_git(project_dir, ["rev-parse", "--is-inside-work-tree"])
+    if inside is None or isinstance(inside, subprocess.TimeoutExpired) or inside.returncode != 0:
+        return {"success": False, "reason": "not_git", "message": _git_failure_message(inside, "not a git checkout")}
+
+    status = _run_git(project_dir, ["status", "--porcelain"])
+    if status is None or isinstance(status, subprocess.TimeoutExpired) or status.returncode != 0:
+        return {"success": False, "reason": "status_failed", "message": _git_failure_message(status, "could not inspect git status")}
+    if status.stdout.strip():
+        return {
+            "success": False,
+            "reason": "local_changes",
+            "message": "local changes are present; continuing with the current build",
+        }
+
+    upstream = _run_git(project_dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    if upstream is None or isinstance(upstream, subprocess.TimeoutExpired) or upstream.returncode != 0:
+        return {
+            "success": False,
+            "reason": "no_upstream",
+            "message": _git_failure_message(upstream, "current branch has no configured upstream"),
+        }
+
+    if dry_run:
+        return {
+            "success": True,
+            "changed": False,
+            "dry_run": True,
+            "message": f"would fast-forward from {upstream.stdout.strip()}",
+        }
+
+    fetch = _run_git(project_dir, ["fetch", "--tags", "--prune"], timeout=90)
+    if fetch is None or isinstance(fetch, subprocess.TimeoutExpired) or fetch.returncode != 0:
+        return {"success": False, "reason": "fetch_failed", "message": _git_failure_message(fetch, "git fetch failed")}
+
+    pull = _run_git(project_dir, ["pull", "--ff-only"], timeout=120)
+    if pull is None or isinstance(pull, subprocess.TimeoutExpired) or pull.returncode != 0:
+        return {"success": False, "reason": "pull_failed", "message": _git_failure_message(pull, "git pull --ff-only failed")}
+
+    output = "\n".join(part.strip() for part in (pull.stdout, pull.stderr) if part and part.strip())
+    changed = "Already up to date." not in output
+    return {"success": True, "changed": changed, "message": output or "update complete"}
+
+
+def _restart_installer():
+    print(f"  {green('Restarting installer with the updated build...')}")
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
+def _print_update_apply_result(result, *, restart_on_change=True):
+    if result.get("success"):
+        if result.get("dry_run"):
+            print(f"  MCP Update: {yellow('Dry run')} {dim(result.get('message', ''))}")
+            return
+        print(f"  MCP Update: {green('Update command completed')}")
+        message = str(result.get("message") or "").strip()
+        if message:
+            for line in message.splitlines()[:6]:
+                print(f"  {dim(line)}")
+        if result.get("changed") and restart_on_change:
+            _restart_installer()
+        return
+
+    print(f"  MCP Update: {yellow('Not applied')} {dim(result.get('message', ''))}")
+
+
+def maybe_prompt_for_update(project_dir, result, *, interactive, force_update=False, dry_run=False):
+    """Prompt or auto-apply updates only in this human-facing installer."""
+    if not result or result.get("status") != "update_available":
+        return
+
+    decision = update_prompt_decision(result)
+    if force_update or decision.get("action") == "auto":
+        print(f"  MCP Update: {yellow('Applying safe fast-forward update...')}")
+        _print_update_apply_result(apply_safe_self_update(project_dir, dry_run=dry_run))
+        return
+
+    if decision.get("action") == "notify":
+        print(f"  {dim('Update policy is notify-only; continuing with the current build.')}")
+        return
+    if decision.get("reason") == "ignored":
+        print(f"  {dim('This release was ignored; continuing with the current build.')}")
+        return
+    if decision.get("reason") == "snoozed":
+        snooze_note = f"Update reminder snoozed until {decision.get('snooze_until_iso')}."
+        print(f"  {dim(snooze_note)}")
+        return
+    if not interactive:
+        return
+
+    latest = result.get("latest_version") or result.get("latest_tag") or "latest"
+    print()
+    print(f"  {yellow('A newer DaVinci Resolve MCP is available.')} {dim(f'v{VERSION} -> v{latest}')}")
+    print(f"  {dim('Safe auto-update only runs for clean git checkouts with a configured upstream.')}")
+    print(f"    {cyan('1')}. Update now")
+    print(f"    {cyan('2')}. Continue current build")
+    print(f"    {cyan('3')}. Remind me tomorrow")
+    print(f"    {cyan('4')}. Ignore this version")
+    print(f"    {cyan('5')}. Auto-update this checkout when safe")
+    print(f"    {cyan('6')}. Never check automatically")
+    try:
+        choice = input(f"  Select {dim('[2]')} ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+
+    if choice in ("1", "u", "update", "update now"):
+        _print_update_apply_result(apply_safe_self_update(project_dir, dry_run=dry_run))
+    elif choice in ("3", "r", "remind", "later", "snooze"):
+        snooze_update_prompt(project_dir)
+        print(f"  MCP Update: {dim('Reminder snoozed for 24 hours.')}")
+    elif choice in ("4", "i", "ignore"):
+        ignore_update_version(project_dir, result)
+        print(f"  MCP Update: {dim(f'Ignored v{latest}. Newer releases will still prompt.')}")
+    elif choice in ("5", "a", "auto", "auto-update", "autoupdate"):
+        set_update_mode(project_dir, "auto")
+        print(f"  MCP Update: {green('Safe auto-update enabled for this checkout.')}")
+        _print_update_apply_result(apply_safe_self_update(project_dir, dry_run=dry_run))
+    elif choice in ("6", "n", "never", "disable", "disabled"):
+        set_update_mode(project_dir, "never")
+        print(f"  MCP Update: {dim('Automatic update checks disabled for this checkout.')}")
 
 
 def prompt_yes_no(question, default=True):
@@ -636,6 +791,8 @@ def main():
               python install.py --clients manual           Just print the config
               python install.py --no-venv --clients cursor Skip venv, configure Cursor
               python install.py --dry-run --clients all    Preview without writing
+              python install.py --update-policy auto       Enable guarded auto-updates
+              python install.py --update-policy never      Disable update checks
         """)
     )
     parser.add_argument(
@@ -658,6 +815,20 @@ def main():
         "--server", type=str, default=None,
         help="Path to the MCP server script"
     )
+    parser.add_argument(
+        "--update-policy",
+        choices=["prompt", "auto", "notify", "never"],
+        default=None,
+        help="Set local update policy: prompt, auto, notify, or never"
+    )
+    parser.add_argument(
+        "--update-now", action="store_true",
+        help="Apply a safe git fast-forward update if a newer release is available"
+    )
+    parser.add_argument(
+        "--clear-update-preferences", action="store_true",
+        help="Clear ignored-version and snooze update preferences"
+    )
 
     args = parser.parse_args()
     interactive = args.clients is None
@@ -669,6 +840,13 @@ def main():
     project_dir = Path(__file__).resolve().parent
     total_steps = 5
 
+    if args.clear_update_preferences:
+        clear_update_prompt_preferences(project_dir)
+        print(f"  MCP Update: {green('Cleared ignored-version and snooze preferences')}")
+    if args.update_policy:
+        set_update_mode(project_dir, args.update_policy)
+        print(f"  MCP Update: {green('Policy set')} {dim(args.update_policy)}")
+
     # ══════════════════════════════════════════════════════════════════════
     # STEP 1: Platform & Resolve Detection
     # ══════════════════════════════════════════════════════════════════════
@@ -677,7 +855,14 @@ def main():
         print_step(1, total_steps, "Detecting Platform & DaVinci Resolve")
 
     print(f"  Platform:  {bold(platform_name())} ({platform.machine()})")
-    print_update_status(project_dir)
+    update_result = print_update_status(project_dir, force=args.update_now)
+    maybe_prompt_for_update(
+        project_dir,
+        update_result,
+        interactive=interactive,
+        force_update=args.update_now,
+        dry_run=args.dry_run,
+    )
 
     api_path, lib_path = find_resolve_paths()
 
@@ -777,7 +962,7 @@ def main():
     if args.server:
         server_path = Path(args.server).resolve()
     else:
-        # Try to find the server script (prefer compound 27-tool server)
+        # Try to find the compound server first.
         candidates = [
             project_dir / "src" / "server.py",
             project_dir / "src" / "resolve_mcp_server.py",

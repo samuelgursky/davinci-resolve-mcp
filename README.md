@@ -1,8 +1,8 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.21.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.22.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
-[![Tools](https://img.shields.io/badge/MCP%20Tools-31%20(329%20full)-blue.svg)](#server-modes)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-32%20(329%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](docs/reference/api-coverage.md#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.10--3.12-green.svg)](https://www.python.org/downloads/)
@@ -22,13 +22,13 @@ Before connecting, open DaVinci Resolve Studio and set **Preferences > General >
 
 For platform paths, client-specific config, and manual setup, see [Installation and Configuration](docs/install.md).
 
-The installer and server check the latest GitHub release for MCP updates. Checks are best-effort, throttled, and informational only; no code is installed automatically.
+The installer and server check the latest GitHub release for MCP updates. Checks are best-effort and throttled; the server never blocks MCP startup for a prompt. The installer can prompt, snooze, ignore a release, disable checks, or apply an opt-in safe auto-update for clean git checkouts.
 
 ## Server Modes
 
 | Mode | Entry point | Tools | Best for |
 |------|-------------|-------|----------|
-| Compound | `src/server.py` | 31 | Default mode for most assistants. Related Resolve operations are grouped behind action parameters to keep context usage low. |
+| Compound | `src/server.py` | 32 | Default mode for most assistants. Related Resolve operations are grouped behind action parameters to keep context usage low. |
 | Full / granular | `src/server.py --full` or `src/resolve_mcp_server.py` | 329 | Power users who want one MCP tool per Resolve API method. |
 
 The compound server is recommended unless you specifically need the granular one-tool-per-method surface.
@@ -56,7 +56,7 @@ The compound server is recommended unless you specifically need the granular one
 | Area | What the compound server supports |
 |------|-----------------------------------|
 | App and project control | Launch/reconnect, page switching, project CRUD, project folders, databases, cloud project wrappers, settings, presets, archives |
-| Media pool and ingest | Safe import, image sequences, multicam prep timelines, bin organization, metadata normalization, marks, annotations, relink/proxy/full-resolution guards |
+| Media pool and ingest | Safe import, image sequences, multicam prep timelines, bin organization, metadata normalization, metadata field inventory, marks, annotations, relink/proxy/full-resolution guards |
 | Media analysis | Source-safe file/clip/bin/project analysis, 2-pop/slate-clap sync-event detection, confirmed Resolve metadata publishing, session-only defaults, existing-report reuse, chat-context visual analysis by default in `analyze_media` with opt-out, optional transcription |
 | Timeline editing and conform | Track/item probing, title text key scans/writes, copy/move/duplicate helpers, range operations, gaps/overlaps, source ranges, checked interchange exports/imports |
 | Review annotations | Timeline/item/clip markers, custom data, flags, clip color, copy/move/sync cleanup, review reports, marker thumbnail review |
@@ -78,8 +78,8 @@ The default server is a local stdio process launched by your MCP client; it does
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **31** compound / **329** granular |
-| Kernel Actions | **135** guarded workflow actions across 9 compound tools |
+| MCP Tools | **32** compound / **329** granular |
+| Kernel Actions | **136** guarded workflow actions across 9 compound tools |
 | API Methods Covered | **336/336** (100%) |
 | Methods Live Tested | **331/336** (98.5%) |
 | Live Test Pass Rate | **331/331** (100%) |

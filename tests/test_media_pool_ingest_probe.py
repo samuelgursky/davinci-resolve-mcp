@@ -9,6 +9,9 @@ from src.server import (
     _media_pool_item_probe,
     _media_pool_probe,
     _media_pool_probe_ingest_items,
+    _metadata_field_inventory,
+    _metadata_panel_group_for_field,
+    _metadata_write_field_for_field,
     _normalize_metadata,
     _probe_clip_properties,
     _safe_import_sequence,
@@ -27,6 +30,14 @@ class MediaPoolItemStub:
             "Type": "Video + Audio",
             "Duration": "00:00:05:00",
             "FPS": "24",
+            "Description": "",
+            "Comments": "",
+            "Keyword": "",
+            "People": "",
+            "Scene": "",
+            "Camera #": "A",
+            "Audio Notes": "",
+            "Track 1": "",
         }
         self.markers = {12: {"color": "Blue", "name": "Review", "note": "Check", "duration": 1}}
         self.flags = ["Blue"]
@@ -256,6 +267,43 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
 
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["items"][0]["known_clip_properties"]["FPS"]["value"], "24")
+
+    def test_metadata_field_inventory_separates_metadata_and_panel_fields(self):
+        mp = MediaPoolStub()
+        result = _metadata_field_inventory(mp.root, mp, {"selected": True})
+
+        self.assertTrue(result["success"])
+        item = result["items"][0]
+        self.assertEqual(item["metadata"]["fields"], ["Camera #"])
+        self.assertIn("Description", item["clip_properties"]["fields"])
+        self.assertIn("Shot & Scene", [group["name"] for group in item["metadata_panel_groups"]])
+        self.assertEqual(
+            item["analysis_writeback_fields"]["default"][0],
+            {
+                "field": "Description",
+                "in_get_metadata": False,
+                "in_clip_properties": True,
+                "inferred_ui_group": "Shot & Scene",
+                "clip_property_key": "Description",
+            },
+        )
+        keywords = item["analysis_writeback_fields"]["default"][2]
+        self.assertEqual(keywords["field"], "Keywords")
+        self.assertTrue(keywords["in_clip_properties"])
+        self.assertEqual(keywords["clip_property_key"], "Keyword")
+        roll_card = item["analysis_writeback_fields"]["optional_slate"][4]
+        self.assertEqual(roll_card["field"], "Roll/Card")
+        self.assertEqual(roll_card["metadata_write_key"], "Roll Card #")
+
+    def test_metadata_write_aliases_match_resolve_writeback_surface(self):
+        self.assertEqual(_metadata_write_field_for_field("Keyword"), "Keywords")
+        self.assertEqual(_metadata_write_field_for_field("Keywords"), "Keywords")
+        self.assertEqual(_metadata_write_field_for_field("Roll/Card"), "Roll Card #")
+
+    def test_metadata_panel_group_hints_cover_audio_tracks(self):
+        self.assertEqual(_metadata_panel_group_for_field("Track 12"), "Audio Tracks")
+        self.assertEqual(_metadata_panel_group_for_field("Audio Notes"), "Audio")
+        self.assertEqual(_metadata_panel_group_for_field("Director Reviewed"), "Reviewed By")
 
     def test_set_clip_marks_dry_run(self):
         mp = MediaPoolStub()
