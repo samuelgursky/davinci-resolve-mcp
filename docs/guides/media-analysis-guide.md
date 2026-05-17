@@ -84,8 +84,11 @@ FFprobe is required. If missing:
 
 ### 3. Analysis depth preference
 - **quick** — FFprobe metadata only (~1 second per file)
-- **standard** — Metadata + loudness + scene detection (~30-60 seconds per file)
-- **deep** — Metadata, read-through analysis, transcription, and optionally user-approved thumbnails/contact sheets (~2-5 minutes per file)
+- **standard** — Metadata, loudness, full-stream scene detection, cut-boundary
+  analysis, flash-frame candidates, motion/variance scoring, and analysis
+  keyframes (~30-60 seconds per file)
+- **deep** — Standard analysis plus transcription and expanded visual sampling
+  when chat-context vision is available (~2-5 minutes per file)
 
 ---
 
@@ -120,6 +123,13 @@ ffmpeg -i "INPUT_FILE" -af ebur128=peak=true -f null - 2>&1 | tail -30
 ```bash
 ffmpeg -i "INPUT_FILE" -filter:v "select='gt(scene,0.3)',showinfo" -f null - 2>&1 | grep "showinfo"
 ```
+
+Scene detection is a full-stream read. Standard/deep analysis turns the detected
+times into cut-boundary evidence: one frame before and one frame after each
+candidate cut, first/last usable clip frames, and short adjacent scene ranges
+that may be flash frames. Those candidates are advisory until visual review
+checks whether the boundary is a true edit, a flash/title/black insertion, or a
+high-motion moment inside one continuous shot.
 
 **Black Frame Detection:**
 ```bash
@@ -309,6 +319,75 @@ when the task is to understand an existing edit; the sequence target analyzes
 the distinct Media Pool assets used on the timeline and records each timeline
 occurrence as structured data for later cutdown, adjustment, or recommendation
 work.
+
+### Local SQLite Analysis Index
+
+For large single-user projects, the derived SQLite index is built automatically
+after persisted analysis reports are written. Durable batch jobs refresh the
+index after each successful slice, so search becomes useful as soon as the first
+clip is analyzed instead of waiting for a long job to finish.
+
+Use the explicit build action when you want to repair or fully rebuild the cache
+from existing reports:
+
+```json
+{"action": "build_index", "params": {"analysis_root": "/path/to/analysis-root"}}
+```
+
+The database is stored as `index.sqlite` beside `manifest.json` and
+`project_summary.json` under the project analysis root. The JSON reports remain
+the source of truth; the SQLite index is a rebuildable cache for searching clips,
+markers, transcript segments, visual tags, timeline occurrences, warnings, and
+computed keyframe metrics.
+
+Use `media_analysis(action="index_status")` to inspect row counts and size. Use
+`media_analysis(action="query_index", params={"query": "quiet reflective b-roll"})`
+to search indexed clip summaries, marker descriptions, and transcript text.
+
+Do not store sampled frames or contact sheets in SQLite. The index stores
+text/metadata only; generated frame files remain disposable artifacts under the
+analysis root and can be removed with `cleanup_artifacts(frames_only=true)`.
+
+### Batch Jobs And Local Dashboard
+
+For long runs, prefer durable batch jobs over one large analysis call. A job
+stores operational state in `jobs.sqlite` under the same project analysis root
+as the reports and index. Each slice processes a bounded number of clips, exits
+cleanly, and can be resumed by a later agent or dashboard action.
+
+Resolve-aware MCP workflow:
+
+```json
+{"action": "start_batch_job", "params": {"target": {"type": "bin", "path": "Master/Day 01"}, "depth": "standard"}}
+```
+
+```json
+{"action": "run_batch_job_slice", "params": {"job_id": "job-...", "max_clips": 1}}
+```
+
+```json
+{"action": "batch_job_status", "params": {"job_id": "job-..."}}
+```
+
+Use `list_batch_jobs`, `cancel_batch_job`, and `resume_batch_job` for operations
+around the same project analysis root. Jobs refresh the SQLite search index
+after each successful analyzed or reused clip, and completed jobs do a final
+rebuild if needed. Pass `auto_build_index=false` when creating the job to disable
+that behavior.
+
+Standalone local dashboard:
+
+```bash
+venv/bin/python -m src.analysis_dashboard --analysis-root ~/Documents/davinci-resolve-mcp-analysis --open
+```
+
+The dashboard can create file/folder jobs without Resolve open, run one clip
+slice at a time or auto-run slices, inspect recent events, build the local
+index, and query completed analysis. Chat-context visual analysis still requires
+the MCP request path because the standalone dashboard cannot call the host
+chat/sampling model. It is intentionally single-user and local; it does not
+provide authentication, multi-user locking, media playback, or image storage in
+SQLite.
 
 ### Mapping Resolve Metadata Fields
 

@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -20,18 +21,33 @@ from src.server import (
     _media_analysis_report_metadata_candidates,
     setup,
 )
+from src.analysis_dashboard import DashboardState, discover_project_contexts
 from src.utils import update_check
 from src.utils.media_analysis import (
     analysis_request_signature,
+    analysis_index_status,
+    build_analysis_index,
     build_plan,
     cleanup_artifacts,
+    _cut_boundary_analysis,
     detect_capabilities,
     execute_plan,
     execute_plan_async,
     load_report,
+    query_analysis_index,
     resolve_output_root,
+    _sample_times,
     summarize_reports,
     stable_clip_directory,
+)
+from src.utils.media_analysis_jobs import (
+    batch_job_status,
+    cancel_batch_job,
+    create_batch_job,
+    create_batch_job_from_paths,
+    list_batch_jobs,
+    resume_batch_job,
+    run_batch_job_slice,
 )
 
 
@@ -229,6 +245,35 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         ]
         subprocess.run(cmd, check=True)
 
+    def test_cut_boundary_analysis_flags_flash_candidates_and_samples_boundaries(self):
+        cut_analysis = _cut_boundary_analysis(
+            10.0,
+            [
+                {"time_seconds": 2.0},
+                {"time_seconds": 2.1},
+                {"time_seconds": 6.0},
+            ],
+            24.0,
+        )
+
+        self.assertTrue(cut_analysis["success"])
+        self.assertEqual(cut_analysis["cut_count"], 3)
+        self.assertTrue(cut_analysis["likely_edited_sequence"])
+        self.assertGreaterEqual(len(cut_analysis["flash_frame_candidates"]), 1)
+        self.assertEqual(cut_analysis["flash_frame_candidates"][0]["reason"], "adjacent scene detections bound a very short segment")
+
+        samples = _sample_times(
+            10.0,
+            [{"time_seconds": 2.0}, {"time_seconds": 2.1}, {"time_seconds": 6.0}],
+            8,
+            fps=24.0,
+            cut_analysis=cut_analysis,
+        )
+        reasons = {row["selection_reason"] for row in samples}
+        self.assertIn("flash_candidate", reasons)
+        self.assertIn("cut_before", reasons)
+        self.assertIn("cut_after", reasons)
+
     def test_output_root_uses_davinci_resolve_mcp_name(self):
         out = resolve_output_root(
             project_name="Example Project",
@@ -239,6 +284,27 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertTrue(out["success"])
         self.assertIn("davinci-resolve-mcp-analysis", out["project_root"])
         self.assertIn("example-project", out["project_root"])
+
+    def test_dashboard_context_switch_scopes_active_project_root_and_related_versions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            analysis_root = os.path.join(tmp, "analysis")
+            previous = resolve_output_root(
+                project_name="Example Project",
+                project_id="version-001",
+                analysis_root=analysis_root,
+                create=True,
+            )["project_root"]
+            state = DashboardState("Example Project", "version-002", analysis_root)
+            projects = discover_project_contexts(state.base_analysis_root, state.context())
+
+            self.assertIn(previous, projects["related_project_roots"])
+            self.assertIn(state.project_root, projects["related_project_roots"])
+
+            switched = state.set_context({"project_root": previous, "project_name": "Example Project"})
+
+        self.assertTrue(switched["success"])
+        self.assertEqual(switched["active"]["project_root"], previous)
+        self.assertEqual(state.project_root, previous)
 
     def test_output_root_rejects_source_adjacent_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -660,6 +726,28 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 else:
                     os.environ[update_check.ENV_STATE_PATH] = previous_updates
 
+    def test_unlimited_timed_marker_limit_keeps_all_candidates(self):
+        report = {
+            "visual": {
+                "editing_notes": {
+                    "best_moments": [
+                        "00:00:01 strong answer",
+                        "00:00:02 useful reaction",
+                        "00:00:03 clean transition",
+                    ]
+                }
+            }
+        }
+        markers = _media_analysis_marker_candidates_from_report(
+            report,
+            {"clip_id": "clip-123", "fps": "24"},
+            None,
+            "/tmp/report.json",
+            {"markers": {"marker_types": ["best_moments"], "max_markers": 0}},
+        )
+        self.assertEqual(len(markers["markers"]), 3)
+        self.assertFalse([item for item in markers["skipped"] if item.get("reason") == "max_markers_reached"])
+
     def test_publish_metadata_merge_updates_owned_blocks_and_dedupes_lists(self):
         comments = _media_analysis_merge_metadata_field(
             "Comments",
@@ -820,7 +908,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "source_file": source,
                     "clip": record,
                     "technical": {"format": {"duration_seconds": 1.0}},
-                    "readthrough": {"success": True},
+                    "readthrough": {"success": True, "cut_analysis": {"success": True}},
                     "motion": {"success": True, "analysis_keyframes": []},
                     "transcription": {"success": True, "status": "skipped"},
                     "visual": {"success": True, "status": "skipped"},
@@ -895,7 +983,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "source_file": source,
                     "clip": record,
                     "technical": {"format": {"duration_seconds": 1.0}},
-                    "readthrough": {"success": True},
+                    "readthrough": {"success": True, "cut_analysis": {"success": True}},
                     "motion": {"success": True, "analysis_keyframes": []},
                     "transcription": {"success": True, "status": "skipped"},
                     "visual": {"success": True, "status": "skipped"},
@@ -926,6 +1014,79 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertFalse(plan["clips"][0].get("skip_execution", False))
         self.assertIn("source_size_bytes_changed", plan["clips"][0]["existing_report"]["cache_issues"])
 
+    def test_build_plan_reuses_report_from_same_name_project_version_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001_C001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"current")
+            record = {
+                "clip_id": "clip-current-version",
+                "clip_name": "A001_C001.mov",
+                "file_path": source,
+                "media_id": "media-current-version",
+            }
+            analysis_root = os.path.join(tmp, "analysis")
+            previous_root = resolve_output_root(
+                project_name="Example Project",
+                project_id="version-001",
+                analysis_root=analysis_root,
+                source_paths=[source],
+                create=True,
+            )["project_root"]
+            active_root = resolve_output_root(
+                project_name="Example Project",
+                project_id="version-002",
+                analysis_root=analysis_root,
+                source_paths=[source],
+                create=False,
+            )["project_root"]
+            clip_dir = os.path.join(previous_root, "clips", stable_clip_directory(record))
+            os.makedirs(clip_dir)
+            signature = analysis_request_signature(record, "standard", {"transcription": {}, "vision": {}}, 8)
+            with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as handle:
+                json.dump({
+                    "success": True,
+                    "analysis_version": "0.1",
+                    "analysis_signature": signature,
+                    "analyzed_at": "2026-05-17T12:00:00Z",
+                    "source_file": source,
+                    "clip": record,
+                    "technical": {"format": {"duration_seconds": 1.0}},
+                    "readthrough": {"success": True, "cut_analysis": {"success": True}},
+                    "motion": {"success": True, "analysis_keyframes": []},
+                    "transcription": {"success": True, "status": "skipped"},
+                    "visual": {"success": True, "status": "skipped"},
+                    "clip_analysis_markers": {"success": True, "marker_count": 1, "markers": []},
+                }, handle)
+
+            plan = build_plan(
+                project_name="Example Project",
+                project_id="version-002",
+                records=[record],
+                target={"type": "clips", "clip_ids": ["clip-current-version"]},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "reuse_project_roots": [previous_root],
+                },
+                capabilities={
+                    "tools": {
+                        "ffprobe": {"available": True},
+                        "ffmpeg": {"available": True},
+                    },
+                    "transcription": {"available": False},
+                    "vision": {"available": False},
+                },
+            )
+
+        self.assertTrue(plan["success"])
+        self.assertEqual(plan["output_root"]["project_root"], active_root)
+        self.assertEqual(plan["reusable_clip_count"], 1)
+        self.assertTrue(plan["clips"][0]["skip_execution"])
+        self.assertEqual(plan["clips"][0]["existing_report"]["project_root"], previous_root)
+        self.assertTrue(plan["clips"][0]["artifacts"]["analysis_json"].startswith(active_root))
+
     def test_build_plan_force_refresh_bypasses_reuse(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = os.path.join(tmp, "source", "A001_C001.mov")
@@ -952,7 +1113,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "source_file": source,
                     "clip": record,
                     "technical": {"format": {"duration_seconds": 1.0}},
-                    "readthrough": {"success": True},
+                    "readthrough": {"success": True, "cut_analysis": {"success": True}},
                     "motion": {"success": True, "analysis_keyframes": []},
                     "transcription": {"success": True, "status": "skipped"},
                     "visual": {"success": True, "status": "skipped"},
@@ -1009,7 +1170,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "source_file": source,
                     "clip": record,
                     "technical": {"format": {"duration_seconds": 1.0}},
-                    "readthrough": {"success": True},
+                    "readthrough": {"success": True, "cut_analysis": {"success": True}},
                     "motion": {"success": True, "analysis_keyframes": []},
                     "transcription": {"success": True, "status": "skipped"},
                     "visual": {"success": True, "status": "skipped"},
@@ -1089,6 +1250,25 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertEqual(target["type"], "clip")
         self.assertTrue(target["selected"])
         self.assertEqual(len(records), 1)
+
+    def test_clips_target_uses_explicit_clip_ids_and_rejects_non_analyzable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path_a = os.path.join(tmp, "A001_C001.mov")
+            with open(path_a, "wb") as handle:
+                handle.write(b"placeholder")
+            good = ClipStub("A001_C001.mov", "clip-1", path_a)
+            missing = ClipStub("MISSING.mov", "clip-2", os.path.join(tmp, "missing.mov"))
+            root = FolderStub("Master", clips=[good, missing])
+            records, target, warnings, err = _media_analysis_records_from_target(
+                MediaPoolStub(root),
+                {"target": {"type": "clips", "clip_ids": ["clip-1", "clip-2"]}},
+            )
+
+        self.assertIsNone(err)
+        self.assertEqual(target["type"], "clips")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["clip_id"], "clip-1")
+        self.assertTrue(any("Skipping non-analyzable clip" in warning for warning in warnings))
 
     def test_sequence_target_collects_used_assets_and_occurrences(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1183,6 +1363,10 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertEqual(plan["capability_gaps"], [])
             self.assertTrue(manifest["success"])
             self.assertEqual(manifest["successful_clip_count"], 1)
+            self.assertTrue(manifest["index"]["success"])
+            index = analysis_index_status(plan["output_root"]["project_root"])
+            self.assertTrue(index["exists"])
+            self.assertEqual(index["counts"]["clips"], 1)
             artifacts = manifest["clips"][0]["artifacts"]
             self.assertTrue(os.path.exists(artifacts["analysis_json"]))
             self.assertTrue(os.path.exists(artifacts["technical_json"]))
@@ -1200,6 +1384,14 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertEqual(clip_report["transcription"]["segments"][0]["text"], "Synthetic tone.")
             self.assertGreaterEqual(clip_report["clip_analysis_markers"]["marker_count"], 1)
             self.assertFalse(clip_report["clip_analysis_markers"]["write_to_resolve_default"])
+            self.assertTrue(clip_report["readthrough"]["cut_analysis"]["success"])
+            self.assertIn("cut_count", clip_report["cut_analysis"])
+            self.assertGreaterEqual(
+                clip_report["motion"]["effective_sample_budget"],
+                clip_report["motion"]["requested_sample_budget"],
+            )
+            self.assertIn("cut_boundary_pair_coverage", clip_report["motion"])
+            self.assertIn("cut_analysis", clip_report["clip_analysis_markers"])
             with open(artifacts["transcript_json"], "r", encoding="utf-8") as handle:
                 transcript_json = json.load(handle)
             self.assertEqual(transcript_json["text"], "Synthetic tone.")
@@ -1314,6 +1506,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
 
             async def fake_runner(record, motion, options, artifacts, capabilities):
                 self.assertTrue(any(row.get("frame_path") for row in motion["analysis_keyframes"]))
+                self.assertIn("cut_analysis", motion)
                 return {
                     "success": True,
                     "provider": "chat_context",
@@ -1370,6 +1563,271 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertEqual(manifest["reports"][0]["visual"]["editing_notes"]["search_tags"], ["chat-context"])
             self.assertFalse(os.path.exists(plan["output_root"]["project_root"]))
             self.assertEqual(sorted(os.listdir(source_dir)), ["synthetic_chat_context.mp4"])
+
+    def test_build_analysis_index_queries_reports_without_image_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "source")
+            os.makedirs(source_dir)
+            source = os.path.join(source_dir, "A001_C001.mov")
+            with open(source, "wb") as handle:
+                handle.write(b"synthetic source placeholder")
+
+            record = {
+                "clip_id": "clip-index",
+                "clip_name": "A001_C001.mov",
+                "file_path": source,
+                "media_id": "media-index",
+                "bin_path": "Master/Day 01",
+                "fps": "24",
+                "timeline_occurrences": [
+                    {
+                        "timeline_id": "timeline-main",
+                        "timeline_name": "Assembly",
+                        "track_type": "video",
+                        "track_index": 1,
+                        "item_index": 0,
+                        "start_frame": 100,
+                        "end_frame": 196,
+                    }
+                ],
+            }
+            root = resolve_output_root(
+                project_name="Example Project",
+                project_id="project-index",
+                analysis_root=os.path.join(tmp, "analysis"),
+                source_paths=[source],
+                create=True,
+            )["project_root"]
+            clip_dir = os.path.join(root, "clips", stable_clip_directory(record))
+            os.makedirs(clip_dir)
+            signature = analysis_request_signature(
+                record,
+                "standard",
+                {
+                    "transcription": {"enabled": True, "backend": "mock"},
+                    "vision": {"enabled": True, "provider": "mock"},
+                },
+                4,
+            )
+            report = {
+                "success": True,
+                "analysis_version": "0.1",
+                "analysis_signature": signature,
+                "analyzed_at": "2026-05-17T12:00:00Z",
+                "source_file": source,
+                "clip": record,
+                "summary": "Reflective kitchen interview b-roll, medium motion",
+                "technical_warnings": ["Container frame rate and average frame rate differ; possible VFR media"],
+                "technical": {
+                    "format": {"duration_seconds": 4.0, "size_bytes": 24},
+                    "video": [{"frame_rate": 24.0, "duration_seconds": 4.0}],
+                    "warnings": ["Container frame rate and average frame rate differ; possible VFR media"],
+                },
+                "readthrough": {"success": True, "cut_analysis": {"success": True}},
+                "motion": {
+                    "success": True,
+                    "overall_motion_level": "medium",
+                    "average_frame_delta": 0.04,
+                    "max_frame_delta": 0.12,
+                },
+                "transcription": {
+                    "success": True,
+                    "text": "A childhood memory is described quietly.",
+                    "segments": [
+                        {"start": 0.5, "end": 2.4, "text": "A childhood memory is described quietly."}
+                    ],
+                },
+                "visual": {
+                    "success": True,
+                    "clip_summary": "Person moves through a kitchen in a reflective mood.",
+                    "content": {
+                        "locations": ["kitchen"],
+                        "actions": ["walking"],
+                        "objects": ["coffee mug"],
+                        "visible_text": [],
+                        "notable_audio_context": ["quiet room tone"],
+                    },
+                    "editing_notes": {
+                        "best_moments": ["00:00:01.000 thoughtful pause"],
+                        "qc_flags": [],
+                        "search_tags": ["reflective", "kitchen"],
+                    },
+                },
+                "analysis_keyframes": [
+                    {
+                        "index": 1,
+                        "time_seconds": 1.0,
+                        "selection_reason": "midpoint",
+                        "frame_path": "/tmp/should-not-be-stored.jpg",
+                        "metrics": {"mean_luma": 91.5},
+                        "delta_from_previous": 0.12,
+                    }
+                ],
+                "clip_analysis_markers": {
+                    "success": True,
+                    "duration_seconds": 4.0,
+                    "fps": 24.0,
+                    "timeline_occurrences": record["timeline_occurrences"],
+                    "markers": [
+                        {
+                            "id": "best-moment-001",
+                            "type": "best_moment",
+                            "color": "Green",
+                            "name": "Best Moment",
+                            "start_seconds": 1.0,
+                            "end_seconds": 2.0,
+                            "start_frame": 24,
+                            "duration_frames": 24,
+                            "visual_description": "Quiet reflective moment near the kitchen counter.",
+                            "sound_note": "Soft room tone.",
+                            "transcript_text": "childhood memory",
+                            "source": "visual_editing_notes",
+                            "confidence": "model_suggested",
+                        }
+                    ],
+                },
+            }
+            with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as handle:
+                json.dump(report, handle)
+
+            built = build_analysis_index(root)
+            status = analysis_index_status(root)
+            transcript_results = query_analysis_index(root, "childhood memory", result_types="transcript")
+            marker_results = query_analysis_index(root, "reflective kitchen", result_types=["marker", "clip"])
+
+            self.assertTrue(built["success"])
+            self.assertEqual(built["image_blob_policy"], "excluded")
+            self.assertEqual(built["counts"]["clips"], 1)
+            self.assertEqual(built["counts"]["markers"], 1)
+            self.assertEqual(built["counts"]["transcript_segments"], 1)
+            self.assertTrue(status["exists"])
+            self.assertEqual(status["counts"]["analysis_keyframes"], 1)
+            self.assertGreaterEqual(transcript_results["result_count"], 1)
+            self.assertEqual(transcript_results["results"][0]["result_type"], "transcript")
+            self.assertGreaterEqual(marker_results["result_count"], 1)
+
+            conn = sqlite3.connect(built["index_path"])
+            try:
+                columns = [
+                    row[1]
+                    for row in conn.execute("PRAGMA table_info(analysis_keyframes)").fetchall()
+                ]
+                self.assertNotIn("frame_path", columns)
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT sql FROM sqlite_master WHERE sql LIKE ?",
+                        ("%should-not-be-stored%",),
+                    ).fetchone()
+                )
+            finally:
+                conn.close()
+
+    def test_query_analysis_index_reports_missing_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = resolve_output_root(
+                project_name="Example Project",
+                project_id="project-missing-index",
+                analysis_root=os.path.join(tmp, "analysis"),
+                source_paths=[],
+                create=True,
+            )["project_root"]
+            status = analysis_index_status(root)
+            result = query_analysis_index(root, "anything")
+
+        self.assertTrue(status["success"])
+        self.assertFalse(status["exists"])
+        self.assertFalse(result["success"])
+        self.assertIn("Analysis index not found", result["error"])
+
+    def test_batch_job_slice_runs_and_builds_index(self):
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "source")
+            analysis_dir = os.path.join(tmp, "analysis")
+            os.makedirs(source_dir)
+            source_a = os.path.join(source_dir, "job_a.mp4")
+            source_b = os.path.join(source_dir, "job_b.mp4")
+            self._write_synthetic_media(source_a)
+            self._write_synthetic_media(source_b)
+            records = [
+                {"clip_id": "clip-a", "clip_name": "job_a.mp4", "file_path": source_a, "media_id": "media-a"},
+                {"clip_id": "clip-b", "clip_name": "job_b.mp4", "file_path": source_b, "media_id": "media-b"},
+            ]
+            params = {
+                "analysis_root": analysis_dir,
+                "depth": "standard",
+                "max_analysis_frames": 2,
+                "transcription": {
+                    "enabled": True,
+                    "backend": "mock",
+                    "segments": [{"start": 0, "end": 1.0, "text": "Batch transcript."}],
+                },
+                "vision": {"enabled": True, "provider": "mock"},
+            }
+            created = create_batch_job(
+                project_name="Example Project",
+                project_id="project-job",
+                records=records,
+                target={"type": "file_list"},
+                params=params,
+                name="Synthetic batch",
+            )
+            self.assertTrue(created["success"])
+            job = created["job"]
+            self.assertEqual(job["total_clips"], 2)
+            self.assertEqual(job["pending_clips"], 2)
+
+            first = run_batch_job_slice(job["project_root"], job["job_id"], max_clips=1)
+            self.assertTrue(first["success"])
+            self.assertEqual(first["processed_count"], 1)
+            mid = batch_job_status(job["project_root"], job["job_id"])
+            mid_index = analysis_index_status(job["project_root"])
+            self.assertEqual(mid["succeeded_clips"], 1)
+            self.assertEqual(mid["pending_clips"], 1)
+            self.assertTrue(mid_index["exists"])
+            self.assertEqual(mid_index["counts"]["clips"], 1)
+
+            second = run_batch_job_slice(job["project_root"], job["job_id"], max_clips=5)
+            self.assertTrue(second["success"])
+            final = batch_job_status(job["project_root"], job["job_id"])
+            self.assertEqual(final["status"], "completed")
+            self.assertEqual(final["succeeded_clips"], 2)
+            self.assertTrue(os.path.exists(final["paths"]["progress_json"]))
+            self.assertTrue(os.path.exists(final["paths"]["events_jsonl"]))
+
+            jobs = list_batch_jobs(job["project_root"])
+            index = analysis_index_status(job["project_root"])
+            search = query_analysis_index(job["project_root"], "Batch transcript", result_types="transcript")
+            self.assertEqual(jobs["count"], 1)
+            self.assertTrue(index["exists"])
+            self.assertEqual(index["counts"]["clips"], 2)
+            self.assertGreaterEqual(search["result_count"], 1)
+
+    def test_batch_job_cancel_and_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "source")
+            analysis_dir = os.path.join(tmp, "analysis")
+            os.makedirs(source_dir)
+            source = os.path.join(source_dir, "job_cancel.mov")
+            with open(source, "wb") as handle:
+                handle.write(b"placeholder")
+            created = create_batch_job_from_paths(
+                project_name="Example Project",
+                project_id="project-job-cancel",
+                paths=[source],
+                analysis_root=analysis_dir,
+                params={"depth": "quick"},
+                name="Cancelable batch",
+            )
+            self.assertTrue(created["success"])
+            job = created["job"]
+
+            canceled = cancel_batch_job(job["project_root"], job["job_id"])
+            self.assertEqual(canceled["status"], "canceled")
+            resumed = resume_batch_job(job["project_root"], job["job_id"])
+            self.assertEqual(resumed["status"], "queued")
+            self.assertEqual(resumed["pending_clips"], 1)
 
 
 if __name__ == "__main__":

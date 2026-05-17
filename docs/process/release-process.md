@@ -25,6 +25,7 @@ Every release bump must update all version surfaces:
 - `src/server.py`
 - `src/granular/common.py`
 - `install.py`
+- `package.json`
 - README version badge
 - README current stats or latest-release summary when they changed
 - `CHANGELOG.md` latest release entry
@@ -42,6 +43,9 @@ Always run static checks before release:
 ```bash
 venv/bin/python tests/test_import.py
 venv/bin/python scripts/audit_api_parity.py
+node bin/davinci-resolve-mcp.mjs --help
+node bin/davinci-resolve-mcp.mjs --version
+npm pack --dry-run
 git diff --check
 ```
 
@@ -111,6 +115,10 @@ should say that no behavior changed.
    ```
 
 9. Verify the result:
+
+   The `Publish npm package` workflow publishes the npm package from `v*` tags.
+   The npm package should use trusted publishing/OIDC and provenance, not a
+   long-lived npm token.
 
    ```bash
    gh release list --repo samuelgursky/davinci-resolve-mcp --limit 5

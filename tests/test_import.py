@@ -1,6 +1,7 @@
 """Basic syntax and tool-count smoke tests."""
 
 import ast
+import json
 from pathlib import Path
 
 
@@ -52,6 +53,18 @@ def _tool_annotation_name(path: Path, function_name: str) -> str:
     return ""
 
 
+def _string_assignment(path: Path, name: str) -> str:
+    tree = _parse(path)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+            continue
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            return node.value.value
+    return ""
+
+
 def test_server_syntax():
     assert _parse(PROJECT_ROOT / "src" / "server.py") is not None
 
@@ -67,6 +80,14 @@ def test_granular_module_syntax():
 
 def test_install_syntax():
     assert _parse(PROJECT_ROOT / "install.py") is not None
+
+
+def test_npm_package_metadata():
+    package = json.loads((PROJECT_ROOT / "package.json").read_text())
+    assert package["name"] == "davinci-resolve-mcp"
+    assert package["version"] == _string_assignment(PROJECT_ROOT / "install.py", "VERSION")
+    assert package["bin"]["davinci-resolve-mcp"] == "./bin/davinci-resolve-mcp.mjs"
+    assert (PROJECT_ROOT / "bin" / "davinci-resolve-mcp.mjs").exists()
 
 
 def test_utils_syntax():

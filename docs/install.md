@@ -13,11 +13,21 @@ Validated live coverage is based on **DaVinci Resolve 19.1.3 Studio** for the or
 ## Quick Start
 
 ```bash
-# Clone the repository
+# Make sure DaVinci Resolve Studio is running, then:
+npx davinci-resolve-mcp setup
+```
+
+The npm launcher installs a managed copy in your user application-data directory
+and then runs the universal Python installer from there. MCP client configs point
+directly at the managed Python virtual environment and `src/server.py`, so Node
+is not required after setup.
+
+For source installs:
+
+```bash
 git clone https://github.com/samuelgursky/davinci-resolve-mcp.git
 cd davinci-resolve-mcp
 
-# Make sure DaVinci Resolve is running, then:
 python install.py
 ```
 
@@ -47,6 +57,12 @@ You can configure multiple clients at once, or use `--clients manual` to get cop
 ### Installer Options
 
 ```bash
+npx davinci-resolve-mcp setup                 # Interactive npm setup
+npx davinci-resolve-mcp setup --clients all   # Configure all clients
+npx davinci-resolve-mcp doctor                # Dry-run environment/config check
+npx davinci-resolve-mcp server                # Launch the managed MCP server
+npx davinci-resolve-mcp control-panel         # Launch the local control panel
+
 python install.py                              # Interactive mode
 python install.py --clients all                # Configure all clients
 python install.py --clients cursor,claude-desktop  # Specific clients
@@ -80,6 +96,30 @@ The installer uses the compound server by default. To use the full server:
 python src/server.py --full    # Launch full 329-tool server
 # Or point your MCP config directly at src/resolve_mcp_server.py
 ```
+
+### Local Control Panel
+
+The repository includes a local, single-user control panel for server status,
+Resolve clip visibility, source-safe media-analysis jobs, and the searchable
+analysis index. Persisted analysis jobs refresh the index automatically after
+successful slices; the manual Build Index action is for rebuilding from existing
+reports.
+
+From the repository root:
+
+```bash
+venv/bin/python -m src.control_panel
+```
+
+This opens the browser by default. Use `--no-open` to run only the localhost
+server, or `--port` to choose a different port:
+
+```bash
+venv/bin/python -m src.control_panel --no-open --port 8766
+```
+
+You can also ask an AI coding agent: **"Open the Resolve MCP control panel for
+this repo."** The agent should launch the command above and open the local URL.
 
 ### Manual Configuration
 

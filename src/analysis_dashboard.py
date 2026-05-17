@@ -1,0 +1,4936 @@
+#!/usr/bin/env python3
+"""Local dashboard for single-user media analysis batch jobs."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import sys
+import threading
+import webbrowser
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, urlparse
+
+from src.utils.media_analysis import (
+    analysis_index_status,
+    build_analysis_index,
+    detect_capabilities,
+    query_analysis_index,
+    resolve_output_root,
+    stable_clip_directory,
+)
+from src.utils.media_analysis_jobs import (
+    MEDIA_EXTENSIONS,
+    batch_job_status,
+    cancel_batch_job,
+    create_batch_job_from_paths,
+    list_batch_jobs,
+    project_root_for_dashboard,
+    resume_batch_job,
+    run_batch_job_slice,
+)
+from src.utils.platform import setup_environment
+
+
+HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DaVinci Resolve MCP</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Bradford Operations core tokens */
+      --bg-base: #1a1a1a;
+      --bg-elevated-1: #242424;
+      --bg-elevated-2: #2d2d2d;
+      --bg-elevated-3: #333333;
+      --bg-hover: #3a3a3a;
+      --bg-active: #404040;
+      --text-primary: #e8e8e8;
+      --text-secondary: #a0a0a0;
+      --text-tertiary: #666666;
+      --accent-brand: #1E90FF;
+      --accent-brand-hover: #4A9EFF;
+      --accent-brand-pressed: #0066CC;
+      --accent-brand-muted: rgba(30, 144, 255, 0.15);
+      --accent-brand-subtle: rgba(30, 144, 255, 0.08);
+      --accent-success: #22c55e;
+      --accent-success-muted: rgba(34, 197, 94, 0.15);
+      --accent-warning: #f59e0b;
+      --accent-warning-muted: rgba(245, 158, 11, 0.15);
+      --accent-error: #ef4444;
+      --accent-error-muted: rgba(239, 68, 68, 0.15);
+      --accent-ai: #a855f7;
+      --border-subtle: #333333;
+      --border-default: #404040;
+      --border-strong: #505050;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+      --space-8: 32px;
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --radius-pill: 9999px;
+
+      /* Lab-style module tokens */
+      --lab-workspace-bg: #0A0A0A;
+      --lab-workspace-letterbox: #000000;
+      --lab-panel-bg: #141312;
+      --lab-panel-header: #1A1918;
+      --lab-panel-elevated: #1E1D1C;
+      --lab-accent-primary: var(--accent-brand);
+      --lab-playhead: var(--accent-brand);
+
+      /* Bradford Operations density tokens */
+      --ops-text-label: 12px;
+      --ops-text-body: 14px;
+      --ops-text-ui: 14px;
+      --ops-text-heading: 18px;
+      --ops-text-title: 24px;
+      --ops-leading-tight: 1.3;
+      --ops-leading-normal: 1.55;
+      --ops-weight-ui: 500;
+      --ops-weight-heading: 600;
+
+      font-family: var(--font-sans);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px) 0 0 / 44px 44px,
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px) 0 0 / 44px 44px,
+        linear-gradient(180deg, var(--lab-workspace-bg), var(--bg-base) 58%, #111111);
+      color: var(--text-primary);
+      font-size: var(--ops-text-body);
+      line-height: var(--ops-leading-normal);
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    button, input, textarea, select { font: inherit; }
+    button {
+      border: 1px solid color-mix(in srgb, var(--accent-brand) 45%, transparent);
+      background: var(--accent-brand);
+      color: #ffffff;
+      min-height: 34px;
+      padding: 0 var(--space-4);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: var(--ops-text-ui);
+      font-weight: var(--ops-weight-ui);
+      -webkit-user-select: none;
+      user-select: none;
+      transition: background 150ms ease, border-color 150ms ease, color 150ms ease, transform 100ms ease;
+    }
+    button:hover {
+      background: var(--accent-brand-hover);
+      border-color: var(--accent-brand-hover);
+    }
+    button:active { transform: translateY(1px); }
+    button:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible,
+    select:focus-visible {
+      outline: 0;
+      box-shadow: 0 0 0 1px var(--accent-brand), 0 0 0 4px rgba(30, 144, 255, 0.18);
+    }
+    button.secondary {
+      background: var(--bg-elevated-2);
+      border-color: var(--border-default);
+      color: var(--text-primary);
+    }
+    button.secondary:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-strong);
+    }
+    button.danger {
+      background: color-mix(in srgb, var(--accent-error) 88%, #000000);
+      border-color: color-mix(in srgb, var(--accent-error) 60%, transparent);
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .lab-navbar {
+      height: 48px;
+      min-height: 48px;
+      border-bottom: 1px solid var(--bg-elevated-3);
+      background: var(--bg-base);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+      padding: 0 var(--space-4);
+      position: fixed;
+      inset: 0 0 auto 0;
+      z-index: 1002;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 {
+      font-size: var(--ops-text-title);
+      font-weight: var(--ops-weight-heading);
+      letter-spacing: 0;
+      line-height: var(--ops-leading-tight);
+    }
+    h2 {
+      color: var(--text-primary);
+      font-size: var(--ops-text-label);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      border-bottom: 1px solid var(--border-default);
+      padding-bottom: var(--space-3);
+      margin-bottom: var(--space-4);
+    }
+    small { color: var(--text-secondary); }
+    .nav-left {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: 0;
+      flex: 1;
+    }
+    .wordmark {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      color: #ffffff;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .home-wordmark {
+      border: 0;
+      background: transparent;
+      min-height: auto;
+      padding: 0;
+      border-radius: 0;
+      cursor: pointer;
+    }
+    .home-wordmark:hover {
+      background: transparent;
+      color: #ffffff;
+    }
+    .home-wordmark:active { transform: none; }
+    .wordmark-accent { color: var(--accent-brand); }
+    .project-context {
+      min-width: 170px;
+      max-width: 260px;
+    }
+    .project-context select {
+      min-height: 32px;
+      height: 32px;
+      padding: 0 var(--space-3);
+      background: var(--bg-elevated-1);
+      border-color: var(--border-default);
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+      font-weight: 600;
+    }
+    .project-filter {
+      min-width: 260px;
+      max-width: 360px;
+    }
+    .project-filter input {
+      min-height: 32px;
+      height: 32px;
+      font-size: var(--ops-text-label);
+    }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: var(--space-5);
+      background: rgba(0, 0, 0, 0.62);
+      z-index: 1200;
+    }
+    .modal-backdrop.open {
+      display: flex;
+    }
+    .modal-card {
+      width: min(520px, 100%);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--bg-base) 94%, #000000);
+      box-shadow: 0 24px 64px rgba(0,0,0,0.48);
+      padding: var(--space-5);
+    }
+    .modal-kicker {
+      color: var(--accent-brand-hover);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-bottom: var(--space-2);
+    }
+    .modal-card h3 {
+      color: var(--text-primary);
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.3;
+      margin-bottom: var(--space-3);
+    }
+    .modal-body {
+      color: var(--text-secondary);
+      line-height: 1.55;
+      margin-bottom: var(--space-4);
+    }
+    .modal-detail {
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      background: var(--lab-workspace-letterbox);
+      padding: var(--space-3);
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+      margin-bottom: var(--space-5);
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: var(--space-2);
+      flex-wrap: wrap;
+    }
+    .nav-breadcrumb {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--text-secondary);
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .breadcrumb-icon,
+    .nav-breadcrumb-sep {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      color: var(--text-tertiary);
+      flex: 0 0 auto;
+    }
+    .breadcrumb-icon {
+      color: var(--accent-brand-hover);
+    }
+    .breadcrumb-icon svg,
+    .nav-breadcrumb-sep svg {
+      width: 12px;
+      height: 12px;
+    }
+    .nav-breadcrumb-sep {
+      color: var(--text-tertiary);
+    }
+    .nav-breadcrumb-current {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .breadcrumb-trail {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+    }
+    .breadcrumb-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .breadcrumb-item-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      color: var(--accent-brand-hover);
+      flex: 0 0 auto;
+    }
+    .breadcrumb-item-icon svg {
+      width: 13px;
+      height: 13px;
+    }
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      margin-bottom: var(--space-2);
+    }
+    .brand-kicker {
+      color: var(--accent-brand-hover);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .brand-sep { color: var(--text-tertiary); }
+    .brand-context {
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .subhead {
+      margin-top: var(--space-2);
+      color: var(--text-secondary);
+      max-width: 760px;
+      line-height: 1.45;
+    }
+    .credit {
+      margin-top: var(--space-2);
+      color: var(--text-tertiary);
+      font-size: var(--ops-text-label);
+    }
+    .credit strong {
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+    a {
+      color: inherit;
+      text-decoration: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .credit a,
+    .lab-footer a {
+      color: var(--text-secondary);
+      font-weight: 600;
+      text-decoration: underline;
+      text-decoration-color: color-mix(in srgb, var(--accent-brand) 45%, transparent);
+      text-underline-offset: 3px;
+      transition: color 150ms ease, text-decoration-color 150ms ease;
+    }
+    .credit a:hover,
+    .lab-footer a:hover {
+      color: var(--accent-brand-hover);
+      text-decoration-color: var(--accent-brand-hover);
+    }
+    .control-tabs {
+      display: flex;
+      gap: var(--space-2);
+      justify-content: center;
+      min-width: 0;
+      flex: 0 1 auto;
+    }
+    .control-nav-item {
+      position: relative;
+      display: inline-flex;
+    }
+    .control-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 0 var(--space-3);
+      background: transparent;
+      border-color: transparent;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+    .control-tab.has-menu {
+      padding-right: var(--space-2);
+    }
+    .tab-chevron {
+      display: inline-flex;
+      width: 12px;
+      height: 12px;
+      color: var(--text-tertiary);
+      transition: transform 150ms ease, color 150ms ease;
+    }
+    .tab-chevron svg {
+      width: 12px;
+      height: 12px;
+    }
+    .control-tab:hover {
+      background: var(--bg-elevated-2);
+      border-color: var(--border-default);
+      color: var(--text-primary);
+    }
+    .control-tab.active {
+      background: var(--accent-brand-muted);
+      border-color: color-mix(in srgb, var(--accent-brand) 45%, transparent);
+      color: #ffffff;
+    }
+    .control-tab.active .tab-chevron,
+    .control-nav-item.open .tab-chevron {
+      color: var(--accent-brand-hover);
+      transform: translateY(1px);
+    }
+    .nav-dropdown {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      min-width: 220px;
+      display: none;
+      padding: var(--space-2);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--bg-base) 96%, #000000);
+      box-shadow: 0 16px 36px rgba(0,0,0,0.36);
+      z-index: 1005;
+    }
+    .control-nav-item.open .nav-dropdown {
+      display: grid;
+      gap: var(--space-1);
+    }
+    .nav-dropdown-item {
+      min-height: 34px;
+      width: 100%;
+      justify-content: flex-start;
+      gap: var(--space-2);
+      border-color: transparent;
+      background: transparent;
+      color: var(--text-secondary);
+      text-align: left;
+      padding: 0 var(--space-3);
+    }
+    .nav-dropdown-item:hover,
+    .nav-dropdown-item.active {
+      background: var(--bg-elevated-2);
+      border-color: var(--border-default);
+      color: var(--text-primary);
+    }
+    .nav-dropdown-item.active {
+      color: #ffffff;
+      box-shadow: inset 3px 0 0 var(--accent-brand);
+    }
+    .nav-dropdown-icon {
+      display: none;
+      width: 14px;
+      height: 14px;
+      color: var(--accent-brand-hover);
+      flex: 0 0 auto;
+    }
+    .nav-dropdown-icon svg {
+      width: 14px;
+      height: 14px;
+    }
+    .nav-links {
+      display: flex;
+      justify-content: flex-end;
+      min-width: 0;
+    }
+    .nav-link,
+    .external-link {
+      border: 1px solid var(--border-default);
+      background: var(--bg-elevated-1);
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 0 var(--space-3);
+      font-size: var(--ops-text-label);
+      font-weight: 600;
+      transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+    }
+    .nav-link:hover,
+    .external-link:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-strong);
+      color: var(--accent-brand-hover);
+    }
+    .github-icon-link {
+      border: 1px solid var(--border-default);
+      background: var(--bg-elevated-1);
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      display: inline-flex;
+      align-items: center;
+      width: 34px;
+      min-width: 34px;
+      min-height: 32px;
+      justify-content: center;
+      padding: 0;
+      text-decoration: none;
+      transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+    }
+    .github-icon-link:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-strong);
+      color: var(--accent-brand-hover);
+    }
+    .external-link.github-icon-link {
+      width: 40px;
+      min-width: 40px;
+      min-height: 38px;
+    }
+    .github-icon {
+      width: 17px;
+      height: 17px;
+      flex: 0 0 auto;
+      color: currentColor;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .lab-footer a.github-icon-link {
+      color: var(--text-secondary);
+      text-decoration: none;
+    }
+    .pill {
+      border: 1px solid var(--border-default);
+      background: var(--bg-elevated-1);
+      border-radius: var(--radius-pill);
+      padding: 5px 9px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      font-size: var(--ops-text-label);
+      font-family: var(--font-mono);
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+      gap: var(--space-4);
+      padding: calc(48px + var(--space-4)) var(--space-4) calc(52px + var(--space-4));
+      max-width: 1500px;
+      margin: 0 auto;
+    }
+    .panel { display: none; }
+    .panel.active { display: grid; }
+    .panel.control-grid {
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      align-items: start;
+    }
+    .panel.control-grid > section { grid-column: span 6; }
+    .panel.control-grid > section.span-12 { grid-column: span 12; }
+    .panel.control-grid > section.span-8 { grid-column: span 8; }
+    .panel.control-grid > section.span-4 { grid-column: span 4; }
+    .panel.control-grid > .span-12 { grid-column: span 12; }
+    .panel.control-grid > .span-8 { grid-column: span 8; }
+    .panel.control-grid > .span-4 { grid-column: span 4; }
+    .subpage { display: none; }
+    .subpage.active { display: block; }
+    .subpage-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: var(--space-4);
+      align-items: start;
+    }
+    .subpage-grid > section { grid-column: span 6; }
+    .subpage-grid > section.span-12 { grid-column: span 12; }
+    .subpage-grid > section.span-8 { grid-column: span 8; }
+    .subpage-grid > section.span-4 { grid-column: span 4; }
+    section {
+      background: color-mix(in srgb, var(--lab-panel-bg) 94%, var(--bg-elevated-1));
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      padding: var(--space-4);
+      box-shadow: 0 18px 42px rgba(0,0,0,0.24);
+      min-width: 0;
+    }
+    .stack { display: grid; gap: var(--space-4); align-content: start; }
+    .stack.compact { gap: var(--space-2); }
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+      font-weight: 500;
+    }
+    .field-help,
+    .section-copy,
+    .settings-subtitle {
+      color: var(--text-tertiary);
+      font-size: 11px;
+      font-weight: 400;
+      line-height: 1.45;
+      max-width: 68ch;
+    }
+    input, textarea, select {
+      width: 100%;
+      border: 1px solid var(--border-default);
+      background: var(--lab-workspace-letterbox);
+      color: var(--text-primary);
+      border-radius: var(--radius-sm);
+      min-height: 38px;
+      padding: var(--space-2) var(--space-3);
+      transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+    }
+    input, textarea {
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    input:hover, textarea:hover, select:hover {
+      border-color: var(--border-strong);
+      background: #0f0f0f;
+    }
+    input::placeholder, textarea::placeholder { color: var(--text-tertiary); }
+    select {
+      appearance: auto;
+      color-scheme: dark;
+    }
+    textarea {
+      min-height: 118px;
+      resize: vertical;
+      line-height: 1.4;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+    .controls { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+    .checkbox {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+      flex-wrap: wrap;
+    }
+    .checkbox input {
+      width: auto;
+      min-height: auto;
+      accent-color: var(--accent-brand);
+    }
+    .checkbox .field-help {
+      flex: 1 0 100%;
+      padding-left: 22px;
+    }
+    .jobs {
+      display: grid;
+      gap: var(--space-3);
+      margin-top: var(--space-3);
+    }
+    .job {
+      border: 1px solid var(--border-default);
+      background: var(--lab-panel-elevated);
+      border-radius: var(--radius-md);
+      padding: var(--space-3);
+      display: grid;
+      gap: var(--space-3);
+      cursor: pointer;
+      transition: background 150ms ease, border-color 150ms ease;
+    }
+    .job:hover {
+      background: var(--bg-elevated-2);
+      border-color: var(--border-strong);
+    }
+    .job.active {
+      border-color: var(--accent-brand);
+      background: color-mix(in srgb, var(--accent-brand) 10%, var(--lab-panel-elevated));
+      box-shadow: inset 3px 0 0 var(--accent-brand);
+    }
+    .job-top {
+      display: flex;
+      justify-content: space-between;
+      gap: var(--space-3);
+      align-items: start;
+    }
+    .job-title { font-weight: 700; word-break: break-word; }
+    .badge {
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-pill);
+      padding: 3px 8px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      font-family: var(--font-mono);
+    }
+    .badge.completed, .badge.completed_with_errors { color: var(--accent-success); border-color: color-mix(in srgb, var(--accent-success) 45%, transparent); background: var(--accent-success-muted); }
+    .badge.failed, .badge.canceled { color: #fca5a5; border-color: color-mix(in srgb, var(--accent-error) 45%, transparent); background: var(--accent-error-muted); }
+    .badge.running { color: var(--accent-brand-hover); border-color: color-mix(in srgb, var(--accent-brand) 45%, transparent); background: var(--accent-brand-muted); }
+    .badge.ready { color: var(--accent-success); border-color: color-mix(in srgb, var(--accent-success) 45%, transparent); background: var(--accent-success-muted); }
+    .badge.missing { color: #fca5a5; border-color: color-mix(in srgb, var(--accent-error) 45%, transparent); background: var(--accent-error-muted); }
+    .meter {
+      height: 10px;
+      border: 1px solid var(--border-default);
+      background: var(--lab-workspace-letterbox);
+      border-radius: var(--radius-pill);
+      overflow: hidden;
+    }
+    .meter > span {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--accent-brand-pressed), var(--accent-brand-hover));
+      transition: width 240ms ease;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: var(--space-3);
+      margin: var(--space-3) 0;
+    }
+    .metric {
+      border: 1px solid var(--border-default);
+      background: var(--bg-elevated-1);
+      border-radius: var(--radius-md);
+      padding: var(--space-3);
+    }
+    .metric b {
+      display: block;
+      color: var(--text-primary);
+      font-size: 24px;
+      line-height: 1;
+      margin-bottom: 5px;
+    }
+    .metric span { color: var(--text-secondary); font-size: var(--ops-text-label); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border-subtle);
+      padding: var(--space-2) 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: var(--text-secondary); font-weight: 600; }
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+      gap: var(--space-4);
+      align-items: start;
+    }
+    .console {
+      background: var(--lab-workspace-letterbox);
+      color: #d6d6d6;
+      border-radius: var(--radius-md);
+      min-height: 220px;
+      padding: var(--space-3);
+      overflow: auto;
+      font: 12px/1.45 var(--font-mono);
+      border: 1px solid var(--border-default);
+    }
+    .result {
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      padding: var(--space-3);
+      background: var(--lab-panel-elevated);
+      display: grid;
+      gap: var(--space-1);
+    }
+    .result b { color: var(--text-primary); }
+    .result small { color: var(--accent-brand-hover); font-family: var(--font-mono); }
+    .empty {
+      padding: var(--space-5);
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius-md);
+      color: var(--text-secondary);
+      text-align: center;
+      background: rgba(255,255,255,0.02);
+    }
+    .section-top {
+      display: flex;
+      justify-content: space-between;
+      gap: var(--space-3);
+      align-items: start;
+      border-bottom: 1px solid var(--border-default);
+      padding-bottom: var(--space-3);
+      margin-bottom: var(--space-4);
+    }
+    .section-top h2 {
+      border-bottom: 0;
+      padding-bottom: 0;
+      margin-bottom: 0;
+    }
+    .section-meta {
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+      font-family: var(--font-mono);
+      text-align: right;
+    }
+    .section-top > div:first-child .section-meta {
+      text-align: left;
+      margin-top: var(--space-2);
+    }
+    .section-copy {
+      margin: calc(-1 * var(--space-2)) 0 var(--space-4);
+      max-width: 76ch;
+    }
+    .section-top .section-copy { margin: var(--space-2) 0 0; }
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: var(--space-3);
+    }
+    .metric-card {
+      border: 1px solid var(--border-default);
+      background: var(--lab-panel-elevated);
+      border-radius: var(--radius-md);
+      padding: var(--space-4);
+      min-width: 0;
+    }
+    .metric-card span {
+      display: block;
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+      font-weight: 600;
+      margin-bottom: var(--space-2);
+    }
+    .metric-card b {
+      display: block;
+      color: var(--text-primary);
+      font-size: 26px;
+      line-height: 1.1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .metric-card small {
+      display: block;
+      margin-top: var(--space-2);
+      min-height: 18px;
+    }
+    .info-list {
+      display: grid;
+      gap: var(--space-2);
+    }
+    .info-row {
+      display: grid;
+      grid-template-columns: minmax(110px, 0.35fr) minmax(0, 1fr);
+      gap: var(--space-3);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 10px 0;
+      min-width: 0;
+    }
+    .info-row:last-child { border-bottom: 0; }
+    .info-row span {
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+      font-weight: 600;
+    }
+    .info-row b {
+      color: var(--text-primary);
+      font-weight: 500;
+      overflow-wrap: anywhere;
+    }
+    .tool-grid,
+    .doc-grid {
+      display: grid;
+      gap: var(--space-3);
+    }
+    .doc-reader-layout {
+      display: grid;
+      grid-template-columns: minmax(220px, 0.28fr) minmax(0, 1fr);
+      gap: var(--space-4);
+      align-items: start;
+    }
+    #panel-docs:not(.doc-detail) .docs-detail-only { display: none; }
+    #panel-docs:not(.doc-detail) .doc-reader-layout {
+      grid-template-columns: minmax(240px, 360px) minmax(0, 1fr);
+    }
+    #panel-docs.doc-detail .docs-overview-summary,
+    #panel-docs.doc-detail .docs-overview-only { display: none; }
+    .docs-overview-summary {
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--lab-panel-elevated);
+      padding: var(--space-4);
+      color: var(--text-secondary);
+      min-height: 180px;
+    }
+    .doc-tools {
+      display: grid;
+      gap: var(--space-3);
+      align-content: start;
+    }
+    .doc-tool-group {
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--lab-panel-elevated);
+      padding: var(--space-3);
+      display: grid;
+      gap: var(--space-2);
+    }
+    .doc-tool-title {
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .doc-filter {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+    }
+    .doc-filter input {
+      width: auto;
+      min-height: auto;
+      accent-color: var(--accent-brand);
+    }
+    .doc-section-nav {
+      display: grid;
+      gap: 4px;
+      max-height: 220px;
+      overflow: auto;
+    }
+    .doc-section-link {
+      min-height: 28px;
+      justify-content: flex-start;
+      text-align: left;
+      padding: 0 var(--space-2);
+      background: transparent;
+      border-color: transparent;
+      color: var(--text-secondary);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .doc-section-link:hover {
+      background: var(--bg-elevated-2);
+      border-color: var(--border-default);
+      color: var(--text-primary);
+    }
+    .doc-list {
+      display: grid;
+      gap: var(--space-2);
+    }
+    .doc-select {
+      min-height: 38px;
+      text-align: left;
+      justify-content: flex-start;
+      background: var(--lab-panel-elevated);
+      border-color: var(--border-default);
+      color: var(--text-primary);
+    }
+    .doc-select.active {
+      background: var(--accent-brand-muted);
+      border-color: color-mix(in srgb, var(--accent-brand) 45%, transparent);
+      box-shadow: inset 3px 0 0 var(--accent-brand);
+    }
+    .doc-reader {
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--lab-workspace-letterbox);
+      min-height: 420px;
+      max-height: calc(100vh - 230px);
+      overflow: auto;
+      padding: var(--space-5);
+      color: var(--text-secondary);
+    }
+    .doc-reader h1,
+    .doc-reader h2,
+    .doc-reader h3 {
+      color: var(--text-primary);
+      text-transform: none;
+      border-bottom: 1px solid var(--border-default);
+      padding-bottom: var(--space-2);
+      margin: var(--space-5) 0 var(--space-3);
+      line-height: 1.25;
+      scroll-margin-top: 26px;
+    }
+    .doc-reader h1:first-child,
+    .doc-reader h2:first-child,
+    .doc-reader h3:first-child { margin-top: 0; }
+    .doc-reader h1 { font-size: 22px; }
+    .doc-reader h2 { font-size: 17px; }
+    .doc-reader h3 { font-size: 14px; }
+    .doc-reader p {
+      margin: 0 0 var(--space-3);
+      max-width: 84ch;
+    }
+    .doc-reader pre {
+      margin: var(--space-3) 0;
+      padding: var(--space-3);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: #050505;
+      overflow: auto;
+      font: 12px/1.45 var(--font-mono);
+      color: #d6d6d6;
+    }
+    .doc-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      margin: 0 0 var(--space-3);
+    }
+    .doc-badges a,
+    .doc-badges span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+    }
+    .doc-badges img,
+    .doc-image img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+    }
+    .doc-badges img {
+      height: 20px;
+      width: auto;
+      border-radius: 3px;
+    }
+    .doc-image {
+      margin: 0 0 var(--space-3);
+    }
+    .doc-reader code {
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+    }
+    .doc-reader table {
+      margin: var(--space-3) 0;
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      display: block;
+      max-width: 100%;
+      background: #050505;
+    }
+    .doc-reader th,
+    .doc-reader td {
+      padding: 7px 9px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .doc-bullet {
+      position: relative;
+      margin: 0 0 var(--space-2) 18px;
+      max-width: 84ch;
+    }
+    .doc-block.hidden { display: none; }
+    .repo-inline {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      flex-wrap: wrap;
+    }
+    .repo-url {
+      color: var(--accent-brand-hover);
+      font-family: var(--font-mono);
+      font-size: var(--ops-text-label);
+      text-decoration: underline;
+      text-decoration-color: color-mix(in srgb, var(--accent-brand) 50%, transparent);
+      text-underline-offset: 3px;
+    }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: var(--space-5);
+      row-gap: var(--space-5);
+    }
+    .settings-grid label {
+      min-width: 0;
+      align-content: start;
+    }
+    .settings-actions {
+      margin-top: var(--space-4);
+      display: flex;
+      gap: var(--space-2);
+      flex-wrap: wrap;
+    }
+    .settings-group {
+      display: grid;
+      gap: var(--space-4);
+      margin-top: var(--space-5);
+    }
+    .settings-group:first-of-type { margin-top: 0; }
+    .settings-subhead {
+      color: var(--text-primary);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border-default);
+      padding-bottom: var(--space-2);
+      margin-bottom: var(--space-2);
+    }
+    .settings-subtitle {
+      margin: 0 0 var(--space-5);
+    }
+    .settings-textarea {
+      min-height: 84px;
+    }
+    .marker-limit-control {
+      display: grid;
+      grid-template-columns: minmax(130px, 0.8fr) minmax(96px, 0.45fr);
+      gap: var(--space-2);
+      align-items: center;
+    }
+    .marker-limit-control input:disabled {
+      opacity: 0.48;
+      color: var(--text-tertiary);
+    }
+    .token-field {
+      align-content: start;
+    }
+    .token-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: var(--space-2);
+      padding: var(--space-2);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--lab-workspace-letterbox);
+      min-height: 84px;
+    }
+    .token-pill {
+      display: inline-flex;
+      align-items: center;
+      width: 100%;
+      min-height: 34px;
+      padding: 0 var(--space-2);
+      border-radius: var(--radius-sm);
+      border-color: var(--border-default);
+      background: var(--bg-elevated-1);
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      white-space: nowrap;
+      justify-content: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .token-pill.active {
+      border-color: color-mix(in srgb, var(--accent-brand) 50%, transparent);
+      background: var(--accent-brand-muted);
+      color: var(--text-primary);
+    }
+    .token-pill:not(.active) {
+      opacity: 0.68;
+    }
+    .token-pill:hover {
+      border-color: var(--accent-brand-hover);
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+    .token-count {
+      color: var(--text-tertiary);
+      font: 11px/1.4 var(--font-mono);
+    }
+    .settings-status {
+      color: var(--text-tertiary);
+      font: 11px/1.4 var(--font-mono);
+      margin-top: var(--space-3);
+      min-height: 16px;
+    }
+    .doc-bullet::before {
+      content: "";
+      position: absolute;
+      left: -13px;
+      top: 0.72em;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--accent-brand);
+    }
+    .doc-source {
+      margin-top: var(--space-3);
+      color: var(--text-tertiary);
+      font: 11px/1.4 var(--font-mono);
+      overflow-wrap: anywhere;
+    }
+    .tool-row,
+    .doc-link {
+      border: 1px solid var(--border-default);
+      background: var(--lab-panel-elevated);
+      border-radius: var(--radius-md);
+      padding: var(--space-3);
+      display: flex;
+      justify-content: space-between;
+      gap: var(--space-3);
+      align-items: center;
+      min-width: 0;
+    }
+    .doc-link {
+      color: var(--text-primary);
+      transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+    }
+    .doc-link:hover {
+      background: var(--bg-elevated-2);
+      border-color: var(--border-strong);
+      color: var(--accent-brand-hover);
+    }
+    .tool-row strong,
+    .doc-link strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tool-row .badge {
+      max-width: min(58vw, 680px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .helper-copy {
+      color: var(--text-secondary);
+      margin-bottom: var(--space-4);
+      max-width: 760px;
+    }
+    .media-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: var(--space-2);
+      margin-bottom: var(--space-3);
+    }
+    .media-stat {
+      border: 1px solid var(--border-default);
+      background: var(--bg-elevated-1);
+      border-radius: var(--radius-md);
+      padding: var(--space-2);
+      min-width: 0;
+    }
+    .media-stat b {
+      display: block;
+      color: var(--text-primary);
+      font-size: 18px;
+      line-height: 1.1;
+    }
+    .media-stat span {
+      color: var(--text-secondary);
+      font-size: 11px;
+    }
+    .media-table-wrap {
+      max-height: 280px;
+      overflow: auto;
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--lab-workspace-letterbox);
+    }
+    .media-table-wrap table {
+      min-width: 760px;
+    }
+    .filter-row {
+      display: grid;
+      grid-template-columns: minmax(180px, 1.4fr) minmax(120px, 0.8fr) minmax(140px, 0.9fr) minmax(110px, 0.6fr);
+      gap: var(--space-2);
+      margin-bottom: var(--space-3);
+      align-items: end;
+    }
+    .filter-row input,
+    .filter-row select {
+      min-height: 34px;
+      font-size: var(--ops-text-label);
+    }
+    .poll-status {
+      color: var(--text-tertiary);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      margin-top: var(--space-2);
+    }
+    .status-cell {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-tertiary);
+      box-shadow: 0 0 0 3px rgba(255,255,255,0.04);
+    }
+    .status-dot.online,
+    .status-dot.analyzable,
+    .status-dot.analyzed,
+    .status-dot.succeeded,
+    .status-dot.skipped {
+      background: var(--accent-success);
+    }
+    .status-dot.missing_file,
+    .status-dot.offline,
+    .status-dot.failed {
+      background: var(--accent-error);
+    }
+    .status-dot.no_path,
+    .status-dot.not_analyzable,
+    .status-dot.pending,
+    .status-dot.queued {
+      background: var(--accent-warning);
+    }
+    .status-dot.running {
+      background: var(--accent-brand-hover);
+    }
+    .media-path {
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .clip-select {
+      width: auto;
+      min-height: auto;
+      accent-color: var(--accent-brand);
+    }
+    .copy-status {
+      color: var(--accent-success);
+      font: 12px/1.4 var(--font-mono);
+      min-height: 18px;
+    }
+    .lab-footer {
+      height: 52px;
+      min-height: 52px;
+      background: var(--bg-base);
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      color: var(--text-tertiary);
+      font-size: var(--ops-text-label);
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) minmax(420px, 1.35fr) minmax(260px, 1fr);
+      align-items: center;
+      gap: var(--space-5);
+      padding: 0 var(--space-4);
+      position: fixed;
+      inset: auto 0 0 0;
+      z-index: 1002;
+    }
+    .footer-credit,
+    .footer-links,
+    .footer-notice {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .footer-credit,
+    .footer-links { white-space: nowrap; }
+    .footer-credit {
+      justify-self: start;
+    }
+    .footer-notice {
+      color: var(--text-tertiary);
+      text-align: center;
+      font-weight: 400;
+      font-size: 10px;
+      line-height: 1.2;
+      justify-self: center;
+      max-width: 720px;
+    }
+    .footer-links {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--space-3);
+      text-align: right;
+      justify-self: end;
+    }
+    .footer-open-source {
+      color: var(--text-secondary);
+      font-size: 10px;
+      line-height: 1.25;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    footer strong { color: var(--text-secondary); font-weight: 600; }
+    ::selection {
+      background: var(--accent-brand-muted);
+      color: var(--text-primary);
+    }
+    @media (max-width: 980px) {
+      main, .split, .panel.control-grid { grid-template-columns: 1fr; }
+      .lab-navbar { padding: 0 var(--space-3); }
+      .nav-breadcrumb { display: none; }
+      .control-tabs {
+        order: 3;
+        flex: 1 0 100%;
+        overflow-x: auto;
+        justify-content: flex-start;
+        padding-bottom: 2px;
+      }
+      .lab-navbar {
+        height: 88px;
+        flex-wrap: wrap;
+        align-content: center;
+      }
+      .nav-links { margin-left: auto; }
+      .wordmark { font-size: 18px; }
+      main { padding: calc(88px + var(--space-3)) var(--space-3) calc(112px + var(--space-3)); }
+      .panel.control-grid > section,
+      .panel.control-grid > section.span-12,
+      .panel.control-grid > section.span-8,
+      .panel.control-grid > section.span-4,
+      .panel.control-grid > .span-12,
+      .panel.control-grid > .span-8,
+      .panel.control-grid > .span-4,
+      .subpage-grid > section,
+      .subpage-grid > section.span-12,
+      .subpage-grid > section.span-8,
+      .subpage-grid > section.span-4 { grid-column: auto; }
+      .overview-grid { grid-template-columns: 1fr 1fr; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .media-summary { grid-template-columns: 1fr 1fr; }
+      .section-top { display: grid; }
+      .section-meta { text-align: left; }
+      .filter-row { grid-template-columns: 1fr; }
+      .lab-footer {
+        height: 112px;
+        grid-template-columns: 1fr;
+        justify-items: center;
+        gap: 2px;
+        padding: var(--space-2) var(--space-3);
+        text-align: center;
+      }
+      .footer-links {
+        justify-content: center;
+        text-align: center;
+      }
+      .footer-open-source {
+        white-space: normal;
+      }
+      .subpage-grid { grid-template-columns: 1fr; }
+      .doc-reader-layout { grid-template-columns: 1fr; }
+      .doc-reader { max-height: none; }
+      .settings-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .overview-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body data-theme="studio" data-tier="operations">
+  <header class="lab-navbar">
+    <div class="nav-left">
+      <h1><button class="wordmark home-wordmark" data-panel-target="overview" aria-label="Open Overview"><span>DaVinci Resolve</span><span class="wordmark-accent">MCP</span></button></h1>
+      <div class="nav-breadcrumb" aria-label="Breadcrumb">
+        <span class="nav-breadcrumb-sep" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m9 18 6-6-6-6"></path>
+          </svg>
+        </span>
+        <span class="breadcrumb-trail" id="breadcrumbTrail">
+          <span class="nav-breadcrumb-current">Overview</span>
+        </span>
+      </div>
+    </div>
+    <nav class="control-tabs" aria-label="Control panel sections">
+      <button class="control-tab active" data-panel-target="overview">Overview</button>
+      <div class="control-nav-item">
+        <button class="control-tab has-menu" data-panel-target="analysis">Analysis <span class="tab-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+        <div class="nav-dropdown" role="menu" aria-label="Analysis pages">
+          <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="batch" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16"></path><path d="M4 12h16"></path><path d="M4 18h10"></path></svg></span>Batch Jobs</button>
+          <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="media" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m7 15 3-3 2 2 4-5 1 2"></path></svg></span>Resolve Clips</button>
+          <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="detail" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg></span>Job Detail</button>
+          <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="search" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></span>Search Index</button>
+        </div>
+      </div>
+      <div class="control-nav-item">
+        <button class="control-tab has-menu" data-panel-target="diagnostics">Diagnostics <span class="tab-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+        <div class="nav-dropdown" role="menu" aria-label="Diagnostic pages">
+          <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="resolve" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"></path><path d="M12 18v4"></path><path d="m4.93 4.93 2.83 2.83"></path><path d="m16.24 16.24 2.83 2.83"></path><path d="M2 12h4"></path><path d="M18 12h4"></path><path d="m4.93 19.07 2.83-2.83"></path><path d="m16.24 7.76 2.83-2.83"></path></svg></span>Resolve</button>
+          <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="storage" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"></path><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"></path></svg></span>Storage</button>
+          <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="tools" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l2.1-2.1a6 6 0 0 1-7.6 7.6l-4 4a2.1 2.1 0 0 1-3-3l4-4a6 6 0 0 1 7.6-7.6z"></path></svg></span>Tools</button>
+        </div>
+      </div>
+      <button class="control-tab" data-panel-target="projects">Projects</button>
+      <div class="control-nav-item">
+        <button class="control-tab has-menu" data-panel-target="docs">Docs <span class="tab-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+        <div class="nav-dropdown" role="menu" aria-label="Documentation pages">
+          <button class="nav-dropdown-item" data-panel-target="docs" data-subpage-target="readme" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"></path></svg></span>README</button>
+          <button class="nav-dropdown-item" data-panel-target="docs" data-subpage-target="analysis-guide" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6"></path><path d="M10 22h4"></path><path d="M12 2a7 7 0 0 0-4 12c.65.55 1 1.35 1 2h6c0-.65.35-1.45 1-2A7 7 0 0 0 12 2z"></path></svg></span>Media Analysis Guide</button>
+          <button class="nav-dropdown-item" data-panel-target="docs" data-subpage-target="agent-skill" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8V4H8"></path><rect x="4" y="12" width="16" height="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg></span>Agent Skill</button>
+        </div>
+      </div>
+      <div class="control-nav-item">
+        <button class="control-tab has-menu" data-panel-target="preferences">Preferences <span class="tab-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+        <div class="nav-dropdown" role="menu" aria-label="Preference pages">
+          <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="analysis" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"></path><path d="m19 9-5 5-4-4-3 3"></path></svg></span>Analysis</button>
+          <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="metadata" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-9"></path><path d="M14 17H5"></path><circle cx="17" cy="17" r="3"></circle><circle cx="7" cy="7" r="3"></circle></svg></span>Metadata And Markers</button>
+          <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="paths" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h5l2 3h11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg></span>Paths And Workflow</button>
+          <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="updates" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"></path><path d="M21 3v6h-6"></path></svg></span>MCP Updates</button>
+          <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="dashboard" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18"></path><path d="M9 21V9"></path></svg></span>Dashboard</button>
+          <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="storage" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"></path><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"></path></svg></span>Storage</button>
+        </div>
+      </div>
+      <div class="project-context">
+        <select id="projectContextSelect" aria-label="Project context">
+          <option value="">Loading project contexts</option>
+        </select>
+      </div>
+    </nav>
+    <div class="nav-links">
+      <a class="nav-link github-icon-link" href="https://github.com/samuelgursky/davinci-resolve-mcp" target="_blank" rel="noreferrer" aria-label="GitHub Repository" title="GitHub Repository">
+        <svg class="github-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path>
+          <path d="M9 18c-4.51 2-5-2-7-2"></path>
+        </svg>
+        <span class="sr-only">GitHub Repository</span>
+      </a>
+    </div>
+  </header>
+
+  <main id="panel-overview" class="panel control-grid active">
+    <section class="span-12">
+      <div class="section-top">
+        <div>
+          <h2>Overview</h2>
+          <div class="section-meta" id="overviewUpdated">Waiting for first refresh</div>
+        </div>
+        <div class="controls">
+          <button id="overviewRefresh">Refresh All</button>
+          <button class="secondary" data-panel-target="analysis" data-subpage-target="batch">Open Analysis</button>
+        </div>
+      </div>
+      <div class="overview-grid">
+        <div class="metric-card">
+          <span>Active Project</span>
+          <b id="overviewProject">Checking</b>
+          <small id="overviewResolveStatus">Resolve connection pending</small>
+        </div>
+        <div class="metric-card">
+          <span>Source Clips</span>
+          <b id="overviewClipCount">0</b>
+          <small id="overviewClipStatus">Source clips only</small>
+        </div>
+        <div class="metric-card">
+          <span>Sequences</span>
+          <b id="overviewSequenceCount">0</b>
+          <small id="overviewSequenceStatus">Read-only context</small>
+        </div>
+        <div class="metric-card">
+          <span>Media Status</span>
+          <b id="overviewMediaStatus">Checking</b>
+          <small id="overviewMediaStatusDetail">Inventory pending</small>
+        </div>
+      </div>
+      <div class="info-list" id="overviewStatusList" style="margin-top:16px">
+        <div class="empty">Waiting for Resolve media inventory.</div>
+      </div>
+    </section>
+  </main>
+
+  <main id="panel-projects" class="panel control-grid">
+    <section class="span-12">
+      <div class="section-top">
+        <div>
+          <h2>Resolve Projects</h2>
+          <div class="section-meta" id="projectsUpdated">Open the full database view to inspect projects outside the current Project Manager folder.</div>
+        </div>
+        <div class="controls">
+          <button id="projectsRefresh">Refresh Projects</button>
+        </div>
+      </div>
+      <div class="overview-grid">
+        <div class="metric-card">
+          <span>Current Project</span>
+          <b id="projectsCurrentProject">Checking</b>
+          <small id="projectsCurrentFolder">Current folder pending</small>
+        </div>
+        <div class="metric-card">
+          <span>Open Projects</span>
+          <b id="projectsOpenCount">0</b>
+          <small>Shown in the navbar dropdown</small>
+        </div>
+        <div class="metric-card">
+          <span>Database Projects</span>
+          <b id="projectsAllCount">0</b>
+          <small id="projectsDatabaseName">Database pending</small>
+        </div>
+        <div class="metric-card">
+          <span>Analysis Contexts</span>
+          <b id="projectsContextCount">0</b>
+          <small>Existing local reports and indexes</small>
+        </div>
+      </div>
+    </section>
+
+    <section class="span-12">
+      <div class="section-top">
+        <div>
+          <h2>All Database Projects</h2>
+          <div class="section-copy">This view walks Resolve Project Manager folders read-only, then uses confirmation before loading a different project in Resolve.</div>
+        </div>
+        <label class="project-filter">
+          Filter
+          <input id="projectFilterText" type="search" placeholder="project or folder">
+        </label>
+      </div>
+      <div id="allProjectsBody" class="empty">Open Projects to scan the current Resolve database.</div>
+    </section>
+  </main>
+
+  <main id="panel-analysis" class="panel control-grid">
+    <div class="subpage active span-12" data-subpage-scope="analysis" data-subpage="batch">
+      <div class="subpage-grid">
+      <section class="span-6">
+        <h2>Create Batch Prompt</h2>
+        <p class="section-copy">Compose an MCP prompt from Resolve source clips. Paste the copied prompt into your MCP chat so chat-context vision can inspect sampled frames.</p>
+        <div class="stack">
+          <label>Job name <input id="jobName" value="Editorial analysis pass"></label>
+          <div class="grid-2">
+            <label>Depth
+              <select id="depth">
+                <option value="quick">quick</option>
+                <option value="standard" selected>standard</option>
+                <option value="deep">deep</option>
+              </select>
+            </label>
+            <label>Sample frames
+              <select id="sampleFrameMode">
+                <option value="auto" selected>auto</option>
+                <option value="custom">custom</option>
+              </select>
+            </label>
+          </div>
+          <label id="customFramesLabel" style="display:none">Custom sample frames <input id="frames" type="number" min="0" max="48" value="8"></label>
+          <div class="controls">
+            <label class="checkbox"><input id="vision" type="checkbox" checked disabled> Chat vision via MCP</label>
+            <label class="checkbox"><input id="transcription" type="checkbox"> Transcription</label>
+          </div>
+          <div class="info-list">
+            <div class="info-row"><span>Source</span><b id="promptSourceSummary">Filtered Resolve source clips</b></div>
+            <div class="info-row"><span>Selected</span><b id="promptSelectedSummary">No clips selected yet</b></div>
+            <div class="info-row"><span>Reuse</span><b id="promptReuseSummary">Same-name project versions</b></div>
+          </div>
+          <div class="controls">
+            <button id="copyPromptBtn">Copy MCP Prompt</button>
+            <button class="secondary" data-panel-target="analysis" data-subpage-target="media">Choose Clips</button>
+          </div>
+          <div class="copy-status" id="copyPromptStatus"></div>
+        </div>
+      </section>
+
+      <section class="span-6">
+        <h2>Jobs</h2>
+        <p class="section-copy">Jobs created by pasted MCP prompts appear here. Run slices from the MCP session when visual analysis is enabled.</p>
+        <div class="controls">
+          <button class="secondary" id="refreshBtn">Refresh</button>
+        </div>
+        <div class="jobs" id="jobs"></div>
+      </section>
+      </div>
+    </div>
+
+    <section id="detail" class="span-12 subpage" data-subpage-scope="analysis" data-subpage="detail">
+        <h2>Job Detail</h2>
+        <p class="section-copy">Inspect durable progress, clip-level state, and recent events for the selected batch.</p>
+        <div id="detailBody" class="empty">Select or create a job.</div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="analysis" data-subpage="media">
+        <div class="section-top">
+          <div>
+            <h2>Resolve Clips</h2>
+            <p class="section-copy">Resolve media is inventoried read-only and filtered to source clips so timelines, compounds, titles, and generated items stay out of analysis queues.</p>
+            <div class="section-meta" id="resolveProject">Resolve connection pending</div>
+          </div>
+          <div class="controls">
+            <button class="secondary" id="refreshMediaBtn">Refresh Clips</button>
+            <button class="secondary" id="selectReadyMediaBtn" disabled>Select Ready Clips</button>
+            <button id="copyPromptFromMediaBtn" disabled>Copy MCP Prompt</button>
+          </div>
+        </div>
+        <div class="filter-row">
+          <label>Find media <input id="mediaFilterText" placeholder="clip, bin, or path"></label>
+          <label>Clip status
+            <select id="mediaStatusFilter">
+              <option value="clips" selected>clips</option>
+              <option value="analyzable">analysis ready</option>
+              <option value="online">online</option>
+              <option value="missing">missing/offline</option>
+            </select>
+          </label>
+          <label>Analysis status
+            <select id="analysisStatusFilter">
+              <option value="all">all</option>
+              <option value="not_analyzed">not analyzed</option>
+              <option value="analyzed">analyzed</option>
+              <option value="active">queued/running</option>
+              <option value="failed">failed</option>
+            </select>
+          </label>
+          <label>Poll
+            <select id="mediaPollInterval">
+              <option value="0">off</option>
+              <option value="5000">5s</option>
+              <option value="15000" selected>15s</option>
+              <option value="30000">30s</option>
+              <option value="60000">60s</option>
+            </select>
+          </label>
+        </div>
+        <label class="checkbox"><input id="autoPollMedia" type="checkbox" checked> Auto refresh Resolve clips</label>
+        <div class="poll-status" id="mediaPollStatus">waiting for first refresh</div>
+        <div id="resolveMediaBody" class="empty">Checking Resolve media pool.</div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="analysis" data-subpage="search">
+        <h2>Search Index</h2>
+        <p class="section-copy">Search across persisted analysis reports after clips have been analyzed. The index rebuilds automatically after successful job slices.</p>
+        <div class="controls">
+          <input id="query" placeholder="quiet reflective b-roll, slate 12A, childhood memory">
+          <button id="queryBtn">Search</button>
+          <button class="secondary" id="rebuildIndexBtn">Rebuild Index</button>
+        </div>
+        <div id="results" class="jobs"></div>
+    </section>
+  </main>
+
+  <main id="panel-diagnostics" class="panel control-grid">
+    <section class="span-12 subpage active" data-subpage-scope="diagnostics" data-subpage="resolve">
+      <h2>Resolve</h2>
+      <p class="section-copy">Current read-only Resolve connection, project inventory, and any warnings from the media pool probe.</p>
+      <div class="info-list" id="diagnosticsResolve">
+        <div class="empty">Resolve diagnostics pending.</div>
+      </div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="diagnostics" data-subpage="storage">
+      <h2>Analysis Storage</h2>
+      <p class="section-copy">Project analysis paths used for reports, the durable job database, and the local search index.</p>
+      <div class="info-list" id="diagnosticsStorage">
+        <div class="empty">Storage diagnostics pending.</div>
+      </div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="diagnostics" data-subpage="tools">
+      <h2>Tools</h2>
+      <p class="section-copy">Runtime helpers detected by the dashboard. Missing tools may reduce technical metadata or media probing depth.</p>
+      <div class="tool-grid" id="diagnosticsTools">
+        <div class="empty">Tool diagnostics pending.</div>
+      </div>
+    </section>
+  </main>
+
+  <main id="panel-docs" class="panel control-grid">
+    <section class="span-12">
+      <h2>Reference</h2>
+      <div class="doc-reader-layout">
+        <div class="doc-tools">
+          <div class="doc-tool-group">
+            <div class="doc-tool-title">Sections</div>
+            <div class="doc-section-nav" id="docSectionNav">
+              <div class="empty">Load a document.</div>
+            </div>
+          </div>
+          <div class="doc-tool-group">
+            <div class="doc-tool-title">Markdown</div>
+            <label class="doc-filter"><input type="checkbox" data-md-filter="heading" checked> Headings</label>
+            <label class="doc-filter"><input type="checkbox" data-md-filter="text" checked> Text</label>
+            <label class="doc-filter"><input type="checkbox" data-md-filter="list" checked> Lists</label>
+            <label class="doc-filter"><input type="checkbox" data-md-filter="code" checked> Code</label>
+            <label class="doc-filter"><input type="checkbox" data-md-filter="table" checked> Tables</label>
+            <label class="doc-filter"><input type="checkbox" data-md-filter="image" checked> Images</label>
+          </div>
+        </div>
+        <div>
+          <div class="section-meta" id="docMeta">Loading README</div>
+          <article class="doc-reader" id="docReader">
+            <div class="empty">Choose a document.</div>
+          </article>
+          <div class="doc-source" id="docSource"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <main id="panel-preferences" class="panel control-grid">
+    <section class="span-12">
+      <div class="section-top">
+        <div>
+          <h2>Server Defaults</h2>
+          <p class="section-copy">These preferences are server-wide defaults for this local MCP install. Dashboard convenience settings stay in this browser.</p>
+          <div class="section-meta" id="setupPrefsStatus">Loading setup defaults</div>
+        </div>
+        <div class="controls">
+          <button id="savePrefsBtn">Save Defaults</button>
+          <button class="secondary" id="refreshPrefsBtn">Refresh</button>
+          <button class="secondary" id="resetPrefsBtn">Reset Defaults</button>
+        </div>
+      </div>
+      <div class="settings-status" id="prefSaveStatus"></div>
+    </section>
+
+    <section class="span-12 subpage active" data-subpage-scope="preferences" data-subpage="analysis">
+        <div class="settings-subhead">Analysis</div>
+        <p class="settings-subtitle">Defaults used when agents run analysis or publish analysis-backed outputs without specifying every option.</p>
+        <div class="settings-grid">
+          <label>Vision default
+            <select id="prefVisionDefault">
+              <option value="on">on</option>
+              <option value="off">off</option>
+              <option value="technical_only">technical only</option>
+              <option value="ask">ask</option>
+            </select>
+          </label>
+          <label>Transcription default
+            <select id="prefTranscriptionDefault">
+              <option value="no">no</option>
+              <option value="yes">yes</option>
+              <option value="ask">ask</option>
+            </select>
+          </label>
+          <label>Slate detection
+            <select id="prefSlateDetectionDefault">
+              <option value="ask">ask</option>
+              <option value="yes">yes</option>
+              <option value="no">no</option>
+            </select>
+          </label>
+          <label>Persistence
+            <select id="prefAnalysisPersistence">
+              <option value="session_only">session only</option>
+              <option value="keep_reports">keep reports</option>
+              <option value="keep_artifacts">keep artifacts</option>
+            </select>
+          </label>
+          <label>Summary style
+            <select id="prefAnalysisSummaryStyle">
+              <option value="concise">concise</option>
+              <option value="assistant_editor">assistant editor</option>
+              <option value="qc">qc</option>
+              <option value="producer">producer</option>
+              <option value="full">full</option>
+            </select>
+          </label>
+          <label>Report format
+            <select id="prefReportFormat">
+              <option value="compact">compact</option>
+              <option value="full">full</option>
+              <option value="machine_readable">machine readable</option>
+            </select>
+          </label>
+        </div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="preferences" data-subpage="metadata">
+        <div class="settings-subhead">Metadata And Markers</div>
+        <p class="settings-subtitle">Controls for Resolve metadata writes and source-time marker suggestions. Source media remains read-only.</p>
+        <div class="settings-grid">
+          <label>Timed markers
+            <select id="prefTimedMarkersDefault">
+              <option value="ask">ask</option>
+              <option value="yes">yes</option>
+              <option value="no">no</option>
+            </select>
+          </label>
+          <label>Overwrite policy
+            <select id="prefMetadataOverwritePolicy">
+              <option value="preserve_human">preserve human</option>
+              <option value="fill_empty">fill empty</option>
+              <option value="overwrite_owned_blocks">overwrite owned blocks</option>
+              <option value="overwrite_all">overwrite all</option>
+            </select>
+          </label>
+          <label>Max markers per clip
+            <div class="marker-limit-control">
+              <select id="prefMaxTimedMarkersMode">
+                <option value="limited">limited</option>
+                <option value="unlimited">unlimited</option>
+              </select>
+              <input id="prefMaxTimedMarkers" type="number" min="1" max="250" value="12">
+            </div>
+          </label>
+          <label>Marker custom data
+            <select id="prefMarkerCustomData">
+              <option value="namespaced">namespaced</option>
+              <option value="minimal">minimal</option>
+            </select>
+          </label>
+          <label class="token-field">Metadata fields
+            <div id="prefMetadataFieldPills" class="token-grid" role="group" aria-label="Metadata fields"></div>
+            <input id="prefMetadataFields" type="hidden">
+            <span class="token-count" id="prefMetadataFieldCount"></span>
+          </label>
+          <label class="token-field">Marker types
+            <div id="prefTimedMarkerTypePills" class="token-grid" role="group" aria-label="Marker types"></div>
+            <input id="prefTimedMarkerTypes" type="hidden">
+            <span class="token-count" id="prefTimedMarkerTypeCount"></span>
+          </label>
+          <label>Marker colors <textarea id="prefTimedMarkerColors" class="settings-textarea" spellcheck="false"></textarea></label>
+          <div class="stack">
+            <label class="checkbox"><input id="prefIncludeConfidenceScores" type="checkbox"> Include confidence scores</label>
+            <label class="checkbox"><input id="prefIncludeSourceTimeNotes" type="checkbox"> Include source time notes</label>
+            <label class="checkbox"><input id="prefAskBeforeMetadataPublish" type="checkbox"> Ask before metadata publish</label>
+            <label class="checkbox"><input id="prefDryRunFirstDefault" type="checkbox"> Dry run first</label>
+          </div>
+        </div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="preferences" data-subpage="paths">
+        <div class="settings-subhead">Paths And Workflow</div>
+        <p class="settings-subtitle">Optional locations and Resolve navigation behavior after operations complete.</p>
+        <div class="settings-grid">
+          <label>Preferred analysis root <input id="prefPreferredAnalysisRoot" placeholder="Default project analysis root"></label>
+          <label>Generated media folder <input id="prefPreferredGeneratedMediaFolder" placeholder="Default generated media folder"></label>
+          <label>Post-operation page
+            <select id="prefPostOperationPage">
+              <option value="stay_put">stay put</option>
+              <option value="media">media</option>
+              <option value="cut">cut</option>
+              <option value="edit">edit</option>
+              <option value="fusion">fusion</option>
+              <option value="color">color</option>
+              <option value="fairlight">fairlight</option>
+              <option value="deliver">deliver</option>
+            </select>
+          </label>
+        </div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="preferences" data-subpage="updates">
+        <div class="settings-subhead">MCP Updates</div>
+        <p class="settings-subtitle">Server-wide update-check behavior for the MCP package. Checks are best-effort and should not block startup.</p>
+        <div class="settings-grid">
+          <label>Update policy
+            <select id="prefUpdateMode">
+              <option value="prompt">prompt</option>
+              <option value="notify">notify</option>
+              <option value="auto">auto</option>
+              <option value="never">never</option>
+            </select>
+          </label>
+          <label>Check interval hours <input id="prefUpdateIntervalHours" type="number" min="0.1" step="0.1" value="24"></label>
+          <label>Snooze hours <input id="prefUpdateSnoozeHours" type="number" min="0.1" step="0.1" value="24"></label>
+        </div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="preferences" data-subpage="dashboard">
+        <div class="settings-subhead">Dashboard Convenience</div>
+        <p class="settings-subtitle">Browser-local defaults for this control panel only. These shape the form presets, not source media behavior.</p>
+        <div class="settings-grid">
+          <label>Default job name <input id="prefJobName" value="Editorial analysis pass"></label>
+          <label>Default depth
+            <select id="prefDepth">
+              <option value="quick">quick</option>
+              <option value="standard" selected>standard</option>
+              <option value="deep">deep</option>
+            </select>
+          </label>
+          <label>Sample frames <input id="prefFrames" type="number" min="0" max="48" value="8"></label>
+          <label>Clip polling
+            <select id="prefPollInterval">
+              <option value="0">off</option>
+              <option value="5000">5s</option>
+              <option value="15000" selected>15s</option>
+              <option value="30000">30s</option>
+              <option value="60000">60s</option>
+            </select>
+          </label>
+        </div>
+        <div class="controls" style="margin-top:16px">
+          <label class="checkbox"><input id="prefRecursive" type="checkbox" checked> Recursive folders</label>
+          <label class="checkbox"><input id="prefTranscription" type="checkbox"> Transcription</label>
+          <label class="checkbox"><input id="prefAutoPoll" type="checkbox" checked> Auto refresh Resolve clips</label>
+        </div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="preferences" data-subpage="storage">
+      <h2>Storage</h2>
+      <p class="section-copy">Where server defaults and browser-local dashboard preferences are stored.</p>
+      <div class="info-list" id="preferencesStorage">
+        <div class="empty">Loading preference storage.</div>
+      </div>
+    </section>
+  </main>
+  <div class="modal-backdrop" id="projectSwitchModal" role="dialog" aria-modal="true" aria-labelledby="projectSwitchTitle" aria-describedby="projectSwitchBody">
+    <div class="modal-card">
+      <div class="modal-kicker">Resolve Project Switch</div>
+      <h3 id="projectSwitchTitle">Change Active Project?</h3>
+      <p class="modal-body" id="projectSwitchBody">This will load the selected project in DaVinci Resolve and scope the control panel to that project.</p>
+      <div class="modal-detail" id="projectSwitchDetail">Search, jobs, logs, diagnostics, and index status will refresh after the switch.</div>
+      <div class="modal-actions">
+        <button class="secondary" id="projectSwitchCancel" type="button">Cancel</button>
+        <button id="projectSwitchConfirm" type="button">Load Project</button>
+      </div>
+    </div>
+  </div>
+  <footer class="lab-footer">
+    <div class="footer-credit">Developed by <a href="https://www.samuelgursky.com" target="_blank" rel="noreferrer">Samuel Gursky</a> for <a href="https://www.bradfordoperations.com" target="_blank" rel="noreferrer">Bradford Operations</a></div>
+    <div class="footer-notice">DaVinci Resolve is a trademark of Blackmagic Design Pty Ltd. Bradford Operations is not affiliated with, endorsed by, or sponsored by Blackmagic Design. All third-party trademarks are the property of their respective owners.</div>
+    <div class="footer-links">
+      <span class="footer-open-source">Open source. Patches, features, and community contributions welcome.</span>
+      <a class="github-icon-link" href="https://github.com/samuelgursky/davinci-resolve-mcp" target="_blank" rel="noreferrer" aria-label="GitHub Repository" title="GitHub Repository">
+        <svg class="github-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path>
+          <path d="M9 18c-4.51 2-5-2-7-2"></path>
+        </svg>
+        <span class="sr-only">GitHub Repository</span>
+      </a>
+    </div>
+  </footer>
+
+  <script>
+    const state = {
+      jobs: [],
+      selected: null,
+      running: false,
+      boot: null,
+      projects: null,
+      allProjects: null,
+      activeContext: null,
+      resolveMedia: null,
+      mediaPollTimer: null,
+      mediaRefreshing: false,
+      mediaLastRefresh: null,
+      indexStatus: null,
+      selectedClipIds: new Set(),
+      clipSelectionTouched: false,
+      setupDefaults: null,
+      setupSchema: null,
+      projectDialogCleanup: null,
+      activePanel: 'overview',
+      activeDoc: 'readme',
+      activeSubpages: {
+        analysis: 'batch',
+        diagnostics: 'resolve',
+        docs: 'readme',
+        preferences: 'analysis',
+      },
+    };
+    const $ = (id) => document.getElementById(id);
+    const PANEL_LABELS = {
+      overview: 'Overview',
+      analysis: 'Analysis',
+      diagnostics: 'Diagnostics',
+      projects: 'Projects',
+      docs: 'Docs',
+      preferences: 'Preferences',
+    };
+    const PANEL_ICONS = {
+      overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>',
+      analysis: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="m19 9-5 5-4-4-3 3"></path></svg>',
+      diagnostics: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l2.1-2.1a6 6 0 0 1-7.6 7.6l-4 4a2.1 2.1 0 0 1-3-3l4-4a6 6 0 0 1 7.6-7.6z"></path></svg>',
+      projects: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 3h11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><path d="M7 7V5a2 2 0 0 1 2-2h3l2 2h3a2 2 0 0 1 2 2v3"></path></svg>',
+      docs: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"></path></svg>',
+      preferences: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.52a2 2 0 0 1-1 1.72l-.15.1a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.52a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
+    };
+    const DOC_LABELS = {
+      readme: 'README',
+      'analysis-guide': 'Media Analysis Guide',
+      'agent-skill': 'Agent Skill',
+    };
+    const SUBPAGE_LABELS = {
+      analysis: {
+        batch: 'Batch Jobs',
+        media: 'Resolve Clips',
+        detail: 'Job Detail',
+        search: 'Search Index',
+      },
+      diagnostics: {
+        resolve: 'Resolve',
+        storage: 'Storage',
+        tools: 'Tools',
+      },
+      docs: DOC_LABELS,
+      preferences: {
+        analysis: 'Analysis',
+        metadata: 'Metadata And Markers',
+        paths: 'Paths And Workflow',
+        updates: 'MCP Updates',
+        dashboard: 'Dashboard',
+        storage: 'Storage',
+      },
+    };
+    const DEFAULT_SUBPAGES = {
+      analysis: 'batch',
+      diagnostics: 'resolve',
+      docs: 'readme',
+      preferences: 'analysis',
+    };
+    const SUBPAGE_ICONS = {
+      batch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16"></path><path d="M4 12h16"></path><path d="M4 18h10"></path></svg>',
+      media: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m7 15 3-3 2 2 4-5 1 2"></path></svg>',
+      detail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>',
+      search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>',
+      resolve: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"></path><path d="M12 18v4"></path><path d="M2 12h4"></path><path d="M18 12h4"></path><circle cx="12" cy="12" r="3"></circle></svg>',
+      storage: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"></path><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"></path></svg>',
+      tools: PANEL_ICONS.diagnostics,
+      readme: PANEL_ICONS.docs,
+      'analysis-guide': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6"></path><path d="M10 22h4"></path><path d="M12 2a7 7 0 0 0-4 12c.65.55 1 1.35 1 2h6c0-.65.35-1.45 1-2A7 7 0 0 0 12 2z"></path></svg>',
+      'agent-skill': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8V4H8"></path><rect x="4" y="12" width="16" height="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg>',
+      metadata: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-9"></path><path d="M14 17H5"></path><circle cx="17" cy="17" r="3"></circle><circle cx="7" cy="7" r="3"></circle></svg>',
+      paths: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h5l2 3h11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>',
+      updates: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"></path><path d="M21 3v6h-6"></path></svg>',
+      dashboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18"></path><path d="M9 21V9"></path></svg>',
+    };
+    const METADATA_FIELD_CANDIDATES = [
+      'Description',
+      'Comments',
+      'Keywords',
+      'People',
+      'Scene',
+      'Shot',
+      'Take',
+      'Camera #',
+      'Roll Card #',
+      'Good Take',
+      'Location',
+      'Notes',
+    ];
+    const DEFAULT_PREFS = {
+      jobName: 'Editorial analysis pass',
+      depth: 'standard',
+      frames: 8,
+      recursive: true,
+      transcription: false,
+      autoPoll: true,
+      pollInterval: '15000',
+    };
+    const PREFERENCE_HELP = {
+      prefVisionDefault: 'Controls whether visual frame analysis is used by default when an operation supports it.',
+      prefTranscriptionDefault: 'Sets the default answer for transcript generation on audio-bearing clips.',
+      prefSlateDetectionDefault: 'Controls whether slate detection should run or ask before adding slate-informed context.',
+      prefAnalysisPersistence: 'Chooses whether analysis artifacts stay session-only or keep reusable reports and frames.',
+      prefAnalysisSummaryStyle: 'Tunes the language of generated summaries for editorial, QC, producer, or full-detail review.',
+      prefReportFormat: 'Chooses compact readable reports, full reports, or machine-readable output for downstream agents.',
+      prefTimedMarkersDefault: 'Sets the default answer for writing source-time analysis notes as Resolve clip markers.',
+      prefMetadataOverwritePolicy: 'Controls how analysis text interacts with existing human-entered Resolve metadata.',
+      prefMaxTimedMarkersMode: 'Limited caps marker suggestions per clip. Unlimited stores 0 and does not truncate marker candidates.',
+      prefMarkerCustomData: 'Namespaced custom data keeps provenance richer; minimal keeps Resolve marker payloads smaller.',
+      prefMetadataFieldPills: 'Enabled fields receive analysis metadata when publishing is confirmed.',
+      prefTimedMarkerTypePills: 'Enabled marker types decide which source-time moments can become Resolve markers.',
+      prefTimedMarkerColors: 'JSON map from marker type to Resolve marker color.',
+      prefIncludeConfidenceScores: 'Adds model or detector confidence values where analysis provides them.',
+      prefIncludeSourceTimeNotes: 'Includes source time references in generated metadata and marker notes.',
+      prefAskBeforeMetadataPublish: 'Keeps metadata writes behind an explicit confirmation step by default.',
+      prefDryRunFirstDefault: 'Prefers a preview pass before committing metadata or marker changes.',
+      prefPreferredAnalysisRoot: 'Optional absolute path for analysis databases and reports. Empty uses the project analysis root.',
+      prefPreferredGeneratedMediaFolder: 'Optional folder for generated sidecars or scratch outputs when a workflow needs them.',
+      prefPostOperationPage: 'Resolve page to open after an operation completes, or stay put.',
+      prefUpdateMode: 'Controls update checks for the MCP package.',
+      prefUpdateIntervalHours: 'Minimum time between best-effort release checks.',
+      prefUpdateSnoozeHours: 'How long snoozed update notices stay quiet.',
+      prefJobName: 'Default name used when creating a new dashboard batch job.',
+      prefDepth: 'Default analysis depth for jobs started from this browser.',
+      prefFrames: 'Default number of sample frames to inspect per clip for visual analysis.',
+      prefPollInterval: 'How often the dashboard refreshes Resolve clip status while auto refresh is enabled.',
+      prefRecursive: 'Includes nested folders when batch jobs are created from folders.',
+      prefTranscription: 'Preselects transcription for newly created dashboard jobs.',
+      prefAutoPoll: 'Automatically refreshes Resolve clip inventory while the control panel is open.',
+    };
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options,
+      });
+      const payload = await res.json();
+      if (!res.ok || payload.success === false) {
+        throw new Error(payload.error || res.statusText);
+      }
+      return payload;
+    }
+
+    function clipCount(job, key) {
+      return Number(job[key] || 0);
+    }
+
+    function setText(id, value) {
+      const el = $(id);
+      if (el) el.textContent = value;
+    }
+
+    function setHtml(id, value) {
+      const el = $(id);
+      if (el) el.innerHTML = value;
+    }
+
+    function subpageFor(panelName, requested) {
+      const pages = SUBPAGE_LABELS[panelName];
+      if (!pages) return null;
+      if (requested && pages[requested]) return requested;
+      const current = state.activeSubpages[panelName];
+      if (current && pages[current]) return current;
+      return DEFAULT_SUBPAGES[panelName] || Object.keys(pages)[0] || null;
+    }
+
+    function setPanel(panelName, options = {}) {
+      const next = PANEL_LABELS[panelName] ? panelName : 'overview';
+      const subpage = subpageFor(next, options.subpage || options.subpageTarget);
+      state.activePanel = next;
+      if (subpage) {
+        state.activeSubpages[next] = subpage;
+      }
+      if (next === 'docs' && subpage) {
+        state.activeDoc = subpage;
+      }
+      document.querySelectorAll('.panel').forEach(panel => {
+        panel.classList.toggle('active', panel.id === `panel-${next}`);
+      });
+      document.querySelectorAll('.control-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.panelTarget === next);
+      });
+      renderSubpage(next, subpage);
+      renderBreadcrumb();
+      if (options.updateHash !== false) {
+        updateRouteHash(next, subpage);
+      }
+      if (next === 'preferences') {
+        syncPreferencesPanel();
+        refreshSetupDefaults().catch(alertError);
+      }
+      if (next === 'docs' && subpage) {
+        loadDoc(subpage, { updateHash: false }).catch(alertError);
+      }
+      if (next === 'projects' && !state.allProjects) {
+        refreshAllProjects().catch(alertError);
+      }
+    }
+
+    function renderSubpage(panelName, subpage) {
+      document.querySelectorAll(`[data-subpage-scope="${panelName}"]`).forEach(el => {
+        el.classList.toggle('active', el.dataset.subpage === subpage);
+      });
+      document.querySelectorAll('.nav-dropdown-item').forEach(item => {
+        const active = item.dataset.panelTarget === panelName && item.dataset.subpageTarget === subpage;
+        item.classList.toggle('active', active);
+        if (active) {
+          item.setAttribute('aria-current', 'page');
+        } else {
+          item.removeAttribute('aria-current');
+        }
+      });
+    }
+
+    function breadcrumbSeparator() {
+      return `<span class="nav-breadcrumb-sep" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m9 18 6-6-6-6"></path>
+        </svg>
+      </span>`;
+    }
+
+    function breadcrumbMarkup({ label, icon }) {
+      const iconMarkup = `<span class="breadcrumb-item-icon" aria-hidden="true">${icon || ''}</span>`;
+      const textMarkup = `<span class="nav-breadcrumb-current">${escapeHtml(label)}</span>`;
+      return `<span class="breadcrumb-item">${iconMarkup}${textMarkup}</span>`;
+    }
+
+    function renderBreadcrumb() {
+      const trail = $('breadcrumbTrail');
+      if (!trail) return;
+      const panel = state.activePanel;
+      const subpage = state.activeSubpages[panel];
+      const crumbs = [{
+        label: PANEL_LABELS[panel] || 'Overview',
+        icon: PANEL_ICONS[panel] || PANEL_ICONS.overview,
+        current: !subpage,
+      }];
+      if (subpage && SUBPAGE_LABELS[panel]?.[subpage]) {
+        crumbs.push({
+          label: SUBPAGE_LABELS[panel][subpage],
+          icon: SUBPAGE_ICONS[subpage] || PANEL_ICONS[panel],
+          current: true,
+        });
+      }
+      trail.innerHTML = crumbs.map((crumb, index) => {
+        const separator = index === 0 ? '' : breadcrumbSeparator();
+        return `${separator}${breadcrumbMarkup(crumb)}`;
+      }).join('');
+    }
+
+    function updateRouteHash(panelName, subpage) {
+      const next = PANEL_LABELS[panelName] ? panelName : 'overview';
+      const hash = subpage && SUBPAGE_LABELS[next]?.[subpage]
+        ? `#${next}/${encodeURIComponent(subpage)}`
+        : `#${next}`;
+      if (window.location.hash !== hash) {
+        history.replaceState(null, '', hash);
+      }
+    }
+
+    function applyInitialRoute() {
+      const route = window.location.hash.replace(/^#/, '').split('/');
+      const panelName = PANEL_LABELS[route[0]] ? route[0] : 'overview';
+      const requestedSubpage = decodeURIComponent(route[1] || '');
+      const subpage = subpageFor(panelName, requestedSubpage);
+      setPanel(panelName, { subpage, updateHash: false });
+    }
+
+    function renderInfoRows(id, rows) {
+      setHtml(id, rows.map(row => {
+        const value = row.value == null || row.value === '' ? 'Unavailable' : row.value;
+        return `<div class="info-row"><span>${escapeHtml(row.label)}</span><b>${escapeHtml(value)}</b></div>`;
+      }).join(''));
+    }
+
+    function sourceClips() {
+      return (state.resolveMedia?.clips || []).filter(clip => clip.source_clip);
+    }
+
+    function sequenceCount(media) {
+      const counts = media?.counts || {};
+      if (counts.sequences != null) return Number(counts.sequences || 0);
+      return (media?.clips || []).filter(clip => {
+        const mediaType = String(clip.media_type || '').toLowerCase();
+        return mediaType.includes('sequence') || mediaType.includes('timeline');
+      }).length;
+    }
+
+    function indexSummary() {
+      const status = state.indexStatus;
+      if (!status) return { label: 'Checking', detail: 'Index status pending' };
+      if (!status.exists) return { label: 'Not built', detail: 'Search unavailable until built' };
+      const clips = Number(status.counts?.clips || 0);
+      return {
+        label: String(clips),
+        detail: `${clipLabel(clips)} indexed · ${formatBytes(status.size_bytes || 0)}`,
+      };
+    }
+
+    function renderOverview() {
+      const media = state.resolveMedia;
+      const counts = media?.counts || {};
+      const clips = sourceClips();
+      const hiddenRecords = Math.max(0, Number(counts.total || 0) - Number(counts.source_clips || clips.length));
+      const sequences = sequenceCount(media);
+      const projectName = state.activeContext?.project_name || media?.project?.name || state.boot?.project_name || 'Resolve project';
+      const resolveProject = media?.project?.name || 'No Resolve project';
+      const resolveStatus = media?.resolve_available ? `Resolve: ${resolveProject} · read-only` : (media?.status || 'Connection pending');
+      const index = indexSummary();
+      const activeJobs = state.jobs.filter(job => ['queued', 'running'].includes(String(job.status || ''))).length;
+      const failedJobs = state.jobs.filter(job => ['failed', 'completed_with_errors'].includes(String(job.status || ''))).length;
+      const readyClips = clips.filter(clip => clip.analyzable).length;
+      const analyzedClips = clips.filter(clip => ['analyzed', 'succeeded', 'skipped'].includes(String(clip.analysis_status || ''))).length;
+      const onlineClips = clips.filter(clip => String(clip.status || '') === 'online').length;
+      const missingClips = clips.filter(clip => ['missing_file', 'offline'].includes(String(clip.status || ''))).length;
+      const mediaStatusLabel = media?.resolve_available ? `${onlineClips} online` : 'Unavailable';
+      const mediaStatusDetail = media?.resolve_available
+        ? `${missingClips} missing/offline · ${hiddenRecords} non-source records`
+        : (media?.error || media?.status || 'Resolve inventory pending');
+
+      setText('overviewUpdated', `Updated ${new Date().toLocaleTimeString()}`);
+      setText('overviewProject', projectName);
+      setText('overviewResolveStatus', resolveStatus);
+      setText('overviewClipCount', String(clips.length));
+      setText('overviewClipStatus', `${readyClips} ready · ${analyzedClips} analyzed`);
+      setText('overviewSequenceCount', String(sequences));
+      setText('overviewSequenceStatus', sequences ? 'Read-only Resolve sequences' : 'No sequences detected');
+      setText('overviewMediaStatus', mediaStatusLabel);
+      setText('overviewMediaStatusDetail', mediaStatusDetail);
+
+      if (!media?.resolve_available) {
+        setHtml('overviewStatusList', `<div class="empty">${escapeHtml(media?.error || 'Open Resolve with a project loaded to inspect clips.')}</div>`);
+      } else {
+        renderInfoRows('overviewStatusList', [
+          { label: 'Resolve project', value: resolveProject },
+          { label: 'Source clips', value: `${clipLabel(clips.length)} · ${readyClips} analysis ready` },
+          { label: 'Sequences', value: `${sequences} read-only context ${sequences === 1 ? 'item' : 'items'}` },
+          { label: 'Clip media status', value: `${onlineClips} online · ${missingClips} missing/offline` },
+          { label: 'Analysis status', value: `${analyzedClips} analyzed · ${activeJobs} active jobs${failedJobs ? ` · ${failedJobs} need review` : ''}` },
+          { label: 'Search index', value: index.detail },
+          { label: 'Safety', value: 'Source media is read-only; outputs stay in the active project analysis root.' },
+        ]);
+      }
+    }
+
+    function renderDiagnostics() {
+      const media = state.resolveMedia;
+      const counts = media?.counts || {};
+      const clips = sourceClips();
+      const hiddenRecords = Math.max(0, Number(counts.total || 0) - Number(counts.source_clips || clips.length));
+      const index = indexSummary();
+      renderInfoRows('diagnosticsResolve', [
+        { label: 'Connection', value: media?.resolve_available ? 'Connected' : (media?.status || 'Pending') },
+        { label: 'Project', value: media?.project?.name || 'Unavailable' },
+        { label: 'Total records', value: counts.total ?? 0 },
+        { label: 'Source clips', value: counts.source_clips ?? clips.length },
+        { label: 'Hidden records', value: hiddenRecords },
+        { label: 'Warnings', value: (media?.warnings || []).join(' · ') || 'None' },
+      ]);
+      renderInfoRows('diagnosticsStorage', [
+        { label: 'Analysis root', value: state.activeContext?.project_root || state.boot?.project_root || media?.project_root || 'Pending' },
+        { label: 'Index status', value: index.detail },
+        { label: 'Index database', value: (state.activeContext?.project_root || state.boot?.project_root) ? `${state.activeContext?.project_root || state.boot.project_root}/index.sqlite` : 'Pending' },
+        { label: 'Jobs database', value: (state.activeContext?.project_root || state.boot?.project_root) ? `${state.activeContext?.project_root || state.boot.project_root}/jobs.sqlite` : 'Pending' },
+      ]);
+
+      const tools = state.boot?.capabilities?.tools || {};
+      const names = Object.keys(tools);
+      if (!names.length) {
+        setHtml('diagnosticsTools', '<div class="empty">No tool capability data yet.</div>');
+        return;
+      }
+      setHtml('diagnosticsTools', names.map(name => {
+        const tool = tools[name] || {};
+        const ready = tool.available ? 'ready' : 'missing';
+        const label = tool.version || tool.path || ready;
+        return `<div class="tool-row">
+          <strong>${escapeHtml(name)}</strong>
+          <span class="badge ${escapeHtml(ready)}">${escapeHtml(label)}</span>
+        </div>`;
+      }).join(''));
+    }
+
+    function renderControlPanels() {
+      renderOverview();
+      renderDiagnostics();
+      renderProjects();
+    }
+
+    function renderJobs() {
+      const wrap = $('jobs');
+      if (!state.jobs.length) {
+        wrap.innerHTML = '<div class="empty">No batch jobs yet.</div>';
+        return;
+      }
+      wrap.innerHTML = state.jobs.map(job => {
+        const percent = job.progress?.percent || 0;
+        const active = state.selected === job.job_id ? ' active' : '';
+        return `<div class="job${active}" data-job="${job.job_id}">
+          <div class="job-top">
+            <div>
+              <div class="job-title">${escapeHtml(job.name)}</div>
+              <small>${escapeHtml(job.job_id)}</small>
+            </div>
+            <span class="badge ${job.status}">${escapeHtml(job.status)}</span>
+          </div>
+          <div class="meter"><span style="width:${percent}%"></span></div>
+          <small>${percent}% · ${clipCount(job, 'succeeded_clips')} ok · ${clipCount(job, 'failed_clips')} failed · ${clipCount(job, 'pending_clips')} pending</small>
+        </div>`;
+      }).join('');
+      wrap.querySelectorAll('[data-job]').forEach(el => {
+        el.onclick = () => selectJob(el.dataset.job).then(() => {
+          setPanel('analysis', { subpage: 'detail' });
+        }).catch(alertError);
+      });
+    }
+
+    function renderDetail(job) {
+      const el = $('detailBody');
+      if (!job) {
+        el.className = 'empty';
+        el.textContent = 'Select or create a job.';
+        return;
+      }
+      el.className = '';
+      const percent = job.progress?.percent || 0;
+      const events = (job.events || []).slice(0, 10).map(ev => {
+        return `<div>[${escapeHtml(ev.event_time)}] ${escapeHtml(ev.level)} · ${escapeHtml(ev.message)}</div>`;
+      }).join('');
+      const clips = (job.clips || []).slice(0, 80).map(clip => {
+        return `<tr>
+          <td>${Number(clip.position) + 1}</td>
+          <td>${escapeHtml(clip.clip_key || '')}</td>
+          <td>${escapeHtml(clip.status || '')}</td>
+          <td>${escapeHtml(clip.error || clip.cache_status || '')}</td>
+        </tr>`;
+      }).join('');
+      el.innerHTML = `
+        <div class="metrics">
+          <div class="metric"><b>${percent}%</b><span>complete</span></div>
+          <div class="metric"><b>${clipCount(job, 'succeeded_clips')}</b><span>succeeded</span></div>
+          <div class="metric"><b>${clipCount(job, 'failed_clips')}</b><span>failed</span></div>
+          <div class="metric"><b>${clipCount(job, 'pending_clips')}</b><span>pending</span></div>
+        </div>
+        <div class="meter"><span style="width:${percent}%"></span></div>
+        <div class="controls" style="margin:12px 0">
+          <button id="copyRunSlice">Copy Run Slice Prompt</button>
+          <button class="secondary" id="copyContinueJob">Copy Continue Prompt</button>
+          <button class="secondary" id="resumeJob">Resume</button>
+          <button class="danger" id="cancelJob">Cancel</button>
+        </div>
+        <div class="split">
+          <div>
+            <table>
+              <thead><tr><th>#</th><th>Clip</th><th>Status</th><th>Note</th></tr></thead>
+              <tbody>${clips || '<tr><td colspan="4">No clip rows.</td></tr>'}</tbody>
+            </table>
+          </div>
+          <div class="console">${events || 'No events yet.'}</div>
+        </div>`;
+      $('copyRunSlice').onclick = () => copyJobPrompt(job.job_id, false).catch(alertError);
+      $('copyContinueJob').onclick = () => copyJobPrompt(job.job_id, true).catch(alertError);
+      $('resumeJob').onclick = resumeSelected;
+      $('cancelJob').onclick = cancelSelected;
+    }
+
+    function renderResolveMedia(payload) {
+      const body = $('resolveMediaBody');
+      const project = $('resolveProject');
+      const selectBtn = $('selectReadyMediaBtn');
+      const copyBtn = $('copyPromptFromMediaBtn');
+      state.resolveMedia = payload;
+      selectBtn.disabled = true;
+      copyBtn.disabled = true;
+
+      if (!payload?.resolve_available) {
+        project.textContent = payload?.status || 'Resolve unavailable';
+        body.className = 'empty';
+        body.textContent = payload?.error || 'Open a Resolve project to see media pool availability.';
+        updateMediaPollStatus();
+        renderControlPanels();
+        return;
+      }
+
+      const allClips = payload.clips || [];
+      const clips = filteredResolveClips(allClips);
+      const projectLabel = payload.project?.name || 'Current Resolve project';
+      const visibleCounts = summarizeVisibleClips(clips);
+      project.textContent = `${projectLabel} · ${clipLabel(clips.length)}`;
+      selectBtn.disabled = !clips.some(clip => clip.analyzable);
+      copyBtn.disabled = !clips.some(clip => clip.analyzable);
+      body.className = '';
+      const rows = clips.map((clip, index) => {
+        const analysisStatus = clip.analysis_status || 'not analyzed';
+        const readyLabel = clip.analyzable ? 'analyzable' : 'not analyzable';
+        const clipId = clip.clip_id || '';
+        const checked = clipId && (state.selectedClipIds.has(clipId) || (!state.clipSelectionTouched && clip.analyzable));
+        const disabled = !clip.analyzable || !clipId;
+        return `<tr>
+          <td>${index + 1}</td>
+          <td><input class="clip-select" type="checkbox" data-clip-id="${escapeAttribute(clipId)}"${checked ? ' checked' : ''}${disabled ? ' disabled' : ''}></td>
+          <td>
+            <b>${escapeHtml(clip.clip_name || 'Untitled')}</b>
+            <div class="media-path">${escapeHtml(clip.bin_path || '')}</div>
+          </td>
+          <td>
+            <span class="status-cell"><span class="status-dot ${cssToken(readyLabel)}"></span>${escapeHtml(readyLabel)}</span>
+            <div class="media-path">${escapeHtml(clip.analyzable_reason || '')}</div>
+          </td>
+          <td><span class="status-cell"><span class="status-dot ${cssToken(clip.status || 'unknown')}"></span>${escapeHtml(clip.status || 'unknown')}</span></td>
+          <td><span class="status-cell"><span class="status-dot ${cssToken(analysisStatus)}"></span>${escapeHtml(analysisStatus)}</span></td>
+          <td class="media-path">${escapeHtml(clip.file_path || 'No file path exposed')}</td>
+        </tr>`;
+      }).join('');
+      body.innerHTML = `
+        <div class="media-summary">
+          <div class="media-stat"><b>${visibleCounts.clips}</b><span>${visibleCounts.clips === 1 ? 'clip' : 'clips'}</span></div>
+          <div class="media-stat"><b>${visibleCounts.online}</b><span>online</span></div>
+          <div class="media-stat"><b>${visibleCounts.missing}</b><span>missing</span></div>
+          <div class="media-stat"><b>${visibleCounts.analyzed}</b><span>analyzed</span></div>
+        </div>
+        ${payload.truncated ? `<div class="empty" style="margin-bottom:12px">Showing first ${allClips.length} Resolve records before clip filtering. Use analysis jobs for full long-form progress.</div>` : ''}
+        <div class="media-table-wrap">
+          <table>
+            <thead><tr><th>#</th><th></th><th>Clip</th><th>Ready</th><th>Media</th><th>Analysis</th><th>Path</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="7">No clips match the current filters.</td></tr>'}</tbody>
+          </table>
+        </div>`;
+      body.querySelectorAll('[data-clip-id]').forEach(input => {
+        input.addEventListener('change', () => {
+          if (input.checked) {
+            state.selectedClipIds.add(input.dataset.clipId);
+          } else {
+            state.selectedClipIds.delete(input.dataset.clipId);
+          }
+          state.clipSelectionTouched = true;
+          updatePromptSummary();
+        });
+      });
+      updateMediaPollStatus();
+      updatePromptSummary();
+      renderControlPanels();
+    }
+
+    function mediaFilterValues() {
+      return {
+        text: $('mediaFilterText').value.trim().toLowerCase(),
+        mediaStatus: $('mediaStatusFilter').value,
+        analysisStatus: $('analysisStatusFilter').value,
+      };
+    }
+
+    function filteredResolveClips(clips) {
+      const filters = mediaFilterValues();
+      return clips.filter(clip => {
+        const haystack = [
+          clip.clip_name,
+          clip.bin_path,
+          clip.file_path,
+          clip.media_type,
+          clip.resolve_status,
+          clip.analysis_status,
+          clip.analyzable_reason,
+        ].map(value => String(value || '').toLowerCase()).join(' ');
+        if (filters.text && !haystack.includes(filters.text)) return false;
+
+        const mediaStatus = String(clip.status || 'unknown');
+        if (filters.mediaStatus === 'clips' && !clip.source_clip) return false;
+        if (filters.mediaStatus === 'analyzable' && !clip.analyzable) return false;
+        if (filters.mediaStatus === 'online' && (!clip.source_clip || mediaStatus !== 'online')) return false;
+        if (filters.mediaStatus === 'missing' && (!clip.source_clip || !['missing_file', 'offline'].includes(mediaStatus))) return false;
+
+        const analysisStatus = String(clip.analysis_status || 'not analyzed');
+        if (filters.analysisStatus === 'not_analyzed' && analysisStatus !== 'not analyzed') return false;
+        if (filters.analysisStatus === 'analyzed' && !['analyzed', 'succeeded', 'skipped'].includes(analysisStatus)) return false;
+        if (filters.analysisStatus === 'active' && !['queued', 'running', 'pending'].includes(analysisStatus)) return false;
+        if (filters.analysisStatus === 'failed' && analysisStatus !== 'failed') return false;
+        return true;
+      });
+    }
+
+    function summarizeVisibleClips(clips) {
+      return clips.reduce((acc, clip) => {
+        acc.clips += 1;
+        const mediaStatus = String(clip.status || 'unknown');
+        const analysisStatus = String(clip.analysis_status || 'not analyzed');
+        if (mediaStatus === 'online') acc.online += 1;
+        if (['missing_file', 'offline'].includes(mediaStatus)) acc.missing += 1;
+        if (['analyzed', 'succeeded', 'skipped'].includes(analysisStatus)) acc.analyzed += 1;
+        return acc;
+      }, { clips: 0, online: 0, missing: 0, analyzed: 0 });
+    }
+
+    function clipLabel(count) {
+      return `${count} ${count === 1 ? 'clip' : 'clips'}`;
+    }
+
+    async function refreshProjectContexts() {
+      const payload = await api('/api/projects');
+      state.projects = payload;
+      state.activeContext = payload.active || state.activeContext;
+      renderProjectContextSelect();
+      renderProjects();
+      updatePromptSummary();
+      renderControlPanels();
+    }
+
+    async function refreshAllProjects() {
+      setText('projectsUpdated', 'Scanning Resolve project database');
+      const payload = await api('/api/projects/all');
+      state.allProjects = payload;
+      renderProjects();
+    }
+
+    function renderProjectContextSelect() {
+      const select = $('projectContextSelect');
+      if (!select) return;
+      const contexts = (state.projects?.contexts || [])
+        .filter(context => context.active || context.resolve_current);
+      const activeRoot = state.activeContext?.project_root;
+      if (!contexts.length) {
+        select.innerHTML = '<option value="">No open Resolve project</option>';
+        select.disabled = true;
+        return;
+      }
+      select.innerHTML = contexts.map(context => {
+        const label = context.project_name || 'Project';
+        const selected = context.project_root === activeRoot ? ' selected' : '';
+        const disabled = context.project_root === activeRoot ? ' disabled' : '';
+        return `<option value="${escapeAttribute(context.project_root)}"${selected}${disabled}>${escapeHtml(label)}</option>`;
+      }).join('');
+      select.disabled = contexts.length <= 1;
+    }
+
+    function renderProjects() {
+      const openContexts = (state.projects?.contexts || []).filter(context => context.active || context.resolve_current);
+      const localContexts = (state.projects?.contexts || []).filter(context => context.can_load_resolve === false);
+      const allPayload = state.allProjects;
+      const allProjects = allPayload?.projects || [];
+      const activeName = state.activeContext?.project_name || state.projects?.current_resolve_project?.project_name || 'No project';
+      const currentFolder = state.projects?.resolve_projects?.folder || allPayload?.current_folder || 'Current folder pending';
+      const database = allPayload?.database || state.projects?.resolve_projects?.database || {};
+      const databaseName = database.DbName || database.db_name || database.name || 'Current Resolve database';
+
+      setText('projectsCurrentProject', activeName);
+      setText('projectsCurrentFolder', `Folder: ${currentFolder || 'Root'}`);
+      setText('projectsOpenCount', String(openContexts.length || (activeName !== 'No project' ? 1 : 0)));
+      setText('projectsAllCount', allPayload ? String(allProjects.length) : 'Not scanned');
+      setText('projectsDatabaseName', databaseName);
+      setText('projectsContextCount', String(localContexts.length));
+      if (allPayload) {
+        const stamp = new Date().toLocaleTimeString();
+        const warning = allPayload.warning ? ` · ${allPayload.warning}` : '';
+        setText('projectsUpdated', `Updated ${stamp}${warning}`);
+      }
+
+      const body = $('allProjectsBody');
+      if (!body) return;
+      if (!allPayload) {
+        body.className = 'empty';
+        body.textContent = 'Open Projects to scan the current Resolve database.';
+        return;
+      }
+      if (!allPayload.available) {
+        body.className = 'empty';
+        body.textContent = allPayload.error || 'Resolve project database unavailable.';
+        return;
+      }
+      const filter = String($('projectFilterText')?.value || '').trim().toLowerCase();
+      const rows = allProjects
+        .filter(project => {
+          if (!filter) return true;
+          return [project.project_name, project.folder_label, project.database_label]
+            .map(value => String(value || '').toLowerCase())
+            .join(' ')
+            .includes(filter);
+        })
+        .map(project => {
+          const active = project.active ? '<span class="badge ready">active</span>' : '';
+          const folderPath = escapeAttribute(JSON.stringify(project.folder_path || []));
+          const disabled = project.active ? ' disabled' : '';
+          return `<tr>
+            <td><b>${escapeHtml(project.project_name || 'Untitled')}</b><div class="media-path">${escapeHtml(project.project_directory || '')}</div></td>
+            <td>${escapeHtml(project.folder_label || 'Root')}</td>
+            <td>${active || '<span class="badge">available</span>'}</td>
+            <td><button class="secondary" data-load-db-project="${escapeAttribute(project.project_name || '')}" data-project-folder="${folderPath}"${disabled}>Load</button></td>
+          </tr>`;
+        }).join('');
+      body.className = '';
+      body.innerHTML = `
+        <div class="media-table-wrap">
+          <table>
+            <thead><tr><th>Project</th><th>Folder</th><th>Status</th><th></th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="4">No projects match the current filter.</td></tr>'}</tbody>
+          </table>
+        </div>`;
+      body.querySelectorAll('[data-load-db-project]').forEach(button => {
+        button.addEventListener('click', () => {
+          const folderPath = JSON.parse(button.dataset.projectFolder || '[]');
+          loadProjectFromDatabase(button.dataset.loadDbProject, folderPath).catch(alertError);
+        });
+      });
+    }
+
+    function restoreProjectContextSelect() {
+      const select = $('projectContextSelect');
+      const currentRoot = state.activeContext?.project_root;
+      if (select && currentRoot) select.value = currentRoot;
+    }
+
+    function projectSwitchDialog(currentName, nextName) {
+      const modal = $('projectSwitchModal');
+      const title = $('projectSwitchTitle');
+      const body = $('projectSwitchBody');
+      const detail = $('projectSwitchDetail');
+      const cancel = $('projectSwitchCancel');
+      const confirm = $('projectSwitchConfirm');
+      if (!modal || !cancel || !confirm) {
+        return Promise.resolve(window.confirm(`Load "${nextName}" in DaVinci Resolve?`));
+      }
+      if (state.projectDialogCleanup) state.projectDialogCleanup(false);
+      title.textContent = `Load "${nextName}" in DaVinci Resolve?`;
+      body.textContent = `This will change the open Resolve project from "${currentName}" to "${nextName}" and make it the active control panel project.`;
+      detail.textContent = 'Search, jobs, logs, diagnostics, clip inventory, and index status will refresh for the selected project.';
+      modal.classList.add('open');
+      confirm.focus();
+      return new Promise(resolve => {
+        const finish = value => {
+          modal.classList.remove('open');
+          cancel.removeEventListener('click', onCancel);
+          confirm.removeEventListener('click', onConfirm);
+          modal.removeEventListener('click', onBackdrop);
+          document.removeEventListener('keydown', onKeydown);
+          state.projectDialogCleanup = null;
+          resolve(value);
+        };
+        const onCancel = () => finish(false);
+        const onConfirm = () => finish(true);
+        const onBackdrop = event => {
+          if (event.target === modal) finish(false);
+        };
+        const onKeydown = event => {
+          if (event.key === 'Escape') finish(false);
+        };
+        state.projectDialogCleanup = finish;
+        cancel.addEventListener('click', onCancel);
+        confirm.addEventListener('click', onConfirm);
+        modal.addEventListener('click', onBackdrop);
+        document.addEventListener('keydown', onKeydown);
+      });
+    }
+
+    async function switchProjectContext(projectRoot) {
+      if (!projectRoot) return;
+      const select = $('projectContextSelect');
+      const currentRoot = state.activeContext?.project_root;
+      if (projectRoot === currentRoot) {
+        restoreProjectContextSelect();
+        return;
+      }
+      const context = (state.projects?.contexts || []).find(item => item.project_root === projectRoot);
+      if (context?.can_load_resolve === false) {
+        restoreProjectContextSelect();
+        throw new Error(`${context.project_name || 'This project'} is a local analysis context only and cannot be loaded in Resolve.`);
+      }
+      const currentName = state.activeContext?.project_name || 'current project';
+      const nextName = context?.project_name || 'selected project';
+      const confirmed = await projectSwitchDialog(currentName, nextName);
+      if (!confirmed) {
+        restoreProjectContextSelect();
+        return;
+      }
+      if (select) select.disabled = true;
+      let payload;
+      try {
+        payload = await api('/api/context', {
+          method: 'POST',
+          body: JSON.stringify({
+            project_root: projectRoot,
+            project_name: context?.project_name,
+            project_id: context?.project_id,
+            resolve_project_name: context?.resolve_project_name || context?.project_name,
+            load_resolve_project: true,
+          }),
+        });
+      } catch (error) {
+        restoreProjectContextSelect();
+        throw error;
+      } finally {
+        if (select) select.disabled = false;
+      }
+      state.activeContext = payload.active;
+      state.projects = payload.projects;
+      state.selected = null;
+      state.selectedClipIds.clear();
+      state.clipSelectionTouched = false;
+      renderProjectContextSelect();
+      await refreshIndex();
+      await refreshJobs();
+      await refreshResolveMedia();
+      updatePromptSummary();
+      renderControlPanels();
+    }
+
+    async function loadProjectFromDatabase(projectName, folderPath = []) {
+      const targetName = String(projectName || '').trim();
+      if (!targetName) return;
+      const currentName = state.activeContext?.project_name || 'current project';
+      const confirmed = await projectSwitchDialog(currentName, targetName);
+      if (!confirmed) return;
+      const payload = await api('/api/context', {
+        method: 'POST',
+        body: JSON.stringify({
+          project_name: targetName,
+          resolve_project_name: targetName,
+          resolve_project_folder_path: folderPath,
+          load_resolve_project: true,
+        }),
+      });
+      state.activeContext = payload.active;
+      state.projects = payload.projects;
+      state.selected = null;
+      state.selectedClipIds.clear();
+      state.clipSelectionTouched = false;
+      renderProjectContextSelect();
+      await refreshIndex();
+      await refreshJobs();
+      await refreshResolveMedia();
+      if (state.allProjects) await refreshAllProjects();
+      updatePromptSummary();
+      renderControlPanels();
+    }
+
+    async function boot() {
+      state.boot = await api('/api/boot');
+      state.activeContext = state.boot.active_context || {
+        project_name: state.boot.project_name,
+        project_id: state.boot.project_id,
+        project_root: state.boot.project_root,
+        base_root: state.boot.output_root?.base_root,
+      };
+      const prefs = readPreferences();
+      syncPreferencesPanel();
+      applyPreferencesToControls(prefs);
+      await refreshProjectContexts();
+      renderControlPanels();
+      await refreshIndex();
+      await refreshJobs();
+      await refreshResolveMedia();
+      scheduleMediaPoll();
+    }
+
+    async function refreshJobs() {
+      const payload = await api('/api/jobs');
+      state.jobs = payload.jobs || [];
+      renderJobs();
+      if (state.selected) {
+        await selectJob(state.selected, false);
+      } else {
+        renderDetail(null);
+      }
+      renderControlPanels();
+    }
+
+    async function selectJob(jobId, rerenderJobs = true) {
+      state.selected = jobId;
+      const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
+      renderDetail(job);
+      if (rerenderJobs) renderJobs();
+    }
+
+    async function createJob() {
+      return copyMcpPrompt();
+    }
+
+    async function runSlice() {
+      if (!state.selected) return;
+      const result = await api(`/api/jobs/${encodeURIComponent(state.selected)}/run`, {
+        method: 'POST',
+        body: JSON.stringify({ max_clips: 1 })
+      });
+      renderDetail(result.job);
+      await refreshJobs();
+      await refreshIndex();
+    }
+
+    async function toggleAutoRun() {
+      state.running = !state.running;
+      if (!state.running) {
+        await selectJob(state.selected);
+        return;
+      }
+      while (state.running && state.selected) {
+        const result = await api(`/api/jobs/${encodeURIComponent(state.selected)}/run`, {
+          method: 'POST',
+          body: JSON.stringify({ max_clips: 1 })
+        });
+        renderDetail(result.job);
+        await refreshJobs();
+        await refreshIndex();
+        const status = result.job.status;
+        if (status === 'completed' || status === 'completed_with_errors' || status === 'canceled') {
+          state.running = false;
+          break;
+        }
+      }
+      if (state.selected) await selectJob(state.selected);
+    }
+
+    async function cancelSelected() {
+      if (!state.selected) return;
+      const job = await api(`/api/jobs/${encodeURIComponent(state.selected)}/cancel`, { method: 'POST' });
+      renderDetail(job);
+      await refreshJobs();
+    }
+
+    async function resumeSelected() {
+      if (!state.selected) return;
+      const job = await api(`/api/jobs/${encodeURIComponent(state.selected)}/resume`, { method: 'POST' });
+      renderDetail(job);
+      await refreshJobs();
+    }
+
+    async function refreshResolveMedia(options = {}) {
+      if (state.mediaRefreshing) return;
+      state.mediaRefreshing = true;
+      updateMediaPollStatus('refreshing');
+      try {
+        const payload = await api('/api/resolve/media?limit=500');
+        state.mediaLastRefresh = new Date();
+        renderResolveMedia(payload);
+      } finally {
+        state.mediaRefreshing = false;
+        updateMediaPollStatus();
+      }
+    }
+
+    function promptCandidateClips() {
+      return filteredResolveClips(state.resolveMedia?.clips || [])
+        .filter(clip => clip.source_clip && clip.analyzable && clip.clip_id);
+    }
+
+    function selectedPromptClips() {
+      const candidates = promptCandidateClips();
+      if (!state.clipSelectionTouched) {
+        return candidates;
+      }
+      const selected = candidates.filter(clip => state.selectedClipIds.has(clip.clip_id));
+      return selected;
+    }
+
+    function selectReadyMedia() {
+      promptCandidateClips().forEach(clip => state.selectedClipIds.add(clip.clip_id));
+      state.clipSelectionTouched = true;
+      rerenderResolveMedia();
+      updatePromptSummary();
+    }
+
+    function updatePromptSummary() {
+      const candidates = promptCandidateClips();
+      const selected = selectedPromptClips();
+      const related = state.projects?.related_project_roots || state.boot?.related_project_roots || [];
+      setText('promptSourceSummary', `${clipLabel(candidates.length)} match the Resolve filters`);
+      setText('promptSelectedSummary', selected.length ? `${clipLabel(selected.length)} will be included` : 'No Resolve clips selected');
+      setText('promptReuseSummary', related.length > 1 ? `${related.length} same-name project versions` : 'Active project only');
+    }
+
+    function promptPayload() {
+      const clips = selectedPromptClips();
+      if (!clips.length) {
+        throw new Error('No analyzable Resolve clips are selected or visible.');
+      }
+      const params = {
+        name: $('jobName').value.trim() || 'Editorial analysis pass',
+        target: {
+          type: 'clips',
+          clip_ids: clips.map(clip => clip.clip_id),
+        },
+        depth: $('depth').value,
+        analysis_root: state.activeContext?.base_root || state.boot?.output_root?.base_root,
+        project_name: state.activeContext?.project_name,
+        project_id: state.activeContext?.project_id,
+        vision: { enabled: true, provider: 'chat_context' },
+        transcription: { enabled: $('transcription').checked },
+        reuse_project_roots: state.projects?.related_project_roots || state.boot?.related_project_roots || [],
+      };
+      if ($('sampleFrameMode').value === 'custom') {
+        params.max_analysis_frames = Math.max(0, Math.min(48, Number($('frames').value || 8)));
+      }
+      return params;
+    }
+
+    function buildMcpPrompt() {
+      const params = promptPayload();
+      const sliceParams = {
+        job_id: '<job_id>',
+        max_clips: 1,
+        analysis_root: params.analysis_root,
+        project_name: params.project_name,
+        project_id: params.project_id,
+      };
+      const statusParams = {
+        job_id: '<job_id>',
+        analysis_root: params.analysis_root,
+        project_name: params.project_name,
+        project_id: params.project_id,
+      };
+      return [
+        'Please start a source-safe DaVinci Resolve MCP analysis batch for these Resolve Media Pool clips, then run one bounded slice at a time until complete.',
+        '',
+        'Use this tool call first:',
+        `media_analysis(action="start_batch_job", params=${JSON.stringify(params, null, 2)})`,
+        '',
+        'After it returns a job_id, continue with:',
+        `media_analysis(action="run_batch_job_slice", params=${JSON.stringify(sliceParams, null, 2)})`,
+        '',
+        'Check progress with:',
+        `media_analysis(action="batch_job_status", params=${JSON.stringify(statusParams, null, 2)})`,
+        '',
+        'Keep running slices until batch_job_status reports completed or completed_with_errors. Use chat-context vision for sampled frames and keep source media read-only.',
+      ].join('\n');
+    }
+
+    async function copyMcpPrompt() {
+      const prompt = buildMcpPrompt();
+      try {
+        await navigator.clipboard.writeText(prompt);
+      } catch {
+        window.prompt('Copy this MCP prompt', prompt);
+      }
+      setText('copyPromptStatus', 'Copied. Paste in your MCP session to begin.');
+    }
+
+    async function copyJobPrompt(jobId, continueUntilDone) {
+      const params = {
+        job_id: jobId,
+        max_clips: 1,
+        analysis_root: state.activeContext?.base_root || state.boot?.output_root?.base_root,
+        project_name: state.activeContext?.project_name,
+        project_id: state.activeContext?.project_id,
+      };
+      const prompt = continueUntilDone
+        ? [
+            'Please continue this DaVinci Resolve MCP analysis job one bounded slice at a time until it completes.',
+            `media_analysis(action="run_batch_job_slice", params=${JSON.stringify(params, null, 2)})`,
+            'After each slice, check batch_job_status for the same job_id and continue until completed or completed_with_errors.',
+          ].join('\n\n')
+        : `media_analysis(action="run_batch_job_slice", params=${JSON.stringify(params, null, 2)})`;
+      try {
+        await navigator.clipboard.writeText(prompt);
+      } catch {
+        window.prompt('Copy this MCP prompt', prompt);
+      }
+      setText('copyPromptStatus', 'Copied. Paste in your MCP session to begin.');
+    }
+
+    function scheduleMediaPoll() {
+      if (state.mediaPollTimer) {
+        clearInterval(state.mediaPollTimer);
+        state.mediaPollTimer = null;
+      }
+      const enabled = $('autoPollMedia').checked;
+      const interval = Number($('mediaPollInterval').value || 0);
+      if (enabled && interval > 0) {
+        state.mediaPollTimer = setInterval(() => {
+          refreshResolveMedia({ silent: true }).catch(error => {
+            console.warn('Resolve media poll failed', error);
+            updateMediaPollStatus(error.message || String(error));
+          });
+        }, interval);
+      }
+      updateMediaPollStatus();
+    }
+
+    function updateMediaPollStatus(extra = '') {
+      const el = $('mediaPollStatus');
+      if (!el) return;
+      const interval = Number($('mediaPollInterval').value || 0);
+      const enabled = $('autoPollMedia').checked && interval > 0;
+      const last = state.mediaLastRefresh ? state.mediaLastRefresh.toLocaleTimeString() : 'not yet';
+      const poll = enabled ? `polling every ${Math.round(interval / 1000)}s` : 'polling off';
+      const visible = state.resolveMedia?.clips ? clipLabel(filteredResolveClips(state.resolveMedia.clips).length) : 'no media snapshot';
+      const prefix = state.mediaRefreshing ? 'refreshing' : poll;
+      el.textContent = `${prefix} · last ${last} · ${visible}${extra ? ` · ${extra}` : ''}`;
+    }
+
+    function rerenderResolveMedia() {
+      if (state.resolveMedia) {
+        renderResolveMedia(state.resolveMedia);
+      } else {
+        updateMediaPollStatus();
+      }
+    }
+
+    async function refreshIndex() {
+      const status = await api('/api/index/status');
+      state.indexStatus = status;
+      renderControlPanels();
+    }
+
+    async function buildIndex() {
+      const built = await api('/api/index/build', { method: 'POST' });
+      state.indexStatus = { ...built, exists: true };
+      renderControlPanels();
+    }
+
+    async function refreshAll() {
+      await refreshIndex();
+      await refreshJobs();
+      await refreshResolveMedia();
+    }
+
+    function readPreferences() {
+      try {
+        return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem('resolveMcpDashboardPrefs') || '{}') };
+      } catch {
+        return { ...DEFAULT_PREFS };
+      }
+    }
+
+    function writePreferences(prefs) {
+      localStorage.setItem('resolveMcpDashboardPrefs', JSON.stringify(prefs));
+    }
+
+    function syncPreferencesPanel() {
+      const prefs = readPreferences();
+      $('prefJobName').value = prefs.jobName;
+      $('prefDepth').value = prefs.depth;
+      $('prefFrames').value = Number(prefs.frames || DEFAULT_PREFS.frames);
+      $('prefRecursive').checked = Boolean(prefs.recursive);
+      $('prefTranscription').checked = Boolean(prefs.transcription);
+      $('prefAutoPoll').checked = Boolean(prefs.autoPoll);
+      $('prefPollInterval').value = String(prefs.pollInterval || DEFAULT_PREFS.pollInterval);
+      renderSetupPreferences();
+    }
+
+    async function refreshSetupDefaults() {
+      const [defaultsPayload, schemaPayload] = await Promise.all([
+        api('/api/setup/defaults'),
+        api('/api/setup/schema'),
+      ]);
+      state.setupDefaults = defaultsPayload.defaults || {};
+      state.setupSchema = schemaPayload.defaults || {};
+      renderSetupPreferences();
+    }
+
+    function setControlValue(id, value) {
+      const el = $(id);
+      if (!el) return;
+      el.value = value == null ? '' : String(value);
+    }
+
+    function setControlChecked(id, value) {
+      const el = $(id);
+      if (el) el.checked = Boolean(value);
+    }
+
+    function hydratePreferenceHelp() {
+      Object.entries(PREFERENCE_HELP).forEach(([id, copy]) => {
+        const control = $(id);
+        const label = control?.closest('label');
+        if (!label || label.querySelector(`[data-help-for="${id}"]`)) return;
+        const help = document.createElement('span');
+        help.className = 'field-help';
+        help.dataset.helpFor = id;
+        help.textContent = copy;
+        label.appendChild(help);
+      });
+    }
+
+    function syncMarkerLimitMode() {
+      const mode = $('prefMaxTimedMarkersMode');
+      const input = $('prefMaxTimedMarkers');
+      if (!mode || !input) return;
+      const unlimited = mode.value === 'unlimited';
+      input.disabled = unlimited;
+      if (unlimited) {
+        input.value = '0';
+      } else if (Number(input.value || 0) < 1) {
+        input.value = '12';
+      }
+    }
+
+    function markerLimitValue() {
+      const mode = $('prefMaxTimedMarkersMode')?.value || 'limited';
+      if (mode === 'unlimited') return 0;
+      return Math.max(1, Math.min(250, Number($('prefMaxTimedMarkers').value || 12)));
+    }
+
+    function uniqueValues(...lists) {
+      const seen = new Set();
+      const values = [];
+      lists.flat().forEach(value => {
+        const normalized = String(value || '').trim();
+        if (!normalized || seen.has(normalized)) return;
+        seen.add(normalized);
+        values.push(normalized);
+      });
+      return values;
+    }
+
+    function renderTokenPills(containerId, countId, hiddenId, candidates, activeValues) {
+      const container = $(containerId);
+      const hidden = $(hiddenId);
+      if (!container || !hidden) return;
+      const active = new Set((activeValues || []).map(value => String(value || '').trim()).filter(Boolean));
+      const values = uniqueValues(candidates || [], Array.from(active));
+      hidden.value = Array.from(active).join(', ');
+      container.innerHTML = values.map(value => `
+        <button type="button" class="token-pill${active.has(value) ? ' active' : ''}" data-token-value="${escapeHtml(value)}" aria-pressed="${active.has(value) ? 'true' : 'false'}">${escapeHtml(value)}</button>
+      `).join('');
+      container.querySelectorAll('[data-token-value]').forEach(button => {
+        button.addEventListener('click', () => {
+          button.classList.toggle('active');
+          button.setAttribute('aria-pressed', button.classList.contains('active') ? 'true' : 'false');
+          syncTokenPills(containerId, countId, hiddenId);
+        });
+      });
+      syncTokenPills(containerId, countId, hiddenId);
+    }
+
+    function syncTokenPills(containerId, countId, hiddenId) {
+      const active = activeTokenValues(containerId);
+      const hidden = $(hiddenId);
+      if (hidden) hidden.value = active.join(', ');
+      setText(countId, `${active.length} enabled`);
+    }
+
+    function activeTokenValues(containerId) {
+      const container = $(containerId);
+      if (!container) return [];
+      return Array.from(container.querySelectorAll('.token-pill.active'))
+        .map(button => button.dataset.tokenValue)
+        .filter(Boolean);
+    }
+
+    function renderSetupPreferences() {
+      const media = state.setupDefaults?.media_analysis;
+      const updates = state.setupDefaults?.updates;
+      if (!media || !updates) {
+        setText('setupPrefsStatus', 'Loading setup defaults');
+        setHtml('preferencesStorage', '<div class="empty">Loading preference storage.</div>');
+        return;
+      }
+      setText('setupPrefsStatus', `Server defaults loaded · ${new Date().toLocaleTimeString()}`);
+      setControlValue('prefVisionDefault', media.vision_default);
+      setControlValue('prefTranscriptionDefault', media.transcription_default);
+      setControlValue('prefSlateDetectionDefault', media.slate_detection_default);
+      setControlValue('prefAnalysisPersistence', media.analysis_persistence);
+      setControlValue('prefAnalysisSummaryStyle', media.analysis_summary_style);
+      setControlValue('prefReportFormat', media.report_format);
+      setControlValue('prefTimedMarkersDefault', media.timed_markers_default || 'ask');
+      setControlValue('prefMetadataOverwritePolicy', media.metadata_overwrite_policy);
+      const markerLimit = Number(media.max_timed_markers_per_clip ?? 12);
+      setControlValue('prefMaxTimedMarkersMode', markerLimit === 0 ? 'unlimited' : 'limited');
+      setControlValue('prefMaxTimedMarkers', markerLimit === 0 ? 0 : markerLimit);
+      syncMarkerLimitMode();
+      setControlValue('prefMarkerCustomData', media.marker_custom_data);
+      renderTokenPills(
+        'prefMetadataFieldPills',
+        'prefMetadataFieldCount',
+        'prefMetadataFields',
+        uniqueValues(METADATA_FIELD_CANDIDATES, media.metadata_publish_fields || []),
+        media.metadata_publish_fields || []
+      );
+      renderTokenPills(
+        'prefTimedMarkerTypePills',
+        'prefTimedMarkerTypeCount',
+        'prefTimedMarkerTypes',
+        uniqueValues(media.options?.timed_marker_types || [], media.timed_marker_types || []),
+        media.timed_marker_types || []
+      );
+      setControlValue('prefTimedMarkerColors', JSON.stringify(media.timed_marker_colors || {}, null, 2));
+      setControlChecked('prefIncludeConfidenceScores', media.include_confidence_scores);
+      setControlChecked('prefIncludeSourceTimeNotes', media.include_source_time_notes);
+      setControlChecked('prefAskBeforeMetadataPublish', media.ask_before_metadata_publish);
+      setControlChecked('prefDryRunFirstDefault', media.dry_run_first_default);
+      setControlValue('prefPreferredAnalysisRoot', media.preferred_analysis_root || '');
+      setControlValue('prefPreferredGeneratedMediaFolder', media.preferred_generated_media_folder || '');
+      setControlValue('prefPostOperationPage', media.default_post_operation_page);
+      setControlValue('prefUpdateMode', updates.mode);
+      setControlValue('prefUpdateIntervalHours', updates.check_interval_hours);
+      setControlValue('prefUpdateSnoozeHours', updates.snooze_hours);
+
+      renderInfoRows('preferencesStorage', [
+        { label: 'Media defaults', value: media.preferences_path || 'Default preferences path' },
+        { label: 'Update defaults', value: updates.state_path || 'Default update state path' },
+        { label: 'Dashboard defaults', value: 'Browser localStorage' },
+        { label: 'Project root', value: state.activeContext?.project_root || state.boot?.project_root || 'Pending' },
+      ]);
+    }
+
+    function applyPreferencesToControls(prefs, reschedule = false) {
+      $('jobName').value = prefs.jobName;
+      $('depth').value = prefs.depth;
+      $('frames').value = Number(prefs.frames || DEFAULT_PREFS.frames);
+      $('transcription').checked = Boolean(prefs.transcription);
+      $('autoPollMedia').checked = Boolean(prefs.autoPoll);
+      $('mediaPollInterval').value = String(prefs.pollInterval || DEFAULT_PREFS.pollInterval);
+      if (reschedule) scheduleMediaPoll();
+    }
+
+    function dashboardPreferencePayload() {
+      return {
+        jobName: $('prefJobName').value.trim() || DEFAULT_PREFS.jobName,
+        depth: $('prefDepth').value,
+        frames: Number($('prefFrames').value || DEFAULT_PREFS.frames),
+        recursive: $('prefRecursive').checked,
+        transcription: $('prefTranscription').checked,
+        autoPoll: $('prefAutoPoll').checked,
+        pollInterval: $('prefPollInterval').value,
+      };
+    }
+
+    function setupPreferencePayload() {
+      let markerColors = {};
+      try {
+        markerColors = JSON.parse($('prefTimedMarkerColors').value || '{}');
+      } catch {
+        throw new Error('Marker colors must be valid JSON.');
+      }
+      return {
+        media_analysis: {
+          vision_default: $('prefVisionDefault').value,
+          transcription_default: $('prefTranscriptionDefault').value,
+          slate_detection_default: $('prefSlateDetectionDefault').value,
+          analysis_persistence: $('prefAnalysisPersistence').value,
+          analysis_summary_style: $('prefAnalysisSummaryStyle').value,
+          report_format: $('prefReportFormat').value,
+          timed_markers_default: $('prefTimedMarkersDefault').value,
+          metadata_overwrite_policy: $('prefMetadataOverwritePolicy').value,
+          max_timed_markers_per_clip: markerLimitValue(),
+          marker_custom_data: $('prefMarkerCustomData').value,
+          metadata_publish_fields: activeTokenValues('prefMetadataFieldPills'),
+          timed_marker_types: activeTokenValues('prefTimedMarkerTypePills'),
+          timed_marker_colors: markerColors,
+          include_confidence_scores: $('prefIncludeConfidenceScores').checked,
+          include_source_time_notes: $('prefIncludeSourceTimeNotes').checked,
+          ask_before_metadata_publish: $('prefAskBeforeMetadataPublish').checked,
+          dry_run_first_default: $('prefDryRunFirstDefault').checked,
+          preferred_analysis_root: $('prefPreferredAnalysisRoot').value.trim() || 'clear',
+          preferred_generated_media_folder: $('prefPreferredGeneratedMediaFolder').value.trim() || 'clear',
+          default_post_operation_page: $('prefPostOperationPage').value,
+        },
+        updates: {
+          mode: $('prefUpdateMode').value,
+          check_interval_hours: Number($('prefUpdateIntervalHours').value || 24),
+          snooze_hours: Number($('prefUpdateSnoozeHours').value || 24),
+        },
+      };
+    }
+
+    async function savePreferences() {
+      const prefs = {
+        ...dashboardPreferencePayload(),
+      };
+      writePreferences(prefs);
+      applyPreferencesToControls(prefs, true);
+      setText('prefSaveStatus', 'Saving defaults');
+      const payload = setupPreferencePayload();
+      const saved = await api('/api/setup/defaults', { method: 'POST', body: JSON.stringify(payload) });
+      state.setupDefaults = saved.defaults || state.setupDefaults;
+      syncPreferencesPanel();
+      setText('prefSaveStatus', `Saved · ${new Date().toLocaleTimeString()}`);
+    }
+
+    async function resetPreferences() {
+      if (!window.confirm('Reset all server defaults and dashboard convenience preferences?')) {
+        return;
+      }
+      localStorage.removeItem('resolveMcpDashboardPrefs');
+      const prefs = readPreferences();
+      applyPreferencesToControls(prefs, true);
+      setText('prefSaveStatus', 'Resetting defaults');
+      const reset = await api('/api/setup/clear', { method: 'POST', body: JSON.stringify({ keys: 'all' }) });
+      state.setupDefaults = reset.defaults || state.setupDefaults;
+      syncPreferencesPanel();
+      setText('prefSaveStatus', `Reset · ${new Date().toLocaleTimeString()}`);
+    }
+
+    async function searchIndex() {
+      const q = $('query').value.trim();
+      const payload = await api(`/api/index/query?q=${encodeURIComponent(q)}`);
+      const wrap = $('results');
+      if (!payload.results?.length) {
+        wrap.innerHTML = '<div class="empty">No indexed matches.</div>';
+        return;
+      }
+      wrap.innerHTML = payload.results.map(row => `
+        <div class="result">
+          <b>${escapeHtml(row.clip_name || row.clip_key || 'Result')}</b>
+          <small>${escapeHtml(row.result_type || '')}${row.start_seconds != null ? ` · ${row.start_seconds}s` : ''}</small>
+          <div>${escapeHtml(row.summary || row.file_path || '')}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderDocsOverview() {
+      $('panel-docs').classList.remove('doc-detail');
+      document.querySelectorAll('[data-doc]').forEach(button => {
+        button.classList.toggle('active', false);
+      });
+      delete $('docReader').dataset.loaded;
+      setHtml('docReader', '<div class="empty">Choose a document.</div>');
+      setHtml('docSectionNav', '<div class="empty">Open a document.</div>');
+      setText('docMeta', '');
+      setText('docSource', '');
+      renderBreadcrumb();
+    }
+
+    async function loadDoc(docId, options = {}) {
+      state.activeDoc = DOC_LABELS[docId] ? docId : 'readme';
+      state.activeSubpages.docs = state.activeDoc;
+      renderSubpage('docs', state.activeDoc);
+      $('panel-docs').classList.add('doc-detail');
+      document.querySelectorAll('[data-doc]').forEach(button => {
+        button.classList.toggle('active', button.dataset.doc === state.activeDoc);
+      });
+      renderBreadcrumb();
+      setText('docMeta', 'Loading document');
+      setHtml('docReader', '<div class="empty">Loading document.</div>');
+      setText('docSource', '');
+      const payload = await api(`/api/docs?doc=${encodeURIComponent(state.activeDoc)}`);
+      $('docReader').dataset.loaded = state.activeDoc;
+      setText('docMeta', `${payload.title} · ${payload.path}`);
+      if (options.updateHash !== false) {
+        updateRouteHash('docs', state.activeDoc);
+      }
+      const rendered = renderMarkdown(payload.content || '');
+      setHtml('docReader', rendered.html);
+      renderDocSectionNav(rendered.sections);
+      setText('docSource', payload.path || '');
+      applyDocFilters();
+    }
+
+    function renderMarkdown(markdown) {
+      const lines = String(markdown || '').split(/\r?\n/);
+      const parts = [];
+      const sections = [];
+      let inCode = false;
+      let codeLines = [];
+      const flushCode = () => {
+        if (!codeLines.length) return;
+        parts.push(`<div class="doc-block" data-md-type="code"><pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre></div>`);
+        codeLines = [];
+      };
+      for (let index = 0; index < lines.length; index += 1) {
+        const rawLine = lines[index];
+        if (rawLine.trim().startsWith('```')) {
+          if (inCode) {
+            flushCode();
+            inCode = false;
+          } else {
+            inCode = true;
+          }
+          continue;
+        }
+        if (inCode) {
+          codeLines.push(rawLine);
+          continue;
+        }
+        const line = rawLine.trimEnd();
+        if (!line.trim()) continue;
+        const badgeMatches = parseBadgeTokens(line.trim());
+        if (badgeMatches.length) {
+          while (index + 1 < lines.length) {
+            const nextMatches = parseBadgeTokens(lines[index + 1].trim());
+            if (!nextMatches.length) break;
+            badgeMatches.push(...nextMatches);
+            index += 1;
+          }
+          parts.push(renderBadgeTokens(badgeMatches));
+          continue;
+        }
+        if (line.trim().startsWith('|')) {
+          const tableLines = [];
+          while (index < lines.length && lines[index].trim().startsWith('|')) {
+            tableLines.push(lines[index].trim());
+            index += 1;
+          }
+          index -= 1;
+          parts.push(renderMarkdownTable(tableLines));
+          continue;
+        }
+        const heading = line.match(/^(#{1,3})\s+(.+)$/);
+        if (heading) {
+          const level = heading[1].length;
+          const text = stripMarkdown(heading[2]);
+          const id = `doc-section-${sections.length}`;
+          sections.push({ id, text, level });
+          parts.push(`<h${level} id="${id}" class="doc-block" data-md-type="heading">${inlineMarkdown(heading[2])}</h${level}>`);
+          continue;
+        }
+        const image = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+        if (image) {
+          parts.push(renderImageBlock(image[1], image[2]));
+          continue;
+        }
+        const bullet = line.match(/^[-*]\s+(.+)$/) || line.match(/^\d+\.\s+(.+)$/);
+        if (bullet) {
+          parts.push(`<div class="doc-bullet doc-block" data-md-type="list">${inlineMarkdown(bullet[1])}</div>`);
+          continue;
+        }
+        parts.push(`<p class="doc-block" data-md-type="text">${inlineMarkdown(line)}</p>`);
+      }
+      if (inCode) flushCode();
+      return { html: parts.join('') || '<div class="empty">Document is empty.</div>', sections };
+    }
+
+    function renderBadgeLine(line) {
+      const matches = parseBadgeTokens(line);
+      if (!matches.length) return '';
+      return renderBadgeTokens(matches);
+    }
+
+    function renderBadgeTokens(matches) {
+      const badges = matches.map(match => {
+        const alt = match.alt || 'badge';
+        const src = match.src || '';
+        const href = match.href || '';
+        const img = `<img src="${escapeAttribute(src)}" alt="${escapeAttribute(alt)}" loading="lazy">`;
+        return href
+          ? `<a href="${escapeAttribute(href)}" target="_blank" rel="noreferrer">${img}</a>`
+          : `<span>${img}</span>`;
+      }).join('');
+      return `<div class="doc-badges doc-block" data-md-type="image">${badges}</div>`;
+    }
+
+    function parseBadgeTokens(line) {
+      const tokens = [];
+      let rest = String(line || '').trim();
+      while (rest) {
+        if (rest.startsWith('[![')) {
+          const altEnd = rest.indexOf('](', 3);
+          if (altEnd < 0) return [];
+          const srcEnd = rest.indexOf(')](', altEnd + 2);
+          if (srcEnd < 0) return [];
+          const hrefEnd = rest.indexOf(')', srcEnd + 3);
+          if (hrefEnd < 0) return [];
+          tokens.push({
+            alt: rest.slice(3, altEnd),
+            src: rest.slice(altEnd + 2, srcEnd),
+            href: rest.slice(srcEnd + 3, hrefEnd),
+          });
+          rest = rest.slice(hrefEnd + 1).trim();
+          continue;
+        }
+        if (rest.startsWith('![')) {
+          const altEnd = rest.indexOf('](', 2);
+          if (altEnd < 0 || !rest.endsWith(')')) return [];
+          tokens.push({
+            alt: rest.slice(2, altEnd),
+            src: rest.slice(altEnd + 2, -1),
+            href: '',
+          });
+          rest = '';
+          continue;
+        }
+        return [];
+      }
+      return tokens;
+    }
+
+    function renderImageBlock(alt, src) {
+      return `<figure class="doc-image doc-block" data-md-type="image"><img src="${escapeAttribute(src)}" alt="${escapeAttribute(alt || src)}" loading="lazy"></figure>`;
+    }
+
+    function renderMarkdownTable(lines) {
+      const rows = lines
+        .filter(line => !/^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(line))
+        .map(line => line.replace(/^\||\|$/g, '').split('|').map(cell => cell.trim()));
+      if (!rows.length) return '';
+      const header = rows.shift();
+      const head = `<thead><tr>${header.map(cell => `<th>${inlineMarkdown(cell)}</th>`).join('')}</tr></thead>`;
+      const body = `<tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${inlineMarkdown(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+      return `<div class="doc-block" data-md-type="table"><table>${head}${body}</table></div>`;
+    }
+
+    function renderDocSectionNav(sections) {
+      if (!sections.length) {
+        setHtml('docSectionNav', '<div class="empty">No headings found.</div>');
+        return;
+      }
+      setHtml('docSectionNav', sections.map(section => `
+        <button class="doc-section-link" data-doc-section="${escapeHtml(section.id)}" style="padding-left:${8 + (section.level - 1) * 10}px">${escapeHtml(section.text)}</button>
+      `).join(''));
+      document.querySelectorAll('[data-doc-section]').forEach(button => {
+        button.addEventListener('click', () => {
+          const target = document.getElementById(button.dataset.docSection);
+          if (target) scrollDocSection(target);
+        });
+      });
+    }
+
+    function scrollDocSection(target) {
+      const reader = $('docReader');
+      if (reader && reader.contains(target)) {
+        const readerRect = reader.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const top = reader.scrollTop + targetRect.top - readerRect.top - 22;
+        reader.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+        return;
+      }
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function applyDocFilters() {
+      const enabled = new Set(Array.from(document.querySelectorAll('[data-md-filter]'))
+        .filter(input => input.checked)
+        .map(input => input.dataset.mdFilter));
+      document.querySelectorAll('#docReader [data-md-type]').forEach(block => {
+        block.classList.toggle('hidden', !enabled.has(block.dataset.mdType));
+      });
+    }
+
+    function stripMarkdown(value) {
+      return String(value || '')
+        .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/[`*_#]/g, '')
+        .trim();
+    }
+
+    function commaList(value) {
+      return String(value || '')
+        .split(/[,;\n]/)
+        .map(item => item.trim())
+        .filter(Boolean);
+    }
+
+    function inlineMarkdown(value) {
+      let html = escapeHtml(value);
+      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<span>$1</span>');
+      return html;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[char]));
+    }
+
+    function escapeAttribute(value) {
+      return escapeHtml(value).replace(/`/g, '&#96;');
+    }
+
+    function cssToken(value) {
+      return String(value ?? 'unknown').toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
+    }
+
+    function formatBytes(value) {
+      const n = Number(value || 0);
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+      if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+      return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+    }
+
+    function closeNavDropdowns(except = null) {
+      document.querySelectorAll('.control-nav-item.open').forEach(item => {
+        if (item === except) return;
+        item.classList.remove('open');
+        item.querySelector('.control-tab.has-menu')?.setAttribute('aria-expanded', 'false');
+      });
+    }
+
+    function toggleNavDropdown(button) {
+      const item = button.closest('.control-nav-item');
+      if (!item) return;
+      const willOpen = !item.classList.contains('open');
+      closeNavDropdowns(item);
+      item.classList.toggle('open', willOpen);
+      button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    }
+
+    document.querySelectorAll('.control-tab.has-menu').forEach(button => {
+      button.setAttribute('aria-haspopup', 'menu');
+      button.setAttribute('aria-expanded', 'false');
+    });
+
+    document.querySelectorAll('[data-panel-target]').forEach(control => {
+      control.addEventListener('click', (event) => {
+        if (control.classList.contains('has-menu')) {
+          event.stopPropagation();
+          setPanel(control.dataset.panelTarget, { subpage: control.dataset.subpageTarget });
+          toggleNavDropdown(control);
+          return;
+        }
+        closeNavDropdowns();
+        setPanel(control.dataset.panelTarget, { subpage: control.dataset.subpageTarget });
+      });
+    });
+    document.querySelectorAll('[data-doc]').forEach(control => {
+      control.addEventListener('click', () => loadDoc(control.dataset.doc).catch(alertError));
+    });
+    document.querySelectorAll('[data-md-filter]').forEach(control => {
+      control.addEventListener('change', applyDocFilters);
+    });
+    $('overviewRefresh').onclick = () => refreshAll().catch(alertError);
+    $('projectsRefresh').onclick = () => refreshAllProjects().catch(alertError);
+    $('projectFilterText').addEventListener('input', renderProjects);
+    $('projectContextSelect').addEventListener('change', event => switchProjectContext(event.target.value).catch(alertError));
+    $('sampleFrameMode').addEventListener('change', () => {
+      $('customFramesLabel').style.display = $('sampleFrameMode').value === 'custom' ? 'grid' : 'none';
+    });
+    $('copyPromptBtn').onclick = () => copyMcpPrompt().catch(alertError);
+    $('refreshBtn').onclick = () => refreshJobs().catch(alertError);
+    $('refreshMediaBtn').onclick = () => refreshResolveMedia().catch(alertError);
+    $('selectReadyMediaBtn').onclick = selectReadyMedia;
+    $('copyPromptFromMediaBtn').onclick = () => copyMcpPrompt().catch(alertError);
+    $('rebuildIndexBtn').onclick = () => buildIndex().catch(alertError);
+    $('mediaFilterText').addEventListener('input', rerenderResolveMedia);
+    $('mediaStatusFilter').addEventListener('change', rerenderResolveMedia);
+    $('analysisStatusFilter').addEventListener('change', rerenderResolveMedia);
+    $('autoPollMedia').addEventListener('change', scheduleMediaPoll);
+    $('mediaPollInterval').addEventListener('change', scheduleMediaPoll);
+    $('prefMaxTimedMarkersMode').addEventListener('change', syncMarkerLimitMode);
+    $('prefMaxTimedMarkers').addEventListener('change', syncMarkerLimitMode);
+    $('savePrefsBtn').onclick = () => savePreferences().catch(alertError);
+    $('refreshPrefsBtn').onclick = () => refreshSetupDefaults().catch(alertError);
+    $('resetPrefsBtn').onclick = () => resetPreferences().catch(alertError);
+    $('queryBtn').onclick = () => searchIndex().catch(alertError);
+    $('query').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') searchIndex().catch(alertError);
+    });
+    window.addEventListener('beforeunload', () => {
+      if (state.mediaPollTimer) clearInterval(state.mediaPollTimer);
+    });
+    document.addEventListener('click', event => {
+      if (!event.target.closest('.control-nav-item')) closeNavDropdowns();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeNavDropdowns();
+    });
+    window.addEventListener('hashchange', applyInitialRoute);
+    function alertError(error) { alert(error.message || String(error)); }
+    hydratePreferenceHelp();
+    applyInitialRoute();
+    boot().catch(alertError);
+  </script>
+</body>
+</html>
+"""
+
+
+def _safe_call(obj: Any, method_name: str, *args: Any) -> Tuple[Any, Optional[str]]:
+    if obj is None or not hasattr(obj, method_name):
+        return None, f"{method_name} unavailable"
+    try:
+        return getattr(obj, method_name)(*args), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _safe_name(obj: Any, fallback: str = "Untitled") -> str:
+    value, _ = _safe_call(obj, "GetName")
+    return str(value or fallback)
+
+
+def _safe_id(obj: Any) -> Optional[str]:
+    value, _ = _safe_call(obj, "GetUniqueId")
+    return str(value) if value else None
+
+
+def _connect_resolve_read_only() -> Tuple[Any, Optional[str]]:
+    try:
+        setup_environment()
+        paths = os.environ.get("PYTHONPATH", "")
+        modules_path = os.environ.get("RESOLVE_SCRIPT_API")
+        if modules_path:
+            candidate = os.path.join(modules_path, "Modules")
+            if candidate not in sys.path:
+                sys.path.append(candidate)
+        import DaVinciResolveScript as dvr_script  # type: ignore
+    except Exception as exc:
+        return None, f"Resolve scripting API unavailable: {exc}"
+    try:
+        resolve = dvr_script.scriptapp("Resolve")
+    except Exception as exc:
+        return None, f"Resolve connection failed: {exc}"
+    if resolve is None:
+        return None, "DaVinci Resolve is not connected. Open Resolve Studio with a project loaded."
+    return resolve, None
+
+
+def _clip_props(clip: Any) -> Dict[str, Any]:
+    props, _ = _safe_call(clip, "GetClipProperty", "")
+    return props if isinstance(props, dict) else {}
+
+
+def _first_prop(props: Dict[str, Any], keys: Tuple[str, ...]) -> Any:
+    for key in keys:
+        value = props.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _media_status(props: Dict[str, Any], file_path: Optional[str]) -> str:
+    status_text = str(_first_prop(props, ("Status", "Media Status", "Online Status", "Offline")) or "").strip().lower()
+    if not file_path:
+        return "no_path"
+    if "offline" in status_text or status_text in {"true", "yes", "1"}:
+        return "offline"
+    if "missing" in status_text:
+        return "missing_file"
+    if not os.path.exists(str(file_path)):
+        return "missing_file"
+    return "online"
+
+
+_RESOLVE_CONTAINER_TYPE_PARTS = (
+    "adjustment",
+    "compound",
+    "fusion",
+    "generator",
+    "multicam",
+    "multi cam",
+    "sequence",
+    "subclip",
+    "sub clip",
+    "timeline",
+    "title",
+)
+
+
+def _truthy_resolve_value(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _source_clip_status(record: Dict[str, Any], props: Dict[str, Any]) -> Tuple[bool, str]:
+    media_type = str(record.get("media_type") or "").strip()
+    media_type_lower = media_type.lower()
+    for marker in _RESOLVE_CONTAINER_TYPE_PARTS:
+        if marker in media_type_lower:
+            return False, f"Resolve {media_type or 'container'} item"
+
+    subclip_flag = _first_prop(props, ("Sub Clip", "SubClip", "Is Sub Clip", "IsSubClip", "Is Subclip"))
+    if _truthy_resolve_value(subclip_flag):
+        return False, "Resolve subclip"
+
+    file_path = record.get("file_path")
+    if not file_path:
+        return False, "No source file path exposed"
+
+    extension = os.path.splitext(str(file_path))[1].lower()
+    if extension not in MEDIA_EXTENSIONS:
+        return False, f"Unsupported extension: {extension or 'none'}"
+
+    return True, "Source media clip"
+
+
+def _record_is_sequence(record: Dict[str, Any]) -> bool:
+    media_type_lower = str(record.get("media_type") or "").strip().lower()
+    return "sequence" in media_type_lower or "timeline" in media_type_lower
+
+
+def _analyzable_clip_status(record: Dict[str, Any], props: Dict[str, Any]) -> Tuple[bool, str]:
+    source_clip, reason = _source_clip_status(record, props)
+    if not source_clip:
+        return False, reason
+
+    if record.get("status") != "online":
+        return False, str(record.get("status") or "offline").replace("_", " ")
+
+    return True, "Online source media"
+
+
+def _resolve_clip_record(clip: Any, bin_path: str, selected_ids: set) -> Dict[str, Any]:
+    props = _clip_props(clip)
+    file_path = _first_prop(props, ("File Path", "FilePath"))
+    media_id, _ = _safe_call(clip, "GetMediaId")
+    clip_id = _safe_id(clip)
+    record = {
+        "clip_id": clip_id,
+        "clip_name": _safe_name(clip),
+        "bin_path": bin_path,
+        "file_path": str(file_path) if file_path else None,
+        "media_id": str(media_id) if media_id else None,
+        "duration": _first_prop(props, ("Duration",)),
+        "fps": _first_prop(props, ("FPS", "Frame Rate")),
+        "resolution": _first_prop(props, ("Resolution",)),
+        "media_type": _first_prop(props, ("Type", "Media Type")),
+        "proxy": _first_prop(props, ("Proxy", "Proxy Media Path")),
+        "resolve_status": _first_prop(props, ("Status", "Media Status", "Online Status", "Offline")),
+        "selected": bool(clip_id and clip_id in selected_ids),
+    }
+    record["file_exists"] = bool(record["file_path"] and os.path.exists(str(record["file_path"])))
+    record["status"] = _media_status(props, record["file_path"])
+    record["clip_key"] = stable_clip_directory(record)
+    record["source_clip"], record["source_clip_reason"] = _source_clip_status(record, props)
+    record["analyzable"], record["analyzable_reason"] = _analyzable_clip_status(record, props)
+    return record
+
+
+def _append_folder_media(
+    folder: Any,
+    *,
+    bin_path: str,
+    recursive: bool,
+    selected_ids: set,
+    records: List[Dict[str, Any]],
+    warnings: List[str],
+    limit: int,
+) -> bool:
+    clips, clip_err = _safe_call(folder, "GetClipList")
+    if clip_err:
+        warnings.append(f"GetClipList failed for {bin_path}: {clip_err}")
+        clips = []
+    for clip in clips or []:
+        if len(records) >= limit:
+            return True
+        records.append(_resolve_clip_record(clip, bin_path, selected_ids))
+
+    if not recursive:
+        return False
+    subfolders, folder_err = _safe_call(folder, "GetSubFolderList")
+    if folder_err:
+        warnings.append(f"GetSubFolderList failed for {bin_path}: {folder_err}")
+        return False
+    for subfolder in subfolders or []:
+        if len(records) >= limit:
+            return True
+        child_name = _safe_name(subfolder, "Unnamed")
+        truncated = _append_folder_media(
+            subfolder,
+            bin_path=f"{bin_path}/{child_name}",
+            recursive=recursive,
+            selected_ids=selected_ids,
+            records=records,
+            warnings=warnings,
+            limit=limit,
+        )
+        if truncated:
+            return True
+    return False
+
+
+def _empty_media_counts() -> Dict[str, int]:
+    return {
+        "total": 0,
+        "source_clips": 0,
+        "sequences": 0,
+        "analyzable": 0,
+        "not_analyzable": 0,
+        "online": 0,
+        "offline": 0,
+        "missing_file": 0,
+        "no_path": 0,
+        "analyzed": 0,
+        "selected": 0,
+    }
+
+
+def _analysis_status_by_clip(project_root: str, records: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    keys = [record.get("clip_key") for record in records if record.get("clip_key")]
+    status_by_key: Dict[str, Dict[str, Any]] = {}
+    if not keys:
+        return status_by_key
+    for record in records:
+        clip_key = record.get("clip_key")
+        if not clip_key:
+            continue
+        report_path = os.path.join(project_root, "clips", str(clip_key), "analysis.json")
+        if os.path.isfile(report_path):
+            status_by_key[str(clip_key)] = {
+                "analysis_status": "analyzed",
+                "analysis_report_path": report_path,
+            }
+
+    db_path = os.path.join(project_root, "jobs.sqlite")
+    if not os.path.isfile(db_path):
+        return status_by_key
+    placeholders = ",".join("?" for _ in keys)
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"""
+            SELECT jc.clip_key, jc.status, jc.cache_status, jc.report_path, jc.error,
+                   j.job_id, j.name AS job_name, j.updated_at
+            FROM job_clips jc
+            JOIN jobs j ON j.job_id = jc.job_id
+            WHERE jc.clip_key IN ({placeholders})
+            ORDER BY jc.updated_at DESC
+            """,
+            keys,
+        ).fetchall()
+    except Exception:
+        return status_by_key
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    for row in rows:
+        clip_key = str(row["clip_key"])
+        if clip_key in status_by_key and status_by_key[clip_key].get("analysis_status") == "analyzed":
+            continue
+        status_by_key[clip_key] = {
+            "analysis_status": row["status"],
+            "cache_status": row["cache_status"],
+            "analysis_report_path": row["report_path"],
+            "analysis_error": row["error"],
+            "job_id": row["job_id"],
+            "job_name": row["job_name"],
+            "job_updated_at": row["updated_at"],
+        }
+    return status_by_key
+
+
+def resolve_media_inventory(project_root: str, *, limit: Any = 500, recursive: bool = True) -> Dict[str, Any]:
+    try:
+        max_items = max(1, min(int(limit), 2000))
+    except (TypeError, ValueError):
+        max_items = 500
+    resolve, resolve_error = _connect_resolve_read_only()
+    if resolve_error:
+        return {
+            "success": True,
+            "resolve_available": False,
+            "status": "Resolve unavailable",
+            "error": resolve_error,
+            "clips": [],
+            "counts": _empty_media_counts(),
+        }
+    pm, pm_error = _safe_call(resolve, "GetProjectManager")
+    project = None
+    if pm and not pm_error:
+        project, _ = _safe_call(pm, "GetCurrentProject")
+    if not project:
+        return {
+            "success": True,
+            "resolve_available": False,
+            "status": "No Resolve project",
+            "error": "DaVinci Resolve is connected, but no project is open.",
+            "clips": [],
+            "counts": _empty_media_counts(),
+        }
+    media_pool, mp_error = _safe_call(project, "GetMediaPool")
+    if not media_pool or mp_error:
+        return {
+            "success": True,
+            "resolve_available": False,
+            "status": "Media Pool unavailable",
+            "error": mp_error or "Failed to get Resolve Media Pool",
+            "clips": [],
+            "counts": _empty_media_counts(),
+        }
+    root_folder, root_error = _safe_call(media_pool, "GetRootFolder")
+    if not root_folder or root_error:
+        return {
+            "success": True,
+            "resolve_available": False,
+            "status": "Root folder unavailable",
+            "error": root_error or "Failed to get Resolve root folder",
+            "clips": [],
+            "counts": _empty_media_counts(),
+        }
+
+    selected_ids = set()
+    selected_clips, _ = _safe_call(media_pool, "GetSelectedClips")
+    for clip in selected_clips or []:
+        clip_id = _safe_id(clip)
+        if clip_id:
+            selected_ids.add(clip_id)
+
+    warnings: List[str] = []
+    records: List[Dict[str, Any]] = []
+    truncated = _append_folder_media(
+        root_folder,
+        bin_path="Master",
+        recursive=recursive,
+        selected_ids=selected_ids,
+        records=records,
+        warnings=warnings,
+        limit=max_items,
+    )
+    status_by_key = _analysis_status_by_clip(project_root, records)
+    counts = _empty_media_counts()
+    counts["total"] = len(records)
+    counts["selected"] = len(selected_ids)
+    for record in records:
+        status = record.get("status") or "unknown"
+        if status in counts:
+            counts[status] += 1
+        if _record_is_sequence(record):
+            counts["sequences"] += 1
+        if record.get("source_clip"):
+            counts["source_clips"] += 1
+        if record.get("analyzable"):
+            counts["analyzable"] += 1
+        else:
+            counts["not_analyzable"] += 1
+        analysis = status_by_key.get(str(record.get("clip_key") or ""), {})
+        record.update(analysis)
+        record.setdefault("analysis_status", "not analyzed")
+        if record["analysis_status"] in {"analyzed", "succeeded", "skipped"}:
+            counts["analyzed"] += 1
+
+    return {
+        "success": True,
+        "resolve_available": True,
+        "status": "Resolve connected",
+        "project": {
+            "name": _safe_name(project, "Resolve Project"),
+            "id": _safe_id(project),
+        },
+        "project_root": project_root,
+        "clips": records,
+        "counts": counts,
+        "truncated": bool(truncated),
+        "limit": max_items,
+        "warnings": warnings,
+    }
+
+
+_PROJECT_CONTEXT_RE = re.compile(r"^(?P<slug>.+)-(?P<hash>[0-9a-f]{10})$")
+
+
+def _project_context_family_slug(project_directory: Any) -> str:
+    name = os.path.basename(str(project_directory or "")).strip()
+    match = _PROJECT_CONTEXT_RE.match(name)
+    return match.group("slug") if match else name
+
+
+def _project_context_label(project_directory: Any) -> str:
+    family = _project_context_family_slug(project_directory)
+    return family.replace("-", " ").strip().title() or "Project"
+
+
+def _context_payload(project_name: Any, project_id: Any, output_root: Dict[str, Any], *, source: str = "dashboard") -> Dict[str, Any]:
+    project_directory = output_root.get("project_directory") or os.path.basename(str(output_root.get("project_root") or ""))
+    return {
+        "project_name": str(project_name or _project_context_label(project_directory)),
+        "project_id": str(project_id) if project_id not in (None, "") else None,
+        "project_root": output_root.get("project_root"),
+        "base_root": output_root.get("base_root"),
+        "project_directory": project_directory,
+        "family_slug": _project_context_family_slug(project_directory),
+        "source": source,
+    }
+
+
+def _context_from_project_root(base_root: str, project_root: str, *, source: str = "analysis_root") -> Optional[Dict[str, Any]]:
+    root = os.path.realpath(os.path.abspath(os.path.expanduser(str(project_root))))
+    base = os.path.realpath(os.path.abspath(os.path.expanduser(str(base_root))))
+    try:
+        if os.path.commonpath([root, base]) != base:
+            return None
+    except ValueError:
+        return None
+    if not os.path.isdir(root):
+        return None
+    project_directory = os.path.basename(root)
+    return {
+        "project_name": _project_context_label(project_directory),
+        "project_id": None,
+        "project_root": root,
+        "base_root": base,
+        "project_directory": project_directory,
+        "family_slug": _project_context_family_slug(project_directory),
+        "source": source,
+    }
+
+
+def _current_resolve_project_context(base_root: str) -> Optional[Dict[str, Any]]:
+    resolve, resolve_error = _connect_resolve_read_only()
+    if resolve_error:
+        return None
+    pm, pm_error = _safe_call(resolve, "GetProjectManager")
+    if not pm or pm_error:
+        return None
+    project, _ = _safe_call(pm, "GetCurrentProject")
+    if not project:
+        return None
+    project_name = _safe_name(project, "Resolve Project")
+    project_id = _safe_id(project)
+    root = project_root_for_dashboard(
+        project_name=project_name,
+        project_id=project_id,
+        analysis_root=base_root,
+    )
+    if not root.get("success"):
+        return None
+    return _context_payload(project_name, project_id, root, source="resolve")
+
+
+def _project_folder_name(folder: Any) -> str:
+    if isinstance(folder, str):
+        return folder
+    name, _ = _safe_call(folder, "GetName")
+    return str(name or folder or "").strip()
+
+
+def _normalize_project_folder_path(folder_path: Any) -> List[str]:
+    if folder_path is None:
+        return []
+    if isinstance(folder_path, (list, tuple)):
+        raw_parts = [str(part or "").strip() for part in folder_path]
+    else:
+        raw_parts = re.split(r"[\\/]+", str(folder_path or ""))
+    parts = [part for part in raw_parts if part and part not in {".", "/"}]
+    if parts and parts[0].lower() in {"root", "master"}:
+        parts = parts[1:]
+    return parts
+
+
+def _goto_project_folder(pm: Any, folder_path: Any) -> Tuple[bool, Optional[str]]:
+    parts = _normalize_project_folder_path(folder_path)
+    _, root_error = _safe_call(pm, "GotoRootFolder")
+    if root_error:
+        return False, root_error
+    for part in parts:
+        opened, open_error = _safe_call(pm, "OpenFolder", part)
+        if open_error:
+            return False, open_error
+        if not opened:
+            return False, f"Resolve project folder not found: {part}"
+    return True, None
+
+
+def _project_folder_label(folder_path: List[str]) -> str:
+    return " / ".join(folder_path) if folder_path else "Root"
+
+
+def _resolve_all_project_contexts(base_root: str, *, max_depth: int = 12, max_projects: int = 2000) -> Dict[str, Any]:
+    resolve, resolve_error = _connect_resolve_read_only()
+    if resolve_error:
+        return {
+            "success": True,
+            "available": False,
+            "error": resolve_error,
+            "projects": [],
+            "database": None,
+            "current_folder": None,
+        }
+    pm, pm_error = _safe_call(resolve, "GetProjectManager")
+    if not pm or pm_error:
+        return {
+            "success": True,
+            "available": False,
+            "error": pm_error or "ProjectManager unavailable",
+            "projects": [],
+            "database": None,
+            "current_folder": None,
+        }
+
+    current_project, _ = _safe_call(pm, "GetCurrentProject")
+    current_name = _safe_name(current_project, "") if current_project else None
+    current_id = _safe_id(current_project) if current_project else None
+    current_folder, _ = _safe_call(pm, "GetCurrentFolder")
+    database, _ = _safe_call(pm, "GetCurrentDatabase")
+    projects: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    active_folder_path: Optional[List[str]] = None
+    seen_locations = set()
+
+    ok, root_error = _goto_project_folder(pm, [])
+    if not ok:
+        return {
+            "success": True,
+            "available": False,
+            "error": root_error or "Failed to open Resolve project root folder",
+            "projects": [],
+            "database": database if isinstance(database, dict) else None,
+            "current_folder": current_folder,
+        }
+
+    def visit(folder_path: List[str], depth: int = 0) -> None:
+        nonlocal active_folder_path
+        if depth > max_depth or len(projects) >= max_projects:
+            return
+        names, names_error = _safe_call(pm, "GetProjectListInCurrentFolder")
+        if names_error:
+            errors.append(f"{_project_folder_label(folder_path)}: {names_error}")
+            names = []
+        for raw_name in names or []:
+            if len(projects) >= max_projects:
+                break
+            project_name = str(raw_name or "").strip()
+            if not project_name:
+                continue
+            location_key = (tuple(folder_path), project_name)
+            if location_key in seen_locations:
+                continue
+            seen_locations.add(location_key)
+            project_id = current_id if current_name and project_name == current_name else None
+            root = resolve_output_root(
+                project_name=project_name,
+                project_id=project_id,
+                analysis_root=base_root,
+                create=False,
+            )
+            project_directory = root.get("project_directory") if root.get("success") else ""
+            is_active = bool(current_name and project_name == current_name)
+            if is_active:
+                active_folder_path = list(folder_path)
+            projects.append({
+                "project_name": project_name,
+                "project_id": project_id,
+                "project_directory": project_directory,
+                "folder_path": list(folder_path),
+                "folder_label": _project_folder_label(folder_path),
+                "database_label": (database or {}).get("DbName") if isinstance(database, dict) else None,
+                "active": is_active,
+                "can_load_resolve": True,
+            })
+
+        folders, folders_error = _safe_call(pm, "GetFolderListInCurrentFolder")
+        if folders_error:
+            errors.append(f"{_project_folder_label(folder_path)} folders: {folders_error}")
+            return
+        for folder in folders or []:
+            if len(projects) >= max_projects:
+                break
+            folder_name = _project_folder_name(folder)
+            if not folder_name:
+                continue
+            opened, open_error = _safe_call(pm, "OpenFolder", folder_name)
+            if open_error or not opened:
+                errors.append(open_error or f"Failed to open folder {folder_name}")
+                continue
+            visit([*folder_path, folder_name], depth + 1)
+            _, parent_error = _safe_call(pm, "GotoParentFolder")
+            if parent_error:
+                errors.append(f"Failed to return from {folder_name}: {parent_error}")
+                _goto_project_folder(pm, folder_path)
+
+    visit([])
+    restore_path = active_folder_path if active_folder_path is not None else []
+    _goto_project_folder(pm, restore_path)
+    projects.sort(key=lambda row: (str(row.get("folder_label") or "").lower(), str(row.get("project_name") or "").lower()))
+    return {
+        "success": True,
+        "available": True,
+        "projects": projects,
+        "count": len(projects),
+        "database": database if isinstance(database, dict) else None,
+        "current_folder": current_folder,
+        "active_project": current_name,
+        "active_folder_path": active_folder_path,
+        "truncated": len(projects) >= max_projects,
+        "errors": errors,
+        "warning": "Project list truncated" if len(projects) >= max_projects else None,
+    }
+
+
+def _resolve_project_contexts(base_root: str) -> Dict[str, Any]:
+    resolve, resolve_error = _connect_resolve_read_only()
+    if resolve_error:
+        return {
+            "available": False,
+            "error": resolve_error,
+            "contexts": [],
+            "current": None,
+            "database": None,
+            "folder": None,
+        }
+    pm, pm_error = _safe_call(resolve, "GetProjectManager")
+    if not pm or pm_error:
+        return {
+            "available": False,
+            "error": pm_error or "ProjectManager unavailable",
+            "contexts": [],
+            "current": None,
+            "database": None,
+            "folder": None,
+        }
+    current_project, _ = _safe_call(pm, "GetCurrentProject")
+    current_name = _safe_name(current_project, "") if current_project else None
+    current_id = _safe_id(current_project) if current_project else None
+    names, names_error = _safe_call(pm, "GetProjectListInCurrentFolder")
+    if names_error:
+        names = []
+    database, _ = _safe_call(pm, "GetCurrentDatabase")
+    folder, _ = _safe_call(pm, "GetCurrentFolder")
+    contexts: List[Dict[str, Any]] = []
+    seen_names = set()
+    for raw_name in names or []:
+        project_name = str(raw_name or "").strip()
+        if not project_name or project_name in seen_names:
+            continue
+        seen_names.add(project_name)
+        project_id = current_id if current_name and project_name == current_name else None
+        root = resolve_output_root(
+            project_name=project_name,
+            project_id=project_id,
+            analysis_root=base_root,
+            create=False,
+        )
+        if not root.get("success"):
+            continue
+        context = _context_payload(project_name, project_id, root, source="resolve")
+        context["resolve_project_name"] = project_name
+        context["can_load_resolve"] = True
+        context["resolve_current"] = bool(current_name and project_name == current_name)
+        contexts.append(context)
+    if current_project and current_name and current_name not in seen_names:
+        root = resolve_output_root(
+            project_name=current_name,
+            project_id=current_id,
+            analysis_root=base_root,
+            create=False,
+        )
+        if root.get("success"):
+            context = _context_payload(current_name, current_id, root, source="resolve")
+            context["resolve_project_name"] = current_name
+            context["can_load_resolve"] = True
+            context["resolve_current"] = True
+            contexts.insert(0, context)
+    return {
+        "available": True,
+        "error": names_error,
+        "contexts": contexts,
+        "current": next((context for context in contexts if context.get("resolve_current")), None),
+        "database": database if isinstance(database, dict) else None,
+        "folder": folder,
+    }
+
+
+def _load_resolve_project_context(base_root: str, project_name: Any, folder_path: Any = None) -> Dict[str, Any]:
+    target_name = str(project_name or "").strip()
+    if not target_name:
+        return {"success": False, "error": "Resolve project name is required"}
+    resolve, resolve_error = _connect_resolve_read_only()
+    if resolve_error:
+        return {"success": False, "error": resolve_error}
+    pm, pm_error = _safe_call(resolve, "GetProjectManager")
+    if not pm or pm_error:
+        return {"success": False, "error": pm_error or "ProjectManager unavailable"}
+    current_project, _ = _safe_call(pm, "GetCurrentProject")
+    current_name = _safe_name(current_project, "") if current_project else None
+    loaded_project = current_project
+    target_folder = _normalize_project_folder_path(folder_path)
+    if target_folder:
+        ok, folder_error = _goto_project_folder(pm, target_folder)
+        if not ok:
+            return {"success": False, "error": folder_error or "Failed to open Resolve project folder"}
+    if current_name != target_name or target_folder:
+        loaded_project, load_error = _safe_call(pm, "LoadProject", target_name)
+        if load_error:
+            return {"success": False, "error": f"LoadProject failed: {load_error}"}
+        if not loaded_project:
+            folder_label = _project_folder_label(target_folder) if target_folder else "current project folder"
+            return {"success": False, "error": f"Resolve project not found in {folder_label}: {target_name}"}
+    project, _ = _safe_call(pm, "GetCurrentProject")
+    project = project or loaded_project
+    loaded_name = _safe_name(project, target_name)
+    project_id = _safe_id(project)
+    root = project_root_for_dashboard(
+        project_name=loaded_name,
+        project_id=project_id,
+        analysis_root=base_root,
+    )
+    if not root.get("success"):
+        return root
+    context = _context_payload(loaded_name, project_id, root, source="resolve")
+    context["resolve_project_name"] = loaded_name
+    context["can_load_resolve"] = True
+    context["resolve_current"] = True
+    return {"success": True, "active": context, "output_root": root}
+
+
+def discover_project_contexts(base_root: str, active: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    base = os.path.realpath(os.path.abspath(os.path.expanduser(str(base_root))))
+    contexts: List[Dict[str, Any]] = []
+    resolve_projects = _resolve_project_contexts(base)
+    current = resolve_projects.get("current")
+    contexts.extend(resolve_projects.get("contexts") or [])
+    if os.path.isdir(base):
+        for name in sorted(os.listdir(base)):
+            path = os.path.join(base, name)
+            context = _context_from_project_root(base, path)
+            if context:
+                context["can_load_resolve"] = False
+                contexts.append(context)
+    if active:
+        contexts.append(dict(active, source=active.get("source") or "active"))
+
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for context in contexts:
+        root = context.get("project_root")
+        if not root or root in seen:
+            continue
+        seen.add(root)
+        context["active"] = bool(active and root == active.get("project_root"))
+        deduped.append(context)
+
+    active_family = (active or {}).get("family_slug")
+    related_roots = [
+        context["project_root"]
+        for context in deduped
+        if active_family and context.get("family_slug") == active_family
+        and (context["project_root"] == (active or {}).get("project_root") or os.path.isdir(context["project_root"]))
+    ]
+    return {
+        "success": True,
+        "base_root": base,
+        "active": active,
+        "current_resolve_project": current,
+        "resolve_projects": resolve_projects,
+        "contexts": deduped,
+        "related_project_roots": related_roots,
+    }
+
+
+class DashboardState:
+    def __init__(self, project_name: str, project_id: str, analysis_root: str):
+        self.base_analysis_root = os.path.realpath(os.path.abspath(os.path.expanduser(str(analysis_root))))
+        if project_name == "Dashboard Analysis" and project_id == "dashboard":
+            current = _current_resolve_project_context(self.base_analysis_root)
+            if current:
+                project_name = current["project_name"]
+                project_id = current.get("project_id")
+        self.project_name = project_name
+        self.project_id = project_id
+        root = project_root_for_dashboard(
+            project_name=project_name,
+            project_id=project_id,
+            analysis_root=self.base_analysis_root,
+        )
+        if not root.get("success"):
+            raise RuntimeError(root.get("error") or "Invalid analysis root")
+        self.output_root = root
+        self.project_root = root["project_root"]
+        self.lock = threading.Lock()
+
+    def context(self) -> Dict[str, Any]:
+        return _context_payload(self.project_name, self.project_id, self.output_root, source="active")
+
+    def projects(self) -> Dict[str, Any]:
+        return discover_project_contexts(self.base_analysis_root, self.context())
+
+    def related_project_roots(self) -> List[str]:
+        return list(self.projects().get("related_project_roots") or [])
+
+    def set_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        project_root = payload.get("project_root") or payload.get("projectRoot")
+        project_name = payload.get("project_name") or payload.get("projectName")
+        project_id = payload.get("project_id") or payload.get("projectId")
+        load_resolve_project = bool(payload.get("load_resolve_project") or payload.get("loadResolveProject"))
+        if load_resolve_project:
+            resolve_project_name = payload.get("resolve_project_name") or payload.get("resolveProjectName") or project_name
+            resolve_project_folder_path = payload.get("resolve_project_folder_path") or payload.get("resolveProjectFolderPath")
+            loaded = _load_resolve_project_context(self.base_analysis_root, resolve_project_name, resolve_project_folder_path)
+            if not loaded.get("success"):
+                return loaded
+            active = loaded["active"]
+            self.project_name = active["project_name"]
+            self.project_id = active.get("project_id")
+            self.output_root = loaded["output_root"]
+            self.project_root = active["project_root"]
+            return {"success": True, "active": self.context(), "projects": self.projects()}
+        if project_root:
+            context = _context_from_project_root(self.base_analysis_root, str(project_root), source="selected")
+            if not context:
+                candidate_root = os.path.realpath(os.path.abspath(os.path.expanduser(str(project_root))))
+                try:
+                    under_base = os.path.commonpath([candidate_root, self.base_analysis_root]) == self.base_analysis_root
+                except ValueError:
+                    under_base = False
+                if not under_base or not project_name:
+                    return {"success": False, "error": "Project context must be under the analysis base root"}
+                project_directory = os.path.basename(candidate_root)
+                context = {
+                    "project_name": project_name,
+                    "project_id": project_id,
+                    "project_root": candidate_root,
+                    "project_directory": project_directory,
+                }
+            project_name = project_name or context["project_name"]
+            project_id = project_id if project_id not in (None, "") else context.get("project_id")
+            output_root = {
+                "success": True,
+                "analysis_version": None,
+                "base_root": self.base_analysis_root,
+                "project_root": context["project_root"],
+                "project_directory": context["project_directory"],
+                "project_name": project_name,
+                "project_id": project_id,
+                "errors": [],
+            }
+        else:
+            if not project_name:
+                return {"success": False, "error": "project_name or project_root is required"}
+            output_root = project_root_for_dashboard(
+                project_name=project_name,
+                project_id=project_id,
+                analysis_root=self.base_analysis_root,
+            )
+            if not output_root.get("success"):
+                return output_root
+        self.project_name = str(project_name or output_root.get("project_name") or "Project")
+        self.project_id = str(project_id) if project_id not in (None, "") else None
+        self.output_root = output_root
+        self.project_root = output_root["project_root"]
+        return {"success": True, "active": self.context(), "projects": self.projects()}
+
+
+DOC_SOURCES = {
+    "readme": {"title": "README", "path": "README.md"},
+    "analysis-guide": {"title": "Media Analysis Guide", "path": "docs/guides/media-analysis-guide.md"},
+    "agent-skill": {"title": "Agent Skill", "path": "docs/SKILL.md"},
+}
+
+
+def _repo_root() -> str:
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def _dashboard_doc(doc_id: Any) -> Dict[str, Any]:
+    key = str(doc_id or "readme")
+    source = DOC_SOURCES.get(key)
+    if not source:
+        return {"success": False, "error": "Unknown document"}
+    repo_root = _repo_root()
+    rel_path = str(source["path"])
+    path = os.path.abspath(os.path.join(repo_root, rel_path))
+    if not path.startswith(repo_root + os.sep):
+        return {"success": False, "error": "Document path escaped repository root"}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            content = handle.read()
+    except OSError as exc:
+        return {"success": False, "error": str(exc)}
+    return {
+        "success": True,
+        "doc": key,
+        "title": source["title"],
+        "path": rel_path,
+        "content": content,
+    }
+
+
+def _setup_defaults(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from src.server import setup as server_setup
+
+    return server_setup(action, params or {})
+
+
+class Handler(BaseHTTPRequestHandler):
+    state: DashboardState
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        return
+
+    def _json(self, payload: Dict[str, Any], status: int = 200) -> None:
+        raw = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _html(self) -> None:
+        raw = HTML.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _body(self) -> Dict[str, Any]:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length).decode("utf-8")
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def do_GET(self) -> None:
+        try:
+            self._route_get()
+        except Exception as exc:  # pragma: no cover - runtime safety for dashboard users
+            self._json({"success": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def do_POST(self) -> None:
+        try:
+            self._route_post()
+        except Exception as exc:  # pragma: no cover
+            self._json({"success": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _route_get(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+        if path == "/":
+            self._html()
+            return
+        if path == "/api/boot":
+            self._json(
+                {
+                    "success": True,
+                    "project_name": self.state.project_name,
+                    "project_id": self.state.project_id,
+                    "project_root": self.state.project_root,
+                    "output_root": self.state.output_root,
+                    "active_context": self.state.context(),
+                    "related_project_roots": self.state.related_project_roots(),
+                    "capabilities": detect_capabilities(),
+                }
+            )
+            return
+        if path == "/api/projects":
+            self._json(self.state.projects())
+            return
+        if path == "/api/projects/all":
+            self._json(_resolve_all_project_contexts(self.state.base_analysis_root))
+            return
+        if path == "/api/jobs":
+            self._json(list_batch_jobs(self.state.project_root))
+            return
+        if path == "/api/docs":
+            doc = (query.get("doc") or ["readme"])[0]
+            payload = _dashboard_doc(doc)
+            self._json(payload, 200 if payload.get("success") else 404)
+            return
+        if path == "/api/setup/schema":
+            self._json(_setup_defaults("schema"))
+            return
+        if path == "/api/setup/defaults":
+            self._json(_setup_defaults("get_defaults"))
+            return
+        if path == "/api/resolve/media":
+            self._json(
+                resolve_media_inventory(
+                    self.state.project_root,
+                    limit=(query.get("limit") or [500])[0],
+                    recursive=(query.get("recursive") or ["true"])[0].lower() not in {"0", "false", "no"},
+                )
+            )
+            return
+        if path.startswith("/api/jobs/"):
+            job_id = path.split("/")[3]
+            self._json(batch_job_status(self.state.project_root, job_id))
+            return
+        if path == "/api/index/status":
+            self._json(analysis_index_status(self.state.project_root))
+            return
+        if path == "/api/index/query":
+            q = (query.get("q") or [""])[0]
+            self._json(query_analysis_index(self.state.project_root, q, limit=(query.get("limit") or [20])[0]))
+            return
+        self._json({"success": False, "error": "Not found"}, HTTPStatus.NOT_FOUND)
+
+    def _route_post(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        body = self._body()
+        if path == "/api/jobs":
+            paths = body.get("paths") or []
+            if isinstance(paths, str):
+                paths = [line.strip() for line in paths.splitlines() if line.strip()]
+            params = {
+                "depth": body.get("depth") or "standard",
+                "max_analysis_frames": body.get("max_analysis_frames", 8),
+                "vision": body.get("vision") or {"enabled": False},
+                "transcription": body.get("transcription") or {"enabled": False},
+                "cleanup_frames": True,
+                "reuse_project_roots": self.state.related_project_roots(),
+            }
+            with self.state.lock:
+                created = create_batch_job_from_paths(
+                    project_name=self.state.project_name,
+                    project_id=self.state.project_id,
+                    paths=paths,
+                    analysis_root=self.state.output_root["base_root"],
+                    recursive=bool(body.get("recursive", True)),
+                    params=params,
+                    name=body.get("name"),
+                )
+            self._json(created, 200 if created.get("success") else 400)
+            return
+        if path.startswith("/api/jobs/") and path.endswith("/run"):
+            job_id = path.split("/")[3]
+            with self.state.lock:
+                result = run_batch_job_slice(
+                    self.state.project_root,
+                    job_id,
+                    max_clips=body.get("max_clips", 1),
+                    max_seconds=body.get("max_seconds"),
+                )
+            self._json(result, 200 if result.get("success") else 400)
+            return
+        if path.startswith("/api/jobs/") and path.endswith("/cancel"):
+            job_id = path.split("/")[3]
+            self._json(cancel_batch_job(self.state.project_root, job_id))
+            return
+        if path.startswith("/api/jobs/") and path.endswith("/resume"):
+            job_id = path.split("/")[3]
+            self._json(resume_batch_job(self.state.project_root, job_id))
+            return
+        if path == "/api/index/build":
+            with self.state.lock:
+                self._json(build_analysis_index(self.state.project_root))
+            return
+        if path == "/api/setup/defaults":
+            payload = _setup_defaults("set_defaults", body)
+            self._json(payload, 200 if payload.get("success") else 400)
+            return
+        if path == "/api/setup/clear":
+            payload = _setup_defaults("clear_defaults", body)
+            self._json(payload, 200 if payload.get("success") else 400)
+            return
+        if path == "/api/context":
+            with self.state.lock:
+                payload = self.state.set_context(body)
+            self._json(payload, 200 if payload.get("success") else 400)
+            return
+        self._json({"success": False, "error": "Not found"}, HTTPStatus.NOT_FOUND)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the local Resolve MCP control panel.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--project-name", default="Dashboard Analysis")
+    parser.add_argument("--project-id", default="dashboard")
+    parser.add_argument("--analysis-root", default=os.path.expanduser("~/Documents/davinci-resolve-mcp-analysis"))
+    open_group = parser.add_mutually_exclusive_group()
+    open_group.add_argument("--open", dest="open", action="store_true", help="Open the control panel in the default browser.")
+    open_group.add_argument("--no-open", dest="open", action="store_false", help="Run the control panel server without opening a browser.")
+    parser.set_defaults(open=False)
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    state = DashboardState(args.project_name, args.project_id, args.analysis_root)
+    Handler.state = state
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    url = f"http://{args.host}:{args.port}"
+    print(f"DaVinci Resolve MCP: {url}")
+    print(f"Project analysis root: {state.project_root}")
+    if args.open:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

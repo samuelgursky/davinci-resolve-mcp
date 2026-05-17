@@ -1,0 +1,52 @@
+{
+  "name": "davinci-resolve-mcp",
+  "version": "2.23.0",
+  "description": "NPM bootstrapper for the DaVinci Resolve MCP Server.",
+  "license": "MIT",
+  "author": "Samuel Gursky <samgursky@gmail.com>",
+  "homepage": "https://github.com/samuelgursky/davinci-resolve-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samuelgursky/davinci-resolve-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/samuelgursky/davinci-resolve-mcp/issues"
+  },
+  "type": "module",
+  "bin": {
+    "davinci-resolve-mcp": "./bin/davinci-resolve-mcp.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/**/*.py",
+    "docs/**/*.md",
+    "docs/reference/resolve_scripting_api.txt",
+    "examples/**/*.md",
+    "scripts/**/*.py",
+    "install.py",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "SECURITY.md",
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
+  "scripts": {
+    "smoke": "node bin/davinci-resolve-mcp.mjs --help && node bin/davinci-resolve-mcp.mjs --version",
+    "pack:check": "npm pack --dry-run"
+  },
+  "keywords": [
+    "davinci-resolve",
+    "resolve",
+    "mcp",
+    "model-context-protocol",
+    "video-editing",
+    "post-production"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

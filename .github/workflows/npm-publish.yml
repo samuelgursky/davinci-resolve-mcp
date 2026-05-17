@@ -1,0 +1,62 @@
+name: Publish npm package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Run Python smoke tests
+        run: python tests/test_import.py
+
+      - name: Run Node CLI smoke tests
+        run: |
+          node bin/davinci-resolve-mcp.mjs --help
+          node bin/davinci-resolve-mcp.mjs --version
+
+      - name: Run setup dry run
+        run: |
+          export DAVINCI_RESOLVE_MCP_INSTALL_ROOT="$(mktemp -d)"
+          node bin/davinci-resolve-mcp.mjs setup --dry-run --no-venv --clients manual --update-policy never
+
+      - name: Check npm package contents
+        run: npm pack --dry-run
+
+      - name: Check npm version availability
+        id: npm_version
+        shell: bash
+        run: |
+          package_name="$(node -p "require('./package.json').name")"
+          package_version="$(node -p "require('./package.json').version")"
+          if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "${package_name}@${package_version} is already published; skipping npm publish."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "${package_name}@${package_version} is not published yet."
+          fi
+
+      - name: Publish to npm
+        if: steps.npm_version.outputs.publish == 'true'
+        run: npm publish --provenance --access public

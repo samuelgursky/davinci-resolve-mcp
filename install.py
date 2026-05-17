@@ -34,7 +34,9 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.22.0"
+VERSION = "2.23.0"
+SUPPORTED_PYTHON_MIN = (3, 10)
+SUPPORTED_PYTHON_MAX = (3, 12)
 
 # ─── Colors (disabled on Windows cmd without ANSI support) ────────────────────
 
@@ -70,6 +72,70 @@ def platform_name():
     if is_windows(): return "Windows"
     if is_linux():   return "Linux"
     return SYSTEM
+
+
+def is_supported_python_version(version):
+    major, minor = version[:2]
+    return major == 3 and SUPPORTED_PYTHON_MIN[1] <= minor <= SUPPORTED_PYTHON_MAX[1]
+
+
+def format_python_version(version):
+    return ".".join(str(part) for part in version[:3])
+
+
+def python_requirement_text():
+    return (
+        f"Python {SUPPORTED_PYTHON_MIN[0]}.{SUPPORTED_PYTHON_MIN[1]}-"
+        f"{SUPPORTED_PYTHON_MAX[0]}.{SUPPORTED_PYTHON_MAX[1]}"
+    )
+
+
+def _version_for_python(python_path):
+    script = (
+        "import sys; "
+        "print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"
+    )
+    result = subprocess.run(
+        [str(python_path), "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(output or f"{python_path} exited with code {result.returncode}")
+    parts = result.stdout.strip().split(".")
+    if len(parts) < 2:
+        raise RuntimeError(f"could not parse Python version from {python_path!s}")
+    return tuple(int(part) for part in parts[:3])
+
+
+def require_supported_python(python_path, label="Python"):
+    try:
+        version = _version_for_python(python_path)
+    except Exception as exc:
+        print(f"  {red(label + ':')} Could not inspect {python_path}: {exc}")
+        sys.exit(1)
+    if not is_supported_python_version(version):
+        print(
+            f"  {red(label + ':')} {python_requirement_text()} is required "
+            f"for Resolve scripting compatibility; found {format_python_version(version)} "
+            f"at {python_path}"
+        )
+        sys.exit(1)
+    return version
+
+
+def require_current_python(label="Python"):
+    version = (sys.version_info.major, sys.version_info.minor, sys.version_info.micro)
+    if not is_supported_python_version(version):
+        print(
+            f"  {red(label + ':')} {python_requirement_text()} is required "
+            f"for Resolve scripting compatibility; current interpreter is "
+            f"{format_python_version(version)} at {sys.executable}"
+        )
+        sys.exit(1)
+    return version
 
 # ─── Resolve Path Detection ──────────────────────────────────────────────────
 
@@ -912,10 +978,12 @@ def main():
     if skip_venv:
         print(f"  Skipping venv (--no-venv)")
         python_path = Path(args.python) if args.python else Path(sys.executable)
+        require_supported_python(python_path, "Selected Python")
         print(f"  Using:     {python_path}")
     elif venv_path.exists() and venv_python.exists():
         print(f"  Venv:      {green('Already exists')} at {dim(str(venv_path))}")
         python_path = venv_python
+        require_supported_python(python_path, "Existing venv")
 
         # Check if deps are installed
         try:
@@ -939,18 +1007,22 @@ def main():
             create_venv_ok = True
 
         if create_venv_ok:
+            require_current_python("Virtual environment")
             create_venv(venv_path)
             python_path = venv_python
+            require_supported_python(python_path, "Created venv")
             install_dependencies(venv_path, project_dir)
             print(f"  Venv:      {green('Created')}")
             print(f"  MCP SDK:   {green('Installed')}")
         else:
             python_path = Path(args.python) if args.python else Path(sys.executable)
+            require_supported_python(python_path, "Selected Python")
             print(f"  Using system Python: {python_path}")
 
     # Override python path if explicitly provided
     if args.python:
         python_path = Path(args.python)
+        require_supported_python(python_path, "Selected --python")
 
     # ══════════════════════════════════════════════════════════════════════
     # STEP 3: Locate Server Script

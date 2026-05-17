@@ -114,6 +114,21 @@ client supports sampling/image messages, while allowing `include_visuals=false`
 for technical-only or privacy-sensitive runs. It also encodes session-only
 defaults, optional transcription, and finished-video editorial guardrails.
 
+## Local Control Panel
+
+If the user asks to open, launch, or inspect the Resolve MCP control panel, run
+this from the repository root:
+
+```bash
+venv/bin/python -m src.control_panel
+```
+
+The command starts the local control panel and opens the default browser. Use
+`--no-open` when running in a headless context, then give the user the printed
+localhost URL. The panel is local and single-user; it is an operational surface
+for server status, Resolve clips, source-safe analysis jobs, preferences, and
+diagnostics as those sections are added.
+
 ---
 
 ## Editorial Memory And Decision-Making
@@ -384,16 +399,22 @@ timeline-level editorial helpers.
 Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
 `analyze_file`, `analyze_clip`, `analyze_bin`, `analyze_project`,
 `detect_sync_events`, `add_sync_event_markers`, `publish_clip_metadata`,
-`summarize`, `get_report`, `review_timeline_markers`, and `cleanup_artifacts`.
+`summarize`, `get_report`, `build_index`, `index_status`, `query_index`,
+`start_batch_job`, `run_batch_job_slice`, `batch_job_status`,
+`list_batch_jobs`, `cancel_batch_job`, `resume_batch_job`,
+`review_timeline_markers`, and `cleanup_artifacts`.
 The tool never installs
 dependencies and validates that outputs stay under
 `davinci-resolve-mcp-analysis` project roots rather than beside source media.
 Executed file/clip analysis defaults to session-only: scratch artifacts are
 removed after structured reports are returned to the MCP response. `persist=true`
 keeps reports under the project analysis root, and `keep_artifacts=true`
-preserves a session scratch run for inspection. `quick` uses ffprobe metadata;
-`standard` adds ffmpeg read-through checks, motion/variance scoring, analysis
-keyframes, and sidecar reports.
+preserves a session scratch run for inspection. Persisted analysis refreshes the
+local SQLite search index automatically unless `auto_build_index=false` is set;
+`build_index` remains the manual rebuild action for existing reports. `quick`
+uses ffprobe metadata; `standard` adds ffmpeg read-through checks,
+cut-boundary analysis from full-stream scene detection, flash-frame candidates,
+motion/variance scoring, analysis keyframes, and sidecar reports.
 By default, planning checks the active project's analysis root for existing
 reports and marks matching clips `skip_execution=true` when those reports already
 contain the requested technical, motion, transcription, and vision layers.
@@ -406,11 +427,13 @@ Transcription requires explicit opt-in. The `analyze_media` prompt opts into
 visual analysis by default and uses `vision.provider="chat_context"` when the
 MCP client supports sampling; pass `include_visuals=false` to opt out. For
 direct `media_analysis` tool calls, set `vision.enabled=true` explicitly when
-visual interpretation is needed. Sampled frames are sent to the current
-chat/sampling model and the response is stored in the default structured JSON
-shape. If chat-context vision is unavailable, continue with technical/motion
-analysis and ask whether the user wants setup steps or a no-visual run. The
-local mock providers are for tests and do not send frames off-machine.
+visual interpretation is needed. Standard/deep runs prioritize first/last usable
+frames plus before/after cut-boundary frames; those sampled frames are sent to
+the current chat/sampling model and the response is stored in the default
+structured JSON shape. If chat-context vision is unavailable, continue with
+technical/motion analysis and ask whether the user wants setup steps or a
+no-visual run. The local mock providers are for tests and do not send frames
+off-machine.
 Use `detect_sync_events` before multicam setup, deliverable QC, or single-camera
 sync review when the user needs likely 2-pop or slate-clap locations. It reads
 source audio through FFmpeg/FFprobe only, returns advisory frames/timecodes and

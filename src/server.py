@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 329-tool granular server instead
 """
 
-VERSION = "2.22.0"
+VERSION = "2.23.0"
 
 import base64
 import os
@@ -58,17 +58,29 @@ from src.utils.update_check import (
 from src.utils.media_analysis import (
     CHAT_CONTEXT_VISION_PROVIDERS,
     DEFAULT_VISION_ANALYSIS_PROMPT,
+    analysis_index_status,
     build_plan as build_media_analysis_plan,
+    build_analysis_index,
     cleanup_artifacts as cleanup_media_analysis_artifacts,
     detect_capabilities as detect_media_analysis_capabilities,
     execute_plan_async as execute_media_analysis_plan_async,
     install_guidance as media_analysis_install_guidance,
     load_report as load_media_analysis_report,
+    query_analysis_index,
     resolve_output_root as resolve_media_analysis_output_root,
     slugify,
     summarize_reports as summarize_media_analysis_reports,
 )
 from src.utils.sync_detection import detect_sync_events_for_records as detect_media_sync_events
+from src.utils.media_analysis_jobs import (
+    MEDIA_EXTENSIONS,
+    batch_job_status as media_analysis_batch_job_status,
+    cancel_batch_job as cancel_media_analysis_batch_job,
+    create_batch_job as create_media_analysis_batch_job,
+    list_batch_jobs as list_media_analysis_batch_jobs,
+    resume_batch_job as resume_media_analysis_batch_job,
+    run_batch_job_slice as run_media_analysis_batch_job_slice,
+)
 from src.utils.platform import get_resolve_paths, get_resolve_plugin_paths
 from src.utils import fuse_templates, dctl_templates, script_templates
 from src.utils.timeline_title_text import (
@@ -4961,6 +4973,37 @@ def _media_analysis_clip_record(clip, bin_path: Optional[str] = None) -> Optiona
     }
 
 
+_MEDIA_ANALYSIS_CONTAINER_TYPE_PARTS = (
+    "adjustment",
+    "compound",
+    "fusion",
+    "generator",
+    "multicam",
+    "multi cam",
+    "sequence",
+    "subclip",
+    "sub clip",
+    "timeline",
+    "title",
+)
+
+
+def _media_analysis_record_analyzable(record: Dict[str, Any]) -> Tuple[bool, str]:
+    media_type = str(record.get("media_type") or "").strip().lower()
+    for marker in _MEDIA_ANALYSIS_CONTAINER_TYPE_PARTS:
+        if marker in media_type:
+            return False, f"Resolve {record.get('media_type') or 'container'} item"
+    file_path = record.get("file_path")
+    if not file_path:
+        return False, "No source file path exposed"
+    extension = os.path.splitext(str(file_path))[1].lower()
+    if extension not in MEDIA_EXTENSIONS:
+        return False, f"Unsupported extension: {extension or 'none'}"
+    if not os.path.isfile(str(file_path)):
+        return False, "Source file missing"
+    return True, "Online source media"
+
+
 def _media_analysis_folder_records(folder, bin_path: str = "Master", recursive: bool = True) -> Tuple[List[Dict[str, Any]], List[str]]:
     records: List[Dict[str, Any]] = []
     warnings: List[str] = []
@@ -5147,7 +5190,7 @@ def _media_analysis_target_dict(raw_target: Any, p: Optional[Dict[str, Any]] = N
                 "path": p.get("bin_path") or p.get("path") or "Master",
                 "recursive": True,
             }
-        if lower in {"clip", "file"}:
+        if lower in {"clip", "clips", "file"}:
             return {"type": lower}
         expanded = os.path.expanduser(value)
         if os.path.isabs(expanded):
@@ -5231,8 +5274,9 @@ async def _media_analysis_chat_context_vision(
         row for row in motion.get("analysis_keyframes", [])
         if row.get("frame_path") and os.path.isfile(row.get("frame_path"))
     ]
-    max_frames = int(vision.get("max_frames") or 6)
-    keyframes = keyframes[:max(1, min(max_frames, 12))]
+    effective_budget = int(motion.get("effective_sample_budget") or len(keyframes) or 6)
+    max_frames = int(vision.get("max_frames") or min(48, max(6, effective_budget)))
+    keyframes = keyframes[:max(1, min(max_frames, 48))]
     if not keyframes:
         return {
             "success": False,
@@ -5251,6 +5295,20 @@ async def _media_analysis_chat_context_vision(
                     "overall_motion_level": motion.get("overall_motion_level"),
                     "average_frame_delta": motion.get("average_frame_delta"),
                     "max_frame_delta": motion.get("max_frame_delta"),
+                    "requested_sample_budget": motion.get("requested_sample_budget"),
+                    "effective_sample_budget": motion.get("effective_sample_budget"),
+                    "cut_boundary_pairs_total": motion.get("cut_boundary_pairs_total"),
+                    "cut_boundary_pairs_sampled": motion.get("cut_boundary_pairs_sampled"),
+                    "cut_boundary_pair_coverage": motion.get("cut_boundary_pair_coverage"),
+                    "cut_boundary_sampling_capped": motion.get("cut_boundary_sampling_capped"),
+                },
+                "cut_analysis": {
+                    "cut_count": ((motion.get("cut_analysis") or {}).get("cut_count") if isinstance(motion.get("cut_analysis"), dict) else 0),
+                    "cut_density_per_minute": ((motion.get("cut_analysis") or {}).get("cut_density_per_minute") if isinstance(motion.get("cut_analysis"), dict) else 0),
+                    "likely_edited_sequence": bool(((motion.get("cut_analysis") or {}).get("likely_edited_sequence") if isinstance(motion.get("cut_analysis"), dict) else False)),
+                    "flash_frame_candidates": ((motion.get("cut_analysis") or {}).get("flash_frame_candidates") if isinstance(motion.get("cut_analysis"), dict) else []),
+                    "cut_points": ((motion.get("cut_analysis") or {}).get("cut_points", [])[:48] if isinstance(motion.get("cut_analysis"), dict) else []),
+                    "notes": ((motion.get("cut_analysis") or {}).get("notes") if isinstance(motion.get("cut_analysis"), dict) else []),
                 },
                 "frame_count": len(keyframes),
             }, indent=2, ensure_ascii=False),
@@ -5262,11 +5320,20 @@ async def _media_analysis_chat_context_vision(
             image_data = base64.b64encode(f.read()).decode("ascii")
         content.append(mcp_types.TextContent(
             type="text",
-            text=(
-                f"Frame {index}: time_seconds={frame.get('time_seconds')}, "
-                f"selection_reason={frame.get('selection_reason')}, "
-                f"delta_from_previous={frame.get('delta_from_previous')}"
-            ),
+            text=json.dumps({
+                "frame_index": index,
+                "time_seconds": frame.get("time_seconds"),
+                "selection_reason": frame.get("selection_reason"),
+                "delta_from_previous": frame.get("delta_from_previous"),
+                "cut_index": frame.get("cut_index"),
+                "cut_time_seconds": frame.get("cut_time_seconds"),
+                "boundary_role": frame.get("boundary_role"),
+                "shot_index": frame.get("shot_index"),
+                "shot_start": frame.get("shot_start"),
+                "shot_end": frame.get("shot_end"),
+                "motion_peak": frame.get("motion_peak"),
+                "motion_peak_source_reason": frame.get("motion_peak_source_reason"),
+            }, indent=2, ensure_ascii=False),
         ))
         content.append(mcp_types.ImageContent(type="image", data=image_data, mimeType="image/jpeg"))
 
@@ -5481,6 +5548,42 @@ def _media_analysis_records_from_target(mp, p: Dict[str, Any], project=None) -> 
             elif record:
                 warnings.append(f"Skipping clip without file path: {record.get('clip_name')}")
         target.update({"type": "clip", "selected": selected, "clip_id": clip_id})
+    elif target_type == "clips":
+        raw_ids = target.get("clip_ids") or target.get("clipIds") or p.get("clip_ids") or p.get("clipIds") or p.get("ids")
+        if isinstance(raw_ids, str):
+            clip_ids = [item.strip() for item in raw_ids.split(",") if item.strip()]
+        elif isinstance(raw_ids, list):
+            clip_ids = [str(item).strip() for item in raw_ids if str(item).strip()]
+        else:
+            clip_ids = []
+        if not clip_ids:
+            return None, target, warnings, _err("clips target requires clip_ids")
+        root_folder = mp.GetRootFolder()
+        records = []
+        missing_ids = []
+        skipped = []
+        for clip_id in clip_ids:
+            clip = _find_clip(root_folder, clip_id)
+            if not clip:
+                missing_ids.append(clip_id)
+                continue
+            record = _media_analysis_clip_record(clip)
+            if not record:
+                skipped.append({"clip_id": clip_id, "reason": "clip record unavailable"})
+                continue
+            analyzable, reason = _media_analysis_record_analyzable(record)
+            if not analyzable:
+                skipped.append({"clip_id": clip_id, "clip_name": record.get("clip_name"), "reason": reason})
+                continue
+            records.append(record)
+        if missing_ids:
+            return None, target, warnings, _err(f"Clip(s) not found: {', '.join(missing_ids)}")
+        if skipped:
+            warnings.extend([
+                f"Skipping non-analyzable clip {item.get('clip_name') or item.get('clip_id')}: {item.get('reason')}"
+                for item in skipped
+            ])
+        target.update({"type": "clips", "clip_ids": clip_ids, "skipped": skipped})
     elif target_type == "bin":
         path = target.get("path") or p.get("bin_path") or p.get("path") or "Master"
         recursive = bool(target.get("recursive", p.get("recursive", True)))
@@ -5496,7 +5599,7 @@ def _media_analysis_records_from_target(mp, p: Dict[str, Any], project=None) -> 
         warnings.extend(folder_warnings)
         target.update({"type": "project", "recursive": recursive})
     else:
-        return None, target, warnings, _err("target.type must be one of file, clip, bin, project, sequence, timeline")
+        return None, target, warnings, _err("target.type must be one of file, clip, clips, bin, project, sequence, timeline")
 
     records, duplicate_count = _media_analysis_dedupe_records(records, bool(p.get("include_duplicates", target.get("include_duplicates", False))))
     if duplicate_count:
@@ -5764,6 +5867,12 @@ def _setup_positive_int(value: Any, default: int, min_value: int = 0, max_value:
     return max(min_value, min(parsed, max_value))
 
 
+def _setup_marker_limit(value: Any, default: int = 12) -> int:
+    if isinstance(value, str) and _setup_text_key(value) in {"unlimited", "no_limit", "nolimit", "all"}:
+        return 0
+    return _setup_positive_int(value, default, 0, 250)
+
+
 def _setup_positive_float(value: Any, default: float, min_value: float = 0.1, max_value: float = 8760.0) -> float:
     try:
         parsed = float(value)
@@ -5808,7 +5917,7 @@ def _media_analysis_effective_preferences() -> Dict[str, Any]:
         **_MEDIA_ANALYSIS_DEFAULT_MARKER_COLORS,
         **_normalize_marker_colors(effective.get("timed_marker_colors")),
     }
-    effective["max_timed_markers_per_clip"] = _setup_positive_int(effective.get("max_timed_markers_per_clip"), 12, 0, 250)
+    effective["max_timed_markers_per_clip"] = _setup_marker_limit(effective.get("max_timed_markers_per_clip"), 12)
     effective["metadata_publish_fields"] = [
         str(field).strip()
         for field in _media_analysis_as_list(effective.get("metadata_publish_fields"))
@@ -6213,7 +6322,7 @@ def _media_analysis_marker_candidates_from_report(
 ) -> Dict[str, Any]:
     options = _media_analysis_marker_options(p)
     fps = _media_analysis_report_fps(record, report)
-    max_markers = _setup_positive_int(options.get("max_markers", options.get("maxMarkers", 12)), 12, 0, 250)
+    max_markers = _setup_marker_limit(options.get("max_markers", options.get("maxMarkers", 12)), 12)
     duration = _setup_positive_int(options.get("marker_duration", options.get("markerDuration", 1)), 1, 1, 999)
     marker_types = _normalize_setup_list(
         options.get("marker_types", options.get("markerTypes")),
@@ -6305,7 +6414,7 @@ def _media_analysis_marker_candidates_from_report(
         if key in seen:
             continue
         seen.add(key)
-        if len(deduped) >= max_markers:
+        if max_markers > 0 and len(deduped) >= max_markers:
             skipped.append({"source": marker.get("name"), "frame": marker.get("frame"), "reason": "max_markers_reached"})
             continue
         if marker.get("color") == "Blue":
@@ -6980,7 +7089,7 @@ def _media_analysis_apply_setup_defaults(action: str, p: Dict[str, Any]) -> Dict
         out["report_format"] = prefs.get("report_format")
         applied["report_format"] = prefs.get("report_format")
 
-    if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "review_timeline_markers", "publish_clip_metadata"}:
+    if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "start_batch_job", "review_timeline_markers", "publish_clip_metadata"}:
         if not _has_any_param(out, "vision", "include_visuals", "includeVisuals"):
             vision_default = prefs.get("vision_default")
             if vision_default == "on":
@@ -6995,7 +7104,7 @@ def _media_analysis_apply_setup_defaults(action: str, p: Dict[str, Any]) -> Dict
                 out["transcription"] = {"enabled": transcription_default == "yes"}
                 applied["transcription_default"] = transcription_default
 
-    if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "publish_clip_metadata"}:
+    if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "start_batch_job", "publish_clip_metadata"}:
         persistence = prefs.get("analysis_persistence")
         if persistence == "keep_reports":
             if not _has_any_param(out, "persist"):
@@ -8517,7 +8626,7 @@ def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: 
                 return _err("timed_marker_colors must be an object of marker type to Resolve marker color.")
             set_or_clear(key, raw_value, colors)
         elif key == "max_timed_markers_per_clip":
-            set_or_clear(key, raw_value, _setup_positive_int(raw_value, 12, 0, 250))
+            set_or_clear(key, raw_value, _setup_marker_limit(raw_value, 12))
         elif key in {"include_confidence_scores", "include_source_time_notes", "ask_before_metadata_publish", "dry_run_first_default"}:
             set_or_clear(key, raw_value, _media_analysis_bool(raw_value, _MEDIA_ANALYSIS_DEFAULT_PREFS[key]))
         elif key == "analysis_summary_style":
@@ -8780,7 +8889,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 "media_analysis.metadata_overwrite_policy": {"values": ["preserve_human", "fill_empty", "overwrite_owned_blocks", "overwrite_all"], "storage": _media_analysis_preferences_path()},
                 "media_analysis.timed_marker_types": {"values": ["slate_clap", "sync_events", "best_moments", "qc_warnings"], "storage": _media_analysis_preferences_path()},
                 "media_analysis.timed_marker_colors": {"values": "object mapping marker type to Resolve marker color", "storage": _media_analysis_preferences_path()},
-                "media_analysis.max_timed_markers_per_clip": {"values": "integer 0-250", "storage": _media_analysis_preferences_path()},
+                "media_analysis.max_timed_markers_per_clip": {"values": "0 for unlimited, or integer 1-250", "storage": _media_analysis_preferences_path()},
                 "media_analysis.include_confidence_scores": {"values": [True, False], "storage": _media_analysis_preferences_path()},
                 "media_analysis.include_source_time_notes": {"values": [True, False], "storage": _media_analysis_preferences_path()},
                 "media_analysis.analysis_summary_style": {"values": ["concise", "assistant_editor", "qc", "producer", "full"], "storage": _media_analysis_preferences_path()},
@@ -11058,12 +11167,26 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       review_timeline_markers(max_samples?, analysis_root?, vision?) -> {path, samples, vision_review?}
       summarize(analysis_root?) -> project summary from existing clip reports
       get_report(report_path?) -> load manifest or a report under the analysis root
+      build_index(analysis_root?) -> rebuild the single-user SQLite index from existing reports
+      index_status(analysis_root?) -> summarize index path, size, and row counts
+      query_index(query, limit?, result_types?) -> search clips, markers, and transcripts
+      start_batch_job(target, depth?, ...) -> create a durable slice-runnable analysis job; target may be selected, bin, project, sequence, file, or {type:"clips", clip_ids:[...]}
+      run_batch_job_slice(job_id, max_clips?, max_seconds?) -> process a bounded job slice and refresh the index after successful clips
+      batch_job_status(job_id) -> progress, recent events, and clip states
+      list_batch_jobs() -> recent durable analysis jobs
+      cancel_batch_job(job_id) -> stop future slices
+      resume_batch_job(job_id) -> requeue a canceled or interrupted job
       cleanup_artifacts(frames_only=true) -> remove generated frame artifacts only
 
     Analysis outputs stay under a davinci-resolve-mcp-analysis project root
     and are validated so they are never written beside source media. Executed
     file/clip analysis defaults to session-only: scratch artifacts are removed
     after structured reports are returned unless persist=true or keep_artifacts=true.
+    The SQLite index is a single-user derived cache stored beside the JSON
+    reports; it stores text/metadata only, never sampled image bytes.
+    Batch jobs are single-user operational state stored beside the analysis
+    root; each slice exits cleanly so agents can poll progress without spending
+    tokens on long media processing.
     publish_clip_metadata is a separate confirmed Resolve-project metadata write.
     Time-based Media Pool clip markers are opt-in. If no timed marker choice or
     saved default exists, publish_clip_metadata returns a timed_marker_prompt
@@ -11097,6 +11220,10 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
     if err:
         return err
     project_name, project_id = _project_name_and_id(proj)
+    if p.get("project_name") or p.get("projectName"):
+        project_name = p.get("project_name") or p.get("projectName")
+    if p.get("project_id") or p.get("projectId"):
+        project_id = p.get("project_id") or p.get("projectId")
 
     if action == "resolve_output_root":
         return resolve_media_analysis_output_root(
@@ -11107,7 +11234,20 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             create=bool(p.get("create", False)),
         )
 
-    if action in {"summarize", "get_report", "cleanup_artifacts"}:
+    if action in {
+        "summarize",
+        "get_report",
+        "build_index",
+        "rebuild_index",
+        "index_status",
+        "query_index",
+        "batch_job_status",
+        "list_batch_jobs",
+        "run_batch_job_slice",
+        "cancel_batch_job",
+        "resume_batch_job",
+        "cleanup_artifacts",
+    }:
         root = resolve_media_analysis_output_root(
             project_name=project_name,
             project_id=project_id,
@@ -11126,6 +11266,51 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 report_path=p.get("report_path") or p.get("path"),
                 clip_dir=p.get("clip_dir"),
             )
+        if action in {"build_index", "rebuild_index"}:
+            return build_analysis_index(project_root, index_path=p.get("index_path") or p.get("indexPath"))
+        if action == "index_status":
+            return analysis_index_status(project_root, index_path=p.get("index_path") or p.get("indexPath"))
+        if action == "query_index":
+            return query_analysis_index(
+                project_root,
+                p.get("query", ""),
+                limit=p.get("limit", 20),
+                result_types=p.get("result_types") or p.get("resultTypes"),
+                index_path=p.get("index_path") or p.get("indexPath"),
+            )
+        if action == "list_batch_jobs":
+            return list_media_analysis_batch_jobs(project_root, limit=p.get("limit", 50))
+        if action == "batch_job_status":
+            job_id = p.get("job_id") or p.get("jobId") or p.get("id")
+            if not job_id:
+                return _err("batch_job_status requires job_id")
+            return media_analysis_batch_job_status(
+                project_root,
+                str(job_id),
+                include_clips=_media_analysis_bool(p.get("include_clips", p.get("includeClips")), True),
+                include_events=_media_analysis_bool(p.get("include_events", p.get("includeEvents")), True),
+            )
+        if action == "run_batch_job_slice":
+            job_id = p.get("job_id") or p.get("jobId") or p.get("id")
+            if not job_id:
+                return _err("run_batch_job_slice requires job_id")
+            return run_media_analysis_batch_job_slice(
+                project_root,
+                str(job_id),
+                max_clips=p.get("max_clips", p.get("maxClips", 1)),
+                max_seconds=p.get("max_seconds", p.get("maxSeconds")),
+                capabilities=detect_media_analysis_capabilities(),
+            )
+        if action == "cancel_batch_job":
+            job_id = p.get("job_id") or p.get("jobId") or p.get("id")
+            if not job_id:
+                return _err("cancel_batch_job requires job_id")
+            return cancel_media_analysis_batch_job(project_root, str(job_id))
+        if action == "resume_batch_job":
+            job_id = p.get("job_id") or p.get("jobId") or p.get("id")
+            if not job_id:
+                return _err("resume_batch_job requires job_id")
+            return resume_media_analysis_batch_job(project_root, str(job_id))
         return cleanup_media_analysis_artifacts(project_root, frames_only=bool(p.get("frames_only", True)))
 
     if action == "review_timeline_markers":
@@ -11188,6 +11373,38 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
 
     if action == "publish_clip_metadata":
         return await _publish_clip_metadata_from_analysis(proj, p, ctx)
+
+    if action == "start_batch_job":
+        p["dry_run"] = False
+        p["persist"] = True
+        p["session_only"] = False
+        p["cleanup_frames"] = _media_analysis_bool(p.get("cleanup_frames", p.get("cleanupFrames")), True)
+        p["target"] = _media_analysis_target_dict(p.get("target"), p)
+        if p["target"].get("_invalid_target"):
+            return _err(p["target"]["_invalid_target"])
+        mp = None
+        target_type = str(p["target"].get("type") or p.get("target_type") or "clip").strip().lower()
+        if target_type != "file":
+            mp = proj.GetMediaPool()
+            if not mp:
+                return _err("Failed to get MediaPool")
+        records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p, project=proj)
+        if target_err:
+            if warnings:
+                target_err["warnings"] = warnings
+            return target_err
+        created = create_media_analysis_batch_job(
+            project_name=project_name,
+            project_id=project_id,
+            records=records or [],
+            target=normalized_target,
+            params=p,
+            capabilities=detect_media_analysis_capabilities(),
+            name=p.get("name") or p.get("job_name") or p.get("jobName"),
+        )
+        if warnings:
+            created.setdefault("warnings", warnings)
+        return created
 
     if action in {"analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence"}:
         dry_run_default = action in {"analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence"}
@@ -11296,6 +11513,16 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "review_timeline_markers",
         "summarize",
         "get_report",
+        "build_index",
+        "rebuild_index",
+        "index_status",
+        "query_index",
+        "start_batch_job",
+        "run_batch_job_slice",
+        "batch_job_status",
+        "list_batch_jobs",
+        "cancel_batch_job",
+        "resume_batch_job",
         "cleanup_artifacts",
     ])
 

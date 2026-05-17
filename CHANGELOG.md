@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.23.0
+
+**npm installer** — `npx davinci-resolve-mcp setup` is now the primary quick
+start. The npm package bootstraps a managed per-user install, runs the existing
+Python installer from that stable location, and keeps MCP client configs pointed
+at the managed virtual environment and `src/server.py`.
+
+**Local control panel** — Added a single-user browser control panel for server
+status, Resolve clip visibility, source-safe analysis jobs, analysis search, and
+preference management. It can be launched from source with
+`venv/bin/python -m src.control_panel` or from npm with
+`npx davinci-resolve-mcp control-panel`.
+
+**Durable media-analysis jobs and search** — `media_analysis` can now create,
+slice, inspect, cancel, resume, and list durable analysis jobs. Persisted reports
+refresh a single-user SQLite index with clip, marker, timeline occurrence,
+keyframe, and transcript search helpers through `build_index`, `index_status`,
+and `query_index`.
+
+**Release automation** — Added npm package metadata, package-content guards, and
+a tag-driven GitHub Actions workflow for trusted npm publishing with provenance.
+The workflow skips publish when the package version already exists, which keeps
+the first manual npm registration from fighting the later tag workflow.
+
+**Validation**: static import checks, API parity audit, focused media-analysis,
+update-check, and media-pool ingest unit tests passed. npm smoke tests, setup
+dry-run, package dry-run, and `git diff --check` passed. No source media was
+modified.
+
 ## What's New in v2.22.0
 
 **Configurable MCP update prompting** — Update checks now carry a persisted

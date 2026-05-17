@@ -16,6 +16,7 @@ import math
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -28,6 +29,8 @@ from src.utils.sync_detection import detect_sync_event_capabilities
 ANALYSIS_DIR_NAME = "davinci-resolve-mcp-analysis"
 HIDDEN_ANALYSIS_DIR_NAME = ".davinci-resolve-mcp-analysis"
 ANALYSIS_VERSION = "0.1"
+ANALYSIS_INDEX_FILENAME = "index.sqlite"
+ANALYSIS_INDEX_SCHEMA_VERSION = 1
 COMMAND_TIMEOUT_SECONDS = 300
 CHAT_CONTEXT_VISION_PROVIDERS = {"chat_context", "mcp_sampling", "host_chat", "current_chat"}
 MARKER_PLAN_DEFAULT_COLORS = {
@@ -40,10 +43,14 @@ MARKER_PLAN_DEFAULT_COLORS = {
 DEFAULT_VISION_ANALYSIS_PROMPT = """Return only strict JSON for editorial media analysis.
 
 Use the full sequence of sampled keyframes plus the computed motion/variance
-evidence. Describe what changes across the clip; do not treat one frame as the
-whole clip unless only one frame was provided. If a slate or clapper is visible
-in any sampled frame, confirm it in the slate block and extract only clearly
-readable details. Do not infer slate fields from audio cues alone.
+and cut-boundary evidence. Describe what changes across the clip; do not treat
+one frame as the whole clip unless only one frame was provided. When frames are
+tagged shot_start, shot_end, cut_before, or cut_after, explicitly compare the
+adjacent boundary frames and say whether they look like a real cut, a flash
+frame, a title/black insertion, or a high-motion moment inside one continuous
+shot. If a slate or clapper is visible in any sampled frame, confirm it in the
+slate block and extract only clearly readable details. Do not infer slate fields
+from audio cues alone.
 
 Use this schema:
 {
@@ -93,10 +100,16 @@ Use this schema:
     "motion_events": [],
     "quiet_regions": []
   },
+  "cut_understanding": {
+    "cut_count": 0,
+    "likely_edited_sequence": false,
+    "flash_frame_candidates": [],
+    "notes": []
+  },
   "analysis_keyframes": [
     {
       "time_seconds": 0.0,
-      "selection_reason": "first_usable|midpoint|last_usable|scene_change|motion_peak|interval",
+      "selection_reason": "first_usable|midpoint|last_usable|scene_change|cut_before|cut_after|shot_start|shot_end|flash_candidate|motion_peak|interval",
       "description": "What is visible in this frame.",
       "editing_value": "How an editor might use this moment.",
       "qc_flags": []
@@ -420,6 +433,11 @@ def analysis_request_signature(
                 "min_shot_duration_seconds": marker_plan.get("min_shot_duration_seconds"),
                 "colors_hash": _stable_json_hash(marker_plan.get("colors") or {}),
             },
+            "cut_boundary_analysis": {
+                "enabled": depth in {"standard", "deep", "custom"},
+                "version": 1,
+                "hard_frame_cap": HARD_FRAME_CAP,
+            },
         },
         "signature_hash": _stable_json_hash({
             "analysis_version": ANALYSIS_VERSION,
@@ -441,6 +459,11 @@ def analysis_request_signature(
                 "enabled": _coerce_bool(marker_plan.get("enabled"), default=True),
                 "min_shot_duration_seconds": marker_plan.get("min_shot_duration_seconds"),
                 "colors_hash": _stable_json_hash(marker_plan.get("colors") or {}),
+            },
+            "cut_boundary_analysis": {
+                "enabled": depth in {"standard", "deep", "custom"},
+                "version": 1,
+                "hard_frame_cap": HARD_FRAME_CAP,
             },
         }),
     }
@@ -596,6 +619,18 @@ def build_plan(
     else:
         reuse_project_root = params.get("reuse_project_root") or params.get("reuseProjectRoot") or root["project_root"]
         reuse_project_root = normalize_path(reuse_project_root) if reuse_project_root else root["project_root"]
+    raw_reuse_project_roots = params.get("reuse_project_roots") or params.get("reuseProjectRoots") or []
+    if isinstance(raw_reuse_project_roots, str):
+        raw_reuse_project_roots = [raw_reuse_project_roots]
+    elif not isinstance(raw_reuse_project_roots, list):
+        raw_reuse_project_roots = []
+    reuse_project_roots = []
+    for candidate_root in [reuse_project_root, *raw_reuse_project_roots]:
+        if not candidate_root:
+            continue
+        normalized_root = normalize_path(candidate_root)
+        if normalized_root not in reuse_project_roots:
+            reuse_project_roots.append(normalized_root)
 
     clip_plans = []
     for record in records:
@@ -613,8 +648,8 @@ def build_plan(
         elif force_refresh:
             clip_plan["cache_status"] = "refresh_forced"
         else:
-            existing = find_reusable_report(
-                reuse_project_root,
+            existing = find_reusable_report_across_roots(
+                reuse_project_roots,
                 record,
                 depth,
                 options,
@@ -630,11 +665,15 @@ def build_plan(
                     "cache_issues": existing.get("cache_issues", []),
                     "cache_warnings": existing.get("cache_warnings", []),
                     "analyzed_at": existing.get("analyzed_at"),
+                    "project_root": existing.get("project_root"),
                 }
                 if existing.get("reusable"):
                     clip_plan["skip_execution"] = True
                     clip_plan["cache_status"] = "reusable"
-                    clip_plan["reuse_reason"] = "Existing analysis report satisfies the requested depth and modalities."
+                    if existing.get("project_root") and existing.get("project_root") != root["project_root"]:
+                        clip_plan["reuse_reason"] = "Existing analysis report from a related project version satisfies the requested depth and modalities."
+                    else:
+                        clip_plan["reuse_reason"] = "Existing analysis report satisfies the requested depth and modalities."
                 else:
                     clip_plan["cache_status"] = "stale_or_incomplete"
             else:
@@ -663,6 +702,7 @@ def build_plan(
         "reuse_policy": reuse_policy,
         "max_report_age_days": max_report_age_days,
         "reuse_project_root": reuse_project_root,
+        "reuse_project_roots": reuse_project_roots,
         "reusable_clip_count": reusable_count,
         "stale_or_incomplete_clip_count": stale_count,
         "clips": clip_plans,
@@ -931,38 +971,291 @@ def _readthrough_analysis(path: str) -> Dict[str, Any]:
     return result
 
 
-def _sample_times(duration: Optional[float], scene_items: List[Dict[str, Any]], budget: int) -> List[Tuple[float, str]]:
+def _frame_number_for_time(seconds: Optional[float], fps: Optional[float]) -> Optional[int]:
+    if seconds is None:
+        return None
+    try:
+        return int(round(max(0.0, float(seconds)) * max(float(fps or 24.0), 1.0)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _frame_step_seconds(fps: Optional[float]) -> float:
+    try:
+        parsed = float(fps or 24.0)
+    except (TypeError, ValueError):
+        parsed = 24.0
+    return 1.0 / max(parsed, 1.0)
+
+
+def _clamp_sample_time(value: float, duration: Optional[float]) -> float:
+    if duration is None or duration <= 0:
+        return max(0.0, value)
+    return min(max(0.0, value), max(0.0, duration - 0.001))
+
+
+def _cut_boundary_analysis(
+    duration: Optional[float],
+    scene_items: List[Dict[str, Any]],
+    fps: Optional[float],
+    *,
+    min_shot_duration_seconds: float = 0.75,
+    flash_frame_max_duration_seconds: float = 0.25,
+) -> Dict[str, Any]:
+    frame_step = _frame_step_seconds(fps)
+    scene_times = []
+    for item in scene_items or []:
+        if not isinstance(item, dict):
+            continue
+        t = _parse_float(item.get("time_seconds"))
+        if t is None or t <= 0:
+            continue
+        if duration is not None and t >= duration:
+            continue
+        scene_times.append(round(t, 3))
+    scene_times = sorted(set(scene_times))
+
+    cut_points = []
+    for index, t in enumerate(scene_times, 1):
+        before_time = _clamp_sample_time(t - frame_step, duration)
+        after_time = _clamp_sample_time(t + frame_step, duration)
+        cut_points.append({
+            "index": index,
+            "time_seconds": t,
+            "frame": _frame_number_for_time(t, fps),
+            "before_time_seconds": before_time,
+            "before_frame": _frame_number_for_time(before_time, fps),
+            "after_time_seconds": after_time,
+            "after_frame": _frame_number_for_time(after_time, fps),
+            "needs_visual_confirmation": True,
+            "source": "ffmpeg_scene_detection",
+        })
+
+    raw_shot_ranges = []
+    boundaries: List[float] = [0.0]
+    boundaries.extend(scene_times)
+    if duration is not None and duration > 0:
+        boundaries.append(float(duration))
+    for index in range(max(0, len(boundaries) - 1)):
+        start = boundaries[index]
+        end = boundaries[index + 1]
+        if end <= start:
+            continue
+        raw_shot_ranges.append({
+            "index": index + 1,
+            "start": start,
+            "end": end,
+            "duration": end - start,
+            "start_frame": _frame_number_for_time(start, fps),
+            "end_frame": _frame_number_for_time(end, fps),
+        })
+
+    shot_ranges = []
+    flash_candidates = []
+    short_shot_candidates = []
+    flash_keys = set()
+    short_keys = set()
+    for raw_shot in raw_shot_ranges:
+        shot_duration = _parse_float(raw_shot.get("duration"))
+        start = _parse_float(raw_shot.get("start"))
+        end = _parse_float(raw_shot.get("end"))
+        if shot_duration is not None and shot_duration <= float(min_shot_duration_seconds):
+            short_keys.add((round(start or 0.0, 3), round(end or 0.0, 3)))
+            short_shot_candidates.append(dict(raw_shot))
+        if (
+            shot_duration is not None
+            and shot_duration <= float(flash_frame_max_duration_seconds)
+            and start not in (None, 0.0)
+            and end is not None
+            and duration is not None
+            and end < duration
+        ):
+            flash_keys.add((round(start, 3), round(end, 3)))
+            flash_candidates.append({
+                **raw_shot,
+                "mid_sample_time_seconds": _clamp_sample_time(start + shot_duration / 2.0, duration),
+                "reason": "adjacent scene detections bound a very short segment",
+                "needs_visual_confirmation": True,
+            })
+
+    for shot in _shot_ranges_from_scenes(
+        duration,
+        [{"time_seconds": t} for t in scene_times],
+        min_duration_seconds=float(min_shot_duration_seconds),
+    ):
+        start = _parse_float(shot.get("start"))
+        end = _parse_float(shot.get("end"))
+        shot_duration = (end - start) if start is not None and end is not None else None
+        first_sample = _clamp_sample_time((start or 0.0) + frame_step, duration)
+        if end is not None:
+            last_sample = _clamp_sample_time(max(start or 0.0, end - frame_step), duration)
+        else:
+            last_sample = first_sample
+        row = {
+            "index": shot.get("index"),
+            "start": start,
+            "end": end,
+            "duration": shot_duration,
+            "start_frame": _frame_number_for_time(start, fps),
+            "end_frame": _frame_number_for_time(end, fps),
+            "first_sample_time_seconds": first_sample,
+            "last_sample_time_seconds": last_sample,
+            "first_sample_frame": _frame_number_for_time(first_sample, fps),
+            "last_sample_frame": _frame_number_for_time(last_sample, fps),
+        }
+        shot_ranges.append(row)
+        short_key = (round(start or 0.0, 3), round(end or 0.0, 3))
+        if shot_duration is not None and shot_duration <= float(min_shot_duration_seconds) and short_key not in short_keys:
+            short_keys.add(short_key)
+            short_shot_candidates.append(row)
+        if (
+            shot_duration is not None
+            and shot_duration <= float(flash_frame_max_duration_seconds)
+            and start not in (None, 0.0)
+            and end is not None
+            and duration is not None
+            and end < duration
+            and (round(start, 3), round(end, 3)) not in flash_keys
+        ):
+            flash_candidates.append({
+                **row,
+                "mid_sample_time_seconds": _clamp_sample_time(start + shot_duration / 2.0, duration),
+                "reason": "scene-bounded shot shorter than flash frame threshold",
+                "needs_visual_confirmation": True,
+            })
+
+    cut_density_per_minute = (len(cut_points) / max(float(duration or 0.0), 1.0)) * 60.0 if duration else 0.0
+    return {
+        "success": True,
+        "source": "ffmpeg_scene_detection",
+        "threshold": 0.3,
+        "fps": fps,
+        "frame_step_seconds": frame_step,
+        "duration_seconds": duration,
+        "cut_count": len(cut_points),
+        "cut_density_per_minute": cut_density_per_minute,
+        "likely_edited_sequence": bool(len(cut_points) >= 2 or cut_density_per_minute >= 3.0),
+        "cut_points": cut_points,
+        "raw_shot_ranges": raw_shot_ranges,
+        "shot_ranges": shot_ranges,
+        "short_shot_candidates": short_shot_candidates,
+        "flash_frame_candidates": flash_candidates,
+        "notes": [
+            "FFmpeg scene detection reads the full video stream; boundary frames are sampled for visual confirmation when available.",
+            "Short scene-bounded ranges are candidates only until LLM/frame review distinguishes flash frames from deliberate cuts or high motion.",
+        ],
+    }
+
+
+def _sample_times(
+    duration: Optional[float],
+    scene_items: List[Dict[str, Any]],
+    budget: int,
+    *,
+    fps: Optional[float] = None,
+    cut_analysis: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     if budget <= 0:
         return []
     duration = duration or 0
-    candidates: List[Tuple[float, str]] = []
+    candidates: List[Dict[str, Any]] = []
+
+    def add(time_seconds: Optional[float], reason: str, priority: int, **extra: Any) -> None:
+        if time_seconds is None:
+            return
+        candidates.append({
+            "time_seconds": _clamp_sample_time(float(time_seconds), duration),
+            "selection_reason": reason,
+            "priority": priority,
+            **extra,
+        })
+
     if duration > 0:
-        candidates.extend([
-            (min(duration * 0.05, max(duration - 0.05, 0)), "first_usable"),
-            (duration * 0.5, "midpoint"),
-            (max(duration - min(duration * 0.05, 0.5), 0), "last_usable"),
-        ])
-        interval_count = max(0, min(budget, 6) - len(candidates))
-        for index in range(interval_count):
-            t = duration * ((index + 1) / (interval_count + 1))
-            candidates.append((t, "interval"))
-    for scene in scene_items[:budget]:
+        add(min(duration * 0.05, max(duration - 0.05, 0)), "first_usable", 6)
+        add(duration * 0.5, "midpoint", 70)
+        add(max(duration - min(duration * 0.05, 0.5), 0), "last_usable", 6)
+
+    cut_analysis = cut_analysis if isinstance(cut_analysis, dict) else {}
+    for cut in cut_analysis.get("cut_points") or []:
+        if not isinstance(cut, dict):
+            continue
+        cut_index = cut.get("index")
+        add(
+            cut.get("before_time_seconds"),
+            "cut_before",
+            5,
+            cut_index=cut_index,
+            cut_time_seconds=cut.get("time_seconds"),
+            boundary_role="last_frame_before_cut",
+        )
+        add(
+            cut.get("after_time_seconds"),
+            "cut_after",
+            5,
+            cut_index=cut_index,
+            cut_time_seconds=cut.get("time_seconds"),
+            boundary_role="first_frame_after_cut",
+        )
+
+    for shot in cut_analysis.get("shot_ranges") or []:
+        if not isinstance(shot, dict):
+            continue
+        shot_index = shot.get("index")
+        add(
+            shot.get("first_sample_time_seconds"),
+            "shot_start",
+            12,
+            shot_index=shot_index,
+            shot_start=shot.get("start"),
+            shot_end=shot.get("end"),
+        )
+        add(
+            shot.get("last_sample_time_seconds"),
+            "shot_end",
+            12,
+            shot_index=shot_index,
+            shot_start=shot.get("start"),
+            shot_end=shot.get("end"),
+        )
+
+    for flash in cut_analysis.get("flash_frame_candidates") or []:
+        if not isinstance(flash, dict):
+            continue
+        add(
+            flash.get("mid_sample_time_seconds"),
+            "flash_candidate",
+            4,
+            shot_index=flash.get("index"),
+            shot_start=flash.get("start"),
+            shot_end=flash.get("end"),
+        )
+
+    for scene in scene_items[: max(budget, 1)]:
         t = scene.get("time_seconds")
         if isinstance(t, (int, float)) and t >= 0:
-            candidates.append((float(t), "scene_change"))
+            add(float(t), "scene_change", 15)
 
-    unique = []
+    if duration > 0:
+        interval_count = max(0, min(budget, 6) - 3)
+        for index in range(interval_count):
+            add(duration * ((index + 1) / (interval_count + 1)), "interval", 80)
+
+    unique: List[Dict[str, Any]] = []
     seen = set()
-    for t, reason in sorted(candidates, key=lambda row: row[0]):
-        rounded = round(max(t, 0), 3)
-        key = round(rounded, 1)
+    frame_step = _frame_step_seconds(fps)
+    for candidate in sorted(candidates, key=lambda row: (int(row.get("priority", 99)), float(row.get("time_seconds") or 0.0))):
+        rounded = round(max(float(candidate.get("time_seconds") or 0.0), 0), 3)
+        key = round(rounded / max(frame_step, 0.001))
         if key in seen:
             continue
         seen.add(key)
-        unique.append((rounded, reason))
+        row = dict(candidate)
+        row["time_seconds"] = rounded
+        row.pop("priority", None)
+        unique.append(row)
         if len(unique) >= budget:
             break
-    return unique
+    return sorted(unique, key=lambda row: float(row.get("time_seconds") or 0.0))
 
 
 def _raw_frame(path: str, time_seconds: float, width: int = 96, height: int = 54) -> Optional[bytes]:
@@ -1040,12 +1333,28 @@ def _export_analysis_frame(path: str, time_seconds: float, output_path: str) -> 
     return code == 0 and os.path.isfile(output_path)
 
 
-def _motion_and_keyframes(path: str, duration: Optional[float], scene_items: List[Dict[str, Any]], artifacts: Dict[str, Any], budget: int, *, write_frames: bool = True) -> Dict[str, Any]:
+def _motion_and_keyframes(
+    path: str,
+    duration: Optional[float],
+    scene_items: List[Dict[str, Any]],
+    artifacts: Dict[str, Any],
+    budget: int,
+    *,
+    fps: Optional[float] = None,
+    cut_analysis: Optional[Dict[str, Any]] = None,
+    write_frames: bool = True,
+) -> Dict[str, Any]:
     sampled = []
     previous_raw = None
-    times = _sample_times(duration, scene_items, budget)
+    required_boundary_frames = 0
+    if isinstance(cut_analysis, dict):
+        required_boundary_frames += len(cut_analysis.get("cut_points") or []) * 2
+        required_boundary_frames += len(cut_analysis.get("flash_frame_candidates") or [])
+    effective_budget = max(int(budget or 0), min(HARD_FRAME_CAP, required_boundary_frames + 3))
+    times = _sample_times(duration, scene_items, effective_budget, fps=fps, cut_analysis=cut_analysis)
     frames_dir = artifacts.get("frames_dir")
-    for index, (time_seconds, reason) in enumerate(times, 1):
+    for index, sample in enumerate(times, 1):
+        time_seconds = float(sample.get("time_seconds") or 0.0)
         raw = _raw_frame(path, time_seconds)
         if not raw:
             continue
@@ -1057,34 +1366,61 @@ def _motion_and_keyframes(path: str, duration: Optional[float], scene_items: Lis
             candidate = os.path.join(frames_dir, f"sampled_{index:04d}.jpg")
             if _export_analysis_frame(path, time_seconds, candidate):
                 frame_path = candidate
-        sampled.append({
+        sampled_row = {
             "index": index,
             "time_seconds": time_seconds,
-            "selection_reason": reason,
+            "selection_reason": sample.get("selection_reason") or "interval",
             "frame_path": frame_path,
             "metrics": metrics,
             "delta_from_previous": delta,
-        })
+        }
+        for key in ("cut_index", "cut_time_seconds", "boundary_role", "shot_index", "shot_start", "shot_end", "motion_peak"):
+            if sample.get(key) not in (None, ""):
+                sampled_row[key] = sample.get(key)
+        sampled.append(sampled_row)
     deltas = [row["delta_from_previous"] for row in sampled if row.get("delta_from_previous") is not None]
     avg_delta = sum(deltas) / len(deltas) if deltas else 0.0
     max_delta = max(deltas) if deltas else 0.0
     if max_delta >= 0.08:
         for row in sampled:
             if row.get("delta_from_previous") == max_delta:
-                row["selection_reason"] = "motion_peak"
+                row["motion_peak"] = True
+                row["motion_peak_source_reason"] = row.get("selection_reason")
     if max_delta >= 0.2 or avg_delta >= 0.1:
         level = "high"
     elif max_delta >= 0.08 or avg_delta >= 0.035:
         level = "medium"
     else:
         level = "low"
+    total_cut_points = len(cut_analysis.get("cut_points") or []) if isinstance(cut_analysis, dict) else 0
+    cut_roles: Dict[Any, set] = {}
+    for row in sampled:
+        cut_index = row.get("cut_index")
+        boundary_role = row.get("boundary_role")
+        if cut_index in (None, "") or boundary_role in (None, ""):
+            continue
+        cut_roles.setdefault(cut_index, set()).add(boundary_role)
+    paired_cut_boundaries = sum(
+        1
+        for roles in cut_roles.values()
+        if {"last_frame_before_cut", "first_frame_after_cut"}.issubset(roles)
+    )
     return {
         "success": True,
+        "requested_sample_budget": int(budget or 0),
+        "effective_sample_budget": effective_budget,
+        "hard_frame_cap": HARD_FRAME_CAP,
+        "cut_boundary_frames_requested": required_boundary_frames,
+        "cut_boundary_sampling_capped": required_boundary_frames + 3 > HARD_FRAME_CAP,
+        "cut_boundary_pairs_total": total_cut_points,
+        "cut_boundary_pairs_sampled": paired_cut_boundaries,
+        "cut_boundary_pair_coverage": paired_cut_boundaries / total_cut_points if total_cut_points else 1.0,
         "sample_count": len(sampled),
         "overall_motion_level": level,
         "average_frame_delta": avg_delta,
         "max_frame_delta": max_delta,
         "analysis_keyframes": sampled,
+        "cut_analysis": cut_analysis or {},
     }
 
 
@@ -1180,6 +1516,8 @@ def _report_missing_layers(report: Dict[str, Any], depth: str, options: Dict[str
             missing.append("motion")
         if not readthrough or readthrough.get("reason") == "quick analysis depth":
             missing.append("readthrough")
+        if not isinstance(readthrough.get("cut_analysis"), dict):
+            missing.append("cut_analysis")
     transcription = options.get("transcription") or {}
     if _coerce_bool(transcription.get("enabled"), default=(depth == "deep")):
         transcript = report.get("transcription") or {}
@@ -1319,6 +1657,57 @@ def find_reusable_report(
         "reusable": True,
         "report": best["report"],
     }
+
+
+def _report_reuse_score(candidate: Optional[Dict[str, Any]]) -> Tuple[int, float]:
+    if not candidate:
+        return (9999, 0.0)
+    missing = candidate.get("missing_layers") or []
+    issues = candidate.get("cache_issues") or []
+    timestamp = _timestamp_from_analyzed_at(candidate.get("analyzed_at")) or 0
+    return (len(missing) + len(issues), -float(timestamp))
+
+
+def find_reusable_report_across_roots(
+    project_roots: Iterable[Any],
+    record: Dict[str, Any],
+    depth: str,
+    options: Dict[str, Any],
+    *,
+    request_signature: Optional[Dict[str, Any]] = None,
+    max_report_age_days: Optional[float] = None,
+    reuse_policy: str = "compatible",
+) -> Optional[Dict[str, Any]]:
+    """Find the best compatible report across active and prior project roots."""
+    candidates: List[Dict[str, Any]] = []
+    seen_roots = set()
+    for raw_root in project_roots or []:
+        if not raw_root:
+            continue
+        root = normalize_path(raw_root)
+        if root in seen_roots:
+            continue
+        seen_roots.add(root)
+        candidate = find_reusable_report(
+            root,
+            record,
+            depth,
+            options,
+            request_signature=request_signature,
+            max_report_age_days=max_report_age_days,
+            reuse_policy=reuse_policy,
+        )
+        if not candidate:
+            continue
+        candidate = dict(candidate)
+        candidate["project_root"] = root
+        candidates.append(candidate)
+    if not candidates:
+        return None
+    reusable = [row for row in candidates if row.get("reusable")]
+    pool = reusable or candidates
+    pool.sort(key=_report_reuse_score)
+    return pool[0]
 
 
 def _normalize_word_timestamps(raw_words: Any) -> List[Dict[str, Any]]:
@@ -1510,13 +1899,18 @@ def _vision_analysis(record: Dict[str, Any], motion: Dict[str, Any], options: Di
         }
     keyframes = []
     for frame in motion.get("analysis_keyframes", []):
-        keyframes.append({
+        frame_row = {
             "time_seconds": frame.get("time_seconds"),
             "selection_reason": frame.get("selection_reason"),
             "description": "Local mock vision description for representative frame.",
             "editing_value": "Use as a searchable representative moment.",
             "qc_flags": [],
-        })
+        }
+        for key in ("cut_index", "cut_time_seconds", "boundary_role", "shot_index", "shot_start", "shot_end", "motion_peak", "motion_peak_source_reason"):
+            if frame.get(key) not in (None, ""):
+                frame_row[key] = frame.get(key)
+        keyframes.append(frame_row)
+    cut_analysis = motion.get("cut_analysis") if isinstance(motion.get("cut_analysis"), dict) else {}
     payload = {
         "success": True,
         "provider": provider,
@@ -1545,6 +1939,12 @@ def _vision_analysis(record: Dict[str, Any], motion: Dict[str, Any], options: Di
             "overall_level": motion.get("overall_motion_level", "unknown"),
             "motion_events": [],
             "quiet_regions": [],
+        },
+        "cut_understanding": {
+            "cut_count": cut_analysis.get("cut_count", 0),
+            "likely_edited_sequence": bool(cut_analysis.get("likely_edited_sequence")),
+            "flash_frame_candidates": cut_analysis.get("flash_frame_candidates", []),
+            "notes": cut_analysis.get("notes", []),
         },
         "analysis_keyframes": keyframes,
         "editing_notes": {
@@ -1832,7 +2232,11 @@ def _build_clip_marker_plan(
     markers: List[Dict[str, Any]] = []
     untimed_notes: List[Dict[str, Any]] = []
     scene_items = ((readthrough.get("scenes") or {}).get("items") or []) if isinstance(readthrough.get("scenes"), dict) else []
-    for shot in _shot_ranges_from_scenes(duration, scene_items, min_duration_seconds=float(min_shot_duration)):
+    cut_analysis = readthrough.get("cut_analysis") if isinstance(readthrough.get("cut_analysis"), dict) else {}
+    shot_ranges = cut_analysis.get("shot_ranges") if isinstance(cut_analysis.get("shot_ranges"), list) else None
+    if not shot_ranges:
+        shot_ranges = _shot_ranges_from_scenes(duration, scene_items, min_duration_seconds=float(min_shot_duration))
+    for shot in shot_ranges:
         start = _parse_float(shot.get("start"))
         end = _parse_float(shot.get("end"))
         sound_note, transcript_text = _marker_sound_note(transcript, readthrough, start, end)
@@ -1848,6 +2252,32 @@ def _build_clip_marker_plan(
             sound_note=sound_note,
             transcript_text=transcript_text,
             source="scene_detection",
+        ))
+
+    flash_candidates = cut_analysis.get("flash_frame_candidates") if isinstance(cut_analysis.get("flash_frame_candidates"), list) else []
+    for index, item in enumerate(flash_candidates, 1):
+        if not isinstance(item, dict):
+            continue
+        start = _parse_float(item.get("start"))
+        end = _parse_float(item.get("end"))
+        sound_note, transcript_text = _marker_sound_note(transcript, readthrough, start, end)
+        markers.append(_build_marker_entry(
+            marker_id=f"flash-frame-candidate-{index:03d}",
+            marker_type="qc_warning",
+            subtype="flash_frame_candidate",
+            color=color_scheme["qc_warning"],
+            name="QC: Flash Frame Candidate",
+            start=start,
+            end=end,
+            fps=fps,
+            visual_description=(
+                "FFmpeg detected a very short scene-bounded range. Review boundary frames to distinguish "
+                "a flash frame, title/black insertion, or deliberate rapid cut from a high-motion moment."
+            ),
+            sound_note=sound_note,
+            transcript_text=transcript_text,
+            source="cut_boundary_analysis",
+            confidence="computed_needs_visual_confirmation",
         ))
 
     black_items = ((readthrough.get("black_frames") or {}).get("items") or []) if isinstance(readthrough.get("black_frames"), dict) else []
@@ -1947,6 +2377,11 @@ def _build_clip_marker_plan(
             "words": len(words),
         },
         "timeline_occurrences": record.get("timeline_occurrences") or [],
+        "cut_analysis": {
+            "cut_count": cut_analysis.get("cut_count", 0),
+            "likely_edited_sequence": bool(cut_analysis.get("likely_edited_sequence")),
+            "flash_frame_candidates": len(flash_candidates),
+        },
         "marker_count": len(markers),
         "markers": markers,
         "untimed_notes": untimed_notes,
@@ -2004,6 +2439,7 @@ def _synthesize_analysis(
         "technical_warnings": warnings,
         "technical": technical.get("summary", {}),
         "readthrough": readthrough,
+        "cut_analysis": readthrough.get("cut_analysis") if isinstance(readthrough.get("cut_analysis"), dict) else {},
         "motion": motion,
         "transcription": transcript,
         "visual": vision,
@@ -2111,12 +2547,20 @@ async def execute_plan_async(
         if depth in {"standard", "deep", "custom"}:
             readthrough = _readthrough_analysis(source)
             duration = _media_duration_seconds(record, technical)
+            fps = _analysis_fps(record, technical)
+            readthrough["cut_analysis"] = _cut_boundary_analysis(
+                duration,
+                (readthrough.get("scenes") or {}).get("items", []),
+                fps,
+            )
             motion = _motion_and_keyframes(
                 source,
                 duration,
                 (readthrough.get("scenes") or {}).get("items", []),
                 artifacts,
                 int(clip_plan.get("analysis_keyframe_budget") or 0),
+                fps=fps,
+                cut_analysis=readthrough.get("cut_analysis"),
                 write_frames=keep_frame_artifacts_for_vision or not _coerce_bool(params.get("cleanup_frames"), default=False),
             )
             if artifacts.get("motion_json"):
@@ -2165,6 +2609,14 @@ async def execute_plan_async(
     manifest["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     manifest["clip_count"] = len(manifest["clips"])
     manifest["successful_clip_count"] = sum(1 for row in manifest["clips"] if row.get("success"))
+
+    if (
+        not session_only
+        and manifest["successful_clip_count"]
+        and _coerce_bool(params.get("auto_build_index"), default=True)
+    ):
+        manifest["index"] = build_analysis_index(output_root)
+
     _write_json(os.path.join(output_root, "manifest.json"), manifest)
 
     if session_only:
@@ -2292,3 +2744,875 @@ def cleanup_artifacts(project_root: str, *, frames_only: bool = True) -> Dict[st
         shutil.rmtree(root, ignore_errors=True)
         removed.append(root)
     return {"success": True, "removed": removed, "frames_only": frames_only}
+
+
+def _analysis_index_path(project_root: str, index_path: Optional[Any] = None) -> Tuple[Optional[str], Optional[str]]:
+    root = normalize_path(project_root)
+    candidate = normalize_path(index_path) if index_path else os.path.join(root, ANALYSIS_INDEX_FILENAME)
+    if not _is_relative_to(candidate, root):
+        return None, "index_path must be under the project analysis root"
+    return candidate, None
+
+
+def _iter_analysis_report_files(project_root: str) -> Iterable[str]:
+    clips_root = os.path.join(normalize_path(project_root), "clips")
+    if not os.path.isdir(clips_root):
+        return
+    for dirpath, _, filenames in os.walk(clips_root):
+        if "analysis.json" in filenames:
+            yield os.path.join(dirpath, "analysis.json")
+
+
+def _index_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _index_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _index_as_list(value: Any) -> List[Any]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _first_video_summary(technical: Dict[str, Any]) -> Dict[str, Any]:
+    videos = technical.get("video") if isinstance(technical.get("video"), list) else []
+    return videos[0] if videos and isinstance(videos[0], dict) else {}
+
+
+def _index_report_duration(report: Dict[str, Any]) -> Optional[float]:
+    marker_plan = report.get("clip_analysis_markers") if isinstance(report.get("clip_analysis_markers"), dict) else {}
+    duration = _parse_float(marker_plan.get("duration_seconds"))
+    if duration is not None:
+        return duration
+    technical = report.get("technical") if isinstance(report.get("technical"), dict) else {}
+    fmt = technical.get("format") if isinstance(technical.get("format"), dict) else {}
+    duration = _parse_float(fmt.get("duration_seconds"))
+    if duration is not None:
+        return duration
+    return _parse_float(_first_video_summary(technical).get("duration_seconds"))
+
+
+def _index_report_fps(report: Dict[str, Any]) -> Optional[float]:
+    marker_plan = report.get("clip_analysis_markers") if isinstance(report.get("clip_analysis_markers"), dict) else {}
+    fps = _parse_float(marker_plan.get("fps"))
+    if fps is not None:
+        return fps
+    clip = report.get("clip") if isinstance(report.get("clip"), dict) else {}
+    technical = report.get("technical") if isinstance(report.get("technical"), dict) else {}
+    return _parse_float(_analysis_fps(clip, {"summary": technical}))
+
+
+def _index_visual_tags(report: Dict[str, Any]) -> List[Tuple[str, str]]:
+    visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
+    tags: List[Tuple[str, str]] = []
+    editing_notes = visual.get("editing_notes") if isinstance(visual.get("editing_notes"), dict) else {}
+    for tag in _index_as_list(editing_notes.get("search_tags")):
+        text = _index_text(tag)
+        if text:
+            tags.append((text, "visual.search_tags"))
+    content = visual.get("content") if isinstance(visual.get("content"), dict) else {}
+    for key in ("locations", "actions", "objects", "visible_text", "notable_audio_context"):
+        for item in _index_as_list(content.get(key)):
+            text = _index_text(item)
+            if text:
+                tags.append((text, f"visual.content.{key}"))
+    slate = visual.get("slate") if isinstance(visual.get("slate"), dict) else {}
+    for key in ("scene", "shot", "take", "camera", "roll", "production"):
+        text = _index_text(slate.get(key))
+        if text:
+            tags.append((text, f"visual.slate.{key}"))
+    seen = set()
+    unique: List[Tuple[str, str]] = []
+    for tag, source in tags:
+        key = (tag.lower(), source)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((tag, source))
+    return unique
+
+
+def _index_report_key(report_path: str, report: Dict[str, Any]) -> str:
+    clip = report.get("clip") if isinstance(report.get("clip"), dict) else {}
+    parent = os.path.basename(os.path.dirname(report_path))
+    if parent and parent != "clips":
+        return parent
+    return stable_clip_directory(clip)
+
+
+def _create_analysis_index_schema(conn: sqlite3.Connection) -> bool:
+    conn.executescript(
+        """
+        CREATE TABLE index_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE clips (
+            clip_key TEXT PRIMARY KEY,
+            clip_id TEXT,
+            media_id TEXT,
+            clip_name TEXT,
+            file_path TEXT,
+            bin_path TEXT,
+            media_type TEXT,
+            duration_seconds REAL,
+            fps REAL,
+            summary TEXT,
+            analyzed_at TEXT,
+            report_path TEXT NOT NULL,
+            marker_plan_path TEXT,
+            technical_warning_count INTEGER NOT NULL DEFAULT 0,
+            motion_level TEXT,
+            transcript_available INTEGER NOT NULL DEFAULT 0,
+            visual_available INTEGER NOT NULL DEFAULT 0,
+            source_size_bytes INTEGER,
+            source_mtime_ns INTEGER,
+            signature_hash TEXT
+        );
+
+        CREATE INDEX idx_clips_file_path ON clips(file_path);
+        CREATE INDEX idx_clips_clip_id ON clips(clip_id);
+        CREATE INDEX idx_clips_motion_level ON clips(motion_level);
+
+        CREATE TABLE technical_warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_key TEXT NOT NULL,
+            warning TEXT NOT NULL,
+            FOREIGN KEY (clip_key) REFERENCES clips(clip_key) ON DELETE CASCADE
+        );
+
+        CREATE TABLE markers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_key TEXT NOT NULL,
+            marker_id TEXT,
+            marker_type TEXT,
+            subtype TEXT,
+            color TEXT,
+            name TEXT,
+            start_seconds REAL,
+            end_seconds REAL,
+            start_frame INTEGER,
+            duration_frames INTEGER,
+            visual_description TEXT,
+            sound_note TEXT,
+            transcript_text TEXT,
+            source TEXT,
+            confidence TEXT,
+            FOREIGN KEY (clip_key) REFERENCES clips(clip_key) ON DELETE CASCADE
+        );
+
+        CREATE INDEX idx_markers_clip_key ON markers(clip_key);
+        CREATE INDEX idx_markers_type ON markers(marker_type);
+        CREATE INDEX idx_markers_start_seconds ON markers(start_seconds);
+
+        CREATE TABLE transcript_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_key TEXT NOT NULL,
+            segment_index INTEGER NOT NULL,
+            start_seconds REAL,
+            end_seconds REAL,
+            text TEXT NOT NULL,
+            FOREIGN KEY (clip_key) REFERENCES clips(clip_key) ON DELETE CASCADE
+        );
+
+        CREATE INDEX idx_transcript_segments_clip_key ON transcript_segments(clip_key);
+        CREATE INDEX idx_transcript_segments_start_seconds ON transcript_segments(start_seconds);
+
+        CREATE TABLE visual_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_key TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            source TEXT,
+            FOREIGN KEY (clip_key) REFERENCES clips(clip_key) ON DELETE CASCADE
+        );
+
+        CREATE INDEX idx_visual_tags_tag ON visual_tags(tag);
+        CREATE INDEX idx_visual_tags_clip_key ON visual_tags(clip_key);
+
+        CREATE TABLE timeline_occurrences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_key TEXT NOT NULL,
+            timeline_id TEXT,
+            timeline_name TEXT,
+            track_type TEXT,
+            track_index INTEGER,
+            item_index INTEGER,
+            start_frame INTEGER,
+            end_frame INTEGER,
+            record_frame INTEGER,
+            occurrence_json TEXT NOT NULL,
+            FOREIGN KEY (clip_key) REFERENCES clips(clip_key) ON DELETE CASCADE
+        );
+
+        CREATE INDEX idx_timeline_occurrences_clip_key ON timeline_occurrences(clip_key);
+        CREATE INDEX idx_timeline_occurrences_timeline ON timeline_occurrences(timeline_id, timeline_name);
+
+        CREATE TABLE analysis_keyframes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_key TEXT NOT NULL,
+            keyframe_index INTEGER,
+            time_seconds REAL,
+            selection_reason TEXT,
+            mean_luma REAL,
+            delta_from_previous REAL,
+            FOREIGN KEY (clip_key) REFERENCES clips(clip_key) ON DELETE CASCADE
+        );
+
+        CREATE INDEX idx_analysis_keyframes_clip_key ON analysis_keyframes(clip_key);
+        CREATE INDEX idx_analysis_keyframes_time_seconds ON analysis_keyframes(time_seconds);
+        """
+    )
+    try:
+        conn.executescript(
+            """
+            CREATE VIRTUAL TABLE clips_fts USING fts5(
+                clip_key UNINDEXED,
+                clip_name,
+                summary,
+                file_path,
+                tags,
+                warnings
+            );
+            CREATE VIRTUAL TABLE markers_fts USING fts5(
+                marker_rowid UNINDEXED,
+                clip_key UNINDEXED,
+                name,
+                visual_description,
+                sound_note,
+                transcript_text
+            );
+            CREATE VIRTUAL TABLE transcripts_fts USING fts5(
+                segment_rowid UNINDEXED,
+                clip_key UNINDEXED,
+                text
+            );
+            """
+        )
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def _insert_analysis_report_into_index(conn: sqlite3.Connection, report_path: str, report: Dict[str, Any], *, fts_enabled: bool) -> Dict[str, int]:
+    clip = report.get("clip") if isinstance(report.get("clip"), dict) else {}
+    technical = report.get("technical") if isinstance(report.get("technical"), dict) else {}
+    motion = report.get("motion") if isinstance(report.get("motion"), dict) else {}
+    transcription = report.get("transcription") if isinstance(report.get("transcription"), dict) else {}
+    visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
+    marker_plan = report.get("clip_analysis_markers") if isinstance(report.get("clip_analysis_markers"), dict) else {}
+    signature = report.get("analysis_signature") if isinstance(report.get("analysis_signature"), dict) else {}
+    source_signature = signature.get("source_file") if isinstance(signature.get("source_file"), dict) else {}
+
+    clip_key = _index_report_key(report_path, report)
+    source_file = report.get("source_file") or clip.get("file_path")
+    marker_plan_path = os.path.join(os.path.dirname(report_path), "clip_analysis_markers.json")
+    if not os.path.isfile(marker_plan_path):
+        marker_plan_path = None
+
+    warnings = [_index_text(item) for item in _index_as_list(report.get("technical_warnings")) if _index_text(item)]
+    warnings.extend(
+        _index_text(item)
+        for item in _index_as_list(technical.get("warnings") if isinstance(technical, dict) else None)
+        if _index_text(item)
+    )
+    warnings = list(dict.fromkeys(warnings))
+    visual_tags = _index_visual_tags(report)
+    transcript_segments = transcription.get("segments") if isinstance(transcription.get("segments"), list) else []
+    transcript_text = _index_text(transcription.get("text"))
+    transcript_available = bool(transcript_text or transcript_segments)
+    visual_available = bool(visual.get("success") and (visual.get("clip_summary") or visual_tags or visual.get("analysis_keyframes")))
+
+    conn.execute(
+        """
+        INSERT INTO clips (
+            clip_key, clip_id, media_id, clip_name, file_path, bin_path, media_type,
+            duration_seconds, fps, summary, analyzed_at, report_path, marker_plan_path,
+            technical_warning_count, motion_level, transcript_available, visual_available,
+            source_size_bytes, source_mtime_ns, signature_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clip_key,
+            clip.get("clip_id"),
+            clip.get("media_id"),
+            clip.get("clip_name") or (os.path.basename(str(source_file)) if source_file else None),
+            source_file,
+            clip.get("bin_path"),
+            clip.get("media_type"),
+            _index_report_duration(report),
+            _index_report_fps(report),
+            report.get("summary"),
+            report.get("analyzed_at"),
+            report_path,
+            marker_plan_path,
+            len(warnings),
+            motion.get("overall_motion_level"),
+            int(transcript_available),
+            int(visual_available),
+            source_signature.get("size_bytes"),
+            source_signature.get("mtime_ns"),
+            signature.get("signature_hash"),
+        ),
+    )
+
+    for warning in warnings:
+        conn.execute("INSERT INTO technical_warnings (clip_key, warning) VALUES (?, ?)", (clip_key, warning))
+
+    for tag, source in visual_tags:
+        conn.execute("INSERT INTO visual_tags (clip_key, tag, source) VALUES (?, ?, ?)", (clip_key, tag, source))
+
+    marker_count = 0
+    for marker in marker_plan.get("markers") or []:
+        if not isinstance(marker, dict):
+            continue
+        cur = conn.execute(
+            """
+            INSERT INTO markers (
+                clip_key, marker_id, marker_type, subtype, color, name, start_seconds,
+                end_seconds, start_frame, duration_frames, visual_description, sound_note,
+                transcript_text, source, confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                clip_key,
+                marker.get("id"),
+                marker.get("type"),
+                marker.get("subtype"),
+                marker.get("color"),
+                marker.get("name"),
+                _parse_float(marker.get("start_seconds")),
+                _parse_float(marker.get("end_seconds")),
+                marker.get("start_frame"),
+                marker.get("duration_frames"),
+                marker.get("visual_description"),
+                marker.get("sound_note"),
+                marker.get("transcript_text"),
+                marker.get("source"),
+                marker.get("confidence"),
+            ),
+        )
+        marker_count += 1
+        if fts_enabled:
+            conn.execute(
+                """
+                INSERT INTO markers_fts (
+                    marker_rowid, clip_key, name, visual_description, sound_note, transcript_text
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cur.lastrowid,
+                    clip_key,
+                    marker.get("name"),
+                    marker.get("visual_description"),
+                    marker.get("sound_note"),
+                    marker.get("transcript_text"),
+                ),
+            )
+
+    segment_count = 0
+    if transcript_segments:
+        for index, segment in enumerate(transcript_segments):
+            if not isinstance(segment, dict):
+                continue
+            text = _index_text(segment.get("text"))
+            if not text:
+                continue
+            cur = conn.execute(
+                """
+                INSERT INTO transcript_segments (
+                    clip_key, segment_index, start_seconds, end_seconds, text
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    clip_key,
+                    index,
+                    _parse_float(segment.get("start")),
+                    _parse_float(segment.get("end")),
+                    text,
+                ),
+            )
+            segment_count += 1
+            if fts_enabled:
+                conn.execute(
+                    "INSERT INTO transcripts_fts (segment_rowid, clip_key, text) VALUES (?, ?, ?)",
+                    (cur.lastrowid, clip_key, text),
+                )
+    elif transcript_text:
+        cur = conn.execute(
+            """
+            INSERT INTO transcript_segments (
+                clip_key, segment_index, start_seconds, end_seconds, text
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (clip_key, 0, None, None, transcript_text),
+        )
+        segment_count += 1
+        if fts_enabled:
+            conn.execute(
+                "INSERT INTO transcripts_fts (segment_rowid, clip_key, text) VALUES (?, ?, ?)",
+                (cur.lastrowid, clip_key, transcript_text),
+            )
+
+    occurrence_count = 0
+    occurrences = marker_plan.get("timeline_occurrences") or clip.get("timeline_occurrences") or []
+    for occurrence in occurrences:
+        if not isinstance(occurrence, dict):
+            continue
+        conn.execute(
+            """
+            INSERT INTO timeline_occurrences (
+                clip_key, timeline_id, timeline_name, track_type, track_index,
+                item_index, start_frame, end_frame, record_frame, occurrence_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                clip_key,
+                occurrence.get("timeline_id") or occurrence.get("timelineId"),
+                occurrence.get("timeline_name") or occurrence.get("timelineName"),
+                occurrence.get("track_type") or occurrence.get("trackType"),
+                occurrence.get("track_index") or occurrence.get("trackIndex"),
+                occurrence.get("item_index") or occurrence.get("itemIndex"),
+                occurrence.get("start_frame") or occurrence.get("startFrame"),
+                occurrence.get("end_frame") or occurrence.get("endFrame"),
+                occurrence.get("record_frame") or occurrence.get("recordFrame"),
+                _index_json(occurrence),
+            ),
+        )
+        occurrence_count += 1
+
+    keyframe_count = 0
+    for index, keyframe in enumerate(report.get("analysis_keyframes") or []):
+        if not isinstance(keyframe, dict):
+            continue
+        metrics = keyframe.get("metrics") if isinstance(keyframe.get("metrics"), dict) else {}
+        conn.execute(
+            """
+            INSERT INTO analysis_keyframes (
+                clip_key, keyframe_index, time_seconds, selection_reason, mean_luma, delta_from_previous
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                clip_key,
+                keyframe.get("index", index + 1),
+                _parse_float(keyframe.get("time_seconds")),
+                keyframe.get("selection_reason"),
+                _parse_float(metrics.get("mean_luma")),
+                _parse_float(keyframe.get("delta_from_previous")),
+            ),
+        )
+        keyframe_count += 1
+
+    if fts_enabled:
+        conn.execute(
+            """
+            INSERT INTO clips_fts (clip_key, clip_name, summary, file_path, tags, warnings)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                clip_key,
+                clip.get("clip_name") or (os.path.basename(str(source_file)) if source_file else None),
+                report.get("summary"),
+                source_file,
+                " ".join(tag for tag, _ in visual_tags),
+                " ".join(warnings),
+            ),
+        )
+
+    return {
+        "warnings": len(warnings),
+        "markers": marker_count,
+        "transcript_segments": segment_count,
+        "visual_tags": len(visual_tags),
+        "timeline_occurrences": occurrence_count,
+        "analysis_keyframes": keyframe_count,
+    }
+
+
+def build_analysis_index(project_root: str, *, index_path: Optional[Any] = None) -> Dict[str, Any]:
+    """Build a single-user SQLite index derived from media analysis JSON reports."""
+    root = normalize_path(project_root)
+    if not os.path.isdir(root):
+        return {"success": False, "error": f"Project analysis root not found: {root}"}
+    db_path, err = _analysis_index_path(root, index_path)
+    if err or not db_path:
+        return {"success": False, "error": err}
+
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    tmp_path = f"{db_path}.tmp"
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(f"{tmp_path}{suffix}")
+        except OSError:
+            pass
+
+    counts = {
+        "clips": 0,
+        "warnings": 0,
+        "markers": 0,
+        "transcript_segments": 0,
+        "visual_tags": 0,
+        "timeline_occurrences": 0,
+        "analysis_keyframes": 0,
+    }
+    failed_reports: List[Dict[str, Any]] = []
+    built_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    conn = sqlite3.connect(tmp_path)
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=OFF")
+        conn.execute("PRAGMA synchronous=OFF")
+        fts_enabled = _create_analysis_index_schema(conn)
+        conn.execute("INSERT INTO index_metadata (key, value) VALUES (?, ?)", ("schema_version", str(ANALYSIS_INDEX_SCHEMA_VERSION)))
+        conn.execute("INSERT INTO index_metadata (key, value) VALUES (?, ?)", ("analysis_version", ANALYSIS_VERSION))
+        conn.execute("INSERT INTO index_metadata (key, value) VALUES (?, ?)", ("built_at", built_at))
+        conn.execute("INSERT INTO index_metadata (key, value) VALUES (?, ?)", ("fts_enabled", "1" if fts_enabled else "0"))
+        conn.execute("INSERT INTO index_metadata (key, value) VALUES (?, ?)", ("image_blob_policy", "excluded"))
+
+        for report_path in sorted(_iter_analysis_report_files(root)):
+            try:
+                report = _read_json(report_path)
+                row_counts = _insert_analysis_report_into_index(conn, report_path, report, fts_enabled=fts_enabled)
+                counts["clips"] += 1
+                for key, value in row_counts.items():
+                    counts[key] += value
+            except Exception as exc:  # pragma: no cover - defensive for arbitrary user reports
+                failed_reports.append({"path": report_path, "error": str(exc)})
+        for key, value in counts.items():
+            conn.execute("INSERT INTO index_metadata (key, value) VALUES (?, ?)", (f"count.{key}", str(value)))
+        conn.commit()
+    finally:
+        conn.close()
+
+    for suffix in ("-wal", "-shm"):
+        try:
+            os.remove(f"{db_path}{suffix}")
+        except OSError:
+            pass
+    os.replace(tmp_path, db_path)
+    try:
+        final_conn = sqlite3.connect(db_path)
+        final_conn.execute("PRAGMA journal_mode=WAL")
+        final_conn.close()
+    except sqlite3.Error:
+        pass
+
+    return {
+        "success": True,
+        "project_root": root,
+        "index_path": db_path,
+        "schema_version": ANALYSIS_INDEX_SCHEMA_VERSION,
+        "built_at": built_at,
+        "single_user": True,
+        "image_blob_policy": "excluded",
+        "fts_enabled": bool(counts["clips"]) and _sqlite_table_exists(db_path, "clips_fts"),
+        "counts": counts,
+        "failed_report_count": len(failed_reports),
+        "failed_reports": failed_reports[:50],
+        "size_bytes": os.path.getsize(db_path) if os.path.isfile(db_path) else 0,
+    }
+
+
+def _sqlite_table_exists(db_path: str, table_name: str) -> bool:
+    if not os.path.isfile(db_path):
+        return False
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name = ? LIMIT 1",
+                (table_name,),
+            ).fetchone()
+            return bool(row)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+
+
+def _analysis_index_counts(conn: sqlite3.Connection) -> Dict[str, int]:
+    counts = {}
+    for table in (
+        "clips",
+        "technical_warnings",
+        "markers",
+        "transcript_segments",
+        "visual_tags",
+        "timeline_occurrences",
+        "analysis_keyframes",
+    ):
+        try:
+            counts[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        except sqlite3.Error:
+            counts[table] = 0
+    return counts
+
+
+def analysis_index_status(project_root: str, *, index_path: Optional[Any] = None) -> Dict[str, Any]:
+    root = normalize_path(project_root)
+    db_path, err = _analysis_index_path(root, index_path)
+    if err or not db_path:
+        return {"success": False, "error": err}
+    if not os.path.isfile(db_path):
+        return {
+            "success": True,
+            "exists": False,
+            "project_root": root,
+            "index_path": db_path,
+            "hint": "Persisted analysis builds this automatically; run media_analysis(action='build_index') to rebuild from existing reports.",
+        }
+    conn = sqlite3.connect(db_path)
+    try:
+        metadata = {
+            row[0]: row[1]
+            for row in conn.execute("SELECT key, value FROM index_metadata")
+        }
+        counts = _analysis_index_counts(conn)
+    finally:
+        conn.close()
+    return {
+        "success": True,
+        "exists": True,
+        "project_root": root,
+        "index_path": db_path,
+        "schema_version": int(metadata.get("schema_version") or 0),
+        "analysis_version": metadata.get("analysis_version"),
+        "built_at": metadata.get("built_at"),
+        "single_user": True,
+        "image_blob_policy": metadata.get("image_blob_policy") or "excluded",
+        "fts_enabled": metadata.get("fts_enabled") == "1",
+        "counts": counts,
+        "size_bytes": os.path.getsize(db_path),
+    }
+
+
+def _fts_query(value: Any) -> str:
+    tokens = re.findall(r"[A-Za-z0-9_]+", str(value or ""))
+    return " OR ".join(f'"{token}"' for token in tokens[:12])
+
+
+def _row_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    return {key: row[key] for key in row.keys()}
+
+
+def _normalize_index_result_types(result_types: Optional[Iterable[str]]) -> set:
+    if result_types in (None, ""):
+        return set()
+    if isinstance(result_types, str):
+        raw_items = [result_types]
+    else:
+        raw_items = list(result_types)
+    allowed_values = {"clip", "marker", "transcript"}
+    return {
+        str(value).strip().lower()
+        for value in raw_items
+        if str(value).strip().lower() in allowed_values
+    }
+
+
+def _query_analysis_index_fts(conn: sqlite3.Connection, query: str, limit: int, result_types: Optional[Iterable[str]]) -> List[Dict[str, Any]]:
+    fts = _fts_query(query)
+    if not fts:
+        return []
+    allowed = _normalize_index_result_types(result_types)
+    results: List[Dict[str, Any]] = []
+    if not allowed or "clip" in allowed:
+        for row in conn.execute(
+            """
+            SELECT
+                'clip' AS result_type,
+                c.clip_key,
+                c.clip_id,
+                c.media_id,
+                c.clip_name,
+                c.file_path,
+                c.summary,
+                c.report_path,
+                NULL AS marker_type,
+                NULL AS start_seconds,
+                NULL AS end_seconds,
+                bm25(clips_fts) AS rank
+            FROM clips_fts
+            JOIN clips c ON c.clip_key = clips_fts.clip_key
+            WHERE clips_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+            """,
+            (fts, limit),
+        ):
+            results.append(_row_dict(row))
+    if not allowed or "marker" in allowed:
+        for row in conn.execute(
+            """
+            SELECT
+                'marker' AS result_type,
+                c.clip_key,
+                c.clip_id,
+                c.media_id,
+                c.clip_name,
+                c.file_path,
+                m.visual_description AS summary,
+                c.report_path,
+                m.marker_type,
+                m.start_seconds,
+                m.end_seconds,
+                bm25(markers_fts) AS rank
+            FROM markers_fts
+            JOIN markers m ON m.id = markers_fts.marker_rowid
+            JOIN clips c ON c.clip_key = m.clip_key
+            WHERE markers_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+            """,
+            (fts, limit),
+        ):
+            results.append(_row_dict(row))
+    if not allowed or "transcript" in allowed:
+        for row in conn.execute(
+            """
+            SELECT
+                'transcript' AS result_type,
+                c.clip_key,
+                c.clip_id,
+                c.media_id,
+                c.clip_name,
+                c.file_path,
+                s.text AS summary,
+                c.report_path,
+                NULL AS marker_type,
+                s.start_seconds,
+                s.end_seconds,
+                bm25(transcripts_fts) AS rank
+            FROM transcripts_fts
+            JOIN transcript_segments s ON s.id = transcripts_fts.segment_rowid
+            JOIN clips c ON c.clip_key = s.clip_key
+            WHERE transcripts_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+            """,
+            (fts, limit),
+        ):
+            results.append(_row_dict(row))
+    results.sort(key=lambda row: (float(row.get("rank") or 0.0), row.get("result_type") or ""))
+    return results[:limit]
+
+
+def _query_analysis_index_like(conn: sqlite3.Connection, query: str, limit: int, result_types: Optional[Iterable[str]]) -> List[Dict[str, Any]]:
+    needle = f"%{str(query or '').lower()}%"
+    allowed = _normalize_index_result_types(result_types)
+    results: List[Dict[str, Any]] = []
+    if not allowed or "clip" in allowed:
+        for row in conn.execute(
+            """
+            SELECT
+                'clip' AS result_type,
+                clip_key, clip_id, media_id, clip_name, file_path, summary, report_path,
+                NULL AS marker_type, NULL AS start_seconds, NULL AS end_seconds, 0.0 AS rank
+            FROM clips
+            WHERE lower(coalesce(clip_name, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(file_path, '')) LIKE ?
+            LIMIT ?
+            """,
+            (needle, limit),
+        ):
+            results.append(_row_dict(row))
+    if not allowed or "marker" in allowed:
+        for row in conn.execute(
+            """
+            SELECT
+                'marker' AS result_type,
+                c.clip_key, c.clip_id, c.media_id, c.clip_name, c.file_path,
+                m.visual_description AS summary, c.report_path, m.marker_type,
+                m.start_seconds, m.end_seconds, 0.0 AS rank
+            FROM markers m
+            JOIN clips c ON c.clip_key = m.clip_key
+            WHERE lower(
+                coalesce(m.name, '') || ' ' || coalesce(m.visual_description, '') || ' ' ||
+                coalesce(m.sound_note, '') || ' ' || coalesce(m.transcript_text, '')
+            ) LIKE ?
+            LIMIT ?
+            """,
+            (needle, limit),
+        ):
+            results.append(_row_dict(row))
+    if not allowed or "transcript" in allowed:
+        for row in conn.execute(
+            """
+            SELECT
+                'transcript' AS result_type,
+                c.clip_key, c.clip_id, c.media_id, c.clip_name, c.file_path,
+                s.text AS summary, c.report_path, NULL AS marker_type,
+                s.start_seconds, s.end_seconds, 0.0 AS rank
+            FROM transcript_segments s
+            JOIN clips c ON c.clip_key = s.clip_key
+            WHERE lower(s.text) LIKE ?
+            LIMIT ?
+            """,
+            (needle, limit),
+        ):
+            results.append(_row_dict(row))
+    return results[:limit]
+
+
+def query_analysis_index(
+    project_root: str,
+    query: Any,
+    *,
+    limit: Any = 20,
+    result_types: Optional[Iterable[str]] = None,
+    index_path: Optional[Any] = None,
+) -> Dict[str, Any]:
+    root = normalize_path(project_root)
+    db_path, err = _analysis_index_path(root, index_path)
+    if err or not db_path:
+        return {"success": False, "error": err}
+    if not os.path.isfile(db_path):
+        return {"success": False, "error": f"Analysis index not found: {db_path}", "index_path": db_path}
+    try:
+        max_results = max(1, min(int(limit), 100))
+    except (TypeError, ValueError):
+        max_results = 20
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        has_fts = _sqlite_table_exists(db_path, "clips_fts")
+        if _index_text(query):
+            try:
+                results = _query_analysis_index_fts(conn, str(query), max_results, result_types) if has_fts else []
+            except sqlite3.Error:
+                results = []
+            if not results:
+                results = _query_analysis_index_like(conn, str(query), max_results, result_types)
+        else:
+            results = [
+                _row_dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT
+                        'clip' AS result_type,
+                        clip_key, clip_id, media_id, clip_name, file_path, summary, report_path,
+                        NULL AS marker_type, NULL AS start_seconds, NULL AS end_seconds, 0.0 AS rank
+                    FROM clips
+                    ORDER BY analyzed_at DESC, clip_name
+                    LIMIT ?
+                    """,
+                    (max_results,),
+                )
+            ]
+    finally:
+        conn.close()
+    return {
+        "success": True,
+        "project_root": root,
+        "index_path": db_path,
+        "query": query,
+        "limit": max_results,
+        "result_count": len(results),
+        "results": results,
+    }

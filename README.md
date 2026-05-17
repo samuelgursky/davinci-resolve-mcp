@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.22.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.23.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-32%20(329%20full)-blue.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](docs/reference/api-coverage.md#test-results)
@@ -13,16 +13,32 @@ A Model Context Protocol (MCP) server that lets AI assistants control DaVinci Re
 ## Quick Start
 
 ```bash
+npx davinci-resolve-mcp setup
+```
+
+Before connecting, open DaVinci Resolve Studio and set **Preferences > General > External scripting using** to **Local**. The npm launcher installs a managed copy under your user application-data directory, then runs the universal Python installer. The installer creates a virtual environment, detects Resolve paths, and can configure Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Zed, Continue, Cline, Roo Code, and JetBrains IDEs.
+
+For source installs:
+
+```bash
 git clone https://github.com/samuelgursky/davinci-resolve-mcp.git
 cd davinci-resolve-mcp
 python install.py
 ```
 
-Before connecting, open DaVinci Resolve Studio and set **Preferences > General > External scripting using** to **Local**. The installer creates a virtual environment, detects Resolve paths, and can configure Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Zed, Continue, Cline, Roo Code, and JetBrains IDEs.
-
 For platform paths, client-specific config, and manual setup, see [Installation and Configuration](docs/install.md).
 
 The installer and server check the latest GitHub release for MCP updates. Checks are best-effort and throttled; the server never blocks MCP startup for a prompt. The installer can prompt, snooze, ignore a release, disable checks, or apply an opt-in safe auto-update for clean git checkouts.
+
+## Local Control Panel
+
+Launch the single-user local control panel from the repository root:
+
+```bash
+venv/bin/python -m src.control_panel
+```
+
+The command starts a localhost server and opens the control panel in your browser. To have an AI coding agent do this, ask: **"Open the Resolve MCP control panel for this repo."** Agents should use `venv/bin/python -m src.control_panel` unless your Python environment is already active. Persisted analysis jobs refresh the local search index automatically after successful slices; the manual Build Index action is for rebuilding from existing reports.
 
 ## Server Modes
 

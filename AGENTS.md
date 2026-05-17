@@ -52,6 +52,7 @@ semantics.
 
 - Compound server: `src/server.py`
 - Granular server entrypoint: `src/resolve_mcp_server.py`
+- Local control panel launcher: `src/control_panel.py`
 - Granular implementation: `src/granular/`
 - Utilities: `src/utils/`
 - Installer: `install.py`
@@ -63,6 +64,7 @@ semantics.
 ```bash
 python src/server.py
 python src/server.py --full
+venv/bin/python -m src.control_panel
 python install.py
 venv/bin/python tests/test_import.py
 venv/bin/python scripts/audit_api_parity.py
