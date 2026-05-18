@@ -1533,7 +1533,6 @@ HTML = r"""<!doctype html>
           <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="tools" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l2.1-2.1a6 6 0 0 1-7.6 7.6l-4 4a2.1 2.1 0 0 1-3-3l4-4a6 6 0 0 1 7.6-7.6z"></path></svg></span>Tools</button>
         </div>
       </div>
-      <button class="control-tab" data-panel-target="projects">Projects</button>
       <div class="control-nav-item">
         <button class="control-tab has-menu" data-panel-target="docs">Docs <span class="tab-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></button>
         <div class="nav-dropdown" role="menu" aria-label="Documentation pages">
@@ -1630,7 +1629,7 @@ HTML = r"""<!doctype html>
         <div class="metric-card">
           <span>Open Projects</span>
           <b id="projectsOpenCount">0</b>
-          <small>Shown in the navbar dropdown</small>
+          <small>Shown in the project dropdown</small>
         </div>
         <div class="metric-card">
           <span>Database Projects</span>
@@ -2090,6 +2089,7 @@ HTML = r"""<!doctype html>
       },
     };
     const $ = (id) => document.getElementById(id);
+    const VIEW_ALL_PROJECTS_VALUE = '__view_all_projects__';
     const PANEL_LABELS = {
       overview: 'Overview',
       analysis: 'Analysis',
@@ -2701,18 +2701,21 @@ HTML = r"""<!doctype html>
       const contexts = (state.projects?.contexts || [])
         .filter(context => context.active || context.resolve_current);
       const activeRoot = state.activeContext?.project_root;
-      if (!contexts.length) {
-        select.innerHTML = '<option value="">No open Resolve project</option>';
-        select.disabled = true;
-        return;
-      }
-      select.innerHTML = contexts.map(context => {
+      const options = contexts.map(context => {
         const label = context.project_name || 'Project';
         const selected = context.project_root === activeRoot ? ' selected' : '';
-        const disabled = context.project_root === activeRoot ? ' disabled' : '';
+        const disabled = context.can_load_resolve === false ? ' disabled' : '';
         return `<option value="${escapeAttribute(context.project_root)}"${selected}${disabled}>${escapeHtml(label)}</option>`;
-      }).join('');
-      select.disabled = contexts.length <= 1;
+      });
+      options.push(`<option value="${VIEW_ALL_PROJECTS_VALUE}">View All Projects</option>`);
+      if (!contexts.length) {
+        options.unshift('<option value="" selected disabled>No open Resolve project</option>');
+        select.innerHTML = options.join('');
+        select.disabled = false;
+        return;
+      }
+      select.innerHTML = options.join('');
+      select.disabled = false;
     }
 
     function renderProjects() {
@@ -2788,7 +2791,9 @@ HTML = r"""<!doctype html>
     function restoreProjectContextSelect() {
       const select = $('projectContextSelect');
       const currentRoot = state.activeContext?.project_root;
-      if (select && currentRoot) select.value = currentRoot;
+      if (!select) return;
+      select.value = currentRoot || '';
+      if (select.value !== (currentRoot || '')) select.selectedIndex = 0;
     }
 
     function projectSwitchDialog(currentName, nextName) {
@@ -3767,7 +3772,6 @@ HTML = r"""<!doctype html>
       control.addEventListener('click', (event) => {
         if (control.classList.contains('has-menu')) {
           event.stopPropagation();
-          setPanel(control.dataset.panelTarget, { subpage: control.dataset.subpageTarget });
           toggleNavDropdown(control);
           return;
         }
@@ -3784,7 +3788,17 @@ HTML = r"""<!doctype html>
     $('overviewRefresh').onclick = () => refreshAll().catch(alertError);
     $('projectsRefresh').onclick = () => refreshAllProjects().catch(alertError);
     $('projectFilterText').addEventListener('input', renderProjects);
-    $('projectContextSelect').addEventListener('change', event => switchProjectContext(event.target.value).catch(alertError));
+    $('projectContextSelect').addEventListener('change', event => {
+      if (event.target.value === VIEW_ALL_PROJECTS_VALUE) {
+        setPanel('projects');
+        restoreProjectContextSelect();
+        return;
+      }
+      switchProjectContext(event.target.value).catch(error => {
+        restoreProjectContextSelect();
+        alertError(error);
+      });
+    });
     $('sampleFrameMode').addEventListener('change', () => {
       $('customFramesLabel').style.display = $('sampleFrameMode').value === 'custom' ? 'grid' : 'none';
     });

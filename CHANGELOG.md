@@ -2,6 +2,24 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.23.1
+
+**Control panel navigation fixes** — The local browser control panel now keeps
+top-level dropdown buttons from navigating by themselves. Analysis,
+Diagnostics, Docs, and Preferences open their menus first; selecting a menu item
+is what changes the active view.
+
+**Project dropdown cleanup** — The project context dropdown is back to showing
+only the open/current project context plus a bottom `View All Projects` option.
+The full database browser stays in the Projects view, and the standalone
+Projects navbar button has been removed.
+
+**Validation**: static import checks, API parity audit, focused dashboard unit
+tests, npm CLI smoke tests, package dry-run, and `git diff --check` passed. A
+local dashboard smoke check verified the served HTML on `127.0.0.1:8765`.
+No Resolve scripting behavior changed; live Resolve mutation validation was not
+required.
+
 ## What's New in v2.23.0
 
 **npm installer** — `npx davinci-resolve-mcp setup` is now the primary quick

@@ -21,7 +21,7 @@ from src.server import (
     _media_analysis_report_metadata_candidates,
     setup,
 )
-from src.analysis_dashboard import DashboardState, discover_project_contexts
+from src.analysis_dashboard import DashboardState, HTML, discover_project_contexts
 from src.utils import update_check
 from src.utils.media_analysis import (
     analysis_request_signature,
@@ -305,6 +305,19 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertTrue(switched["success"])
         self.assertEqual(switched["active"]["project_root"], previous)
         self.assertEqual(state.project_root, previous)
+
+    def test_dashboard_project_navigation_uses_context_dropdown(self):
+        self.assertNotIn('<button class="control-tab" data-panel-target="projects">Projects</button>', HTML)
+        self.assertIn("const VIEW_ALL_PROJECTS_VALUE", HTML)
+        self.assertIn(".filter(context => context.active || context.resolve_current)", HTML)
+        self.assertNotIn(".filter(context => context.can_load_resolve !== false || context.active || context.resolve_current)", HTML)
+        self.assertIn("View All Projects", HTML)
+        self.assertIn("setPanel('projects')", HTML)
+
+    def test_dashboard_menu_buttons_open_without_navigation(self):
+        menu_branch = HTML.split("if (control.classList.contains('has-menu')) {", 1)[1].split("return;", 1)[0]
+        self.assertIn("toggleNavDropdown(control);", menu_branch)
+        self.assertNotIn("setPanel(", menu_branch)
 
     def test_output_root_rejects_source_adjacent_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
