@@ -9,11 +9,34 @@ kernel-action counts, release notes, or long reference tables here.
 Never modify, transcode, convert, proxy, relink, replace, or create derivatives
 of source media unless the user explicitly asks for that exact operation.
 
-Analysis workflows may read source media, but outputs must go to sidecar files,
-session scratch space, or the configured `davinci-resolve-mcp-analysis` project
-root. Preserve the chain from camera original to final delivery.
+Analysis workflows may read source media, but file outputs must go to sidecar
+files, session scratch space, or the configured
+`davinci-resolve-mcp-analysis` project root. Resolve-target analysis should run
+visual analysis, transcription, metadata writeback, and Media Pool marker
+writeback by default unless the user opts out; those writes are Resolve project
+database changes, not source-media changes. Preserve the chain from camera
+original to final delivery.
 
 See `docs/guides/media-analysis-guide.md` for the full source-safe workflow.
+
+## Media Analysis Defaults Are Mandatory
+
+Do not translate source-safe into underpowered, read-only, no-writeback analysis.
+When the user asks to analyze Resolve media, run the requested analysis directly
+with visual analysis, transcription, persisted artifacts, metadata writeback, and
+Media Pool marker writeback enabled by default. Do not add
+`include_visuals=false`, `include_transcription=false`,
+`publish_metadata=false`, `timed_markers=no`, `session_only=true`, or
+`dry_run=true` unless the user explicitly asks for that opt-out, the target is a
+raw file path that cannot receive Resolve project writeback. Vision uses
+`host_chat_paths` by default — analyze actions return a deferred payload with
+absolute `frame_paths` and a JSON schema; the host chat must read those frames
+as local images, produce JSON per the schema, and call
+`media_analysis(action="commit_vision", params={clip_id, visual, vision_token})`
+to merge the result and trigger metadata + Media Pool clip-marker writeback.
+Not completing `commit_vision` leaves the analysis in
+`pending_host_vision_analysis` — that is a failure mode, not a success. Users
+must explicitly opt out with `include_visuals=false` for a technical-only run.
 
 ## Frame-Referenced Color Work
 

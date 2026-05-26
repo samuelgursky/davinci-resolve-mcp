@@ -1,11 +1,11 @@
 {
   "summary": {
-    "total": 113,
-    "tested": 79,
-    "passed": 79,
+    "total": 93,
+    "tested": 39,
+    "passed": 39,
     "failed": 0,
     "errors": 0,
-    "skipped": 34
+    "skipped": 54
   },
   "pass": [
     {
@@ -46,11 +46,11 @@
     },
     {
       "name": "PM.CreateProject",
-      "value": "None"
+      "value": "Project (0x0x352bfbe80) [App: 'Resolve' on 127.0.0.1, UUID: de07ca8d-5680-4d1c-9"
     },
     {
       "name": "PM.LoadProject",
-      "value": "Project (0x0x32c2cec00) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44a8-9"
+      "value": "Project (0x0x352bfbe00) [App: 'Resolve' on 127.0.0.1, UUID: de07ca8d-5680-4d1c-9"
     },
     {
       "name": "PM.DeleteProject",
@@ -78,7 +78,7 @@
     },
     {
       "name": "PM.LoadProject_reopen",
-      "value": "Project (0x0x32c2cf400) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44a8-9"
+      "value": "Project (0x0x352bf9640) [App: 'Resolve' on 127.0.0.1, UUID: de07ca8d-5680-4d1c-9"
     },
     {
       "name": "Project.SaveAsNewRenderPreset",
@@ -89,24 +89,12 @@
       "value": "True"
     },
     {
-      "name": "Project.GetRenderJobStatus",
-      "value": "{'JobStatus': 'Ready', 'CompletionPercentage': 0}"
-    },
-    {
-      "name": "Project.DeleteRenderJob",
-      "value": "True"
-    },
-    {
-      "name": "Project.StartRendering",
-      "value": "True"
-    },
-    {
       "name": "Project.RenderWithQuickExport",
-      "value": "{'JobStatus': 'Render Failed'}"
+      "value": "{'JobStatus': 'Render Failed', 'Error': 'Project has no active timeline'}"
     },
     {
       "name": "MS.AddItemListToMediaPool",
-      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104c82390>]"
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x112285070>]"
     },
     {
       "name": "MP.AddSubFolder",
@@ -129,10 +117,6 @@
       "value": "True"
     },
     {
-      "name": "MP.AppendToTimeline",
-      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104c82330>]"
-    },
-    {
       "name": "MP.MoveClips",
       "value": "True"
     },
@@ -142,7 +126,7 @@
     },
     {
       "name": "MP.ImportMedia",
-      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104c82350>]"
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x112285290>]"
     },
     {
       "name": "MP.UnlinkClips",
@@ -166,150 +150,6 @@
     },
     {
       "name": "MPI.SetClipProperty",
-      "value": "False"
-    },
-    {
-      "name": "TL.AddTrack",
-      "value": "True"
-    },
-    {
-      "name": "TL.DeleteTrack",
-      "value": "True"
-    },
-    {
-      "name": "TL.DuplicateTimeline",
-      "value": "True"
-    },
-    {
-      "name": "TL.SetClipsLinked",
-      "value": "True"
-    },
-    {
-      "name": "TL.InsertGeneratorIntoTimeline",
-      "value": "True"
-    },
-    {
-      "name": "TL.InsertTitleIntoTimeline",
-      "value": "True"
-    },
-    {
-      "name": "TL.InsertFusionGeneratorIntoTimeline",
-      "value": "True"
-    },
-    {
-      "name": "TL.InsertFusionCompositionIntoTimeline",
-      "value": "True"
-    },
-    {
-      "name": "TL.InsertOFXGeneratorIntoTimeline",
-      "value": "False"
-    },
-    {
-      "name": "TL.InsertFusionTitleIntoTimeline",
-      "value": "True"
-    },
-    {
-      "name": "TL.DeleteClips",
-      "value": "True"
-    },
-    {
-      "name": "TL.CreateCompoundClip",
-      "value": "Timeline item (0x0x32c2ce780) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-"
-    },
-    {
-      "name": "TL.GrabAllStills",
-      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104c830d0>, <BlackmagicFusion.PyRe"
-    },
-    {
-      "name": "TI.SetProperty",
-      "value": "True"
-    },
-    {
-      "name": "TI.AddFusionComp",
-      "value": "True"
-    },
-    {
-      "name": "TI.GetFusionCompByName",
-      "value": "Composition (0x0x32c348100) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44"
-    },
-    {
-      "name": "TI.GetFusionCompByIndex",
-      "value": "Composition (0x0x32c348100) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44"
-    },
-    {
-      "name": "TI.ExportFusionComp",
-      "value": "True"
-    },
-    {
-      "name": "TI.LoadFusionCompByName",
-      "value": "Composition (0x0x32c348100) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44"
-    },
-    {
-      "name": "TI.RenameFusionCompByName",
-      "value": "True"
-    },
-    {
-      "name": "TI.DeleteFusionCompByName",
-      "value": "False"
-    },
-    {
-      "name": "TI.ImportFusionComp",
-      "value": "Composition (0x0x39b5d2b00) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44"
-    },
-    {
-      "name": "TI.AddVersion",
-      "value": "True"
-    },
-    {
-      "name": "TI.LoadVersionByName",
-      "value": "True"
-    },
-    {
-      "name": "TI.RenameVersionByName",
-      "value": "True"
-    },
-    {
-      "name": "TI.DeleteVersionByName",
-      "value": "False"
-    },
-    {
-      "name": "TI.SetCDL",
-      "value": "True"
-    },
-    {
-      "name": "TI.AddTake",
-      "value": "True"
-    },
-    {
-      "name": "TI.GetTakeByIndex",
-      "value": "{'mediaPoolItem': <BlackmagicFusion.PyRemoteObject object at 0x104c832d0>, 'star"
-    },
-    {
-      "name": "TI.SelectTakeByIndex",
-      "value": "True"
-    },
-    {
-      "name": "TI.DeleteTakeByIndex",
-      "value": "True"
-    },
-    {
-      "name": "TI.CopyGrades",
-      "value": "False"
-    },
-    {
-      "name": "TI.AssignToColorGroup",
-      "value": "True"
-    },
-    {
-      "name": "TI.ExportLUT",
-      "value": "True"
-    },
-    {
-      "name": "TI.SetColorOutputCache",
-      "value": "False"
-    },
-    {
-      "name": "TI.SetFusionOutputCache",
       "value": "False"
     },
     {
@@ -347,6 +187,18 @@
     {
       "name": "PM.SetCurrentDatabase",
       "reason": "only one database available"
+    },
+    {
+      "name": "Project.GetRenderJobStatus",
+      "reason": "no job ID from AddRenderJob"
+    },
+    {
+      "name": "Project.DeleteRenderJob",
+      "reason": "no job ID from AddRenderJob"
+    },
+    {
+      "name": "Project.StartRendering",
+      "reason": "no job to render"
     },
     {
       "name": "Project.InsertAudioToCurrentTrackAtPlayhead",
@@ -405,44 +257,112 @@
       "reason": "needs transcription first"
     },
     {
-      "name": "TL.CreateFusionClip",
-      "reason": "would merge items irreversibly"
+      "name": "TI.SetProperty",
+      "reason": "no timeline items"
     },
     {
-      "name": "TL.CreateSubtitlesFromAudio",
-      "reason": "slow AI operation"
+      "name": "TI.AddFusionComp",
+      "reason": "no timeline items"
     },
     {
-      "name": "TL.DetectSceneCuts",
-      "reason": "slow operation"
+      "name": "TI.GetFusionCompByName",
+      "reason": "no timeline items"
     },
     {
-      "name": "TL.ConvertTimelineToStereo",
-      "reason": "irreversible"
+      "name": "TI.GetFusionCompByIndex",
+      "reason": "no timeline items"
     },
     {
-      "name": "TL.AnalyzeDolbyVision",
-      "reason": "slow/needs HDR content"
+      "name": "TI.ExportFusionComp",
+      "reason": "no timeline items"
     },
     {
-      "name": "TL.ImportIntoTimeline",
-      "reason": "needs AAF/EDL file"
+      "name": "TI.LoadFusionCompByName",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.RenameFusionCompByName",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.DeleteFusionCompByName",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.ImportFusionComp",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.AddVersion",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.LoadVersionByName",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.RenameVersionByName",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.DeleteVersionByName",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.SetCDL",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.AddTake",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.GetTakeByIndex",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.SelectTakeByIndex",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.DeleteTakeByIndex",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.CopyGrades",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.AssignToColorGroup",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.ExportLUT",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.SetColorOutputCache",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.SetFusionOutputCache",
+      "reason": "no timeline items"
     },
     {
       "name": "TI.CreateMagicMask",
-      "reason": "slow AI operation (minutes)"
+      "reason": "no timeline items"
     },
     {
       "name": "TI.RegenerateMagicMask",
-      "reason": "needs existing mask"
+      "reason": "no timeline items"
     },
     {
       "name": "TI.Stabilize",
-      "reason": "slow operation"
+      "reason": "no timeline items"
     },
     {
       "name": "TI.SmartReframe",
-      "reason": "slow operation"
+      "reason": "no timeline items"
     },
     {
       "name": "GSA.SetLabel",

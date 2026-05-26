@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.23.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.24.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-32%20(329%20full)-blue.svg)](#server-modes)
@@ -74,7 +74,7 @@ The compound server is recommended unless you specifically need the granular one
 |------|-----------------------------------|
 | App and project control | Launch/reconnect, page switching, project CRUD, project folders, databases, cloud project wrappers, settings, presets, archives |
 | Media pool and ingest | Safe import, image sequences, multicam prep timelines, bin organization, metadata normalization, metadata field inventory, marks, annotations, relink/proxy/full-resolution guards |
-| Media analysis | Source-safe file/clip/bin/project analysis, 2-pop/slate-clap sync-event detection, confirmed Resolve metadata publishing, session-only defaults, existing-report reuse, chat-context visual analysis by default in `analyze_media` with opt-out, optional transcription |
+| Media analysis | Source-safe file/clip/bin/project analysis, 2-pop/slate-clap sync-event detection, default Resolve metadata and Media Pool marker writeback, persisted analysis artifacts, existing-report reuse, host_chat_paths visual analysis (finalized per clip with `commit_vision`, works with any vision-capable MCP client) with opt-out, transcription with opt-out |
 | Timeline editing and conform | Track/item probing, title text key scans/writes, copy/move/duplicate helpers, range operations, gaps/overlaps, source ranges, checked interchange exports/imports |
 | Review annotations | Timeline/item/clip markers, custom data, flags, clip color, copy/move/sync cleanup, review reports, marker thumbnail review |
 | Color and grading | Node graph probing, CDL validation, grade copy, DRX/LUT helpers, versions, Gallery stills, color groups |
@@ -104,7 +104,7 @@ The default server is a local stdio process launched by your MCP client; it does
 
 For method-by-method status, see [API Coverage and Test Results](docs/reference/api-coverage.md). For current workflow support, see [Kernel Action Coverage](docs/kernels/README.md).
 
-`analyze_media` uses in-chat visual analysis by default when the MCP client supports sampling/image messages. Pass `include_visuals=false` for technical-only or privacy-sensitive runs. If in-chat vision is unavailable, analysis continues with local technical/motion evidence and reports the skipped visual layer. `media_analysis.publish_clip_metadata` can publish confirmed analysis summaries, comments, keywords, people, and high-confidence slate fields back to Resolve clip metadata while preserving existing human-entered fields by default.
+`analyze_media` executes directly by default, persists inspectable reports/artifacts under the analysis root, requests host-chat visual analysis via the `host_chat_paths` protocol (analyze returns absolute frame paths + a JSON schema; the host chat reads each frame as an image and calls `media_analysis(action="commit_vision", ...)` to finalize), runs transcription through the configured local backend, and writes analysis summaries plus source-time Media Pool clip markers back to the Resolve project. Pass `include_visuals=false`, `include_transcription=false`, `publish_metadata=false`, `timed_markers=no`, or `dry_run=true` only when you want to opt out of those default behaviors. Skipping `commit_vision` leaves the run in `pending_host_vision_analysis` — surfaced as a failure mode, not silently downgraded.
 
 ## Documentation
 

@@ -372,10 +372,15 @@ def create_batch_job(
     if plan.get("capability_gaps"):
         return {
             "success": False,
-            "error": "Cannot create batch job with missing required capabilities",
+            "status": "missing_required_capabilities",
+            "error": "Cannot create batch job because required local analysis tools are missing.",
             "plan": plan,
             "capability_gaps": plan.get("capability_gaps"),
             "install_guidance": plan.get("install_guidance"),
+            "next_step": (
+                "Install or configure the missing tools, then start the batch again. "
+                "The MCP reports guidance only and does not install packages automatically."
+            ),
         }
 
     project_root = plan["output_root"]["project_root"]

@@ -1,84 +1,36 @@
 {
   "summary": {
-    "total": 30,
-    "tested": 20,
-    "passed": 20,
+    "total": 26,
+    "tested": 8,
+    "passed": 8,
     "failed": 0,
     "errors": 0,
-    "skipped": 10
+    "skipped": 18
   },
   "pass": [
     {
-      "name": "PM.SetCurrentDatabase",
-      "value": "True"
-    },
-    {
       "name": "Import_video",
-      "value": "True"
+      "value": "False"
     },
     {
       "name": "Import_video2",
-      "value": "True"
+      "value": "False"
     },
     {
       "name": "Import_audio",
-      "value": "True"
-    },
-    {
-      "name": "MP.AutoSyncAudio",
       "value": "False"
-    },
-    {
-      "name": "MS.AddClipMattesToMediaPool",
-      "value": "True"
-    },
-    {
-      "name": "MP.DeleteClipMattes",
-      "value": "True"
     },
     {
       "name": "MS.AddTimelineMattesToMediaPool",
-      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104441730>]"
-    },
-    {
-      "name": "MP.ImportTimelineFromFile",
-      "value": "Timeline (0x0x12f894840) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44a8-"
-    },
-    {
-      "name": "TL.ImportIntoTimeline",
-      "value": "False"
-    },
-    {
-      "name": "MP.ImportFolderFromFile",
-      "value": "True"
-    },
-    {
-      "name": "MPI.LinkProxyMedia",
-      "value": "True"
-    },
-    {
-      "name": "MPI.ReplaceClip",
-      "value": "True"
-    },
-    {
-      "name": "MP.CreateStereoClip",
-      "value": "Media pool item (0x0x12f894a40) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cd"
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x1122866d0>]"
     },
     {
       "name": "Project.InsertAudioToCurrentTrackAtPlayhead",
       "value": "False"
     },
     {
-      "name": "MPI.TranscribeAudio",
-      "value": "None"
-    },
-    {
-      "name": "MPI.ClearTranscription",
-      "value": "None"
-    },
-    {
       "name": "Folder.TranscribeAudio",
-      "value": "True"
+      "value": "False"
     },
     {
       "name": "Folder.ClearTranscription",
@@ -92,6 +44,38 @@
   "fail": [],
   "error": [],
   "skip": [
+    {
+      "name": "PM.SetCurrentDatabase",
+      "reason": "only one database available"
+    },
+    {
+      "name": "MP.AutoSyncAudio",
+      "reason": "need both video and audio clips"
+    },
+    {
+      "name": "MP.ImportTimelineFromFile",
+      "reason": "no video clips imported"
+    },
+    {
+      "name": "TL.ImportIntoTimeline",
+      "reason": "no video clips"
+    },
+    {
+      "name": "MP.ImportFolderFromFile",
+      "reason": "no test folder"
+    },
+    {
+      "name": "MPI.LinkProxyMedia",
+      "reason": "need 2 video clips"
+    },
+    {
+      "name": "MPI.ReplaceClip",
+      "reason": "need 2 video clips"
+    },
+    {
+      "name": "MP.CreateStereoClip",
+      "reason": "need 2 video clips"
+    },
     {
       "name": "TL.CreateFusionClip",
       "reason": "need 2 clips for throwaway timeline"

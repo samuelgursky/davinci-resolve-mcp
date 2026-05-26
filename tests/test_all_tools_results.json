@@ -1,11 +1,11 @@
 {
   "summary": {
-    "total_methods": 315,
-    "tested": 204,
-    "passed": 204,
+    "total_methods": 313,
+    "tested": 116,
+    "passed": 116,
     "failed": 0,
     "errors": 0,
-    "skipped": 111,
+    "skipped": 197,
     "pass_rate": "100.0%"
   },
   "pass": [
@@ -35,15 +35,15 @@
     },
     {
       "name": "Resolve.GetVersion",
-      "value": "[19, 1, 3, 7, '']"
+      "value": "[20, 3, 2, 9, '']"
     },
     {
       "name": "Resolve.GetVersionString",
-      "value": "19.1.3.7"
+      "value": "20.3.2.9"
     },
     {
       "name": "Resolve.SaveLayoutPreset",
-      "value": "False"
+      "value": "True"
     },
     {
       "name": "Resolve.LoadLayoutPreset",
@@ -79,11 +79,11 @@
     },
     {
       "name": "PM.GetProjectListInCurrentFolder",
-      "value": "['Sample', '2025-10-20_20-49-52', '240069_DCTV_Twin_SLG-C_20250106_v05', '240069"
+      "value": "['20260517_Sample', '2025-10-20_20-49-52', '240069_DCTV_Twin_SLG-C_20250106_v05'"
     },
     {
       "name": "PM.GetFolderListInCurrentFolder",
-      "value": "[]"
+      "value": "['DCP_HLS_20260331_225634', 'DCP_HLS_20260401_041204', 'DCP_HLS_20260401_085925'"
     },
     {
       "name": "PM.GotoRootFolder",
@@ -111,19 +111,19 @@
     },
     {
       "name": "Project.GetTimelineCount",
-      "value": "1"
+      "value": "0"
     },
     {
       "name": "Project.GetTimelineByIndex",
-      "value": "True"
+      "value": "no timelines"
     },
     {
       "name": "Project.GetCurrentTimeline",
-      "value": "True"
+      "value": "False"
     },
     {
       "name": "Project.SetCurrentTimeline",
-      "value": "True"
+      "value": "no timeline"
     },
     {
       "name": "Project.GetGallery",
@@ -131,7 +131,7 @@
     },
     {
       "name": "Project.GetName",
-      "value": "Sample"
+      "value": "20260517_Sample"
     },
     {
       "name": "Project.SetName",
@@ -147,7 +147,7 @@
     },
     {
       "name": "Project.AddRenderJob",
-      "value": ""
+      "value": "None"
     },
     {
       "name": "Project.DeleteAllRenderJobs",
@@ -179,7 +179,7 @@
     },
     {
       "name": "Project.GetQuickExportRenderPresets",
-      "value": "['H.264', 'HyperDeck', 'H.265', 'ProRes', 'YouTube', 'Vimeo', 'TikTok', 'Present"
+      "value": "['H.264 Master', 'HyperDeck', 'H.265 Master', 'ProRes 422 HQ', 'YouTube', 'Vimeo"
     },
     {
       "name": "Project.GetSetting",
@@ -195,7 +195,7 @@
     },
     {
       "name": "Project.GetRenderCodecs",
-      "value": "{'H.264': 'H264', 'H.265': 'H265'}"
+      "value": "{'H.264': 'H264', 'H.265': 'H265', 'YUV 422 10-bit': 'APVYUV422_10'}"
     },
     {
       "name": "Project.GetCurrentRenderFormatAndCodec",
@@ -223,7 +223,7 @@
     },
     {
       "name": "Project.GetUniqueId",
-      "value": "72381ad3-7787-4e63-bb43-132a5f066650"
+      "value": "51657265-33d8-44d6-b000-fcdb46b72d67"
     },
     {
       "name": "Project.LoadBurnInPreset",
@@ -239,7 +239,7 @@
     },
     {
       "name": "Project.AddColorGroup",
-      "value": "Color Group (0x0x32c2cf000) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44"
+      "value": "Color Group (0x0x352bf8640) [App: 'Resolve' on 127.0.0.1, UUID: de07ca8d-5680-4d"
     },
     {
       "name": "Project.DeleteColorGroup",
@@ -247,15 +247,15 @@
     },
     {
       "name": "MS.GetMountedVolumeList",
-      "value": "['/Users/<UserName>/Movies', '/Volumes/ExampleMedia01', '/Volumes/Macintosh HD'"
+      "value": "['/Users/samuelgursky/Movies', '/Volumes/Firefox', '/Volumes/IANWALLACE_SHUTTLE_"
     },
     {
       "name": "MS.GetSubFolderList",
-      "value": "['/Users/<UserName>/Movies/Resolve Project Backups', '/Users/<UserName>/Movi"
+      "value": "['/Users/samuelgursky/Movies/Resolve Project Backups', '/Users/samuelgursky/Movi"
     },
     {
       "name": "MS.GetFileList",
-      "value": "[]"
+      "value": "['/Users/samuelgursky/Movies/CKY Trippy Montage.mp4']"
     },
     {
       "name": "MS.RevealInStorage",
@@ -291,11 +291,11 @@
     },
     {
       "name": "MP.GetUniqueId",
-      "value": "dde652a0-5930-4198-8896-c750e3b48962"
+      "value": "04da90af-ce87-41b6-8d67-0878368d1d2d"
     },
     {
       "name": "MP.GetSelectedClips",
-      "value": "None"
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x102ea71b0>]"
     },
     {
       "name": "MP.SetSelectedClip",
@@ -303,7 +303,7 @@
     },
     {
       "name": "Folder.GetClipList",
-      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104d5f690>, <BlackmagicFusion.PyRe"
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x102ea5470>]"
     },
     {
       "name": "Folder.GetName",
@@ -319,15 +319,15 @@
     },
     {
       "name": "Folder.GetUniqueId",
-      "value": "6afc6551-6f6d-4847-a76a-ea0ada79436a"
+      "value": "adf17398-dac7-40b0-b23a-a7afaab82568"
     },
     {
       "name": "MPI.GetName",
-      "value": "240023_JaneCentofante_SaffronRobe-Textless_SLG-F_20250307_V08-4096x1716-ProRes42"
+      "value": "CKY - Bam and The Rental Car.mp4"
     },
     {
       "name": "MPI.GetMetadata",
-      "value": "{'Comments': 'API test'}"
+      "value": "{'Comments': '[DaVinci Resolve MCP Analysis]\\nSummary: A fast-cut, lo-fi finishe"
     },
     {
       "name": "MPI.SetMetadata",
@@ -335,11 +335,11 @@
     },
     {
       "name": "MPI.GetThirdPartyMetadata",
-      "value": "{}"
+      "value": "{'davinci_resolve_mcp.published_at': '2026-05-19T19:56:45Z', 'davinci_resolve_mc"
     },
     {
       "name": "MPI.GetMediaId",
-      "value": "51395f41-bc3f-4084-a5bd-ec5b7411d9a4"
+      "value": "c0e9c280-935c-4285-9225-702fd16d3bf3"
     },
     {
       "name": "MPI.AddMarker",
@@ -379,7 +379,7 @@
     },
     {
       "name": "MPI.GetFlagList",
-      "value": "['Green', 'Blue']"
+      "value": "['Blue']"
     },
     {
       "name": "MPI.ClearFlags",
@@ -399,7 +399,7 @@
     },
     {
       "name": "MPI.GetClipProperty",
-      "value": "{'Alpha mode': 'None', 'Angle': '', 'Audio Bit Depth': '24', 'Audio Ch': '2', 'A"
+      "value": "{'2nd Asst': '', '2nd Continuity': '', '2nd DIT': '', '2nd DOP': '', '2nd DOP Re"
     },
     {
       "name": "MPI.UnlinkProxyMedia",
@@ -407,7 +407,7 @@
     },
     {
       "name": "MPI.GetUniqueId",
-      "value": "38a66a67-0e99-4d06-b9b1-24be49d6bcfe"
+      "value": "1f569f5a-03cf-4135-a499-d2b018084d83"
     },
     {
       "name": "MPI.GetAudioMapping",
@@ -415,7 +415,7 @@
     },
     {
       "name": "MPI.GetMarkInOut",
-      "value": "{'video': {}, 'audio': {}}"
+      "value": "{'video': {'in': 672, 'out': 806}, 'audio': {'in': 672, 'out': 806}}"
     },
     {
       "name": "MPI.SetMarkInOut",
@@ -426,364 +426,12 @@
       "value": "True"
     },
     {
-      "name": "TL.GetName",
-      "value": "Timeline 1"
-    },
-    {
-      "name": "TL.SetName",
-      "value": "False"
-    },
-    {
-      "name": "TL.GetStartFrame",
-      "value": "86400"
-    },
-    {
-      "name": "TL.GetEndFrame",
-      "value": "210071"
-    },
-    {
-      "name": "TL.SetStartTimecode",
-      "value": "True"
-    },
-    {
-      "name": "TL.GetStartTimecode",
-      "value": "01:00:00:00"
-    },
-    {
-      "name": "TL.GetTrackCount_video",
-      "value": "1"
-    },
-    {
-      "name": "TL.GetTrackCount_audio",
-      "value": "1"
-    },
-    {
-      "name": "TL.GetTrackCount_subtitle",
-      "value": "0"
-    },
-    {
-      "name": "TL.GetTrackSubType",
-      "value": "stereo"
-    },
-    {
-      "name": "TL.SetTrackEnable",
-      "value": "True"
-    },
-    {
-      "name": "TL.GetIsTrackEnabled",
-      "value": "True"
-    },
-    {
-      "name": "TL.SetTrackLock",
-      "value": "True"
-    },
-    {
-      "name": "TL.GetIsTrackLocked",
-      "value": "False"
-    },
-    {
-      "name": "TL.GetItemListInTrack",
-      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104d5f6f0>, <BlackmagicFusion.PyRe"
-    },
-    {
-      "name": "TL.AddMarker",
-      "value": "True"
-    },
-    {
-      "name": "TL.GetMarkers",
-      "value": "{86400: {'color': 'Blue', 'duration': 1, 'note': 'note', 'name': 'Test', 'custom"
-    },
-    {
-      "name": "TL.GetMarkerByCustomData",
-      "value": "None"
-    },
-    {
-      "name": "TL.UpdateMarkerCustomData",
-      "value": "True"
-    },
-    {
-      "name": "TL.GetMarkerCustomData",
-      "value": "test"
-    },
-    {
-      "name": "TL.DeleteMarkersByColor",
-      "value": "True"
-    },
-    {
-      "name": "TL.DeleteMarkerAtFrame",
-      "value": "False"
-    },
-    {
-      "name": "TL.DeleteMarkerByCustomData",
-      "value": "False"
-    },
-    {
-      "name": "TL.GetCurrentTimecode",
-      "value": "None"
-    },
-    {
-      "name": "TL.SetCurrentTimecode",
-      "value": "False"
-    },
-    {
-      "name": "TL.GetCurrentVideoItem",
-      "value": "None"
-    },
-    {
-      "name": "TL.GetCurrentClipThumbnailImage",
-      "value": "None"
-    },
-    {
-      "name": "TL.GetTrackName",
-      "value": "Video 1"
-    },
-    {
-      "name": "TL.SetTrackName",
-      "value": "True"
-    },
-    {
-      "name": "TL.Export",
-      "value": "True"
-    },
-    {
-      "name": "TL.GetSetting",
-      "value": "{'audioCaptureNumChannels': '2', 'audioOutputHasTimecode': '0', 'audioPlayoutNum"
-    },
-    {
-      "name": "TL.SetSetting",
-      "value": "False"
-    },
-    {
-      "name": "TL.GrabStill",
-      "value": "GalleryStill (0x0x32c2cedc0) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-4"
-    },
-    {
-      "name": "TL.GetUniqueId",
-      "value": "314524ab-705f-4527-9362-9cea0e60d6ac"
-    },
-    {
-      "name": "TL.GetNodeGraph",
-      "value": "True"
-    },
-    {
-      "name": "TL.GetMediaPoolItem",
-      "value": "Media pool item (0x0x32c2cf480) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cd"
-    },
-    {
-      "name": "TL.GetMarkInOut",
-      "value": "{'video': {}, 'audio': {}}"
-    },
-    {
-      "name": "TL.SetMarkInOut",
-      "value": "True"
-    },
-    {
-      "name": "TL.ClearMarkInOut",
-      "value": "True"
-    },
-    {
-      "name": "TI.GetName",
-      "value": "10 Step"
-    },
-    {
-      "name": "TI.GetDuration",
-      "value": "120"
-    },
-    {
-      "name": "TI.GetEnd",
-      "value": "86520"
-    },
-    {
-      "name": "TI.GetSourceEndFrame",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetSourceEndTime",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetFusionCompCount",
-      "value": "0"
-    },
-    {
-      "name": "TI.GetFusionCompNameList",
-      "value": "{}"
-    },
-    {
-      "name": "TI.GetLeftOffset",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetRightOffset",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetStart",
-      "value": "86400"
-    },
-    {
-      "name": "TI.GetSourceStartFrame",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetSourceStartTime",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetProperty",
-      "value": "{'Pan': 0.0, 'Tilt': 0.0, 'ZoomX': 1.0, 'ZoomY': 1.0, 'ZoomGang': True, 'Rotatio"
-    },
-    {
-      "name": "TI.AddMarker",
-      "value": "True"
-    },
-    {
-      "name": "TI.GetMarkers",
-      "value": "{0: {'color': 'Red', 'duration': 1, 'note': 'note', 'name': 'TITest', 'customDat"
-    },
-    {
-      "name": "TI.GetMarkerByCustomData",
-      "value": "None"
-    },
-    {
-      "name": "TI.UpdateMarkerCustomData",
-      "value": "True"
-    },
-    {
-      "name": "TI.GetMarkerCustomData",
-      "value": "test"
-    },
-    {
-      "name": "TI.DeleteMarkersByColor",
-      "value": "True"
-    },
-    {
-      "name": "TI.DeleteMarkerAtFrame",
-      "value": "False"
-    },
-    {
-      "name": "TI.DeleteMarkerByCustomData",
-      "value": "False"
-    },
-    {
-      "name": "TI.AddFlag",
-      "value": "True"
-    },
-    {
-      "name": "TI.GetFlagList",
-      "value": "[]"
-    },
-    {
-      "name": "TI.ClearFlags",
-      "value": "True"
-    },
-    {
-      "name": "TI.GetClipColor",
-      "value": ""
-    },
-    {
-      "name": "TI.SetClipColor",
-      "value": "True"
-    },
-    {
-      "name": "TI.ClearClipColor",
-      "value": "True"
-    },
-    {
-      "name": "TI.GetCurrentVersion",
-      "value": "{}"
-    },
-    {
-      "name": "TI.GetVersionNameList",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetMediaPoolItem",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetStereoConvergenceValues",
-      "value": "{}"
-    },
-    {
-      "name": "TI.GetStereoLeftFloatingWindowParams",
-      "value": "{}"
-    },
-    {
-      "name": "TI.GetStereoRightFloatingWindowParams",
-      "value": "{}"
-    },
-    {
-      "name": "TI.GetSelectedTakeIndex",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetTakesCount",
-      "value": "None"
-    },
-    {
-      "name": "TI.FinalizeTake",
-      "value": "False"
-    },
-    {
-      "name": "TI.SetClipEnabled",
-      "value": "True"
-    },
-    {
-      "name": "TI.GetClipEnabled",
-      "value": "True"
-    },
-    {
-      "name": "TI.UpdateSidecar",
-      "value": "False"
-    },
-    {
-      "name": "TI.GetUniqueId",
-      "value": "c5cf3acf-29db-432c-8839-d23b350e486c"
-    },
-    {
-      "name": "TI.LoadBurnInPreset",
-      "value": "False"
-    },
-    {
-      "name": "TI.GetNodeGraph",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetColorGroup",
-      "value": "None"
-    },
-    {
-      "name": "TI.RemoveFromColorGroup",
-      "value": "False"
-    },
-    {
-      "name": "TI.GetLinkedItems",
-      "value": "[]"
-    },
-    {
-      "name": "TI.GetTrackTypeAndIndex",
-      "value": "['video', 1]"
-    },
-    {
-      "name": "TI.GetSourceAudioChannelMapping",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetIsColorOutputCacheEnabled",
-      "value": "None"
-    },
-    {
-      "name": "TI.GetIsFusionOutputCacheEnabled",
-      "value": "None"
-    },
-    {
       "name": "Gallery.GetAlbumName",
       "value": "Stills 1"
     },
     {
       "name": "Gallery.GetCurrentStillAlbum",
-      "value": "GalleryStillAlbum (0x0x32c2cecc0) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2"
+      "value": "GalleryStillAlbum (0x0x352bf8780) [App: 'Resolve' on 127.0.0.1, UUID: de07ca8d-5"
     },
     {
       "name": "Gallery.SetCurrentStillAlbum",
@@ -791,19 +439,19 @@
     },
     {
       "name": "Gallery.GetGalleryStillAlbums",
-      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104d5f170>, <BlackmagicFusion.PyRe"
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x102ea5470>, <BlackmagicFusion.PyRe"
     },
     {
       "name": "Gallery.GetGalleryPowerGradeAlbums",
-      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104d5f190>, <BlackmagicFusion.PyRe"
+      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x102ea6370>, <BlackmagicFusion.PyRe"
     },
     {
       "name": "GSA.GetStills",
-      "value": "[<BlackmagicFusion.PyRemoteObject object at 0x104d5f870>]"
+      "value": "[]"
     },
     {
       "name": "GSA.GetLabel",
-      "value": ""
+      "value": "no stills"
     },
     {
       "name": "CG.GetName",
@@ -815,15 +463,15 @@
     },
     {
       "name": "CG.GetClipsInTimeline",
-      "value": "[]"
+      "value": "None"
     },
     {
       "name": "CG.GetPreClipNodeGraph",
-      "value": "Graph (0x0x39b70bee0) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44a8-920"
+      "value": "Graph (0x0x3a7d85780) [App: 'Resolve' on 127.0.0.1, UUID: de07ca8d-5680-4d1c-928"
     },
     {
       "name": "CG.GetPostClipNodeGraph",
-      "value": "Graph (0x0x39b70bdc0) [App: 'Resolve' on 127.0.0.1, UUID: d74d0664-2cda-44a8-920"
+      "value": "Graph (0x0x3a7d84520) [App: 'Resolve' on 127.0.0.1, UUID: de07ca8d-5680-4d1c-928"
     }
   ],
   "fail": [],
@@ -1062,188 +710,532 @@
       "reason": "needs transcription"
     },
     {
-      "name": "TL.AddTrack",
-      "reason": "would add track"
+      "name": "TL.method_0",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.DeleteTrack",
-      "reason": "would delete track"
+      "name": "TL.method_1",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.DeleteClips",
-      "reason": "would delete clips"
+      "name": "TL.method_2",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.SetClipsLinked",
-      "reason": "would change links"
+      "name": "TL.method_3",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.DuplicateTimeline",
-      "reason": "would duplicate timeline"
+      "name": "TL.method_4",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.CreateCompoundClip",
-      "reason": "would create compound"
+      "name": "TL.method_5",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.CreateFusionClip",
-      "reason": "would create fusion clip"
+      "name": "TL.method_6",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.ImportIntoTimeline",
-      "reason": "needs AAF/EDL file"
+      "name": "TL.method_7",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.InsertGeneratorIntoTimeline",
-      "reason": "would modify timeline"
+      "name": "TL.method_8",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.InsertFusionGeneratorIntoTimeline",
-      "reason": "would modify timeline"
+      "name": "TL.method_9",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.InsertFusionCompositionIntoTimeline",
-      "reason": "would modify timeline"
+      "name": "TL.method_10",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.InsertOFXGeneratorIntoTimeline",
-      "reason": "would modify timeline"
+      "name": "TL.method_11",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.InsertTitleIntoTimeline",
-      "reason": "would modify timeline"
+      "name": "TL.method_12",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.InsertFusionTitleIntoTimeline",
-      "reason": "would modify timeline"
+      "name": "TL.method_13",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.GrabAllStills",
-      "reason": "slow operation"
+      "name": "TL.method_14",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.CreateSubtitlesFromAudio",
-      "reason": "slow AI operation"
+      "name": "TL.method_15",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.DetectSceneCuts",
-      "reason": "slow operation"
+      "name": "TL.method_16",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.ConvertTimelineToStereo",
-      "reason": "would convert timeline"
+      "name": "TL.method_17",
+      "reason": "no timeline"
     },
     {
-      "name": "TL.AnalyzeDolbyVision",
-      "reason": "slow analysis"
+      "name": "TL.method_18",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.GetFusionCompByIndex",
-      "reason": "needs fusion comp"
+      "name": "TL.method_19",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.GetFusionCompByName",
-      "reason": "needs fusion comp"
+      "name": "TL.method_20",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.SetProperty",
-      "reason": "might change item"
+      "name": "TL.method_21",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.AddFusionComp",
-      "reason": "would add comp"
+      "name": "TL.method_22",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.ImportFusionComp",
-      "reason": "needs comp file"
+      "name": "TL.method_23",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.ExportFusionComp",
-      "reason": "needs comp"
+      "name": "TL.method_24",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.DeleteFusionCompByName",
-      "reason": "needs comp"
+      "name": "TL.method_25",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.LoadFusionCompByName",
-      "reason": "needs comp"
+      "name": "TL.method_26",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.RenameFusionCompByName",
-      "reason": "needs comp"
+      "name": "TL.method_27",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.AddVersion",
-      "reason": "would add version"
+      "name": "TL.method_28",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.DeleteVersionByName",
-      "reason": "needs version"
+      "name": "TL.method_29",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.LoadVersionByName",
-      "reason": "needs version"
+      "name": "TL.method_30",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.RenameVersionByName",
-      "reason": "needs version"
+      "name": "TL.method_31",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.SetCDL",
-      "reason": "would change color"
+      "name": "TL.method_32",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.AddTake",
-      "reason": "needs media pool item"
+      "name": "TL.method_33",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.GetTakeByIndex",
-      "reason": "needs takes"
+      "name": "TL.method_34",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.DeleteTakeByIndex",
-      "reason": "needs takes"
+      "name": "TL.method_35",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.SelectTakeByIndex",
-      "reason": "needs takes"
+      "name": "TL.method_36",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.CopyGrades",
-      "reason": "needs target items"
+      "name": "TL.method_37",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.CreateMagicMask",
-      "reason": "slow AI operation"
+      "name": "TL.method_38",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.RegenerateMagicMask",
-      "reason": "needs mask"
+      "name": "TL.method_39",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.Stabilize",
-      "reason": "slow operation"
+      "name": "TL.method_40",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.SmartReframe",
-      "reason": "slow operation"
+      "name": "TL.method_41",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.AssignToColorGroup",
-      "reason": "needs group"
+      "name": "TL.method_42",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.ExportLUT",
-      "reason": "needs path and enum"
+      "name": "TL.method_43",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.SetColorOutputCache",
-      "reason": "would change cache"
+      "name": "TL.method_44",
+      "reason": "no timeline"
     },
     {
-      "name": "TI.SetFusionOutputCache",
-      "reason": "would change cache"
+      "name": "TL.method_45",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TL.method_46",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TL.method_47",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TL.method_48",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TL.method_49",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TL.method_50",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TL.method_51",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TL.method_52",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TL.method_53",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TL.method_54",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TL.method_55",
+      "reason": "no timeline"
+    },
+    {
+      "name": "TI.method_0",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_1",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_2",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_3",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_4",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_5",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_6",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_7",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_8",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_9",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_10",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_11",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_12",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_13",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_14",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_15",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_16",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_17",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_18",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_19",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_20",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_21",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_22",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_23",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_24",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_25",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_26",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_27",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_28",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_29",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_30",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_31",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_32",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_33",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_34",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_35",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_36",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_37",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_38",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_39",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_40",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_41",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_42",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_43",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_44",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_45",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_46",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_47",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_48",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_49",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_50",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_51",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_52",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_53",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_54",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_55",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_56",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_57",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_58",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_59",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_60",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_61",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_62",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_63",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_64",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_65",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_66",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_67",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_68",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_69",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_70",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_71",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_72",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_73",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_74",
+      "reason": "no timeline items"
+    },
+    {
+      "name": "TI.method_75",
+      "reason": "no timeline items"
     },
     {
       "name": "Gallery.SetAlbumName",

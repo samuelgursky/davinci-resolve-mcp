@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 329-tool granular server instead
 """
 
-VERSION = "2.23.1"
+VERSION = "2.24.0"
 
 import base64
 import os
@@ -56,12 +56,15 @@ from src.utils.update_check import (
     update_state_path,
 )
 from src.utils.media_analysis import (
-    CHAT_CONTEXT_VISION_PROVIDERS,
+    HOST_CHAT_PATHS_PROVIDER,
+    HOST_CHAT_VISION_PROVIDERS,
     DEFAULT_VISION_ANALYSIS_PROMPT,
+    VISION_SCHEMA_REFERENCE,
     analysis_index_status,
     build_plan as build_media_analysis_plan,
     build_analysis_index,
     cleanup_artifacts as cleanup_media_analysis_artifacts,
+    commit_visual_analysis,
     detect_capabilities as detect_media_analysis_capabilities,
     execute_plan_async as execute_media_analysis_plan_async,
     install_guidance as media_analysis_install_guidance,
@@ -256,6 +259,7 @@ Core pattern:
 - Start by probing state: resolve_control.get_version/get_page, project_manager.get_current, timeline.get_current, and media_pool.probe_media_pool.
 - Before mutating timelines, media pools, render settings, grades, projects, databases, or extensions, prefer the matching probe, capabilities, boundary_report, safe_*, or dry_run action when one exists.
 - Preserve source media integrity. Never transcode, proxy, rewrite, move, rename, or create derivatives of source media unless the user explicitly asks. Analysis output belongs in sidecars or analysis directories.
+- Do not silently downgrade media analysis. Source-safe does not mean no visuals, no transcription, no persistence, no metadata, or no markers. For Resolve-target media analysis, keep visual analysis, transcription, persisted artifacts, metadata writeback, and Media Pool marker writeback enabled unless the user explicitly opts out. Vision uses host_chat_paths by default: analyze actions return absolute frame_paths in a deferred payload; you must read those frames as images and call media_analysis(action="commit_vision", ...) to finalize. Not completing commit_vision leaves the analysis in pending_host_vision_analysis — that is a failure mode, not a success.
 
 Visual feedback:
 - For the current Color-page frame, use timeline_markers(action="get_thumbnail_image") when the client can display MCP images.
@@ -263,7 +267,7 @@ Visual feedback:
 - Use project_settings(action="export_frame_as_still") only when a file export is explicitly useful, and write to a temp/stills location rather than near source media.
 
 High-value workflows:
-- Media analysis: use the analyze_media prompt or media_analysis.capabilities/install_guidance, then plan or analyze file/clip/bin/project targets with session-only defaults.
+- Media analysis: use the analyze_media prompt or media_analysis.capabilities/install_guidance, then analyze file/clip/bin/project targets directly with persisted artifacts, host_chat_paths visual analysis (finish each clip with media_analysis(action="commit_vision", ...)), transcription, metadata writeback, and Media Pool marker writeback enabled by default unless the user opts out.
 - Timeline editing: use timeline.probe_edit_kernel_item, timeline.title_property_scan / timeline.set_title_text for Edit-page Text+ keys, duplicate_clips/copy_clips/move_clips, copy_range/overwrite_range/lift_range, and detect_gaps_overlaps.
 - Media ingest: use media_pool.ingest_capabilities, safe_import_media/safe_import_sequence, organize_clips, normalize_metadata, and relink planning actions.
 - Color: use timeline_item_color.grade_boundary_report, probe_node_graph, safe_set_cdl, safe_apply_drx, grade_version_snapshot/restore, and gallery/color-group capability actions.
@@ -281,15 +285,15 @@ For one-off scripting:
 @mcp.prompt(
     name="analyze_media",
     title="Analyze Media",
-    description="Run a read-only DaVinci Resolve media-analysis workflow for a file, selected clip, bin, sequence/timeline, or whole project.",
+    description="Run a source-safe DaVinci Resolve media-analysis workflow for a file, selected clip, bin, sequence/timeline, or whole project.",
 )
 def analyze_media(
     target: str = "project",
     depth: str = "standard",
     finished_video: bool = False,
     include_visuals: bool = True,
-    include_transcription: bool = False,
-    persist: bool = False,
+    include_transcription: bool = True,
+    persist: bool = True,
 ) -> str:
     """Slash-command style prompt for guided media analysis."""
     return f"""Analyze Resolve media with the DaVinci Resolve MCP attached.
@@ -311,35 +315,39 @@ Workflow:
    - "timeline" or "sequence": use media_analysis(action="analyze_sequence", params={{"track_types": ["video", "audio"]}}).
    - "bin:<path>": use media_analysis(action="analyze_bin", params={{"path": "<path>", "recursive": true}}).
    - An absolute file path: use media_analysis(action="analyze_file", params={{"path": "<path>"}}).
-4. Before running new analysis, check memory:
+4. Do not silently downgrade media analysis. Do not add include_visuals=false, include_transcription=false, publish_metadata=false, timed_markers="no", session_only=true, or dry_run=true unless the user explicitly asks for that opt-out or the target is a raw file path that cannot receive Resolve project writeback.
+5. Do a quick memory check, then keep moving:
    - media_analysis(action="summarize") to find existing reports for the active project.
    - media_analysis(action="get_report") when a manifest/report already exists.
    - timeline(action="list"), timeline(action="get_current"), timeline(action="probe_timeline_structure"), and timeline_markers(action="get_all") when an edit already exists.
-   Reuse existing evidence instead of re-analyzing unless the old report is stale, cache-incompatible, or missing the requested modality.
-5. For bin or project targets, dry-run first so the user can see clip count, estimated time, missing capabilities, and output behavior. For one selected clip or one file, execution is fine when the user asked to analyze.
-6. Prefer session-only execution unless persist is true. Use persist=true only when the user wants reusable reports under davinci-resolve-mcp-analysis.
-7. Visual analysis defaults on for this prompt. If include_visuals is true, request vision={{"enabled": true, "provider": "chat_context"}} so the current MCP client/chat model can inspect sampled frames when supported. If include_visuals is false, run a technical/audio/metadata-only analysis and do not request vision.
-8. If chat-context sampling is unavailable while include_visuals is true, continue with technical/motion analysis, report that visual analysis was skipped, and offer the user two next steps: continue without visuals or get setup steps for a supported in-chat/sampling vision path.
-9. If include_transcription is true, use an available local transcription backend only when it is already installed and the user has explicitly approved any model download. Resolve-native transcription mutates project state, so use it only when that mutation is explicitly desired.
-10. If the task is about an existing edit, markers, or a finished video, call media_analysis(action="review_timeline_markers", params={{"vision": {{"enabled": {str(include_visuals).lower()}, "provider": "chat_context"}}}}) when marker/frame alignment affects the decision.
+   Reuse existing evidence only when it already satisfies the requested technical, visual, transcription, and marker/writeback needs; otherwise run fresh analysis.
+6. Execute analysis by default. Use dry_run=true only when the user asks for a preview or when you are intentionally staging a very large batch before a slice-based job.
+7. Persist inspectable reports and artifacts by default under davinci-resolve-mcp-analysis. Use session_only=true only when the user explicitly asks for scratch results.
+8. Visual analysis and transcription default on. If include_visuals is true, request vision={{"enabled": true, "provider": "host_chat_paths"}}. The analyze tool will respond with a deferred payload containing absolute frame_paths and a JSON schema; read each frame as a local image, produce JSON per the schema, then call media_analysis(action="commit_vision", params={{"clip_id": "...", "visual": <your JSON>, "vision_token": "..."}}) per clip. Metadata writeback and Media Pool clip markers publish automatically when commit_vision finalizes each clip. If include_transcription is true, request transcription={{"enabled": true, "allow_model_download": true}} so the configured local transcription backend can run.
+9. If you cannot read the frame_paths as images, the visual layer remains pending_host_vision_analysis — surface that to the user; do not call the analysis complete unless they explicitly opt out with include_visuals=false.
+10. Executed Resolve-target analysis writes metadata and source-time Media Pool clip markers by default after commit_vision finalizes. Pass publish_metadata=false, timed_markers="no", or dry_run=true only when the user asks to avoid Resolve project writeback.
+11. If the task is about an existing edit, markers, or a finished video, call media_analysis(action="review_timeline_markers", params={{"vision": {{"enabled": {str(include_visuals).lower()}, "provider": "host_chat_paths"}}}}) when marker/frame alignment affects the decision. The response will include image_path; read it and answer inline (no commit step).
 
 Recommended execution params:
 {{
   "dry_run": false,
   "depth": "{depth}",
-  "session_only": {str(not persist).lower()},
+  "session_only": false,
   "persist": {str(persist).lower()},
+  "publish_metadata": true,
+  "timed_markers": "yes",
   "reuse_existing": true,
   "force_refresh": false,
   "reuse_policy": "compatible",
   "max_analysis_frames": 8,
-  "vision": {{"enabled": {str(include_visuals).lower()}, "provider": "chat_context"}},
-  "transcription": {{"enabled": {str(include_transcription).lower()}}}
+  "vision": {{"enabled": {str(include_visuals).lower()}, "provider": "host_chat_paths"}},
+  "transcription": {{"enabled": {str(include_transcription).lower()}, "allow_model_download": true}}
 }}
 
 Interpretation rules learned from live Resolve sessions:
 - Preserve source media integrity. Do not modify, transcode, proxy, rename, move, or write beside source media.
-- Users can opt out of in-chat visual analysis by setting include_visuals=false. Do not send sampled frames to chat-context vision when they opt out.
+- Users can opt out of in-chat visual analysis by setting include_visuals=false. When opted out, do not read frame_paths and do not call commit_vision.
+- Users can opt out of transcription with include_transcription=false and can opt out of Resolve project writeback with publish_metadata=false or timed_markers="no".
 - Use the project-owned editorial craft reference in docs/guides/editorial-decision-guide.md; do not rely on personal or external editor skills.
 - When the user asks for cutting, pacing, story structure, suspense, comedy, or tonal reframing, use the editor craft lens: emotion and story outrank coverage; sound leads picture; find blink points and decisive frames; cut on reaction when meaning matters.
 - Treat scene/cut detection as guardrails, not story. If the source is a finished video, use black/flash ranges and likely cut points to avoid bad edit regions, but let transcript, sound, and complete thoughts drive editorial decisions.
@@ -348,7 +356,7 @@ Interpretation rules learned from live Resolve sessions:
 - Watch for Resolve timeline start-frame offsets. Positioned appends should anchor record_frame to the timeline start frame, often 108000 for 01:00:00:00.
 - Summarize results as editor-usable intelligence: technical state, warnings, motion/variance, visual content, transcript/sound notes, avoid ranges, best moments, and concrete next actions.
 
-When finished, report exactly which media_analysis call was made, whether artifacts were session-only or persisted, and whether chat-context visual analysis succeeded."""
+When finished, report exactly which media_analysis call was made, whether artifacts were persisted, whether commit_vision was called for each clip with pending vision, whether metadata/markers were written back, and whether transcription succeeded."""
 
 # ─── Python Version Check ────────────────────────────────────────────────────
 
@@ -481,6 +489,122 @@ def _err(msg):
 
 def _ok(**kw):
     return {"success": True, **kw}
+
+
+def _activate_resolve_window() -> Dict[str, Any]:
+    """Bring DaVinci Resolve to the foreground.
+
+    macOS: AppleScript `tell application "DaVinci Resolve" to activate`.
+    Windows: PowerShell `(New-Object -ComObject WScript.Shell).AppActivate(...)`.
+    Linux: wmctrl/xdotool if present.
+
+    Best-effort; returns {activated: bool, platform, error?}. Never raises.
+    """
+    try:
+        if sys.platform == "darwin":
+            import subprocess
+            proc = subprocess.run(
+                ["osascript", "-e", 'tell application "DaVinci Resolve" to activate'],
+                capture_output=True, text=True, timeout=5,
+            )
+            return {
+                "activated": proc.returncode == 0,
+                "platform": "darwin",
+                "error": proc.stderr.strip() if proc.returncode != 0 else None,
+            }
+        if sys.platform.startswith("win"):
+            import subprocess
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "$s = New-Object -ComObject WScript.Shell; "
+                 "$null = $s.AppActivate('DaVinci Resolve')"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return {
+                "activated": proc.returncode == 0,
+                "platform": "win32",
+                "error": proc.stderr.strip() if proc.returncode != 0 else None,
+            }
+        # Linux: try wmctrl, then xdotool. Quietly no-op if neither present.
+        import subprocess, shutil
+        if shutil.which("wmctrl"):
+            proc = subprocess.run(
+                ["wmctrl", "-a", "DaVinci Resolve"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return {
+                "activated": proc.returncode == 0,
+                "platform": "linux",
+                "tool": "wmctrl",
+            }
+        if shutil.which("xdotool"):
+            proc = subprocess.run(
+                ["xdotool", "search", "--name", "DaVinci Resolve", "windowactivate"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return {
+                "activated": proc.returncode == 0,
+                "platform": "linux",
+                "tool": "xdotool",
+            }
+        return {"activated": False, "platform": sys.platform, "note": "no window-manager tool found"}
+    except Exception as exc:
+        return {"activated": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
+    """Send the Resolve keyboard shortcut for "Go to In" (Shift+I).
+
+    Resolve's scripting API has no direct call to move the source-viewer
+    playhead, so we use the OS-level keystroke once the app is focused.
+    Best-effort; returns {sent: bool, platform, error?}.
+    """
+    try:
+        if sys.platform == "darwin":
+            import subprocess
+            # Tiny pause lets the just-activated app settle before receiving keys.
+            script = (
+                'delay 0.15\n'
+                'tell application "System Events" to tell process "DaVinci Resolve"\n'
+                '    key code 34 using {shift down}\n'  # 34 = 'i'
+                'end tell'
+            )
+            proc = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=5,
+            )
+            return {
+                "sent": proc.returncode == 0,
+                "platform": "darwin",
+                "shortcut": "Shift+I",
+                "error": proc.stderr.strip() if proc.returncode != 0 else None,
+            }
+        if sys.platform.startswith("win"):
+            import subprocess
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Add-Type -AssemblyName System.Windows.Forms; "
+                 "Start-Sleep -Milliseconds 150; "
+                 "[System.Windows.Forms.SendKeys]::SendWait('+i')"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return {
+                "sent": proc.returncode == 0,
+                "platform": "win32",
+                "shortcut": "Shift+I",
+                "error": proc.stderr.strip() if proc.returncode != 0 else None,
+            }
+        # Linux: try xdotool only (wmctrl can't send keys).
+        import subprocess, shutil
+        if shutil.which("xdotool"):
+            proc = subprocess.run(
+                ["xdotool", "search", "--name", "DaVinci Resolve", "key", "--window", "%@", "shift+i"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return {"sent": proc.returncode == 0, "platform": "linux", "tool": "xdotool", "shortcut": "Shift+I"}
+        return {"sent": False, "platform": sys.platform, "note": "no key-send tool found"}
+    except Exception as exc:
+        return {"sent": False, "error": f"{type(exc).__name__}: {exc}"}
 
 def _has_method(obj, method_name):
     return callable(getattr(obj, method_name, None))
@@ -1130,6 +1254,23 @@ def _find_clip(folder, clip_id):
         if found:
             return found
     return None
+
+
+def _find_clip_with_parent(folder, clip_id, _parent=None):
+    """Return (clip, parent_folder) for clip_id, searching recursively.
+
+    `parent_folder` is the immediate folder containing the clip, which is what
+    MediaPool.SetCurrentFolder() needs in order to reveal the clip in the bin.
+    Returns (None, None) if not found.
+    """
+    for clip in (folder.GetClipList() or []):
+        if clip.GetUniqueId() == clip_id:
+            return clip, folder
+    for sub in (folder.GetSubFolderList() or []):
+        found_clip, found_parent = _find_clip_with_parent(sub, clip_id, folder)
+        if found_clip:
+            return found_clip, found_parent
+    return None, None
 
 def _navigate_folder(mp, path):
     root = mp.GetRootFolder()
@@ -3951,7 +4092,7 @@ def _timeline_marker_thumbnail_review(proj, tl, p: Dict[str, Any]) -> Dict[str, 
     review["review_guidance"] = [
         "Compare each marker name/note with the sampled Resolve-rendered frame.",
         "If the image contradicts marker intent, update the marker before using it as edit evidence.",
-        "This helper samples frames only; rich descriptions require chat-context vision or the assistant viewing the generated sheet.",
+        "This helper samples frames only; rich descriptions require the assistant viewing the generated sheet (host_chat_paths review payload).",
     ]
     review["review_prompt"] = {
         "task": "Review the marker contact sheet for editorial accuracy.",
@@ -5225,173 +5366,50 @@ def _media_analysis_extract_json_text(text: str) -> Tuple[Optional[Dict[str, Any
     return payload, None
 
 
-def _media_analysis_sampling_capability(ctx: Optional[Context], *, context: bool = False) -> bool:
-    if ctx is None:
-        return False
-    try:
-        sampling = (
-            mcp_types.SamplingCapability(context=mcp_types.SamplingContextCapability())
-            if context
-            else mcp_types.SamplingCapability()
-        )
-        return bool(ctx.request_context.session.check_client_capability(
-            mcp_types.ClientCapabilities(sampling=sampling)
-        ))
-    except Exception:
-        return False
+def _media_analysis_capabilities_for_request(ctx: Optional[Context]) -> Dict[str, Any]:
+    """Capabilities report shaped for the active MCP request.
 
-
-def _media_analysis_sampling_context(ctx: Optional[Context], requested: Any) -> Optional[str]:
-    include_context = str(requested or "allServers")
-    if include_context not in {"none", "thisServer", "allServers"}:
-        include_context = "allServers"
-    if include_context == "none":
-        return "none"
-    if _media_analysis_sampling_capability(ctx, context=True):
-        return include_context
-    return None
-
-
-async def _media_analysis_chat_context_vision(
-    record: Dict[str, Any],
-    motion: Dict[str, Any],
-    options: Dict[str, Any],
-    artifacts: Dict[str, Any],
-    capabilities: Dict[str, Any],
-    ctx: Optional[Context],
-) -> Dict[str, Any]:
-    vision = options.get("vision") or {}
-    provider = vision.get("provider") or capabilities.get("vision", {}).get("provider") or "chat_context"
-    if not _media_analysis_sampling_capability(ctx):
-        return {
-            "success": False,
-            "status": "skipped",
-            "provider": provider,
-            "reason": "The MCP client for this request does not advertise sampling/createMessage support.",
-        }
-
-    keyframes = [
-        row for row in motion.get("analysis_keyframes", [])
-        if row.get("frame_path") and os.path.isfile(row.get("frame_path"))
-    ]
-    effective_budget = int(motion.get("effective_sample_budget") or len(keyframes) or 6)
-    max_frames = int(vision.get("max_frames") or min(48, max(6, effective_budget)))
-    keyframes = keyframes[:max(1, min(max_frames, 48))]
-    if not keyframes:
-        return {
-            "success": False,
-            "status": "skipped",
-            "provider": provider,
-            "reason": "No sampled analysis frames were available for chat-context vision.",
-        }
-
-    content: List[Any] = [
-        mcp_types.TextContent(
-            type="text",
-            text=json.dumps({
-                "task": "Analyze these representative frames for editing decisions.",
-                "clip": record,
-                "motion_summary": {
-                    "overall_motion_level": motion.get("overall_motion_level"),
-                    "average_frame_delta": motion.get("average_frame_delta"),
-                    "max_frame_delta": motion.get("max_frame_delta"),
-                    "requested_sample_budget": motion.get("requested_sample_budget"),
-                    "effective_sample_budget": motion.get("effective_sample_budget"),
-                    "cut_boundary_pairs_total": motion.get("cut_boundary_pairs_total"),
-                    "cut_boundary_pairs_sampled": motion.get("cut_boundary_pairs_sampled"),
-                    "cut_boundary_pair_coverage": motion.get("cut_boundary_pair_coverage"),
-                    "cut_boundary_sampling_capped": motion.get("cut_boundary_sampling_capped"),
-                },
-                "cut_analysis": {
-                    "cut_count": ((motion.get("cut_analysis") or {}).get("cut_count") if isinstance(motion.get("cut_analysis"), dict) else 0),
-                    "cut_density_per_minute": ((motion.get("cut_analysis") or {}).get("cut_density_per_minute") if isinstance(motion.get("cut_analysis"), dict) else 0),
-                    "likely_edited_sequence": bool(((motion.get("cut_analysis") or {}).get("likely_edited_sequence") if isinstance(motion.get("cut_analysis"), dict) else False)),
-                    "flash_frame_candidates": ((motion.get("cut_analysis") or {}).get("flash_frame_candidates") if isinstance(motion.get("cut_analysis"), dict) else []),
-                    "cut_points": ((motion.get("cut_analysis") or {}).get("cut_points", [])[:48] if isinstance(motion.get("cut_analysis"), dict) else []),
-                    "notes": ((motion.get("cut_analysis") or {}).get("notes") if isinstance(motion.get("cut_analysis"), dict) else []),
-                },
-                "frame_count": len(keyframes),
-            }, indent=2, ensure_ascii=False),
-        )
-    ]
-    for index, frame in enumerate(keyframes, 1):
-        frame_path = frame.get("frame_path")
-        with open(frame_path, "rb") as f:
-            image_data = base64.b64encode(f.read()).decode("ascii")
-        content.append(mcp_types.TextContent(
-            type="text",
-            text=json.dumps({
-                "frame_index": index,
-                "time_seconds": frame.get("time_seconds"),
-                "selection_reason": frame.get("selection_reason"),
-                "delta_from_previous": frame.get("delta_from_previous"),
-                "cut_index": frame.get("cut_index"),
-                "cut_time_seconds": frame.get("cut_time_seconds"),
-                "boundary_role": frame.get("boundary_role"),
-                "shot_index": frame.get("shot_index"),
-                "shot_start": frame.get("shot_start"),
-                "shot_end": frame.get("shot_end"),
-                "motion_peak": frame.get("motion_peak"),
-                "motion_peak_source_reason": frame.get("motion_peak_source_reason"),
-            }, indent=2, ensure_ascii=False),
-        ))
-        content.append(mcp_types.ImageContent(type="image", data=image_data, mimeType="image/jpeg"))
-
-    model_name = vision.get("model")
-    model_preferences = None
-    if model_name:
-        model_preferences = mcp_types.ModelPreferences(
-            hints=[mcp_types.ModelHint(name=str(model_name))],
-            intelligencePriority=0.8,
-            speedPriority=0.2,
-        )
-
-    result = await ctx.request_context.session.create_message(
-        [
-            mcp_types.SamplingMessage(
-                role="user",
-                content=content,
-            )
-        ],
-        max_tokens=int(vision.get("max_tokens") or 1800),
-        system_prompt=str(vision.get("prompt") or DEFAULT_VISION_ANALYSIS_PROMPT),
-        include_context=_media_analysis_sampling_context(ctx, vision.get("include_context")),
-        temperature=float(vision.get("temperature", 0.2)),
-        model_preferences=model_preferences,
-        related_request_id=ctx.request_id,
+    Vision uses host_chat_paths: the server emits a deferred payload with
+    absolute frame paths and the host chat completes the analysis via
+    media_analysis(action="commit_vision"). No sampling/createMessage required.
+    """
+    caps = detect_media_analysis_capabilities()
+    vision = caps.setdefault("vision", {})
+    prefs = _media_analysis_effective_preferences()
+    default_on = prefs.get("vision_default") == "on"
+    configured_provider = vision.get("provider") or HOST_CHAT_PATHS_PROVIDER
+    vision["enabled_by_default"] = default_on
+    vision["default_provider"] = HOST_CHAT_PATHS_PROVIDER
+    vision["provider"] = configured_provider
+    vision["available"] = True
+    vision["availability"] = "ready" if configured_provider in HOST_CHAT_VISION_PROVIDERS or configured_provider in {"mock", "local_mock"} else "configured_provider"
+    vision["host_chat_paths"] = {
+        "available": True,
+        "provider": HOST_CHAT_PATHS_PROVIDER,
+        "requires": "MCP host chat able to read local image files (e.g. Claude Code Read tool, Claude Desktop image input)",
+        "commit_action": {"tool": "media_analysis", "action": "commit_vision"},
+        "schema_reference": VISION_SCHEMA_REFERENCE,
+    }
+    vision["note"] = (
+        "Vision is enabled by default through host_chat_paths. Analyze actions "
+        "return absolute frame paths in a deferred payload; the host chat reads "
+        "them as images, produces JSON per the included schema, and calls "
+        "media_analysis(action='commit_vision', ...) to merge and publish. "
+        "Works with any MCP client whose chat model is vision-capable."
     )
-    response_content = result.content
-    if not isinstance(response_content, mcp_types.TextContent):
-        return {
-            "success": False,
-            "status": "skipped",
-            "provider": provider,
-            "reason": f"Sampling returned non-text content: {type(response_content).__name__}",
-        }
-    payload, err = _media_analysis_extract_json_text(response_content.text)
-    if err:
-        return {
-            "success": False,
-            "status": "invalid_response",
-            "provider": provider,
-            "reason": err,
-            "raw_response": response_content.text[:4000],
-        }
-    payload.setdefault("success", True)
-    payload["provider"] = "chat_context"
-    return payload
+    return caps
 
 
 DEFAULT_TIMELINE_MARKER_REVIEW_PROMPT = """Return only strict JSON for Resolve marker/contact-sheet review.
 
-Use the provided metadata plus the contact-sheet image. Check whether marker
-names/notes match what the rendered Resolve frames actually show. Be precise,
-editorial, and source-safe.
+Read the contact-sheet image at image_path as a local image, then check whether
+marker names/notes match what the rendered Resolve frames actually show. Be
+precise, editorial, and source-safe.
 
 Use this schema:
 {
   "success": true,
-  "provider": "chat_context",
+  "provider": "host_chat_paths",
   "timeline_summary": "Concise editorial read of the marker frames.",
   "marker_checks": [
     {
@@ -5408,82 +5426,37 @@ Use this schema:
 Do not include markdown fences, prose outside JSON, or keys outside this schema."""
 
 
-async def _media_analysis_chat_context_image_review(
+def _media_analysis_host_chat_image_review_payload(
     image_path: str,
     metadata: Dict[str, Any],
     vision: Dict[str, Any],
-    ctx: Optional[Context],
 ) -> Dict[str, Any]:
-    provider = vision.get("provider") or "chat_context"
-    if not _media_analysis_sampling_capability(ctx):
-        return {
-            "success": False,
-            "status": "skipped",
-            "provider": provider,
-            "reason": "The MCP client for this request does not advertise sampling/createMessage support.",
-        }
+    """Return a deferred host_chat_paths payload pointing at an image to review.
+
+    Unlike clip analysis, marker review writes nothing back to Resolve, so there
+    is no commit step — the host chat can read the image and answer inline.
+    """
     if not image_path or not os.path.isfile(image_path):
         return {
             "success": False,
             "status": "skipped",
-            "provider": provider,
+            "provider": HOST_CHAT_PATHS_PROVIDER,
             "reason": f"Review image not found: {image_path}",
         }
-
-    with open(image_path, "rb") as handle:
-        image_data = base64.b64encode(handle.read()).decode("ascii")
-    content: List[Any] = [
-        mcp_types.TextContent(
-            type="text",
-            text=json.dumps({
-                "task": "Review this Resolve contact sheet for marker/editing accuracy.",
-                "metadata": metadata,
-            }, indent=2, ensure_ascii=False),
+    return {
+        "success": True,
+        "status": "pending_host_analysis",
+        "provider": HOST_CHAT_PATHS_PROVIDER,
+        "image_path": os.path.realpath(os.path.abspath(image_path)),
+        "metadata": metadata,
+        "prompt": str(vision.get("prompt") or DEFAULT_TIMELINE_MARKER_REVIEW_PROMPT),
+        "instructions": (
+            "Read image_path as a local image using your client's image-reading "
+            "capability. Produce a single JSON object matching the structure in "
+            "prompt and return it to the user inline. No follow-up tool call is "
+            "required — marker review does not persist to Resolve."
         ),
-        mcp_types.ImageContent(type="image", data=image_data, mimeType="image/png"),
-    ]
-    model_name = vision.get("model")
-    model_preferences = None
-    if model_name:
-        model_preferences = mcp_types.ModelPreferences(
-            hints=[mcp_types.ModelHint(name=str(model_name))],
-            intelligencePriority=0.75,
-            speedPriority=0.25,
-        )
-    result = await ctx.request_context.session.create_message(
-        [
-            mcp_types.SamplingMessage(
-                role="user",
-                content=content,
-            )
-        ],
-        max_tokens=int(vision.get("max_tokens") or 1500),
-        system_prompt=str(vision.get("prompt") or DEFAULT_TIMELINE_MARKER_REVIEW_PROMPT),
-        include_context=_media_analysis_sampling_context(ctx, vision.get("include_context")),
-        temperature=float(vision.get("temperature", 0.2)),
-        model_preferences=model_preferences,
-        related_request_id=ctx.request_id,
-    )
-    response_content = result.content
-    if not isinstance(response_content, mcp_types.TextContent):
-        return {
-            "success": False,
-            "status": "skipped",
-            "provider": provider,
-            "reason": f"Sampling returned non-text content: {type(response_content).__name__}",
-        }
-    payload, err = _media_analysis_extract_json_text(response_content.text)
-    if err:
-        return {
-            "success": False,
-            "status": "invalid_response",
-            "provider": provider,
-            "reason": err,
-            "raw_response": response_content.text[:4000],
-        }
-    payload.setdefault("success", True)
-    payload["provider"] = "chat_context"
-    return payload
+    }
 
 
 def _media_analysis_records_from_target(mp, p: Dict[str, Any], project=None) -> Tuple[Optional[List[Dict[str, Any]]], Dict[str, Any], List[str], Optional[Dict[str, Any]]]:
@@ -5658,14 +5631,18 @@ def _media_analysis_confirmed(p: Dict[str, Any]) -> bool:
 
 
 def _media_analysis_publish_confirmed(p: Dict[str, Any]) -> bool:
-    return _media_analysis_bool(p.get("confirm", p.get("confirmed", p.get("apply"))), False)
+    explicit = _first_param(p, "confirm", "confirmed", "apply")
+    if explicit is not None:
+        return _media_analysis_bool(explicit, False)
+    return not _media_analysis_effective_preferences().get("ask_before_metadata_publish")
 
 
 _MEDIA_ANALYSIS_PREFS_ENV = "DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"
 _SETUP_CHOICE_CLEAR_VALUES = {"", "ask", "prompt", "clear", "default", "none", "null", "unset"}
 _SETUP_YES_NO_VALUES = {"yes", "no"}
-_MEDIA_ANALYSIS_DEFAULT_MARKER_TYPES = ["slate_clap", "best_moments", "qc_warnings"]
+_MEDIA_ANALYSIS_DEFAULT_MARKER_TYPES = ["shots", "slate_clap", "sync_events", "best_moments", "qc_warnings"]
 _MEDIA_ANALYSIS_DEFAULT_MARKER_COLORS = {
+    "shots": "Blue",
     "slate_clap": "Cyan",
     "sync_events": "Cyan",
     "best_moments": "Green",
@@ -5676,6 +5653,10 @@ _MEDIA_ANALYSIS_MARKER_TYPE_ALIASES = {
     "slate_claps": "slate_clap",
     "slate_clap": "slate_clap",
     "slate-clap": "slate_clap",
+    "shot": "shots",
+    "shots": "shots",
+    "shot_range": "shots",
+    "shot_ranges": "shots",
     "sync": "sync_events",
     "sync_event": "sync_events",
     "sync_events": "sync_events",
@@ -5689,25 +5670,40 @@ _MEDIA_ANALYSIS_MARKER_TYPE_ALIASES = {
     "qc_warnings": "qc_warnings",
 }
 _MEDIA_ANALYSIS_DEFAULT_PREFS = {
-    "slate_detection_default": "ask",
+    "timed_markers_default": "ask",
+    "slate_detection_default": "yes",
     "vision_default": "on",
-    "transcription_default": "no",
-    "analysis_persistence": "session_only",
-    "metadata_publish_fields": ["Description", "Comments", "Keywords", "People"],
+    "transcription_default": "yes",
+    "analysis_persistence": "keep_artifacts",
+    "metadata_publish_fields": [
+        "Description",
+        "Comments",
+        "Keywords",
+        "People",
+        "Scene",
+        "Shot",
+        "Take",
+        "Camera #",
+        "Roll Card #",
+    ],
     "metadata_overwrite_policy": "preserve_human",
     "timed_marker_types": list(_MEDIA_ANALYSIS_DEFAULT_MARKER_TYPES),
     "timed_marker_colors": dict(_MEDIA_ANALYSIS_DEFAULT_MARKER_COLORS),
-    "max_timed_markers_per_clip": 12,
+    "max_timed_markers_per_clip": 0,
     "include_confidence_scores": True,
     "include_source_time_notes": True,
     "analysis_summary_style": "concise",
     "report_format": "compact",
+    "source_trust": "auto",
+    "default_depth": "standard",
+    "default_sample_frames": 8,
     "preferred_analysis_root": None,
     "preferred_generated_media_folder": None,
     "default_post_operation_page": "stay_put",
     "marker_custom_data": "namespaced",
-    "ask_before_metadata_publish": True,
-    "dry_run_first_default": True,
+    "metadata_writeback_default": True,
+    "ask_before_metadata_publish": False,
+    "dry_run_first_default": False,
 }
 
 
@@ -5772,6 +5768,8 @@ def _normalize_vision_default(value: Any) -> Optional[str]:
         "enabled": "on",
         "chat": "on",
         "chat_context": "on",
+        "host_chat": "on",
+        "host_chat_paths": "on",
         "0": "off",
         "false": "off",
         "no": "off",
@@ -5901,17 +5899,17 @@ def _media_analysis_effective_preferences() -> Dict[str, Any]:
         if key in effective:
             effective[key] = value
 
-    timed_default = _normalize_timed_marker_choice(preferences.get("timed_markers_default"))
+    timed_default = _normalize_timed_marker_choice(effective.get("timed_markers_default"))
     effective["timed_markers_default"] = timed_default if timed_default in {"yes", "no"} else None
     effective["slate_detection_default"] = _normalize_yes_no_ask(effective.get("slate_detection_default")) or "ask"
     effective["vision_default"] = _normalize_vision_default(effective.get("vision_default")) or "on"
-    effective["transcription_default"] = _normalize_yes_no_ask(effective.get("transcription_default")) or "no"
+    effective["transcription_default"] = _normalize_yes_no_ask(effective.get("transcription_default")) or "yes"
     effective["analysis_persistence"] = _normalize_analysis_persistence(effective.get("analysis_persistence")) or "session_only"
     effective["metadata_overwrite_policy"] = _normalize_metadata_overwrite_policy(effective.get("metadata_overwrite_policy")) or "preserve_human"
     effective["timed_marker_types"] = _normalize_setup_list(
         effective.get("timed_marker_types"),
         aliases=_MEDIA_ANALYSIS_MARKER_TYPE_ALIASES,
-        allowed=["slate_clap", "sync_events", "best_moments", "qc_warnings"],
+        allowed=["shots", "slate_clap", "sync_events", "best_moments", "qc_warnings"],
     ) or list(_MEDIA_ANALYSIS_DEFAULT_MARKER_TYPES)
     effective["timed_marker_colors"] = {
         **_MEDIA_ANALYSIS_DEFAULT_MARKER_COLORS,
@@ -5927,16 +5925,40 @@ def _media_analysis_effective_preferences() -> Dict[str, Any]:
     effective["include_source_time_notes"] = _media_analysis_bool(effective.get("include_source_time_notes"), True)
     effective["analysis_summary_style"] = _normalize_setup_choice(
         effective.get("analysis_summary_style"),
-        ["concise", "assistant_editor", "qc", "producer", "full"],
-        aliases={"assistant": "assistant_editor", "editor": "assistant_editor"},
+        ["full", "concise", "creative", "technical"],
+        aliases={
+            "assistant_editor": "creative",
+            "assistant": "creative",
+            "editor": "creative",
+            "producer": "creative",
+            "qc": "technical",
+            "qc_focus": "technical",
+            "qc_focused": "technical",
+        },
     ) or "concise"
     effective["report_format"] = _normalize_setup_choice(effective.get("report_format"), ["compact", "full", "machine_readable"]) or "compact"
+    effective["source_trust"] = _normalize_setup_choice(
+        effective.get("source_trust"),
+        ["auto", "filename", "low", "medium", "high"],
+        aliases={"none": "auto", "default": "auto"},
+    ) or "auto"
+    effective["default_depth"] = _normalize_setup_choice(
+        effective.get("default_depth"),
+        ["quick", "standard", "deep"],
+    ) or "standard"
+    try:
+        sample_frames_raw = effective.get("default_sample_frames")
+        sample_frames_int = int(sample_frames_raw) if sample_frames_raw not in (None, "") else 8
+    except (TypeError, ValueError):
+        sample_frames_int = 8
+    effective["default_sample_frames"] = max(0, min(48, sample_frames_int))
     effective["default_post_operation_page"] = _normalize_setup_choice(
         effective.get("default_post_operation_page"),
         ["stay_put", "media", "cut", "edit", "fusion", "color", "fairlight", "deliver"],
         aliases={"media_pool": "media", "none": "stay_put"},
     ) or "stay_put"
     effective["marker_custom_data"] = _normalize_setup_choice(effective.get("marker_custom_data"), ["namespaced", "minimal"]) or "namespaced"
+    effective["metadata_writeback_default"] = _media_analysis_bool(effective.get("metadata_writeback_default"), True)
     effective["ask_before_metadata_publish"] = _media_analysis_bool(effective.get("ask_before_metadata_publish"), True)
     effective["dry_run_first_default"] = _media_analysis_bool(effective.get("dry_run_first_default"), True)
     return effective
@@ -5995,7 +6017,7 @@ def _timed_marker_choice_from_params(p: Dict[str, Any]) -> Optional[str]:
 def _media_analysis_timed_marker_prompt() -> Dict[str, Any]:
     return {
         "question": "Do you want source-time analysis notes written as Media Pool clip markers?",
-        "default_behavior": "No timed markers until a choice or saved default is provided.",
+        "default_behavior": "Timed markers are written by default; choose no/default_no to disable them.",
         "options": [
             {"id": "yes", "label": "Yes", "description": "Write timed markers for this publish only.", "params": {"timed_markers": "yes"}},
             {"id": "no", "label": "No", "description": "Skip timed markers for this publish only.", "params": {"timed_markers": "no"}},
@@ -6005,12 +6027,43 @@ def _media_analysis_timed_marker_prompt() -> Dict[str, Any]:
     }
 
 
+# V2 architecture decision: machine-generated per-shot / qc_warning / best_moment markers
+# are NOT written to Resolve. Clip-level metadata (Description, Keywords, Comments,
+# third_party namespace) still writes through for searchability in Resolve's bin.
+# Editor's own markers in Resolve are untouched by the machine.
+#
+# Rationale: bidirectional sync with Resolve markers was the largest source of
+# architectural pain (pull-only API with no event hooks, 362-char note truncation,
+# one-marker-per-frame collisions). The canonical store is the analysis DB; the
+# correction surface is the control panel + chat, not Resolve markers.
+#
+# See docs/design/v2-shot-schema-spec.md §9.1 (Decisions log) for details.
+V2_MACHINE_MARKER_WRITEBACK_ENABLED = False
+
+
 def _media_analysis_timed_marker_decision(p: Dict[str, Any]) -> Dict[str, Any]:
+    """Decide whether to write machine-generated timed markers to Resolve.
+
+    In V2 this always returns enabled=False; see V2_MACHINE_MARKER_WRITEBACK_ENABLED.
+    The user preference / choice flow is retained for traceability and so the API
+    surface is unchanged for callers, but the writeback path is gated off.
+    """
     if isinstance(p.get("_timed_marker_decision"), dict):
-        return p["_timed_marker_decision"]
+        decision = dict(p["_timed_marker_decision"])
+        if not V2_MACHINE_MARKER_WRITEBACK_ENABLED:
+            decision["enabled"] = False
+            decision.setdefault("source", "v2_disabled")
+            decision["prompt_required"] = False
+            decision.setdefault(
+                "note",
+                "V2 architecture disables machine marker writeback to Resolve; "
+                "use clip-level metadata and the control panel instead.",
+            )
+        return decision
 
     choice = _timed_marker_choice_from_params(p)
     preferences = _read_media_analysis_preferences()
+    explicit_saved_default = "timed_markers_default" in preferences
     saved_default = _media_analysis_effective_preferences().get("timed_markers_default")
     source = "explicit"
     saved = None
@@ -6026,13 +6079,31 @@ def _media_analysis_timed_marker_decision(p: Dict[str, Any]) -> Dict[str, Any]:
     elif choice == "ask":
         enabled = False
     elif saved_default in {"yes", "no"}:
-        source = "saved_default"
+        source = "saved_default" if explicit_saved_default else "default"
         choice = saved_default
         enabled = saved_default == "yes"
     else:
         source = "prompt_required"
         choice = "ask"
         enabled = False
+
+    if not V2_MACHINE_MARKER_WRITEBACK_ENABLED:
+        # Override the preference-based decision; the V2 architecture has dropped
+        # machine marker writeback entirely. Preserve the recorded choice for audit.
+        return {
+            "enabled": False,
+            "choice": choice,
+            "source": "v2_disabled",
+            "prompt_required": False,
+            "saved_default": saved or (saved_default if saved_default in {"yes", "no"} else None),
+            "preferences_path": _media_analysis_preferences_path(),
+            "note": (
+                "V2 architecture disables machine marker writeback to Resolve "
+                "(per-shot, qc_warning, best_moment). Clip-level metadata "
+                "(Description, Keywords, Comments) still writes. See "
+                "docs/design/v2-shot-schema-spec.md §9.1 for rationale."
+            ),
+        }
 
     return {
         "enabled": enabled,
@@ -6327,18 +6398,72 @@ def _media_analysis_marker_candidates_from_report(
     marker_types = _normalize_setup_list(
         options.get("marker_types", options.get("markerTypes")),
         aliases=_MEDIA_ANALYSIS_MARKER_TYPE_ALIASES,
-        allowed=["slate_clap", "sync_events", "best_moments", "qc_warnings"],
+        allowed=["shots", "slate_clap", "sync_events", "best_moments", "qc_warnings"],
     ) or list(_MEDIA_ANALYSIS_DEFAULT_MARKER_TYPES)
     marker_colors = {
         **_MEDIA_ANALYSIS_DEFAULT_MARKER_COLORS,
         **_normalize_marker_colors(options.get("marker_colors", options.get("markerColors"))),
     }
-    custom_data_mode = _normalize_setup_choice(options.get("custom_data_mode", options.get("customDataMode")), ["namespaced", "minimal"]) or "namespaced"
+    custom_data_mode = _normalize_setup_choice(
+        options.get("custom_data_mode", options.get("customDataMode")),
+        ["namespaced", "minimal"],
+    ) or "namespaced"
     default_color, color_err = _normalize_marker_color(options.get("marker_color", options.get("markerColor", "Blue")))
     if color_err:
         default_color = "Blue"
     markers: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
+
+    marker_plan = report.get("clip_analysis_markers") if isinstance(report.get("clip_analysis_markers"), dict) else {}
+    plan_markers = marker_plan.get("markers") if isinstance(marker_plan.get("markers"), list) else []
+    for item in plan_markers:
+        if not isinstance(item, dict):
+            continue
+        item_type = _setup_text_key(item.get("type"))
+        planned_type = _MEDIA_ANALYSIS_MARKER_TYPE_ALIASES.get(item_type, item_type)
+        if planned_type not in marker_types:
+            continue
+        frame = item.get("start_frame")
+        try:
+            frame = int(frame)
+        except (TypeError, ValueError):
+            skipped.append({"source": "clip_marker_plan", "reason": "missing_frame", "item": item.get("id")})
+            continue
+        planned_color, planned_color_err = _normalize_marker_color(
+            item.get("color")
+            or marker_colors.get(planned_type)
+            or marker_colors.get(str(item.get("type") or ""))
+            or default_color
+        )
+        if planned_color_err:
+            planned_color = marker_colors.get(planned_type) or default_color
+        visual_note = _media_analysis_metadata_text(item.get("visual_description"))
+        sound_note = _media_analysis_metadata_text(item.get("sound_note"))
+        note_parts = []
+        if visual_note and "unavailable" not in visual_note.lower():
+            note_parts.append(visual_note)
+        if sound_note and "no transcript excerpt" not in sound_note.lower():
+            note_parts.append(sound_note)
+        note = " | ".join(note_parts) or _media_analysis_metadata_text(item.get("name")) or "Analysis marker"
+        markers.append(_media_analysis_make_marker(
+            frame=frame,
+            color=planned_color,
+            name=_media_analysis_metadata_text(item.get("name")) or "Analysis Marker",
+            note=note,
+            duration=_setup_positive_int(item.get("duration_frames"), duration, 1, 99999),
+            source="clip_marker_plan",
+            report_path=report_path,
+            extra={
+                "marker_id": item.get("id"),
+                "marker_type": item.get("type"),
+                "marker_subtype": item.get("subtype"),
+                "marker_source": item.get("source"),
+                "confidence": item.get("confidence"),
+                "start_seconds": item.get("start_seconds"),
+                "end_seconds": item.get("end_seconds"),
+            },
+            custom_data_mode=custom_data_mode,
+        ))
 
     slate_visual_confirmed = _media_analysis_slate_visual_confirmed(report, slate_review)
     if sync_event and ("slate_clap" in marker_types or "sync_events" in marker_types):
@@ -6391,7 +6516,10 @@ def _media_analysis_marker_candidates_from_report(
             ))
 
     if "qc_warnings" in marker_types:
-        timed_warnings = _media_analysis_note_items(report.get("technical_warnings")) + _media_analysis_note_items(editing_notes.get("qc_flags"))
+        timed_warnings = (
+            _media_analysis_note_items(report.get("technical_warnings"))
+            + _media_analysis_note_items(editing_notes.get("qc_flags"))
+        )
         for item in timed_warnings:
             frame = _media_analysis_time_to_frame(item, fps)
             if frame is None:
@@ -6409,13 +6537,24 @@ def _media_analysis_marker_candidates_from_report(
 
     deduped: List[Dict[str, Any]] = []
     seen = set()
+    markers.sort(
+        key=lambda marker: (
+            int(marker.get("frame") or 0),
+            marker.get("name") or "",
+            marker.get("note") or "",
+        )
+    )
     for marker in markers:
         key = (marker["frame"], marker["name"], marker["note"])
         if key in seen:
             continue
         seen.add(key)
         if max_markers > 0 and len(deduped) >= max_markers:
-            skipped.append({"source": marker.get("name"), "frame": marker.get("frame"), "reason": "max_markers_reached"})
+            skipped.append({
+                "source": marker.get("name"),
+                "frame": marker.get("frame"),
+                "reason": "max_markers_reached",
+            })
             continue
         if marker.get("color") == "Blue":
             marker["color"] = default_color
@@ -7066,6 +7205,189 @@ def _has_any_param(p: Dict[str, Any], *keys: str) -> bool:
     return any(key in p and p[key] is not None for key in keys)
 
 
+def _media_analysis_transcription_options(enabled: bool) -> Dict[str, Any]:
+    options = {"enabled": bool(enabled)}
+    if enabled:
+        options["allow_model_download"] = True
+    return options
+
+
+def _media_analysis_metadata_writeback_enabled(p: Dict[str, Any]) -> bool:
+    raw = _first_param(
+        p,
+        "publish_metadata",
+        "publishMetadata",
+        "write_metadata",
+        "writeMetadata",
+        "metadata_writeback",
+        "metadataWriteback",
+        "write_to_resolve",
+        "writeToResolve",
+    )
+    if raw is None:
+        return bool(_media_analysis_effective_preferences().get("metadata_writeback_default", True))
+    return _media_analysis_bool(raw, True)
+
+
+def _compact_clip_row_for_response(clip: Any) -> Any:
+    """Build a compact per-clip row for tool-result responses (V2 P9).
+
+    Heavy fields (visual.prompt ~9k chars, visual.frame_metadata, visual.shot_table,
+    visual.frame_paths in full) are replaced with summaries. The complete payload
+    remains on disk at analysis_json; consumers can read from there when needed.
+    """
+    if not isinstance(clip, dict):
+        return clip
+    record = clip.get("record") if isinstance(clip.get("record"), dict) else {}
+    visual = clip.get("visual") if isinstance(clip.get("visual"), dict) else None
+    out: Dict[str, Any] = {
+        "success": clip.get("success"),
+        "analysis_json": clip.get("analysis_json"),
+        "clip_dir": clip.get("clip_dir"),
+        "marker_plan_json": clip.get("marker_plan_json"),
+        "vision_status": clip.get("vision_status"),
+        "record": {
+            k: record.get(k)
+            for k in ("clip_id", "clip_name", "file_path", "duration_seconds",
+                     "fps", "media_type", "resolution", "bin_path", "media_id")
+            if record.get(k) is not None
+        },
+    }
+    if "error" in clip:
+        out["error"] = clip.get("error")
+    if isinstance(visual, dict):
+        frame_paths = visual.get("frame_paths") or []
+        shot_table = visual.get("shot_table") or []
+        prompt = visual.get("prompt")
+        out["visual"] = {
+            "status": visual.get("status"),
+            "provider": visual.get("provider"),
+            "schema_reference": visual.get("schema_reference"),
+            "vision_token": visual.get("vision_token"),
+            "frame_count": len(frame_paths),
+            "frame_paths_summary": {
+                "directory": (frame_paths[0].rsplit("/", 1)[0] if frame_paths else None),
+                "first": frame_paths[0] if frame_paths else None,
+                "last": frame_paths[-1] if frame_paths else None,
+                "count": len(frame_paths),
+            },
+            "shot_count": len(shot_table),
+            "commit_action": visual.get("commit_action"),
+            "prompt_size_chars": (len(prompt) if isinstance(prompt, str) else None),
+            "instructions": (
+                "Full vision payload (prompt, schema, frame_paths[], frame_metadata[], shot_table[]) "
+                "is on disk at analysis_json. Read it for vision pass; call media_analysis"
+                "(action='commit_vision', params={clip_id, visual, vision_token}) when done. "
+                "Use verbose=true on analyze to inline the full payload instead."
+            ),
+        }
+    return out
+
+
+def _compact_manifest_for_response(manifest: Any, *, verbose: bool = False) -> Any:
+    """Compact manifest for tool-result return (V2 P9 — fixes 25k-token overflow).
+
+    When verbose=False (default), heavy clip-level fields are replaced with summaries.
+    The full manifest is always persisted to disk; this only affects what gets returned
+    over the wire to the calling chat / agent.
+    """
+    if verbose or not isinstance(manifest, dict):
+        return manifest
+    compact = {
+        k: manifest.get(k)
+        for k in (
+            "success", "analysis_version", "schema_version",
+            "vision_pending", "vision_pending_clip_count",
+            "clip_count", "successful_clip_count", "failed_clip_count",
+            "started_at", "completed_at",
+            "project_name", "project_id",
+            "depth", "session_only", "session_token",
+            "pending_action", "index", "memory_layer_warnings",
+            "artifacts_cleaned_up", "artifact_cleanup_root",
+        )
+        if k in manifest
+    }
+    compact["clips"] = [
+        _compact_clip_row_for_response(c) for c in (manifest.get("clips") or [])
+    ]
+    # Drop the heavy 'reports' field that session_only mode inlines. Consumers
+    # who need it should call verbose=true or read analysis_json from disk.
+    if isinstance(manifest.get("reports"), list):
+        compact["reports_summary"] = {
+            "count": len(manifest["reports"]),
+            "note": "Full reports inlined only when verbose=true. Read analysis_json on disk per clip.",
+        }
+    return compact
+
+
+def _media_analysis_missing_capabilities_response(plan: Dict[str, Any], *, action_label: str = "analysis") -> Dict[str, Any]:
+    gaps = plan.get("capability_gaps") or []
+    install = plan.get("install_guidance") or {}
+    return {
+        "success": False,
+        "status": "missing_required_capabilities",
+        "error": f"Cannot start {action_label} because required local analysis tools are missing.",
+        "capability_gaps": gaps,
+        "install_guidance": install,
+        "next_step": (
+            "Install or configure the missing tools, then rerun the analysis. "
+            "The MCP reports guidance only and does not install packages automatically."
+        ),
+        "plan": plan,
+    }
+
+
+def _compact_metadata_publish_for_response(publish: Any, *, verbose: bool = False) -> Any:
+    """Compact publish_clip_metadata response for wire return (V2 P9).
+
+    The full response carries the analysis manifest, marker plans, evidence blocks,
+    and per-field write attempts — easily 100k+ chars for a normal clip. The compact
+    view keeps the success/error signal and the per-clip outcome summary, drops bulk.
+    """
+    if verbose or not isinstance(publish, dict):
+        return publish
+    compact = {
+        k: publish.get(k)
+        for k in (
+            "success", "dry_run", "confirmation_required",
+            "marker_writeback_enabled", "timed_marker_decision",
+            "target", "clip_count", "changed_clip_count",
+            "warnings", "setup_defaults_applied",
+        )
+        if k in publish
+    }
+    if isinstance(publish.get("timed_marker_prompt"), str) or publish.get("timed_marker_prompt") is None:
+        compact["timed_marker_prompt"] = publish.get("timed_marker_prompt")
+    results = publish.get("results")
+    if isinstance(results, list):
+        compact["results"] = [
+            {
+                "clip_id": (r.get("clip_id") if isinstance(r, dict) else None),
+                "clip_name": (r.get("clip_name") if isinstance(r, dict) else None),
+                "success": (r.get("success") if isinstance(r, dict) else None),
+                "metadata_error": (r.get("metadata_error") if isinstance(r, dict) else None),
+                "third_party_metadata_error": (r.get("third_party_metadata_error") if isinstance(r, dict) else None),
+                "marker_writeback_enabled": (r.get("marker_writeback_enabled") if isinstance(r, dict) else None),
+                "fields_written": (
+                    list((r.get("metadata_writes") or {}).keys())
+                    if isinstance(r, dict) and isinstance(r.get("metadata_writes"), dict)
+                    else []
+                ),
+                "third_party_keys_written": (
+                    list((r.get("third_party_metadata_writes") or {}).keys())
+                    if isinstance(r, dict) and isinstance(r.get("third_party_metadata_writes"), dict)
+                    else []
+                ),
+                "analysis_report": (r.get("analysis_report") if isinstance(r, dict) else None),
+                "write_errors": (r.get("write_errors") if isinstance(r, dict) else None),
+            }
+            for r in results
+        ]
+    # Drop the heavy analysis_manifest from the publish response — caller has it
+    # in the parent result['manifest'] already (also compacted).
+    return compact
+
+
 def _media_analysis_apply_setup_defaults(action: str, p: Dict[str, Any]) -> Dict[str, Any]:
     prefs = _media_analysis_effective_preferences()
     applied: Dict[str, Any] = {}
@@ -7088,23 +7410,59 @@ def _media_analysis_apply_setup_defaults(action: str, p: Dict[str, Any]) -> Dict
     if not _has_any_param(out, "report_format", "reportFormat"):
         out["report_format"] = prefs.get("report_format")
         applied["report_format"] = prefs.get("report_format")
+    if not _has_any_param(out, "source_trust", "sourceTrust"):
+        pref_trust = prefs.get("source_trust")
+        if pref_trust and pref_trust != "auto":
+            out["source_trust"] = pref_trust
+            applied["source_trust"] = pref_trust
 
     if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "start_batch_job", "review_timeline_markers", "publish_clip_metadata"}:
-        if not _has_any_param(out, "vision", "include_visuals", "includeVisuals"):
-            vision_default = prefs.get("vision_default")
-            if vision_default == "on":
-                out["vision"] = {"enabled": True, "provider": "chat_context"}
-                applied["vision_default"] = vision_default
-            elif vision_default in {"off", "technical_only"}:
-                out["vision"] = {"enabled": False}
-                applied["vision_default"] = vision_default
-        if not _has_any_param(out, "transcription", "include_transcription", "includeTranscription"):
-            transcription_default = prefs.get("transcription_default")
-            if transcription_default in {"yes", "no"}:
-                out["transcription"] = {"enabled": transcription_default == "yes"}
-                applied["transcription_default"] = transcription_default
+        include_visuals = _first_param(out, "include_visuals", "includeVisuals")
+        if not _has_any_param(out, "vision"):
+            if include_visuals is not None:
+                visuals_enabled = _media_analysis_bool(include_visuals, True)
+                out["vision"] = {"enabled": visuals_enabled}
+                if visuals_enabled:
+                    out["vision"]["provider"] = HOST_CHAT_PATHS_PROVIDER
+                applied["include_visuals"] = visuals_enabled
+            else:
+                vision_default = prefs.get("vision_default")
+                if vision_default == "on":
+                    out["vision"] = {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER}
+                    applied["vision_default"] = vision_default
+                elif vision_default in {"off", "technical_only"}:
+                    out["vision"] = {"enabled": False}
+                    applied["vision_default"] = vision_default
+        include_transcription = _first_param(out, "include_transcription", "includeTranscription")
+        if not _has_any_param(out, "transcription"):
+            if include_transcription is not None:
+                out["transcription"] = _media_analysis_transcription_options(
+                    _media_analysis_bool(include_transcription, False)
+                )
+                applied["include_transcription"] = out["transcription"]["enabled"]
+            else:
+                transcription_default = prefs.get("transcription_default")
+                if transcription_default in {"yes", "no"}:
+                    out["transcription"] = _media_analysis_transcription_options(
+                        transcription_default == "yes"
+                    )
+                    applied["transcription_default"] = transcription_default
 
     if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "start_batch_job", "publish_clip_metadata"}:
+        if not _has_any_param(
+            out,
+            "publish_metadata",
+            "publishMetadata",
+            "write_metadata",
+            "writeMetadata",
+            "metadata_writeback",
+            "metadataWriteback",
+            "write_to_resolve",
+            "writeToResolve",
+        ):
+            out["publish_metadata"] = bool(prefs.get("metadata_writeback_default", True))
+            applied["metadata_writeback_default"] = out["publish_metadata"]
+
         persistence = prefs.get("analysis_persistence")
         if persistence == "keep_reports":
             if not _has_any_param(out, "persist"):
@@ -7152,6 +7510,9 @@ def _media_analysis_apply_setup_defaults(action: str, p: Dict[str, Any]) -> Dict
                     "use_vision": slate_default == "yes" and (prefs.get("vision_default") == "on"),
                 }
                 applied["slate_detection_default"] = slate_default
+        if not _has_any_param(out, "confirm", "confirmed", "apply") and not prefs.get("ask_before_metadata_publish"):
+            out["confirm"] = True
+            applied["ask_before_metadata_publish"] = False
         if not _has_any_param(out, "dry_run", "dryRun") and not prefs.get("dry_run_first_default") and _media_analysis_publish_confirmed(out):
             out["dry_run"] = False
             applied["dry_run_first_default"] = False
@@ -7167,154 +7528,28 @@ async def _media_analysis_chat_context_slate_review(
     slate_detection: Dict[str, Any],
     ctx: Optional[Context],
 ) -> Dict[str, Any]:
+    """Slate vision is now handled by the main commit_vision payload's `slate` block.
+
+    The vision schema (see DEFAULT_VISION_ANALYSIS_PROMPT) already includes a
+    slate block; the host chat fills it in during commit_vision when a slate or
+    clapper is visible in the sampled keyframes. This stub keeps the publish
+    flow happy when slate_detection.use_vision is set but takes no action.
+    """
     if not sync_event:
         return {"success": True, "status": "skipped", "reason": "No slate-clap event detected."}
     vision = slate_detection.get("vision") or {}
     if not _media_analysis_bool(slate_detection.get("use_vision", slate_detection.get("useVision", vision.get("enabled"))), False):
         return {"success": True, "status": "skipped", "reason": "Slate vision disabled."}
-    if not _media_analysis_sampling_capability(ctx):
-        return {
-            "success": False,
-            "status": "skipped",
-            "provider": vision.get("provider") or "chat_context",
-            "reason": "The MCP client for this request does not advertise sampling/createMessage support.",
-        }
-    source = record.get("file_path")
-    if not source or not os.path.isfile(source):
-        return {"success": False, "status": "skipped", "reason": f"Source media not found: {source}"}
-    if not shutil.which("ffmpeg"):
-        return {"success": False, "status": "skipped", "reason": "ffmpeg is required to sample slate frames."}
-
-    event_time = sync_event.get("time_seconds")
-    try:
-        event_time = float(event_time)
-    except (TypeError, ValueError):
-        return {"success": False, "status": "skipped", "reason": "Slate event did not include a numeric time_seconds."}
-
-    offsets = slate_detection.get("frame_offsets_seconds") or slate_detection.get("frameOffsetsSeconds") or [-1.0, -0.5, 0.0, 0.25]
-    if not isinstance(offsets, list):
-        offsets = [-1.0, -0.5, 0.0, 0.25]
-    temp_dir = tempfile.mkdtemp(prefix="davinci-resolve-mcp-slate-")
-    frame_payloads = []
-    try:
-        for index, offset in enumerate(offsets[:8]):
-            try:
-                offset_float = float(offset)
-            except (TypeError, ValueError):
-                continue
-            sample_time = max(0.0, event_time + offset_float)
-            frame_path = os.path.join(temp_dir, f"slate_{index:02d}.jpg")
-            cmd = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-ss",
-                f"{sample_time:.3f}",
-                "-i",
-                source,
-                "-frames:v",
-                "1",
-                "-q:v",
-                "2",
-                frame_path,
-            ]
-            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
-            if proc.returncode == 0 and os.path.isfile(frame_path):
-                with open(frame_path, "rb") as handle:
-                    frame_payloads.append({
-                        "time_seconds": sample_time,
-                        "offset_seconds": offset_float,
-                        "data": base64.b64encode(handle.read()).decode("ascii"),
-                    })
-        if not frame_payloads:
-            return {"success": False, "status": "skipped", "reason": "No slate frames could be sampled."}
-
-        content: List[Any] = [
-            mcp_types.TextContent(
-                type="text",
-                text=json.dumps({
-                    "task": "Check these frames around a detected slate clap. Read production slate text only when visible.",
-                    "clip": record,
-                    "sync_event": sync_event,
-                    "frame_count": len(frame_payloads),
-                }, indent=2, ensure_ascii=False),
-            )
-        ]
-        for index, frame in enumerate(frame_payloads, 1):
-            content.append(mcp_types.TextContent(
-                type="text",
-                text=(
-                    f"Slate sample {index}: time_seconds={frame['time_seconds']:.3f}, "
-                    f"offset_seconds={frame['offset_seconds']:.3f}"
-                ),
-            ))
-            content.append(mcp_types.ImageContent(type="image", data=frame["data"], mimeType="image/jpeg"))
-
-        prompt = str(slate_detection.get("prompt") or """Return only strict JSON.
-
-Inspect the provided frames around a detected slate clap. If a production slate
-or clapper is visible, transcribe only clearly visible text and extract fields.
-If no slate or clapper is visible, set slate_visible to false and leave fields
-empty. Do not guess unclear values or infer slate details from the audio cue.
-
-Use this schema:
-{
-  "success": true,
-  "provider": "chat_context",
-  "slate_visible": true,
-  "fields": {
-    "scene": "",
-    "shot": "",
-    "take": "",
-    "camera": "",
-    "roll": "",
-    "date": "",
-    "production": ""
-  },
-  "visible_text": [],
-  "confidence": {
-    "overall": "low|medium|high",
-    "scene": "low|medium|high",
-    "shot": "low|medium|high",
-    "take": "low|medium|high",
-    "camera": "low|medium|high"
-  },
-  "notes": ""
-}
-Do not include markdown fences or prose outside JSON.""")
-        result = await ctx.request_context.session.create_message(
-            [mcp_types.SamplingMessage(role="user", content=content)],
-            max_tokens=int(slate_detection.get("max_tokens") or 1000),
-            system_prompt=prompt,
-            include_context=_media_analysis_sampling_context(ctx, slate_detection.get("include_context")),
-            temperature=float(slate_detection.get("temperature", 0.1)),
-            related_request_id=ctx.request_id,
-        )
-        response_content = result.content
-        if not isinstance(response_content, mcp_types.TextContent):
-            return {
-                "success": False,
-                "status": "skipped",
-                "provider": "chat_context",
-                "reason": f"Sampling returned non-text content: {type(response_content).__name__}",
-            }
-        payload, err = _media_analysis_extract_json_text(response_content.text)
-        if err:
-            return {
-                "success": False,
-                "status": "invalid_response",
-                "provider": "chat_context",
-                "reason": err,
-                "raw_response": response_content.text[:4000],
-            }
-        payload.setdefault("success", True)
-        payload["provider"] = "chat_context"
-        payload["sync_event"] = sync_event
-        return payload
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    return {
+        "success": True,
+        "status": "skipped",
+        "provider": HOST_CHAT_PATHS_PROVIDER,
+        "reason": (
+            "Slate vision is embedded in the host_chat_paths commit_vision payload; "
+            "fill in visual.slate during commit_vision instead of running a separate slate pass."
+        ),
+        "sync_event": sync_event,
+    }
 
 
 async def _publish_clip_metadata_from_analysis(
@@ -7339,15 +7574,34 @@ async def _publish_clip_metadata_from_analysis(
     marker_decision = _media_analysis_timed_marker_decision(p)
     p = dict(p)
     p["_timed_marker_decision"] = marker_decision
-    dry_run = _media_analysis_bool(p.get("dry_run"), True)
+    caller_dry_run = _media_analysis_bool(p.get("dry_run"), True)  # what the caller asked for
+    dry_run = caller_dry_run
+    # V2 P10: track WHY dry_run might get auto-flipped, so we can report it
+    # honestly. Previous behavior: auto-flip to dry_run=True and still return
+    # success=True per-clip, producing a silent lie ("publish succeeded" when
+    # nothing was written). Fix: surface the flip reason in the response so
+    # callers can distinguish "no writes attempted" from "writes succeeded".
+    auto_dry_run_flip = False
+    auto_dry_run_flip_reason: Optional[str] = None
+
+    if not _media_analysis_metadata_writeback_enabled(p):
+        if not dry_run:
+            auto_dry_run_flip = True
+            auto_dry_run_flip_reason = "metadata_writeback_disabled"
+        dry_run = True
+
     if not dry_run and not _media_analysis_publish_confirmed(p):
         dry_run = True
+        auto_dry_run_flip = True
+        auto_dry_run_flip_reason = auto_dry_run_flip_reason or "publish_not_confirmed"
         confirmation_required = True
     elif not dry_run and marker_decision.get("prompt_required"):
         dry_run = True
+        auto_dry_run_flip = True
+        auto_dry_run_flip_reason = auto_dry_run_flip_reason or "marker_prompt_required"
         confirmation_required = True
     else:
-        confirmation_required = False
+        confirmation_required = bool(not caller_dry_run and dry_run)
 
     project_name, project_id = _project_name_and_id(proj)
     analysis_params = dict(p)
@@ -7359,50 +7613,85 @@ async def _publish_clip_metadata_from_analysis(
     if dry_run and "cleanup_frames" not in analysis_params:
         analysis_params["cleanup_frames"] = True
 
-    caps = detect_media_analysis_capabilities()
-    plan = build_media_analysis_plan(
-        project_name=project_name,
-        project_id=project_id,
-        records=records,
-        target=normalized_target,
-        params=analysis_params,
-        capabilities=caps,
-    )
-    if not plan.get("success"):
-        return plan
-    if plan.get("capability_gaps"):
-        return {
-            "success": False,
-            "error": "Cannot publish metadata because analysis has missing required capabilities",
-            "capability_gaps": plan.get("capability_gaps"),
-            "install_guidance": plan.get("install_guidance"),
-            "plan": plan,
-        }
+    caps = _media_analysis_capabilities_for_request(ctx)
 
-    async def vision_runner(record, motion, options, artifacts, capabilities):
-        return await _media_analysis_chat_context_vision(
-            record,
-            motion,
-            options,
-            artifacts,
-            capabilities,
-            ctx,
-        )
-
-    manifest = await execute_media_analysis_plan_async(
-        plan,
-        params=analysis_params,
-        capabilities=caps,
-        vision_runner=vision_runner,
-    )
-    if not manifest.get("success"):
-        return {"success": False, "manifest": manifest, "plan": plan}
-
+    # Auto-publish-after-commit_vision fast path. When the caller has just
+    # written a fresh analysis report (commit_vision did the merge), it passes
+    # `_pre_resolved_report_paths={clip_id: analysis_json_path, ...}` so we
+    # skip the re-analysis step entirely. Re-running execute_plan here is
+    # fragile: any cache-reuse miss (path normalization, signature drift,
+    # record-shape difference) causes a fresh analysis pass, which re-emits
+    # `vision_status=pending_host_analysis` and silently lies in the response
+    # ("status=pending_host_vision_analysis") even though the disk artifact
+    # is fine. Reading the just-written report directly removes that class.
+    pre_resolved_paths = p.get("_pre_resolved_report_paths") or {}
+    plan: Dict[str, Any] = {}
+    manifest: Dict[str, Any] = {}
     reports_by_clip_id: Dict[str, Tuple[Dict[str, Any], Optional[str]]] = {}
-    for report in manifest.get("reports") or []:
-        clip_id = ((report.get("clip") or {}).get("clip_id"))
-        if clip_id:
-            reports_by_clip_id[str(clip_id)] = (report, None)
+
+    if pre_resolved_paths and isinstance(pre_resolved_paths, dict):
+        for clip_id_key, report_path in pre_resolved_paths.items():
+            if not clip_id_key or not report_path or not os.path.isfile(report_path):
+                continue
+            try:
+                with open(report_path, "r", encoding="utf-8") as handle:
+                    reports_by_clip_id[str(clip_id_key)] = (json.load(handle), report_path)
+            except (OSError, json.JSONDecodeError):
+                continue
+        manifest = {
+            "success": True,
+            "vision_pending": False,
+            "pre_resolved": True,
+            "clips": [
+                {
+                    "record": rec,
+                    "success": True,
+                    "reused": True,
+                    "analysis_json": reports_by_clip_id.get(str(rec.get("clip_id") or ""), (None, None))[1],
+                }
+                for rec in records
+            ],
+        }
+        plan = {"success": True, "pre_resolved": True, "clip_count": len(records)}
+    else:
+        plan = build_media_analysis_plan(
+            project_name=project_name,
+            project_id=project_id,
+            records=records,
+            target=normalized_target,
+            params=analysis_params,
+            capabilities=caps,
+        )
+        if not plan.get("success"):
+            return plan
+        if plan.get("capability_gaps"):
+            return _media_analysis_missing_capabilities_response(plan, action_label="metadata publish analysis")
+
+        manifest = await execute_media_analysis_plan_async(
+            plan,
+            params=analysis_params,
+            capabilities=caps,
+        )
+        if not manifest.get("success"):
+            return {"success": False, "manifest": manifest, "plan": plan}
+        if manifest.get("vision_pending"):
+            return {
+                "success": True,
+                "status": "pending_host_vision_analysis",
+                "manifest": manifest,
+                "plan": plan,
+                "pending_action": manifest.get("pending_action"),
+                "reason": (
+                    "Visual analysis is deferred to the host chat. Inspect manifest.clips[*].visual "
+                    "for each clip's frame_paths and call media_analysis(action='commit_vision', ...) "
+                    "per clip. Metadata writeback will run automatically when commit_vision finalizes."
+                ),
+            }
+
+        for report in manifest.get("reports") or []:
+            clip_id = ((report.get("clip") or {}).get("clip_id"))
+            if clip_id:
+                reports_by_clip_id[str(clip_id)] = (report, None)
     for row in manifest.get("clips") or []:
         report_path = row.get("analysis_json")
         if manifest.get("session_only") and manifest.get("artifacts_cleaned_up") and report_path and not os.path.isfile(report_path):
@@ -7469,7 +7758,7 @@ async def _publish_clip_metadata_from_analysis(
             detection=detection,
             slate_review=slate_review,
             fields=fields,
-            require_visual_description=_media_analysis_bool((p.get("vision") or {}).get("enabled"), False),
+            require_visual_description=_media_analysis_bool(p.get("require_visual_description", p.get("requireVisualDescription")), False),
             require_visual_slate=True,
         )
         proposed_fields = candidate_payload["fields"]
@@ -7494,11 +7783,17 @@ async def _publish_clip_metadata_from_analysis(
             p,
             slate_review=slate_review,
         )
+        # V2 P10: row.success starts False — only becomes True if writes actually
+        # happen and succeed. Previously defaulted to True, so dry_run cases
+        # silently returned success=true with no writes.
         row = {
             "clip_id": clip_id,
             "clip_name": record.get("clip_name"),
-            "success": True,
+            "success": False,
+            "status": "dry_run" if dry_run else "writes_pending",
             "dry_run": dry_run,
+            "auto_dry_run_flip": auto_dry_run_flip,
+            "auto_dry_run_flip_reason": auto_dry_run_flip_reason,
             "timed_marker_decision": marker_decision,
             "marker_writeback_enabled": marker_writeback_enabled,
             "metadata_error": metadata_error,
@@ -7533,13 +7828,27 @@ async def _publish_clip_metadata_from_analysis(
                 row["marker_writes"] = marker_writeback
                 markers_ok = marker_result.get("success") is True
             row["success"] = metadata_ok and third_party_ok and markers_ok
+            row["status"] = "wrote" if row["success"] else "write_failed"
             if not row["success"]:
                 write_failures.append(clip_id)
+        elif auto_dry_run_flip:
+            # Caller asked for writes; we silently downgraded. Treat as a failure
+            # of intent (caller will surface this to the user).
+            row["status"] = f"blocked:{auto_dry_run_flip_reason}"
+            write_failures.append(clip_id)
         results.append(row)
 
+    # Top-level success requires: no write failures AND writes weren't auto-blocked.
+    # A dry_run requested explicitly by the caller returns success=true (preview ok);
+    # a dry_run auto-flipped from a real write request returns success=false.
+    top_success = (not write_failures) and (not auto_dry_run_flip)
+
     return {
-        "success": not write_failures,
+        "success": top_success,
         "dry_run": dry_run,
+        "caller_dry_run": caller_dry_run,
+        "auto_dry_run_flip": auto_dry_run_flip,
+        "auto_dry_run_flip_reason": auto_dry_run_flip_reason,
         "setup_defaults_applied": p.get("_setup_defaults_applied", {}),
         "marker_writeback_enabled": marker_writeback_enabled,
         "timed_marker_decision": marker_decision,
@@ -8436,10 +8745,13 @@ def _setup_media_analysis_defaults() -> Dict[str, Any]:
             "timed_markers": ["yes", "no", "ask", "default_yes", "default_no"],
             "vision_default": ["on", "off", "technical_only", "ask"],
             "analysis_persistence": ["session_only", "keep_reports", "keep_artifacts"],
+            "metadata_writeback_default": [True, False],
             "metadata_overwrite_policy": ["preserve_human", "fill_empty", "overwrite_owned_blocks", "overwrite_all"],
-            "timed_marker_types": ["slate_clap", "sync_events", "best_moments", "qc_warnings"],
-            "analysis_summary_style": ["concise", "assistant_editor", "qc", "producer", "full"],
+            "timed_marker_types": ["shots", "slate_clap", "sync_events", "best_moments", "qc_warnings"],
+            "analysis_summary_style": ["full", "concise", "creative", "technical"],
             "report_format": ["compact", "full", "machine_readable"],
+            "source_trust": ["auto", "filename", "low", "medium", "high"],
+            "default_depth": ["quick", "standard", "deep"],
             "default_post_operation_page": ["stay_put", "media", "cut", "edit", "fusion", "color", "fairlight", "deliver"],
         },
     }
@@ -8537,12 +8849,31 @@ def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: 
         "postoperationpage": "default_post_operation_page",
         "marker_custom_data": "marker_custom_data",
         "markercustomdata": "marker_custom_data",
+        "metadata_writeback_default": "metadata_writeback_default",
+        "metadatawritebackdefault": "metadata_writeback_default",
+        "metadata_writeback": "metadata_writeback_default",
+        "metadatawriteback": "metadata_writeback_default",
+        "publish_metadata": "metadata_writeback_default",
+        "publishmetadata": "metadata_writeback_default",
+        "write_metadata": "metadata_writeback_default",
+        "writemetadata": "metadata_writeback_default",
+        "write_to_resolve": "metadata_writeback_default",
+        "writetoresolve": "metadata_writeback_default",
         "ask_before_metadata_publish": "ask_before_metadata_publish",
         "askbeforemetadatapublish": "ask_before_metadata_publish",
         "dry_run_first_default": "dry_run_first_default",
         "dryrunfirstdefault": "dry_run_first_default",
         "dry_run_first": "dry_run_first_default",
         "dryrunfirst": "dry_run_first_default",
+        "source_trust": "source_trust",
+        "sourcetrust": "source_trust",
+        "trust": "source_trust",
+        "default_depth": "default_depth",
+        "defaultdepth": "default_depth",
+        "default_sample_frames": "default_sample_frames",
+        "defaultsampleframes": "default_sample_frames",
+        "sample_frames": "default_sample_frames",
+        "sampleframes": "default_sample_frames",
     }
 
     requested: Dict[str, Any] = {}
@@ -8615,10 +8946,10 @@ def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: 
             marker_types = _normalize_setup_list(
                 raw_value,
                 aliases=_MEDIA_ANALYSIS_MARKER_TYPE_ALIASES,
-                allowed=["slate_clap", "sync_events", "best_moments", "qc_warnings"],
+                allowed=["shots", "slate_clap", "sync_events", "best_moments", "qc_warnings"],
             )
             if not marker_types and not clear_requested(raw_value):
-                return _err("timed_marker_types must include slate_clap, sync_events, best_moments, or qc_warnings.")
+                return _err("timed_marker_types must include shots, slate_clap, sync_events, best_moments, or qc_warnings.")
             set_or_clear(key, raw_value, marker_types)
         elif key == "timed_marker_colors":
             colors = _normalize_marker_colors(raw_value)
@@ -8627,22 +8958,50 @@ def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: 
             set_or_clear(key, raw_value, colors)
         elif key == "max_timed_markers_per_clip":
             set_or_clear(key, raw_value, _setup_marker_limit(raw_value, 12))
-        elif key in {"include_confidence_scores", "include_source_time_notes", "ask_before_metadata_publish", "dry_run_first_default"}:
+        elif key in {"include_confidence_scores", "include_source_time_notes", "metadata_writeback_default", "ask_before_metadata_publish", "dry_run_first_default"}:
             set_or_clear(key, raw_value, _media_analysis_bool(raw_value, _MEDIA_ANALYSIS_DEFAULT_PREFS[key]))
         elif key == "analysis_summary_style":
             normalized = _normalize_setup_choice(
                 raw_value,
-                ["concise", "assistant_editor", "qc", "producer", "full"],
-                aliases={"assistant": "assistant_editor", "editor": "assistant_editor"},
+                ["full", "concise", "creative", "technical"],
+                aliases={
+                    "assistant_editor": "creative",
+                    "assistant": "creative",
+                    "editor": "creative",
+                    "producer": "creative",
+                    "qc": "technical",
+                    "qc_focus": "technical",
+                    "qc_focused": "technical",
+                },
             )
             if normalized is None:
-                return _err("Unsupported analysis_summary_style. Use concise, assistant_editor, qc, producer, or full.")
+                return _err("Unsupported analysis_summary_style. Use full, concise, creative, or technical.")
             set_or_clear(key, raw_value, normalized)
         elif key == "report_format":
             normalized = _normalize_setup_choice(raw_value, ["compact", "full", "machine_readable"])
             if normalized is None:
                 return _err("Unsupported report_format. Use compact, full, or machine_readable.")
             set_or_clear(key, raw_value, normalized)
+        elif key == "source_trust":
+            normalized = _normalize_setup_choice(
+                raw_value,
+                ["auto", "filename", "low", "medium", "high"],
+                aliases={"none": "auto", "default": "auto"},
+            )
+            if normalized is None:
+                return _err("Unsupported source_trust. Use auto, filename, low, medium, or high.")
+            set_or_clear(key, raw_value, normalized)
+        elif key == "default_depth":
+            normalized = _normalize_setup_choice(raw_value, ["quick", "standard", "deep"])
+            if normalized is None:
+                return _err("Unsupported default_depth. Use quick, standard, or deep.")
+            set_or_clear(key, raw_value, normalized)
+        elif key == "default_sample_frames":
+            try:
+                frames_int = int(raw_value) if not isinstance(raw_value, bool) else 8
+            except (TypeError, ValueError):
+                return _err("default_sample_frames must be an integer between 0 and 48.")
+            set_or_clear(key, raw_value, max(0, min(48, frames_int)))
         elif key == "default_post_operation_page":
             normalized = _normalize_setup_choice(
                 raw_value,
@@ -8797,6 +9156,7 @@ def _setup_clear_defaults(keys: Any, dry_run: bool) -> Dict[str, Any]:
         "preferred_generated_media_folder": "media_analysis.preferred_generated_media_folder",
         "default_post_operation_page": "media_analysis.default_post_operation_page",
         "marker_custom_data": "media_analysis.marker_custom_data",
+        "metadata_writeback_default": "media_analysis.metadata_writeback_default",
         "ask_before_metadata_publish": "media_analysis.ask_before_metadata_publish",
         "dry_run_first_default": "media_analysis.dry_run_first_default",
     }
@@ -8887,7 +9247,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 "media_analysis.analysis_persistence": {"values": ["session_only", "keep_reports", "keep_artifacts"], "storage": _media_analysis_preferences_path()},
                 "media_analysis.metadata_publish_fields": {"values": "list of Resolve metadata field names", "storage": _media_analysis_preferences_path()},
                 "media_analysis.metadata_overwrite_policy": {"values": ["preserve_human", "fill_empty", "overwrite_owned_blocks", "overwrite_all"], "storage": _media_analysis_preferences_path()},
-                "media_analysis.timed_marker_types": {"values": ["slate_clap", "sync_events", "best_moments", "qc_warnings"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.timed_marker_types": {"values": ["shots", "slate_clap", "sync_events", "best_moments", "qc_warnings"], "storage": _media_analysis_preferences_path()},
                 "media_analysis.timed_marker_colors": {"values": "object mapping marker type to Resolve marker color", "storage": _media_analysis_preferences_path()},
                 "media_analysis.max_timed_markers_per_clip": {"values": "0 for unlimited, or integer 1-250", "storage": _media_analysis_preferences_path()},
                 "media_analysis.include_confidence_scores": {"values": [True, False], "storage": _media_analysis_preferences_path()},
@@ -8898,6 +9258,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 "media_analysis.preferred_generated_media_folder": {"values": "absolute or expandable path", "storage": _media_analysis_preferences_path()},
                 "media_analysis.default_post_operation_page": {"values": ["stay_put", "media", "cut", "edit", "fusion", "color", "fairlight", "deliver"], "storage": _media_analysis_preferences_path()},
                 "media_analysis.marker_custom_data": {"values": ["namespaced", "minimal"], "storage": _media_analysis_preferences_path()},
+                "media_analysis.metadata_writeback_default": {"values": [True, False], "storage": _media_analysis_preferences_path()},
                 "media_analysis.ask_before_metadata_publish": {"values": [True, False], "storage": _media_analysis_preferences_path()},
                 "media_analysis.dry_run_first_default": {"values": [True, False], "storage": _media_analysis_preferences_path()},
                 "updates.mode": {
@@ -9018,8 +9379,29 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       quit() -> {success}
       get_fairlight_presets() -> {presets}
       set_high_priority() -> {success}
+      open_control_panel(port?, host?, open_browser?) -> {success, url, pid, port, status}
+        — Launches the analysis control panel (src/analysis_dashboard.py) as a background process.
+          Idempotent: returns the existing URL if already running.
+      control_panel_status() -> {running, pid, port, url}
+      close_control_panel() -> {success, was_running}
+      save_state() -> {state_token, page, current_timeline_id, current_timecode, selected_clip_ids}
+        — Captures the current Resolve UI state so it can be restored after a preview.
+      restore_state(state_token) -> {success, restored: {...}}
+        — Returns Resolve to a previously-saved state.
     """
     p = params or {}
+
+    # Control-panel actions don't require Resolve to be running.
+    if action == "open_control_panel":
+        return _open_control_panel(p)
+    elif action == "control_panel_status":
+        return _control_panel_status()
+    elif action == "close_control_panel":
+        return _close_control_panel()
+    elif action == "save_state":
+        return _resolve_save_state()
+    elif action == "restore_state":
+        return _resolve_restore_state(p)
 
     if action == "mcp_update_status":
         return _mcp_update_status_payload(
@@ -9090,7 +9472,622 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"presets": _ser(r.GetFairlightPresets())}
     elif action == "set_high_priority":
         return {"success": bool(r.SetHighPriority())}
-    return _unknown(action, ["launch","get_version","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority"])
+    return _unknown(action, ["launch","get_version","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+
+
+# ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
+#
+# Until the SQLite source-of-truth migration (C1) lands, corrections live in a
+# per-clip sidecar JSON at {clip_dir}/corrections.json. Schema mirrors the V2
+# DB design (docs/design/v2-db-schema.sql §subjective_fields + field_changelog):
+#
+#   {
+#     "schema_version": "2.0",
+#     "clip_uuid": "...",
+#     "current": {
+#       "<entity_type>:<entity_uuid>:<field_path>": {
+#         "value": <any JSON>,
+#         "confidence": "low|medium|high",
+#         "source": "human" | "vision_v0.2",
+#         "author": "sam@bradfordoperations.com",
+#         "timestamp": "2026-05-19T...Z"
+#       }
+#     },
+#     "changelog": [
+#       {previous_value, new_value, source, author, change_reason, timestamp}
+#     ]
+#   }
+#
+# Subsequent commit_vision / analyze runs must read this file and PRESERVE any
+# field whose `source == "human"` (V2 trust-but-fix-optionally contract).
+# Migration target: once C1 lands, ingest corrections.json into the DB tables.
+
+
+def _v2_corrections_path_for_clip(project_root: str, clip_dir: Optional[str], clip_id: Optional[str]) -> Optional[str]:
+    """Find the corrections.json path for a clip. Returns None if clip_dir can't be resolved."""
+    if clip_dir and os.path.isabs(clip_dir):
+        return os.path.join(clip_dir, "corrections.json")
+    # Walk clips/ to find a directory containing analysis.json with this clip_id
+    if not clip_id:
+        return None
+    clips_root = os.path.join(project_root, "clips")
+    if not os.path.isdir(clips_root):
+        return None
+    for entry in os.listdir(clips_root):
+        candidate_dir = os.path.join(clips_root, entry)
+        if not os.path.isdir(candidate_dir):
+            continue
+        analysis = os.path.join(candidate_dir, "analysis.json")
+        if not os.path.isfile(analysis):
+            continue
+        try:
+            with open(analysis, "r", encoding="utf-8") as handle:
+                report = json.load(handle)
+            if (report.get("clip") or {}).get("clip_id") == clip_id:
+                return os.path.join(candidate_dir, "corrections.json")
+        except (OSError, json.JSONDecodeError):
+            continue
+    return None
+
+
+def _v2_read_corrections(path: str) -> Dict[str, Any]:
+    if not os.path.isfile(path):
+        return {"schema_version": "2.0", "current": {}, "changelog": []}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        # Ensure shape
+        if not isinstance(data, dict):
+            data = {}
+        data.setdefault("schema_version", "2.0")
+        data.setdefault("current", {})
+        data.setdefault("changelog", [])
+        return data
+    except (OSError, json.JSONDecodeError):
+        return {"schema_version": "2.0", "current": {}, "changelog": []}
+
+
+def _v2_write_corrections(path: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, sort_keys=True, default=str)
+        os.replace(tmp_path, path)
+        return {"success": True, "path": path}
+    except OSError as exc:
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _v2_update_field(project_root: str, p: Dict[str, Any], *, entity_type: str) -> Dict[str, Any]:
+    """Apply a correction to a subjective field with provenance + changelog."""
+    clip_id = p.get("clip_id") or p.get("clipId")
+    clip_dir = p.get("clip_dir") or p.get("clipDir")
+    if not clip_id and not clip_dir:
+        return _err("update_*_field requires clip_id or clip_dir")
+
+    entity_uuid = (
+        p.get("entity_uuid") or p.get("entityUuid")
+        or (p.get("shot_uuid") if entity_type == "shot" else None)
+        or (p.get("shot_index") if entity_type == "shot" else None)
+        or clip_id  # for clip entity, the entity_uuid is the clip_id
+    )
+    if entity_uuid is None:
+        return _err(f"update_{entity_type}_field requires entity_uuid (or shot_index for shots)")
+
+    field_path = p.get("field_path") or p.get("fieldPath")
+    if not field_path:
+        return _err("update_*_field requires field_path (e.g. 'visual.shot_size')")
+
+    if "new_value" not in p and "newValue" not in p and "value" not in p:
+        return _err("update_*_field requires new_value")
+    new_value = p.get("new_value") if "new_value" in p else (p.get("newValue") if "newValue" in p else p.get("value"))
+
+    author = p.get("author") or "unknown"
+    reason = p.get("reason") or p.get("change_reason")
+    confidence = p.get("confidence")
+
+    path = _v2_corrections_path_for_clip(project_root, clip_dir, clip_id)
+    if not path:
+        return _err(f"Could not locate clip directory for clip_id={clip_id} under {project_root}/clips/. Pass clip_dir explicitly if the clip directory is non-standard.")
+
+    data = _v2_read_corrections(path)
+    if clip_id and "clip_id" not in data:
+        data["clip_id"] = str(clip_id)
+
+    key = f"{entity_type}:{entity_uuid}:{field_path}"
+    previous = data["current"].get(key)
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    new_entry = {
+        "value": new_value,
+        "source": "human",
+        "author": author,
+        "timestamp": now,
+    }
+    if confidence:
+        new_entry["confidence"] = str(confidence)
+
+    data["current"][key] = new_entry
+    data["changelog"].append({
+        "entity_type": entity_type,
+        "entity_uuid": str(entity_uuid),
+        "field_path": field_path,
+        "previous_value": (previous or {}).get("value"),
+        "new_value": new_value,
+        "previous_source": (previous or {}).get("source"),
+        "new_source": "human",
+        "previous_author": (previous or {}).get("author"),
+        "new_author": author,
+        "change_reason": reason,
+        "timestamp": now,
+    })
+    write_result = _v2_write_corrections(path, data)
+    if not write_result.get("success"):
+        return write_result
+    return {
+        "success": True,
+        "entity_type": entity_type,
+        "entity_uuid": str(entity_uuid),
+        "field_path": field_path,
+        "new_value": new_value,
+        "previous_value": (previous or {}).get("value"),
+        "author": author,
+        "timestamp": now,
+        "corrections_path": path,
+    }
+
+
+def _v2_get_field_history(project_root: str, p: Dict[str, Any]) -> Dict[str, Any]:
+    clip_id = p.get("clip_id") or p.get("clipId")
+    clip_dir = p.get("clip_dir") or p.get("clipDir")
+    path = _v2_corrections_path_for_clip(project_root, clip_dir, clip_id)
+    if not path or not os.path.isfile(path):
+        return {"success": True, "history": [], "note": "No corrections recorded for this clip."}
+    data = _v2_read_corrections(path)
+    entity_type = p.get("entity_type") or p.get("entityType")
+    entity_uuid = p.get("entity_uuid") or p.get("entityUuid")
+    field_path = p.get("field_path") or p.get("fieldPath")
+    rows = data.get("changelog") or []
+    if entity_type:
+        rows = [r for r in rows if r.get("entity_type") == entity_type]
+    if entity_uuid is not None:
+        rows = [r for r in rows if str(r.get("entity_uuid")) == str(entity_uuid)]
+    if field_path:
+        rows = [r for r in rows if r.get("field_path") == field_path]
+    return {"success": True, "history": rows, "corrections_path": path}
+
+
+def _v2_revert_field(project_root: str, p: Dict[str, Any]) -> Dict[str, Any]:
+    clip_id = p.get("clip_id") or p.get("clipId")
+    clip_dir = p.get("clip_dir") or p.get("clipDir")
+    entity_type = p.get("entity_type") or p.get("entityType")
+    entity_uuid = p.get("entity_uuid") or p.get("entityUuid")
+    field_path = p.get("field_path") or p.get("fieldPath")
+    if not (entity_type and entity_uuid is not None and field_path):
+        return _err("revert_field requires entity_type, entity_uuid, field_path")
+    author = p.get("author") or "unknown"
+
+    path = _v2_corrections_path_for_clip(project_root, clip_dir, clip_id)
+    if not path or not os.path.isfile(path):
+        return _err("No corrections file exists for this clip; nothing to revert.")
+    data = _v2_read_corrections(path)
+    key = f"{entity_type}:{entity_uuid}:{field_path}"
+    if key not in data.get("current", {}):
+        return _err(f"No current correction for {key}; nothing to revert.")
+    # Walk changelog backwards to find the value BEFORE the most-recent change for this key
+    target_changelog = [r for r in (data.get("changelog") or [])
+                        if r.get("entity_type") == entity_type
+                        and str(r.get("entity_uuid")) == str(entity_uuid)
+                        and r.get("field_path") == field_path]
+    if not target_changelog:
+        return _err("No changelog entries found for this field; cannot revert.")
+    last_change = target_changelog[-1]
+    revert_to = last_change.get("previous_value")
+    revert_source = last_change.get("previous_source") or "vision_v0.2"
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    if revert_to is None and not last_change.get("previous_source"):
+        # The reverted-to state is "no human correction" — remove the current entry
+        previous_entry = data["current"].pop(key, None)
+        action_taken = "removed (back to machine-derived)"
+    else:
+        previous_entry = data["current"].get(key)
+        data["current"][key] = {
+            "value": revert_to,
+            "source": revert_source,
+            "author": last_change.get("previous_author") or "system",
+            "timestamp": now,
+        }
+        action_taken = "reverted to previous value"
+
+    data["changelog"].append({
+        "entity_type": entity_type,
+        "entity_uuid": str(entity_uuid),
+        "field_path": field_path,
+        "previous_value": (previous_entry or {}).get("value"),
+        "new_value": revert_to,
+        "previous_source": (previous_entry or {}).get("source"),
+        "new_source": revert_source,
+        "previous_author": (previous_entry or {}).get("author"),
+        "new_author": author,
+        "change_reason": f"revert by {author}",
+        "timestamp": now,
+    })
+    write_result = _v2_write_corrections(path, data)
+    if not write_result.get("success"):
+        return write_result
+    return {
+        "success": True,
+        "action": action_taken,
+        "field_path": field_path,
+        "reverted_value": revert_to,
+        "timestamp": now,
+        "corrections_path": path,
+    }
+
+
+def _v2_list_corrections(project_root: str, p: Dict[str, Any]) -> Dict[str, Any]:
+    """List all corrections across the project (or for a specific clip)."""
+    clip_id = p.get("clip_id") or p.get("clipId")
+    if clip_id:
+        clip_dir = p.get("clip_dir") or p.get("clipDir")
+        path = _v2_corrections_path_for_clip(project_root, clip_dir, clip_id)
+        if not path or not os.path.isfile(path):
+            return {"success": True, "corrections": [], "note": "No corrections for this clip."}
+        data = _v2_read_corrections(path)
+        return {
+            "success": True,
+            "clip_id": clip_id,
+            "current_field_count": len(data.get("current", {})),
+            "changelog_count": len(data.get("changelog", [])),
+            "current": data.get("current", {}),
+            "changelog": data.get("changelog", []),
+            "corrections_path": path,
+        }
+    # Whole project — walk clips/
+    clips_root = os.path.join(project_root, "clips")
+    if not os.path.isdir(clips_root):
+        return {"success": True, "corrections": [], "note": "No clips directory."}
+    summary = []
+    for entry in os.listdir(clips_root):
+        candidate = os.path.join(clips_root, entry, "corrections.json")
+        if not os.path.isfile(candidate):
+            continue
+        data = _v2_read_corrections(candidate)
+        summary.append({
+            "clip_dir": entry,
+            "clip_id": data.get("clip_id"),
+            "current_field_count": len(data.get("current", {})),
+            "changelog_count": len(data.get("changelog", [])),
+            "corrections_path": candidate,
+        })
+    return {"success": True, "project_root": project_root, "corrections": summary}
+
+
+# ─── V2 P12: Control panel lifecycle ──────────────────────────────────────────
+
+def _control_panel_pidfile() -> str:
+    return os.path.expanduser("~/Documents/davinci-resolve-mcp-analysis/.control_panel.pid")
+
+
+def _control_panel_read_state() -> Optional[Dict[str, Any]]:
+    """Read the saved PID/port from the pidfile if present. Returns None if absent or unreadable."""
+    path = _control_panel_pidfile()
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _control_panel_pid_alive(pid: int) -> bool:
+    """Check whether a PID is alive on this OS without killing it."""
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)  # signal 0 = existence check
+    except (ProcessLookupError, PermissionError):
+        return False
+    except OSError:
+        return False
+    return True
+
+
+def _control_panel_status() -> Dict[str, Any]:
+    state = _control_panel_read_state() or {}
+    pid = int(state.get("pid") or 0)
+    running = _control_panel_pid_alive(pid)
+    if not running:
+        # Stale pidfile — clean up
+        if state:
+            try:
+                os.remove(_control_panel_pidfile())
+            except OSError:
+                pass
+        return {"running": False, "pid": None, "port": None, "url": None}
+    return {
+        "running": True,
+        "pid": pid,
+        "port": state.get("port"),
+        "host": state.get("host"),
+        "url": state.get("url"),
+        "started_at": state.get("started_at"),
+    }
+
+
+def _pick_dashboard_python(repo_root: str) -> Tuple[str, Optional[str]]:
+    """Pick the interpreter to launch the dashboard with.
+
+    Prefer a repo-local venv whose interpreter can import ``mcp`` — that
+    survives the MCP server itself being started under system Python.
+    Returns ``(executable, source)`` where ``source`` is "venv:<path>" when
+    a venv was picked, ``"sys.executable"`` otherwise.
+    """
+    import subprocess
+    import sys as _sys
+
+    candidates = [
+        os.path.join(repo_root, "venv", "bin", "python"),
+        os.path.join(repo_root, ".venv", "bin", "python"),
+        os.path.join(repo_root, "venv", "Scripts", "python.exe"),
+        os.path.join(repo_root, ".venv", "Scripts", "python.exe"),
+    ]
+    for candidate in candidates:
+        if not os.path.isfile(candidate) or not os.access(candidate, os.X_OK):
+            continue
+        try:
+            result = subprocess.run(
+                [candidate, "-c", "import mcp"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            return candidate, f"venv:{candidate}"
+    return _sys.executable, "sys.executable"
+
+
+def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
+    import subprocess
+
+    existing = _control_panel_status()
+    if existing.get("running"):
+        return {
+            "success": True,
+            "status": "already_running",
+            "url": existing.get("url"),
+            "pid": existing.get("pid"),
+            "port": existing.get("port"),
+            "note": "Control panel already running; returning existing URL.",
+        }
+
+    host = p.get("host") or "127.0.0.1"
+    port = int(p.get("port") or 8765)
+    project_name = p.get("project_name") or "Dashboard Analysis"
+    project_id = p.get("project_id") or "dashboard"
+    analysis_root = p.get("analysis_root") or os.path.expanduser("~/Documents/davinci-resolve-mcp-analysis")
+    open_browser = _media_analysis_bool(p.get("open_browser", p.get("openBrowser")), False)
+
+    # Locate the repo root so we can run the dashboard module
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    python_exe, python_source = _pick_dashboard_python(repo_root)
+    cmd = [
+        python_exe, "-m", "src.analysis_dashboard",
+        "--host", str(host),
+        "--port", str(port),
+        "--project-name", str(project_name),
+        "--project-id", str(project_id),
+        "--analysis-root", str(analysis_root),
+    ]
+    if open_browser:
+        cmd.append("--open")
+    else:
+        cmd.append("--no-open")
+
+    # Detach so the dashboard outlives this MCP call.
+    log_path = os.path.join(os.path.expanduser("~/Documents/davinci-resolve-mcp-analysis"), ".control_panel.log")
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        log_handle = open(log_path, "a", encoding="utf-8")
+    except OSError:
+        log_handle = subprocess.DEVNULL
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=repo_root,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except (OSError, FileNotFoundError) as exc:
+        return _err(f"Failed to launch control panel: {type(exc).__name__}: {exc}")
+
+    # Write the pidfile so subsequent calls find it
+    url = f"http://{host}:{port}"
+    state = {
+        "pid": proc.pid,
+        "port": port,
+        "host": host,
+        "url": url,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "project_name": project_name,
+        "project_id": project_id,
+        "analysis_root": analysis_root,
+        "log_path": log_path,
+        "python_executable": python_exe,
+        "python_source": python_source,
+    }
+    try:
+        os.makedirs(os.path.dirname(_control_panel_pidfile()), exist_ok=True)
+        with open(_control_panel_pidfile(), "w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2)
+    except OSError:
+        pass  # non-fatal; status-check will just spawn a new one next time
+
+    return {
+        "success": True,
+        "status": "launched",
+        "url": url,
+        "pid": proc.pid,
+        "port": port,
+        "host": host,
+        "log_path": log_path,
+        "python_executable": python_exe,
+        "python_source": python_source,
+        "note": (
+            "Control panel launched in background. Open the URL in a browser, or "
+            "call again with open_browser=true to auto-open. Use close_control_panel "
+            "to terminate."
+        ),
+    }
+
+
+# ─── V2 B4: Save / restore Resolve UI state for preview workflows ─────────────
+#
+# The control panel's "Open in Resolve at this timecode" flow wants to:
+#   1. Save where the editor was (page, current timeline, timecode)
+#   2. Preview a different clip in source viewer (via media_pool_item.open_in_viewer)
+#   3. Restore the editor to their prior context once they close the preview
+#
+# State is held in-memory in a small token-keyed dict (single-user model).
+
+_RESOLVE_STATE_SNAPSHOTS: Dict[str, Dict[str, Any]] = {}
+
+
+def _resolve_save_state() -> Dict[str, Any]:
+    r = get_resolve()
+    if r is None:
+        return _err("Not connected to DaVinci Resolve.")
+    pm = r.GetProjectManager()
+    proj = pm.GetCurrentProject() if pm else None
+    state: Dict[str, Any] = {
+        "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "page": r.GetCurrentPage(),
+    }
+    if proj is not None:
+        try:
+            tl = proj.GetCurrentTimeline()
+        except Exception:
+            tl = None
+        if tl is not None:
+            try:
+                state["current_timeline_id"] = tl.GetUniqueId()
+                state["current_timeline_name"] = tl.GetName()
+                state["current_timecode"] = tl.GetCurrentTimecode()
+            except Exception:
+                pass
+        try:
+            mp = proj.GetMediaPool()
+            if mp:
+                selected = mp.GetSelectedClips() or []
+                state["selected_clip_ids"] = [c.GetUniqueId() for c in selected if c]
+                current_folder = mp.GetCurrentFolder()
+                if current_folder is not None:
+                    state["current_folder_name"] = current_folder.GetName()
+        except Exception:
+            pass
+    token = short_hash(json.dumps(state, sort_keys=True, default=str), length=12) if "short_hash" in globals() else str(int(time.time() * 1000))
+    _RESOLVE_STATE_SNAPSHOTS[token] = state
+    # Prune old snapshots (keep last 20)
+    if len(_RESOLVE_STATE_SNAPSHOTS) > 20:
+        oldest = sorted(_RESOLVE_STATE_SNAPSHOTS.items(), key=lambda kv: kv[1].get("saved_at") or "")
+        for k, _ in oldest[:-20]:
+            _RESOLVE_STATE_SNAPSHOTS.pop(k, None)
+    return {"state_token": token, **state}
+
+
+def _resolve_restore_state(p: Dict[str, Any]) -> Dict[str, Any]:
+    token = p.get("state_token") or p.get("stateToken")
+    if not token:
+        return _err("restore_state requires state_token")
+    state = _RESOLVE_STATE_SNAPSHOTS.get(token)
+    if not state:
+        return _err(f"Unknown state_token: {token}")
+    r = get_resolve()
+    if r is None:
+        return _err("Not connected to DaVinci Resolve.")
+    restored: Dict[str, Any] = {}
+
+    # Restore page first so subsequent ops land in the right context
+    if state.get("page"):
+        try:
+            r.OpenPage(state["page"])
+            restored["page"] = state["page"]
+        except Exception as exc:
+            restored["page_error"] = str(exc)
+
+    pm = r.GetProjectManager()
+    proj = pm.GetCurrentProject() if pm else None
+    if proj is not None and state.get("current_timeline_id"):
+        try:
+            count = proj.GetTimelineCount() or 0
+            for i in range(1, count + 1):
+                tl = proj.GetTimelineByIndex(i)
+                if tl and tl.GetUniqueId() == state["current_timeline_id"]:
+                    proj.SetCurrentTimeline(tl)
+                    restored["current_timeline_id"] = state["current_timeline_id"]
+                    if state.get("current_timecode"):
+                        try:
+                            tl.SetCurrentTimecode(state["current_timecode"])
+                            restored["current_timecode"] = state["current_timecode"]
+                        except Exception:
+                            pass
+                    break
+        except Exception as exc:
+            restored["timeline_error"] = str(exc)
+
+    # Restore media pool selection
+    if proj is not None and state.get("selected_clip_ids"):
+        try:
+            mp = proj.GetMediaPool()
+            if mp:
+                root = mp.GetRootFolder()
+                for cid in state["selected_clip_ids"]:
+                    found, parent = _find_clip_with_parent(root, cid)
+                    if found and parent is not None:
+                        mp.SetCurrentFolder(parent)
+                        mp.SetSelectedClip(found)
+                        restored["selected_clip_id"] = cid
+                        break  # SetSelectedClip is singular; pick the first
+        except Exception as exc:
+            restored["selection_error"] = str(exc)
+
+    return {"success": True, "state_token": token, "restored": restored}
+
+
+def _close_control_panel() -> Dict[str, Any]:
+    state = _control_panel_read_state()
+    if not state:
+        return {"success": True, "was_running": False, "note": "No control panel was running."}
+    pid = int(state.get("pid") or 0)
+    if not _control_panel_pid_alive(pid):
+        try:
+            os.remove(_control_panel_pidfile())
+        except OSError:
+            pass
+        return {"success": True, "was_running": False, "note": "Stale pidfile cleaned up."}
+    try:
+        os.kill(pid, 15)  # SIGTERM
+    except (ProcessLookupError, PermissionError, OSError) as exc:
+        return _err(f"Failed to terminate control panel (pid {pid}): {exc}")
+    # Best-effort: give it a moment to die, then remove pidfile
+    import time as _t
+    for _ in range(10):
+        if not _control_panel_pid_alive(pid):
+            break
+        _t.sleep(0.1)
+    try:
+        os.remove(_control_panel_pidfile())
+    except OSError:
+        pass
+    return {"success": True, "was_running": True, "pid": pid}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -10963,11 +11960,128 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       get_mark_in_out(clip_id) -> {mark}
       set_mark_in_out(clip_id, mark_in, mark_out, type?) -> {success}
       clear_mark_in_out(clip_id, type?) -> {success}
+      open_in_viewer(clip_id, page?, mark_in_seconds?, mark_out_seconds?, clear_marks?) -> {success, clip_id, clip_name, folder_name, page, mark_set}
+        — Switches to Media page (default) and selects the clip in the bin.
+          Resolve auto-loads the selected clip into the source viewer on Media page.
+          Optional: pre-set Mark In/Out on the clip so a shot's time range is
+          highlighted when it loads.
+          NOTE: Source-viewer auto-load is undocumented in the Scripting API;
+          verified empirically on Resolve Studio 20.3.2.9. If BMD changes the
+          behavior the clip will still be selected — editor double-clicks to load.
     """
     p = params or {}
     _, _, mp, err = _get_mp()
     if err:
         return err
+
+    # open_in_viewer needs (clip, parent_folder) to set the bin to the right folder.
+    # Other actions just need the clip.
+    if action == "open_in_viewer":
+        clip, parent = _find_clip_with_parent(mp.GetRootFolder(), p.get("clip_id", ""))
+        if not clip:
+            return _err(f"Clip not found: {p.get('clip_id')}")
+        page = (p.get("page") or "media").strip().lower()
+        if page not in ("media", "cut", "edit"):
+            return _err(f"Unsupported page for open_in_viewer: {page!r}. Use 'media' (recommended), 'cut', or 'edit'.")
+        resolve_obj = get_resolve()
+        if resolve_obj is None:
+            return _err("Not connected to DaVinci Resolve. Is Resolve running?")
+        if not resolve_obj.OpenPage(page):
+            return _err(f"Failed to switch to {page} page")
+
+        # V2 P14+B4: Optional mark in/out so a shot's time range is pre-highlighted
+        # when the clip loads in source viewer. Caller passes seconds; we convert
+        # to frames using the clip's fps from properties.
+        mark_set: Optional[Dict[str, Any]] = None
+        if p.get("clear_marks") or p.get("clearMarks"):
+            try:
+                clip.ClearMarkInOut(p.get("mark_type") or "all")
+                mark_set = {"cleared": True}
+            except Exception as exc:
+                mark_set = {"cleared": False, "error": str(exc)}
+        else:
+            mark_in_s = p.get("mark_in_seconds") if p.get("mark_in_seconds") is not None else p.get("markInSeconds")
+            mark_out_s = p.get("mark_out_seconds") if p.get("mark_out_seconds") is not None else p.get("markOutSeconds")
+            if mark_in_s is not None or mark_out_s is not None:
+                # Resolve fps from clip properties; fall back to 24 if not readable.
+                try:
+                    fps_str = clip.GetClipProperty("FPS") or clip.GetClipProperty("Frame Rate") or "24"
+                    fps = float(str(fps_str).split()[0])
+                    if fps <= 0:
+                        fps = 24.0
+                except Exception:
+                    fps = 24.0
+                in_frame = int(round(float(mark_in_s) * fps)) if mark_in_s is not None else 0
+                out_frame = int(round(float(mark_out_s) * fps)) if mark_out_s is not None else None
+                if out_frame is None:
+                    # No out → caller wants only an "in" mark; use clip end.
+                    try:
+                        existing = clip.GetMarkInOut() or {}
+                        video = existing.get("video") or {}
+                        out_frame = int(video.get("out") or (in_frame + 1))
+                    except Exception:
+                        out_frame = in_frame + 1
+                if out_frame <= in_frame:
+                    out_frame = in_frame + 1
+                try:
+                    mark_ok = bool(clip.SetMarkInOut(in_frame, out_frame, p.get("mark_type") or "all"))
+                    mark_set = {
+                        "applied": mark_ok,
+                        "in_frame": in_frame,
+                        "out_frame": out_frame,
+                        "fps_used": fps,
+                        "mark_in_seconds": mark_in_s,
+                        "mark_out_seconds": mark_out_s,
+                    }
+                except Exception as exc:
+                    mark_set = {"applied": False, "error": str(exc)}
+
+        # Navigate the bin to the clip's folder so the clip is visible to select.
+        if parent is not None:
+            try:
+                mp.SetCurrentFolder(parent)
+            except Exception:
+                pass  # not fatal; SetSelectedClip below may still work
+        select_ok = bool(mp.SetSelectedClip(clip))
+
+        # Bring Resolve to the foreground so the editor doesn't have to
+        # alt-tab. Default on; pass focus_app=false to suppress.
+        focus_app = p.get("focus_app", p.get("focusApp", True))
+        focus_result: Optional[Dict[str, Any]] = None
+        if focus_app:
+            focus_result = _activate_resolve_window()
+
+        # Jump the source viewer playhead to Mark In via Shift+I keystroke.
+        # Resolve's scripting API has no direct "set source viewer playhead"
+        # call, so we send the keyboard equivalent of "Go to In" once the
+        # app is in the foreground. Default on when a mark was set.
+        jump_result: Optional[Dict[str, Any]] = None
+        wants_jump = p.get("jump_to_mark_in", p.get("jumpToMarkIn", True))
+        applied_mark = bool(mark_set and mark_set.get("applied"))
+        if wants_jump and applied_mark and focus_result and focus_result.get("activated"):
+            jump_result = _send_resolve_keystroke_go_to_mark_in()
+
+        return {
+            "success": select_ok,
+            "clip_id": clip.GetUniqueId(),
+            "clip_name": clip.GetName(),
+            "folder_name": parent.GetName() if parent else None,
+            "page": page,
+            "mark_set": mark_set,
+            "focus": focus_result,
+            "playhead_jump": jump_result,
+            "note": (
+                "Clip selected in bin. On Media page the source viewer auto-loads "
+                "the selection. On Cut/Edit pages the clip is selected but the "
+                "source viewer may not auto-load — call again with page='media' or "
+                "double-click in Resolve."
+            ) if page != "media" else (
+                "Clip selected and auto-loaded in Media page source viewer."
+                + (" Mark In/Out set." if mark_set and mark_set.get("applied") else "")
+                + (" Resolve activated." if focus_result and focus_result.get("activated") else "")
+                + (" Playhead jumped to Mark In." if jump_result and jump_result.get("sent") else "")
+            ),
+        }
 
     clip = _find_clip(mp.GetRootFolder(), p.get("clip_id", ""))
     if not clip:
@@ -11043,7 +12157,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"success": bool(clip.SetMarkInOut(p["mark_in"], p["mark_out"], p.get("type", "all")))}
     elif action == "clear_mark_in_out":
         return {"success": bool(clip.ClearMarkInOut(p.get("type", "all")))}
-    return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip","get_unique_id","transcribe_audio","clear_transcription","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out"])
+    return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip","get_unique_id","transcribe_audio","clear_transcription","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out","open_in_viewer"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -11164,6 +12278,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       detect_sync_events(paths?|target?, event_types?, windows?) -> {files, alignment}
       add_sync_event_markers(target?|paths?|detections?, confirm?) -> {added, skipped}
       publish_clip_metadata(target?, fields?, slate_detection?, timed_markers?|write_markers?, dry_run?, confirm?) -> {results}
+      commit_vision(clip_id|file_path|clip_dir, visual, vision_token?, analysis_root?, publish_metadata?, dry_run?, confirm?) -> {analysis_json, marker_plan_json, metadata_publish}
       review_timeline_markers(max_samples?, analysis_root?, vision?) -> {path, samples, vision_review?}
       summarize(analysis_root?) -> project summary from existing clip reports
       get_report(report_path?) -> load manifest or a report under the analysis root
@@ -11180,39 +12295,62 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
 
     Analysis outputs stay under a davinci-resolve-mcp-analysis project root
     and are validated so they are never written beside source media. Executed
-    file/clip analysis defaults to session-only: scratch artifacts are removed
-    after structured reports are returned unless persist=true or keep_artifacts=true.
+    Resolve-target analysis defaults to execution, persisted inspectable
+    artifacts, metadata writeback, and Media Pool clip markers unless disabled.
     The SQLite index is a single-user derived cache stored beside the JSON
     reports; it stores text/metadata only, never sampled image bytes.
     Batch jobs are single-user operational state stored beside the analysis
     root; each slice exits cleanly so agents can poll progress without spending
     tokens on long media processing.
-    publish_clip_metadata is a separate confirmed Resolve-project metadata write.
-    Time-based Media Pool clip markers are opt-in. If no timed marker choice or
-    saved default exists, publish_clip_metadata returns a timed_marker_prompt
-    with yes, no, default_yes, and default_no choices.
-    Set vision={enabled:true, provider:"chat_context"} to request visual
-    analysis from the MCP client's current chat/sampling model when supported.
+    Executed Resolve-target analysis writes metadata and Media Pool clip markers
+    by default; pass dry_run=true, publish_metadata=false, or timed_markers=no
+    to disable writeback. If ask_before_metadata_publish is enabled,
+    publish_clip_metadata returns a confirmation prompt until confirm=true.
+    Vision uses host_chat_paths by default: analyze actions return a deferred
+    payload with absolute frame_paths and a JSON schema. The host chat reads
+    each frame as a local image, produces JSON per the schema, and calls
+    media_analysis(action="commit_vision", params={clip_id, visual, vision_token})
+    to merge the result, rebuild Media Pool clip markers, and publish
+    vision-dependent metadata to Resolve. Works with any MCP client whose chat
+    model is vision-capable; no sampling/createMessage support required.
     """
     p = _media_analysis_apply_setup_defaults(action, dict(params or {}))
 
     if action == "capabilities":
-        caps = detect_media_analysis_capabilities()
-        caps.setdefault("vision", {})["chat_context"] = {
-            "available": _media_analysis_sampling_capability(ctx),
-            "requires": "MCP client sampling/createMessage support on the active request",
-            "provider": "chat_context",
+        return _media_analysis_capabilities_for_request(ctx)
+    if action == "recheck_capabilities":
+        # Re-runs detection (shutil.which / importlib.util.find_spec) so a tool
+        # an agent just installed flips from missing → available without the
+        # user reloading the dashboard. Optional `previous` param compares against
+        # a prior snapshot and returns a `changed` diff for "before/after" reporting.
+        fresh = _media_analysis_capabilities_for_request(ctx)
+        previous = (p.get("previous") or {}) if isinstance(p, dict) else {}
+        prev_tools = (previous.get("tools") or {}) if isinstance(previous, dict) else {}
+        new_tools = fresh.get("tools") or {}
+        changed: Dict[str, Dict[str, Any]] = {}
+        for name, new_entry in new_tools.items():
+            prev_avail = bool((prev_tools.get(name) or {}).get("available")) if isinstance(prev_tools.get(name), dict) else None
+            new_avail = bool(new_entry.get("available"))
+            if prev_avail is None:
+                continue
+            if prev_avail != new_avail:
+                changed[name] = {"was": prev_avail, "now": new_avail}
+        return {
+            "success": True,
+            "capabilities": fresh,
+            "changed": changed,
         }
-        return caps
     if action == "install_guidance":
-        caps = detect_media_analysis_capabilities()
+        caps = _media_analysis_capabilities_for_request(ctx)
         guidance = media_analysis_install_guidance(caps)
-        if _media_analysis_sampling_capability(ctx):
+        if caps.get("vision", {}).get("available"):
             guidance.get("missing", {}).pop("vision", None)
-        guidance["chat_context_vision"] = {
-            "available": _media_analysis_sampling_capability(ctx),
-            "requires": "No package install; the MCP client must support sampling/createMessage.",
-            "provider": "chat_context",
+        guidance["host_chat_paths_vision"] = {
+            "available": True,
+            "requires": "No package install; the host MCP client's chat model must be able to read local image files.",
+            "provider": HOST_CHAT_PATHS_PROVIDER,
+            "commit_action": {"tool": "media_analysis", "action": "commit_vision"},
+            "schema_reference": VISION_SCHEMA_REFERENCE,
         }
         return guidance
 
@@ -11266,6 +12404,39 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 report_path=p.get("report_path") or p.get("path"),
                 clip_dir=p.get("clip_dir"),
             )
+        # V2 B6: chat ↔ panel state sharing
+        if action == "get_panel_state":
+            from src.utils.analysis_memory import read_panel_state, panel_state_path
+            state = read_panel_state(project_root)
+            return {
+                "success": True,
+                "project_root": project_root,
+                "panel_state_path": panel_state_path(project_root),
+                "panel_state": state,
+            }
+        if action == "set_panel_state":
+            from src.utils.analysis_memory import write_panel_state
+            updates = p.get("state") or p.get("panel_state") or {}
+            if not isinstance(updates, dict):
+                return _err("set_panel_state requires `state` to be an object")
+            merge = _media_analysis_bool(p.get("merge", True), True)
+            written_by = p.get("written_by") or p.get("writtenBy") or "chat"
+            return write_panel_state(project_root, updates, written_by=written_by, merge=merge)
+        # V2 session-start context (loads soul + memory + heartbeat + panel state)
+        if action == "session_start_context":
+            from src.utils.analysis_memory import session_start_context
+            return session_start_context(project_root)
+        # V2 C4: correction tools — per-clip sidecar JSON with provenance + changelog
+        if action == "update_shot_field":
+            return _v2_update_field(project_root, p, entity_type="shot")
+        if action == "update_clip_field":
+            return _v2_update_field(project_root, p, entity_type="clip")
+        if action == "get_field_history":
+            return _v2_get_field_history(project_root, p)
+        if action == "revert_field":
+            return _v2_revert_field(project_root, p)
+        if action == "list_corrections":
+            return _v2_list_corrections(project_root, p)
         if action in {"build_index", "rebuild_index"}:
             return build_analysis_index(project_root, index_path=p.get("index_path") or p.get("indexPath"))
         if action == "index_status":
@@ -11322,9 +12493,9 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             return review
         vision = p.get("vision") or {}
         if _media_analysis_bool(vision.get("enabled"), default=False):
-            provider = vision.get("provider") or "chat_context"
-            if provider in CHAT_CONTEXT_VISION_PROVIDERS:
-                review["vision_review"] = await _media_analysis_chat_context_image_review(
+            provider = vision.get("provider") or HOST_CHAT_PATHS_PROVIDER
+            if provider in HOST_CHAT_VISION_PROVIDERS:
+                review["vision_review"] = _media_analysis_host_chat_image_review_payload(
                     review.get("path"),
                     {
                         "timeline": {"name": tl.GetName(), "id": tl.GetUniqueId()},
@@ -11332,14 +12503,13 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                         "review_prompt": review.get("review_prompt"),
                     },
                     vision,
-                    ctx,
                 )
             else:
                 review["vision_review"] = {
                     "success": False,
                     "status": "skipped",
                     "provider": provider,
-                    "reason": "Timeline marker image review currently supports chat-context vision only.",
+                    "reason": f"Timeline marker image review uses host_chat_paths; unknown provider '{provider}'.",
                 }
         return review
 
@@ -11374,6 +12544,63 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
     if action == "publish_clip_metadata":
         return await _publish_clip_metadata_from_analysis(proj, p, ctx)
 
+    if action == "commit_vision":
+        visual = p.get("visual") or p.get("visual_analysis") or p.get("visualAnalysis")
+        if visual is None:
+            return _err("commit_vision requires `visual` (JSON object matching the vision schema)")
+        clip_id = p.get("clip_id") or p.get("clipId")
+        file_path = p.get("file_path") or p.get("filePath") or p.get("path")
+        clip_dir = p.get("clip_dir") or p.get("clipDir")
+        vision_token = p.get("vision_token") or p.get("visionToken")
+
+        analysis_root = p.get("analysis_root") or p.get("analysisRoot") or p.get("project_root") or p.get("projectRoot")
+        if not analysis_root:
+            source_paths = [file_path] if file_path else None
+            root_info = resolve_media_analysis_output_root(source_paths=source_paths, project_name=project_name, project_id=project_id)
+            if not root_info.get("success"):
+                return root_info
+            analysis_root = root_info.get("project_root")
+
+        commit = commit_visual_analysis(
+            project_root=analysis_root,
+            visual=visual,
+            clip_id=str(clip_id) if clip_id else None,
+            file_path=file_path,
+            clip_dir=clip_dir,
+            vision_token=str(vision_token) if vision_token else None,
+        )
+        if not commit.get("success"):
+            return commit
+
+        record = commit.get("record") or {}
+        committed_clip_id = record.get("clip_id") or clip_id
+        if committed_clip_id and _media_analysis_metadata_writeback_enabled(p):
+            publish_params = _media_analysis_apply_setup_defaults("publish_clip_metadata", {
+                **p,
+                "target": {"type": "clip", "clip_id": str(committed_clip_id)},
+            })
+            publish_params["target"] = {"type": "clip", "clip_id": str(committed_clip_id)}
+            if not _has_any_param(publish_params, "dry_run", "dryRun"):
+                publish_params["dry_run"] = False
+            if not _has_any_param(publish_params, "confirm", "confirmed", "apply"):
+                publish_params["confirm"] = True
+            committed_report_path = commit.get("analysis_json")
+            if committed_report_path and os.path.isfile(committed_report_path):
+                publish_params["_pre_resolved_report_paths"] = {
+                    str(committed_clip_id): committed_report_path,
+                }
+            commit["metadata_publish"] = await _publish_clip_metadata_from_analysis(proj, publish_params, ctx)
+        else:
+            commit["metadata_publish"] = {
+                "success": True,
+                "status": "skipped",
+                "reason": (
+                    "Metadata writeback skipped — commit_vision called against a non-Resolve clip "
+                    "or with publish_metadata=false. Analysis files were updated on disk."
+                ),
+            }
+        return commit
+
     if action == "start_batch_job":
         p["dry_run"] = False
         p["persist"] = True
@@ -11407,7 +12634,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         return created
 
     if action in {"analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence"}:
-        dry_run_default = action in {"analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence"}
+        dry_run_default = bool(_media_analysis_effective_preferences().get("dry_run_first_default"))
         p["dry_run"] = _media_analysis_bool(p.get("dry_run"), dry_run_default)
         target = _media_analysis_target_dict(p.get("target"), p)
         if target.get("_invalid_target"):
@@ -11460,44 +12687,74 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             if warnings:
                 target_err["warnings"] = warnings
             return target_err
+        caps = _media_analysis_capabilities_for_request(ctx)
         plan = build_media_analysis_plan(
             project_name=project_name,
             project_id=project_id,
             records=records or [],
             target=normalized_target,
             params=p,
-            capabilities=detect_media_analysis_capabilities(),
+            capabilities=caps,
         )
         if p.get("_setup_defaults_applied"):
             plan["setup_defaults_applied"] = p.get("_setup_defaults_applied")
         if warnings:
             plan["warnings"] = warnings
+        if plan.get("capability_gaps") and not bool(p.get("dry_run", True)):
+            return _media_analysis_missing_capabilities_response(plan)
         if not bool(p.get("dry_run", True)):
-            async def vision_runner(record, motion, options, artifacts, capabilities):
-                return await _media_analysis_chat_context_vision(
-                    record,
-                    motion,
-                    options,
-                    artifacts,
-                    capabilities,
-                    ctx,
-                )
-
             executed = await execute_media_analysis_plan_async(
                 plan,
                 params=p,
-                capabilities=detect_media_analysis_capabilities(),
-                vision_runner=vision_runner,
+                capabilities=caps,
             )
-            return {
+            # V2 P9: compact the wire response unless verbose=true. Full payload
+            # is always on disk under analysis_json. Saves 100k+ chars per call
+            # and avoids forcing consumers to file-shovel via jq.
+            verbose = _media_analysis_bool(p.get("verbose", p.get("verboseResponse", p.get("include_full_manifest"))), False)
+            result = {
                 "success": bool(executed.get("success")),
                 "plan": plan,
-                "manifest": executed,
+                "manifest": _compact_manifest_for_response(executed, verbose=verbose),
+                "response_format": "verbose" if verbose else "compact",
             }
+            if executed.get("vision_pending"):
+                result["status"] = "pending_host_vision_analysis"
+                result["pending_action"] = executed.get("pending_action")
+                result["next_step_instructions"] = (
+                    "Visual analysis is deferred to the host chat. For each clip in "
+                    "manifest.clips with vision_status='pending_host_analysis', open "
+                    "analysis_json on disk to retrieve the full visual.prompt, "
+                    "schema_reference, frame_paths[] and shot_table[]. Read those frames "
+                    "as local images, produce a JSON object matching the schema, and call "
+                    "media_analysis(action='commit_vision', params={clip_id, visual, vision_token}). "
+                    "Resolve clip-level metadata (Description, Keywords, Comments) is published "
+                    "automatically after commit_vision finalizes. Pass verbose=true to inline the "
+                    "full visual payload in the response instead of reading from disk."
+                )
+                return result
+            if (
+                result["success"]
+                and target_type != "file"
+                and not _media_analysis_bool(p.get("dry_run"), True)
+                and _media_analysis_metadata_writeback_enabled(p)
+            ):
+                publish_params = _media_analysis_apply_setup_defaults("publish_clip_metadata", {
+                    **p,
+                    "target": normalized_target,
+                })
+                publish_params["target"] = normalized_target
+                if not _has_any_param(publish_params, "dry_run", "dryRun"):
+                    publish_params["dry_run"] = False
+                publish_result = await _publish_clip_metadata_from_analysis(proj, publish_params, ctx)
+                result["metadata_publish"] = _compact_metadata_publish_for_response(publish_result, verbose=verbose)
+                result["success"] = bool(result["success"] and publish_result.get("success"))
+            return result
         return plan
 
     return _unknown(action, [
         "capabilities",
+        "recheck_capabilities",
         "install_guidance",
         "resolve_output_root",
         "plan",
@@ -11510,6 +12767,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "detect_sync_events",
         "add_sync_event_markers",
         "publish_clip_metadata",
+        "commit_vision",
         "review_timeline_markers",
         "summarize",
         "get_report",

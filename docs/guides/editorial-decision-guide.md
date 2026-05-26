@@ -97,10 +97,10 @@ verify it against a Resolve-rendered frame:
 - Keep marker notes concrete enough that another editor can act on them.
 
 Use contact sheets for orientation and review. `analyze_media` defaults to
-chat-context vision for visual/editorial analysis when the MCP client supports
-sampling; pass `include_visuals=false` for a no-visual run. Use direct assistant
-inspection when the user provides or requests specific still/contact-sheet
-review.
+host_chat_paths vision: analyze actions return frame_paths and a schema, and the
+host chat finalizes per-clip visual analysis via `commit_vision`. Pass
+`include_visuals=false` for a no-visual run. Use direct assistant inspection
+when the user provides or requests specific still/contact-sheet review.
 
 ## Edit Variant Safety
 

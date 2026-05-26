@@ -30,8 +30,10 @@ Your relationship to source media is **READ-ONLY**. Every department in a post-p
 - Running Whisper transcription that writes only to an analysis directory
 - Creating sampled frames/contact sheets only for visual analysis workflows, only
   in a designated analysis directory. The `analyze_media` prompt defaults
-  visual analysis on when chat-context vision is supported; pass
-  `include_visuals=false` to opt out.
+  visual analysis and transcription on, and writes metadata/markers back to the
+  Resolve project by default; pass `include_visuals=false`,
+  `include_transcription=false`, `publish_metadata=false`, or
+  `timed_markers=no` to opt out.
 
 ### Why This Matters
 
@@ -88,13 +90,16 @@ FFprobe is required. If missing:
   analysis, flash-frame candidates, motion/variance scoring, and analysis
   keyframes (~30-60 seconds per file)
 - **deep** — Standard analysis plus transcription and expanded visual sampling
-  when chat-context vision is available (~2-5 minutes per file)
+  via host_chat_paths (finalized per clip with commit_vision, ~2-5 minutes per
+  file plus host-chat read time)
 
 ---
 
 ## Analysis Commands
 
-Every command below is read-only. None write to the source file.
+Every command below is source-file read-only. Resolve-target analysis may write
+metadata and Media Pool clip markers to the Resolve project database by default;
+none of these commands write to the source media file.
 
 ### FFprobe: Technical Metadata (Required)
 
@@ -212,17 +217,131 @@ If you already have a detection result, pass it back as `detection` with
 `confirm=true`. Raw file-path detections cannot be marked in Resolve unless
 they are tied to Media Pool clips.
 
+### Host-Chat Visual Analysis (`host_chat_paths` + `commit_vision`)
+
+Vision uses `host_chat_paths` by default. It works with any MCP client whose
+chat model is vision-capable; no `sampling/createMessage` support is required
+on the client side.
+
+The protocol is two tool calls per clip:
+
+**1. Analyze.** `analyze_clip` / `analyze_file` / `analyze_bin` etc. extract
+representative frames to disk under the project analysis root and return a
+deferred-vision payload in `manifest.clips[*].visual`:
+
+```json
+{
+  "success": true,
+  "status": "pending_host_analysis",
+  "provider": "host_chat_paths",
+  "vision_token": "<16-char hash>",
+  "frame_paths": [
+    "/Users/.../analysis/.../clips/<clip-dir>/frames/sampled_0001.jpg",
+    "..."
+  ],
+  "frame_metadata": [
+    {"frame_index": 1, "time_seconds": 0.0, "selection_reason": "first_usable", "boundary_role": null, ...},
+    ...
+  ],
+  "shot_table": [
+    {
+      "shot_index": 1,
+      "time_seconds_start": 0.0,
+      "time_seconds_end": 1.969,
+      "duration_seconds": 1.969,
+      "frame_indices": [1, 2],
+      "has_in_shot_frame": true
+    },
+    ...
+  ],
+  "prompt": "<the JSON schema you must return>",
+  "schema_reference": "davinci_resolve_mcp.visual_analysis.v1",
+  "commit_action": {
+    "tool": "media_analysis",
+    "action": "commit_vision",
+    "params": {
+      "clip_id": "<clip-id>",
+      "analysis_root": "<absolute project root>",
+      "vision_token": "<same token>",
+      "visual": "<host chat: fill with JSON matching prompt>"
+    }
+  },
+  "instructions": "Read every file under frame_paths..."
+}
+```
+
+The manifest also carries `vision_pending: true` and `pending_action` at the
+top level so the response shape signals incompleteness to any caller.
+
+**2. Commit.** The host chat reads each `frame_paths` entry as a local image
+(Claude Code's `Read` tool handles JPG/PNG natively; Claude Desktop accepts
+images in chat; Cursor/Continue/Cline etc. expose comparable mechanisms),
+produces JSON matching the `prompt`, then calls:
+
+```json
+{
+  "action": "commit_vision",
+  "params": {
+    "clip_id": "<clip-id>",
+    "vision_token": "<token>",
+    "visual": { "clip_summary": "...", "editorial_classification": {...}, ... }
+  }
+}
+```
+
+`commit_vision` validates the token (rejects stale commits if the analysis has
+been re-run), normalizes the visual payload against the schema, rewrites
+`visual.json` / `analysis.json` / `clip_analysis_markers.json`, refreshes the
+SQLite index entry, and — for Resolve-target clips — publishes metadata and
+Media Pool clip markers automatically. The response includes a
+`metadata_publish` block reporting the publish outcome.
+
+**Shot-level descriptions are required, not optional.** The host chat must
+return one `shot_descriptions` entry per `shot_index` in `shot_table`:
+
+```json
+"shot_descriptions": [
+  {
+    "shot_index": 1,
+    "time_seconds_start": 0.0,
+    "time_seconds_end": 1.969,
+    "frame_indices_used": [1, 2],
+    "description": "What is visible in this shot's frames specifically.",
+    "editing_value": "How an editor might use this shot.",
+    "qc_flags": []
+  }
+]
+```
+
+Each shot marker in Resolve inherits its `visual_description` from
+`shot_descriptions[shot_index]`. If a shot has no entry, the server falls back
+to an in-range `analysis_keyframe` description, and finally to a
+clip-summary-tagged fallback so the marker is honest about being inherited
+rather than authored — it never copies a far-away neighbour's description.
+Use `analysis_keyframes` for sparse notable-moment observations (motion peaks,
+slate visibility, flash candidates); it is additive and does not replace
+`shot_descriptions`.
+
+Per-layer artifacts (technical, loudness, scenes, motion, transcription) persist
+during the initial analyze call regardless of vision status, so a partial
+completion still leaves usable inspectable reports on disk.
+
+Skip vision entirely with `include_visuals=false` or set
+`vision={"enabled": false}` — only do this when the user explicitly opts out.
+
 ### Publishing Analysis Back To Resolve Metadata
 
 Use `media_analysis(action="publish_clip_metadata")` when analysis should become
 searchable and usable inside Resolve's own Media Pool metadata views, smart bins,
 and filters.
 
-The publish step is a separate Resolve-project mutation. It does not modify
-source media, but it does write to the Resolve project database, so it defaults
-to `dry_run=true` and requires `confirm=true` before writing.
+The publish step is a Resolve-project mutation. It does not modify source media,
+but it does write to the Resolve project database. Executed Resolve-target
+analysis publishes metadata and source-time Media Pool markers by default; pass
+`dry_run=true`, `publish_metadata=false`, or `timed_markers=no` to disable those
+writes for a run.
 
-Recommended dry-run:
+Optional dry-run:
 
 ```json
 {
@@ -231,15 +350,14 @@ Recommended dry-run:
     "target": "selected",
     "fields": ["Description", "Comments", "Keywords", "People"],
     "merge_policy": "append_relevant",
-    "vision": {"enabled": true, "provider": "chat_context"},
+    "vision": {"enabled": true, "provider": "host_chat_paths"},
     "slate_detection": {"enabled": true, "use_vision": true},
     "dry_run": true
   }
 }
 ```
 
-After reviewing the proposed field changes, confirm only if the target clips and
-merge results are correct:
+To force an explicit publish call after review:
 
 ```json
 {
@@ -265,26 +383,27 @@ Field policies are conservative by default:
 - Machine provenance is written to third-party metadata using
   `davinci_resolve_mcp.*` keys so future runs can check report path, signature,
   publish timestamp, publisher version, and changed fields.
-- Source-time observations can optionally be written as Media Pool clip markers
-  by calling `publish_clip_metadata` with `write_markers=true`. This is off by
-  default; without that flag, best moments, sync events, and warnings remain in
-  the analysis JSON and metadata text rather than becoming Resolve markers.
-- If no timed-marker choice or saved default exists, `publish_clip_metadata`
-  returns a `timed_marker_prompt` with four choices: `yes`, `no`,
-  `default_yes`, and `default_no`. The default choices persist locally for
-  future publishes; actual Resolve writes still require `confirm=true`.
+- Source-time observations are written as Media Pool clip markers by default,
+  including shot ranges, best moments, sync events, and warnings. Use
+  `timed_markers=no`, `marker_types`, or `max_markers` when a run needs fewer
+  markers.
+- If `ask_before_metadata_publish=true`, `publish_clip_metadata` returns a
+  confirmation prompt until `confirm=true` is supplied. Timed-marker choices
+  still support `yes`, `no`, `default_yes`, and `default_no` for local defaults.
 - Conversation-level defaults can also be managed through
   `setup(action="get_defaults")` and `setup(action="set_defaults")`. For
   example, pass
   `{"defaults":{"media_analysis":{"timed_markers_default":"default_no"}}}` to
-  make timed markers opt-in without waiting for the next publish prompt.
-  The setup tool also stores defaults for slate detection, chat-context vision,
+  disable timed markers by default.
+  The setup tool also stores defaults for slate detection, host_chat_paths vision,
   transcription, session-only vs persisted reports, metadata field lists,
   metadata overwrite policy, timed-marker types/colors/counts, confidence/time
   note reporting, summary style, report format, preferred analysis roots,
   generated-media folders, post-operation page preference, marker custom-data
-  style, and dry-run-first behavior. These defaults shape future analysis calls
-  but do not remove the `confirm=true` requirement for Resolve project writes.
+  style, metadata writeback default, and dry-run-first behavior. These defaults
+  shape future analysis calls
+  and can restore prompt-before-write behavior with
+  `ask_before_metadata_publish=true`.
 
 When slate detection is enabled, the helper first looks for likely audio clap
 cues with the source-safe sync detector, then checks temporary frames around the
@@ -296,9 +415,11 @@ structured fields; lower-confidence reads stay out of structured writeback.
 
 When visual analysis is requested for metadata publishing, `Description` and
 editorial `Comments` are generated from successful visual analysis rather than
-falling back to filename/duration/motion summaries. If the MCP client cannot
-provide chat-context vision for that request, the publish result reports the
-visual skip and leaves those descriptive fields unchanged.
+falling back to filename/duration/motion summaries. Vision uses host_chat_paths
+by default — analyze actions return a deferred payload and the publish flow
+defers until the host chat calls `commit_vision` with the visual JSON. If the
+host chat skips `commit_vision`, the publish result reports the visual layer as
+`pending_host_vision_analysis` and leaves descriptive fields unchanged.
 
 ### Clip Marker JSON And Sequence Analysis
 

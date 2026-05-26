@@ -14,25 +14,67 @@ import inspect
 import json
 import math
 import os
+import platform as _platform
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.utils.sync_detection import detect_sync_event_capabilities
+from src.utils import analysis_memory
+
+
+def _ensure_path_includes_standard_tool_dirs() -> None:
+    """Augment os.environ['PATH'] with common tool install dirs.
+
+    macOS GUI apps (Claude.app, Dock/Spotlight launches) inherit launchd's bare
+    PATH (/usr/bin:/bin:/usr/sbin:/sbin) and never source the user's shell rc.
+    That makes shutil.which("ffprobe") return None even when Homebrew has it at
+    /opt/homebrew/bin/ffprobe. Subprocess calls (subprocess.run(["ffprobe"...]))
+    then also fail to find the binary. Prepending the standard tool dirs here
+    fixes both detection and execution for every importer of this module.
+    """
+    candidates = [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+        "/opt/local/bin",
+        "/opt/local/sbin",
+    ]
+    current = os.environ.get("PATH", "")
+    parts = current.split(os.pathsep) if current else []
+    existing = set(parts)
+    additions = [d for d in candidates if os.path.isdir(d) and d not in existing]
+    if additions:
+        os.environ["PATH"] = os.pathsep.join(additions + parts) if parts else os.pathsep.join(additions)
+
+
+_ensure_path_includes_standard_tool_dirs()
 
 
 ANALYSIS_DIR_NAME = "davinci-resolve-mcp-analysis"
 HIDDEN_ANALYSIS_DIR_NAME = ".davinci-resolve-mcp-analysis"
-ANALYSIS_VERSION = "0.1"
+ANALYSIS_VERSION = "0.2"
 ANALYSIS_INDEX_FILENAME = "index.sqlite"
 ANALYSIS_INDEX_SCHEMA_VERSION = 1
 COMMAND_TIMEOUT_SECONDS = 300
-CHAT_CONTEXT_VISION_PROVIDERS = {"chat_context", "mcp_sampling", "host_chat", "current_chat"}
+HOST_CHAT_PATHS_PROVIDER = "host_chat_paths"
+HOST_CHAT_VISION_PROVIDERS = {
+    "host_chat_paths",
+    "host_chat",
+    "current_chat",
+    "chat_context",
+    "mcp_sampling",
+}
+VISION_SCHEMA_REFERENCE = "davinci_resolve_mcp.visual_analysis.v2"
+DEFAULT_TRANSCRIPTION_ENABLED = True
 MARKER_PLAN_DEFAULT_COLORS = {
     "shot": "Blue",
     "best_moment": "Green",
@@ -40,94 +82,216 @@ MARKER_PLAN_DEFAULT_COLORS = {
     "black_or_title": "Red",
 }
 
-DEFAULT_VISION_ANALYSIS_PROMPT = """Return only strict JSON for editorial media analysis.
+DEFAULT_VISION_ANALYSIS_PROMPT = """Return only strict JSON for editorial media analysis (schema v2).
 
-Use the full sequence of sampled keyframes plus the computed motion/variance
-and cut-boundary evidence. Describe what changes across the clip; do not treat
-one frame as the whole clip unless only one frame was provided. When frames are
-tagged shot_start, shot_end, cut_before, or cut_after, explicitly compare the
-adjacent boundary frames and say whether they look like a real cut, a flash
-frame, a title/black insertion, or a high-motion moment inside one continuous
-shot. If a slate or clapper is visible in any sampled frame, confirm it in the
-slate block and extract only clearly readable details. Do not infer slate fields
-from audio cues alone.
+You are producing the foundation an editorial AI uses to assemble cuts and answer
+questions about this footage. Outputs are TRUSTED BY DEFAULT — downstream tools
+treat them as ground truth. Be conservative: hedge identity, intent, and value
+claims when frame evidence is thin. Per-field confidence is how you signal
+uncertainty (low / medium / high). Description-of-what-is-visible beats
+interpretation when the evidence is ambiguous. If you cannot tell, return
+`unknown` or `null` — that is a valid and useful answer.
 
-Use this schema:
+READ every frame file listed under `frame_paths` as an image. Use the full
+sequence plus the computed motion / variance and cut-boundary evidence in the
+payload. Describe what changes across the clip; do not treat one frame as the
+whole clip unless only one frame was provided. When frames are tagged
+`shot_start`, `shot_end`, `cut_before`, `cut_after`, or `flash_candidate`,
+explicitly compare adjacent boundary frames and say whether they read as a real
+cut, a flash frame, a title / black insertion, or a high-motion moment inside
+one continuous shot.
+
+PER-SHOT COVERAGE IS REQUIRED. The payload's `shot_table` lists every detected
+shot. Emit one `shot_descriptions` entry for every `shot_index` in `shot_table`.
+Each entry's content must be grounded in THAT shot's frames only — never paste
+the clip summary or a neighbouring shot's content. If a shot has no associated
+frames (sampler missed it), say so explicitly in `description` and set
+`qc_flags: ["no_in_shot_frame_sampled"]`.
+
+CROSS-SHOT RELATIONSHIPS. After describing every shot individually, fill the
+`relationships` block on each shot with pattern observations only (which shots
+appear to be the same setup, which continue action from prior shots, which look
+like alternate takes). DO NOT suggest editorial pairings (no "cuts well to" /
+"cuts poorly to" — those are user-side runtime queries, not stored fields).
+
+ENUMS ARE CLOSED. Use only the documented values. If none fits, use `unknown`.
+
+CONFIDENCE PER GROUP. Each shot carries confidence ratings per major field
+group. Default `medium` unless evidence is clearly strong (`high`) or thin
+(`low`). Downstream tools weight outputs by confidence.
+
+BEST MOMENT IS NULLABLE. Only populate `best_moment` if there is a moment within
+the shot an editor would naturally point to. If the shot is a sustained flat
+beat, return `null` and set `best_moment_present: false`. Forced best_moments
+add noise.
+
+CONTINUITY QC. Surface eye-line and screen-direction observations as QC
+questions ("possible eye-line mismatch between shots 12 and 13") — not as
+assertions. Skip prop-continuity claims (we cannot reliably track props).
+
+V2 SCHEMA:
 {
   "success": true,
-  "provider": "chat_context",
-  "clip_summary": "One concise natural-language summary of the full clip evidence.",
+  "provider": "host_chat_paths",
+  "schema_version": "2.0",
+
+  "clip_summary": "Colleague-style first-impression paragraph, 2-4 sentences. Primary editorial summary; downstream tools use this as the clip's Description.",
+  "clip_summary_oneliner": "Elevator-pitch single sentence describing the clip.",
+
   "editorial_classification": {
-    "primary_use": "b-roll|interview|action|establishing|detail|screen|unknown",
+    "primary_use": "action|interview|b_roll|insert|establishing|montage|screen_recording|titles|finished_video|other",
     "select_potential": "low|medium|high",
-    "reason": "Why this clip may or may not be useful editorially."
+    "energy_arc": "rising|falling|flat|spiky|varied|unknown",
+    "style": "documentary|narrative|experimental|commercial|mixed_genre|unknown",
+    "genre_indicators": [],
+    "reason": "Why this classification."
   },
-  "content": {
-    "locations": [],
-    "people_visible": "none|one|multiple|unknown",
-    "actions": [],
-    "objects": [],
-    "visible_text": [],
-    "notable_audio_context": []
-  },
-  "shot_and_style": {
-    "shot_sizes": [],
-    "camera_motion": [],
-    "composition_notes": "",
-    "lighting_mood": "",
-    "color_mood": ""
-  },
+
   "slate": {
     "slate_visible": false,
-    "scene": "",
-    "shot": "",
-    "take": "",
-    "camera": "",
-    "roll": "",
-    "date": "",
-    "production": "",
+    "scene": "", "shot": "", "take": "", "camera": "", "roll": "", "date": "", "production": "",
     "visible_text": [],
     "confidence": {
       "overall": "low|medium|high",
-      "scene": "low|medium|high",
-      "shot": "low|medium|high",
-      "take": "low|medium|high",
-      "camera": "low|medium|high"
+      "scene": "low|medium|high", "shot": "low|medium|high",
+      "take": "low|medium|high", "camera": "low|medium|high"
     }
   },
-  "motion": {
-    "overall_level": "low|medium|high|unknown",
-    "motion_events": [],
-    "quiet_regions": []
+
+  "shot_descriptions": [
+    {
+      "shot_index": 1,
+      "time_seconds_start": 0.0,
+      "time_seconds_end": 1.969,
+      "frame_indices_used": [1, 2, 3],
+
+      "visual": {
+        "shot_size": "wide|medium_wide|medium|medium_close|close|extreme_close|insert|establishing|other",
+        "framing": "single|two_shot|group|crowd|empty|insert|establishing|abstract",
+        "camera_height": "eye_level|high_angle|low_angle|birds_eye|dutch|unknown",
+        "camera_motion": "locked|pan|tilt|dolly|handheld|crane|drone|zoom|composite|other",
+        "motion_direction": "left|right|up|down|in|out|clockwise|counter_clockwise|none",
+        "depth_of_field": "deep|shallow|rack_focus|unknown",
+        "lens_character": "wide|normal|tele|fisheye|unknown",
+        "lens_format": "spherical|anamorphic|fisheye|unknown",
+        "lighting": "natural|high_key|low_key|practical|backlit|silhouette|mixed|unknown",
+        "color_mood": "warm|cool|neutral|desaturated|saturated|monochrome|unnatural|unknown",
+        "composition_notes": "Short freeform note on composition."
+      },
+
+      "content": {
+        "primary_subject": {
+          "type": "person|object|landscape|interior|vehicle|animal|text_graphic|abstract",
+          "description": "Short concrete description.",
+          "performance": {
+            "eye_line": "to_camera|off_left|off_right|down|up|closed|unknown",
+            "energy": "low|medium|high",
+            "emotional_register": "Short freeform observation, e.g. 'looks tense, jaw clenched'. Use null if no person."
+          }
+        },
+        "secondary_subjects": [],
+        "action": "1-sentence description of what's happening.",
+        "location": "1-sentence description of where this is.",
+        "visible_text": [],
+        "objects_of_note": [],
+        "audio_character": "silence|sync_dialogue|vo_dialogue|music|ambient|sfx|mixed|unknown"
+      },
+
+      "production": {
+        "composite_shot": false,
+        "composite_panels": null,
+        "vfx_present": "none|minor|major|unknown"
+      },
+
+      "editorial": {
+        "editorial_role": "establishing|coverage|reaction|insert|transition|b_roll|montage_element|titles_or_graphics|bumper|other",
+        "select_potential": "low|medium|high",
+        "best_moment_present": false,
+        "best_moment": null,
+        "pacing": "still|moderate|kinetic|variable",
+        "stillness_type": "held_tension|quiet|contemplative|transitional|dead_air|unknown|null",
+        "pacing_note": "Use when pacing is still or variable; null otherwise."
+      },
+
+      "cuttability": {
+        "cut_in": {"quality": "poor|ok|clean", "notes": ""},
+        "cut_out": {"quality": "poor|ok|clean", "notes": ""},
+        "match_action_in": false,
+        "match_action_out": false,
+        "cut_compatibility_hints": "Freeform notes for downstream assembly logic."
+      },
+
+      "relationships": {
+        "same_setup_as": [],
+        "continues_from": [],
+        "alt_take_of": []
+      },
+
+      "transition_in": {"type": "cut|fade|dissolve|wipe|unknown", "duration_seconds": 0},
+      "transition_out": {"type": "cut|fade|dissolve|wipe|unknown", "duration_seconds": 0},
+
+      "confidence": {
+        "visual": "low|medium|high",
+        "content": "low|medium|high",
+        "audio": "low|medium|high",
+        "editorial": "low|medium|high",
+        "cuttability": "low|medium|high"
+      },
+
+      "description": "1-3 sentences, colleague-style note, editorially useful.",
+      "qc_flags": []
+    }
+  ],
+
+  "cross_shot": {
+    "coverage_groups": [
+      {"label": "interview master + close", "shot_indices": [3, 5, 7], "setup_description": ""}
+    ],
+    "continuity_chains": [
+      {"label": "action continues across shots 20-25", "shot_indices": [20, 21, 22, 23, 24, 25], "action_description": ""}
+    ],
+    "alt_take_groups": [],
+    "energy_arc": "rising|falling|flat|spiky|varied|unknown"
   },
-  "cut_understanding": {
-    "cut_count": 0,
-    "likely_edited_sequence": false,
-    "flash_frame_candidates": [],
-    "notes": []
+
+  "editing_notes": {
+    "best_moments": ["List of notable clip-wide moments (separate from per-shot best_moment)."],
+    "continuity_flags": [],
+    "qc_flags": [],
+    "search_tags": ["Keywords for cross-clip retrieval. This is what populates the clip's Keywords metadata in Resolve."]
   },
+
   "analysis_keyframes": [
     {
       "time_seconds": 0.0,
-      "selection_reason": "first_usable|midpoint|last_usable|scene_change|cut_before|cut_after|shot_start|shot_end|flash_candidate|motion_peak|interval",
+      "selection_reason": "first_usable|midpoint|last_usable|scene_change|cut_before|cut_after|shot_start|shot_end|shot_representative|shot_progress|flash_candidate|motion_peak|interval",
       "description": "What is visible in this frame.",
       "editing_value": "How an editor might use this moment.",
       "qc_flags": []
     }
   ],
-  "editing_notes": {
-    "best_moments": [],
-    "continuity_flags": [],
-    "qc_flags": [],
-    "search_tags": []
+
+  "qc": {
+    "warnings": [],
+    "continuity_observations": [
+      {"kind": "eye_line|screen_direction", "shot_indices": [12, 13], "observation": "Possible eye-line break between A's looking-left in shot 12 and looking-right in shot 13.", "confidence": "low|medium|high"}
+    ],
+    "coverage_gaps": []
   },
+
   "confidence": {
     "visual": "low|medium|high",
     "motion": "computed",
     "transcript": "unavailable|provided"
   }
 }
-Do not include markdown fences, prose outside JSON, or keys outside this schema."""
+
+Do not include markdown fences, prose outside JSON, or keys outside this schema.
+When a field is not applicable (e.g. performance fields on a landscape shot,
+composite_panels when composite_shot is false, best_moment for flat shots),
+use null. When evidence is thin, use the documented `unknown` enum value and
+mark confidence `low`. Never invent identity, intent, or editorial value beyond
+what the frames support."""
 
 DEPTHS = {"quick", "standard", "deep", "custom"}
 DEFAULT_DEPTH = "standard"
@@ -137,7 +301,7 @@ FRAME_CAPS = {
     "deep": 24,
     "custom": 8,
 }
-HARD_FRAME_CAP = 48
+HARD_FRAME_CAP = 512
 
 
 def slugify(value: Any, fallback: str = "untitled") -> str:
@@ -223,9 +387,17 @@ def resolve_output_root(
     else:
         base_root = normalize_path(Path.home() / "Documents" / ANALYSIS_DIR_NAME)
 
-    # Treat the provided root as a base by default so every project remains
-    # isolated even when users choose a shared custom analysis location.
-    output_root = normalize_path(os.path.join(base_root, project_dir))
+    # V2 P13: Don't double-append project_dir when the caller passed an
+    # analysis_root that already terminates in the project slug (e.g. when
+    # a previous call's project_root is re-used as the new analysis_root).
+    # Previous behavior created nested {base}/{slug}/{slug}/ trees on disk.
+    base_basename = os.path.basename(base_root.rstrip("/"))
+    if base_basename == project_dir:
+        output_root = base_root
+    else:
+        # Treat the provided root as a base by default so every project remains
+        # isolated even when users choose a shared custom analysis location.
+        output_root = normalize_path(os.path.join(base_root, project_dir))
     ok, errors = validate_output_root(output_root, source_paths)
 
     if ok and create:
@@ -243,28 +415,222 @@ def resolve_output_root(
     }
 
 
+# ── Runtime-tool install metadata ────────────────────────────────────────────
+# Per-tool install commands keyed by platform. The dashboard reads this through
+# detect_capabilities() so each missing-tool chip can render a one-click "Copy"
+# or "Ask Claude/Codex" affordance. We never execute installs server-side; the
+# user runs the command themselves, or lets their agent (Claude Code / Codex)
+# run it with its own confirmation gating.
+TOOL_INSTALL: Dict[str, Dict[str, Any]] = {
+    "ffprobe": {
+        "label": "ffprobe",
+        "bundle": "ffmpeg_suite",
+        "required_for": ["technical metadata", "scene detection", "sync detection"],
+        "commands": {
+            "macos": "brew install ffmpeg",
+            "linux_debian": "sudo apt install ffmpeg",
+            "linux_rhel": "sudo dnf install ffmpeg",
+            "linux_arch": "sudo pacman -S ffmpeg",
+            "windows": "winget install --id=Gyan.FFmpeg -e",
+        },
+        "verify": "ffprobe -version",
+        "notes": "Bundled with ffmpeg. One install covers both ffprobe and ffmpeg.",
+    },
+    "ffmpeg": {
+        "label": "ffmpeg",
+        "bundle": "ffmpeg_suite",
+        "required_for": ["frame extraction", "motion analysis", "audio decode for sync"],
+        "commands": {
+            "macos": "brew install ffmpeg",
+            "linux_debian": "sudo apt install ffmpeg",
+            "linux_rhel": "sudo dnf install ffmpeg",
+            "linux_arch": "sudo pacman -S ffmpeg",
+            "windows": "winget install --id=Gyan.FFmpeg -e",
+        },
+        "verify": "ffmpeg -version",
+        "notes": "Bundled with ffprobe. One install covers both.",
+    },
+    "whisper_cli": {
+        "label": "openai-whisper",
+        "bundle": "transcription",
+        "required_for": ["transcription (CPU/GPU, Python)"],
+        "commands": {
+            "all": "pip install -U openai-whisper",
+        },
+        "verify": "whisper --help",
+        "notes": "Pure-Python reference implementation. Choose this OR whisper_cpp OR mlx_whisper.",
+    },
+    "whisper_cpp": {
+        "label": "whisper.cpp",
+        "bundle": "transcription",
+        "required_for": ["transcription (fast C++ backend)"],
+        "commands": {
+            "macos": "brew install whisper-cpp",
+            "linux_debian": "Build from source: https://github.com/ggerganov/whisper.cpp",
+            "linux_rhel": "Build from source: https://github.com/ggerganov/whisper.cpp",
+            "linux_arch": "yay -S whisper.cpp",
+            "windows": "Build from source or use WSL: https://github.com/ggerganov/whisper.cpp",
+        },
+        "verify": "whisper-cli --help",
+        "notes": "Fastest CPU option. Choose this OR whisper_cli OR mlx_whisper.",
+    },
+    "mlx_whisper": {
+        "label": "mlx-whisper",
+        "bundle": "transcription",
+        "required_for": ["transcription on Apple Silicon (MLX backend)"],
+        "commands": {
+            "macos_apple_silicon": "pip install mlx-whisper",
+        },
+        "verify": "python -c 'import mlx_whisper'",
+        "requires": "apple_silicon",
+        "notes": "Apple Silicon only. Choose this OR whisper_cli OR whisper_cpp.",
+    },
+    "opencv": {
+        "label": "opencv-python",
+        "required_for": ["optical-flow motion scoring (optional)"],
+        "commands": {
+            "all": "pip install opencv-python",
+        },
+        "verify": "python -c 'import cv2'",
+        "notes": "Optional. Standard frame-difference motion scoring works without it.",
+    },
+}
+
+
+def _runtime_platform_id() -> Tuple[str, str]:
+    """Return (platform_id, machine) for install-command resolution.
+
+    platform_id is one of: "macos", "macos_apple_silicon", "linux_debian",
+    "linux_rhel", "linux_arch", "linux", "windows", "unknown".
+    """
+    machine = (_platform.machine() or "").lower()
+    if sys.platform == "darwin":
+        if machine in ("arm64", "aarch64"):
+            return "macos_apple_silicon", machine
+        return "macos", machine
+    if sys.platform.startswith("win"):
+        return "windows", machine
+    if sys.platform.startswith("linux"):
+        # Detect distro family for the most-likely package manager. Best-effort;
+        # the dashboard always shows the resolved command so a wrong guess is a
+        # one-click copy-and-tweak, not a silent failure.
+        os_release = "/etc/os-release"
+        try:
+            with open(os_release, "r", encoding="utf-8") as fh:
+                data = fh.read().lower()
+            if "id=debian" in data or "id_like=debian" in data or "ubuntu" in data:
+                return "linux_debian", machine
+            if "id=fedora" in data or "rhel" in data or "centos" in data or "id_like=\"rhel" in data:
+                return "linux_rhel", machine
+            if "id=arch" in data or "manjaro" in data:
+                return "linux_arch", machine
+        except OSError:
+            pass
+        return "linux", machine
+    return "unknown", machine
+
+
+def install_plan_for(tool_name: str, platform_id: Optional[str] = None) -> Dict[str, Any]:
+    """Return a structured install plan for a single tool.
+
+    The plan resolves the best command for the current platform, includes
+    alternates so the UI/agent can offer choices, and surfaces the verify
+    command and any platform requirement (e.g. Apple Silicon for mlx_whisper).
+    """
+    meta = TOOL_INSTALL.get(tool_name)
+    if not meta:
+        return {"tool": tool_name, "available": False, "command": None, "notes": "No install plan registered."}
+    if platform_id is None:
+        platform_id, _ = _runtime_platform_id()
+
+    commands = meta.get("commands") or {}
+    # Resolution order: exact platform → family fallback → "all" → None.
+    # macos_apple_silicon falls through to macos; linux_<distro> falls through
+    # to a generic "linux" key. We don't pick a random first command — better to
+    # tell the UI we don't know and let it surface "no suggested command".
+    resolved_key = None
+    if platform_id in commands:
+        resolved_key = platform_id
+    elif platform_id == "macos_apple_silicon" and "macos" in commands:
+        resolved_key = "macos"
+    elif platform_id.startswith("linux_") and "linux" in commands:
+        resolved_key = "linux"
+    elif "all" in commands:
+        resolved_key = "all"
+    resolved = commands.get(resolved_key) if resolved_key else None
+
+    # Alternates: every other distinct command we know about, keyed for display.
+    alternates: Dict[str, str] = {}
+    for key, value in commands.items():
+        if key == resolved_key:
+            continue
+        if value == resolved:
+            continue  # don't show the same command twice under a different label
+        alternates[key] = value
+
+    requires = meta.get("requires")
+    requirement_met = True
+    requirement_note = None
+    if requires == "apple_silicon":
+        # Use the resolved platform_id (caller's view of the world) rather than the
+        # current process, so a Linux user querying mlx_whisper sees "not for you".
+        if platform_id != "macos_apple_silicon":
+            requirement_met = False
+            requirement_note = "Requires Apple Silicon (arm64 macOS). Use whisper_cli or whisper_cpp on other platforms."
+
+    return {
+        "tool": tool_name,
+        "label": meta.get("label", tool_name),
+        "bundle": meta.get("bundle"),
+        "platform_id": platform_id,
+        "command": resolved,
+        "alternates": alternates,
+        "verify": meta.get("verify"),
+        "required_for": meta.get("required_for", []),
+        "notes": meta.get("notes"),
+        "requires": requires,
+        "requirement_met": requirement_met,
+        "requirement_note": requirement_note,
+    }
+
+
 def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Detect available analysis helpers without installing or downloading."""
     env = env if env is not None else os.environ
     whisper_cli = shutil.which("whisper")
-    whisper_cpp = shutil.which("whisper-cpp")
+    # Modern brew whisper-cpp ships the binary as `whisper-cli`; older builds
+    # used `whisper-cpp`. Accept either so a fresh `brew install whisper-cpp`
+    # is detected. (Distinct from the `whisper_cli` slot above, which is the
+    # openai-whisper Python CLI invoked as `whisper`.)
+    whisper_cpp = shutil.which("whisper-cli") or shutil.which("whisper-cpp")
     mlx_whisper = importlib.util.find_spec("mlx_whisper") is not None
     cv2 = importlib.util.find_spec("cv2") is not None
     provider = env.get("DAVINCI_RESOLVE_MCP_VISION_PROVIDER")
 
     sync_events = detect_sync_event_capabilities()
 
+    platform_id, machine = _runtime_platform_id()
+
+    def _tool_entry(name: str, available: bool, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        entry: Dict[str, Any] = {"available": bool(available)}
+        if extra:
+            entry.update(extra)
+        if not available:
+            entry["install"] = install_plan_for(name, platform_id=platform_id)
+        return entry
+
     return {
         "success": True,
         "analysis_version": ANALYSIS_VERSION,
         "no_auto_install": True,
+        "platform": {"id": platform_id, "machine": machine, "sys_platform": sys.platform},
         "tools": {
-            "ffprobe": {"available": bool(shutil.which("ffprobe")), "path": shutil.which("ffprobe")},
-            "ffmpeg": {"available": bool(shutil.which("ffmpeg")), "path": shutil.which("ffmpeg")},
-            "whisper_cli": {"available": bool(whisper_cli), "path": whisper_cli},
-            "whisper_cpp": {"available": bool(whisper_cpp), "path": whisper_cpp},
-            "mlx_whisper": {"available": bool(mlx_whisper), "python_module": "mlx_whisper"},
-            "opencv": {"available": bool(cv2), "python_module": "cv2"},
+            "ffprobe": _tool_entry("ffprobe", bool(shutil.which("ffprobe")), {"path": shutil.which("ffprobe")}),
+            "ffmpeg": _tool_entry("ffmpeg", bool(shutil.which("ffmpeg")), {"path": shutil.which("ffmpeg")}),
+            "whisper_cli": _tool_entry("whisper_cli", bool(whisper_cli), {"path": whisper_cli}),
+            "whisper_cpp": _tool_entry("whisper_cpp", bool(whisper_cpp), {"path": whisper_cpp}),
+            "mlx_whisper": _tool_entry("mlx_whisper", bool(mlx_whisper), {"python_module": "mlx_whisper"}),
+            "opencv": _tool_entry("opencv", bool(cv2), {"python_module": "cv2"}),
         },
         "transcription": {
             "available": bool(whisper_cli or whisper_cpp or mlx_whisper),
@@ -278,12 +644,20 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
             ],
         },
         "vision": {
-            "available": bool(provider),
-            "provider": provider,
-            "enabled_by_default": False,
+            "available": True,
+            "provider": provider or HOST_CHAT_PATHS_PROVIDER,
+            "default_provider": HOST_CHAT_PATHS_PROVIDER,
+            "enabled_by_default": True,
             "note": (
-                "Vision analysis is opt-in and requires a configured provider. "
-                "The 'mock' provider is local-only for tests and never sends frames."
+                "Media-analysis tools default to host_chat_paths vision: the analyze "
+                "actions return absolute paths to extracted analysis frames in a "
+                "deferred-vision payload. The host chat model reads those frames as "
+                "local images, produces JSON per the included schema, and calls "
+                "media_analysis(action='commit_vision', ...) to merge the result, "
+                "rebuild markers, and publish vision-dependent metadata to Resolve. "
+                "Works with any MCP client whose chat model is vision-capable; no "
+                "sampling/createMessage support required. The 'mock' provider is "
+                "local-only for tests and never sends frames off-machine."
             ),
         },
         "sync_events": {
@@ -315,12 +689,13 @@ def install_guidance(capabilities: Optional[Dict[str, Any]] = None) -> Dict[str,
         }
     if not caps.get("transcription", {}).get("available"):
         missing["transcription"] = {
-            "required_for": ["deep transcription analysis"],
+            "required_for": ["transcription analysis", "default Resolve media analysis"],
             "options": [
                 "Install/configure whisper CLI",
                 "Install/configure whisper-cpp",
                 "Install mlx-whisper on supported Apple Silicon systems",
             ],
+            "macos": "Ask the user before running: brew install whisper-cpp, or configure another supported local Whisper backend.",
             "note": "The MCP server must not install these automatically.",
         }
     if not tools.get("opencv", {}).get("available"):
@@ -328,15 +703,9 @@ def install_guidance(capabilities: Optional[Dict[str, Any]] = None) -> Dict[str,
             "required_for": ["optional optical-flow motion scoring"],
             "note": "OpenCV is optional; standard frame-difference motion scoring can work without it.",
         }
-    if not caps.get("vision", {}).get("available"):
-        missing["vision"] = {
-            "required_for": ["LLM visual analysis"],
-            "note": (
-                "Prefer chat-context vision when the MCP client supports sampling/createMessage. "
-                "If unavailable, ask the user whether to continue without visuals or provide setup "
-                "steps for a supported vision path. Never send frames off-machine without explicit approval."
-            ),
-        }
+    # Vision uses host_chat_paths by default and is always advertised available;
+    # the host chat reads frame files locally and posts results back via
+    # media_analysis(action="commit_vision"). No external provider install is required.
 
     return {
         "success": True,
@@ -418,7 +787,7 @@ def analysis_request_signature(
             "readthrough": depth in {"standard", "deep", "custom"},
             "motion": depth in {"standard", "deep", "custom"},
             "transcription": {
-                "enabled": _coerce_bool(transcription.get("enabled"), default=(depth == "deep")),
+                "enabled": _coerce_bool(transcription.get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED),
                 "backend": transcription.get("backend"),
                 "model": transcription.get("model"),
                 "language": transcription.get("language"),
@@ -445,7 +814,7 @@ def analysis_request_signature(
             "frame_count": int(frame_count or 0),
             "source_file": _source_file_signature(record.get("file_path")),
             "transcription": {
-                "enabled": _coerce_bool(transcription.get("enabled"), default=(depth == "deep")),
+                "enabled": _coerce_bool(transcription.get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED),
                 "backend": transcription.get("backend"),
                 "model": transcription.get("model"),
                 "language": transcription.get("language"),
@@ -483,12 +852,43 @@ def _timestamp_from_analyzed_at(value: Any) -> Optional[float]:
         return None
 
 
-def vision_uses_chat_context(options: Dict[str, Any], capabilities: Optional[Dict[str, Any]] = None) -> bool:
+def vision_uses_host_chat(options: Dict[str, Any], capabilities: Optional[Dict[str, Any]] = None) -> bool:
     vision = options.get("vision") or {}
     if not _coerce_bool(vision.get("enabled"), default=False):
         return False
     provider = vision.get("provider") or (capabilities or {}).get("vision", {}).get("provider")
-    return provider in CHAT_CONTEXT_VISION_PROVIDERS
+    return provider in HOST_CHAT_VISION_PROVIDERS
+
+
+vision_uses_chat_context = vision_uses_host_chat
+
+
+def vision_requested(options: Dict[str, Any]) -> bool:
+    return _coerce_bool((options.get("vision") or {}).get("enabled"), default=False)
+
+
+def vision_is_pending_host_analysis(vision: Dict[str, Any]) -> bool:
+    if not isinstance(vision, dict):
+        return False
+    return str(vision.get("status") or "").strip().lower() == "pending_host_analysis"
+
+
+def visual_analysis_completed(vision: Dict[str, Any]) -> bool:
+    if not isinstance(vision, dict):
+        return False
+    if not vision.get("success"):
+        return False
+    status = str(vision.get("status") or "").strip().lower()
+    if status in {"skipped", "disabled", "pending_host_analysis"}:
+        return False
+    return bool(
+        vision.get("clip_summary")
+        or vision.get("content")
+        or vision.get("editing_notes")
+        or vision.get("analysis_keyframes")
+        or vision.get("slate")
+        or vision.get("shot_and_style")
+    )
 
 
 def _bounded_frame_count(depth: str, requested: Any = None) -> int:
@@ -516,7 +916,7 @@ def _artifact_paths(project_root: str, record: Dict[str, Any], depth: str, optio
         artifacts["frames_dir"] = os.path.join(clip_dir, "frames")
 
     transcription = options.get("transcription") or {}
-    if _coerce_bool(transcription.get("enabled"), default=(depth == "deep")):
+    if _coerce_bool(transcription.get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED):
         artifacts["transcript_json"] = os.path.join(clip_dir, "transcript.json")
         artifacts["transcript_srt"] = os.path.join(clip_dir, "transcript.srt")
         artifacts["transcript_vtt"] = os.path.join(clip_dir, "transcript.vtt")
@@ -537,7 +937,7 @@ def _required_capability_gaps(depth: str, options: Dict[str, Any], capabilities:
         gaps.append({"capability": "ffmpeg", "required_for": ["standard", "deep"]})
 
     transcription = options.get("transcription") or {}
-    if _coerce_bool(transcription.get("enabled"), default=(depth == "deep")):
+    if _coerce_bool(transcription.get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED):
         backend = transcription.get("backend")
         if backend in {"mock", "local_mock"}:
             pass
@@ -547,7 +947,7 @@ def _required_capability_gaps(depth: str, options: Dict[str, Any], capabilities:
     vision = options.get("vision") or {}
     if _coerce_bool(vision.get("enabled"), default=False):
         provider = vision.get("provider") or capabilities.get("vision", {}).get("provider")
-        if provider in {"mock", "local_mock"} or provider in CHAT_CONTEXT_VISION_PROVIDERS:
+        if provider in {"mock", "local_mock"} or provider in HOST_CHAT_VISION_PROVIDERS:
             pass
         elif not capabilities.get("vision", {}).get("available"):
             gaps.append({"capability": "vision_provider", "required_for": ["vision"]})
@@ -589,7 +989,7 @@ def build_plan(
     }
     gaps = _required_capability_gaps(depth, options, caps)
     frame_count = _bounded_frame_count(depth, params.get("max_analysis_frames"))
-    transcription_enabled = _coerce_bool((options.get("transcription") or {}).get("enabled"), default=(depth == "deep"))
+    transcription_enabled = _coerce_bool((options.get("transcription") or {}).get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED)
     notes = [
         "Plans describe analysis before execution.",
         "All planned artifacts are under the project analysis root, never beside source media.",
@@ -711,14 +1111,22 @@ def build_plan(
 
 
 def _run_command(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tuple[int, str, str]:
-    proc = subprocess.run(
-        args,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-    return proc.returncode, proc.stdout, proc.stderr
+    try:
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
+        stderr_tail = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+        return 124, stdout, f"Command timed out after {timeout}s. {stderr_tail}".strip()
+    except OSError as exc:
+        return 127, "", str(exc)
+    stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
+    stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+    return proc.returncode, stdout, stderr
 
 
 def _write_json(path: str, payload: Dict[str, Any]) -> None:
@@ -891,6 +1299,79 @@ def _parse_scene_changes(stderr: str) -> List[Dict[str, Any]]:
     return scenes
 
 
+def _parse_scene_score_pairs(stderr: str) -> List[Tuple[float, float]]:
+    """Pair (pts_time, lavfi.scene_score) from showinfo + metadata=print output.
+
+    The filtergraph ``select='gt(scene,0)',metadata=print:key=lavfi.scene_score,showinfo``
+    emits, per qualifying frame, a showinfo line carrying ``pts_time:...`` followed by a
+    metadata line carrying ``lavfi.scene_score=...``. Pair them in stream order.
+    """
+    pairs: List[Tuple[float, float]] = []
+    current_time: Optional[float] = None
+    for line in stderr.splitlines():
+        m = re.search(r"pts_time:([0-9.]+)", line)
+        if m:
+            current_time = _parse_float(m.group(1))
+            continue
+        m = re.search(r"lavfi\.scene_score=([0-9.]+)", line)
+        if m and current_time is not None:
+            score = _parse_float(m.group(1))
+            if score is not None:
+                pairs.append((current_time, score))
+                current_time = None
+    return pairs
+
+
+def _adaptive_scene_threshold(
+    scores: List[Tuple[float, float]],
+    *,
+    min_floor: float = 0.15,
+    k_sd: float = 2.5,
+    threshold_cap: float = 0.40,
+    fallback: float = 0.30,
+) -> Tuple[float, Dict[str, Any]]:
+    """Pick a content-aware scene-change threshold from the score distribution.
+
+    ``threshold = clamp(mean + k_sd*sd, [min_floor, threshold_cap])``. The floor protects
+    low-motion footage (interview / locked-off) where ``mean+sd`` is tiny; the cap guards
+    against a few extreme flashes inflating SD. Falls back to ``fallback`` (the legacy
+    0.30) if the distribution is empty.
+    """
+    values = [s for _, s in scores if s is not None]
+    if not values:
+        return fallback, {"reason": "no_scores", "chosen": fallback, "source": "fallback"}
+
+    n = len(values)
+    mean = sum(values) / n
+    if n > 1:
+        var = sum((v - mean) * (v - mean) for v in values) / (n - 1)
+        sd = math.sqrt(var)
+    else:
+        sd = 0.0
+
+    candidate = mean + k_sd * sd
+    chosen = max(min_floor, min(candidate, threshold_cap))
+
+    sorted_vals = sorted(values)
+    def _pctl(p: float) -> float:
+        idx = max(0, min(n - 1, int(round((p / 100.0) * (n - 1)))))
+        return sorted_vals[idx]
+
+    return chosen, {
+        "n": n,
+        "mean": round(mean, 5),
+        "sd": round(sd, 5),
+        "p95": round(_pctl(95), 5),
+        "p99": round(_pctl(99), 5),
+        "candidate": round(candidate, 5),
+        "min_floor": min_floor,
+        "k_sd": k_sd,
+        "threshold_cap": threshold_cap,
+        "chosen": round(chosen, 5),
+        "source": "adaptive",
+    }
+
+
 def _parse_blackdetect(stderr: str) -> List[Dict[str, Any]]:
     out = []
     pattern = r"black_start:([0-9.]+)\s+black_end:([0-9.]+)\s+black_duration:([0-9.]+)"
@@ -944,10 +1425,27 @@ def _readthrough_analysis(path: str) -> Dict[str, Any]:
         "metrics": _parse_loudness(loud_stderr),
     }
 
-    scene_code, scene_stderr = _ffmpeg_stderr_filter(path, video_filter="select='gt(scene,0.3)',showinfo")
+    # Adaptive scene detection. One ffmpeg pass dumps a (pts_time, scene_score) pair
+    # for every frame whose scene score is > 0 (i.e. every non-first frame); we then
+    # compute a content-aware threshold from that distribution and keep peaks above it.
+    # Replaces the legacy hardcoded ``gt(scene,0.3)``, which was too coarse on
+    # high-motion content (missed real cuts) and too sensitive on locked-off content.
+    scene_code, scene_stderr = _ffmpeg_stderr_filter(
+        path,
+        video_filter="select='gt(scene,0)',metadata=print:key=lavfi.scene_score,showinfo",
+    )
+    scene_score_pairs = _parse_scene_score_pairs(scene_stderr)
+    scene_threshold, scene_threshold_stats = _adaptive_scene_threshold(scene_score_pairs)
+    adaptive_scene_items = [
+        {"time_seconds": pts, "score": score}
+        for pts, score in scene_score_pairs
+        if score is not None and score > scene_threshold
+    ]
     result["scenes"] = {
         "success": scene_code == 0,
-        "items": _parse_scene_changes(scene_stderr),
+        "items": adaptive_scene_items,
+        "threshold": scene_threshold,
+        "threshold_stats": scene_threshold_stats,
     }
 
     black_code, black_stderr = _ffmpeg_stderr_filter(path, video_filter="blackdetect=d=0.5:pix_th=0.10")
@@ -1086,9 +1584,12 @@ def _cut_boundary_analysis(
         start = _parse_float(shot.get("start"))
         end = _parse_float(shot.get("end"))
         shot_duration = (end - start) if start is not None and end is not None else None
-        first_sample = _clamp_sample_time((start or 0.0) + frame_step, duration)
+        # 2*frame_step inset (~66ms at 30fps) keeps boundary samples clear of
+        # cut-detector imprecision — a single-frame margin can land ON the cut.
+        boundary_inset = frame_step * 2
+        first_sample = _clamp_sample_time((start or 0.0) + boundary_inset, duration)
         if end is not None:
-            last_sample = _clamp_sample_time(max(start or 0.0, end - frame_step), duration)
+            last_sample = _clamp_sample_time(max(start or 0.0, end - boundary_inset), duration)
         else:
             last_sample = first_sample
         row = {
@@ -1147,6 +1648,59 @@ def _cut_boundary_analysis(
     }
 
 
+def _compute_demand_driven_budget(
+    requested_budget: int,
+    cut_analysis: Optional[Dict[str, Any]],
+    duration_seconds: Optional[float],
+) -> int:
+    """Compute the effective frame-sampling budget driven by analysis demand.
+
+    Demand sources (so vision can populate the V2 per-shot schema):
+      - Per shot: 1 representative (midpoint) + 2 boundary frames + duration-scaled extras
+        (+1 for shots >5s, +1 for shots >15s, +1 per additional 15s beyond 30s)
+      - Per flash_candidate: 1 mid-frame for vision adjudication (preserve all)
+      - Per cut_point: a small buffer for cuts not covered by shot boundaries
+
+    Safety ceiling: HARD_FRAME_CAP capped by duration so a 10s clip cannot request 500 frames.
+    """
+    if not isinstance(cut_analysis, dict):
+        return min(max(int(requested_budget or 0), 0), HARD_FRAME_CAP)
+
+    per_shot_demand = 0
+    for shot in cut_analysis.get("shot_ranges") or []:
+        if not isinstance(shot, dict):
+            continue
+        start = _parse_float(shot.get("start"))
+        end = _parse_float(shot.get("end"))
+        if start is None or end is None or end <= start:
+            continue
+        d = end - start
+        # Base: representative + 2 boundaries
+        per_shot_demand += 3
+        if d > 5.0:
+            per_shot_demand += 1
+        if d > 15.0:
+            per_shot_demand += 1
+        if d > 30.0:
+            per_shot_demand += int((d - 30.0) / 15.0)
+
+    flash_count = len(cut_analysis.get("flash_frame_candidates") or [])
+    cut_count = len(cut_analysis.get("cut_points") or [])
+
+    # Cut points mostly overlap with shot boundaries; add a small buffer
+    cut_buffer = min(cut_count, 8)
+    # Clip-level frames (first_usable, last_usable, midpoint)
+    clip_buffer = 4
+
+    demand = per_shot_demand + flash_count + cut_buffer + clip_buffer
+
+    # Duration-scaled safety ceiling: clips can't request hundreds of frames per second.
+    # Floor at 64 so short clips still have headroom; ceiling at HARD_FRAME_CAP.
+    duration_cap = max(64, min(HARD_FRAME_CAP, int((duration_seconds or 0) * 2)))
+
+    return min(max(int(requested_budget or 0), demand), duration_cap)
+
+
 def _sample_times(
     duration: Optional[float],
     scene_items: List[Dict[str, Any]],
@@ -1155,12 +1709,98 @@ def _sample_times(
     fps: Optional[float] = None,
     cut_analysis: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
+    """Two-pass frame allocation.
+
+    Pass 1 (reservations, always allocated — demand-driven, not budget-bounded):
+      - Per shot: shot_representative (midpoint), shot_start, shot_end boundaries,
+        duration-scaled progress samples (+1 for shots >5s, +1 for shots >15s,
+        +1 per 15s beyond 30s).
+      - Per flash_candidate: mid-frame for vision adjudication.
+
+    Pass 2 (priority fill, consumes remaining budget):
+      - cut_before/cut_after pairs (for cuts not covered by shot boundaries)
+      - first_usable, last_usable, scene_change, midpoint, interval fillers
+
+    The caller passes `budget` as the soft target. Reservations always land
+    (demand-driven); priority fill is what `budget` constrains.
+
+    Returns a time-sorted list of sample candidates.
+    """
     if budget <= 0:
         return []
     duration = duration or 0
+    cut_analysis = cut_analysis if isinstance(cut_analysis, dict) else {}
+    frame_step = _frame_step_seconds(fps)
+
+    # ===================== Pass 1: Reservations =====================
+    reserved: List[Dict[str, Any]] = []
+
+    def add_reserved(time_seconds: Optional[float], reason: str, **extra: Any) -> None:
+        if time_seconds is None:
+            return
+        reserved.append({
+            "time_seconds": _clamp_sample_time(float(time_seconds), duration),
+            "selection_reason": reason,
+            **extra,
+        })
+
+    # Per-shot reservations
+    for shot in cut_analysis.get("shot_ranges") or []:
+        if not isinstance(shot, dict):
+            continue
+        shot_index = shot.get("index")
+        start = _parse_float(shot.get("start"))
+        end = _parse_float(shot.get("end"))
+        if start is None or end is None or end <= start:
+            continue
+        d = end - start
+        common = {"shot_index": shot_index, "shot_start": start, "shot_end": end}
+        # Always: mid-shot representative
+        add_reserved((start + end) / 2.0, "shot_representative", **common)
+        # Boundary frames if shot is long enough to distinguish them from the midpoint.
+        # Use 2*frame_step inset (~66ms at 30fps) instead of 1*frame_step to clear
+        # cut-detector imprecision — a single-frame margin can land ON the cut.
+        boundary_inset = frame_step * 2
+        if d >= boundary_inset * 4:
+            add_reserved(
+                shot.get("first_sample_time_seconds") or _clamp_sample_time(start + boundary_inset, duration),
+                "shot_start",
+                boundary_role="first_frame_in_shot",
+                **common,
+            )
+            add_reserved(
+                shot.get("last_sample_time_seconds") or _clamp_sample_time(end - boundary_inset, duration),
+                "shot_end",
+                boundary_role="last_frame_in_shot",
+                **common,
+            )
+        # Duration-scaled progress samples
+        if d > 5.0:
+            add_reserved(start + d * (1.0 / 3.0), "shot_progress", **common)
+        if d > 15.0:
+            add_reserved(start + d * (2.0 / 3.0), "shot_progress", **common)
+        if d > 30.0:
+            extras = int((d - 30.0) / 15.0)
+            for i in range(extras):
+                frac = (i + 0.5) / max(extras, 1)
+                add_reserved(start + 30.0 + (d - 30.0) * frac, "shot_progress", **common)
+
+    # Per-flash-candidate reservations (preserved for vision adjudication)
+    for flash in cut_analysis.get("flash_frame_candidates") or []:
+        if not isinstance(flash, dict):
+            continue
+        add_reserved(
+            flash.get("mid_sample_time_seconds"),
+            "flash_candidate",
+            shot_index=flash.get("index"),
+            shot_start=flash.get("start"),
+            shot_end=flash.get("end"),
+        )
+
+    # ===================== Pass 2: Priority fill =====================
     candidates: List[Dict[str, Any]] = []
 
-    def add(time_seconds: Optional[float], reason: str, priority: int, **extra: Any) -> None:
+    def add_candidate(time_seconds: Optional[float], reason: str, priority: int, **extra: Any) -> None:
         if time_seconds is None:
             return
         candidates.append({
@@ -1170,91 +1810,67 @@ def _sample_times(
             **extra,
         })
 
-    if duration > 0:
-        add(min(duration * 0.05, max(duration - 0.05, 0)), "first_usable", 6)
-        add(duration * 0.5, "midpoint", 70)
-        add(max(duration - min(duration * 0.05, 0.5), 0), "last_usable", 6)
-
-    cut_analysis = cut_analysis if isinstance(cut_analysis, dict) else {}
+    # Cut boundary pairs (for cuts not already covered by shot boundaries)
     for cut in cut_analysis.get("cut_points") or []:
         if not isinstance(cut, dict):
             continue
         cut_index = cut.get("index")
-        add(
-            cut.get("before_time_seconds"),
-            "cut_before",
-            5,
-            cut_index=cut_index,
-            cut_time_seconds=cut.get("time_seconds"),
+        add_candidate(
+            cut.get("before_time_seconds"), "cut_before", 5,
+            cut_index=cut_index, cut_time_seconds=cut.get("time_seconds"),
             boundary_role="last_frame_before_cut",
         )
-        add(
-            cut.get("after_time_seconds"),
-            "cut_after",
-            5,
-            cut_index=cut_index,
-            cut_time_seconds=cut.get("time_seconds"),
+        add_candidate(
+            cut.get("after_time_seconds"), "cut_after", 5,
+            cut_index=cut_index, cut_time_seconds=cut.get("time_seconds"),
             boundary_role="first_frame_after_cut",
         )
 
-    for shot in cut_analysis.get("shot_ranges") or []:
-        if not isinstance(shot, dict):
-            continue
-        shot_index = shot.get("index")
-        add(
-            shot.get("first_sample_time_seconds"),
-            "shot_start",
-            12,
-            shot_index=shot_index,
-            shot_start=shot.get("start"),
-            shot_end=shot.get("end"),
-        )
-        add(
-            shot.get("last_sample_time_seconds"),
-            "shot_end",
-            12,
-            shot_index=shot_index,
-            shot_start=shot.get("start"),
-            shot_end=shot.get("end"),
-        )
+    # Clip-level usable frames
+    if duration > 0:
+        add_candidate(min(duration * 0.05, max(duration - 0.05, 0)), "first_usable", 6)
+        add_candidate(max(duration - min(duration * 0.05, 0.5), 0), "last_usable", 6)
+        add_candidate(duration * 0.5, "midpoint", 70)
 
-    for flash in cut_analysis.get("flash_frame_candidates") or []:
-        if not isinstance(flash, dict):
-            continue
-        add(
-            flash.get("mid_sample_time_seconds"),
-            "flash_candidate",
-            4,
-            shot_index=flash.get("index"),
-            shot_start=flash.get("start"),
-            shot_end=flash.get("end"),
-        )
-
+    # Scene change candidates
     for scene in scene_items[: max(budget, 1)]:
         t = scene.get("time_seconds")
         if isinstance(t, (int, float)) and t >= 0:
-            add(float(t), "scene_change", 15)
+            add_candidate(float(t), "scene_change", 15)
 
+    # Interval filler (low priority)
     if duration > 0:
         interval_count = max(0, min(budget, 6) - 3)
         for index in range(interval_count):
-            add(duration * ((index + 1) / (interval_count + 1)), "interval", 80)
+            add_candidate(duration * ((index + 1) / (interval_count + 1)), "interval", 80)
 
+    # ===================== Assemble: reservations first, then priority fill =====================
     unique: List[Dict[str, Any]] = []
     seen = set()
-    frame_step = _frame_step_seconds(fps)
-    for candidate in sorted(candidates, key=lambda row: (int(row.get("priority", 99)), float(row.get("time_seconds") or 0.0))):
-        rounded = round(max(float(candidate.get("time_seconds") or 0.0), 0), 3)
+
+    def maybe_add(row: Dict[str, Any]) -> bool:
+        rounded = round(max(float(row.get("time_seconds") or 0.0), 0), 3)
         key = round(rounded / max(frame_step, 0.001))
         if key in seen:
-            continue
+            return False
         seen.add(key)
-        row = dict(candidate)
-        row["time_seconds"] = rounded
-        row.pop("priority", None)
-        unique.append(row)
-        if len(unique) >= budget:
+        r = dict(row)
+        r["time_seconds"] = rounded
+        r.pop("priority", None)
+        unique.append(r)
+        return True
+
+    # Reservations always land (demand-driven); budget bounds only priority fill.
+    for r in sorted(reserved, key=lambda row: float(row.get("time_seconds") or 0.0)):
+        maybe_add(r)
+
+    # Effective budget for priority fill: max(budget, len(reservations))
+    fill_budget = max(int(budget or 0), len(unique))
+    for candidate in sorted(candidates, key=lambda row: (int(row.get("priority", 99)), float(row.get("time_seconds") or 0.0))):
+        if len(unique) >= fill_budget:
             break
+        maybe_add(candidate)
+
     return sorted(unique, key=lambda row: float(row.get("time_seconds") or 0.0))
 
 
@@ -1276,7 +1892,10 @@ def _raw_frame(path: str, time_seconds: float, width: int = 96, height: int = 54
         "rawvideo",
         "-",
     ]
-    proc = subprocess.run(args, capture_output=True, timeout=60, check=False)
+    try:
+        proc = subprocess.run(args, capture_output=True, timeout=180, check=False)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
     expected = width * height * 3
     if proc.returncode != 0 or len(proc.stdout) < expected:
         return None
@@ -1328,8 +1947,9 @@ def _export_analysis_frame(path: str, time_seconds: float, output_path: str) -> 
         "1",
         "-q:v",
         "3",
+        "-y",
         output_path,
-    ], timeout=60)
+    ], timeout=180)
     return code == 0 and os.path.isfile(output_path)
 
 
@@ -1350,7 +1970,7 @@ def _motion_and_keyframes(
     if isinstance(cut_analysis, dict):
         required_boundary_frames += len(cut_analysis.get("cut_points") or []) * 2
         required_boundary_frames += len(cut_analysis.get("flash_frame_candidates") or [])
-    effective_budget = max(int(budget or 0), min(HARD_FRAME_CAP, required_boundary_frames + 3))
+    effective_budget = _compute_demand_driven_budget(budget, cut_analysis, duration)
     times = _sample_times(duration, scene_items, effective_budget, fps=fps, cut_analysis=cut_analysis)
     frames_dir = artifacts.get("frames_dir")
     for index, sample in enumerate(times, 1):
@@ -1519,7 +2139,7 @@ def _report_missing_layers(report: Dict[str, Any], depth: str, options: Dict[str
         if not isinstance(readthrough.get("cut_analysis"), dict):
             missing.append("cut_analysis")
     transcription = options.get("transcription") or {}
-    if _coerce_bool(transcription.get("enabled"), default=(depth == "deep")):
+    if _coerce_bool(transcription.get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED):
         transcript = report.get("transcription") or {}
         if not transcript.get("success") or transcript.get("status") == "skipped":
             missing.append("transcription")
@@ -1784,6 +2404,9 @@ def _transcribe_with_whisper_cli(path: str, artifacts: Dict[str, Any], transcrip
         return {"success": False, "status": "skipped", "backend": "whisper_cli", "reason": "whisper CLI not found"}
     work_dir = os.path.join(os.path.dirname(artifacts.get("transcript_json") or artifacts["analysis_json"]), "transcript-work")
     os.makedirs(work_dir, exist_ok=True)
+    # Default to capturing per-word timestamps so editor / word-snap features
+    # work out of the box. Callers can opt out with word_timestamps=False.
+    want_words = _coerce_bool(transcription.get("word_timestamps", True), default=True)
     cmd = [
         whisper,
         path,
@@ -1793,6 +2416,8 @@ def _transcribe_with_whisper_cli(path: str, artifacts: Dict[str, Any], transcrip
         "json",
         "--output_dir",
         work_dir,
+        "--word_timestamps",
+        "True" if want_words else "False",
     ]
     if transcription.get("language"):
         cmd.extend(["--language", str(transcription["language"])])
@@ -1820,7 +2445,7 @@ def _transcribe_with_mlx_whisper(path: str, artifacts: Dict[str, Any], transcrip
     raw = mlx_whisper.transcribe(
         path,
         path_or_hf_repo=model,
-        word_timestamps=bool(transcription.get("word_timestamps", False)),
+        word_timestamps=_coerce_bool(transcription.get("word_timestamps", True), default=True),
         verbose=False,
         **kwargs,
     )
@@ -1831,7 +2456,7 @@ def _transcribe_with_mlx_whisper(path: str, artifacts: Dict[str, Any], transcrip
 
 def _transcribe(path: str, artifacts: Dict[str, Any], options: Dict[str, Any], capabilities: Dict[str, Any]) -> Dict[str, Any]:
     transcription = options.get("transcription") or {}
-    if not _coerce_bool(transcription.get("enabled"), default=False):
+    if not _coerce_bool(transcription.get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED):
         return {"success": True, "status": "skipped", "reason": "transcription disabled"}
     backend = transcription.get("backend")
     if not backend:
@@ -1878,24 +2503,341 @@ def _transcribe(path: str, artifacts: Dict[str, Any], options: Dict[str, Any], c
         return {"success": False, "status": "skipped", "reason": "No local transcription backend available"}
 
 
+_SUMMARY_STYLE_DIRECTIVES = {
+    "full": (
+        "Use the full schema as written. Populate every applicable field; "
+        "do not trim narrative content or omit observations to save words."
+    ),
+    "concise": (
+        "Bias narrative fields toward brevity while keeping every schema field "
+        "populated. Targets: `clip_summary` is 1-2 sentences (not 2-4); each "
+        "shot `description` is 1 sentence; `composition_notes`, `pacing_note`, "
+        "and `emotional_register` reduce to the single most important "
+        "observation or `null` if there is nothing distinct to say. Do not "
+        "drop fields; do not fabricate detail to fill them either."
+    ),
+    "creative": (
+        "Bias narrative fields toward editorial vibes — tone, atmosphere, "
+        "intent, performance, and how the shot might earn its place in a cut. "
+        "`clip_summary` and shot `description` should read like an assistant "
+        "editor's first-impression note (concrete imagery + editorial read), "
+        "not a forensic inventory. `editorial_role`, `select_potential`, "
+        "`best_moment`, `pacing`, and `emotional_register` deserve full "
+        "attention. Keep `confidence` values honest and continue to hedge "
+        "identity / intent claims when frame evidence is thin."
+    ),
+    "technical": (
+        "Bias narrative fields toward camera, exposure, lighting, and QC. "
+        "`composition_notes`, `framing`, `camera_height`, `camera_motion`, "
+        "`lens_character`, `lens_format`, `lighting`, `color_mood`, "
+        "`audio_character`, and `qc_flags` deserve full attention. Subject "
+        "performance / emotional register stays terse (one observation or "
+        "`null`). `clip_summary` reads like a camera operator's or QC pass "
+        "note — what's in the frame technically, what works or doesn't, "
+        "what an editor needs to know to use this shot."
+    ),
+}
+
+
+def _build_summary_style_directive(value: Any) -> Optional[str]:
+    """Map an analysis_summary_style value to a short narrative-tone directive
+    that biases the vision model's wording without changing the schema.
+
+    Returns the directive string, or None for `full` (default behavior).
+    """
+    style = (str(value).strip().lower() if value else "")
+    if not style or style == "full":
+        return None
+    # Backwards-compat: legacy enum values get folded into the new four-option
+    # scheme. Saved prefs files from older installs may still have these.
+    legacy = {
+        "assistant_editor": "creative",
+        "assistant": "creative",
+        "editor": "creative",
+        "producer": "creative",
+        "qc": "technical",
+        "qc_focus": "technical",
+        "qc_focused": "technical",
+    }
+    style = legacy.get(style, style)
+    return _SUMMARY_STYLE_DIRECTIVES.get(style)
+
+
+def _build_vision_prompt_with_source_trust(
+    *,
+    base_prompt: str,
+    source_trust: Optional[str],
+    file_path: Optional[str],
+    clip_name: Optional[str],
+    summary_style: Optional[str] = None,
+) -> str:
+    """V2 P11: Prepend a source-trust preamble when the caller has signaled
+    that the clip's filename / context can be used as supporting evidence.
+
+    Trust levels:
+      - None / "auto" (default) — no preamble; conservative-by-default
+      - "filename" — filename may corroborate frame evidence; hedge if uncorroborated
+      - "low" / "medium" / "high" — explicit trust for all available context
+
+    The preamble adjusts conservative-by-default tone *upward* (allows using
+    available context) without raising the per-field confidence ceiling
+    (vision still hedges via confidence values when evidence is thin).
+    """
+    trust = (str(source_trust).strip().lower() if source_trust else "auto")
+    style_directive = _build_summary_style_directive(summary_style)
+
+    if trust in ("", "auto", "none"):
+        if not style_directive:
+            return base_prompt
+        style_preamble = (
+            f"\n=== NARRATIVE STYLE ===\n"
+            f"analysis_summary_style: {str(summary_style).strip().lower()}\n\n"
+            f"{style_directive}\n"
+            f"=== END NARRATIVE STYLE ===\n\n"
+        )
+        return style_preamble + base_prompt
+
+    if trust == "filename":
+        explanation = (
+            "The clip filename and any visible on-screen text may be used as supporting "
+            "evidence for identity, location, and editorial classification claims. Still "
+            "hedge in the `confidence` fields when frame evidence alone wouldn't support "
+            "the claim — the trust override raises the floor for using available context, "
+            "not the ceiling for asserting facts."
+        )
+    elif trust == "low":
+        explanation = (
+            "Source trust is LOW. Treat frames as the primary evidence; ignore filename and "
+            "outside context. Hedge identity / intent / value claims aggressively; default "
+            "confidence to `low` unless frame evidence is unambiguous."
+        )
+    elif trust == "medium":
+        explanation = (
+            "Source trust is MEDIUM. Use frames as primary evidence; filename and visible "
+            "text may corroborate. Cultural recognition (well-known people, locations, "
+            "brands) is allowed when frames support it. Maintain conservative confidence."
+        )
+    elif trust == "high":
+        explanation = (
+            "Source trust is HIGH. The clip is from a known archival or trusted source. "
+            "Use filename, visible text, frame evidence, and cultural recognition together "
+            "to make confident editorial claims. Hedge only when sources actively conflict "
+            "(e.g. filename says X but frames clearly show Y)."
+        )
+    else:
+        # Unknown trust level — pass through with a note instead of failing
+        explanation = (
+            f"Source trust level '{trust}' is not a recognized value (use one of: "
+            "auto, filename, low, medium, high). Defaulting to conservative-by-default."
+        )
+
+    filename_line = ""
+    if file_path or clip_name:
+        import os as _os
+        basename = _os.path.basename(file_path) if file_path else None
+        filename_line = f"\nClip filename: {basename or clip_name}"
+
+    preamble = (
+        f"\n=== SOURCE TRUST CONTEXT ===\n"
+        f"source_trust: {trust}{filename_line}\n\n"
+        f"{explanation}\n"
+        f"=== END SOURCE TRUST CONTEXT ===\n\n"
+    )
+    if style_directive:
+        style_preamble = (
+            f"\n=== NARRATIVE STYLE ===\n"
+            f"analysis_summary_style: {str(summary_style).strip().lower()}\n\n"
+            f"{style_directive}\n"
+            f"=== END NARRATIVE STYLE ===\n\n"
+        )
+        return style_preamble + preamble + base_prompt
+    return preamble + base_prompt
+
+
+def build_host_chat_paths_payload(
+    record: Dict[str, Any],
+    motion: Dict[str, Any],
+    options: Dict[str, Any],
+    artifacts: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build the deferred-vision payload the host chat must complete via commit_vision.
+
+    Returns a dict with absolute frame_paths, per-frame metadata, the analysis prompt,
+    the response schema, and a commit_action describing the follow-up tool call.
+    """
+    vision = options.get("vision") or {}
+    frame_metadata: List[Dict[str, Any]] = []
+    frame_paths: List[str] = []
+    for index, frame in enumerate(motion.get("analysis_keyframes") or [], 1):
+        frame_path = frame.get("frame_path")
+        if not frame_path or not os.path.isfile(frame_path):
+            continue
+        absolute = normalize_path(frame_path)
+        frame_paths.append(absolute)
+        row: Dict[str, Any] = {
+            "frame_index": index,
+            "frame_path": absolute,
+            "time_seconds": frame.get("time_seconds"),
+            "selection_reason": frame.get("selection_reason"),
+            "delta_from_previous": frame.get("delta_from_previous"),
+        }
+        for key in (
+            "cut_index", "cut_time_seconds", "boundary_role",
+            "shot_index", "shot_start", "shot_end",
+            "motion_peak", "motion_peak_source_reason",
+        ):
+            if frame.get(key) not in (None, ""):
+                row[key] = frame.get(key)
+        frame_metadata.append(row)
+
+    clip_dir = artifacts.get("clip_dir") or ""
+    project_root = normalize_path(os.path.dirname(os.path.dirname(clip_dir))) if clip_dir else None
+    clip_id = record.get("clip_id") or record.get("media_id")
+    file_path = record.get("file_path")
+    vision_token = short_hash(json.dumps({
+        "clip_id": clip_id,
+        "file_path": file_path,
+        "clip_dir": clip_dir,
+        "frame_paths": frame_paths,
+        "analysis_version": ANALYSIS_VERSION,
+    }, sort_keys=True), length=16)
+
+    motion_summary = {
+        key: motion.get(key)
+        for key in (
+            "overall_motion_level",
+            "average_frame_delta",
+            "max_frame_delta",
+            "requested_sample_budget",
+            "effective_sample_budget",
+            "cut_boundary_pairs_total",
+            "cut_boundary_pairs_sampled",
+            "cut_boundary_pair_coverage",
+            "cut_boundary_sampling_capped",
+        )
+        if motion.get(key) is not None
+    }
+    cut_analysis = motion.get("cut_analysis") if isinstance(motion.get("cut_analysis"), dict) else {}
+    cut_summary = {
+        "cut_count": cut_analysis.get("cut_count", 0),
+        "cut_density_per_minute": cut_analysis.get("cut_density_per_minute"),
+        "likely_edited_sequence": bool(cut_analysis.get("likely_edited_sequence")),
+        "flash_frame_candidates": cut_analysis.get("flash_frame_candidates") or [],
+        "cut_points": (cut_analysis.get("cut_points") or [])[:48],
+        "notes": cut_analysis.get("notes") or [],
+    }
+
+    shot_table: List[Dict[str, Any]] = []
+    for shot in cut_analysis.get("shot_ranges") or []:
+        if not isinstance(shot, dict):
+            continue
+        s_index = shot.get("index")
+        s_start = _parse_float(shot.get("start"))
+        s_end = _parse_float(shot.get("end"))
+        if s_index in (None, "") or s_start is None or s_end is None:
+            continue
+        frame_indices: List[int] = []
+        for row in frame_metadata:
+            t = _parse_float(row.get("time_seconds"))
+            if t is None:
+                continue
+            if s_start <= t < s_end or (s_end == t and row is frame_metadata[-1]):
+                frame_indices.append(int(row.get("frame_index")))
+        shot_table.append({
+            "shot_index": int(s_index),
+            "time_seconds_start": float(s_start),
+            "time_seconds_end": float(s_end),
+            "duration_seconds": float(s_end) - float(s_start),
+            "frame_indices": frame_indices,
+            "has_in_shot_frame": bool(frame_indices),
+        })
+
+    commit_params: Dict[str, Any] = {
+        "vision_token": vision_token,
+        "visual": "<host chat: fill this with JSON matching `schema`>",
+    }
+    if clip_id:
+        commit_params["clip_id"] = str(clip_id)
+    if file_path:
+        commit_params["file_path"] = file_path
+    if project_root:
+        commit_params["analysis_root"] = project_root
+
+    return {
+        "success": True,
+        "status": "pending_host_analysis",
+        "provider": HOST_CHAT_PATHS_PROVIDER,
+        "vision_token": vision_token,
+        "frame_count": len(frame_paths),
+        "frame_paths": frame_paths,
+        "frame_metadata": frame_metadata,
+        "clip": {
+            "clip_id": clip_id,
+            "clip_name": record.get("clip_name"),
+            "file_path": file_path,
+        },
+        "motion_summary": motion_summary,
+        "cut_analysis": cut_summary,
+        "shot_table": shot_table,
+        "prompt": _build_vision_prompt_with_source_trust(
+            base_prompt=str(vision.get("prompt") or DEFAULT_VISION_ANALYSIS_PROMPT),
+            source_trust=(
+                options.get("source_trust") or options.get("sourceTrust")
+                or vision.get("source_trust") or vision.get("sourceTrust")
+            ),
+            summary_style=(
+                options.get("analysis_summary_style") or options.get("analysisSummaryStyle")
+                or vision.get("analysis_summary_style") or vision.get("analysisSummaryStyle")
+            ),
+            file_path=file_path,
+            clip_name=record.get("clip_name"),
+        ),
+        "schema_reference": VISION_SCHEMA_REFERENCE,
+        "commit_action": {
+            "tool": "media_analysis",
+            "action": "commit_vision",
+            "params": commit_params,
+        },
+        "instructions": (
+            "Read every file under frame_paths as a local image using your client's "
+            "image-reading capability (Claude Code's Read tool handles JPG/PNG natively). "
+            "Produce a single JSON object that matches the structure of `prompt`/`schema` "
+            "(no markdown fences, no prose outside JSON). The response MUST include a "
+            "`shot_descriptions` entry for every `shot_index` listed in `shot_table` — "
+            "each description should be grounded in the frames whose indices appear in "
+            "`shot_table[i].frame_indices`, never in unrelated shots. Then call the tool in "
+            "`commit_action` with `visual` set to that JSON object — the server will merge it "
+            "into the analysis report, rebuild Media Pool clip markers, and publish "
+            "vision-dependent metadata to Resolve. Non-vision layers "
+            "(technical/loudness/scenes/motion/transcription) are already persisted under "
+            "the clip's analysis directory; commit_vision finishes the run."
+        ),
+    }
+
+
 def _vision_analysis(record: Dict[str, Any], motion: Dict[str, Any], options: Dict[str, Any], artifacts: Dict[str, Any], capabilities: Dict[str, Any]) -> Dict[str, Any]:
     vision = options.get("vision") or {}
     if not _coerce_bool(vision.get("enabled"), default=False):
         return {"success": True, "status": "skipped", "reason": "vision disabled"}
-    provider = vision.get("provider") or capabilities.get("vision", {}).get("provider")
-    if provider in CHAT_CONTEXT_VISION_PROVIDERS:
-        return {
-            "success": False,
-            "status": "skipped",
-            "provider": provider,
-            "reason": "Chat-context vision requires MCP client sampling support for this tool call.",
-        }
+    provider = vision.get("provider") or capabilities.get("vision", {}).get("provider") or HOST_CHAT_PATHS_PROVIDER
+    if provider in HOST_CHAT_VISION_PROVIDERS:
+        payload = build_host_chat_paths_payload(record, motion, options, artifacts)
+        if not payload.get("frame_paths"):
+            return {
+                "success": False,
+                "status": "skipped",
+                "provider": HOST_CHAT_PATHS_PROVIDER,
+                "reason": "No sampled analysis frames were available for host-chat vision.",
+            }
+        if artifacts.get("visual_json"):
+            _write_json(artifacts["visual_json"], payload)
+        return payload
     if provider not in {"mock", "local_mock"}:
         return {
             "success": False,
             "status": "skipped",
             "provider": provider,
-            "reason": "Only local mock vision is implemented in this offline pass; no frames were sent externally.",
+            "reason": f"Unknown vision provider '{provider}'. Set DAVINCI_RESOLVE_MCP_VISION_PROVIDER to '{HOST_CHAT_PATHS_PROVIDER}' or use the 'mock' provider for tests.",
         }
     keyframes = []
     for frame in motion.get("analysis_keyframes", []):
@@ -2089,15 +3031,52 @@ def _transcript_excerpt_for_range(transcript: Dict[str, Any], start: Optional[fl
     return _trim_text(" ".join(text for text in selected_segments if text), 280)
 
 
-def _visual_description_for_time(vision: Dict[str, Any], start: Optional[float], end: Optional[float]) -> str:
+_VISUAL_DESCRIPTION_UNAVAILABLE = "Visual description unavailable from this analysis pass."
+
+
+def _shot_description_entry(
+    vision: Dict[str, Any], shot_index: Optional[int], start: Optional[float], end: Optional[float]
+) -> Optional[Dict[str, Any]]:
+    """Return the matching shot_descriptions entry by index, or by time-range overlap."""
+    rows = vision.get("shot_descriptions") if isinstance(vision.get("shot_descriptions"), list) else []
+    if not rows:
+        return None
+    target_index = None
+    try:
+        if shot_index is not None:
+            target_index = int(shot_index)
+    except (TypeError, ValueError):
+        target_index = None
+    if target_index is not None:
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                if int(row.get("shot_index")) == target_index:
+                    return row
+            except (TypeError, ValueError):
+                continue
+    if start is None or end is None:
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        r_start = _parse_float(row.get("time_seconds_start"))
+        r_end = _parse_float(row.get("time_seconds_end"))
+        if r_start is None or r_end is None:
+            continue
+        if abs(r_start - float(start)) <= 0.05 and abs(r_end - float(end)) <= 0.05:
+            return row
+    return None
+
+
+def _keyframe_description_in_range(
+    vision: Dict[str, Any], start: Optional[float], end: Optional[float]
+) -> Optional[str]:
+    """Return the first analysis_keyframe description whose time falls inside [start, end]."""
+    if start is None or end is None:
+        return None
     keyframes = vision.get("analysis_keyframes") if isinstance(vision.get("analysis_keyframes"), list) else []
-    midpoint = None
-    if start is not None and end is not None:
-        midpoint = (float(start) + float(end)) / 2.0
-    elif start is not None:
-        midpoint = float(start)
-    best = None
-    best_distance = None
     for keyframe in keyframes:
         if not isinstance(keyframe, dict):
             continue
@@ -2105,15 +3084,79 @@ def _visual_description_for_time(vision: Dict[str, Any], start: Optional[float],
         if not description:
             continue
         frame_time = _parse_float(keyframe.get("time_seconds"))
-        distance = abs((frame_time or 0.0) - (midpoint or frame_time or 0.0))
-        if best_distance is None or distance < best_distance:
-            best = description
-            best_distance = distance
-    if best:
-        return _trim_text(best, 360)
+        if frame_time is None:
+            continue
+        if float(start) <= frame_time <= float(end):
+            return description
+    return None
+
+
+def _visual_description_for_shot(
+    vision: Dict[str, Any],
+    shot_index: Optional[int],
+    start: Optional[float],
+    end: Optional[float],
+) -> str:
+    """Layered shot-description lookup.
+
+    1. Exact match in vision.shot_descriptions (by shot_index, then by [start,end]).
+    2. analysis_keyframe whose time falls inside [start, end].
+    3. clip_summary as a clearly-marked fallback.
+    4. Sentinel placeholder if nothing usable exists.
+    """
+    entry = _shot_description_entry(vision, shot_index, start, end)
+    if entry:
+        description = entry.get("description") or entry.get("visual_description")
+        if description:
+            return _trim_text(description, 360)
+    in_range = _keyframe_description_in_range(vision, start, end)
+    if in_range:
+        return _trim_text(in_range, 360)
+    summary = vision.get("clip_summary")
+    if summary:
+        return _trim_text(f"[shot description unavailable — falling back to clip summary] {summary}", 360)
+    return _VISUAL_DESCRIPTION_UNAVAILABLE
+
+
+def _visual_description_for_time(vision: Dict[str, Any], start: Optional[float], end: Optional[float]) -> str:
+    """Used by point-in-time markers (best_moments, qc_warnings).
+
+    Picks the nearest analysis_keyframe whose time is within roughly the marker's
+    own range. Outside that window, falls back to clip_summary or the sentinel —
+    never copies a far-away keyframe's description.
+    """
+    keyframes = vision.get("analysis_keyframes") if isinstance(vision.get("analysis_keyframes"), list) else []
+    midpoint = None
+    if start is not None and end is not None:
+        midpoint = (float(start) + float(end)) / 2.0
+    elif start is not None:
+        midpoint = float(start)
+    if midpoint is not None:
+        in_range = _keyframe_description_in_range(vision, start, end)
+        if in_range:
+            return _trim_text(in_range, 360)
+        best = None
+        best_distance = None
+        for keyframe in keyframes:
+            if not isinstance(keyframe, dict):
+                continue
+            description = keyframe.get("description") or keyframe.get("visual_description")
+            if not description:
+                continue
+            frame_time = _parse_float(keyframe.get("time_seconds"))
+            if frame_time is None:
+                continue
+            distance = abs(frame_time - midpoint)
+            if distance > 2.0:
+                continue
+            if best_distance is None or distance < best_distance:
+                best = description
+                best_distance = distance
+        if best:
+            return _trim_text(best, 360)
     if vision.get("clip_summary"):
         return _trim_text(vision.get("clip_summary"), 360)
-    return "Visual description unavailable from this analysis pass."
+    return _VISUAL_DESCRIPTION_UNAVAILABLE
 
 
 def _shot_ranges_from_scenes(
@@ -2199,7 +3242,7 @@ def _build_marker_entry(
         "transcript_text": transcript_text,
         "source": source,
         "confidence": confidence,
-        "write_to_resolve": False,
+        "write_to_resolve": True,
     }
     return {key: value for key, value in payload.items() if value not in (None, "")}
 
@@ -2239,6 +3282,10 @@ def _build_clip_marker_plan(
     for shot in shot_ranges:
         start = _parse_float(shot.get("start"))
         end = _parse_float(shot.get("end"))
+        try:
+            shot_index = int(shot.get("index"))
+        except (TypeError, ValueError):
+            shot_index = None
         sound_note, transcript_text = _marker_sound_note(transcript, readthrough, start, end)
         markers.append(_build_marker_entry(
             marker_id=f"shot-{int(shot['index']):03d}",
@@ -2248,7 +3295,7 @@ def _build_clip_marker_plan(
             start=start,
             end=end,
             fps=fps,
-            visual_description=_visual_description_for_time(vision, start, end),
+            visual_description=_visual_description_for_shot(vision, shot_index, start, end),
             sound_note=sound_note,
             transcript_text=transcript_text,
             source="scene_detection",
@@ -2363,12 +3410,16 @@ def _build_clip_marker_plan(
         "fps": fps,
         "duration_seconds": duration,
         "color_scheme": color_scheme,
-        "write_to_resolve_default": False,
+        "write_to_resolve_default": True,
         "resolve_marker_writeback": {
             "optional": True,
-            "enabled": False,
+            "enabled": True,
+            "default_behavior": (
+                "Written during executed Resolve-target analysis and metadata publish unless "
+                "timed_markers=no or dry_run=true."
+            ),
             "write_action": "publish_clip_metadata",
-            "required_flags": {"write_markers": True, "confirm": True, "dry_run": False},
+            "disable_flags": {"timed_markers": "no", "dry_run": True, "publish_metadata": False},
         },
         "transcript_index": {
             "available": bool(transcript.get("text") or transcript.get("segments")),
@@ -2429,7 +3480,7 @@ def _synthesize_analysis(
         "analysis_profile": {
             "depth": depth,
             "analysis_keyframe_budget": int(frame_count or 0),
-            "transcription_enabled": _coerce_bool(((options or {}).get("transcription") or {}).get("enabled"), default=(depth == "deep")),
+            "transcription_enabled": _coerce_bool(((options or {}).get("transcription") or {}).get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED),
             "vision_enabled": _coerce_bool(((options or {}).get("vision") or {}).get("enabled"), default=False),
         },
         "analyzed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -2568,6 +3619,12 @@ async def execute_plan_async(
 
         transcript = _transcribe(source, artifacts, options, caps)
         vision = await _maybe_run_vision_analysis(record, motion, options, artifacts, caps, vision_runner)
+        vision_pending = vision_is_pending_host_analysis(vision)
+        vision_failed = (
+            vision_requested(options)
+            and not vision_pending
+            and not visual_analysis_completed(vision)
+        )
         frame_count = int(clip_plan.get("analysis_keyframe_budget") or 0)
         marker_plan = _build_clip_marker_plan(
             record,
@@ -2579,6 +3636,8 @@ async def execute_plan_async(
             options=options,
             analysis_signature=clip_plan.get("analysis_signature"),
         )
+        if vision_pending:
+            marker_plan["vision_status"] = "pending_host_analysis"
         if artifacts.get("marker_plan_json"):
             marker_plan["path"] = artifacts["marker_plan_json"]
             _write_json(artifacts["marker_plan_json"], marker_plan)
@@ -2595,8 +3654,12 @@ async def execute_plan_async(
             analysis_signature=clip_plan.get("analysis_signature"),
             marker_plan=marker_plan,
         )
+        if vision_pending:
+            analysis["vision_status"] = "pending_host_analysis"
+            analysis["vision_token"] = vision.get("vision_token")
         _write_json(artifacts["analysis_json"], analysis)
-        if _coerce_bool(params.get("cleanup_frames"), default=False) and artifacts.get("frames_dir"):
+        cleanup_frames_requested = _coerce_bool(params.get("cleanup_frames"), default=False)
+        if cleanup_frames_requested and not vision_pending and artifacts.get("frames_dir"):
             shutil.rmtree(artifacts["frames_dir"], ignore_errors=True)
         clip_result.update({
             "success": True,
@@ -2604,11 +3667,41 @@ async def execute_plan_async(
             "marker_plan_json": artifacts.get("marker_plan_json"),
             "marker_count": marker_plan.get("marker_count"),
         })
+        if vision_pending:
+            clip_result.update({
+                "vision_status": "pending_host_analysis",
+                "vision_token": vision.get("vision_token"),
+                "visual": vision,
+            })
+            manifest["vision_pending"] = True
+        elif vision_failed:
+            clip_result.update({
+                "success": False,
+                "error": "Visual analysis was requested but did not complete.",
+                "visual": vision,
+            })
         manifest["clips"].append(clip_result)
 
     manifest["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     manifest["clip_count"] = len(manifest["clips"])
     manifest["successful_clip_count"] = sum(1 for row in manifest["clips"] if row.get("success"))
+    manifest["failed_clip_count"] = manifest["clip_count"] - manifest["successful_clip_count"]
+    manifest["vision_pending_clip_count"] = sum(
+        1 for row in manifest["clips"] if row.get("vision_status") == "pending_host_analysis"
+    )
+    manifest["vision_pending"] = bool(manifest["vision_pending_clip_count"])
+    manifest["success"] = manifest["failed_clip_count"] == 0
+    if manifest["vision_pending"]:
+        manifest["pending_action"] = {
+            "tool": "media_analysis",
+            "action": "commit_vision",
+            "note": (
+                "Host chat must read each clip's frame_paths, produce visual analysis "
+                "JSON, and call commit_vision with the result. Until then, vision-derived "
+                "metadata (Description, Keywords, slate fields) and vision-derived clip "
+                "markers (best_moments, visual qc_flags) are deferred."
+            ),
+        }
 
     if (
         not session_only
@@ -2616,6 +3709,51 @@ async def execute_plan_async(
         and _coerce_bool(params.get("auto_build_index"), default=True)
     ):
         manifest["index"] = build_analysis_index(output_root)
+
+    # V2 memory + heartbeat layer (per docs/design/v2-shot-schema-spec.md §9).
+    # Heartbeat tracks current project state for session-start awareness.
+    # Bin summary is the machine's "first impression" briefing of the bin.
+    if not session_only and manifest["successful_clip_count"]:
+        try:
+            analysis_memory.ensure_memory_structure(output_root)
+            analysis_memory.ensure_soul_structure(os.path.dirname(output_root))
+            pending_clips = [
+                {"clip_id": (row.get("record") or {}).get("clip_id"), "reason": "vision_pending"}
+                for row in manifest["clips"]
+                if row.get("vision_status") == "pending_host_analysis"
+            ]
+            failed_clips = [
+                {"clip_id": (row.get("record") or {}).get("clip_id"), "error": row.get("error")}
+                for row in manifest["clips"]
+                if not row.get("success") and row.get("vision_status") != "pending_host_analysis"
+            ]
+            analysis_memory.update_heartbeat(
+                output_root,
+                last_run={
+                    "completed_at": manifest.get("completed_at"),
+                    "depth": manifest.get("depth"),
+                    "analysis_version": manifest.get("analysis_version"),
+                    "schema_version": "2.0",
+                },
+                clip_counts={
+                    "total": manifest["clip_count"],
+                    "analyzed": manifest["successful_clip_count"],
+                    "failed": manifest["failed_clip_count"],
+                    "vision_pending": manifest["vision_pending_clip_count"],
+                },
+                pending=pending_clips,
+                recent_failures=failed_clips,
+            )
+            # Regenerate bin summary only when vision has actually committed
+            # (otherwise per-clip summaries don't exist yet).
+            if not manifest.get("vision_pending"):
+                analysis_memory.regenerate_bin_summary_from_manifest(
+                    output_root, manifest, project_name=manifest.get("project_name"),
+                )
+        except Exception as exc:  # defensive: memory layer must never break analysis
+            manifest.setdefault("memory_layer_warnings", []).append(
+                f"{type(exc).__name__}: {exc}"
+            )
 
     _write_json(os.path.join(output_root, "manifest.json"), manifest)
 
@@ -2649,7 +3787,459 @@ async def execute_plan_async(
 
 
 def execute_plan(plan: Dict[str, Any], params: Optional[Dict[str, Any]] = None, capabilities: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    return asyncio.run(execute_plan_async(plan, params=params, capabilities=capabilities))
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(execute_plan_async(plan, params=params, capabilities=capabilities))
+
+    # A loop is already running in this thread (e.g. invoked from an async MCP handler).
+    # Run the coroutine in a worker thread with its own loop so we can block-wait here.
+    result: Dict[str, Any] = {}
+    error: Dict[str, BaseException] = {}
+
+    def _runner() -> None:
+        try:
+            result["value"] = asyncio.run(
+                execute_plan_async(plan, params=params, capabilities=capabilities)
+            )
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller thread
+            error["exc"] = exc
+
+    worker = threading.Thread(target=_runner, name="execute_plan_worker", daemon=True)
+    worker.start()
+    worker.join()
+    if "exc" in error:
+        raise error["exc"]
+    return result["value"]
+
+
+def _walk_set(container: Any, path_parts: List[str], value: Any) -> bool:
+    """Set value at a dotted path inside a nested dict, creating intermediate dicts as needed.
+
+    Returns True if the leaf node was modified, False if container is not navigable.
+    """
+    if not path_parts:
+        return False
+    cursor = container
+    for part in path_parts[:-1]:
+        if not isinstance(cursor, dict):
+            return False
+        nxt = cursor.get(part)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cursor[part] = nxt
+        cursor = nxt
+    if not isinstance(cursor, dict):
+        return False
+    cursor[path_parts[-1]] = value
+    return True
+
+
+def _walk_get(container: Any, path_parts: List[str]) -> Tuple[bool, Any]:
+    """Return (found, value) for a dotted path inside a nested dict."""
+    cursor = container
+    for part in path_parts:
+        if not isinstance(cursor, dict) or part not in cursor:
+            return False, None
+        cursor = cursor[part]
+    return True, cursor
+
+
+def _find_shot_entry(shot_descriptions: List[Dict[str, Any]], entity_uuid: str) -> Optional[Dict[str, Any]]:
+    """Locate a shot in shot_descriptions by shot_uuid or shot_index match."""
+    if not isinstance(shot_descriptions, list):
+        return None
+    target = str(entity_uuid)
+    # First pass: match shot_uuid
+    for entry in shot_descriptions:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("shot_uuid") or "") == target:
+            return entry
+    # Second pass: match shot_index (V1/sidecar identifier)
+    try:
+        target_int = int(target)
+    except (TypeError, ValueError):
+        target_int = None
+    if target_int is not None:
+        for entry in shot_descriptions:
+            if not isinstance(entry, dict):
+                continue
+            entry_idx = entry.get("shot_index")
+            if entry_idx is None:
+                continue
+            try:
+                if int(entry_idx) == target_int:
+                    return entry
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def preserve_human_corrections(
+    clip_dir_path: str,
+    normalized_visual: Dict[str, Any],
+    *,
+    clip_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """V2 contract: read corrections.json sidecar and re-apply human-edited fields.
+
+    Called from commit_visual_analysis between normalization and persistence so
+    that re-analyzing a clip never silently overwrites editor corrections.
+
+    Returns a metrics dict:
+      {preserved_count, applied: [{entity_type, entity_uuid, field_path}],
+       skipped: [{key, reason}], changelog_added}
+    """
+    corrections_path = os.path.join(clip_dir_path, "corrections.json")
+    metrics: Dict[str, Any] = {
+        "preserved_count": 0,
+        "applied": [],
+        "skipped": [],
+        "changelog_added": 0,
+        "corrections_path": corrections_path,
+    }
+    if not os.path.isfile(corrections_path):
+        return metrics
+
+    try:
+        with open(corrections_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        metrics["error"] = f"Failed to read corrections.json: {exc}"
+        return metrics
+
+    if not isinstance(data, dict):
+        metrics["error"] = "corrections.json is not a JSON object"
+        return metrics
+
+    current = data.get("current") if isinstance(data.get("current"), dict) else {}
+    changelog = data.get("changelog") if isinstance(data.get("changelog"), list) else []
+    data.setdefault("schema_version", "2.0")
+    data["current"] = current
+    data["changelog"] = changelog
+    if clip_id and not data.get("clip_id"):
+        data["clip_id"] = str(clip_id)
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    shot_descriptions = normalized_visual.get("shot_descriptions") if isinstance(normalized_visual.get("shot_descriptions"), list) else []
+    new_changelog_entries: List[Dict[str, Any]] = []
+
+    for key, entry in list(current.items()):
+        if not isinstance(entry, dict):
+            metrics["skipped"].append({"key": key, "reason": "entry not a dict"})
+            continue
+        if entry.get("source") != "human":
+            continue
+        # Key format: "{entity_type}:{entity_uuid}:{field_path}"
+        parts = key.split(":", 2)
+        if len(parts) != 3:
+            metrics["skipped"].append({"key": key, "reason": "malformed key"})
+            continue
+        entity_type, entity_uuid, field_path = parts
+        path_parts = [p for p in field_path.split(".") if p]
+        if not path_parts:
+            metrics["skipped"].append({"key": key, "reason": "empty field_path"})
+            continue
+        human_value = entry.get("value")
+
+        if entity_type == "clip":
+            target_container = normalized_visual
+        elif entity_type == "shot":
+            target_container = _find_shot_entry(shot_descriptions, entity_uuid)
+            if target_container is None:
+                metrics["skipped"].append({"key": key, "reason": "shot not found in vision output"})
+                continue
+        else:
+            metrics["skipped"].append({"key": key, "reason": f"unknown entity_type '{entity_type}'"})
+            continue
+
+        found, machine_value = _walk_get(target_container, path_parts)
+        if not _walk_set(target_container, path_parts, human_value):
+            metrics["skipped"].append({"key": key, "reason": "could not write into target container"})
+            continue
+        metrics["preserved_count"] += 1
+        metrics["applied"].append({
+            "entity_type": entity_type,
+            "entity_uuid": entity_uuid,
+            "field_path": field_path,
+        })
+
+        if found and machine_value != human_value:
+            new_changelog_entries.append({
+                "entity_type": entity_type,
+                "entity_uuid": entity_uuid,
+                "field_path": field_path,
+                "previous_value": machine_value,
+                "new_value": human_value,
+                "previous_source": "vision",
+                "new_source": "human",
+                "previous_author": "system",
+                "new_author": entry.get("author") or "unknown",
+                "change_reason": "preserved across re-analysis",
+                "timestamp": now,
+            })
+
+    if new_changelog_entries:
+        changelog.extend(new_changelog_entries)
+        metrics["changelog_added"] = len(new_changelog_entries)
+        try:
+            os.makedirs(os.path.dirname(corrections_path), exist_ok=True)
+            tmp_path = corrections_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2, sort_keys=True, default=str)
+            os.replace(tmp_path, corrections_path)
+        except OSError as exc:
+            metrics["error"] = f"Failed to write corrections.json: {exc}"
+
+    return metrics
+
+
+def _normalize_host_chat_visual(payload: Any, *, fallback_record: Optional[Dict[str, Any]] = None) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Coerce a host-chat visual payload into the canonical visual shape.
+
+    Returns (normalized_visual, error). If the payload is missing required structure
+    that we cannot safely default, returns (None, reason).
+    """
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            return None, f"visual payload was a string but not valid JSON: {exc}"
+    if not isinstance(payload, dict):
+        return None, "visual payload must be a JSON object matching the vision schema"
+
+    normalized: Dict[str, Any] = dict(payload)
+    normalized["success"] = True
+    normalized["provider"] = HOST_CHAT_PATHS_PROVIDER
+    normalized.pop("status", None)
+
+    clip_summary = normalized.get("clip_summary")
+    if not isinstance(clip_summary, str) or not clip_summary.strip():
+        if fallback_record:
+            normalized["clip_summary"] = f"Host-chat visual analysis for {fallback_record.get('clip_name') or fallback_record.get('file_path') or 'clip'}."
+        else:
+            normalized["clip_summary"] = "Host-chat visual analysis (no summary provided)."
+
+    def _ensure_dict(key: str, default: Dict[str, Any]) -> None:
+        value = normalized.get(key)
+        if not isinstance(value, dict):
+            normalized[key] = dict(default)
+
+    def _ensure_list(container: Dict[str, Any], key: str) -> None:
+        if not isinstance(container.get(key), list):
+            container[key] = []
+
+    _ensure_dict("editorial_classification", {"primary_use": "unknown", "select_potential": "medium", "reason": ""})
+    _ensure_dict("content", {"locations": [], "people_visible": "unknown", "actions": [], "objects": [], "visible_text": [], "notable_audio_context": []})
+    for list_key in ("locations", "actions", "objects", "visible_text", "notable_audio_context"):
+        _ensure_list(normalized["content"], list_key)
+    _ensure_dict("shot_and_style", {"shot_sizes": [], "camera_motion": [], "composition_notes": "", "lighting_mood": "", "color_mood": ""})
+    for list_key in ("shot_sizes", "camera_motion"):
+        _ensure_list(normalized["shot_and_style"], list_key)
+    _ensure_dict("slate", {"slate_visible": False, "scene": "", "shot": "", "take": "", "camera": "", "roll": "", "date": "", "production": "", "visible_text": [], "confidence": {}})
+    _ensure_list(normalized["slate"], "visible_text")
+    _ensure_dict("motion", {"overall_level": "unknown", "motion_events": [], "quiet_regions": []})
+    _ensure_list(normalized["motion"], "motion_events")
+    _ensure_list(normalized["motion"], "quiet_regions")
+    _ensure_dict("cut_understanding", {"cut_count": 0, "likely_edited_sequence": False, "flash_frame_candidates": [], "notes": []})
+    _ensure_list(normalized["cut_understanding"], "flash_frame_candidates")
+    _ensure_list(normalized["cut_understanding"], "notes")
+    if not isinstance(normalized.get("analysis_keyframes"), list):
+        normalized["analysis_keyframes"] = []
+    raw_shot_descriptions = normalized.get("shot_descriptions")
+    coerced_shot_descriptions: List[Dict[str, Any]] = []
+    if isinstance(raw_shot_descriptions, list):
+        for row in raw_shot_descriptions:
+            if not isinstance(row, dict):
+                continue
+            entry: Dict[str, Any] = dict(row)
+            try:
+                entry["shot_index"] = int(entry.get("shot_index"))
+            except (TypeError, ValueError):
+                entry.pop("shot_index", None)
+            for time_key in ("time_seconds_start", "time_seconds_end"):
+                parsed = _parse_float(entry.get(time_key))
+                if parsed is not None:
+                    entry[time_key] = parsed
+                else:
+                    entry.pop(time_key, None)
+            description = entry.get("description") or entry.get("visual_description")
+            entry["description"] = str(description).strip() if description else ""
+            if not isinstance(entry.get("qc_flags"), list):
+                entry["qc_flags"] = []
+            if not isinstance(entry.get("frame_indices_used"), list):
+                entry.pop("frame_indices_used", None)
+            coerced_shot_descriptions.append(entry)
+    normalized["shot_descriptions"] = coerced_shot_descriptions
+    _ensure_dict("editing_notes", {"best_moments": [], "continuity_flags": [], "qc_flags": [], "search_tags": []})
+    for list_key in ("best_moments", "continuity_flags", "qc_flags", "search_tags"):
+        _ensure_list(normalized["editing_notes"], list_key)
+    _ensure_dict("confidence", {"visual": "low", "motion": "computed", "transcript": "unavailable"})
+
+    return normalized, None
+
+
+def _find_clip_dir_for_commit(
+    project_root: str,
+    *,
+    clip_id: Optional[str] = None,
+    file_path: Optional[str] = None,
+    clip_dir: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    root = normalize_path(project_root)
+    clips_root = os.path.join(root, "clips")
+    if clip_dir:
+        candidate = normalize_path(clip_dir if os.path.isabs(clip_dir) else os.path.join(clips_root, clip_dir))
+        if not _is_relative_to(candidate, root):
+            return None, "clip_dir must be under the project analysis root"
+        if os.path.isdir(candidate):
+            return candidate, None
+        return None, f"clip_dir not found: {candidate}"
+    if not os.path.isdir(clips_root):
+        return None, f"No clips directory under analysis root: {clips_root}"
+    target_clip_id = str(clip_id) if clip_id else None
+    target_file = normalize_path(file_path) if file_path else None
+    for entry in sorted(os.listdir(clips_root)):
+        candidate = os.path.join(clips_root, entry)
+        analysis_path = os.path.join(candidate, "analysis.json")
+        if not os.path.isfile(analysis_path):
+            continue
+        try:
+            with open(analysis_path, "r", encoding="utf-8") as handle:
+                report = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        clip_block = report.get("clip") or {}
+        if target_clip_id and str(clip_block.get("clip_id") or "") == target_clip_id:
+            return candidate, None
+        if target_file and normalize_path(clip_block.get("file_path") or "") == target_file:
+            return candidate, None
+    if target_clip_id:
+        return None, f"No persisted analysis found for clip_id={target_clip_id} under {clips_root}"
+    if target_file:
+        return None, f"No persisted analysis found for file_path={target_file} under {clips_root}"
+    return None, "commit_vision requires clip_id, file_path, or clip_dir"
+
+
+def commit_visual_analysis(
+    *,
+    project_root: str,
+    visual: Any,
+    clip_id: Optional[str] = None,
+    file_path: Optional[str] = None,
+    clip_dir: Optional[str] = None,
+    vision_token: Optional[str] = None,
+    options: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Merge host-chat visual analysis into an already-persisted clip report.
+
+    Reads analysis.json under <project_root>/clips/<clip_dir>/, validates the
+    optional vision_token against the stored deferred payload, normalizes the
+    visual JSON, rewrites visual.json + analysis.json + clip_analysis_markers.json,
+    refreshes the SQLite index entry, and returns the new report path.
+    """
+    root = normalize_path(project_root)
+    if not os.path.isdir(root):
+        return {"success": False, "error": f"Project analysis root not found: {root}"}
+
+    clip_dir_path, lookup_err = _find_clip_dir_for_commit(
+        root, clip_id=clip_id, file_path=file_path, clip_dir=clip_dir,
+    )
+    if lookup_err:
+        return {"success": False, "error": lookup_err}
+
+    analysis_json_path = os.path.join(clip_dir_path, "analysis.json")
+    try:
+        with open(analysis_json_path, "r", encoding="utf-8") as handle:
+            report = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"success": False, "error": f"Failed to read analysis.json: {exc}"}
+
+    existing_vision = report.get("visual") if isinstance(report.get("visual"), dict) else {}
+    stored_token = existing_vision.get("vision_token") or report.get("vision_token")
+    if vision_token and stored_token and str(vision_token) != str(stored_token):
+        return {
+            "success": False,
+            "error": "vision_token mismatch; the analysis report has been re-analyzed since the deferred payload was issued.",
+            "expected_vision_token": stored_token,
+            "received_vision_token": vision_token,
+        }
+
+    record = report.get("clip") or {}
+    normalized_visual, normalize_err = _normalize_host_chat_visual(visual, fallback_record=record)
+    if normalize_err:
+        return {"success": False, "error": normalize_err}
+
+    # V2 trust-but-fix-optionally contract: re-apply human corrections so
+    # re-analysis never silently overwrites editor edits.
+    corrections_metrics = preserve_human_corrections(
+        clip_dir_path,
+        normalized_visual,
+        clip_id=record.get("clip_id"),
+    )
+
+    technical = {"summary": report.get("technical") or {}}
+    if isinstance(report.get("readthrough"), dict):
+        readthrough = report["readthrough"]
+    else:
+        readthrough = {}
+    motion = report.get("motion") if isinstance(report.get("motion"), dict) else {}
+    transcript = report.get("transcription") if isinstance(report.get("transcription"), dict) else {}
+    analysis_signature = report.get("analysis_signature") or {}
+    profile = report.get("analysis_profile") or {}
+
+    merged_options: Dict[str, Any] = {
+        "vision": {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER},
+        "transcription": {"enabled": bool(profile.get("transcription_enabled", DEFAULT_TRANSCRIPTION_ENABLED))},
+        "marker_plan": (options or {}).get("marker_plan") or {},
+    }
+
+    marker_plan = _build_clip_marker_plan(
+        record,
+        technical,
+        readthrough,
+        motion,
+        transcript,
+        normalized_visual,
+        options=merged_options,
+        analysis_signature=analysis_signature,
+    )
+    marker_plan_path = os.path.join(clip_dir_path, "clip_analysis_markers.json")
+    marker_plan["path"] = marker_plan_path
+    _write_json(marker_plan_path, marker_plan)
+
+    visual_json_path = os.path.join(clip_dir_path, "visual.json")
+    _write_json(visual_json_path, normalized_visual)
+
+    report["visual"] = normalized_visual
+    report["clip_analysis_markers"] = marker_plan
+    report["analysis_profile"] = {
+        **(profile if isinstance(profile, dict) else {}),
+        "vision_enabled": True,
+    }
+    report.pop("vision_status", None)
+    report.pop("vision_token", None)
+    report["vision_committed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    _write_json(analysis_json_path, report)
+
+    index_status_info: Dict[str, Any] = {}
+    try:
+        index_status_info = build_analysis_index(root)
+    except Exception as exc:  # noqa: BLE001 — index refresh is best-effort
+        index_status_info = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    return {
+        "success": True,
+        "analysis_json": analysis_json_path,
+        "visual_json": visual_json_path,
+        "marker_plan_json": marker_plan_path,
+        "marker_count": marker_plan.get("marker_count"),
+        "clip_dir": clip_dir_path,
+        "record": record,
+        "index": index_status_info,
+        "corrections": corrections_metrics,
+    }
 
 
 def _safe_report_path(project_root: str, report_path: str) -> Tuple[Optional[str], Optional[str]]:
@@ -2755,12 +4345,56 @@ def _analysis_index_path(project_root: str, index_path: Optional[Any] = None) ->
 
 
 def _iter_analysis_report_files(project_root: str) -> Iterable[str]:
-    clips_root = os.path.join(normalize_path(project_root), "clips")
+    root = normalize_path(project_root)
+    seen: set = set()
+    clips_root = os.path.join(root, "clips")
     if not os.path.isdir(clips_root):
+        clips_root = ""
+    if clips_root:
+        for dirpath, _, filenames in os.walk(clips_root):
+            if "analysis.json" in filenames:
+                path = os.path.join(dirpath, "analysis.json")
+                real_path = os.path.realpath(path)
+                seen.add(real_path)
+                yield path
+
+    db_path = os.path.join(root, "jobs.sqlite")
+    if not os.path.isfile(db_path):
         return
-    for dirpath, _, filenames in os.walk(clips_root):
-        if "analysis.json" in filenames:
-            yield os.path.join(dirpath, "analysis.json")
+    base_root = os.path.dirname(root)
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT report_path, status
+                FROM job_clips
+                WHERE report_path IS NOT NULL
+                  AND status IN ('succeeded', 'skipped', 'analyzed')
+                ORDER BY updated_at DESC
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return
+    for row in rows:
+        report_path = str(row[0] or "")
+        if not report_path:
+            continue
+        path = normalize_path(report_path)
+        real_path = os.path.realpath(path)
+        if real_path in seen:
+            continue
+        if os.path.basename(real_path) != "analysis.json" or not os.path.isfile(real_path):
+            continue
+        try:
+            if os.path.commonpath([real_path, base_root]) != base_root:
+                continue
+        except ValueError:
+            continue
+        seen.add(real_path)
+        yield path
 
 
 def _index_text(value: Any) -> str:
@@ -2828,6 +4462,31 @@ def _index_visual_tags(report: Dict[str, Any]) -> List[Tuple[str, str]]:
         text = _index_text(slate.get(key))
         if text:
             tags.append((text, f"visual.slate.{key}"))
+    for item in _index_as_list(slate.get("visible_text")):
+        text = _index_text(item)
+        if text:
+            tags.append((text, "visual.slate.visible_text"))
+    classification = visual.get("editorial_classification") if isinstance(visual.get("editorial_classification"), dict) else {}
+    for key in ("primary_use", "select_potential", "energy_arc", "style"):
+        text = _index_text(classification.get(key))
+        if text:
+            tags.append((text, f"visual.editorial_classification.{key}"))
+    for item in _index_as_list(classification.get("genre_indicators")):
+        text = _index_text(item)
+        if text:
+            tags.append((text, "visual.editorial_classification.genre_indicators"))
+    shot_and_style = visual.get("shot_and_style") if isinstance(visual.get("shot_and_style"), dict) else {}
+    for key in ("shot_sizes", "camera_motion"):
+        for item in _index_as_list(shot_and_style.get(key)):
+            text = _index_text(item)
+            if text:
+                tags.append((text, f"visual.shot_and_style.{key}"))
+    for row in visual.get("shot_descriptions") or []:
+        if not isinstance(row, dict):
+            continue
+        text = _index_text(row.get("description"))
+        if text:
+            tags.append((text, "visual.shot_descriptions"))
     seen = set()
     unique: List[Tuple[str, str]] = []
     for tag, source in tags:
@@ -2837,6 +4496,61 @@ def _index_visual_tags(report: Dict[str, Any]) -> List[Tuple[str, str]]:
         seen.add(key)
         unique.append((tag, source))
     return unique
+
+
+def _index_editorial_corpus(report: Dict[str, Any]) -> str:
+    """Concatenate every long-form editorial text field from the V2 visual layer
+    into a single searchable string. Used to populate the FTS `summary` column
+    so the Review page search box can find clips by their editorial content,
+    not just by chips and slate metadata.
+    """
+    visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
+    parts: List[str] = []
+
+    def push(value: Any) -> None:
+        text = _index_text(value)
+        if text:
+            parts.append(text)
+
+    push(visual.get("clip_summary"))
+    push(visual.get("clip_summary_oneliner"))
+
+    classification = visual.get("editorial_classification") if isinstance(visual.get("editorial_classification"), dict) else {}
+    push(classification.get("reason"))
+    for item in _index_as_list(classification.get("genre_indicators")):
+        push(item)
+
+    shot_and_style = visual.get("shot_and_style") if isinstance(visual.get("shot_and_style"), dict) else {}
+    for key in ("composition_notes", "lighting_mood", "color_mood"):
+        push(shot_and_style.get(key))
+
+    cut_understanding = visual.get("cut_understanding") if isinstance(visual.get("cut_understanding"), dict) else {}
+    for item in _index_as_list(cut_understanding.get("notes")):
+        push(item)
+    for item in _index_as_list(cut_understanding.get("flash_frame_candidates")):
+        push(item)
+
+    editing_notes = visual.get("editing_notes") if isinstance(visual.get("editing_notes"), dict) else {}
+    for key in ("best_moments", "continuity_flags", "qc_flags"):
+        for item in _index_as_list(editing_notes.get(key)):
+            push(item)
+
+    qc = visual.get("qc") if isinstance(visual.get("qc"), dict) else {}
+    for key in ("warnings", "continuity_observations", "coverage_gaps"):
+        for item in _index_as_list(qc.get(key)):
+            push(item)
+
+    motion = visual.get("motion") if isinstance(visual.get("motion"), dict) else {}
+    for key in ("motion_events", "quiet_regions"):
+        for item in _index_as_list(motion.get(key)):
+            push(item)
+
+    for row in visual.get("shot_descriptions") or []:
+        if not isinstance(row, dict):
+            continue
+        push(row.get("description"))
+
+    return " ".join(parts)
 
 
 def _index_report_key(report_path: str, report: Dict[str, Any]) -> str:
@@ -3025,10 +4739,30 @@ def _insert_analysis_report_into_index(conn: sqlite3.Connection, report_path: st
     )
     warnings = list(dict.fromkeys(warnings))
     visual_tags = _index_visual_tags(report)
+    # If the user has saved transcript corrections, index those instead of the
+    # raw transcription. Keeps the search box in sync with edits.
     transcript_segments = transcription.get("segments") if isinstance(transcription.get("segments"), list) else []
+    if report_path:
+        corrections_path = os.path.join(os.path.dirname(report_path), "transcript-corrections.json")
+        if os.path.isfile(corrections_path):
+            try:
+                with open(corrections_path, "r", encoding="utf-8") as handle:
+                    corr = json.load(handle)
+                if isinstance(corr, dict) and isinstance(corr.get("segments"), list):
+                    transcript_segments = [s for s in corr["segments"] if isinstance(s, dict) and not s.get("deleted")]
+            except Exception:
+                pass
     transcript_text = _index_text(transcription.get("text"))
     transcript_available = bool(transcript_text or transcript_segments)
-    visual_available = bool(visual.get("success") and (visual.get("clip_summary") or visual_tags or visual.get("analysis_keyframes")))
+    visual_available = bool(
+        visual.get("success")
+        and (
+            visual.get("clip_summary")
+            or visual_tags
+            or visual.get("analysis_keyframes")
+            or visual.get("shot_descriptions")
+        )
+    )
 
     conn.execute(
         """
@@ -3211,6 +4945,13 @@ def _insert_analysis_report_into_index(conn: sqlite3.Connection, report_path: st
         keyframe_count += 1
 
     if fts_enabled:
+        editorial_corpus = _index_editorial_corpus(report)
+        technical_summary = report.get("summary") or ""
+        # Stuff both into the FTS `summary` column so the search box on the
+        # Review page can find clips by any editorial text (summaries,
+        # composition notes, qc observations, motion events, shot
+        # descriptions) in addition to the technical pass.
+        combined_summary = " ".join(part for part in (technical_summary, editorial_corpus) if part).strip() or None
         conn.execute(
             """
             INSERT INTO clips_fts (clip_key, clip_name, summary, file_path, tags, warnings)
@@ -3219,7 +4960,7 @@ def _insert_analysis_report_into_index(conn: sqlite3.Connection, report_path: st
             (
                 clip_key,
                 clip.get("clip_name") or (os.path.basename(str(source_file)) if source_file else None),
-                report.get("summary"),
+                combined_summary,
                 source_file,
                 " ".join(tag for tag, _ in visual_tags),
                 " ".join(warnings),
@@ -3423,9 +5164,17 @@ def _query_analysis_index_fts(conn: sqlite3.Connection, query: str, limit: int, 
         return []
     allowed = _normalize_index_result_types(result_types)
     results: List[Dict[str, Any]] = []
+    # FTS5 snippet() builds an excerpt around the match with marker tokens around
+    # the matched terms. We use sentinel braces here (NOT HTML) and convert them
+    # to <mark> tags on the client; this keeps the raw SQL output safe to pass
+    # through escapeHtml on the way to the DOM.
+    SNIP_START = "[[hi]]"
+    SNIP_END = "[[/hi]]"
+    SNIP_ELLIPSIS = "…"
+    SNIP_TOKENS = 24
     if not allowed or "clip" in allowed:
         for row in conn.execute(
-            """
+            f"""
             SELECT
                 'clip' AS result_type,
                 c.clip_key,
@@ -3434,6 +5183,7 @@ def _query_analysis_index_fts(conn: sqlite3.Connection, query: str, limit: int, 
                 c.clip_name,
                 c.file_path,
                 c.summary,
+                snippet(clips_fts, -1, '{SNIP_START}', '{SNIP_END}', '{SNIP_ELLIPSIS}', {SNIP_TOKENS}) AS snippet,
                 c.report_path,
                 NULL AS marker_type,
                 NULL AS start_seconds,
@@ -3450,7 +5200,7 @@ def _query_analysis_index_fts(conn: sqlite3.Connection, query: str, limit: int, 
             results.append(_row_dict(row))
     if not allowed or "marker" in allowed:
         for row in conn.execute(
-            """
+            f"""
             SELECT
                 'marker' AS result_type,
                 c.clip_key,
@@ -3459,6 +5209,7 @@ def _query_analysis_index_fts(conn: sqlite3.Connection, query: str, limit: int, 
                 c.clip_name,
                 c.file_path,
                 m.visual_description AS summary,
+                snippet(markers_fts, -1, '{SNIP_START}', '{SNIP_END}', '{SNIP_ELLIPSIS}', {SNIP_TOKENS}) AS snippet,
                 c.report_path,
                 m.marker_type,
                 m.start_seconds,
@@ -3476,7 +5227,7 @@ def _query_analysis_index_fts(conn: sqlite3.Connection, query: str, limit: int, 
             results.append(_row_dict(row))
     if not allowed or "transcript" in allowed:
         for row in conn.execute(
-            """
+            f"""
             SELECT
                 'transcript' AS result_type,
                 c.clip_key,
@@ -3485,6 +5236,7 @@ def _query_analysis_index_fts(conn: sqlite3.Connection, query: str, limit: int, 
                 c.clip_name,
                 c.file_path,
                 s.text AS summary,
+                snippet(transcripts_fts, -1, '{SNIP_START}', '{SNIP_END}', '{SNIP_ELLIPSIS}', {SNIP_TOKENS}) AS snippet,
                 c.report_path,
                 NULL AS marker_type,
                 s.start_seconds,

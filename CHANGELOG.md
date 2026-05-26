@@ -2,6 +2,105 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.24.0
+
+**Host-chat vision protocol (V2)** — `analyze_*` actions now use
+`vision.provider="host_chat_paths"` by default. The analyze response is a
+deferred payload with absolute `frame_paths`, a per-shot `shot_table`, and a
+JSON schema; the host chat reads each frame as a local image, produces JSON per
+the schema, and calls `media_analysis(action="commit_vision", params={clip_id,
+visual, vision_token})` to finalize. `commit_vision` merges the visual report,
+rebuilds Media Pool clip markers, publishes metadata to Resolve, and preserves
+human corrections via `corrections.json`. Skipping the commit leaves the run in
+`pending_host_vision_analysis` — surfaced explicitly rather than silently
+downgraded. The legacy `chat_context`/`mcp_sampling` providers still resolve to
+the same host-chat path.
+
+**Trust-by-default analysis defaults** — `analyze_media` defaults to
+`include_transcription=true`, `persist=true`, `publish_metadata=true`, and
+`timed_markers="ask"` so source-safe no longer means underpowered. Agents that
+need a technical-only or read-only run must explicitly pass
+`include_visuals=false`, `include_transcription=false`, `publish_metadata=false`,
+`timed_markers="no"`, `session_only=true`, or `dry_run=true`. The
+`analyze_media` prompt and SKILL.md spell out the anti-regression rule.
+
+**Control panel: Review surface (Phase B)** — The local browser control panel
+gains a Review tab backed by new endpoints: `/api/clips`, `/api/clips/<id>`,
+`/api/clips/<id>/shots`, `/api/clips/<id>/shots/<index>`,
+`/api/clips/<id>/frames/<n>`, `/api/clips/<id>/transcript`,
+`/api/clips/<id>/corrections`, `/api/clips/combined`, `/api/clips/export`,
+`/api/panel_state`, `/api/update/status`, `/api/update/apply`, and
+`/api/resolve/open_clip`. The UI ships a bin grid with thumbnails, a clip
+detail with shot strip, a shot detail with grouped V2 fields + frame grid,
+inline correction editors per subjective field, transcript correction +
+regeneration, an Open-in-Resolve bridge, and 2-second chat ↔ panel state
+polling.
+
+**Control panel MCP actions** — `resolve_control.open_control_panel`,
+`control_panel_status`, and `close_control_panel` manage the local panel
+subprocess via a pidfile. `save_state` / `restore_state` snapshot and restore
+Resolve playhead + selection state. `get_panel_state`, `set_panel_state`, and
+`session_start_context` share panel focus between chat and the UI through
+`panel_state.json`.
+
+**Correction tools** — New `media_analysis` actions for editing analysis
+without re-running it: `update_shot_field`, `update_clip_field`,
+`get_field_history`, `revert_field`, `list_corrections`. Writes land in
+`{clip_dir}/corrections.json` with append-only changelog + provenance
+(mirrors the V2 DB schema). `commit_vision` merges corrections on top of the
+fresh visual report so human edits survive re-analysis.
+
+**Media Pool item open-in-viewer** — `media_pool_item.open_in_viewer` selects
+a clip on the Media page and loads it into the source viewer, optionally
+setting mark in/out and bringing Resolve to the foreground via OS-level
+window activation. Useful for chat → Resolve hand-off.
+
+**Source-trust prompt grading** — `source_trust` parameter
+(`auto`/`filename`/`low`/`medium`/`high`) on analyze actions tunes the vision
+prompt to hedge identity/intent/value for archival or thin-evidence clips.
+
+**Analysis memory layer** — New `src/utils/analysis_memory.py` introduces
+per-project memory + heartbeat + bin summary + soul scaffolding under the
+analysis root. `regenerate_bin_summary_from_manifest` aggregates per-clip
+fields (primary use, select potential, style, energy arc, top tags/locations)
+into a bin briefing. Auto-initialized on analyze.
+
+**Control-panel polish** — Diagnostics + Overview restyled with a status-pill
+design system, navbar dropdowns fixed so top-level buttons no longer navigate
+on their own, Preferences consolidated (Dashboard Convenience + Storage pages
+removed), summary-style enum renamed to `full`/`concise`/`creative`/
+`technical` with backwards compat, navbar version badge + update modal,
+source-trust dropdown wired through.
+
+**Server-side bug fixes** — `commit_vision` auto-publish now reflects per-row
+status correctly (no silent-lie pending), compact analyze responses by default
+(`verbose: true` for the full manifest), `resolve_output_root` skips slug
+append when the configured base already terminates in the slug, frame sampler
+reserves per-shot budget so shot starts aren't starved by flash candidates,
+and machine markers are no longer written to Resolve (V2 architecture).
+
+**Path hardening for GUI launches** — `media_analysis` now augments `PATH`
+with the standard tool dirs (`/opt/homebrew/bin`, `/usr/local/bin`, etc.) so
+ffprobe/ffmpeg resolve even when the MCP server is launched by a GUI app
+(Claude.app, Dock/Spotlight) that inherits launchd's bare PATH.
+
+**Documentation** — `AGENTS.md` adds the "Media Analysis Defaults Are
+Mandatory" section. `docs/SKILL.md` rewrites the `analyze_media` prompt
+guidance for the host-chat-paths protocol and adds the anti-regression rule.
+`docs/guides/media-analysis-guide.md` covers the deferred vision payload and
+commit step. New design docs under `docs/design/`:
+`v2-control-panel-design.md`, `v2-db-schema.sql`,
+`v2-implementation-gameplan.md`, `v2-shot-schema-spec.md`,
+`control-panel-polish-gameplan.md`.
+
+**Validation**: static import checks, API parity audit, focused
+media-analysis + marker/range/v232/v233 unit tests, npm CLI smoke,
+`npm pack --dry-run`, and `git diff --check` all passed. No source media was
+modified. Resolve scripting behavior is additive (new actions; existing
+actions unchanged); live Resolve validation covered the control-panel +
+open_in_viewer + commit_vision auto-publish + corrections-merge paths during
+the V2 push sessions logged in MEMORY.md.
+
 ## What's New in v2.23.1
 
 **Control panel navigation fixes** — The local browser control panel now keeps

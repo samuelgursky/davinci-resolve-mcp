@@ -7,28 +7,47 @@ import subprocess
 import tempfile
 import unittest
 
+from src import server as _server_module
 from src.server import (
     _apply_media_analysis_clip_markers,
     _apply_sync_event_markers,
     _media_analysis_apply_setup_defaults,
+    _media_analysis_capabilities_for_request,
     _media_analysis_effective_preferences,
     _media_analysis_merge_metadata_field,
     _media_analysis_marker_candidates_from_report,
+    _media_analysis_metadata_writeback_enabled,
+    _media_analysis_missing_capabilities_response,
     _media_analysis_publish_confirmed,
     _media_analysis_timed_marker_decision,
     _media_analysis_provenance_metadata,
     _media_analysis_records_from_target,
     _media_analysis_report_metadata_candidates,
+    _publish_clip_metadata_from_analysis,
     setup,
 )
-from src.analysis_dashboard import DashboardState, HTML, discover_project_contexts
+from mcp import types as mcp_types
+from src.analysis_dashboard import (
+    DashboardState,
+    HTML,
+    discover_project_contexts,
+    list_analyzed_clips,
+    get_analyzed_clip,
+    get_analyzed_clip_shot,
+    get_clip_frame_path,
+    read_clip_corrections,
+)
 from src.utils import update_check
 from src.utils.media_analysis import (
+    HOST_CHAT_PATHS_PROVIDER,
+    VISION_SCHEMA_REFERENCE,
     analysis_request_signature,
     analysis_index_status,
     build_analysis_index,
+    build_host_chat_paths_payload,
     build_plan,
     cleanup_artifacts,
+    commit_visual_analysis,
     _cut_boundary_analysis,
     detect_capabilities,
     execute_plan,
@@ -39,6 +58,7 @@ from src.utils.media_analysis import (
     _sample_times,
     summarize_reports,
     stable_clip_directory,
+    vision_is_pending_host_analysis,
 )
 from src.utils.media_analysis_jobs import (
     batch_job_status,
@@ -127,6 +147,62 @@ class MarkerProjectStub:
 
     def GetMediaPool(self):
         return self.media_pool
+
+
+class SamplingSessionStub:
+    def __init__(self, sampling=False, context=False):
+        self.sampling = sampling
+        self.context = context
+
+    def check_client_capability(self, capability):
+        if capability.sampling is None:
+            return False
+        if not self.sampling:
+            return False
+        if capability.sampling.context is not None and not self.context:
+            return False
+        return True
+
+
+class SamplingContextStub:
+    def __init__(self, sampling=False, context=False):
+        self.request_context = type(
+            "RequestContextStub",
+            (),
+            {"session": SamplingSessionStub(sampling=sampling, context=context)},
+        )()
+
+
+class SamplingRequestSessionStub(SamplingSessionStub):
+    def __init__(self, sampling=False, context=False, response_text=None):
+        super().__init__(sampling=sampling, context=context)
+        self.response_text = response_text or json.dumps({"success": True, "clip_summary": "sampled"})
+        self.created = False
+
+    async def create_message(self, *args, **kwargs):
+        self.created = True
+        self.create_message_args = args
+        self.create_message_kwargs = kwargs
+        return type(
+            "SamplingResultStub",
+            (),
+            {"content": mcp_types.TextContent(type="text", text=self.response_text)},
+        )()
+
+
+class SamplingRequestContextStub:
+    def __init__(self, sampling=False, context=False, response_text=None):
+        self.session = SamplingRequestSessionStub(
+            sampling=sampling,
+            context=context,
+            response_text=response_text,
+        )
+        self.request_context = type(
+            "RequestContextStub",
+            (),
+            {"session": self.session},
+        )()
+        self.request_id = "request-123"
 
 
 class FolderStub:
@@ -270,9 +346,14 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             cut_analysis=cut_analysis,
         )
         reasons = {row["selection_reason"] for row in samples}
+        # Flash candidates surface as their own sampled frames. cut_before/cut_after
+        # candidates are emitted by _sample_times but get deduped against shot_start
+        # and shot_end reservations when shot boundaries coincide with cut points
+        # (which is the normal case — shots are defined by cuts). The cut-boundary
+        # coverage is therefore visible as shot_start / shot_end samples here.
         self.assertIn("flash_candidate", reasons)
-        self.assertIn("cut_before", reasons)
-        self.assertIn("cut_after", reasons)
+        self.assertIn("shot_start", reasons)
+        self.assertIn("shot_end", reasons)
 
     def test_output_root_uses_davinci_resolve_mcp_name(self):
         out = resolve_output_root(
@@ -350,7 +431,714 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
 
         self.assertTrue(caps["success"])
         self.assertTrue(caps["no_auto_install"])
-        self.assertFalse(caps["vision"]["enabled_by_default"])
+        self.assertTrue(caps["vision"]["enabled_by_default"])
+        self.assertEqual(caps["vision"]["default_provider"], HOST_CHAT_PATHS_PROVIDER)
+        self.assertTrue(caps["vision"]["available"])
+
+    def test_request_capabilities_report_host_chat_paths_vision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = os.environ.get("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS")
+            os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = os.path.join(tmp, "prefs.json")
+            try:
+                report = _media_analysis_capabilities_for_request(None)
+                self.assertTrue(report["vision"]["enabled_by_default"])
+                self.assertTrue(report["vision"]["available"])
+                self.assertEqual(report["vision"]["provider"], HOST_CHAT_PATHS_PROVIDER)
+                self.assertEqual(report["vision"]["availability"], "ready")
+                self.assertEqual(
+                    report["vision"]["host_chat_paths"]["commit_action"],
+                    {"tool": "media_analysis", "action": "commit_vision"},
+                )
+                self.assertEqual(
+                    report["vision"]["host_chat_paths"]["schema_reference"],
+                    VISION_SCHEMA_REFERENCE,
+                )
+            finally:
+                if previous is None:
+                    os.environ.pop("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS", None)
+                else:
+                    os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = previous
+
+    def test_host_chat_paths_payload_emits_frame_paths_and_commit_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            frame_path = os.path.join(tmp, "frame.jpg")
+            with open(frame_path, "wb") as handle:
+                handle.write(b"sample-frame-bytes")
+
+            payload = build_host_chat_paths_payload(
+                record={
+                    "clip_id": "clip-xyz-1",
+                    "clip_name": "A001_C001.mov",
+                    "file_path": "/Volumes/Media/A001_C001.mov",
+                },
+                motion={
+                    "analysis_keyframes": [{
+                        "frame_path": frame_path,
+                        "time_seconds": 0.0,
+                        "selection_reason": "first_usable",
+                    }],
+                    "effective_sample_budget": 1,
+                    "overall_motion_level": "low",
+                    "cut_analysis": {"cut_count": 0, "flash_frame_candidates": []},
+                },
+                options={"vision": {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER}},
+                artifacts={"clip_dir": os.path.join(tmp, "clips", "test")},
+            )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["status"], "pending_host_analysis")
+        self.assertEqual(payload["provider"], HOST_CHAT_PATHS_PROVIDER)
+        self.assertEqual(payload["frame_paths"], [os.path.realpath(frame_path)])
+        self.assertEqual(payload["frame_count"], 1)
+        self.assertEqual(payload["schema_reference"], VISION_SCHEMA_REFERENCE)
+        self.assertEqual(payload["commit_action"]["tool"], "media_analysis")
+        self.assertEqual(payload["commit_action"]["action"], "commit_vision")
+        self.assertEqual(payload["commit_action"]["params"]["clip_id"], "clip-xyz-1")
+        self.assertEqual(payload["commit_action"]["params"]["vision_token"], payload["vision_token"])
+        self.assertTrue(vision_is_pending_host_analysis(payload))
+
+    def test_host_chat_paths_payload_emits_shot_table_keyed_to_frame_indices(self):
+        """Deferred payload must list every shot range with the frame indices that fall in it.
+
+        The host chat needs this table to author one shot_descriptions entry per shot,
+        grounded in the specific frame_indices for that shot rather than nearest neighbours.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            frames_dir = os.path.join(tmp, "frames")
+            os.makedirs(frames_dir, exist_ok=True)
+            paths = []
+            times = [0.5, 1.5, 4.5, 5.5, 9.0]
+            for index, _ in enumerate(times, 1):
+                p = os.path.join(frames_dir, f"sampled_{index:04d}.jpg")
+                with open(p, "wb") as handle:
+                    handle.write(b"x")
+                paths.append(p)
+            payload = build_host_chat_paths_payload(
+                record={
+                    "clip_id": "clip-shots",
+                    "clip_name": "A001.mov",
+                    "file_path": "/Volumes/Media/A001.mov",
+                },
+                motion={
+                    "analysis_keyframes": [
+                        {"frame_path": paths[idx], "time_seconds": t, "selection_reason": "cut_before"}
+                        for idx, t in enumerate(times)
+                    ],
+                    "overall_motion_level": "high",
+                    "cut_analysis": {
+                        "cut_count": 2,
+                        "shot_ranges": [
+                            {"index": 1, "start": 0.0, "end": 2.0},
+                            {"index": 2, "start": 2.0, "end": 6.0},
+                            {"index": 3, "start": 6.0, "end": 10.0},
+                        ],
+                        "flash_frame_candidates": [],
+                    },
+                },
+                options={"vision": {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER}},
+                artifacts={"clip_dir": os.path.join(tmp, "clips", "shots")},
+            )
+
+        shot_table = payload["shot_table"]
+        self.assertEqual([row["shot_index"] for row in shot_table], [1, 2, 3])
+        by_index = {row["shot_index"]: row for row in shot_table}
+        self.assertEqual(by_index[1]["frame_indices"], [1, 2])
+        self.assertEqual(by_index[2]["frame_indices"], [3, 4])
+        self.assertEqual(by_index[3]["frame_indices"], [5])
+        for row in shot_table:
+            self.assertTrue(row["has_in_shot_frame"])
+        self.assertIn("shot_descriptions", payload["prompt"])
+        self.assertIn("shot_table", payload["instructions"])
+
+    def test_commit_visual_analysis_applies_shot_descriptions_per_shot_marker(self):
+        """Each shot marker must inherit its own shot_descriptions[shot_index] description.
+
+        Regression for the bug where _visual_description_for_time copied the
+        temporally-nearest analysis_keyframe's description into every adjacent shot,
+        producing wrong labels for shots without a per-shot keyframe.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            clip_dir = os.path.join(project_root, "clips", "shotty")
+            os.makedirs(clip_dir, exist_ok=True)
+            existing = {
+                "success": True,
+                "analysis_version": "0.2",
+                "analysis_signature": {"signature_hash": "feedface"},
+                "clip": {"clip_id": "clip-shots", "clip_name": "A001.mov", "file_path": "/Volumes/Media/A001.mov"},
+                "technical": {"video": [{"frame_rate": 24}]},
+                "readthrough": {
+                    "scenes": {"items": []},
+                    "cut_analysis": {
+                        "cut_points": [],
+                        "shot_ranges": [
+                            {"index": 1, "start": 0.0, "end": 2.0},
+                            {"index": 2, "start": 2.0, "end": 6.0},
+                            {"index": 3, "start": 6.0, "end": 10.0},
+                        ],
+                        "flash_frame_candidates": [],
+                    },
+                },
+                "motion": {"analysis_keyframes": [], "overall_motion_level": "high"},
+                "transcription": {"success": True, "segments": []},
+                "visual": {
+                    "success": True,
+                    "status": "pending_host_analysis",
+                    "provider": HOST_CHAT_PATHS_PROVIDER,
+                    "vision_token": "tok-shots-aaaaaaaa",
+                    "frame_paths": [],
+                },
+                "analysis_profile": {"vision_enabled": True, "transcription_enabled": False},
+                "vision_status": "pending_host_analysis",
+                "vision_token": "tok-shots-aaaaaaaa",
+            }
+            with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as handle:
+                json.dump(existing, handle)
+
+            result = commit_visual_analysis(
+                project_root=project_root,
+                clip_id="clip-shots",
+                vision_token="tok-shots-aaaaaaaa",
+                visual={
+                    "clip_summary": "Three distinct shots: opener, B-roll, outro.",
+                    "shot_descriptions": [
+                        {"shot_index": 1, "time_seconds_start": 0.0, "time_seconds_end": 2.0,
+                         "description": "Opening fisheye on rental car at driver door."},
+                        {"shot_index": 2, "time_seconds_start": 2.0, "time_seconds_end": 6.0,
+                         "description": "Aerial driveway, no subjects in frame."},
+                        {"shot_index": 3, "time_seconds_start": 6.0, "time_seconds_end": 10.0,
+                         "description": "Interior driver POV at the wheel."},
+                    ],
+                    "analysis_keyframes": [
+                        {"time_seconds": 0.5, "description": "Opening fisheye keyframe."},
+                    ],
+                },
+            )
+
+            self.assertTrue(result["success"])
+            with open(result["marker_plan_json"], "r", encoding="utf-8") as handle:
+                plan = json.load(handle)
+            shot_markers = [m for m in plan["markers"] if m["type"] == "shot"]
+            by_index = {m["id"]: m for m in shot_markers}
+            self.assertEqual(by_index["shot-001"]["visual_description"], "Opening fisheye on rental car at driver door.")
+            self.assertEqual(by_index["shot-002"]["visual_description"], "Aerial driveway, no subjects in frame.")
+            self.assertEqual(by_index["shot-003"]["visual_description"], "Interior driver POV at the wheel.")
+
+    def test_commit_visual_analysis_falls_back_when_shot_description_missing(self):
+        """When a shot has no shot_descriptions entry and no in-range keyframe,
+        the fallback must NOT pick a far-away keyframe — it should land on the
+        clip_summary-tagged fallback so the marker is honest about being unverified.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            clip_dir = os.path.join(project_root, "clips", "partial")
+            os.makedirs(clip_dir, exist_ok=True)
+            existing = {
+                "success": True,
+                "analysis_version": "0.2",
+                "clip": {"clip_id": "clip-partial", "clip_name": "B001.mov", "file_path": "/Volumes/Media/B001.mov"},
+                "technical": {"video": [{"frame_rate": 24}]},
+                "readthrough": {
+                    "scenes": {"items": []},
+                    "cut_analysis": {
+                        "cut_points": [],
+                        "shot_ranges": [
+                            {"index": 1, "start": 0.0, "end": 2.0},
+                            {"index": 2, "start": 2.0, "end": 6.0},
+                            {"index": 3, "start": 6.0, "end": 10.0},
+                        ],
+                        "flash_frame_candidates": [],
+                    },
+                },
+                "motion": {"analysis_keyframes": [], "overall_motion_level": "high"},
+                "transcription": {"success": True, "segments": []},
+                "visual": {"success": True, "status": "pending_host_analysis", "provider": HOST_CHAT_PATHS_PROVIDER, "vision_token": "tok-partial-cccccccc"},
+                "analysis_profile": {"vision_enabled": True},
+                "vision_status": "pending_host_analysis",
+                "vision_token": "tok-partial-cccccccc",
+            }
+            with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as handle:
+                json.dump(existing, handle)
+
+            result = commit_visual_analysis(
+                project_root=project_root,
+                clip_id="clip-partial",
+                vision_token="tok-partial-cccccccc",
+                visual={
+                    "clip_summary": "Cold open: rental car gag.",
+                    "shot_descriptions": [
+                        {"shot_index": 1, "time_seconds_start": 0.0, "time_seconds_end": 2.0,
+                         "description": "Opening fisheye on rental car."},
+                    ],
+                    "analysis_keyframes": [
+                        {"time_seconds": 0.5, "description": "Opening fisheye keyframe."},
+                    ],
+                },
+            )
+
+            self.assertTrue(result["success"])
+            with open(result["marker_plan_json"], "r", encoding="utf-8") as handle:
+                plan = json.load(handle)
+            shot_markers = {m["id"]: m for m in plan["markers"] if m["type"] == "shot"}
+            self.assertEqual(shot_markers["shot-001"]["visual_description"], "Opening fisheye on rental car.")
+            # Shot 2 has no per-shot description and no in-range keyframe → fallback to clip_summary
+            # tagged so reviewers can tell it was inherited, not authored for this shot.
+            self.assertIn("clip summary", shot_markers["shot-002"]["visual_description"].lower())
+            self.assertNotIn("Opening fisheye", shot_markers["shot-002"]["visual_description"])
+            self.assertIn("clip summary", shot_markers["shot-003"]["visual_description"].lower())
+            self.assertNotIn("Opening fisheye", shot_markers["shot-003"]["visual_description"])
+
+    def test_commit_visual_analysis_merges_into_existing_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            clip_dir = os.path.join(project_root, "clips", "demo-clip")
+            os.makedirs(clip_dir, exist_ok=True)
+            existing = {
+                "success": True,
+                "analysis_version": "0.1",
+                "analysis_signature": {"signature_hash": "deadbeef"},
+                "clip": {"clip_id": "clip-xyz-1", "clip_name": "A001_C001.mov", "file_path": "/Volumes/Media/A001_C001.mov"},
+                "technical": {"video": [{"frame_rate": 24}]},
+                "readthrough": {"scenes": {"items": []}, "cut_analysis": {"cut_points": [], "shot_ranges": []}},
+                "motion": {"analysis_keyframes": [], "overall_motion_level": "low"},
+                "transcription": {"success": True, "segments": []},
+                "visual": {
+                    "success": True,
+                    "status": "pending_host_analysis",
+                    "provider": HOST_CHAT_PATHS_PROVIDER,
+                    "vision_token": "abcdef1234567890",
+                    "frame_paths": [],
+                },
+                "analysis_profile": {"vision_enabled": True, "transcription_enabled": False},
+                "vision_status": "pending_host_analysis",
+                "vision_token": "abcdef1234567890",
+            }
+            with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as handle:
+                json.dump(existing, handle)
+
+            result = commit_visual_analysis(
+                project_root=project_root,
+                clip_id="clip-xyz-1",
+                vision_token="abcdef1234567890",
+                visual={
+                    "clip_summary": "Static wide shot of an empty room.",
+                    "editorial_classification": {"primary_use": "establishing", "select_potential": "low", "reason": "no subject"},
+                    "editing_notes": {"best_moments": [], "qc_flags": [], "search_tags": ["empty", "wide"]},
+                },
+            )
+
+            self.assertTrue(result["success"])
+            self.assertTrue(os.path.isfile(result["analysis_json"]))
+            self.assertTrue(os.path.isfile(result["visual_json"]))
+            self.assertTrue(os.path.isfile(result["marker_plan_json"]))
+            with open(result["analysis_json"], "r", encoding="utf-8") as handle:
+                updated = json.load(handle)
+            self.assertEqual(updated["visual"]["clip_summary"], "Static wide shot of an empty room.")
+            self.assertEqual(updated["visual"]["provider"], HOST_CHAT_PATHS_PROVIDER)
+            self.assertNotIn("vision_status", updated)
+            self.assertNotIn("vision_token", updated)
+            self.assertIn("vision_committed_at", updated)
+            self.assertIn("empty", updated["visual"]["editing_notes"]["search_tags"])
+
+    def test_commit_visual_analysis_rejects_mismatched_vision_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            clip_dir = os.path.join(project_root, "clips", "demo-clip")
+            os.makedirs(clip_dir, exist_ok=True)
+            with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as handle:
+                json.dump({
+                    "clip": {"clip_id": "clip-xyz-2"},
+                    "visual": {"vision_token": "real-token-aaaaaaaa"},
+                }, handle)
+
+            result = commit_visual_analysis(
+                project_root=project_root,
+                clip_id="clip-xyz-2",
+                vision_token="wrong-token-bbbbbbbb",
+                visual={"clip_summary": "anything"},
+            )
+
+            self.assertFalse(result["success"])
+            self.assertIn("vision_token mismatch", result["error"])
+
+    def test_publish_clip_metadata_uses_pre_resolved_report_path_bypassing_reanalysis(self):
+        """commit_vision auto-publish must NOT re-run analysis after a successful merge.
+
+        When the wrapper passes `_pre_resolved_report_paths={clip_id: analysis_json}`,
+        `_publish_clip_metadata_from_analysis` must read the just-committed report
+        directly and skip `execute_media_analysis_plan_async`. The previous behavior
+        re-ran analysis, and any cache-reuse miss (path normalization drift,
+        signature mismatch, record-shape difference) surfaced as a silent-lie
+        `status=pending_host_vision_analysis` in the response even though the
+        on-disk artifact was finalized.
+        """
+        class _PublishClipStub:
+            def __init__(self, clip_id, clip_name, file_path):
+                self._id = clip_id
+                self._name = clip_name
+                self._props = {
+                    "File Path": file_path,
+                    "Duration": "00:00:06:00",
+                    "FPS": "24",
+                    "Resolution": "160x90",
+                    "Type": "Video",
+                }
+                self.metadata = {}
+                self.third_party = {}
+                self.markers = {}
+
+            def GetUniqueId(self):
+                return self._id
+
+            def GetName(self):
+                return self._name
+
+            def GetClipProperty(self, key=""):
+                if key in (None, ""):
+                    return dict(self._props)
+                return self._props.get(key, "")
+
+            def GetMediaId(self):
+                return self._id
+
+            def GetMetadata(self, key=""):
+                if key in (None, ""):
+                    return dict(self.metadata)
+                return self.metadata.get(key, "")
+
+            def GetThirdPartyMetadata(self, key=""):
+                if key in (None, ""):
+                    return dict(self.third_party)
+                return self.third_party.get(key, "")
+
+            def SetMetadata(self, key, value):
+                self.metadata[key] = value
+                return True
+
+            def SetThirdPartyMetadata(self, key, value):
+                self.third_party[key] = value
+                return True
+
+            def AddMarker(self, frame, color, name, note, duration, custom_data=""):
+                self.markers[frame] = {"color": color, "name": name, "note": note, "duration": duration}
+                return True
+
+            def GetMarkers(self):
+                return self.markers
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "20260517_sample-fc314309e4")
+            clip_dir = os.path.join(project_root, "clips", "demo-clip")
+            os.makedirs(clip_dir, exist_ok=True)
+            media_file = os.path.join(tmp, "demo.mp4")
+            with open(media_file, "wb") as h:
+                h.write(b"\x00" * 1024)
+
+            report = {
+                "success": True,
+                "analysis_version": "0.2",
+                "analyzed_at": "2026-05-19T10:00:00Z",
+                "source_file": media_file,
+                "clip": {
+                    "clip_id": "clip-pub-1",
+                    "clip_name": "demo.mp4",
+                    "file_path": media_file,
+                    "duration_seconds": 6.0,
+                    "fps": 24.0,
+                },
+                "technical": {"video": [{"duration_seconds": 6.0, "frame_rate": 24}]},
+                "readthrough": {"scenes": {"items": []}, "cut_analysis": {"cut_points": [], "shot_ranges": []}},
+                "motion": {"analysis_keyframes": [], "overall_motion_level": "low"},
+                "transcription": {"success": True, "segments": []},
+                "visual": {
+                    "success": True,
+                    "provider": HOST_CHAT_PATHS_PROVIDER,
+                    "clip_summary": "Wide static shot.",
+                    "editorial_classification": {"primary_use": "establishing", "select_potential": "medium", "reason": ""},
+                    "content": {"locations": ["studio"], "people_visible": "unknown", "actions": [], "objects": [], "visible_text": [], "notable_audio_context": []},
+                    "shot_and_style": {"shot_sizes": ["wide"], "camera_motion": ["static"], "composition_notes": "", "lighting_mood": "", "color_mood": ""},
+                    "slate": {"slate_visible": False, "scene": "", "shot": "", "take": "", "camera": "", "roll": "", "date": "", "production": "", "visible_text": [], "confidence": {}},
+                    "motion": {"overall_level": "low", "motion_events": [], "quiet_regions": []},
+                    "cut_understanding": {"cut_count": 0, "likely_edited_sequence": False, "flash_frame_candidates": [], "notes": []},
+                    "shot_descriptions": [
+                        {"shot_index": 0, "description": "Wide static shot of a studio.", "time_seconds_start": 0.0, "time_seconds_end": 6.0, "qc_flags": []},
+                    ],
+                    "editing_notes": {"best_moments": [], "continuity_flags": [], "qc_flags": [], "search_tags": ["wide", "studio"]},
+                    "confidence": {"visual": "high", "motion": "computed", "transcript": "unavailable"},
+                },
+                "analysis_signature": {"signature_hash": "test-abcdef"},
+                "analysis_profile": {"depth": "standard", "vision_enabled": True, "transcription_enabled": False},
+                "vision_committed_at": "2026-05-19T11:00:00Z",
+                "clip_analysis_markers": {"markers": [], "marker_count": 0},
+            }
+            report_path = os.path.join(clip_dir, "analysis.json")
+            with open(report_path, "w") as handle:
+                json.dump(report, handle)
+
+            clip = _PublishClipStub("clip-pub-1", "demo.mp4", media_file)
+            mp = MarkerMediaPoolStub([clip])
+
+            class _ProjectStub:
+                def __init__(self, media_pool):
+                    self._mp = media_pool
+                def GetMediaPool(self):
+                    return self._mp
+                def GetName(self):
+                    return "20260517_Sample"
+                def GetUniqueId(self):
+                    return "51657265-33d8-44d6-b000-fcdb46b72d67"
+
+            proj = _ProjectStub(mp)
+
+            called = {"execute_plan": False}
+            async def _sentinel_execute_plan(*args, **kwargs):
+                called["execute_plan"] = True
+                raise AssertionError(
+                    "execute_media_analysis_plan_async called despite _pre_resolved_report_paths bypass"
+                )
+
+            original_exec = _server_module.execute_media_analysis_plan_async
+            _server_module.execute_media_analysis_plan_async = _sentinel_execute_plan
+            try:
+                publish_params = {
+                    "target": {"type": "clip", "clip_id": "clip-pub-1"},
+                    "analysis_root": project_root,
+                    "publish_metadata": True,
+                    "confirm": True,
+                    "dry_run": False,
+                    "timed_markers": "no",
+                    "vision": {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER},
+                    "transcription": {"enabled": False},
+                    "fields": ["Description"],
+                    "_pre_resolved_report_paths": {"clip-pub-1": report_path},
+                }
+                result = asyncio.run(
+                    _publish_clip_metadata_from_analysis(proj, publish_params, None)
+                )
+            finally:
+                _server_module.execute_media_analysis_plan_async = original_exec
+
+            self.assertFalse(called["execute_plan"], "fast path must skip execute_plan")
+            self.assertNotEqual(
+                result.get("status"), "pending_host_vision_analysis",
+                f"auto-publish silently lied with pending_host_vision_analysis; result={result}",
+            )
+            self.assertTrue(result.get("success"), f"publish failed: {result}")
+            self.assertTrue(
+                (result.get("analysis_manifest") or {}).get("pre_resolved"),
+                "manifest should be marked pre_resolved when the fast path was used",
+            )
+
+    def test_review_api_list_clip_shot_frame(self):
+        """V2 Review API: bin grid + clip detail + shot detail + frame serving."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "demo-project-aabbccdd")
+            clip_dir = os.path.join(project_root, "clips", "demo-clip")
+            os.makedirs(os.path.join(clip_dir, "frames"), exist_ok=True)
+            report = {
+                "clip": {"clip_id": "clip-rev-1", "clip_name": "Demo.mov"},
+                "analyzed_at": "2026-05-19T10:00:00Z",
+                "technical": {"video": [{"duration_seconds": 6.0}]},
+                "motion": {"analysis_keyframes": [
+                    {"index": 1, "time_seconds": 0.1, "selection_reason": "shot_start"},
+                    {"index": 2, "time_seconds": 3.0, "selection_reason": "shot_progress"},
+                ]},
+                "visual": {
+                    "clip_summary": "Test summary.",
+                    "editorial_classification": {"primary_use": "establishing", "select_potential": "high"},
+                    "editing_notes": {"search_tags": ["test"]},
+                    "shot_descriptions": [
+                        {
+                            "shot_index": 0,
+                            "description": "Wide shot.",
+                            "time_seconds_start": 0.0,
+                            "time_seconds_end": 6.0,
+                            "frame_indices_used": [1, 2],
+                            "visual": {"shot_size": "wide"},
+                        },
+                    ],
+                },
+            }
+            with open(os.path.join(clip_dir, "analysis.json"), "w") as h:
+                json.dump(report, h)
+            jpeg = b"\xff\xd8\xff\xd9"
+            with open(os.path.join(clip_dir, "frames", "sampled_0001.jpg"), "wb") as h:
+                h.write(jpeg)
+
+            listing = list_analyzed_clips(project_root)
+            self.assertTrue(listing["success"])
+            self.assertEqual(listing["count"], 1)
+            self.assertEqual(listing["clips"][0]["clip_id"], "clip-rev-1")
+            self.assertGreaterEqual(listing["clips"][0]["representative_frame_index"], 1)
+
+            detail = get_analyzed_clip(project_root, "clip-rev-1")
+            self.assertTrue(detail["success"])
+            self.assertEqual(detail["shot_count"], 1)
+            self.assertEqual(detail["clip_summary"], "Test summary.")
+
+            shot = get_analyzed_clip_shot(project_root, "clip-rev-1", 0)
+            self.assertTrue(shot["success"])
+            self.assertEqual(shot["shot"]["description"], "Wide shot.")
+            self.assertEqual(len(shot["frames"]), 2)
+
+            self.assertIsNotNone(get_clip_frame_path(project_root, "clip-rev-1", 1))
+            self.assertIsNone(get_clip_frame_path(project_root, "clip-rev-1", 99))
+
+            corrections = read_clip_corrections(project_root, "clip-rev-1")
+            self.assertTrue(corrections["success"])
+            self.assertEqual(corrections["current_field_count"], 0)
+
+    def test_review_api_follows_reusable_batch_report_paths(self):
+        """Review API includes reusable reports referenced by the active project's job DB."""
+        with tempfile.TemporaryDirectory() as tmp:
+            active_root = os.path.join(tmp, "active-project-aabbccdd")
+            source_root = os.path.join(tmp, "source-project-eeff001122")
+            clip_dir = os.path.join(source_root, "clips", "reused-clip")
+            os.makedirs(os.path.join(clip_dir, "frames"), exist_ok=True)
+            report_path = os.path.join(clip_dir, "analysis.json")
+            report = {
+                "clip": {"clip_id": "clip-reused-1", "clip_name": "Reused.mov"},
+                "analyzed_at": "2026-05-19T10:00:00Z",
+                "technical": {"video": [{"duration_seconds": 6.0}]},
+                "motion": {"analysis_keyframes": [
+                    {"index": 1, "time_seconds": 0.1, "selection_reason": "shot_start"},
+                ]},
+                "visual": {
+                    "clip_summary": "Reusable summary.",
+                    "editorial_classification": {"primary_use": "b_roll", "select_potential": "medium"},
+                    "editing_notes": {"search_tags": ["reused"]},
+                    "shot_descriptions": [
+                        {
+                            "shot_index": 1,
+                            "description": "Reusable shot.",
+                            "time_seconds_start": 0.0,
+                            "time_seconds_end": 6.0,
+                            "frame_indices_used": [1],
+                        },
+                    ],
+                },
+            }
+            with open(report_path, "w", encoding="utf-8") as handle:
+                json.dump(report, handle)
+            with open(os.path.join(clip_dir, "frames", "sampled_0001.jpg"), "wb") as handle:
+                handle.write(b"\xff\xd8\xff\xd9")
+
+            os.makedirs(active_root, exist_ok=True)
+            conn = sqlite3.connect(os.path.join(active_root, "jobs.sqlite"))
+            try:
+                conn.execute(
+                    "CREATE TABLE job_clips (clip_key TEXT, report_path TEXT, status TEXT, updated_at TEXT)"
+                )
+                conn.execute(
+                    "INSERT INTO job_clips (clip_key, report_path, status, updated_at) VALUES (?, ?, ?, ?)",
+                    ("reused-clip", report_path, "skipped", "2026-05-19T11:00:00Z"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            listing = list_analyzed_clips(active_root)
+            self.assertTrue(listing["success"])
+            self.assertEqual(listing["count"], 1)
+            self.assertEqual(listing["clips"][0]["clip_id"], "clip-reused-1")
+
+            detail = get_analyzed_clip(active_root, "clip-reused-1")
+            self.assertTrue(detail["success"])
+            self.assertEqual(detail["clip_summary"], "Reusable summary.")
+
+            self.assertIsNotNone(get_clip_frame_path(active_root, "clip-reused-1", 1))
+
+            index = build_analysis_index(active_root)
+            self.assertTrue(index["success"])
+            self.assertEqual(index["counts"]["clips"], 1)
+            search = query_analysis_index(active_root, "Reusable", limit=5)
+            self.assertTrue(search["success"])
+            self.assertGreaterEqual(search["result_count"], 1)
+
+    def test_commit_visual_analysis_preserves_human_corrections(self):
+        """V2 trust-but-fix-optionally contract: re-analysis preserves human edits."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            clip_dir = os.path.join(project_root, "clips", "demo-clip")
+            os.makedirs(clip_dir, exist_ok=True)
+            existing = {
+                "success": True,
+                "clip": {"clip_id": "clip-cor-1", "clip_name": "A001.mov", "file_path": "/tmp/A001.mov"},
+                "technical": {"video": [{"frame_rate": 24}]},
+                "readthrough": {"scenes": {"items": []}, "cut_analysis": {"cut_points": [], "shot_ranges": []}},
+                "motion": {"analysis_keyframes": [], "overall_motion_level": "low"},
+                "transcription": {"success": True, "segments": []},
+                "visual": {
+                    "success": True,
+                    "status": "pending_host_analysis",
+                    "provider": HOST_CHAT_PATHS_PROVIDER,
+                },
+                "analysis_profile": {"vision_enabled": True, "transcription_enabled": False},
+            }
+            with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as handle:
+                json.dump(existing, handle)
+
+            # Editor previously corrected the editorial_classification.primary_use
+            # for the clip, and a shot-level visual.shot_size for shot_index=0.
+            corrections = {
+                "schema_version": "2.0",
+                "clip_id": "clip-cor-1",
+                "current": {
+                    "clip:clip-cor-1:editorial_classification.primary_use": {
+                        "value": "interview",
+                        "source": "human",
+                        "author": "sam@bradfordoperations.com",
+                        "timestamp": "2026-05-19T10:00:00Z",
+                    },
+                    "shot:0:visual.shot_size": {
+                        "value": "medium_close",
+                        "source": "human",
+                        "author": "sam@bradfordoperations.com",
+                        "timestamp": "2026-05-19T10:01:00Z",
+                    },
+                },
+                "changelog": [],
+            }
+            with open(os.path.join(clip_dir, "corrections.json"), "w", encoding="utf-8") as handle:
+                json.dump(corrections, handle)
+
+            # Machine re-analysis tries to overwrite with different values.
+            result = commit_visual_analysis(
+                project_root=project_root,
+                clip_id="clip-cor-1",
+                visual={
+                    "clip_summary": "Reanalyzed clip summary.",
+                    "editorial_classification": {
+                        "primary_use": "establishing",
+                        "select_potential": "low",
+                        "reason": "machine reread",
+                    },
+                    "shot_descriptions": [
+                        {"shot_index": 0, "description": "Wide opening shot.", "visual": {"shot_size": "wide"}},
+                    ],
+                },
+            )
+
+            self.assertTrue(result["success"], msg=result.get("error"))
+            metrics = result.get("corrections") or {}
+            self.assertEqual(metrics.get("preserved_count"), 2)
+            self.assertGreaterEqual(metrics.get("changelog_added"), 2)
+
+            with open(result["analysis_json"], "r", encoding="utf-8") as handle:
+                updated = json.load(handle)
+            self.assertEqual(updated["visual"]["editorial_classification"]["primary_use"], "interview")
+            shot_zero = next(
+                s for s in updated["visual"]["shot_descriptions"]
+                if s.get("shot_index") == 0
+            )
+            self.assertEqual(shot_zero["visual"]["shot_size"], "medium_close")
+            # Machine description on the same shot is not a human-edited field, so it sticks
+            self.assertEqual(shot_zero.get("description"), "Wide opening shot.")
+
+            with open(os.path.join(clip_dir, "corrections.json"), "r", encoding="utf-8") as handle:
+                updated_corrections = json.load(handle)
+            reasons = {entry.get("change_reason") for entry in updated_corrections["changelog"]}
+            self.assertIn("preserved across re-analysis", reasons)
 
     def test_publish_metadata_candidates_map_visual_report_to_resolve_fields(self):
         report = {
@@ -535,7 +1323,20 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertIn("sync", proposal["fields"]["Keyword"])
         self.assertEqual(proposal["fields"]["Roll Card #"], "A001")
 
-    def test_publish_metadata_marker_writeback_is_opt_in_and_source_framed(self):
+    def test_publish_metadata_marker_candidates_built_but_writeback_gated_off_in_v2(self):
+        prefs_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(prefs_tmp.cleanup)
+        previous_prefs = os.environ.get("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS")
+        os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = os.path.join(prefs_tmp.name, "prefs.json")
+
+        def restore_prefs_env():
+            if previous_prefs is None:
+                os.environ.pop("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS", None)
+            else:
+                os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = previous_prefs
+
+        self.addCleanup(restore_prefs_env)
+
         report = {
             "clip": {"clip_id": "clip-123"},
             "visual": {
@@ -543,6 +1344,31 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "best_moments": ["00:00:04 strong answer"],
                     "qc_flags": ["00:00:05:12 small audio pop"],
                 },
+            },
+            "clip_analysis_markers": {
+                "markers": [
+                    {
+                        "id": "shot-001",
+                        "type": "shot",
+                        "name": "Shot 001",
+                        "color": "Blue",
+                        "start_frame": 0,
+                        "duration_frames": 48,
+                        "visual_description": "Wide shot in a driveway.",
+                        "source": "scene_detection",
+                    },
+                    {
+                        "id": "black-or-title-001",
+                        "type": "qc_warning",
+                        "subtype": "black_or_title",
+                        "name": "QC: Black/Very Dark Range",
+                        "color": "Red",
+                        "start_frame": 48,
+                        "duration_frames": 12,
+                        "visual_description": "Detected black or very dark picture.",
+                        "source": "blackdetect",
+                    },
+                ],
             },
         }
         record = {"clip_id": "clip-123", "fps": "24"}
@@ -566,18 +1392,52 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             slate_review={"slate_visible": True, "confidence": {"overall": "high"}},
         )
 
+        # V2 architecture: machine markers (per-shot, qc_warning, best_moment) are
+        # dropped from Resolve writeback entirely. The marker candidate list is
+        # still built (it's persisted to clip_analysis_markers.json and consumed
+        # by the DB / control panel), but the writeback gate (`enabled`) is
+        # always False so nothing is added to Resolve clip markers.
         self.assertFalse(disabled["enabled"])
-        self.assertEqual([marker["name"] for marker in unconfirmed["markers"]], ["Best Moment", "QC Warning"])
-        self.assertEqual(unconfirmed["skipped"][0]["reason"], "slate_not_visually_confirmed")
-        self.assertTrue(enabled["enabled"])
-        self.assertEqual([marker["frame"] for marker in enabled["markers"]], [30, 96, 132])
-        self.assertEqual(enabled["markers"][0]["name"], "Slate Clap")
-        self.assertFalse(_media_analysis_publish_confirmed({"write_markers": True, "dry_run": False}))
+        self.assertFalse(unconfirmed["enabled"], "V2 gate disables writeback regardless of write_markers=True")
+        self.assertFalse(enabled["enabled"], "V2 gate disables writeback even with slate visually confirmed")
 
+        # The candidate list itself still contains the expected markers — only
+        # the writeback step is gated. This keeps the DB/control-panel path
+        # working while removing the Resolve-side clutter.
+        self.assertIn("Shot 001", [marker["name"] for marker in unconfirmed["markers"]])
+        self.assertIn("QC: Black/Very Dark Range", [marker["name"] for marker in unconfirmed["markers"]])
+        self.assertIn("Best Moment", [marker["name"] for marker in unconfirmed["markers"]])
+        self.assertIn("QC Warning", [marker["name"] for marker in unconfirmed["markers"]])
+        self.assertEqual(unconfirmed["skipped"][0]["reason"], "slate_not_visually_confirmed")
+        self.assertEqual([marker["name"] for marker in enabled["markers"]], [
+            "Shot 001",
+            "Slate Clap",
+            "QC: Black/Very Dark Range",
+            "Best Moment",
+            "QC Warning",
+        ])
+        self.assertEqual([marker["frame"] for marker in enabled["markers"]], [0, 30, 48, 96, 132])
+
+        # _apply_media_analysis_clip_markers is unit-callable and still works
+        # when invoked directly with a marker list — it's just that the publish
+        # path never calls it under V2 because the writeback gate is off.
         clip = MarkerClipStub()
         applied = _apply_media_analysis_clip_markers(clip, enabled["markers"], {})
         self.assertTrue(applied["success"])
-        self.assertEqual(len(clip.GetMarkers()), 3)
+        self.assertEqual(len(clip.GetMarkers()), 5)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = os.environ.get("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS")
+            os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = os.path.join(tmp, "prefs.json")
+            try:
+                self.assertTrue(_media_analysis_publish_confirmed({"write_markers": True, "dry_run": False}))
+                setup("set_defaults", {"ask_before_metadata_publish": True})
+                self.assertFalse(_media_analysis_publish_confirmed({"write_markers": True, "dry_run": False}))
+            finally:
+                if previous is None:
+                    os.environ.pop("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS", None)
+                else:
+                    os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = previous
 
     def test_sync_event_marker_write_requires_visual_slate_confirmation(self):
         clip = MarkerClipStub("clip-123")
@@ -620,27 +1480,41 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertEqual(confirmed["added"], 1)
         self.assertIn(24, clip.GetMarkers())
 
-    def test_timed_marker_prompt_choices_and_defaults_are_explicit(self):
+    def test_timed_marker_decision_records_choice_but_v2_gate_disables_writeback(self):
+        """V2 architecture drops per-shot/qc/best_moment machine markers.
+
+        `_media_analysis_timed_marker_decision` still records the user's choice
+        and saved-default preferences (so the API surface is unchanged), but
+        the V2 gate (V2_MACHINE_MARKER_WRITEBACK_ENABLED=False) forces
+        `enabled=False` and `prompt_required=False` regardless of the
+        underlying choice. The saved-default preference is still persisted for
+        forward-compat when the gate is reopened.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             previous = os.environ.get("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS")
             os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = os.path.join(tmp, "prefs.json")
             try:
-                prompt = _media_analysis_timed_marker_decision({})
-                self.assertTrue(prompt["prompt_required"])
-                self.assertFalse(prompt["enabled"])
+                defaulted = _media_analysis_timed_marker_decision({})
+                self.assertFalse(defaulted["enabled"])
+                self.assertFalse(defaulted["prompt_required"])
+                self.assertEqual(defaulted["source"], "v2_disabled")
+
+                ask = _media_analysis_timed_marker_decision({"timed_markers": "ask"})
+                self.assertFalse(ask["enabled"])
+                self.assertFalse(ask["prompt_required"])
+                self.assertEqual(ask["source"], "v2_disabled")
 
                 yes = _media_analysis_timed_marker_decision({"timed_markers": "yes"})
-                self.assertFalse(yes["prompt_required"])
-                self.assertTrue(yes["enabled"])
+                self.assertFalse(yes["enabled"])
+                self.assertEqual(yes["source"], "v2_disabled")
 
                 default_yes = _media_analysis_timed_marker_decision({"timed_markers": "default_yes"})
-                self.assertTrue(default_yes["enabled"])
+                self.assertFalse(default_yes["enabled"])
                 self.assertEqual(default_yes["saved_default"], "yes")
 
                 saved = _media_analysis_timed_marker_decision({})
+                self.assertFalse(saved["enabled"])
                 self.assertFalse(saved["prompt_required"])
-                self.assertTrue(saved["enabled"])
-                self.assertEqual(saved["source"], "saved_default")
 
                 default_no = _media_analysis_timed_marker_decision({"timed_markers": "default_no"})
                 self.assertFalse(default_no["enabled"])
@@ -679,6 +1553,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                             "preferred_generated_media_folder": os.path.join(tmp, "generated"),
                             "default_post_operation_page": "edit",
                             "marker_custom_data": "minimal",
+                            "metadata_writeback_default": False,
                             "ask_before_metadata_publish": True,
                             "dry_run_first_default": False,
                         },
@@ -696,11 +1571,13 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 self.assertEqual(configured["defaults"]["media_analysis"]["timed_marker_colors"]["best_moments"], "Pink")
                 self.assertEqual(configured["defaults"]["media_analysis"]["max_timed_markers_per_clip"], 2)
                 self.assertFalse(configured["defaults"]["media_analysis"]["include_confidence_scores"])
+                self.assertFalse(configured["defaults"]["media_analysis"]["metadata_writeback_default"])
                 self.assertEqual(configured["defaults"]["updates"]["mode"], "notify")
                 self.assertEqual(configured["defaults"]["updates"]["check_interval_hours"], 6)
                 self.assertEqual(configured["defaults"]["updates"]["snooze_hours"], 3)
 
                 applied = _media_analysis_apply_setup_defaults("publish_clip_metadata", {"confirm": True})
+                self.assertFalse(applied["publish_metadata"])
                 self.assertEqual(applied["fields"], ["Description", "Comments", "Scene"])
                 self.assertEqual(applied["merge_policy"], "fill_empty")
                 self.assertFalse(applied["dry_run"])
@@ -721,6 +1598,9 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "keys": ["media_analysis", "updates.mode", "updates.check_interval_hours", "updates.snooze_hours"],
                 })
                 self.assertTrue(cleared["success"])
+                # After clear_defaults, timed_markers_default falls back to the
+                # server default ("ask"), which is normalized to None in the
+                # effective-prefs response (only "yes"/"no" survive).
                 self.assertIsNone(cleared["defaults"]["media_analysis"]["timed_markers_default"])
                 self.assertEqual(cleared["defaults"]["media_analysis"]["vision_default"], _media_analysis_effective_preferences()["vision_default"])
                 self.assertEqual(cleared["defaults"]["updates"]["mode"], "prompt")
@@ -738,6 +1618,60 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     os.environ.pop(update_check.ENV_STATE_PATH, None)
                 else:
                     os.environ[update_check.ENV_STATE_PATH] = previous_updates
+
+    def test_media_analysis_defaults_turn_on_host_chat_paths_vision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = os.environ.get("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS")
+            os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = os.path.join(tmp, "prefs.json")
+            try:
+                applied = _media_analysis_apply_setup_defaults("analyze_clip", {})
+                self.assertEqual(applied["vision"], {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER})
+                self.assertEqual(applied["transcription"], {"enabled": True, "allow_model_download": True})
+                self.assertTrue(applied["publish_metadata"])
+                self.assertTrue(_media_analysis_metadata_writeback_enabled(applied))
+                self.assertEqual(applied["_setup_defaults_applied"]["vision_default"], "on")
+                self.assertEqual(applied["_setup_defaults_applied"]["transcription_default"], "yes")
+                self.assertTrue(applied["_setup_defaults_applied"]["metadata_writeback_default"])
+
+                with open(os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"], "w", encoding="utf-8") as handle:
+                    json.dump({"transcription_default": "bogus"}, handle)
+                self.assertEqual(_media_analysis_effective_preferences()["transcription_default"], "yes")
+
+                writeback_off = _media_analysis_apply_setup_defaults("analyze_clip", {"publish_metadata": False})
+                self.assertFalse(_media_analysis_metadata_writeback_enabled(writeback_off))
+
+                visuals_off = _media_analysis_apply_setup_defaults("analyze_clip", {"include_visuals": False})
+                self.assertEqual(visuals_off["vision"], {"enabled": False})
+                self.assertFalse(visuals_off["_setup_defaults_applied"]["include_visuals"])
+
+                visuals_on = _media_analysis_apply_setup_defaults("analyze_clip", {"includeVisuals": True})
+                self.assertEqual(visuals_on["vision"], {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER})
+                self.assertTrue(visuals_on["_setup_defaults_applied"]["include_visuals"])
+
+                transcription_on = _media_analysis_apply_setup_defaults("analyze_clip", {"include_transcription": True})
+                self.assertEqual(transcription_on["transcription"], {"enabled": True, "allow_model_download": True})
+                self.assertTrue(transcription_on["_setup_defaults_applied"]["include_transcription"])
+
+                publish_defaults = _media_analysis_apply_setup_defaults("publish_clip_metadata", {})
+                self.assertFalse(publish_defaults["dry_run"])
+                self.assertTrue(publish_defaults["confirm"])
+                self.assertEqual(publish_defaults["fields"], [
+                    "Description",
+                    "Comments",
+                    "Keywords",
+                    "People",
+                    "Scene",
+                    "Shot",
+                    "Take",
+                    "Camera #",
+                    "Roll Card #",
+                ])
+                self.assertEqual(publish_defaults["slate_detection"]["enabled"], True)
+            finally:
+                if previous is None:
+                    os.environ.pop("DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS", None)
+                else:
+                    os.environ["DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"] = previous
 
     def test_unlimited_timed_marker_limit_keeps_all_candidates(self):
         report = {
@@ -850,6 +1784,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 params={
                     "analysis_root": os.path.join(tmp, "analysis"),
                     "depth": "standard",
+                    "transcription": {"enabled": False},
                     "vision": {"enabled": True, "provider": "chat_context"},
                 },
                 capabilities={
@@ -865,7 +1800,40 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertTrue(plan["success"])
         self.assertEqual(plan["capability_gaps"], [])
 
-    def test_build_plan_hints_when_transcription_available_but_disabled(self):
+    def test_build_plan_hints_when_transcription_available_but_explicitly_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001_C001.mov")
+            os.makedirs(os.path.dirname(source))
+            records = [{
+                "clip_id": "clip-123",
+                "clip_name": "A001_C001.mov",
+                "file_path": source,
+                "media_id": "media-123",
+            }]
+            plan = build_plan(
+                project_name="Example Project",
+                project_id="project-123",
+                records=records,
+                target={"type": "clip", "clip_id": "clip-123"},
+                params={
+                    "analysis_root": os.path.join(tmp, "analysis"),
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities={
+                    "tools": {
+                        "ffprobe": {"available": True},
+                        "ffmpeg": {"available": True},
+                    },
+                    "transcription": {"available": True, "backends": ["whisper_cli"]},
+                    "vision": {"available": False},
+                },
+            )
+
+        self.assertTrue(plan["success"])
+        self.assertTrue(any("Transcription is available but disabled" in note for note in plan["notes"]))
+
+    def test_build_plan_defaults_transcription_on_for_standard_depth(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = os.path.join(tmp, "source", "A001_C001.mov")
             os.makedirs(os.path.dirname(source))
@@ -886,13 +1854,49 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                         "ffprobe": {"available": True},
                         "ffmpeg": {"available": True},
                     },
-                    "transcription": {"available": True, "backends": ["whisper_cli"]},
+                    "transcription": {"available": True, "backends": ["mock"]},
                     "vision": {"available": False},
                 },
             )
 
         self.assertTrue(plan["success"])
-        self.assertTrue(any("Transcription is available but disabled" in note for note in plan["notes"]))
+        self.assertEqual(plan["capability_gaps"], [])
+        self.assertTrue(plan["clips"][0]["analysis_signature"]["layers"]["transcription"]["enabled"])
+        self.assertIn("transcript_json", plan["clips"][0]["artifacts"])
+
+    def test_build_plan_blocks_default_transcription_when_backend_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001_C001.mov")
+            os.makedirs(os.path.dirname(source))
+            records = [{
+                "clip_id": "clip-123",
+                "clip_name": "A001_C001.mov",
+                "file_path": source,
+                "media_id": "media-123",
+            }]
+            plan = build_plan(
+                project_name="Example Project",
+                project_id="project-123",
+                records=records,
+                target={"type": "clip", "clip_id": "clip-123"},
+                params={"analysis_root": os.path.join(tmp, "analysis"), "depth": "standard"},
+                capabilities={
+                    "tools": {
+                        "ffprobe": {"available": True},
+                        "ffmpeg": {"available": True},
+                    },
+                    "transcription": {"available": False, "backends": []},
+                    "vision": {"available": False},
+                },
+            )
+            response = _media_analysis_missing_capabilities_response(plan)
+
+        self.assertTrue(plan["success"])
+        self.assertIn({"capability": "transcription_backend", "required_for": ["transcription"]}, plan["capability_gaps"])
+        self.assertIn("transcription", plan["install_guidance"]["missing"])
+        self.assertFalse(response["success"])
+        self.assertEqual(response["status"], "missing_required_capabilities")
+        self.assertIn("install", response["next_step"].lower())
 
     def test_build_plan_reuses_existing_complete_report(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -931,6 +1935,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 "analysis_root": os.path.join(tmp, "analysis"),
                 "depth": "standard",
                 "dry_run": False,
+                "transcription": {"enabled": False},
             }
             caps = {
                 "tools": {
@@ -983,7 +1988,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             signature = analysis_request_signature(
                 record,
                 "standard",
-                {"transcription": {}, "vision": {}},
+                {"transcription": {"enabled": False}, "vision": {}},
                 8,
             )
             signature["source_file"]["size_bytes"] = 999
@@ -1010,6 +2015,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 params={
                     "analysis_root": os.path.join(tmp, "analysis"),
                     "depth": "standard",
+                    "transcription": {"enabled": False},
                 },
                 capabilities={
                     "tools": {
@@ -1056,7 +2062,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             )["project_root"]
             clip_dir = os.path.join(previous_root, "clips", stable_clip_directory(record))
             os.makedirs(clip_dir)
-            signature = analysis_request_signature(record, "standard", {"transcription": {}, "vision": {}}, 8)
+            signature = analysis_request_signature(record, "standard", {"transcription": {"enabled": False}, "vision": {}}, 8)
             with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as handle:
                 json.dump({
                     "success": True,
@@ -1081,6 +2087,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 params={
                     "analysis_root": analysis_root,
                     "depth": "standard",
+                    "transcription": {"enabled": False},
                     "reuse_project_roots": [previous_root],
                 },
                 capabilities={
@@ -1198,6 +2205,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "analysis_root": os.path.join(tmp, "analysis"),
                     "depth": "standard",
                     "vision": {"enabled": True, "provider": "mock"},
+                    "transcription": {"enabled": False},
                 },
                 capabilities={
                     "tools": {
@@ -1396,7 +2404,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertEqual(clip_report["transcription"]["text"], "Synthetic tone.")
             self.assertEqual(clip_report["transcription"]["segments"][0]["text"], "Synthetic tone.")
             self.assertGreaterEqual(clip_report["clip_analysis_markers"]["marker_count"], 1)
-            self.assertFalse(clip_report["clip_analysis_markers"]["write_to_resolve_default"])
+            self.assertTrue(clip_report["clip_analysis_markers"]["write_to_resolve_default"])
             self.assertTrue(clip_report["readthrough"]["cut_analysis"]["success"])
             self.assertIn("cut_count", clip_report["cut_analysis"])
             self.assertGreaterEqual(
@@ -1413,7 +2421,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             with open(artifacts["marker_plan_json"], "r", encoding="utf-8") as handle:
                 marker_plan_json = json.load(handle)
             self.assertEqual(marker_plan_json["schema"], "davinci_resolve_mcp.clip_analysis_markers.v1")
-            self.assertFalse(marker_plan_json["resolve_marker_writeback"]["enabled"])
+            self.assertTrue(marker_plan_json["resolve_marker_writeback"]["enabled"])
             self.assertEqual(marker_plan_json["color_scheme"]["qc_warning"], "Red")
             with open(artifacts["transcript_srt"], "r", encoding="utf-8") as handle:
                 transcript_srt = handle.read()
@@ -1482,21 +2490,75 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertFalse(os.path.exists(plan["output_root"]["project_root"]))
             self.assertEqual(sorted(os.listdir(source_dir)), ["synthetic_session.mp4"])
 
-    def test_execute_chat_context_vision_runner_writes_structured_visual_report(self):
+    def test_execute_emits_pending_host_analysis_when_vision_requested(self):
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             self.skipTest("ffmpeg/ffprobe not installed")
         with tempfile.TemporaryDirectory() as tmp:
             source_dir = os.path.join(tmp, "source")
             analysis_dir = os.path.join(tmp, "davinci-resolve-mcp-analysis")
             os.makedirs(source_dir)
-            source = os.path.join(source_dir, "synthetic_chat_context.mp4")
+            source = os.path.join(source_dir, "synthetic_requires_vision.mp4")
             self._write_synthetic_media(source)
 
             records = [{
-                "clip_id": "clip-chat-context",
-                "clip_name": "synthetic_chat_context.mp4",
+                "clip_id": "clip-requires-vision",
+                "clip_name": "synthetic_requires_vision.mp4",
                 "file_path": source,
-                "media_id": "media-chat-context",
+                "media_id": "media-requires-vision",
+            }]
+            params = {
+                "analysis_root": analysis_dir,
+                "depth": "standard",
+                "dry_run": False,
+                "session_only": True,
+                "cleanup_frames": False,
+                "max_analysis_frames": 1,
+                "vision": {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER},
+            }
+            caps = detect_capabilities(env={})
+            plan = build_plan(
+                project_name="Example Project",
+                project_id="project-requires-vision",
+                records=records,
+                target={"type": "file", "path": source},
+                params=params,
+                capabilities=caps,
+            )
+
+            manifest = execute_plan(plan, params=params, capabilities=caps)
+
+            self.assertTrue(plan["success"])
+            self.assertTrue(manifest["success"])
+            self.assertTrue(manifest["vision_pending"])
+            self.assertEqual(manifest["vision_pending_clip_count"], 1)
+            self.assertEqual(manifest["successful_clip_count"], 1)
+            self.assertEqual(manifest["failed_clip_count"], 0)
+            self.assertEqual(manifest["pending_action"]["action"], "commit_vision")
+            clip_row = manifest["clips"][0]
+            self.assertEqual(clip_row["vision_status"], "pending_host_analysis")
+            self.assertEqual(clip_row["visual"]["provider"], HOST_CHAT_PATHS_PROVIDER)
+            self.assertTrue(clip_row["visual"]["frame_paths"])
+            self.assertEqual(clip_row["visual"]["commit_action"]["action"], "commit_vision")
+            self.assertEqual(sorted(os.listdir(source_dir)), ["synthetic_requires_vision.mp4"])
+
+    def test_execute_with_custom_vision_runner_writes_structured_visual_report(self):
+        """A custom vision_runner (e.g. a future provider) can short-circuit the
+        host_chat_paths deferred payload and return a final visual report directly.
+        The runner contract: same signature as before, return dict matches schema."""
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "source")
+            analysis_dir = os.path.join(tmp, "davinci-resolve-mcp-analysis")
+            os.makedirs(source_dir)
+            source = os.path.join(source_dir, "synthetic_custom_runner.mp4")
+            self._write_synthetic_media(source)
+
+            records = [{
+                "clip_id": "clip-custom-runner",
+                "clip_name": "synthetic_custom_runner.mp4",
+                "file_path": source,
+                "media_id": "media-custom-runner",
             }]
             params = {
                 "analysis_root": analysis_dir,
@@ -1505,12 +2567,12 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 "session_only": True,
                 "cleanup_frames": True,
                 "max_analysis_frames": 3,
-                "vision": {"enabled": True, "provider": "chat_context"},
+                "vision": {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER},
             }
             caps = detect_capabilities(env={})
             plan = build_plan(
                 project_name="Example Project",
-                project_id="project-chat-context",
+                project_id="project-custom-runner",
                 records=records,
                 target={"type": "file", "path": source},
                 params=params,
@@ -1522,8 +2584,8 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 self.assertIn("cut_analysis", motion)
                 return {
                     "success": True,
-                    "provider": "chat_context",
-                    "clip_summary": "Synthetic chat-context visual report.",
+                    "provider": "custom_test_runner",
+                    "clip_summary": "Custom-runner visual report.",
                     "editorial_classification": {
                         "primary_use": "unknown",
                         "select_potential": "medium",
@@ -1554,7 +2616,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                         "best_moments": [],
                         "continuity_flags": [],
                         "qc_flags": [],
-                        "search_tags": ["chat-context"],
+                        "search_tags": ["custom-runner"],
                     },
                     "confidence": {
                         "visual": "medium",
@@ -1571,11 +2633,12 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             ))
 
             self.assertTrue(manifest["success"])
+            self.assertFalse(manifest["vision_pending"])
             self.assertTrue(manifest["artifacts_cleaned_up"])
-            self.assertEqual(manifest["reports"][0]["visual"]["provider"], "chat_context")
-            self.assertEqual(manifest["reports"][0]["visual"]["editing_notes"]["search_tags"], ["chat-context"])
+            self.assertEqual(manifest["reports"][0]["visual"]["provider"], "custom_test_runner")
+            self.assertEqual(manifest["reports"][0]["visual"]["editing_notes"]["search_tags"], ["custom-runner"])
             self.assertFalse(os.path.exists(plan["output_root"]["project_root"]))
-            self.assertEqual(sorted(os.listdir(source_dir)), ["synthetic_chat_context.mp4"])
+            self.assertEqual(sorted(os.listdir(source_dir)), ["synthetic_custom_runner.mp4"])
 
     def test_build_analysis_index_queries_reports_without_image_columns(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1830,7 +2893,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 project_id="project-job-cancel",
                 paths=[source],
                 analysis_root=analysis_dir,
-                params={"depth": "quick"},
+                params={"depth": "quick", "transcription": {"enabled": False}},
                 name="Cancelable batch",
             )
             self.assertTrue(created["success"])

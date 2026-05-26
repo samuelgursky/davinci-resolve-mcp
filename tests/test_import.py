@@ -106,7 +106,11 @@ def test_prompt_registrations():
     assert 'name="analyze_media"' in source
     assert "def analyze_media(" in source
     assert "include_visuals: bool = True" in source
+    assert "include_transcription: bool = True" in source
+    assert "publish_metadata" in source
     assert "include_visuals=false" in source
+    assert "Do not silently downgrade media analysis" in source
+    assert "session_only=true" in source
 
 
 def test_granular_tool_count():

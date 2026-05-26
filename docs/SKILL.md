@@ -108,11 +108,28 @@ tool accepts an `action` string and an optional `params` object.
 
 The compound server also registers MCP prompts. Use `davinci_resolve_workflow`
 as the compact operating brief, and use `analyze_media` as a slash-command style
-entry point for read-only project, selected-clip, bin, or file analysis. The
-Analyze Media prompt defaults to chat-context visual analysis when the MCP
-client supports sampling/image messages, while allowing `include_visuals=false`
-for technical-only or privacy-sensitive runs. It also encodes session-only
-defaults, optional transcription, and finished-video editorial guardrails.
+entry point for source-safe project, selected-clip, bin, file, or sequence
+analysis. The Analyze Media prompt executes directly by default, persists
+inspectable reports/artifacts under the project analysis root, requests
+`host_chat_paths` visual analysis (frames are extracted to disk and the host
+chat finalizes each clip via `media_analysis(action="commit_vision", ...)`),
+runs local transcription through the configured backend, and writes metadata
+plus source-time Media Pool markers back to the Resolve project unless the
+user opts out.
+
+Anti-regression rule: do not silently downgrade media analysis. Source-safe
+means source media stays untouched; it does not mean no visuals, no transcript,
+no persisted report, no metadata writeback, or no Media Pool markers. Do not
+add `include_visuals=false`, `include_transcription=false`,
+`publish_metadata=false`, `timed_markers=no`, `session_only=true`, or
+`dry_run=true` unless the user explicitly asks for that opt-out, the target is a
+raw file path that cannot receive Resolve project writeback. The host_chat_paths
+vision protocol is: `analyze_*` returns a deferred payload with absolute
+`frame_paths` and a JSON schema; you must read those frames as images (Claude
+Code's Read tool handles JPG/PNG natively), produce the JSON, and call
+`commit_vision` for each clip. Skipping `commit_vision` leaves the run in
+`pending_host_vision_analysis` — surface that explicitly; do not call the
+analysis complete.
 
 ## Local Control Panel
 
@@ -154,9 +171,9 @@ contains useful evidence:
 Reuse prior analysis unless it is stale, incomplete, or missing the modality the
 user is asking for. For example, do not re-run visual analysis just because the
 edit task is new if a current report already has keyframes, motion variance, and
-usable visual descriptions. Add transcription, chat-context vision, marker
-review, or source range checks only when that missing evidence changes the
-decision. Use `force_refresh=true` only when the user asks for a fresh read or
+usable visual descriptions. Add transcription, host_chat_paths vision (followed
+by commit_vision), marker review, or source range checks only when that missing
+evidence changes the decision. Use `force_refresh=true` only when the user asks for a fresh read or
 when cache signatures show the source, prompt, depth, or requested modality has
 changed.
 
@@ -393,26 +410,28 @@ Key actions: `add(frame, color, name, note, duration)`, `get_all`, `delete_by_co
 **`media_analysis`** — Project-scoped media intelligence and guarded metadata publishing.
 
 Media Analysis and editorial-assist actions (v2.17.0+) add source-safe planning,
-report reuse, session-only execution, chat-context visual review, and
-timeline-level editorial helpers.
+report reuse, persisted analysis execution, host_chat_paths visual review
+(finalized per clip via `commit_vision`), transcription, default Resolve
+metadata/marker writeback, and timeline-level editorial helpers.
 
 Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
 `analyze_file`, `analyze_clip`, `analyze_bin`, `analyze_project`,
 `detect_sync_events`, `add_sync_event_markers`, `publish_clip_metadata`,
-`summarize`, `get_report`, `build_index`, `index_status`, `query_index`,
-`start_batch_job`, `run_batch_job_slice`, `batch_job_status`,
+`commit_vision`, `summarize`, `get_report`, `build_index`, `index_status`,
+`query_index`, `start_batch_job`, `run_batch_job_slice`, `batch_job_status`,
 `list_batch_jobs`, `cancel_batch_job`, `resume_batch_job`,
 `review_timeline_markers`, and `cleanup_artifacts`.
 The tool never installs
 dependencies and validates that outputs stay under
 `davinci-resolve-mcp-analysis` project roots rather than beside source media.
-Executed file/clip analysis defaults to session-only: scratch artifacts are
-removed after structured reports are returned to the MCP response. `persist=true`
-keeps reports under the project analysis root, and `keep_artifacts=true`
-preserves a session scratch run for inspection. Persisted analysis refreshes the
-local SQLite search index automatically unless `auto_build_index=false` is set;
-`build_index` remains the manual rebuild action for existing reports. `quick`
-uses ffprobe metadata; `standard` adds ffmpeg read-through checks,
+Executed Resolve-target analysis defaults to running, persisting inspectable
+artifacts, and publishing metadata plus Media Pool clip markers. Use
+`dry_run=true`, `publish_metadata=false`, `timed_markers=no`, or
+`session_only=true` with `keep_artifacts=false` to disable those defaults for a
+run. Persisted analysis refreshes the local SQLite search index automatically unless
+`auto_build_index=false` is set; `build_index` remains the manual rebuild action
+for existing reports. `quick` uses ffprobe metadata; `standard` adds ffmpeg
+read-through checks,
 cut-boundary analysis from full-stream scene detection, flash-frame candidates,
 motion/variance scoring, analysis keyframes, and sidecar reports.
 By default, planning checks the active project's analysis root for existing
@@ -423,31 +442,47 @@ hash, and requested modalities. Use `force_refresh=true` for a fresh read,
 `max_report_age_days` for freshness limits, and `reuse_policy="fresh"` when
 unsigned older reports should not be reused. Pass `reuse_existing=false` only
 when the user explicitly wants to ignore memory.
-Transcription requires explicit opt-in. The `analyze_media` prompt opts into
-visual analysis by default and uses `vision.provider="chat_context"` when the
-MCP client supports sampling; pass `include_visuals=false` to opt out. For
-direct `media_analysis` tool calls, set `vision.enabled=true` explicitly when
-visual interpretation is needed. Standard/deep runs prioritize first/last usable
-frames plus before/after cut-boundary frames; those sampled frames are sent to
-the current chat/sampling model and the response is stored in the default
-structured JSON shape. If chat-context vision is unavailable, continue with
-technical/motion analysis and ask whether the user wants setup steps or a
-no-visual run. The local mock providers are for tests and do not send frames
-off-machine.
+Transcription, visual analysis, metadata writeback, and Media Pool marker
+writeback are default-on. Vision uses
+`vision.provider="host_chat_paths"`: analyze actions extract representative
+frames to disk under the project analysis root and return a deferred payload
+containing absolute `frame_paths`, a `shot_table` mapping each detected shot
+range to its in-shot `frame_indices`, the JSON schema, and a `commit_action`.
+The host chat must read those frames as local images, produce JSON per the
+schema (including one `shot_descriptions` entry per `shot_index` in the
+`shot_table`, grounded only in the frames listed for that shot), and call
+`media_analysis(action="commit_vision", params={clip_id, visual,
+vision_token})` per clip to merge the visual report, rebuild Media Pool clip
+markers, and publish vision-dependent metadata to Resolve. Each Resolve shot
+marker inherits its description from `shot_descriptions[shot_index]`; missing
+entries fall back to an in-range `analysis_keyframe` and finally to a
+clip-summary-tagged fallback — never to a neighbour shot's description. The manifest exposes
+`vision_pending=True` and `pending_action` so callers know what is incomplete.
+Pass `include_visuals=false`, `include_transcription=false`,
+`publish_metadata=false`, or `timed_markers=no` to opt out. Agents must not add
+those opt-out flags preemptively; use them only when requested or when a target
+boundary requires it. Standard/deep runs prioritize first/last usable frames
+plus before/after cut-boundary frames as the sampled set. Skipping
+`commit_vision` leaves the run in `pending_host_vision_analysis` — that is a
+failure mode to surface, not a silent downgrade. The local mock providers are
+for tests and do not send frames off-machine.
 Use `detect_sync_events` before multicam setup, deliverable QC, or single-camera
 sync review when the user needs likely 2-pop or slate-clap locations. It reads
 source audio through FFmpeg/FFprobe only, returns advisory frames/timecodes and
 per-file `record_offset` suggestions, and never installs FFmpeg automatically.
-It also returns marker suggestions; only call `add_sync_event_markers` after the
-user explicitly approves marker writes, and pass `confirm=true`.
+It also returns marker suggestions; `add_sync_event_markers` remains an explicit
+marker-write action for standalone sync detections.
 Use `publish_clip_metadata` when the user wants analysis to become searchable
 inside Resolve. It analyzes or reuses reports, proposes field-specific merges
 for `Description`, `Comments`, `Keywords`, `People`, and optional slate-derived
-fields, stores provenance in third-party metadata, defaults to `dry_run=true`,
-and writes Resolve metadata only when called with `confirm=true`.
+fields, stores provenance in third-party metadata, and writes metadata plus
+source-time markers by default for executed Resolve-target analysis. Disable a
+write run with `dry_run=true`, `publish_metadata=false`, or `timed_markers=no`.
 `review_timeline_markers` creates a labeled
-Resolve-rendered marker contact sheet plus JSON sidecar, and can request
-chat-context vision for marker/frame mismatch review.
+Resolve-rendered marker contact sheet plus JSON sidecar; with
+`vision.enabled=true` it returns a host_chat_paths review payload (image_path +
+prompt) so the host chat can read the sheet and answer inline — no commit step
+required for marker review.
 
 Before calling `analyze_*`, prefer `summarize` and `get_report` to discover
 existing reports for the active project. If reports exist, use them as the

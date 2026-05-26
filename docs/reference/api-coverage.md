@@ -25,10 +25,18 @@ prepares a stacked timeline for Resolve's multicam UI, but native multicam clip
 creation itself is not exposed by the scripting API. Similarly,
 `media_analysis.detect_sync_events` is a source-safe FFmpeg/FFprobe helper for
 advisory 2-pop and slate-clap sync points; it is not a Resolve API method.
-`media_analysis.add_sync_event_markers` is a guarded marker-write helper and
-requires explicit confirmation. `media_analysis.publish_clip_metadata` bridges
-source-safe analysis reports back into Resolve clip metadata with dry-run
-previews, field-specific merge policies, and confirmed writes.
+`media_analysis.add_sync_event_markers` is an explicit marker-write helper for
+standalone sync detections. `media_analysis.publish_clip_metadata` bridges
+source-safe analysis reports back into Resolve clip metadata with opt-out
+dry-run previews, field-specific merge policies, and default metadata/marker
+writeback for executed Resolve-target analysis. Vision uses host_chat_paths by
+default: analyze actions return frame_paths, a `shot_table` listing each shot
+range with its in-shot `frame_indices`, and a JSON schema requiring one
+`shot_descriptions` entry per shot. The host chat finalizes per-clip visual
+analysis via `media_analysis.commit_vision`, which merges the visual report,
+maps `shot_descriptions[shot_index]` onto Media Pool shot markers, and triggers
+metadata writeback for that clip. Works with any MCP client whose chat model
+is vision-capable; no `sampling/createMessage` support required.
 
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|
