@@ -126,20 +126,3 @@ mark_in, mark_out})`, which selects the clip on the Media page, loads it into
 the source viewer, sets mark in/out, and brings Resolve to the foreground via
 an OS-level window activation (AppleScript on macOS, PowerShell `AppActivate`
 on Windows, wmctrl/xdotool on Linux).
-
-## Re-capturing screenshots
-
-The screenshots in this guide are captured with a small Puppeteer script that
-drives the running panel. To re-shoot:
-
-```bash
-# In a scratch dir (don't pollute the project)
-npm install puppeteer
-# Then run a script that navigates each tab and screenshots to
-# docs/images/control-panel/. See the project memory for the latest capture
-# script.
-```
-
-The panel must be running on `127.0.0.1:8765` against an analysis root that
-has at least one analyzed clip (otherwise the Review/Clip/Shot screenshots
-will be empty).
