@@ -125,3 +125,8 @@ docs/*session*.md
 davinci-resolve-mcp-analysis/
 **/.davinci-resolve-mcp-analysis/
 **/davinci-resolve-mcp-analysis/
+
+# Local scratch / personal tooling attached to this project.
+# Holds things like the screenshot capture script, release-notes drafts,
+# and one-off repro scripts. Never shipped. See local/README.md.
+/local/
