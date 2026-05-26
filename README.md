@@ -11,6 +11,10 @@
 
 A Model Context Protocol (MCP) server that lets AI assistants control DaVinci Resolve Studio through the official Scripting API. It provides full API coverage plus guarded workflow helpers for editing, media pool organization, render setup, review markers, grading, Fusion, Fairlight, project lifecycle tasks, extension authoring, and source-safe media analysis.
 
+[![Local control panel](docs/images/control-panel/01-overview.png)](docs/guides/control-panel.md)
+
+A local browser control panel ships with the server for inspecting Resolve state, running source-safe analysis, drilling into analyzed clips and shots, and editing analysis output inline. See the [Control Panel Guide](docs/guides/control-panel.md) for the full tour.
+
 ## Quick Start
 
 ```bash
@@ -114,6 +118,7 @@ For method-by-method status, see [API Coverage and Test Results](docs/reference/
 | [API Coverage and Test Results](docs/reference/api-coverage.md) | Key stats, API coverage table, live-test status, full method reference |
 | [Kernel Action Coverage](docs/kernels/README.md) | Current guarded workflow action map |
 | [AI Skill Reference](docs/SKILL.md) | Operational context for AI assistants using the compound server |
+| [Control Panel Guide](docs/guides/control-panel.md) | Local browser panel tour: Overview, Review (bin/clip/shot), Analyze, Setup, Preferences |
 | [Media Analysis Guide](docs/guides/media-analysis-guide.md) | Source-safe FFprobe, FFmpeg, Whisper, sidecar, and analysis-root workflows |
 | [Multicam Setup Helper Guide](docs/guides/multicam-setup-guide.md) | Stacked timeline prep, helper/API boundary, and Resolve UI conversion steps |
 | [Editorial Decision Guide](docs/guides/editorial-decision-guide.md) | Project-owned editorial craft guidance for analysis and timeline decisions |
