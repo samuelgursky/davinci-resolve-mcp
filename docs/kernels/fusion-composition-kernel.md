@@ -30,6 +30,12 @@ All actions are exposed through `fusion_comp`.
 | `safe_set_inputs` | Batch write inputs on one tool with optional readback classification. |
 | `safe_connect_tools` | Validate source/target tools before connecting a source output to a target input. |
 | `fusion_boundary_report` | Return graph capabilities plus a composition snapshot for the selected comp scope. |
+| `group_settings_export` | Export a named `GroupOperator` via `SaveSettings`; return parsed `InstanceInput` summary. |
+| `group_settings_patch_controls` | Patch a `.setting` file's published-input block (thought-bubble / SpeechBubble order). |
+| `group_settings_load` | Backup then `LoadSettings` on a group (never deletes the group). |
+| `bulk_set_expressions` | Batch `SetExpression` on scoped timeline-item comps. |
+| `probe_group_published_inputs` | Live + file probe of group published inputs. |
+| `fusion_commit_hint` | Standard post-script checklist after comp mutations. |
 
 The pre-existing `bulk_set_inputs` action remains the batch path for applying
 input writes across multiple explicitly scoped timeline-item Fusion comps.
