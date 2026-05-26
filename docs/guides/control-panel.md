@@ -36,7 +36,7 @@ and the source-media safety status.
 
 ### Analysis → Analyze
 
-![Analyze view](../images/control-panel/05-analyze.png)
+![Analyze view](../images/control-panel/06-analyze.png)
 
 The Analyze view inventories the Resolve media pool read-only and lets you
 queue source-safe analysis jobs. Filters cover bin, media type, clip status,
@@ -60,9 +60,21 @@ every detected shot with thumbnails. From here you can open the clip in
 Resolve, jump to the transcript, or click into any shot for the full V2 field
 breakdown.
 
+### Transcript
+
+![Transcript view with word-level timing](../images/control-panel/04-transcript.png)
+
+The transcript view is reachable from the clip detail (top-right `Transcript`
+button). Each segment shows its start timecode, the cleaned sentence, and the
+word-level transcription beneath. The segment filter narrows by text; clicking
+a segment can jump the Resolve playhead to that source time. `Re-transcribe
+with words` re-runs the configured local transcription backend (Whisper by
+default) without re-doing visual analysis, and `corrections.json` captures
+inline edits so they survive future re-runs.
+
 ### Shot detail with inline correction
 
-![Shot detail with V2 fields and frames](../images/control-panel/04-shot-detail.png)
+![Shot detail with V2 fields and frames](../images/control-panel/05-shot-detail.png)
 
 The shot view shows every V2 schema field (shot size, framing, camera height,
 motion direction, lens character, lighting, composition notes, and more)
@@ -74,7 +86,7 @@ source viewer with the shot's mark in/out set.
 
 ### Setup → Resolve diagnostic
 
-![Setup / Resolve diagnostic](../images/control-panel/06-diagnostics-resolve.png)
+![Setup / Resolve diagnostic](../images/control-panel/07-diagnostics-resolve.png)
 
 The Resolve diagnostic page reports the live connection, product/version,
 active page, project identity, and media pool inventory. Useful when chat
@@ -83,7 +95,7 @@ operations.
 
 ### Preferences → Analysis
 
-![Preferences / Analysis defaults](../images/control-panel/07-preferences-analysis.png)
+![Preferences / Analysis defaults](../images/control-panel/08-preferences-analysis.png)
 
 Server-wide analysis defaults: vision on/off, transcription default, slate
 detection, source-trust grading (`auto` / `filename` / `low` / `medium` /
