@@ -1,6 +1,6 @@
 """Memory and heartbeat layer for V2 analysis architecture.
 
-Per docs/design/v2-shot-schema-spec.md §9 and the project_v2_architecture memory,
+Per the V2 shot schema spec §9 and the project_v2_architecture memory,
 each project's analysis root carries narrative memory alongside the structured DB:
 
     {analysis_root}/memory/

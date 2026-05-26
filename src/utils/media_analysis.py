@@ -3710,7 +3710,7 @@ async def execute_plan_async(
     ):
         manifest["index"] = build_analysis_index(output_root)
 
-    # V2 memory + heartbeat layer (per docs/design/v2-shot-schema-spec.md §9).
+    # V2 memory + heartbeat layer (per V2 shot schema spec §9).
     # Heartbeat tracks current project state for session-start awareness.
     # Bin summary is the machine's "first impression" briefing of the bin.
     if not session_only and manifest["successful_clip_count"]:

@@ -88,10 +88,7 @@ ffprobe/ffmpeg resolve even when the MCP server is launched by a GUI app
 Mandatory" section. `docs/SKILL.md` rewrites the `analyze_media` prompt
 guidance for the host-chat-paths protocol and adds the anti-regression rule.
 `docs/guides/media-analysis-guide.md` covers the deferred vision payload and
-commit step. New design docs under `docs/design/`:
-`v2-control-panel-design.md`, `v2-db-schema.sql`,
-`v2-implementation-gameplan.md`, `v2-shot-schema-spec.md`,
-`control-panel-polish-gameplan.md`.
+commit step.
 
 **Validation**: static import checks, API parity audit, focused
 media-analysis + marker/range/v232/v233 unit tests, npm CLI smoke,

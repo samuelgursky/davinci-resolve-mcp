@@ -6037,7 +6037,7 @@ def _media_analysis_timed_marker_prompt() -> Dict[str, Any]:
 # one-marker-per-frame collisions). The canonical store is the analysis DB; the
 # correction surface is the control panel + chat, not Resolve markers.
 #
-# See docs/design/v2-shot-schema-spec.md §9.1 (Decisions log) for details.
+# See the V2 shot schema spec §9.1 (Decisions log) for details.
 V2_MACHINE_MARKER_WRITEBACK_ENABLED = False
 
 
@@ -6100,8 +6100,8 @@ def _media_analysis_timed_marker_decision(p: Dict[str, Any]) -> Dict[str, Any]:
             "note": (
                 "V2 architecture disables machine marker writeback to Resolve "
                 "(per-shot, qc_warning, best_moment). Clip-level metadata "
-                "(Description, Keywords, Comments) still writes. See "
-                "docs/design/v2-shot-schema-spec.md §9.1 for rationale."
+                "(Description, Keywords, Comments) still writes. See the V2 "
+                "shot schema spec §9.1 for rationale."
             ),
         }
 
@@ -9479,7 +9479,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 #
 # Until the SQLite source-of-truth migration (C1) lands, corrections live in a
 # per-clip sidecar JSON at {clip_dir}/corrections.json. Schema mirrors the V2
-# DB design (docs/design/v2-db-schema.sql §subjective_fields + field_changelog):
+# DB design (V2 schema — subjective_fields + field_changelog tables):
 #
 #   {
 #     "schema_version": "2.0",

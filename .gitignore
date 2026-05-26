@@ -115,10 +115,11 @@ docs/demo-video-gameplan.md
 operational-client-safety-hardening-gameplan.md
 docs/_scratch/
 docs/_design/
-docs/*gameplan*.md
-docs/*ledger*.json
-docs/*review-log*.md
-docs/*session*.md
+# Match gameplans / scratch artifacts anywhere in the tree, not just docs/ root.
+**/*gameplan*.md
+**/*ledger*.json
+**/*review-log*.md
+**/*session*.md
 
 # Resolve MCP media analysis artifacts
 .davinci-resolve-mcp-analysis/
