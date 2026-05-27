@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.24.1
+
+**`npx davinci-resolve-mcp` no longer breaks MCP clients when invoked without a
+subcommand.** The npm bootstrapper previously defaulted to `--help`, which wrote
+usage text to stdout and exited 0. MCP stdio clients (Hermes Agent, Claude
+Desktop, Cursor, etc.) read that as malformed JSON-RPC, retried three times,
+then dropped the connection. `bin/davinci-resolve-mcp.mjs` now defaults to the
+`server` subcommand when no arguments are supplied. Explicit `--help`, `-h`,
+`help`, `--version`, and `-v` continue to print to stdout as before, and
+existing configs that already pass `server` explicitly are unaffected. Reported
+in [#41](https://github.com/samuelgursky/davinci-resolve-mcp/issues/41).
+
 ## What's New in v2.24.0
 
 **Host-chat vision protocol (V2)** — `analyze_*` actions now use

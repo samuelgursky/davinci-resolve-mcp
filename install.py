@@ -34,7 +34,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.24.0"
+VERSION = "2.24.1"
 SUPPORTED_PYTHON_MIN = (3, 10)
 SUPPORTED_PYTHON_MAX = (3, 12)
 

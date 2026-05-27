@@ -336,7 +336,10 @@ function commandControlPanel(args) {
 }
 
 function main() {
-  const [command = "--help", ...args] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  // No args → run the MCP stdio server. Anything printed to stdout would
+  // otherwise be parsed as JSON-RPC by MCP clients and break the connection.
+  const [command = "server", ...args] = argv;
 
   try {
     if (command === "--help" || command === "-h" || command === "help") {
