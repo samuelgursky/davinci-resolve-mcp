@@ -923,6 +923,18 @@ Key actions:
 - `start_undo(name?)` / `end_undo(keep?)`
 - `bulk_set_inputs(ops)` — batch set inputs across multiple timeline item comps in
   one call; each op requires timeline scope plus `tool_name`, `input_name`, `value`
+- `bulk_set_expressions(ops)` — batch attach expressions across multiple timeline
+  item comps in one call; each op requires timeline scope plus `tool_name`,
+  `input_name`, `expression`
+- `group_settings_export(group_name, path, include_advisory?)` — write a
+  `GroupOperator` to disk and return a parsed published-input summary
+- `group_settings_splice_inputs(source_path, template_path, dest_path?, source_group_name?, template_group_name?)` —
+  replace one `.setting` file's `Inputs = ordered() { ... }` block with the
+  matching block from another, preserving inner tools and outer structure;
+  balanced-brace parser handles nested `UserControls`
+- `group_settings_load(group_name, settings_path, backup_path?, undo_name?)` —
+  apply a `.setting` to a live group with an auto backup and an undo wrap so
+  Ctrl+Z reverses the change
 
 Fusion Composition kernel actions (v2.12.0+) add safer graph inspection and
 mutation wrappers around the raw Fusion API:

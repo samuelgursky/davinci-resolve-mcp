@@ -2,6 +2,44 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.26.0
+
+**Fusion group-settings helpers** — Three new `fusion_comp` actions for
+authoring and patching `GroupOperator` macros without leaving the kernel.
+`group_settings_export` writes a live group to a `.setting` file and returns a
+parsed `published_inputs` summary using a balanced-brace walker so nested
+`UserControls` / `ControlGroup` tables are bounded correctly (the original
+flat-regex parser truncated `InstanceInput` bodies at the first inner `}`).
+`group_settings_splice_inputs` replaces the `Inputs = ordered() { ... }` block
+of one `.setting` with the matching block from another, preserving the source's
+outer structure and inner `Tools`. `group_settings_load` applies a `.setting`
+to a live group with an automatic timestamped backup, wrapped in
+`StartUndo`/`Lock`/`LoadSettings`/`Unlock`/`EndUndo(True)` so Fusion's Ctrl+Z
+reverses the change — verified live via direct BMD API.
+
+**bulk_set_expressions** — Companion to the existing `bulk_set_inputs`. Batch
+attach Fusion expressions across many timeline-item comps in one call. Each op
+requires timeline scope plus `tool_name`, `input_name`, `expression`. Returns
+per-op `success`/`error` rows + `op_count`, matching the bulk-inputs contract.
+Useful for animating many controls at once (`time/30`, etc.) under a single
+chat turn.
+
+**Headless batch-runner CLI** — New
+`davinci-resolve-mcp batch <plan|run|status|list|resume|cancel>` subcommand
+drives `src/utils/media_analysis_jobs` from outside an MCP/chat client so long
+analysis batches can run via cron, CI, or terminal without holding a chat turn
+open. The orchestration loop and durable state stay in the existing jobs
+engine; the CLI only handles argv, progress streaming, and exit codes
+(`0` ok / `2` partial / `3` fatal / `130` Ctrl+C). JSON mode (`--json`)
+emits one record per progress event for log scraping. Closes #42.
+
+**Adapted from PR #40** — Group-settings work originated as a contribution
+from @RaincloudTheDragon; PR #43 retains the keepable parts (parser, exporter,
+splicer, loader, `bulk_set_expressions`) with a balanced-brace fix on the
+parser and an undo+lock wrap on `group_settings_load`. The two AMZ-specific
+templates and the static checklist from #40 were dropped as out-of-scope for a
+general kernel.
+
 ## What's New in v2.25.0
 
 **Agentic flow improvements** — A second-pass review against the Claude
