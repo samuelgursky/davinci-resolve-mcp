@@ -35,9 +35,14 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.26.0"
+VERSION = "2.26.1"
+# Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
+# Resolve's scripting bridge loads into newer interpreters on recent builds
+# (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
+# may fail to connect on 3.13+, but the connection check is the real signal,
+# so we proceed with a heads-up rather than refusing to run.
 SUPPORTED_PYTHON_MIN = (3, 10)
-SUPPORTED_PYTHON_MAX = (3, 12)
+PYTHON_ABI_RISK_MIN = (3, 13)
 
 # ─── Colors (disabled on Windows cmd without ANSI support) ────────────────────
 
@@ -77,7 +82,12 @@ def platform_name():
 
 def is_supported_python_version(version):
     major, minor = version[:2]
-    return major == 3 and SUPPORTED_PYTHON_MIN[1] <= minor <= SUPPORTED_PYTHON_MAX[1]
+    return major == 3 and minor >= SUPPORTED_PYTHON_MIN[1]
+
+
+def is_abi_risk_python_version(version):
+    major, minor = version[:2]
+    return major == 3 and minor >= PYTHON_ABI_RISK_MIN[1]
 
 
 def format_python_version(version):
@@ -85,9 +95,38 @@ def format_python_version(version):
 
 
 def python_requirement_text():
+    return f"Python {SUPPORTED_PYTHON_MIN[0]}.{SUPPORTED_PYTHON_MIN[1]} or newer"
+
+
+_ABI_NOTE_PRINTED = False
+
+
+def print_abi_risk_note_once(version, label="Python"):
+    """Emit the 3.13+ heads-up at most once per installer run."""
+    global _ABI_NOTE_PRINTED
+    if _ABI_NOTE_PRINTED:
+        return
+    _ABI_NOTE_PRINTED = True
+    print(f"  {yellow(label + ':')} {python_abi_risk_note(version)}")
+
+
+def python_abi_risk_note(version):
     return (
-        f"Python {SUPPORTED_PYTHON_MIN[0]}.{SUPPORTED_PYTHON_MIN[1]}-"
-        f"{SUPPORTED_PYTHON_MAX[0]}.{SUPPORTED_PYTHON_MAX[1]}"
+        f"Using Python {format_python_version(version)}. Verified working on recent "
+        f"Resolve builds (Studio 20.3.2). If Resolve fails to connect "
+        f"(scriptapp(\"Resolve\") returns None), install Python 3.10-3.12 and re-run "
+        f"with it, e.g.: python3.12 install.py"
+    )
+
+
+def python_fix_hint():
+    return (
+        "  How to fix:\n"
+        "    - Install Python 3.12 (the lowest-risk version for Resolve), e.g.:\n"
+        "        macOS:   brew install python@3.12   (or: pyenv install 3.12)\n"
+        "        Linux:   pyenv install 3.12          (or your distro's python3.12 package)\n"
+        "        Windows: install Python 3.12 from python.org\n"
+        "    - Re-run with that interpreter, e.g.:  python3.12 install.py"
     )
 
 
@@ -120,10 +159,13 @@ def require_supported_python(python_path, label="Python"):
     if not is_supported_python_version(version):
         print(
             f"  {red(label + ':')} {python_requirement_text()} is required "
-            f"for Resolve scripting compatibility; found {format_python_version(version)} "
+            f"(the MCP SDK needs 3.10+); found {format_python_version(version)} "
             f"at {python_path}"
         )
+        print(python_fix_hint())
         sys.exit(1)
+    if is_abi_risk_python_version(version):
+        print_abi_risk_note_once(version, label)
     return version
 
 
@@ -132,10 +174,13 @@ def require_current_python(label="Python"):
     if not is_supported_python_version(version):
         print(
             f"  {red(label + ':')} {python_requirement_text()} is required "
-            f"for Resolve scripting compatibility; current interpreter is "
+            f"(the MCP SDK needs 3.10+); current interpreter is "
             f"{format_python_version(version)} at {sys.executable}"
         )
+        print(python_fix_hint())
         sys.exit(1)
+    if is_abi_risk_python_version(version):
+        print_abi_risk_note_once(version, label)
     return version
 
 # ─── Resolve Path Detection ──────────────────────────────────────────────────
@@ -1411,14 +1456,34 @@ def main():
 
     if api_path:
         success, message = verify_resolve_connection(python_path, api_path, lib_path)
+        try:
+            py_abi_risk = is_abi_risk_python_version(_version_for_python(python_path))
+        except Exception:
+            py_abi_risk = False
         if success:
             if "not running" in message.lower():
                 print(f"  API:       {green('Module loads OK')}")
-                print(f"  Resolve:   {yellow('Not running')} — start Resolve to use MCP tools")
+                # If Resolve IS running but the bridge still reported no connection
+                # on a 3.13+ interpreter, that is the ABI-mismatch signature.
+                if resolve_running and py_abi_risk:
+                    print(
+                        f"  Resolve:   {yellow('Running, but the scripting bridge returned no connection')}"
+                    )
+                    print(
+                        f"             This can happen on Python 3.13+ with older Resolve builds. "
+                        f"If MCP tools fail, recreate the venv with Python 3.10-3.12."
+                    )
+                else:
+                    print(f"  Resolve:   {yellow('Not running')} — start Resolve to use MCP tools")
             else:
                 print(f"  Connected: {green(message)}")
         else:
             print(f"  Verify:    {yellow(message)}")
+            if py_abi_risk:
+                print(
+                    f"             On Python 3.13+ this may be an ABI mismatch with Resolve's "
+                    f"scripting library — try Python 3.10-3.12 if it persists."
+                )
     else:
         print(f"  {yellow('Skipped')} — Resolve API path not detected")
 

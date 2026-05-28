@@ -1247,9 +1247,13 @@ timeline item returns `False` in Resolve. Use `get_node_graph` without a
 if the Gallery panel is open in the Resolve UI on the Color page. Instruct the
 user to open it via Workspace menu if export fails.
 
-**Python version** — Resolve's scripting library works best with Python 3.10–3.12.
-Python 3.13+ may cause `scriptapp("Resolve")` to return `None` due to ABI
-incompatibilities.
+**Python version** — the only hard requirement is Python **3.10+** (the MCP SDK
+floor). There is no upper cap: 3.13/3.14 are accepted, and Python 3.14 is verified
+working against Resolve Studio 20.3.2. On *older* Resolve builds the scripting
+bridge may still fail to load on 3.13+ (`scriptapp("Resolve")` returns `None`);
+`setup`/`doctor` warn on 3.13+ and their connection check surfaces a real failure.
+If that happens, recreate the venv with Python 3.10–3.12 (the lowest-risk range).
+The running server only warns on 3.13+ rather than exiting.
 
 **Resolve version guards** — Resolve 20-specific actions return a clear
 `requires DaVinci Resolve 20.x+` error when called against older builds. Resolve

@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.26.1
+
+**Python 3.13 / 3.14 support (issue #45)** — `npx davinci-resolve-mcp setup`
+previously hard-refused any interpreter outside 3.10–3.12, so it failed outright
+on Python 3.14. The 3.12 ceiling was based on a stale assumption that Resolve's
+scripting bridge has ABI incompatibilities on 3.13+. Verified empirically against
+DaVinci Resolve Studio 20.3.2.9: Python 3.14.4 connects and exercises the
+dict/list marshalling paths cleanly. The launcher and installer now enforce only
+the 3.10 floor (the `mcp[cli]` SDK requirement) with no upper cap. Python 3.13/3.14
+are accepted with a soft heads-up; `setup`/`doctor` surface a precise,
+connection-aware hint only when Resolve is running but the bridge returns no
+connection on 3.13+. Sub-3.10 interpreters get an actionable error instead of a
+dead end. `server.py` warns (never exits) on 3.13+. Adds 6 version-gate unit tests.
+
 ## What's New in v2.26.0
 
 **Fusion group-settings helpers** — Three new `fusion_comp` actions for
