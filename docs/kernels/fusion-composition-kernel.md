@@ -30,9 +30,39 @@ All actions are exposed through `fusion_comp`.
 | `safe_set_inputs` | Batch write inputs on one tool with optional readback classification. |
 | `safe_connect_tools` | Validate source/target tools before connecting a source output to a target input. |
 | `fusion_boundary_report` | Return graph capabilities plus a composition snapshot for the selected comp scope. |
+| `bulk_set_expressions` | Batch `SetExpression` across scoped timeline-item Fusion comps. Each op needs `tool_name`, `input_name`, `expression`, plus a timeline scope. Wraps each op in `StartUndo`/`EndUndo` + `comp.Lock`. |
+| `group_settings_export` | Save a named `GroupOperator`'s settings to a `.setting` file via `SaveSettings`, returning a parsed published-input summary. |
+| `group_settings_splice_inputs` | Replace the `Inputs = ordered() { ... }` block of `source_path` with the matching block from `template_path` and write `dest_path`. Read-only against Resolve; pure file operation. |
+| `group_settings_load` | Backup the current group state, then `LoadSettings` from a `.setting` file. Wrapped in `StartUndo`/`EndUndo` + `comp.Lock` so Fusion's Ctrl+Z can reverse it. Backup path is returned alongside any error. |
+| `probe_group_published_inputs` | Read live published `Input1..InputN` slots off a `GroupOperator`, optionally cross-referenced with a `.setting` file summary. |
 
 The pre-existing `bulk_set_inputs` action remains the batch path for applying
 input writes across multiple explicitly scoped timeline-item Fusion comps.
+
+### `group_settings_splice_inputs` notes
+
+The Fusion `.setting` format is a Lua-like nested structure: an InstanceInput
+commonly contains `UserControls = ordered() { Custom = { ... } }` tables, so any
+parsing that uses a flat regex will truncate bodies at the first inner `}`. This
+kernel uses balanced-brace scanning end-to-end. Practical implications:
+
+- The action only swaps the published `Inputs = ordered() { ... }` block. The
+  group's outer name, inner `Tools = ordered() { ... }` section, and surrounding
+  structure are preserved byte-for-byte.
+- You must provide the *new* layout as a real `.setting` file (typically
+  exported from a known-good group via `group_settings_export`). The kernel does
+  not ship hardcoded templates.
+- `template_group_name` is optional when the template file contains a single
+  `GroupOperator`; pass it when the template file contains multiple groups and
+  you want a specific one.
+
+### `group_settings_load` Edit-page caveat
+
+`LoadSettings` may update inner tool wiring but not refresh Edit-page
+`InstanceInput` order until the group is selected in Fusion and reloaded via UI.
+This is a Resolve quirk, not a kernel bug. The action always backs up the group
+to a timestamped sibling of `settings_path` first; the backup path is returned
+in success and in error responses.
 
 ## Scope Matrix
 
