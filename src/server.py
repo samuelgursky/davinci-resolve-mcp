@@ -93,6 +93,13 @@ from src.utils.timeline_title_text import (
     timeline_item_get_property_map as _timeline_item_get_property_map,
 )
 from src.utils.multicam import build_multicam_setup_plan
+from src.utils.fusion_group_settings import (
+    FUSION_COMMIT_CHECKLIST,
+    FUSION_GROUP_GUARDRAILS,
+    default_backup_path,
+    parse_setting_file,
+    splice_inputs_block,
+)
 from src.utils import analysis_runs as _analysis_runs
 from src.utils import brain_edits as _brain_edits
 from src.utils import media_pool_changes as _media_pool_changes
@@ -16864,6 +16871,304 @@ def color_group(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 # TOOL 27: fusion_comp
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_FUSION_GROUP_KERNEL_ACTIONS = [
+    "group_settings_export",
+    "group_settings_splice_inputs",
+    "group_settings_load",
+    "bulk_set_expressions",
+    "probe_group_published_inputs",
+]
+
+
+def _find_fusion_group(comp, group_name: str):
+    tool = comp.FindTool(group_name)
+    if tool:
+        attrs = tool.GetAttrs() or {}
+        if attrs.get("TOOLS_RegID") == "GroupOperator":
+            return tool
+    tool_list = comp.GetToolList(False, "GroupOperator") or {}
+    for idx in tool_list:
+        candidate = tool_list[idx]
+        attrs = candidate.GetAttrs() or {}
+        if attrs.get("TOOLS_Name") == group_name:
+            return candidate
+    return None
+
+
+def _resolve_setting_path(p: Dict[str, Any], key: str = "path") -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    raw = p.get(key)
+    if not raw or not str(raw).strip():
+        return None, _err(f"{key} is required")
+    return os.path.abspath(str(raw)), None
+
+
+def _fusion_group_advisory(include: bool) -> Dict[str, Any]:
+    if not include:
+        return {}
+    return {
+        "guardrails": list(FUSION_GROUP_GUARDRAILS),
+        "commit_checklist": list(FUSION_COMMIT_CHECKLIST),
+    }
+
+
+def _fusion_group_settings_export(comp, p: Dict[str, Any]) -> Dict[str, Any]:
+    group_name = p.get("group_name")
+    if not group_name:
+        return _err("group_name is required")
+    path, path_err = _resolve_setting_path(p)
+    if path_err:
+        return path_err
+    group = _find_fusion_group(comp, str(group_name))
+    if not group:
+        return _err(f"GroupOperator {group_name!r} not found in comp")
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    try:
+        group.SaveSettings(path)
+    except Exception as exc:
+        return _err(f"SaveSettings failed: {exc}")
+    if not os.path.isfile(path):
+        return _err(f"SaveSettings did not create file at {path!r}")
+    try:
+        parsed = parse_setting_file(path, group_name=str(group_name))
+    except Exception as exc:
+        return {
+            "success": True,
+            "path": path,
+            "group_name": group_name,
+            "parse_warning": f"saved, but summary parse failed: {exc}",
+            **_fusion_group_advisory(p.get("include_advisory", False)),
+        }
+    return {
+        "success": True,
+        "path": path,
+        "group_name": group_name,
+        "published_inputs": parsed["published_inputs"],
+        "input_count": parsed["input_count"],
+        **_fusion_group_advisory(p.get("include_advisory", False)),
+    }
+
+
+def _fusion_group_settings_splice_inputs(p: Dict[str, Any]) -> Dict[str, Any]:
+    source_path, src_err = _resolve_setting_path(p, "source_path")
+    if src_err:
+        return src_err
+    if not os.path.isfile(source_path):
+        return _err(f"source_path not found: {source_path}")
+    template_path, tpl_err = _resolve_setting_path(p, "template_path")
+    if tpl_err:
+        return tpl_err
+    if not os.path.isfile(template_path):
+        return _err(f"template_path not found: {template_path}")
+    dest_path = p.get("dest_path")
+    if dest_path:
+        dest_path = os.path.abspath(str(dest_path))
+    else:
+        root, ext = os.path.splitext(source_path)
+        dest_path = f"{root}.patched{ext or '.setting'}"
+    try:
+        summary = splice_inputs_block(
+            source_path,
+            template_path,
+            dest_path,
+            source_group_name=p.get("source_group_name") or p.get("group_name"),
+            template_group_name=p.get("template_group_name"),
+        )
+    except Exception as exc:
+        return _err(f"splice failed: {exc}")
+    return {
+        "success": True,
+        "dest_path": summary["dest_path"],
+        "summary": summary,
+        **_fusion_group_advisory(p.get("include_advisory", False)),
+    }
+
+
+def _fusion_group_settings_load(comp, p: Dict[str, Any]) -> Dict[str, Any]:
+    group_name = p.get("group_name")
+    if not group_name:
+        return _err("group_name is required")
+    settings_path, path_err = _resolve_setting_path(p, "settings_path")
+    if path_err:
+        return path_err
+    if not os.path.isfile(settings_path):
+        return _err(f"settings_path not found: {settings_path}")
+    group = _find_fusion_group(comp, str(group_name))
+    if not group:
+        return _err(f"GroupOperator {group_name!r} not found in comp")
+    backup_path = p.get("backup_path")
+    if backup_path:
+        backup_path = os.path.abspath(str(backup_path))
+    else:
+        backup_path = default_backup_path(settings_path)
+    try:
+        os.makedirs(os.path.dirname(backup_path) or ".", exist_ok=True)
+        group.SaveSettings(backup_path)
+    except Exception as exc:
+        return _err(f"backup SaveSettings failed: {exc}")
+
+    undo_name = p.get("undo_name", f"MCP group_settings_load {group_name}")
+    undo_started = False
+    keep_undo = False
+    error_message: Optional[str] = None
+    try:
+        try:
+            comp.StartUndo(undo_name)
+            undo_started = True
+        except Exception:
+            undo_started = False
+        comp.Lock()
+        try:
+            group.LoadSettings(settings_path)
+            keep_undo = True
+        finally:
+            comp.Unlock()
+    except Exception as exc:
+        error_message = str(exc)
+    finally:
+        if undo_started:
+            try:
+                comp.EndUndo(keep_undo)
+            except Exception:
+                pass
+
+    if error_message is not None:
+        return _err(
+            f"LoadSettings failed: {error_message}",
+            remediation=f"Group state preserved by backup at {backup_path}",
+        )
+    return {
+        "success": True,
+        "group_name": group_name,
+        "settings_path": settings_path,
+        "backup_path": backup_path,
+        "warning": (
+            "Group preserved. If Edit Controls don't refresh, select the group in "
+            "Fusion and use UI Load Settings to remap InstanceInput order."
+        ),
+        **_fusion_group_advisory(p.get("include_advisory", False)),
+    }
+
+
+def _fusion_comp_bulk_set_expressions(p: Dict[str, Any]) -> Dict[str, Any]:
+    ops = p.get("ops")
+    if not isinstance(ops, list) or not ops:
+        return _err(
+            "bulk_set_expressions requires params.ops: non-empty list of objects. "
+            "Each op must include tool_name, input_name, expression, and a timeline scope: "
+            "clip_id, timeline_item_id, or timeline_item={track_type, track_index, item_index}. "
+            "Optional per-op: comp_name, comp_index, time, undo_name."
+        )
+    results: List[Dict[str, Any]] = []
+    for index, op in enumerate(ops):
+        if not isinstance(op, dict):
+            results.append({"index": index, "error": "op must be an object"})
+            continue
+        if not _has_fusion_timeline_scope(op):
+            results.append({"index": index, "error": "timeline scope is required for bulk_set_expressions"})
+            continue
+        missing = [key for key in ("tool_name", "input_name", "expression") if key not in op]
+        if missing:
+            results.append({"index": index, "error": f"missing required field(s): {', '.join(missing)}"})
+            continue
+        comp, comp_err = _resolve_fusion_comp(op, require_timeline_scope=True)
+        if comp_err:
+            results.append({"index": index, "error": comp_err.get("error", str(comp_err))})
+            continue
+        tool = comp.FindTool(op["tool_name"])
+        if not tool:
+            results.append({"index": index, "error": f"Tool {op['tool_name']!r} not found"})
+            continue
+        undo_name = op.get("undo_name", f"MCP bulk_set_expressions #{index}")
+        undo_started = False
+        keep_undo = False
+        error_message: Optional[str] = None
+        try:
+            try:
+                comp.StartUndo(undo_name)
+                undo_started = True
+            except Exception:
+                undo_started = False
+            comp.Lock()
+            try:
+                time = op.get("time", 0)
+                inp = tool[op["input_name"]]
+                if not inp:
+                    raise ValueError(f"Input {op['input_name']!r} not found on {op['tool_name']!r}")
+                inp.SetExpression(str(op["expression"]), time)
+                keep_undo = True
+            finally:
+                comp.Unlock()
+        except Exception as exc:
+            error_message = str(exc)
+        finally:
+            if undo_started:
+                try:
+                    comp.EndUndo(keep_undo)
+                except Exception:
+                    pass
+        if error_message is not None:
+            results.append({"index": index, "error": error_message})
+        elif keep_undo:
+            results.append({"index": index, "success": True, "expression": op["expression"]})
+    return {"results": results, "op_count": len(ops)}
+
+
+def _fusion_probe_group_published_inputs(comp, p: Dict[str, Any]) -> Dict[str, Any]:
+    group_name = p.get("group_name")
+    if not group_name:
+        return _err("group_name is required")
+    group = _find_fusion_group(comp, str(group_name))
+    if not group:
+        return _err(f"GroupOperator {group_name!r} not found in comp")
+    max_inputs = p.get("max_inputs", 32)
+    try:
+        max_inputs = int(max_inputs)
+    except (TypeError, ValueError):
+        max_inputs = 32
+    time = p.get("time", 0)
+    live_inputs: List[Dict[str, Any]] = []
+    for index in range(1, max_inputs + 1):
+        slot = f"Input{index}"
+        try:
+            inp = group[slot]
+        except Exception:
+            break
+        if not inp:
+            break
+        row: Dict[str, Any] = {"slot": slot}
+        try:
+            attrs = inp.GetAttrs() or {}
+            row["name"] = attrs.get("INPS_Name", "")
+            row["type"] = attrs.get("INPS_DataType", "")
+        except Exception:
+            pass
+        try:
+            row["value"] = _ser(inp[time])
+        except Exception as exc:
+            row["value_error"] = str(exc)
+        try:
+            row["expression"] = inp.GetExpression(time)
+        except Exception:
+            row["expression"] = None
+        live_inputs.append(row)
+
+    file_summary: Optional[Dict[str, Any]] = None
+    settings_path = p.get("settings_path")
+    if settings_path and os.path.isfile(str(settings_path)):
+        try:
+            file_summary = parse_setting_file(str(settings_path), group_name=str(group_name))
+        except Exception as exc:
+            file_summary = {"error": str(exc)}
+
+    return {
+        "group_name": group_name,
+        "live_inputs": live_inputs,
+        "live_input_count": len(live_inputs),
+        "file_summary": file_summary,
+        **_fusion_group_advisory(p.get("include_advisory", False)),
+    }
+
+
 def _fusion_comp_bulk_set_inputs(p: Dict[str, Any]) -> Dict[str, Any]:
     """Apply set_input across many explicitly scoped timeline-item Fusion comps."""
     ops = p.get("ops")
@@ -17177,6 +17482,14 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       start_undo(name?) -> {success}
       end_undo(keep?) -> {success}
       bulk_set_inputs(ops) -> {results, op_count} — each op requires timeline scope plus tool_name, input_name, value
+      bulk_set_expressions(ops) -> {results, op_count} — each op requires timeline scope plus tool_name, input_name, expression
+      group_settings_export(group_name, path, include_advisory?) -> {path, published_inputs, input_count}
+      group_settings_splice_inputs(source_path, template_path, dest_path?, source_group_name?, template_group_name?) -> {dest_path, summary}
+        Replace a source .setting's `Inputs = ordered() { ... }` block with the matching block from template_path.
+        Both files are read; neither GroupOperator is loaded into Resolve. Inner tools and outer structure are preserved.
+      group_settings_load(group_name, settings_path, backup_path?, undo_name?) -> {settings_path, backup_path}
+        Wraps the LoadSettings call in StartUndo/EndUndo + comp.Lock for reversibility.
+      probe_group_published_inputs(group_name, settings_path?, max_inputs?, time?) -> {live_inputs, file_summary?}
       fusion_graph_capabilities(...) -> {supported, boundaries, common_tools}
       probe_fusion_comp(include_io?, max_tools?) -> {name, tool_count, tools}
       probe_fusion_tool(tool_name, include_io?) -> {found, tool}
@@ -17193,10 +17506,21 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 
     if action == "bulk_set_inputs":
         return _fusion_comp_bulk_set_inputs(p)
+    if action == "bulk_set_expressions":
+        return _fusion_comp_bulk_set_expressions(p)
+    if action == "group_settings_splice_inputs":
+        return _fusion_group_settings_splice_inputs(p)
 
     comp, comp_err = _resolve_fusion_comp(p)
     if comp_err:
         return comp_err
+
+    if action == "group_settings_export":
+        return _fusion_group_settings_export(comp, p)
+    if action == "group_settings_load":
+        return _fusion_group_settings_load(comp, p)
+    if action == "probe_group_published_inputs":
+        return _fusion_probe_group_published_inputs(comp, p)
 
     if action == "fusion_graph_capabilities":
         return _fusion_graph_capabilities(comp)
@@ -17449,6 +17773,8 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "get_comp_info","set_frame_range","render",
         "start_undo","end_undo",
         "bulk_set_inputs",
+        "bulk_set_expressions",
+        *_FUSION_GROUP_KERNEL_ACTIONS,
         *_FUSION_KERNEL_ACTIONS,
     ])
 
