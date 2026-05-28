@@ -41,6 +41,7 @@ Usage:
   davinci-resolve-mcp doctor [install.py options]
   davinci-resolve-mcp server [server.py options]
   davinci-resolve-mcp control-panel [control panel options]
+  davinci-resolve-mcp batch <plan|run|status|list|resume|cancel> [options]
   davinci-resolve-mcp --version
   davinci-resolve-mcp --help
 
@@ -48,6 +49,8 @@ Examples:
   npx davinci-resolve-mcp setup
   npx davinci-resolve-mcp setup --clients cursor,claude-desktop
   npx davinci-resolve-mcp doctor
+  npx davinci-resolve-mcp batch run /path/to/footage --depth standard
+  npx davinci-resolve-mcp batch run /path/to/footage --json > progress.log
 
 Environment:
   DAVINCI_RESOLVE_MCP_INSTALL_ROOT   Override the managed install directory.
@@ -335,6 +338,13 @@ function commandControlPanel(args) {
   run(command, commandArgs, { cwd: root });
 }
 
+function commandBatch(args) {
+  const root = syncManagedInstall(installRoot());
+  const python = venvPython(root) || findSupportedPython();
+  const [command, ...commandArgs] = pythonCommandLine(python, ["-m", "src.batch_cli", ...args]);
+  run(command, commandArgs, { cwd: root });
+}
+
 function main() {
   const argv = process.argv.slice(2);
   // No args → run the MCP stdio server. Anything printed to stdout would
@@ -364,6 +374,10 @@ function main() {
     }
     if (command === "control-panel" || command === "control_panel") {
       commandControlPanel(args);
+      return;
+    }
+    if (command === "batch") {
+      commandBatch(args);
       return;
     }
 
