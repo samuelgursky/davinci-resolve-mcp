@@ -330,30 +330,36 @@ class PropertyCopyItemStub:
 
 class AppendClipInfosResultHandlingTest(unittest.TestCase):
     def test_serialize_appended_timeline_item_requires_item_handle(self):
+        from tests._error_envelope_helpers import err_message
+
         item_out, item_err = _serialize_appended_timeline_item(None, 0)
 
         self.assertIsNone(item_out)
         self.assertEqual(
-            item_err,
-            {"error": "Failed to append clip_infos to timeline: missing timeline item at index 0"},
+            err_message(item_err),
+            "Failed to append clip_infos to timeline: missing timeline item at index 0",
         )
 
     def test_serialize_appended_timeline_item_requires_unique_id(self):
+        from tests._error_envelope_helpers import err_message
+
         item_out, item_err = _serialize_appended_timeline_item(TimelineItemStub(unique_id=""), 2)
 
         self.assertIsNone(item_out)
         self.assertEqual(
-            item_err,
-            {"error": "Failed to append clip_infos to timeline: missing timeline item id at index 2"},
+            err_message(item_err),
+            "Failed to append clip_infos to timeline: missing timeline item id at index 2",
         )
 
     def test_serialize_appended_timeline_item_rejects_invalid_item_handle(self):
+        from tests._error_envelope_helpers import err_message
+
         item_out, item_err = _serialize_appended_timeline_item(BrokenTimelineItemStub(), 1)
 
         self.assertIsNone(item_out)
         self.assertEqual(
-            item_err,
-            {"error": "Failed to append clip_infos to timeline: invalid timeline item at index 1"},
+            err_message(item_err),
+            "Failed to append clip_infos to timeline: invalid timeline item at index 1",
         )
 
     def test_serialize_appended_timeline_item_allows_empty_id_when_requested(self):

@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 329-tool granular server instead
 """
 
-VERSION = "2.24.1"
+VERSION = "2.25.0"
 
 import base64
 import os
@@ -62,6 +62,7 @@ from src.utils.media_analysis import (
     VISION_SCHEMA_REFERENCE,
     analysis_index_status,
     build_plan as build_media_analysis_plan,
+    build_coverage_report as build_media_analysis_coverage_report,
     build_analysis_index,
     cleanup_artifacts as cleanup_media_analysis_artifacts,
     commit_visual_analysis,
@@ -92,6 +93,12 @@ from src.utils.timeline_title_text import (
     timeline_item_get_property_map as _timeline_item_get_property_map,
 )
 from src.utils.multicam import build_multicam_setup_plan
+from src.utils import analysis_runs as _analysis_runs
+from src.utils import brain_edits as _brain_edits
+from src.utils import media_pool_changes as _media_pool_changes
+from src.utils import timeline_versioning as _timeline_versioning
+from src.utils import destructive_hook as _destructive_hook
+from src.utils.destructive_hook import destructive_op as _destructive_op
 
 paths = get_resolve_paths()
 RESOLVE_API_PATH = paths["api_path"]
@@ -203,6 +210,7 @@ def _annotations_for_tool_name(tool_name: str) -> mcp_types.ToolAnnotations:
         "timeline_item_fusion",
         "timeline_item_color",
         "timeline_item_takes",
+        "timeline_versioning",
         "gallery",
         "graph",
         "color_group",
@@ -277,6 +285,14 @@ High-value workflows:
 - Project lifecycle: use project_manager.project_boundary_report and safe project/database/archive actions. Keep destructive work scoped to disposable _mcp_ projects unless the user explicitly approves otherwise.
 - Extension authoring: use script_plugin.extension_boundary_report and safe_install_extension/safe_remove_extension. Respect refresh/restart requirements.
 
+Editorial improvements + versioning (C6 — always on for destructive timeline ops):
+- Every destructive timeline op (compound, captions, ripple delete, gap close, retime, marker batch, take swap, color grade, etc.) auto-archives the working timeline to the `Archive` bin BEFORE the mutation runs. You don't need to call archive yourself.
+- For multi-step editorial operations, call `timeline_versioning(action="begin_run", label="<short description>", initiator="brain.chat")` first. Every subsequent destructive call within that run will reuse the same `analysis_run_id` and produce ONE archived predecessor, not N. Pair with `timeline_versioning(action="end_run")` to write a cumulative per-metric summary.
+- When you're making a deliberate edit you can measure, pass `metric`, `direction`, and `rationale` in the action params. The hook captures the live `before_value` and `after_value` from the timeline and writes a `brain_edits` row with the delta — that's the measurement substrate for tuning. Supported metrics: `duration_seconds`, `avg_performance_score`, `clip_count`, `gap_count`, `total_gap_seconds`, `redundancy_score`. `direction` is `increase` | `decrease` | `target_value`.
+- For catastrophic ops (`timeline.delete_timelines`, `timeline.delete_track`, `timeline.delete_clips(ripple=True)`), strict mode is on by default — the call REFUSES to run if the pre-mutation archive can't be created. Pass `strict=true` on any destructive op to opt in to the same protection.
+- Read-only inspection (list, get_current, get_property, etc.) bypasses versioning entirely — no setup needed.
+- Inspect history via `timeline_versioning(action="get_history", timeline_name=…)`, `list_versions`, `diff_versions(from_version, to_version)`, or `list_runs`. Roll back via `timeline_versioning(action="rollback", timeline_name=…, version=…)`.
+
 For one-off scripting:
 - Prefer script_plugin(action="run_inline") over arbitrary persistent code changes. Use it to inspect Resolve state, then move durable behavior into guarded compound actions when it proves valuable.
 """
@@ -320,6 +336,8 @@ Workflow:
    - media_analysis(action="summarize") to find existing reports for the active project.
    - media_analysis(action="get_report") when a manifest/report already exists.
    - timeline(action="list"), timeline(action="get_current"), timeline(action="probe_timeline_structure"), and timeline_markers(action="get_all") when an edit already exists.
+   The planner also reuses Resolve-published `davinci_resolve_mcp.analysis_report_path` provenance, the global analysis registry, and bounded related project-version roots by default; do not disable that unless the user asks for an isolated fresh run.
+   If execution returns status="reuse_blocked", do not rerun analysis silently; restore the referenced report or use force_refresh=true only when the user explicitly wants a fresh read.
    Reuse existing evidence only when it already satisfies the requested technical, visual, transcription, and marker/writeback needs; otherwise run fresh analysis.
 6. Execute analysis by default. Use dry_run=true only when the user asks for a preview or when you are intentionally staging a very large batch before a slice-based job.
 7. Persist inspectable reports and artifacts by default under davinci-resolve-mcp-analysis. Use session_only=true only when the user explicitly asks for scratch results.
@@ -327,6 +345,7 @@ Workflow:
 9. If you cannot read the frame_paths as images, the visual layer remains pending_host_vision_analysis — surface that to the user; do not call the analysis complete unless they explicitly opt out with include_visuals=false.
 10. Executed Resolve-target analysis writes metadata and source-time Media Pool clip markers by default after commit_vision finalizes. Pass publish_metadata=false, timed_markers="no", or dry_run=true only when the user asks to avoid Resolve project writeback.
 11. If the task is about an existing edit, markers, or a finished video, call media_analysis(action="review_timeline_markers", params={{"vision": {{"enabled": {str(include_visuals).lower()}, "provider": "host_chat_paths"}}}}) when marker/frame alignment affects the decision. The response will include image_path; read it and answer inline (no commit step).
+12. Timeline creation supports if_exists: use "reuse" for idempotent reruns, "version" for alternate cuts, and "fail" when duplicates indicate a workflow problem.
 
 Recommended execution params:
 {{
@@ -339,6 +358,7 @@ Recommended execution params:
   "reuse_existing": true,
   "force_refresh": false,
   "reuse_policy": "compatible",
+  "search_related_project_roots": true,
   "max_analysis_frames": 8,
   "vision": {{"enabled": {str(include_visuals).lower()}, "provider": "host_chat_paths"}},
   "transcription": {{"enabled": {str(include_transcription).lower()}, "allow_model_download": true}}
@@ -357,6 +377,114 @@ Interpretation rules learned from live Resolve sessions:
 - Summarize results as editor-usable intelligence: technical state, warnings, motion/variance, visual content, transcript/sound notes, avoid ranges, best moments, and concrete next actions.
 
 When finished, report exactly which media_analysis call was made, whether artifacts were persisted, whether commit_vision was called for each clip with pending vision, whether metadata/markers were written back, and whether transcription succeeded."""
+
+
+# ─── F2 — MCP Prompts for common multi-step workflows ──────────────────────────
+# See local/design/agentic-flow-improvements-gameplan-2.md §3 task F2.
+# These surface as slash commands in the host UI (e.g. /davinci-resolve:match-bin-to-hero).
+
+
+@mcp.prompt(
+    name="analyze_and_propose_grade",
+    title="Analyze + Propose Grade",
+    description="Analyze the hero clip, build a grade_evidence_base, and stage a propose_grade artifact.",
+)
+def analyze_and_propose_grade(hero_clip_id: str) -> str:
+    return f"""Run the hero-clip color pipeline end-to-end.
+
+1. Call media_analysis(action="analyze_clip", params={{"clip_id": "{hero_clip_id}"}}).
+2. Read the resulting `analysis_signature` and confirm the clip has a current vision report.
+3. Call timeline_item_color(action="grade_evidence_base", params={{"min_source_trust": "high"}}).
+4. Lead your reply with the returned `evidence_base` line.
+5. Call timeline_item_color(action="propose_grade", params={{
+     "target_id": "<hero timeline item id>",
+     "evidence_base": "<evidence_base line>",
+     "frame_paths": [<frames from the analysis>],
+     "operation_class": "direct",
+     "cdl_delta_or_artifact": {{"cdl": {{...}}}},
+     "execute": false
+   }}).
+6. Show the user the returned plan_id + preview_path. Wait for explicit confirmation
+   before re-calling with execute=true. Never auto-execute the proposal."""
+
+
+@mcp.prompt(
+    name="match_bin_to_hero",
+    title="Match Bin to Hero",
+    description="Use bulk_match_to_hero to stage a per-target grade across a bin, dry-run first.",
+)
+def match_bin_to_hero(hero_clip_id: str, method: str = "copy_grade") -> str:
+    return f"""Match a bin's clips to a hero shot using bulk_match_to_hero.
+
+1. Run media_analysis(action="analyze_bin", params={{"recursive": true}}) on the
+   current bin so each target has a current vision report.
+2. Call timeline_item_color(action="grade_evidence_base", params={{
+     "target": {{"target_id": "{hero_clip_id}"}}, "min_source_trust": "high"
+   }}).
+3. Lead your reply with the returned `evidence_base` line.
+4. Call timeline_item_color(action="bulk_match_to_hero", params={{
+     "hero_id": "{hero_clip_id}",
+     "target_ids": [<bin clips you analyzed>],
+     "method": "{method}",
+     "min_source_trust": "high",
+     "dry_run": true
+   }}).
+5. Show the user the per-target proposals and any `blocked` entries.
+6. On confirmation, re-call with dry_run=false and the issued confirm_token."""
+
+
+@mcp.prompt(
+    name="verify_timeline_coverage",
+    title="Verify Timeline Coverage",
+    description="Run analyze_sequence on the current timeline and summarize coverage gaps.",
+)
+def verify_timeline_coverage() -> str:
+    return """Verify the current timeline has full analysis coverage.
+
+1. Confirm with timeline(action="get_current") that a timeline is open.
+2. Call media_analysis(action="analyze_sequence", params={"track_types": ["video"]}).
+3. Inspect the returned manifest: clip_count vs successful_clip_count vs failed_clip_count.
+4. If partial_success is true, surface failed_clip_ids and recommend retry-only-failed.
+5. Call media_analysis(action="summarize") and read the `provenance.source_reports`
+   list to verify every contributing clip has a current analysis_signature.
+6. Report any clips in `provenance.missing_reports` as coverage gaps."""
+
+
+@mcp.prompt(
+    name="open_and_analyze_selection",
+    title="Open Panel + Analyze Selection",
+    description="Launch the control panel and analyze the current Resolve clip selection.",
+)
+def open_and_analyze_selection() -> str:
+    return """Open the analysis control panel and analyze the selected clips.
+
+1. Call resolve_control(action="open_control_panel"). Surface the returned URL.
+2. Call media_analysis(action="analyze_clip", params={"selected": true}).
+3. Report manifest.successful_clip_count and any vision_pending count.
+4. If vision_pending > 0, walk each pending clip's frame_paths and call
+   media_analysis(action="commit_vision") per the host_chat_paths protocol.
+5. Direct the user to the control panel URL for inline review of results."""
+
+
+@mcp.prompt(
+    name="prep_color_handoff",
+    title="Prep Color Handoff",
+    description="Generate a coverage + provenance + render-presets handoff packet for online/color.",
+)
+def prep_color_handoff(output_dir: str = "") -> str:
+    target_dir = output_dir or "~/Documents/davinci-resolve-mcp-analysis/handoff"
+    return f"""Prepare a color/online handoff packet.
+
+1. Call media_analysis(action="summarize") and capture provenance.source_reports.
+2. Call render(action="list_render_presets") and timeline(action="probe_timeline_structure").
+3. Call timeline_versioning(action="list_versions") for the current timeline.
+4. Write a handoff manifest to: {target_dir}/handoff_<timestamp>.json containing:
+   - provenance source_reports list (clip signatures + paths)
+   - render preset names
+   - timeline version list
+   - any caps usage at the time of handoff (media_analysis.get_caps)
+5. Surface the manifest path back to the user. Do not write beside source media."""
+
 
 # ─── Python Version Check ────────────────────────────────────────────────────
 
@@ -459,6 +587,122 @@ def get_resolve():
         _launch_resolve()
         return resolve
 
+
+def _destructive_versioning_provider() -> Optional[Tuple[Any, Any, str, Optional[str]]]:
+    """Provider used by the C6 version-on-mutate hook.
+
+    Returns (resolve, project, project_root, project_name) or None if any piece
+    can't be resolved. The hook degrades silently when this returns None.
+    """
+    try:
+        r = get_resolve()
+        if r is None:
+            return None
+        pm = r.GetProjectManager()
+        if pm is None:
+            return None
+        proj = pm.GetCurrentProject()
+        if proj is None:
+            return None
+        try:
+            project_name = proj.GetName()
+        except Exception:
+            project_name = None
+        try:
+            project_id = proj.GetUniqueId() if hasattr(proj, "GetUniqueId") else None
+        except Exception:
+            project_id = None
+        root = resolve_media_analysis_output_root(
+            project_name=project_name,
+            project_id=project_id,
+            create=True,
+        )
+        if not root or not root.get("success"):
+            return None
+        return (r, proj, root["project_root"], project_name)
+    except Exception as exc:
+        logger.debug("destructive versioning provider failed: %s", exc)
+        return None
+
+
+_destructive_hook.register_project_root_provider(_destructive_versioning_provider)
+
+
+def _destructive_preference_provider(key: str) -> Any:
+    """Reader for C6 preferences out of the existing media-analysis prefs file."""
+    try:
+        return _read_media_analysis_preferences().get(key)
+    except Exception:
+        return None
+
+
+_destructive_hook.register_preference_provider(_destructive_preference_provider)
+
+
+# Gated (tool, action) pairs routed through the destructive_hook wrapper that
+# also live behind the confirm_token gate. The wrapper consults this set BEFORE
+# archiving so a token-issuance call (preview-only, no mutation) doesn't waste
+# a version. Keep in sync with the _issue_confirm_token call sites.
+_TOKEN_GATED_DESTRUCTIVE_ACTIONS = frozenset({
+    ("timeline", "delete_track"),
+    ("graph", "apply_grade_from_drx"),
+    ("graph", "reset_all_grades"),
+})
+
+
+def _action_will_gate_pending_confirm(
+    tool_name: str, action: str, params: Optional[Dict[str, Any]]
+) -> bool:
+    """True iff the next call to (tool_name, action, params) will short-circuit
+    to issue a confirm_token (no mutation, nothing to archive yet)."""
+    if not _confirm_token_required():
+        return False
+    if isinstance(params, dict) and ("confirm_token" in params or "confirmToken" in params):
+        return False
+    if (tool_name, action) in _TOKEN_GATED_DESTRUCTIVE_ACTIONS:
+        return True
+    # delete_clips is gated only when ripple=True.
+    if (
+        tool_name == "timeline"
+        and action == "delete_clips"
+        and isinstance(params, dict)
+        and bool(params.get("ripple"))
+    ):
+        return True
+    return False
+
+
+_destructive_hook.register_pending_confirm_check(_action_will_gate_pending_confirm)
+
+
+# ─── Analysis caps preference plumbing ────────────────────────────────────────
+
+
+def _caps_preset_provider() -> Optional[str]:
+    try:
+        prefs = _read_media_analysis_preferences()
+        return prefs.get("analysis_caps_preset")
+    except Exception:
+        return None
+
+
+def _caps_overrides_provider() -> Optional[Dict[str, Any]]:
+    try:
+        prefs = _read_media_analysis_preferences()
+        raw = prefs.get("analysis_caps_overrides") or {}
+        return raw if isinstance(raw, dict) else None
+    except Exception:
+        return None
+
+
+# Lazy import to avoid touching media_analysis at module-init time (it imports
+# our destructive-hook + analysis_caps modules already, but the providers we
+# register here read media-analysis preferences which the server owns).
+from src.utils import media_analysis as _media_analysis_module
+_media_analysis_module.register_caps_preset_provider(_caps_preset_provider)
+_media_analysis_module.register_caps_overrides_provider(_caps_overrides_provider)
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _resolve_safe_dir(path):
@@ -484,11 +728,227 @@ def _resolve_safe_dir(path):
         return os.path.join(os.path.expanduser("~"), "Documents", "resolve-stills")
     return path
 
-def _err(msg):
-    return {"error": msg}
+# Error envelope categories — see local/design/agentic-flow-improvements-gameplan.md A1
+# and local/design/agentic-flow-improvements-gameplan-2.md D1 for the retryable
+# default policy. Lock these names; downstream agents and tests route on them.
+ERROR_CATEGORIES = (
+    "precondition",          # missing current timeline/clip/project; tell user what to do
+    "not_connected",         # Resolve not running or auto-launch failed
+    "wrong_page",            # action requires a specific page (Color, Edit, Fairlight…)
+    "invalid_input",         # caller-side fixable (bad param shape, unknown enum)
+    "resolve_api_failed",    # Resolve returned None/False for unclear reasons
+    "destructive_blocked",   # strict-mode/confirm-token refusal
+    "pending_user_decision", # confirm_token required
+    "unsupported",           # feature/version/method not available
+    "budget_exhausted",      # caps refusal (vision/transcription/day budget)
+    "timeout",               # long-running op exceeded its cap
+    "batch_partial",         # mixed success in a batch op (some clips succeeded, some failed)
+)
+
+# D1 — per-category retryable defaults. Used when `_err(...)` is called without
+# an explicit `retryable=` arg. Explicit overrides still win at the callsite.
+_CATEGORY_RETRYABLE_DEFAULT: Dict[str, bool] = {
+    "precondition":          False,  # caller must change state first
+    "not_connected":         True,   # auto-launch may succeed on next attempt
+    "wrong_page":            True,   # trivial caller fix; retry after page switch
+    "invalid_input":         False,  # caller fix required
+    "resolve_api_failed":    True,   # often transient; retry once
+    "destructive_blocked":   False,  # user decision required
+    "pending_user_decision": False,  # confirm_token required
+    "unsupported":           False,  # API/version mismatch
+    "budget_exhausted":      False,  # cap raise or day rollover needed
+    "timeout":               True,   # may succeed if retried with more headroom
+    "batch_partial":         False,  # caller must re-run only the failed subset
+}
+
+# Sentinel so `retryable=None` from a caller is distinguishable from "unspecified".
+_RETRYABLE_UNSET = object()
+
+
+def _err(message, *, code=None, category=None, retryable=_RETRYABLE_UNSET,
+         remediation=None, reason=None):
+    """Return a structured error envelope.
+
+    Callers may pass just a message string for back-compat with the legacy shape;
+    the envelope always populates code/category/retryable so the agent can route
+    deterministically. Prefer naming a specific code+category at the callsite
+    when the failure mode is known.
+
+    `retryable`:
+        - Omit to use the per-category default (see _CATEGORY_RETRYABLE_DEFAULT).
+        - Pass True/False explicitly to override the default (rare; usually the
+          default is correct).
+
+    Shape:
+        {"error": {"message": str, "code": str, "category": str,
+                   "retryable": bool, "reason": str?, "remediation": str?}}
+    """
+    cat = category if category in ERROR_CATEGORIES else "resolve_api_failed"
+    if retryable is _RETRYABLE_UNSET:
+        retryable_val = _CATEGORY_RETRYABLE_DEFAULT.get(cat, False)
+    else:
+        retryable_val = bool(retryable)
+    body = {
+        "message": str(message),
+        "code": code or "UNSPECIFIED",
+        "category": cat,
+        "retryable": retryable_val,
+    }
+    if reason:
+        body["reason"] = str(reason)
+    if remediation:
+        body["remediation"] = str(remediation)
+    return {"error": body}
 
 def _ok(**kw):
     return {"success": True, **kw}
+
+
+def _record_action_outcome(scope_key: Optional[str], action_name: str,
+                            response: Dict[str, Any]) -> Dict[str, Any]:
+    """E2 — record the (scope, action) outcome with the failure tracker and
+    attach an `escalation` block to the response if the tracker says so.
+
+    Callers should pass the already-built response (the `_err(...)` or `_ok(...)`
+    return value); this helper mutates and returns it. A response with no
+    `error` key is treated as a success and clears any prior failures.
+
+    Wiring strategy: opt-in. Callers in high-blast-radius paths (analyze_clip,
+    commit_vision, safe_apply_drx, etc.) should wrap their final return with
+    this helper. Leaving it off for low-stakes reads (probe_*, *_capabilities)
+    keeps the tracker focused on signals that matter.
+    """
+    try:
+        from src.utils import failure_tracker as _ft
+    except Exception:
+        return response
+    err = response.get("error") if isinstance(response, dict) else None
+    if err and isinstance(err, dict):
+        category = err.get("category") or "resolve_api_failed"
+        _ft.record_failure(scope_key, action_name)
+        block = _ft.build_escalation_block(scope_key, action_name, category)
+        if block:
+            response["escalation"] = block
+    else:
+        _ft.record_success(scope_key, action_name)
+    return response
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# B2 — Confirm-token gate on whole-grade-replacement and catastrophic ops.
+# In-process, session-scoped store. Tokens are one-time-use, expire after 5 min,
+# and are bound to (action, params_fingerprint) so a token for one mutation
+# cannot be reused for a different one.
+# ───────────────────────────────────────────────────────────────────────────
+
+import hashlib as _hashlib
+import time as _time
+import uuid as _uuid
+
+
+_CONFIRM_TOKENS: Dict[str, Dict[str, Any]] = {}
+_CONFIRM_TTL_SECONDS = 300
+
+
+def _confirm_token_fingerprint(action: str, params: Optional[Dict[str, Any]]) -> str:
+    """Stable hash of (action, params) that identifies one specific mutation request."""
+    payload = {"action": action, "params": params or {}}
+    # Strip the confirm_token itself if the caller is echoing it back to us.
+    if isinstance(payload["params"], dict) and "confirm_token" in payload["params"]:
+        payload["params"] = {k: v for k, v in payload["params"].items() if k != "confirm_token"}
+    try:
+        blob = json.dumps(payload, sort_keys=True, default=str)
+    except Exception:
+        blob = repr(payload)
+    return _hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _confirm_token_gc():
+    """Drop expired tokens; called on every issue/validate."""
+    now = _time.time()
+    expired = [t for t, rec in _CONFIRM_TOKENS.items() if rec.get("expires_at", 0) < now]
+    for t in expired:
+        _CONFIRM_TOKENS.pop(t, None)
+
+
+def _confirm_token_required() -> bool:
+    """Honor setup default destructive.require_confirm_token (default True)."""
+    try:
+        prefs = _media_analysis_preferences_read() if "_media_analysis_preferences_read" in globals() else {}
+    except Exception:
+        prefs = {}
+    destructive = prefs.get("destructive") if isinstance(prefs.get("destructive"), dict) else {}
+    val = destructive.get("require_confirm_token", True)
+    if isinstance(val, str):
+        return val.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(val)
+
+
+def _issue_confirm_token(*, action: str, params: Optional[Dict[str, Any]], preview: Dict[str, Any]) -> Dict[str, Any]:
+    """Mint a token. Returns the pending_user_decision response shape."""
+    _confirm_token_gc()
+    token = _uuid.uuid4().hex
+    fp = _confirm_token_fingerprint(action, params)
+    expires_at = _time.time() + _CONFIRM_TTL_SECONDS
+    _CONFIRM_TOKENS[token] = {
+        "action": action,
+        "fingerprint": fp,
+        "expires_at": expires_at,
+        "issued_at": _time.time(),
+    }
+    body = _err(
+        f"This action is destructive. Re-call with confirm_token to proceed.",
+        code="CONFIRMATION_REQUIRED",
+        category="pending_user_decision",
+        retryable=False,
+        remediation=f"Re-call {action} with params.confirm_token={token!r}; token expires in {_CONFIRM_TTL_SECONDS}s.",
+    )
+    body.update({
+        "status": "confirmation_required",
+        "confirm_token": token,
+        "preview": preview,
+        "expires_at_epoch": expires_at,
+        "ttl_seconds": _CONFIRM_TTL_SECONDS,
+    })
+    return body
+
+
+def _consume_confirm_token(*, action: str, params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """If a valid token is present, consume it and return None (proceed).
+    If missing/expired/mismatched, return a destructive_blocked error.
+    If gating is disabled, return None (proceed).
+    """
+    if not _confirm_token_required():
+        return None
+    token = (params or {}).get("confirm_token") or (params or {}).get("confirmToken")
+    if not token:
+        return None  # Caller is expected to call _issue_confirm_token in this case.
+    _confirm_token_gc()
+    rec = _CONFIRM_TOKENS.pop(token, None)  # one-time use
+    if rec is None:
+        return _err(
+            "confirm_token is invalid or expired",
+            code="CONFIRM_TOKEN_INVALID",
+            category="destructive_blocked",
+            retryable=False,
+            remediation=f"Re-call {action} without confirm_token to receive a fresh token.",
+        )
+    if rec.get("action") != action:
+        return _err(
+            f"confirm_token issued for {rec.get('action')!r}, not {action!r}",
+            code="CONFIRM_TOKEN_ACTION_MISMATCH",
+            category="destructive_blocked",
+            retryable=False,
+        )
+    if rec.get("fingerprint") != _confirm_token_fingerprint(action, params):
+        return _err(
+            "confirm_token does not match the current params",
+            code="CONFIRM_TOKEN_FINGERPRINT_MISMATCH",
+            category="destructive_blocked",
+            retryable=False,
+            remediation="Either re-issue the token with current params or roll back the params change.",
+        )
+    return None  # OK to proceed
 
 
 def _activate_resolve_window() -> Dict[str, Any]:
@@ -1093,13 +1553,24 @@ def _annotation_boundary_report(tl, p: Dict[str, Any]):
 def _check():
     resolve = get_resolve()
     if resolve is None:
-        return None, None, _err("Not connected to DaVinci Resolve. Is Resolve running?")
+        return None, None, _err(
+            "Not connected to DaVinci Resolve. Is Resolve running?",
+            code="NOT_CONNECTED", category="not_connected", retryable=True,
+            remediation="Open DaVinci Resolve Studio and set Preferences > General > 'External scripting using' to Local.",
+        )
     pm = resolve.GetProjectManager()
     if pm is None:
-        return None, None, _err("Could not get ProjectManager from Resolve")
+        return None, None, _err(
+            "Could not get ProjectManager from Resolve",
+            code="NO_PROJECT_MANAGER", category="resolve_api_failed", retryable=True,
+        )
     proj = pm.GetCurrentProject()
     if not proj:
-        return pm, None, _err("No project open")
+        return pm, None, _err(
+            "No project open",
+            code="NO_PROJECT", category="precondition",
+            remediation="Open a project via project_manager(action='load', params={'name': ...}) or in the Resolve UI.",
+        )
     return pm, proj, None
 
 def _get_mp():
@@ -1108,7 +1579,10 @@ def _get_mp():
         return None, None, None, err
     mp = proj.GetMediaPool()
     if not mp:
-        return pm, proj, None, _err("Failed to get MediaPool")
+        return pm, proj, None, _err(
+            "Failed to get MediaPool",
+            code="NO_MEDIA_POOL", category="resolve_api_failed",
+        )
     return pm, proj, mp, None
 
 def _get_tl():
@@ -1117,7 +1591,11 @@ def _get_tl():
         return None, None, err
     tl = proj.GetCurrentTimeline()
     if not tl:
-        return proj, None, _err("No current timeline")
+        return proj, None, _err(
+            "No current timeline",
+            code="NO_CURRENT_TIMELINE", category="precondition",
+            remediation="Open a timeline via timeline(action='set_current', params={'index': N}) or in the Resolve UI.",
+        )
     return proj, tl, None
 
 def _get_item(p):
@@ -1129,7 +1607,11 @@ def _get_item(p):
     item_index = p.get("item_index", 0)
     items = tl.GetItemListInTrack(track_type, track_index)
     if not items or item_index >= len(items):
-        return tl, None, _err(f"No item at index {item_index} on {track_type} track {track_index}")
+        return tl, None, _err(
+            f"No item at index {item_index} on {track_type} track {track_index}",
+            code="ITEM_INDEX_OUT_OF_RANGE", category="invalid_input",
+            remediation="Call timeline(action='get_items', params={'track_type': ..., 'index': ...}) to list valid items.",
+        )
     return tl, items[item_index], None
 
 
@@ -4265,6 +4747,86 @@ def _timeline_by_selector(proj, p: Dict[str, Any], *, prefix: str):
     return proj.GetCurrentTimeline(), None
 
 
+def _timeline_identity(tl, index: Optional[int] = None) -> Dict[str, Any]:
+    payload = {
+        "name": tl.GetName() if tl else None,
+        "id": tl.GetUniqueId() if tl else None,
+    }
+    if index is not None:
+        payload["index"] = index
+    return payload
+
+
+def _find_timeline_by_name(proj, name: Any):
+    want = str(name or "")
+    for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
+        tl = proj.GetTimelineByIndex(index)
+        if tl and str(tl.GetName()) == want:
+            return tl, index
+    return None, None
+
+
+def _unique_timeline_name(proj, requested_name: Any) -> str:
+    base = str(requested_name or "Untitled Timeline").strip() or "Untitled Timeline"
+    existing_names = set()
+    for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
+        tl = proj.GetTimelineByIndex(index)
+        if tl:
+            existing_names.add(str(tl.GetName()))
+    if base not in existing_names:
+        return base
+    suffix = 2
+    while True:
+        candidate = f"{base} v{suffix:02d}"
+        if candidate not in existing_names:
+            return candidate
+        suffix += 1
+
+
+def _resolve_timeline_create_policy(proj, p: Dict[str, Any]) -> Tuple[Optional[str], Optional[Any], Optional[Dict[str, Any]]]:
+    requested_name = str(p.get("name") or "").strip()
+    if not requested_name:
+        return None, None, _err("name is required")
+    policy = str(
+        p.get("if_exists")
+        or p.get("ifExists")
+        or p.get("existing_policy")
+        or p.get("existingPolicy")
+        or "version"
+    ).strip().lower()
+    aliases = {
+        "error": "fail",
+        "existing": "reuse",
+        "use_existing": "reuse",
+        "unique": "version",
+        "rename": "version",
+        "new_version": "version",
+    }
+    policy = aliases.get(policy, policy)
+    if policy not in {"version", "reuse", "fail"}:
+        return None, None, _err("if_exists must be one of: version, reuse, fail")
+
+    existing, existing_index = _find_timeline_by_name(proj, requested_name)
+    if not existing:
+        return requested_name, None, None
+    if policy == "reuse":
+        return requested_name, existing, _ok(
+            name=existing.GetName(),
+            id=existing.GetUniqueId(),
+            reused_existing=True,
+            if_exists=policy,
+            existing_timeline=_timeline_identity(existing, existing_index),
+        )
+    if policy == "fail":
+        err = _err(f"Timeline already exists: {requested_name}")
+        err.update({
+            "if_exists": policy,
+            "existing_timeline": _timeline_identity(existing, existing_index),
+        })
+        return None, existing, err
+    return _unique_timeline_name(proj, requested_name), existing, None
+
+
 def _compare_timeline_snapshots(left: Dict[str, Any], right: Dict[str, Any]):
     differences = []
     left_tracks = left.get("tracks", {})
@@ -5100,7 +5662,7 @@ def _media_analysis_clip_record(clip, bin_path: Optional[str] = None) -> Optiona
     props, props_error = _safe_clip_call(clip, "GetClipProperty", "")
     props = props if isinstance(props, dict) else {}
     file_path = props.get("File Path") or props.get("FilePath")
-    return {
+    record = {
         "clip_id": _safe_media_pool_item_id(clip),
         "clip_name": _safe_media_pool_item_name(clip),
         "bin_path": bin_path,
@@ -5112,6 +5674,51 @@ def _media_analysis_clip_record(clip, bin_path: Optional[str] = None) -> Optiona
         "media_type": props.get("Type"),
         "clip_properties_error": props_error,
     }
+    third_party, _ = _safe_clip_call(clip, "GetThirdPartyMetadata", "")
+    if isinstance(third_party, dict):
+        mcp_third_party = {
+            key: value for key, value in third_party.items()
+            if str(key).startswith("davinci_resolve_mcp.")
+        }
+        if mcp_third_party:
+            record["third_party_metadata"] = mcp_third_party
+        report_path = third_party.get("davinci_resolve_mcp.analysis_report_path")
+        if report_path:
+            record["analysis_report_path"] = report_path
+        signature = third_party.get("davinci_resolve_mcp.analysis_signature")
+        if signature:
+            record["published_analysis_signature"] = signature
+        published_at = third_party.get("davinci_resolve_mcp.published_at")
+        if published_at:
+            record["published_analysis_at"] = published_at
+    metadata, _ = _safe_clip_call(clip, "GetMetadata", "")
+    if isinstance(metadata, dict):
+        fields_with_analysis = []
+        for field in ("Description", "Comments", "Keywords", "Keyword", "People"):
+            value = metadata.get(field)
+            if isinstance(value, (list, tuple, set)):
+                text = "\n".join(str(item) for item in value)
+            else:
+                text = str(value or "")
+            if "[DaVinci Resolve MCP Analysis]" in text or "davinci_resolve_mcp." in text:
+                fields_with_analysis.append(field)
+        if fields_with_analysis:
+            record["analysis_metadata_present"] = True
+            record["analysis_metadata_fields"] = fields_with_analysis
+    provenance = {}
+    if record.get("analysis_report_path"):
+        provenance["analysis_report_path"] = record["analysis_report_path"]
+    if record.get("published_analysis_signature"):
+        provenance["analysis_signature"] = record["published_analysis_signature"]
+    if record.get("published_analysis_at"):
+        provenance["published_at"] = record["published_analysis_at"]
+    if record.get("analysis_metadata_present"):
+        provenance["standard_metadata_fields"] = record.get("analysis_metadata_fields", [])
+    if record.get("third_party_metadata"):
+        provenance["third_party_keys"] = sorted(record["third_party_metadata"].keys())
+    if provenance:
+        record["analysis_provenance"] = provenance
+    return record
 
 
 _MEDIA_ANALYSIS_CONTAINER_TYPE_PARTS = (
@@ -5704,6 +6311,19 @@ _MEDIA_ANALYSIS_DEFAULT_PREFS = {
     "metadata_writeback_default": True,
     "ask_before_metadata_publish": False,
     "dry_run_first_default": False,
+    # C6: when true, archive_current_timeline calls project.SaveProject() after
+    # recording the version so a Resolve crash can't lose the archive. Default
+    # off because automatic saves can disrupt interactive editing sessions.
+    "timeline_versioning_auto_save_after_archive": False,
+    # Analysis caps preset (minimal | standard | generous | unlimited). Controls
+    # per-clip frame budget, response payload trim, vision token budgets
+    # per-clip / per-job / per-day, wall-clock timeout, and frame image-size cap.
+    "analysis_caps_preset": "standard",
+    # Per-field overrides; merged into the preset at resolve time. Keys must
+    # match Caps fields (response_chars, vision_tokens_per_clip, frames_per_clip,
+    # vision_tokens_per_job, vision_tokens_per_day, wall_clock_seconds_per_call,
+    # max_frame_dim_pixels). Pass an integer or "unlimited" to lift that cap.
+    "analysis_caps_overrides": {},
 }
 
 
@@ -7246,6 +7866,12 @@ def _compact_clip_row_for_response(clip: Any) -> Any:
         "clip_dir": clip.get("clip_dir"),
         "marker_plan_json": clip.get("marker_plan_json"),
         "vision_status": clip.get("vision_status"),
+        "reused": clip.get("reused"),
+        "reused_from": clip.get("reused_from"),
+        "reuse_source": clip.get("reuse_source"),
+        "reuse_reason": clip.get("reuse_reason"),
+        "cache_status": clip.get("cache_status"),
+        "cache_warnings": clip.get("cache_warnings"),
         "record": {
             k: record.get(k)
             for k in ("clip_id", "clip_name", "file_path", "duration_seconds",
@@ -7255,6 +7881,8 @@ def _compact_clip_row_for_response(clip: Any) -> Any:
     }
     if "error" in clip:
         out["error"] = clip.get("error")
+    if "caps_refusal" in clip:
+        out["caps_refusal"] = clip.get("caps_refusal")
     if isinstance(visual, dict):
         frame_paths = visual.get("frame_paths") or []
         shot_table = visual.get("shot_table") or []
@@ -7299,10 +7927,12 @@ def _compact_manifest_for_response(manifest: Any, *, verbose: bool = False) -> A
             "success", "analysis_version", "schema_version",
             "vision_pending", "vision_pending_clip_count",
             "clip_count", "successful_clip_count", "failed_clip_count",
+            "caps_refusal_clip_count", "error",
+            "partial_success", "completed_clip_ids", "failed_clip_ids",
             "started_at", "completed_at",
             "project_name", "project_id",
             "depth", "session_only", "session_token",
-            "pending_action", "index", "memory_layer_warnings",
+            "pending_action", "index", "analysis_registry", "reuse_summary", "memory_layer_warnings",
             "artifacts_cleaned_up", "artifact_cleanup_root",
         )
         if k in manifest
@@ -9852,22 +10482,157 @@ def _pick_dashboard_python(repo_root: str) -> Tuple[str, Optional[str]]:
     return _sys.executable, "sys.executable"
 
 
+def _control_panel_probe(host: str, port: int, timeout: float = 1.5) -> Dict[str, Any]:
+    """Probe a port to see whether a dashboard is listening and what version.
+
+    Returns ``{"is_dashboard": bool, "version": Optional[str]}``.
+
+    - ``is_dashboard`` is True when /api/boot responds with a recognizable
+      dashboard payload (``success: true`` plus a project field). This lets
+      callers distinguish an older dashboard that predates the
+      ``mcp_version`` surface from a non-dashboard process squatting on the
+      port.
+    - ``version`` is the reported MCP version, or None if the dashboard
+      predates the field.
+    """
+    import urllib.request
+    url = f"http://{host}:{port}/api/boot"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8") or "{}")
+    except Exception:
+        return {"is_dashboard": False, "version": None}
+    if not isinstance(payload, dict):
+        return {"is_dashboard": False, "version": None}
+    is_dashboard = bool(payload.get("success")) and any(
+        k in payload for k in ("project_name", "project_id", "project_root")
+    )
+    cap = payload.get("capabilities")
+    version: Optional[str] = None
+    if isinstance(cap, dict) and cap.get("mcp_version"):
+        version = str(cap["mcp_version"])
+    elif payload.get("mcp_version"):
+        version = str(payload["mcp_version"])
+    return {"is_dashboard": is_dashboard, "version": version}
+
+
+def _control_panel_remote_version(host: str, port: int, timeout: float = 1.5) -> Optional[str]:
+    """Backwards-compat wrapper around :func:`_control_panel_probe`. None on failure."""
+    return _control_panel_probe(host, port, timeout).get("version")
+
+
+def _port_owner_pid(host: str, port: int) -> Optional[int]:
+    """Return PID of the process LISTENing on `port`, or None if free/unknown.
+
+    Uses lsof with `-iTCP:<port> -sTCP:LISTEN -t`: one PID per line, no header.
+    Host is informational only — lsof matches any local LISTEN socket on that
+    port (which is what we care about for port-collision detection).
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", "-iTCP:" + str(port), "-sTCP:LISTEN", "-t"],
+            capture_output=True, timeout=3, text=True, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if line.isdigit():
+            return int(line)
+    return None
+
+
 def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
     import subprocess
-
-    existing = _control_panel_status()
-    if existing.get("running"):
-        return {
-            "success": True,
-            "status": "already_running",
-            "url": existing.get("url"),
-            "pid": existing.get("pid"),
-            "port": existing.get("port"),
-            "note": "Control panel already running; returning existing URL.",
-        }
+    import socket
+    import time as _t
 
     host = p.get("host") or "127.0.0.1"
     port = int(p.get("port") or 8765)
+    force_restart = _media_analysis_bool(p.get("force_restart", p.get("forceRestart")), False)
+
+    # Freshness check: probe the port directly (works whether or not THIS MCP
+    # tracks the listener in its pidfile). This unifies two scenarios:
+    #   1. Tracked stale: pidfile present, our prior MCP spawn still alive,
+    #      now running an older VERSION.
+    #   2. Untracked stale: process survived an MCP restart with
+    #      start_new_session=True; pidfile was removed but the dashboard is
+    #      still listening on the port.
+    # Both surface as `status: "stale_running"` so the caller knows to
+    # force_restart. A non-dashboard squatter on the port still falls through
+    # to a port-collision error.
+    existing = _control_panel_status()
+    port_pid = _port_owner_pid(host, port)
+    live_version = VERSION
+
+    if port_pid is not None and not force_restart:
+        probe = _control_panel_probe(host, port)
+        tracked_url = (existing or {}).get("url") if existing.get("running") else None
+        url = tracked_url or f"http://{host}:{port}"
+        if probe["is_dashboard"]:
+            remote_version = probe["version"]
+            # Compare with explicit None handling: an older dashboard that
+            # predates the mcp_version field is also stale — it can't honor
+            # newer surfaces and the caller needs to know.
+            if remote_version != live_version:
+                reported = remote_version or "unknown (predates the mcp_version field)"
+                return {
+                    "success": True,
+                    "status": "stale_running",
+                    "url": url,
+                    "pid": port_pid,
+                    "port": port,
+                    "running_version": remote_version,
+                    "live_version": live_version,
+                    "remediation": (
+                        f"The running control panel reports version {reported} but the "
+                        f"MCP server is at {live_version}. Re-call open_control_panel with "
+                        "force_restart=true to terminate the stale process and relaunch."
+                    ),
+                }
+            return {
+                "success": True,
+                "status": "already_running",
+                "url": url,
+                "pid": port_pid,
+                "port": port,
+                "running_version": remote_version,
+                "note": "Control panel already running; returning existing URL.",
+            }
+        # Port held by a non-dashboard process — surface as collision.
+        return _err(
+            f"Port {port} is already in use by PID {port_pid} (not a control panel). "
+            "Re-call with force_restart=true to terminate it, or pass a different port.",
+        )
+
+    # Force-restart path: kill whatever owns the port (could be the tracked PID
+    # or an untracked stale process) before re-spawning.
+    if force_restart:
+        tracked_pid = int((existing or {}).get("pid") or 0)
+        for victim in {tracked_pid, port_pid or 0} - {0}:
+            try:
+                os.kill(victim, 15)  # SIGTERM
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        for _ in range(20):
+            if _port_owner_pid(host, port) is None:
+                break
+            _t.sleep(0.1)
+        try:
+            os.remove(_control_panel_pidfile())
+        except OSError:
+            pass
+
+    # Safety net: if force_restart couldn't free the port (e.g. PID owned by
+    # another user, SIGTERM ignored), bail rather than spawning a child that
+    # will crash silently with "Address already in use".
+    port_pid = _port_owner_pid(host, port)
+    if port_pid is not None:
+        return _err(
+            f"Port {port} is still in use by PID {port_pid} after force_restart. "
+            "Pass a different port or kill the process manually.",
+        )
     project_name = p.get("project_name") or "Dashboard Analysis"
     project_id = p.get("project_id") or "dashboard"
     analysis_root = p.get("analysis_root") or os.path.expanduser("~/Documents/davinci-resolve-mcp-analysis")
@@ -9908,6 +10673,41 @@ def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
         )
     except (OSError, FileNotFoundError) as exc:
         return _err(f"Failed to launch control panel: {type(exc).__name__}: {exc}")
+
+    # Verify the child actually came up. Bind errors (port in use), import
+    # failures, etc. would otherwise leave us reporting "launched" while the
+    # child has already died. Poll until the child is serving or we time out.
+    serving = False
+    for _ in range(40):  # ~4 seconds total
+        rc = proc.poll()
+        if rc is not None:
+            # Child already exited — capture the tail of the log for diagnostics.
+            tail = ""
+            try:
+                with open(log_path, "r", encoding="utf-8") as handle:
+                    tail = handle.read()[-800:]
+            except OSError:
+                pass
+            return _err(
+                f"Control panel child exited (rc={rc}) before serving. "
+                f"Log tail: {tail.strip()!r}",
+            )
+        try:
+            with socket.create_connection((host, port), timeout=0.25):
+                serving = True
+                break
+        except OSError:
+            pass
+        _t.sleep(0.1)
+    if not serving:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+        return _err(
+            f"Control panel did not start accepting connections within 4s "
+            f"(pid {proc.pid}). Check {log_path} for details.",
+        )
 
     # Write the pidfile so subsequent calls find it
     url = f"http://{host}:{port}"
@@ -11558,8 +12358,12 @@ def media_storage(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_destructive_op("media_pool")
 def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage the Media Pool: folders, clips, timelines, import/export.
+
+    PREFER safe_* / probe_* / *_capabilities / *_boundary_report / *_checked variants where they
+    exist. Raw mutators below do not validate paths, support dry_run, or normalize errors.
 
     Actions:
       get_root_folder() -> {name, id}
@@ -11567,12 +12371,14 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       set_current_folder(path) -> {success}  — path like "Master/SubFolder"
       add_subfolder(name, parent_path?) -> {success, name, id}
       delete_folders(folder_ids) -> {success}
+        DESTRUCTIVE. Deletes folders + every clip they contain.
       move_folders(folder_ids, target_path) -> {success}
       refresh() -> {success}
-      create_timeline(name) -> {success, name, id}
-      create_timeline_from_clips(name, clip_ids) -> {success, name, id}
+      create_timeline(name, if_exists?) -> {success, name, id}
+        — if_exists: version (default), reuse, or fail
+      create_timeline_from_clips(name, clip_ids, if_exists?) -> {success, name, id}
         — simple: params.clip_ids appends clips end-to-end into a new timeline
-      create_timeline_from_clips(name, clip_infos) -> {success, name, id}
+      create_timeline_from_clips(name, clip_infos, if_exists?) -> {success, name, id}
         — positioned: params.clip_infos is a list of {clip_id or media_pool_item_id,
           start_frame & end_frame (or startFrame/endFrame), record_frame/recordFrame}.
           record_frame is relative to the created timeline start frame by default;
@@ -11581,7 +12387,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         — creates a stacked multicam prep timeline: one angle per video track, optional
           matching audio tracks. Native multicam clip conversion remains a Resolve UI step.
       import_timeline(path, options?) -> {success, name}
+        UNSAFE. No path sandboxing. Prefer timeline.import_timeline_checked.
       delete_timelines(timeline_ids) -> {success}
+        CATASTROPHIC. Deletes timelines outright.
       append_to_timeline(clip_ids) -> {success, count}
         — legacy: params.clip_ids only (appends at end / default placement)
       append_to_timeline(clip_infos) -> {success, count, items}
@@ -11592,15 +12400,20 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
           pass record_frame_mode="absolute" for raw Resolve recordFrame values.
           Returns timeline_item_id per item.
       import_media(paths) -> {imported}
+        UNSAFE. No dry_run. Prefer safe_import_media.
         — simple: params.paths is a list of file/folder paths
       import_media(clip_infos) -> {imported}
+        UNSAFE. No dry_run. Prefer safe_import_sequence.
         — image sequences: params.clip_infos is a list of
           {FilePath, StartIndex, EndIndex} dicts (PascalCase keys per Resolve docs).
           Example: [{"FilePath": "frame_%03d.dpx", "StartIndex": 1, "EndIndex": 100}]
       delete_clips(clip_ids) -> {success}
+        DESTRUCTIVE. Removes clips from the Media Pool (does not touch source files).
       move_clips(clip_ids, target_path) -> {success}
       relink(clip_ids, folder_path) -> {success}
+        UNSAFE. No dry_run. Prefer safe_relink.
       unlink(clip_ids) -> {success}
+        UNSAFE. No dry_run. Prefer safe_unlink.
       export_metadata(path, clip_ids?) -> {success}
       get_unique_id() -> {id}
       create_stereo_clip(left_id, right_id) -> {success, name}
@@ -11672,9 +12485,21 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
     elif action == "refresh":
         return {"success": bool(mp.RefreshFolders())}
     elif action == "create_timeline":
-        tl = mp.CreateEmptyTimeline(p["name"])
-        return _ok(name=tl.GetName(), id=tl.GetUniqueId()) if tl else _err("Failed to create timeline")
+        create_name, existing, policy_result = _resolve_timeline_create_policy(proj, p)
+        if policy_result:
+            return policy_result
+        tl = mp.CreateEmptyTimeline(create_name)
+        return _ok(
+            name=tl.GetName(),
+            id=tl.GetUniqueId(),
+            requested_name=p.get("name"),
+            created_new=True,
+            versioned_name=bool(existing and create_name != p.get("name")),
+        ) if tl else _err("Failed to create timeline")
     elif action == "create_timeline_from_clips":
+        create_name, existing, policy_result = _resolve_timeline_create_policy(proj, p)
+        if policy_result:
+            return policy_result
         if p.get("clip_infos") is not None:
             raw = p["clip_infos"]
             if not isinstance(raw, list):
@@ -11685,7 +12510,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 _, row_err = _build_create_clip_info_dict(root, ci, i)
                 if row_err:
                     return row_err
-            tl = mp.CreateEmptyTimeline(p["name"])
+            tl = mp.CreateEmptyTimeline(create_name)
             if not tl:
                 return _err("Failed to create timeline from clip_infos")
             try:
@@ -11704,7 +12529,13 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             appended = mp.AppendToTimeline(built)
             if not appended:
                 return _err("Failed to append clip_infos to created timeline")
-            return _ok(name=tl.GetName(), id=tl.GetUniqueId())
+            return _ok(
+                name=tl.GetName(),
+                id=tl.GetUniqueId(),
+                requested_name=p.get("name"),
+                created_new=True,
+                versioned_name=bool(existing and create_name != p.get("name")),
+            )
         clip_ids = p.get("clip_ids")
         if not clip_ids:
             return _err("Provide clip_ids (simple) or clip_infos (positioned)")
@@ -11712,8 +12543,14 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         clips = [c for c in clips if c]
         if not clips:
             return _err("No valid clips found")
-        tl = mp.CreateTimelineFromClips(p["name"], clips)
-        return _ok(name=tl.GetName(), id=tl.GetUniqueId()) if tl else _err("Failed to create timeline")
+        tl = mp.CreateTimelineFromClips(create_name, clips)
+        return _ok(
+            name=tl.GetName(),
+            id=tl.GetUniqueId(),
+            requested_name=p.get("name"),
+            created_new=True,
+            versioned_name=bool(existing and create_name != p.get("name")),
+        ) if tl else _err("Failed to create timeline")
     elif action == "setup_multicam_timeline":
         return _setup_multicam_timeline(proj, mp, p)
     elif action == "import_timeline":
@@ -12264,9 +13101,39 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
 async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Project-scoped media analysis and guarded metadata publishing.
 
+    <when_to_use>
+    - Lead any analysis flow with capabilities() + get_caps() to know what's available
+      and what the current budget looks like.
+    - For per-clip work: analyze_clip(clip_id=...). For bins/projects/timelines: analyze_bin,
+      analyze_project, analyze_sequence (return job_id for long runs).
+    - Vision uses host_chat_paths: analyze returns frame_paths + JSON schema; the host reads
+      frames, produces JSON, then calls commit_vision to merge.
+    - For caps refusal recovery: set_caps_preset (preset=generous|unlimited) or wait for day rollover.
+    </when_to_use>
+
+    <returns>
+    capabilities         -> {tools, transcription, vision}
+    get_caps             -> {preset, caps, presets_available, usage?}
+    set_caps_preset      -> {success, preset, overrides}
+    plan                 -> {clips, artifacts, estimated_seconds}
+    analyze_clip|file    -> {clips, manifest: {success, clip_count, successful_clip_count, failed_clip_count, partial_success?, caps_refusal_clip_count?, clips: [...], error?}}
+    analyze_bin|project|sequence -> {job_id, status, clips, manifest, ...}
+    commit_vision        -> {analysis_json, marker_plan_json, metadata_publish}
+    summarize            -> {clips_summarized, summary, provenance: {source_reports, missing_reports}}
+    review_timeline_markers -> {path, samples, vision_review?}
+    start_batch_job      -> {job_id, status}
+    batch_job_status     -> {job_id, status, progress, recent_events, clip_states}
+    All actions may return {"error": {code, category, retryable, message, remediation, reason?}}.
+    Errors with code=CAPS_REFUSAL also carry a `caps_refusal` block at the clip level and a
+    `caps_refusal_clip_count` aggregate at the manifest level.
+    </returns>
+
     Actions:
       capabilities() -> {tools, transcription, vision}
       install_guidance() -> {missing}  — guidance only; never installs anything
+      get_caps(clip_id?, job_id?) -> {preset, caps, presets_available, usage?} — effective caps + usage rollup (vision tokens consumed per scope, percent of budget).
+      set_caps_preset(preset, overrides?) -> {success, preset, overrides} — preset is minimal | standard | generous | unlimited. Overrides is a dict of {field: int|"unlimited"} that wins over the preset.
+      get_usage(scope?, scope_key?, clip_id?, job_id?) -> {scope, usage} — raw usage rollup for one scope (clip | job | day).
       resolve_output_root(analysis_root?, source_paths?) -> {project_root}
       plan(target, depth?, analysis_root?, transcription?, vision?, dry_run?) -> {clips, artifacts}
       analyze_file(path|file_path, dry_run?, session_only?, persist?) -> {clips, manifest}
@@ -12316,6 +13183,35 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
     """
     p = _media_analysis_apply_setup_defaults(action, dict(params or {}))
 
+    # E2 — capture original action + scope before the dispatch may rewrite
+    # `action` (e.g. analyze_clip → plan). Used by _e2_wrap below to attach
+    # an `escalation` block when a (scope, action) pair fails repeatedly.
+    _e2_track_action = action if action in {
+        "analyze_clip", "analyze_file", "analyze_bin",
+        "analyze_project", "analyze_sequence", "analyze_timeline",
+        "commit_vision",
+    } else None
+    _e2_track_scope: Optional[str] = None
+    if _e2_track_action == "analyze_clip":
+        _e2_track_scope = p.get("clip_id") or (p.get("target") or {}).get("clip_id")
+    elif _e2_track_action == "analyze_file":
+        _e2_track_scope = p.get("path") or p.get("file_path") or (p.get("target") or {}).get("path")
+    elif _e2_track_action == "analyze_bin":
+        bin_path = p.get("bin_path") or p.get("path") or (p.get("target") or {}).get("path")
+        _e2_track_scope = ("bin:" + bin_path) if bin_path else "bin:Master"
+    elif _e2_track_action == "analyze_project":
+        _e2_track_scope = "project"
+    elif _e2_track_action in {"analyze_sequence", "analyze_timeline"}:
+        _e2_track_scope = "sequence"
+    elif _e2_track_action == "commit_vision":
+        _e2_track_scope = p.get("clip_id")
+
+    def _e2_wrap(resp: Any) -> Any:
+        """Attach failure_tracker escalation when (scope, action) has failed N times in window."""
+        if not _e2_track_action or not isinstance(resp, dict):
+            return resp
+        return _record_action_outcome(_e2_track_scope, _e2_track_action, resp)
+
     if action == "capabilities":
         return _media_analysis_capabilities_for_request(ctx)
     if action == "recheck_capabilities":
@@ -12340,6 +13236,66 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             "capabilities": fresh,
             "changed": changed,
         }
+    if action == "get_caps":
+        # Effective caps + per-scope usage rollup. Cheap, no Resolve required —
+        # consults the preference file + the per-project token-usage DB.
+        from src.utils import analysis_caps as _ac
+        active = _ac.resolve_caps(_caps_preset_provider(), _caps_overrides_provider())
+        out: Dict[str, Any] = {
+            "success": True,
+            "preset": active.preset,
+            "caps": active.to_dict(),
+            "presets_available": _ac.list_presets(),
+        }
+        # Usage rollup is per-project; if no project context, skip silently.
+        try:
+            vctx = _destructive_versioning_provider()
+            if vctx is not None:
+                _resolve_h, _proj_h, project_root, _name = vctx
+                out["usage"] = _ac.get_usage_rollup(
+                    project_root=project_root,
+                    caps=active,
+                    clip_id=p.get("clip_id"),
+                    job_id=p.get("job_id"),
+                )
+        except Exception as exc:
+            out["usage_error"] = f"{type(exc).__name__}: {exc}"
+        return out
+    if action == "set_caps_preset":
+        preset = (p.get("preset") or "").strip().lower()
+        from src.utils import analysis_caps as _ac
+        if preset not in _ac.VALID_PRESETS:
+            return _err(f"unknown preset '{preset}'. Valid: {sorted(_ac.VALID_PRESETS)}")
+        # Update preference file directly (same pattern as set_defaults).
+        prefs = _read_media_analysis_preferences()
+        prefs["analysis_caps_preset"] = preset
+        if isinstance(p.get("overrides"), dict):
+            prefs["analysis_caps_overrides"] = p["overrides"]
+        path = _media_analysis_preferences_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(prefs, fh, indent=2)
+        return {"success": True, "preset": preset, "overrides": prefs.get("analysis_caps_overrides") or {}}
+    if action == "get_usage":
+        from src.utils import analysis_caps as _ac
+        try:
+            vctx = _destructive_versioning_provider()
+            if vctx is None:
+                return _err("No project context — open a Resolve project first")
+            _r, _proj, project_root, _name = vctx
+            scope = (p.get("scope") or "day").strip().lower()
+            scope_key = p.get("scope_key") or p.get("clip_id") or p.get("job_id")
+            return {
+                "success": True,
+                "scope": scope,
+                "scope_key": scope_key,
+                "usage": _ac.get_current_usage(
+                    project_root=project_root, scope=scope, scope_key=scope_key,
+                ),
+            }
+        except Exception as exc:
+            return _err(f"{type(exc).__name__}: {exc}")
+
     if action == "install_guidance":
         caps = _media_analysis_capabilities_for_request(ctx)
         guidance = media_analysis_install_guidance(caps)
@@ -12356,7 +13312,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
 
     pm, proj, err = _check()
     if err:
-        return err
+        return _e2_wrap(err)
     project_name, project_id = _project_name_and_id(proj)
     if p.get("project_name") or p.get("projectName"):
         project_name = p.get("project_name") or p.get("projectName")
@@ -12654,7 +13610,47 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 "track_types": p.get("track_types") or p.get("trackTypes") or target.get("track_types") or target.get("trackTypes"),
             })
         p["target"] = target
+        # E3 — `prefer_handle` opt-in. When true AND this isn't a dry-run,
+        # divert to the durable batch-job machinery so the call returns a
+        # job_id immediately instead of blocking on vision/transcription.
+        # Default false: existing blocking semantics are preserved.
+        # The start_batch_job handler lives ABOVE this block in the dispatch
+        # chain, so we can't just rewrite `action` and fall through — we
+        # re-enter the tool with the rewritten action via await so the
+        # handler chain restarts from the top.
+        if _media_analysis_bool(p.get("prefer_handle"), False) and not p.get("dry_run"):
+            return await media_analysis("start_batch_job", p, ctx)
         action = "plan"
+
+    if action == "coverage_report":
+        # Pure-read coverage assessment. Editorial / color / online / producer
+        # contexts call this first and lead recommendations with `evidence_base`.
+        target = _media_analysis_target_dict(p.get("target"), p)
+        if target.get("_invalid_target"):
+            return _err(target["_invalid_target"])
+        target_type = str(target.get("type") or p.get("target_type") or "clip").strip().lower()
+        mp = None
+        if target_type != "file":
+            mp = proj.GetMediaPool()
+            if not mp:
+                return _err("Failed to get MediaPool")
+        p["target"] = target
+        records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p, project=proj)
+        if target_err:
+            if warnings:
+                target_err["warnings"] = warnings
+            return target_err
+        coverage = build_media_analysis_coverage_report(
+            project_name=project_name,
+            project_id=project_id,
+            records=records or [],
+            target=normalized_target,
+            params=p,
+            capabilities=_media_analysis_capabilities_for_request(ctx),
+        )
+        if warnings:
+            coverage["warnings"] = warnings
+        return coverage
 
     if action == "plan":
         p["dry_run"] = _media_analysis_bool(p.get("dry_run"), True)
@@ -12681,12 +13677,12 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         if target_type != "file":
             mp = proj.GetMediaPool()
             if not mp:
-                return _err("Failed to get MediaPool")
+                return _e2_wrap(_err("Failed to get MediaPool"))
         records, normalized_target, warnings, target_err = _media_analysis_records_from_target(mp, p, project=proj)
         if target_err:
             if warnings:
                 target_err["warnings"] = warnings
-            return target_err
+            return _e2_wrap(target_err)
         caps = _media_analysis_capabilities_for_request(ctx)
         plan = build_media_analysis_plan(
             project_name=project_name,
@@ -12701,7 +13697,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         if warnings:
             plan["warnings"] = warnings
         if plan.get("capability_gaps") and not bool(p.get("dry_run", True)):
-            return _media_analysis_missing_capabilities_response(plan)
+            return _e2_wrap(_media_analysis_missing_capabilities_response(plan))
         if not bool(p.get("dry_run", True)):
             executed = await execute_media_analysis_plan_async(
                 plan,
@@ -12718,6 +13714,15 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 "manifest": _compact_manifest_for_response(executed, verbose=verbose),
                 "response_format": "verbose" if verbose else "compact",
             }
+            if executed.get("status"):
+                result["status"] = executed.get("status")
+            if executed.get("reuse_summary"):
+                result["reuse_summary"] = executed.get("reuse_summary")
+            if executed.get("error"):
+                result["error"] = executed.get("error")
+            if executed.get("status") == "reuse_blocked":
+                result["blocked_clip_count"] = executed.get("blocked_clip_count")
+                return _e2_wrap(result)
             if executed.get("vision_pending"):
                 result["status"] = "pending_host_vision_analysis"
                 result["pending_action"] = executed.get("pending_action")
@@ -12732,7 +13737,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                     "automatically after commit_vision finalizes. Pass verbose=true to inline the "
                     "full visual payload in the response instead of reading from disk."
                 )
-                return result
+                return _e2_wrap(result)
             if (
                 result["success"]
                 and target_type != "file"
@@ -12749,8 +13754,15 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 publish_result = await _publish_clip_metadata_from_analysis(proj, publish_params, ctx)
                 result["metadata_publish"] = _compact_metadata_publish_for_response(publish_result, verbose=verbose)
                 result["success"] = bool(result["success"] and publish_result.get("success"))
-            return result
-        return plan
+            return _e2_wrap(result)
+        # D3 — dry-run plan path: seed the partial-success keys with defaults
+        # so callers can rely on the schema being uniform between dry-run plans
+        # and executed manifests. No clips have run yet, so completed/failed
+        # are both empty.
+        plan.setdefault("partial_success", False)
+        plan.setdefault("completed_clip_ids", [])
+        plan.setdefault("failed_clip_ids", [])
+        return _e2_wrap(plan)
 
     return _unknown(action, [
         "capabilities",
@@ -12790,8 +13802,149 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Timeline version-on-mutate, archive, rollback, and brain-edit history (C6).
+
+    Every destructive timeline op auto-archives the working timeline to the Archive
+    bin under an analysis_run_id; these actions let you inspect and control that.
+
+    Actions:
+      begin_run(label?, initiator?, analysis_run_id?) -> {success, analysis_run_id, label, initiator, started_at}
+        Open a run. Subsequent destructive calls without an explicit
+        analysis_run_id auto-thread this one — so a multi-step brain operation
+        creates ONE archive instead of N. Pair with end_run to capture the
+        cumulative metric delta.
+      end_run(analysis_run_id?) -> {success, analysis_run_id, ended_at, summary}
+        Close the active run (or a specific one). Aggregates brain_edits into
+        per-metric rollup in analysis_runs.summary_json.
+      list_runs(limit?) -> {success, runs}
+        Recent runs with their summaries, newest first.
+      archive_current(reason?, analysis_run_id?) -> {success, timeline_name, archived_timeline_name, version, archive_bin, row_id}
+        Manually checkpoint the current timeline. If analysis_run_id is supplied
+        and that run already archived the current timeline, this is a no-op.
+      list_versions(timeline_name) -> [{version, archived_timeline_name, created_at, ...}]
+        Version chain for `timeline_name`, oldest first. Includes any retention-
+        collapsed versions (drt_export_path populated).
+      get_history(timeline_name?, analysis_run_id?, limit?) -> [{edit_type, target_metric, before_value, after_value, delta, ...}]
+        Brain-edit history. Filter by timeline_name or analysis_run_id; defaults
+        to the most recent 50 across the project.
+      rollback(timeline_name, version, analysis_run_id?) -> {success, restored_timeline_name, archive_of_previous}
+        Restore an archived version. Archives current state first; restored copy
+        gets a "_rolled_back_<HHMMSS>" suffix.
+      prune(timeline_name, keep_n=10) -> {success, pruned, kept, details}
+        Collapse old versions to .drt exports under _soul/timeline_versions/<slug>/,
+        delete the archived timeline from the bin, keep the DB row for rollback.
+      registry() -> {entries, registry_path}
+        Read the cross-project brain_edits registry that lives one level above
+        each project root (analogous to analysis_registry.json).
+    """
+    r = get_resolve()
+    if r is None:
+        return _err("Resolve not available")
+    ctx = _destructive_versioning_provider()
+    if ctx is None:
+        return _err("No current project / can't resolve project root")
+    resolve_h, project_h, project_root, project_name = ctx
+    p = params or {}
+
+    if action == "begin_run":
+        return _analysis_runs.begin_run(
+            project_root=project_root,
+            label=p.get("label"),
+            initiator=p.get("initiator"),
+            analysis_run_id=p.get("analysis_run_id"),
+        )
+    if action == "end_run":
+        return _analysis_runs.end_run(
+            project_root=project_root,
+            analysis_run_id=p.get("analysis_run_id"),
+        )
+    if action == "list_runs":
+        return {
+            "success": True,
+            "runs": _analysis_runs.list_runs(project_root, limit=int(p.get("limit", 50))),
+        }
+    if action == "archive_current":
+        return _timeline_versioning.archive_current_timeline(
+            resolve=resolve_h,
+            project=project_h,
+            project_root=project_root,
+            reason=p.get("reason"),
+            analysis_run_id=p.get("analysis_run_id"),
+        )
+    if action == "list_versions":
+        if not p.get("timeline_name"):
+            return _err("timeline_name required")
+        rows = _timeline_versioning.list_timeline_versions(
+            project_root=project_root,
+            timeline_name=str(p["timeline_name"]),
+        )
+        return {"success": True, "versions": rows}
+    if action == "diff_versions":
+        if not p.get("timeline_name") or "from_version" not in p or "to_version" not in p:
+            return _err("timeline_name, from_version, to_version required")
+        return {
+            "success": True,
+            **_timeline_versioning.diff_versions(
+                project_root=project_root,
+                timeline_name=str(p["timeline_name"]),
+                from_version=int(p["from_version"]),
+                to_version=int(p["to_version"]),
+            ),
+        }
+    if action == "get_history":
+        rows = _brain_edits.get_brain_edit_history(
+            project_root=project_root,
+            timeline_name=p.get("timeline_name"),
+            analysis_run_id=p.get("analysis_run_id"),
+            limit=int(p.get("limit", 50)),
+        )
+        return {"success": True, "edits": rows}
+    if action == "rollback":
+        if not p.get("timeline_name") or "version" not in p:
+            return _err("timeline_name and version required")
+        return _timeline_versioning.rollback_to_version(
+            resolve=resolve_h,
+            project=project_h,
+            project_root=project_root,
+            timeline_name=str(p["timeline_name"]),
+            version=int(p["version"]),
+            analysis_run_id=p.get("analysis_run_id"),
+        )
+    if action == "prune":
+        if not p.get("timeline_name"):
+            return _err("timeline_name required")
+        return _timeline_versioning.prune_archived_versions(
+            resolve=resolve_h,
+            project=project_h,
+            project_root=project_root,
+            timeline_name=str(p["timeline_name"]),
+            keep_n=int(p.get("keep_n", 10)),
+        )
+    if action == "registry":
+        return {"success": True, **_brain_edits.read_brain_edits_registry(project_root)}
+    if action == "media_pool_changes":
+        return {
+            "success": True,
+            "changes": _media_pool_changes.get_media_pool_change_history(
+                project_root=project_root,
+                analysis_run_id=p.get("analysis_run_id"),
+                action=p.get("media_pool_action"),
+                limit=int(p.get("limit", 50)),
+            ),
+        }
+    return _err(f"Unknown action: {action}")
+
+
+@mcp.tool()
+@_destructive_op("timeline")
 def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Timeline operations: tracks, clips, import/export, generators, titles.
+
+    PREFER probe_* / *_capabilities / *_boundary_report / *_checked / dry_run variants
+    where they exist. Raw mutators are kept for advanced callers but bypass guardrails.
+    DESTRUCTIVE actions auto-archive the current timeline (C6); pass strict=true for
+    refuse-on-archive-failure behavior on the catastrophic ops.
 
     Actions:
       list() -> {timelines}
@@ -12809,6 +13962,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
           audio_type: 'mono', 'stereo', '5.1', '7.1', 'adaptive1'..'adaptive36' for audio.
           index: 1-based slot; appended if omitted/out of bounds.
       delete_track(track_type, index) -> {success}
+        CATASTROPHIC. Deletes a track and all items on it. Strict mode auto-applies.
       get_track_sub_type(track_type, index) -> {sub_type}
       set_track_enable(track_type, index, enabled) -> {success}
       get_track_enabled(track_type, index) -> {enabled}
@@ -12818,6 +13972,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       set_track_name(track_type, index, name) -> {success}
       get_items(track_type, index) -> {items}
       delete_clips(clip_ids, ripple?) -> {success}  — clip_ids: list of unique IDs
+        DESTRUCTIVE. ripple=True is CATASTROPHIC (closes the gap; cannot be selectively undone).
       set_clips_linked(clip_ids, linked) -> {success}
       duplicate(name?) -> {success, name}
       duplicate_clips(clip_ids?, selected?, target_track_index?, track_offset?, placement?, record_frame?, record_frame_offset?, copy_properties?, include_linked?) -> {results, count}
@@ -12829,15 +13984,20 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         transform, crop, composite, audio, retime, clip_color, markers, flags, enabled, cache,
         voice_isolation, fusion, grades, takes, and transitions (reported unsupported by Resolve API).
         include_linked=True duplicates linked audio and restores link state.
+        # example: action_help(name='<action_name>')
       copy_clips(...) -> {results, count} — alias for duplicate_clips.
       move_clips(...) -> {results, count, deleted_sources} — duplicate, then delete successfully duplicated sources.
       copy_range/duplicate_range(start_frame, end_frame, record_frame, ...) -> {results, count}
       overwrite_range(start_frame, end_frame, record_frame, ...) -> {results, count}
       lift_range(start_frame, end_frame, allow_partial_item_delete?, ripple?) -> {success, deleted}
+        DESTRUCTIVE. Removes items in a record-frame range. ripple=True closes the gap.
       story_spine_report() -> {beats, track_summaries, source_ranges, audio_spine}
       create_variant_from_ranges(name, ranges, markers?, cdl?, dry_run?) -> {success, id, items}
+        # example: action_help(name='<action_name>')
       bulk_set_item_properties(ops, dry_run?, readback?) -> {results, op_count}
+        # example: action_help(name='<action_name>')
       apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?) -> {success}
+        # example: action_help(name='<action_name>')
       thumbnail_contact_sheet(frames?|max_samples?, analysis_root?) -> {path, samples}
       marker_thumbnail_review(max_samples?, analysis_root?) -> {path, samples, review_guidance}
       edit_kernel_capabilities() -> {supported, partially_supported, unsupported}
@@ -12846,11 +14006,14 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         — Undocumented generator/Text+ GetProperty map on an item (keys are not in public API docs).
       set_title_text(clip_id|..., text, property_key?, as_styled_xml?, try_plain_first?, try_heuristic_keys?, readback?) -> {success, property_key?, attempts}
         — SetProperty on a heuristic or explicit key; tries plain string then minimal styled XML unless as_styled_xml=True.
+        # example: action_help(name='<action_name>')
       bulk_set_title_text(ops, ...) -> {results, op_count}  — list of set_title_text payloads (same params per op).
       create_compound_clip(clip_ids, info?) -> {success}
       create_fusion_clip(clip_ids) -> {success}
       import_into_timeline(path, options?) -> {success}
+        UNSAFE. No path sandboxing. Prefer import_timeline_checked.
       export(path, type, subtype?) -> {success}  — type: AAF, EDL, FCPXML, etc.
+        UNSAFE. No path sandboxing. Prefer export_timeline_checked.
       get_setting(name?) -> {settings}
       set_setting(name, value) -> {success}
       insert_generator(name) -> {success}
@@ -12896,8 +14059,14 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       transcription_capabilities(clip_ids?|selected?) -> {clip_methods, folder}
       subtitle_generation_probe(settings?, allow_generate?) -> {success}
       fairlight_boundary_report(...) -> {capabilities, track, item, audio_mapping, transcription}
+
+    For long-form per-action guidance and a worked example, call:
+      timeline(action="action_help", params={"name": "<action>"})
     """
     p = params or {}
+    # action_help is pull-on-demand metadata; no Resolve connection needed.
+    if action == "action_help":
+        return _action_help("timeline", p)
     pm, proj, err = _check()
     if err:
         return err
@@ -12972,6 +14141,25 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
             return {"success": bool(tl.AddTrack(p["track_type"], new_track_options))}
         return {"success": bool(tl.AddTrack(p["track_type"]))}
     elif action == "delete_track":
+        # B2 — catastrophic: deletes track + every item on it.
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            try:
+                items_on_track = tl.GetItemListInTrack(p["track_type"], p["index"]) or []
+                item_count = len(items_on_track)
+            except Exception:
+                item_count = None
+            return _issue_confirm_token(
+                action="timeline.delete_track",
+                params=p,
+                preview={"operation": "timeline.delete_track",
+                         "warning": "Deletes a track AND every clip on it.",
+                         "track_type": p.get("track_type"),
+                         "track_index": p.get("index"),
+                         "items_lost": item_count},
+            )
+        blocked = _consume_confirm_token(action="timeline.delete_track", params=p)
+        if blocked:
+            return blocked
         return {"success": bool(tl.DeleteTrack(p["track_type"], p["index"]))}
     elif action == "get_track_sub_type":
         return {"sub_type": tl.GetTrackSubType(p["track_type"], p["index"])}
@@ -12999,7 +14187,23 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                 for it in (tl.GetItemListInTrack(tt, ti) or []):
                     if it.GetUniqueId() in ids_set:
                         found.append(it)
-        return {"success": bool(tl.DeleteClips(found, p.get("ripple", False)))}
+        # B2 — ripple=True is catastrophic; require confirmation.
+        ripple = bool(p.get("ripple", False))
+        if ripple:
+            if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+                return _issue_confirm_token(
+                    action="timeline.delete_clips_ripple",
+                    params=p,
+                    preview={"operation": "timeline.delete_clips",
+                             "ripple": True,
+                             "warning": "ripple=True closes the gap left by deleted items; cannot be selectively undone.",
+                             "clip_count": len(found),
+                             "clip_ids_found": [it.GetUniqueId() for it in found]},
+                )
+            blocked = _consume_confirm_token(action="timeline.delete_clips_ripple", params=p)
+            if blocked:
+                return blocked
+        return {"success": bool(tl.DeleteClips(found, ripple))}
     elif action == "set_clips_linked":
         ids_set = set(p["clip_ids"])
         found = []
@@ -13313,6 +14517,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_destructive_op("timeline_markers")
 def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
     """Markers and playhead operations on the current timeline.
 
@@ -13417,6 +14622,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_destructive_op("timeline_ai")
 def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """AI and analysis operations on the current timeline.
 
@@ -13461,6 +14667,7 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_destructive_op("timeline_item")
 def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Properties, transforms, speed, keyframes, and metadata for a timeline item.
     Identify by track_type, track_index, item_index.
@@ -13687,6 +14894,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_destructive_op("timeline_item_markers")
 def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Markers, flags, and clip color on timeline items. Identify by track_type, track_index, item_index.
 
@@ -13761,6 +14969,7 @@ def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) 
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_destructive_op("timeline_item_fusion")
 def timeline_item_fusion(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fusion composition operations on timeline items. Identify by track_type, track_index, item_index.
 
@@ -13823,6 +15032,9 @@ def timeline_item_fusion(action: str, params: Optional[Dict[str, Any]] = None) -
 
 _COLOR_GRADE_KERNEL_ACTIONS = [
     "grade_capabilities",
+    "grade_evidence_base",
+    "bulk_match_to_hero",
+    "propose_grade",
     "probe_grade_item",
     "probe_node_graph",
     "safe_set_cdl",
@@ -13915,7 +15127,12 @@ def _resolve_lut_export_type(export_type, resolve_obj=None):
 
 def _validate_cdl_payload(cdl):
     if not isinstance(cdl, dict):
-        return None, _err("cdl must be an object")
+        return None, _err(
+            "cdl must be an object",
+            code="INVALID_CDL",
+            category="invalid_input",
+            remediation="Pass cdl as a dict with NodeIndex, Slope, Offset, Power, Saturation.",
+        )
     errors = []
     node_index = cdl.get("NodeIndex", 1)
     if isinstance(node_index, bool):
@@ -14141,7 +15358,8 @@ def _timeline_items_for_grade_copy(tl, target_ids):
 def _safe_copy_grade(item, p: Dict[str, Any]):
     target_ids = p.get("target_ids") or []
     if not isinstance(target_ids, list) or not target_ids:
-        return _err("target_ids must be a non-empty list of timeline item IDs")
+        return _err("target_ids must be a non-empty list of timeline item IDs",
+                    code="MISSING_TARGET_IDS", category="invalid_input")
     _, tl, err = _get_tl()
     if err:
         return err
@@ -14151,6 +15369,20 @@ def _safe_copy_grade(item, p: Dict[str, Any]):
         return _ok(targets=target_summaries, missing=missing, would_copy=not missing)
     if missing:
         return {"success": False, "targets": target_summaries, "missing": missing}
+    # F6 / B2 — Whole-grade copy is a destructive replacement on every target.
+    # Gameplan §3 B2 lists safe_copy_grade among ops that must require confirmation.
+    if "confirm_token" not in p and "confirmToken" not in p:
+        if _confirm_token_required():
+            preview = {
+                "operation": "safe_copy_grade",
+                "warning": "Replaces the entire node graph on every successfully resolved target item.",
+                "target_count": len(target_summaries),
+                "target_ids": [t.get("timeline_item_id") for t in target_summaries],
+            }
+            return _issue_confirm_token(action="safe_copy_grade", params=p, preview=preview)
+    blocked = _consume_confirm_token(action="safe_copy_grade", params=p)
+    if blocked:
+        return blocked
     return {"success": bool(item.CopyGrades(targets)), "targets": target_summaries, "missing": missing}
 
 
@@ -14184,18 +15416,34 @@ def _safe_export_lut(item, p: Dict[str, Any]):
 def _safe_apply_drx(proj, item, p: Dict[str, Any]):
     path = p.get("path")
     if not path:
-        return _err("path is required")
+        return _err("path is required", code="MISSING_PATH", category="invalid_input")
     if not os.path.isfile(path):
-        return _err(f"DRX file not found: {path}")
+        return _err(f"DRX file not found: {path}", code="DRX_NOT_FOUND", category="invalid_input")
     if p.get("require_temp_path", True) and not _grade_temp_path_ok(path):
-        return _err("DRX path must be under the system temp directory unless require_temp_path=False")
+        return _err("DRX path must be under the system temp directory unless require_temp_path=False",
+                    code="DRX_PATH_NOT_TEMP", category="invalid_input")
     graph, source, err = _color_graph_from_params(proj, item, p)
     if err:
         return err
     if not _has_method(graph, "ApplyGradeFromDRX"):
-        return _err(f"{source} graph does not expose ApplyGradeFromDRX")
+        return _err(f"{source} graph does not expose ApplyGradeFromDRX",
+                    code="APPLY_DRX_UNSUPPORTED", category="unsupported")
     if p.get("dry_run"):
         return _ok(path=path, source=source, grade_mode=p.get("grade_mode", p.get("mode", 0)), would_apply=True)
+    # B2 — Whole-grade replacement is catastrophic; require confirmation.
+    if "confirm_token" not in p and "confirmToken" not in p:
+        if _confirm_token_required():
+            preview = {
+                "operation": "safe_apply_drx",
+                "warning": "REPLACES the target graph entirely. There is no append mode.",
+                "path": path,
+                "source": source,
+                "grade_mode": p.get("grade_mode", p.get("mode", 0)),
+            }
+            return _issue_confirm_token(action="safe_apply_drx", params=p, preview=preview)
+    blocked = _consume_confirm_token(action="safe_apply_drx", params=p)
+    if blocked:
+        return blocked
     success = bool(graph.ApplyGradeFromDRX(path, p.get("grade_mode", p.get("mode", 0))))
     return {"success": success, "path": path, "source": source}
 
@@ -14268,49 +15516,812 @@ def _grade_boundary_report(proj, item, p: Dict[str, Any]):
         report["timeline_graph"] = _probe_color_node_graph(proj, item, {"source": "timeline", "include_nodes": False})
     return report
 
+
+# ───────────────────────────────────────────────────────────────────────────
+# B4 — action_help dict. Long-form per-action guidance + examples are pulled
+# on demand via the action_help sub-action so the top-level docstring (sent on
+# every tool catalog turn) can stay short.
+# ───────────────────────────────────────────────────────────────────────────
+
+_ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "timeline_item_color": {
+        "safe_set_cdl": {
+            "summary": "Set CDL values on an existing node. Validates input; supports dry_run.",
+            "params": "cdl={NodeIndex, Slope, Offset, Power, Saturation}, dry_run?, track_type?, track_index?, item_index?",
+            "returns": "{success, validation, normalized}",
+            "example": (
+                'timeline_item_color(action="safe_set_cdl", params={\n'
+                '  "track_type": "video", "track_index": 1, "item_index": 0,\n'
+                '  "cdl": {"NodeIndex": 1,\n'
+                '          "Slope":  [1.00, 0.98, 0.95],\n'
+                '          "Offset": [0.00, 0.00, 0.00],\n'
+                '          "Power":  [1.00, 1.00, 1.00],\n'
+                '          "Saturation": 1.0},\n'
+                '  "dry_run": True\n'
+                '})'
+            ),
+        },
+        "safe_copy_grade": {
+            "summary": "Copy the source item's grade to one or more target items.",
+            "params": "target_ids: [str], dry_run?",
+            "returns": "{success, targets, missing}",
+            "example": (
+                'timeline_item_color(action="safe_copy_grade", params={\n'
+                '  "track_type": "video", "track_index": 1, "item_index": 0,  # source = hero\n'
+                '  "target_ids": ["TimelineItem-abc", "TimelineItem-def"],\n'
+                '  "dry_run": True\n'
+                '})'
+            ),
+        },
+        "safe_apply_drx": {
+            "summary": "Apply a .drx grade. REPLACES the target graph; gated by confirm_token.",
+            "params": "path: str, source?, grade_mode? (0=no keyframes, 1=source TC aligned, 2=start aligned), require_temp_path?, confirm_token?",
+            "returns": "{success, path, source}",
+            "example": (
+                'timeline_item_color(action="safe_apply_drx", params={\n'
+                '  "track_type": "video", "track_index": 1, "item_index": 0,\n'
+                '  "path": "/tmp/show_look_v3.drx",\n'
+                '  "grade_mode": 0,\n'
+                '  "require_temp_path": True\n'
+                '})  # first call returns {status: "confirmation_required", confirm_token}\n'
+                '   # re-call with confirm_token to apply'
+            ),
+        },
+        "grade_evidence_base": {
+            "summary": "PREFERRED pre-flight read. Composes version_snapshot + node_graph + color_group + coverage_report.",
+            "params": "include_coverage?, max_nodes?, min_source_trust? (medium|high), track_type?, track_index?, item_index?",
+            "returns": "{evidence_base: str, structured: {…}, warnings, notes}",
+            "example": (
+                'timeline_item_color(action="grade_evidence_base", params={\n'
+                '  "track_type": "video", "track_index": 1, "item_index": 0,\n'
+                '  "include_coverage": True, "min_source_trust": "medium"\n'
+                '})\n'
+                '# Lead your response to the user with the returned evidence_base line.'
+            ),
+        },
+        "bulk_match_to_hero": {
+            "summary": "Map-reduce: propose per-target CDLs or copy-grade plans from a hero shot.",
+            "params": "hero_id, target_ids: [str], method ('cdl_delta'|'copy_grade'), min_source_trust?, dry_run?, confirm_token?",
+            "returns": "{hero, proposals: [...], blocked: [...], confirm_token?}",
+            "example": (
+                'timeline_item_color(action="bulk_match_to_hero", params={\n'
+                '  "hero_id": "TimelineItem-hero",\n'
+                '  "target_ids": ["TimelineItem-a", "TimelineItem-b", "TimelineItem-c"],\n'
+                '  "method": "copy_grade",\n'
+                '  "min_source_trust": "high",\n'
+                '  "dry_run": True\n'
+                '})'
+            ),
+        },
+        "propose_grade": {
+            "summary": "Validated structured-output action. Turns a color recommendation into a parsed artifact.",
+            "params": "target_id, evidence_base: str, frame_paths: [str], operation_class enum, cdl_delta_or_artifact, unsupported_request_explanation?, execute?",
+            "returns": "{accepted: bool, validation, plan_id?, preview_path?, error?}",
+            "example": (
+                'timeline_item_color(action="propose_grade", params={\n'
+                '  "target_id": "TimelineItem-abc",\n'
+                '  "evidence_base": "evidence base: hero shot 2A graded …",\n'
+                '  "frame_paths": ["/path/untreated.jpg", "/path/current.jpg"],\n'
+                '  "operation_class": "direct",\n'
+                '  "cdl_delta_or_artifact": {"cdl": {…}},\n'
+                '  "execute": False\n'
+                '})'
+            ),
+        },
+    },
+    "timeline": {
+        "duplicate_clips": {
+            "summary": "Re-place the same MediaPool media with the same source trim. Video clips only.",
+            "params": "clip_ids?|selected?, target_track_index?|track_offset?, placement? (same_time|offset|at_playhead|track_above|after_source|next_gap), record_frame?, record_frame_offset?, copy_properties?, include_linked?",
+            "returns": "{results, count}",
+            "example": (
+                'timeline(action="duplicate_clips", params={\n'
+                '  "clip_ids": ["TimelineItem-abc"],\n'
+                '  "placement": "next_gap",\n'
+                '  "track_offset": 1,\n'
+                '  "copy_properties": ["transform", "grades", "markers"],\n'
+                '  "include_linked": True\n'
+                '})'
+            ),
+        },
+        "create_variant_from_ranges": {
+            "summary": "Build a variant timeline from N source ranges. Source-safe; supports dry_run.",
+            "params": "name, ranges: [{source_clip_id|clip_id, start_frame, end_frame, record_frame?, track_type?}], markers?, cdl?, dry_run?",
+            "returns": "{success, id, items}",
+            "example": (
+                'timeline(action="create_variant_from_ranges", params={\n'
+                '  "name": "v02_tighter_act1",\n'
+                '  "ranges": [\n'
+                '    {"source_clip_id": "TimelineItem-abc", "start_frame": 108000, "end_frame": 108120},\n'
+                '    {"source_clip_id": "TimelineItem-def", "start_frame": 108300, "end_frame": 108400}\n'
+                '  ],\n'
+                '  "markers": [{"frame": 0, "color": "Blue", "name": "Act1 turn"}],\n'
+                '  "dry_run": True\n'
+                '})'
+            ),
+        },
+        "apply_look_to_items": {
+            "summary": "Apply one CDL or copied grade to many items.",
+            "params": "target_ids: [str], cdl?|copy_from_item_id?, dry_run?",
+            "returns": "{targets, missing, dry_run, cdl_results?, copy_grades?, success}",
+            "example": (
+                'timeline(action="apply_look_to_items", params={\n'
+                '  "target_ids": ["TimelineItem-1", "TimelineItem-2", "TimelineItem-3"],\n'
+                '  "cdl": {"NodeIndex": 1, "Slope": [1.0, 0.97, 0.93],\n'
+                '          "Offset": [0.0, 0.0, 0.0], "Power": [1.0, 1.0, 1.0],\n'
+                '          "Saturation": 1.0},\n'
+                '  "dry_run": True\n'
+                '})'
+            ),
+        },
+        "bulk_set_item_properties": {
+            "summary": "Batch SetProperty/clip_color/enabled across many items.",
+            "params": "ops: [{timeline_item_id|clip_id, properties|transform|crop|composite|audio, clip_color?, enabled?}], dry_run?, readback?",
+            "returns": "{success, results, op_count}",
+            "example": (
+                'timeline(action="bulk_set_item_properties", params={\n'
+                '  "ops": [\n'
+                '    {"timeline_item_id": "TimelineItem-abc",\n'
+                '     "properties": {"ClipColor": "Teal", "ZoomX": 1.05}},\n'
+                '    {"timeline_item_id": "TimelineItem-def",\n'
+                '     "properties": {"ClipColor": "Teal"}}\n'
+                '  ],\n'
+                '  "dry_run": True, "readback": True\n'
+                '})'
+            ),
+        },
+        "set_title_text": {
+            "summary": "SetProperty on a heuristic or explicit Text+ key.",
+            "params": "clip_id|timeline_item_id, text, property_key?, as_styled_xml?, try_plain_first?, try_heuristic_keys?, readback?",
+            "returns": "{success, property_key?, attempts}",
+            "example": (
+                'timeline(action="set_title_text", params={\n'
+                '  "timeline_item_id": "TimelineItem-title-1",\n'
+                '  "text": "FADE IN",\n'
+                '  "try_heuristic_keys": True,\n'
+                '  "readback": True\n'
+                '})'
+            ),
+        },
+        "delete_clips": {
+            "summary": "Delete timeline items. ripple=True closes the gap (catastrophic; confirm_token required).",
+            "params": "clip_ids: [str], ripple?, confirm_token?",
+            "returns": "{success}",
+            "example": (
+                'timeline(action="delete_clips", params={\n'
+                '  "clip_ids": ["TimelineItem-abc"], "ripple": True\n'
+                '})  # first call returns confirm_token if ripple=True; re-call with it to delete'
+            ),
+        },
+    },
+    "graph": {
+        "apply_grade_from_drx": {
+            "summary": "REPLACES the entire node graph from a .drx. Confirm_token required.",
+            "params": "path, grade_mode? (0/1/2), source?",
+            "returns": "{success}",
+            "example": (
+                'graph(action="apply_grade_from_drx", params={\n'
+                '  "path": "/tmp/look.drx", "grade_mode": 0, "source": "item"\n'
+                '})  # first call returns confirm_token; re-call with it to apply'
+            ),
+        },
+        "reset_all_grades": {
+            "summary": "Wipes the entire grade on the source. Confirm_token required.",
+            "params": "source?",
+            "returns": "{success}",
+            "example": (
+                'graph(action="reset_all_grades", params={"source": "item"})'
+            ),
+        },
+    },
+}
+
+
+def _bulk_match_to_hero(proj, p: Dict[str, Any]) -> Dict[str, Any]:
+    """C1 — map-reduce shot matching: propose per-target CDLs or copy-grade plans from a hero.
+
+    Methods:
+      - copy_grade: emit a plan to CopyGrades from hero to each target. Execute uses hero.CopyGrades([targets]).
+      - cdl_delta: NOT YET IMPLEMENTED — returns invalid_input with a clear remediation.
+
+    Two-step contract:
+      1. First call (no confirm_token, dry_run=true by default): returns {proposals, blocked, confirm_token}
+      2. Second call with confirm_token: executes the planned mutations.
+    """
+    hero_id = p.get("hero_id")
+    target_ids = p.get("target_ids") or []
+    method = (p.get("method") or "copy_grade").strip().lower()
+    if not hero_id:
+        return _err("hero_id is required", code="MISSING_HERO_ID", category="invalid_input",
+                    remediation="Pass hero_id: the timeline item unique ID for the reference shot.")
+    if not isinstance(target_ids, list) or not target_ids:
+        return _err("target_ids must be a non-empty list of timeline item IDs",
+                    code="MISSING_TARGETS", category="invalid_input")
+    if method not in {"copy_grade", "cdl_delta"}:
+        return _err(f"method must be 'copy_grade' or 'cdl_delta' (got {method!r})",
+                    code="INVALID_METHOD", category="invalid_input")
+
+    _, tl, err = _get_tl()
+    if err:
+        return err
+
+    # Resolve hero
+    hero = _find_timeline_item_by_id(tl, hero_id)
+    if hero is None:
+        return _err(f"hero item not found in current timeline: {hero_id}",
+                    code="HERO_NOT_FOUND", category="invalid_input",
+                    remediation="Call timeline(action='get_items', ...) to enumerate valid timeline item IDs.")
+
+    # Resolve hero evidence base (used for the leading line + min_trust gate)
+    hero_evidence = _grade_evidence_base(proj, hero, {"include_coverage": False, "max_nodes": 4})
+    hero_summary = {
+        "id": hero_id,
+        "name": getattr(hero, "GetName", lambda: None)(),
+        "evidence_base": hero_evidence.get("evidence_base"),
+    }
+
+    # Resolve targets
+    targets: List[Any] = []
+    blocked: List[Dict[str, Any]] = []
+    found_ids = set()
+    for track_index in range(1, tl.GetTrackCount("video") + 1):
+        for it in (tl.GetItemListInTrack("video", track_index) or []):
+            try:
+                uid = it.GetUniqueId()
+            except Exception:
+                continue
+            if uid in target_ids and uid != hero_id:
+                targets.append(it)
+                found_ids.add(uid)
+    for tid in target_ids:
+        if tid not in found_ids and tid != hero_id:
+            blocked.append({"target_id": tid, "reason": "not_found_in_current_timeline",
+                            "error_code": "TARGET_NOT_FOUND"})
+
+    # Build proposals
+    proposals: List[Dict[str, Any]] = []
+    if method == "copy_grade":
+        for it in targets:
+            try:
+                name = it.GetName()
+            except Exception:
+                name = None
+            proposals.append({
+                "target_id": it.GetUniqueId(),
+                "name": name,
+                "method": "copy_grade",
+                "copy_source": hero_id,
+                "warnings": [],
+            })
+    else:  # cdl_delta
+        for it in targets:
+            try:
+                name = it.GetName()
+            except Exception:
+                name = None
+            proposals.append({
+                "target_id": it.GetUniqueId(),
+                "name": name,
+                "method": "cdl_delta",
+                "proposed_cdl": None,
+                "warnings": [
+                    "cdl_delta is not yet implemented — use method='copy_grade' for now, "
+                    "or hand-roll safe_set_cdl per target."
+                ],
+            })
+        # Return early as a structured invalid_input so the caller doesn't proceed to execute.
+        return _err(
+            "method='cdl_delta' is not implemented yet",
+            code="CDL_DELTA_UNIMPLEMENTED",
+            category="unsupported",
+            remediation="Use method='copy_grade' or call safe_set_cdl per target with hand-rolled values.",
+        )
+
+    dry_run = bool(p.get("dry_run", True))
+    payload: Dict[str, Any] = {
+        "hero": hero_summary,
+        "proposals": proposals,
+        "blocked": blocked,
+        "method": method,
+        "dry_run": dry_run,
+    }
+
+    if dry_run:
+        # A dry-run that produced at least one proposal is a successful
+        # validation, even if some targets are blocked — the caller can still
+        # act on the resolvable subset. success=False is reserved for the
+        # case where the call produced no actionable output.
+        payload["success"] = bool(proposals)
+        return payload
+
+    # Execute path: confirm-token gated.
+    if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+        issued = _issue_confirm_token(
+            action="timeline_item_color.bulk_match_to_hero",
+            params=p,
+            preview={
+                "operation": "bulk_match_to_hero",
+                "method": method,
+                "hero_id": hero_id,
+                "target_count": len(proposals),
+                "blocked": blocked,
+                "warning": "Mutates grade state on every successfully resolved target item.",
+            },
+        )
+        issued.update(payload)  # surface proposals in the issued response too
+        return issued
+    blocked_token = _consume_confirm_token(action="timeline_item_color.bulk_match_to_hero", params=p)
+    if blocked_token:
+        return blocked_token
+
+    if blocked:
+        payload["success"] = False
+        payload["error_summary"] = "refusing to execute because some targets could not be resolved"
+        return payload
+
+    # Execute copy_grade in one API call.
+    try:
+        success = bool(hero.CopyGrades(targets))
+    except Exception as exc:
+        return _err(f"CopyGrades failed: {exc}",
+                    code="COPY_GRADES_FAILED", category="resolve_api_failed", retryable=False)
+    payload["success"] = success
+    payload["executed"] = True
+    return payload
+
+
+_PROPOSE_GRADE_OPERATION_CLASSES = frozenset({"direct", "opaque", "asset", "review_only", "unsupported"})
+
+
+def _propose_grade_validate(p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Validate a propose_grade payload. Returns None if valid, else a structured error."""
+    if not isinstance(p, dict):
+        return _err("params must be an object", code="INVALID_PARAMS", category="invalid_input")
+    target_id = p.get("target_id")
+    if not target_id:
+        return _err("target_id is required",
+                    code="MISSING_TARGET_ID", category="invalid_input",
+                    remediation="Pass target_id: the timeline item unique ID this proposal applies to.")
+    evidence_base = p.get("evidence_base")
+    if not evidence_base or not isinstance(evidence_base, str):
+        return _err("evidence_base is required and must be a non-empty string",
+                    code="MISSING_EVIDENCE_BASE", category="invalid_input",
+                    remediation="Call timeline_item_color(action='grade_evidence_base') and use its evidence_base string.")
+    if not evidence_base.lstrip().lower().startswith("evidence base:"):
+        return _err("evidence_base must start with 'evidence base:' — call grade_evidence_base first",
+                    code="EVIDENCE_BASE_MALFORMED", category="invalid_input")
+    frame_paths = p.get("frame_paths") or []
+    if not isinstance(frame_paths, list) or not frame_paths:
+        return _err("frame_paths must be a non-empty list of absolute paths",
+                    code="MISSING_FRAME_PATHS", category="invalid_input",
+                    remediation="Include the frame(s) used to make this grade decision.")
+    operation_class = (p.get("operation_class") or "").strip().lower()
+    if operation_class not in _PROPOSE_GRADE_OPERATION_CLASSES:
+        return _err(
+            f"operation_class must be one of {sorted(_PROPOSE_GRADE_OPERATION_CLASSES)} (got {operation_class!r})",
+            code="INVALID_OPERATION_CLASS", category="invalid_input",
+        )
+    artifact = p.get("cdl_delta_or_artifact") or {}
+    if operation_class == "direct":
+        cdl = artifact.get("cdl") if isinstance(artifact, dict) else None
+        if not cdl:
+            return _err("operation_class='direct' requires cdl_delta_or_artifact.cdl",
+                        code="DIRECT_REQUIRES_CDL", category="invalid_input")
+    elif operation_class == "opaque":
+        if not (isinstance(artifact, dict) and (artifact.get("drx_path") or artifact.get("copy_source"))):
+            return _err("operation_class='opaque' requires drx_path or copy_source",
+                        code="OPAQUE_REQUIRES_ARTIFACT", category="invalid_input")
+    elif operation_class == "asset":
+        if not (isinstance(artifact, dict) and artifact.get("lut_path")):
+            return _err("operation_class='asset' requires lut_path",
+                        code="ASSET_REQUIRES_LUT_PATH", category="invalid_input")
+    elif operation_class == "review_only":
+        if len(frame_paths) < 2:
+            return _err("operation_class='review_only' requires at least 2 frame_paths (e.g. untreated + current)",
+                        code="REVIEW_NEEDS_FRAMES", category="invalid_input")
+    elif operation_class == "unsupported":
+        expl = p.get("unsupported_request_explanation")
+        if not expl or not isinstance(expl, str):
+            return _err(
+                "operation_class='unsupported' requires unsupported_request_explanation: str",
+                code="UNSUPPORTED_NEEDS_EXPLANATION", category="invalid_input",
+            )
+    return None
+
+
+def _propose_grade(proj, p: Dict[str, Any]) -> Dict[str, Any]:
+    """C2 — Structured-output action. Validates a color recommendation as a proper artifact.
+
+    With execute=False (default): returns {accepted: True, plan_id, validation, preview_path?}.
+    With execute=True: routes through bulk_match_to_hero / safe_set_cdl / safe_apply_drx
+    based on operation_class. Confirm_token gating applies as usual.
+    """
+    err = _propose_grade_validate(p)
+    if err:
+        return err
+
+    plan_id = f"plan_{_uuid.uuid4().hex[:12]}"
+    operation_class = p["operation_class"].strip().lower()
+    payload: Dict[str, Any] = {
+        "accepted": True,
+        "plan_id": plan_id,
+        "operation_class": operation_class,
+        "target_id": p["target_id"],
+        "evidence_base": p["evidence_base"],
+        "frame_paths": list(p.get("frame_paths") or []),
+        "validation": {"valid": True, "notes": []},
+    }
+    if not p.get("execute"):
+        payload["executed"] = False
+        return payload
+
+    # review_only never mutates — no confirm_token needed.
+    if operation_class == "review_only":
+        payload["executed"] = False
+        payload["validation"]["notes"].append("review_only: no mutation; frame references recorded.")
+        return payload
+
+    # Execute path for mutating classes — gate behind confirm_token like other destructive ops.
+    if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+        issued = _issue_confirm_token(
+            action="timeline_item_color.propose_grade",
+            params=p,
+            preview={
+                "operation": "propose_grade.execute",
+                "plan_id": plan_id,
+                "operation_class": operation_class,
+                "target_id": p["target_id"],
+                "warning": "Mutates grade state on the target item.",
+            },
+        )
+        issued.update(payload)
+        return issued
+    blocked = _consume_confirm_token(action="timeline_item_color.propose_grade", params=p)
+    if blocked:
+        return blocked
+
+    # Routing — operation_class determines which mutator runs.
+    # For C2 v1 we wire the two simple paths (direct CDL, review_only no-op) and leave
+    # opaque/asset as recorded plans for the caller to execute via the matching safe_* action.
+    if operation_class == "review_only":
+        payload["executed"] = False
+        payload["validation"]["notes"].append("review_only: no mutation; frame references recorded.")
+        return payload
+
+    if operation_class == "direct":
+        # Resolve the target item via timeline lookup, then call safe_set_cdl.
+        _, tl, err = _get_tl()
+        if err:
+            return err
+        target_item = _find_timeline_item_by_id(tl, p["target_id"])
+        if target_item is None:
+            return _err(f"target_id not found in current timeline: {p['target_id']}",
+                        code="TARGET_NOT_FOUND", category="invalid_input")
+        cdl_payload = (p.get("cdl_delta_or_artifact") or {}).get("cdl")
+        result = _safe_set_cdl(target_item, {"cdl": cdl_payload})
+        payload["executed"] = True
+        payload["execution"] = result
+        payload["success"] = bool(result.get("success"))
+        # F5 — propose_grade.execute writes a brain_edits row per gameplan §3 C2:
+        # "metric=color_intent, rationale=<evidence_base>". The inner _safe_set_cdl
+        # call doesn't go through the destructive_hook wrapper, so we log here.
+        if payload["success"]:
+            try:
+                ctx = _destructive_versioning_provider()
+                if ctx is not None:
+                    _, proj_h, project_root, project_name = ctx
+                    run_id = _destructive_hook._extract_analysis_run_id(p, project_root=project_root)
+                    initiator = _destructive_hook._extract_initiator(p)
+                    timeline_name = None
+                    try:
+                        cur_tl = proj_h.GetCurrentTimeline()
+                        if cur_tl is not None:
+                            timeline_name = cur_tl.GetName()
+                    except Exception:
+                        timeline_name = None
+                    _brain_edits.log_brain_edit(
+                        project_root=project_root,
+                        analysis_run_id=run_id,
+                        edit_type="timeline_item_color.propose_grade",
+                        tool_name="timeline_item_color",
+                        action_name="propose_grade",
+                        timeline_before=timeline_name,
+                        timeline_after=timeline_name,
+                        target_metric=_brain_edits.METRIC_COLOR_INTENT,
+                        rationale=p.get("evidence_base"),
+                        params={
+                            "target_id": p.get("target_id"),
+                            "operation_class": operation_class,
+                            "plan_id": plan_id,
+                            "frame_paths": list(p.get("frame_paths") or []),
+                            "cdl": cdl_payload,
+                        },
+                        result_summary={
+                            "success": payload["success"],
+                            "normalized": result.get("normalized"),
+                        },
+                        project_name=project_name,
+                        initiator=initiator,
+                    )
+            except Exception as exc:
+                logger.warning("propose_grade brain_edit log failed (non-fatal): %s", exc)
+        return payload
+
+    # opaque/asset/unsupported require the caller to follow up with the matching safe_* action.
+    payload["executed"] = False
+    payload["validation"]["notes"].append(
+        f"operation_class={operation_class}: plan accepted but propose_grade does not execute this class directly. "
+        "Use the matching safe_* action (safe_apply_drx, graph.set_lut, etc.)."
+    )
+    return payload
+
+
+def _action_help(tool_name: str, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Return long-form guidance + example for a named action on tool_name."""
+    name = (p or {}).get("name") or (p or {}).get("action_name")
+    catalog = _ACTION_HELP.get(tool_name, {})
+    if not name:
+        return _ok(tool=tool_name, available=sorted(catalog.keys()),
+                   note="Call action_help with params.name to retrieve guidance for a specific action.")
+    entry = catalog.get(name)
+    if not entry:
+        return _err(
+            f"No help registered for {tool_name}.{name}.",
+            code="HELP_NOT_REGISTERED",
+            category="invalid_input",
+            remediation=f"Call action_help() with no name for the list of actions with detailed help.",
+        )
+    return _ok(tool=tool_name, action=name, **entry)
+
+
+def _grade_evidence_line(*, item_name, version_label, num_nodes, has_lut, group_name,
+                        coverage_summary, coverage_warnings_count):
+    """Compose the one-line evidence_base sentence for color recommendations."""
+    bits = []
+    name = item_name or "current item"
+    parts = []
+    if version_label:
+        parts.append(f"Version {version_label}")
+    if num_nodes is not None:
+        parts.append(f"{num_nodes} nodes")
+    if has_lut:
+        parts.append("LUT")
+    if group_name:
+        parts.append(f"group={group_name}")
+    grade_state = f" ({', '.join(parts)})" if parts else " (default graph)"
+    bits.append(f"evidence base: hero shot {name} graded{grade_state}")
+    if coverage_summary is not None:
+        total = coverage_summary.get("clips_total", 0)
+        analyzed = coverage_summary.get("clips_analyzed", 0)
+        bits.append(f"{analyzed} of {total} target shots have current visual reports")
+        relink = coverage_summary.get("clips_reuse_blocked", 0) + coverage_summary.get("clips_superseded_by_relink", 0)
+        if relink:
+            bits.append(f"{relink} superseded_by_relink")
+    if coverage_warnings_count:
+        bits.append(f"{coverage_warnings_count} warnings")
+    return "; ".join(bits)
+
+
+def _grade_evidence_base(proj, item, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Composite read: grade version snapshot + node graph + color group + coverage.
+
+    Pure read; never mutates. Mirrors media_analysis.coverage_report's
+    `evidence_base` line so color recommendations lead with one composed
+    summary instead of synthesizing across three calls.
+
+    Returns: {evidence_base: str, structured: {version_snapshot, node_graph,
+              color_group, coverage?, capabilities}, warnings: [...]}
+    """
+    structured: Dict[str, Any] = {}
+    warnings: List[str] = []
+
+    # Version snapshot
+    snap = _grade_version_snapshot(item, p)
+    structured["version_snapshot"] = snap
+    current_version = snap.get("current")
+    version_label = None
+    if isinstance(current_version, dict):
+        # Resolve's GetCurrentVersion returns {"versionName": ..., "versionType": ...}
+        # (camelCase). Accept the historical PascalCase keys too for safety.
+        version_label = (
+            current_version.get("versionName")
+            or current_version.get("VersionName")
+            or current_version.get("name")
+        )
+    elif isinstance(current_version, str):
+        version_label = current_version
+    # Strip a leading "Version " prefix so the formatted line doesn't duplicate
+    # it ("Version Version 1").
+    if isinstance(version_label, str):
+        stripped = version_label.strip()
+        if stripped.lower().startswith("version "):
+            stripped = stripped[len("version "):].strip()
+        version_label = stripped or None
+
+    # Node graph
+    node_graph_probe = _probe_color_node_graph(
+        proj, item,
+        {"source": p.get("source", "item"), "include_nodes": True, "max_nodes": int(p.get("max_nodes", 8))},
+    )
+    structured["node_graph"] = node_graph_probe
+    num_nodes = node_graph_probe.get("num_nodes")
+    has_lut = False
+    for n in (node_graph_probe.get("nodes") or []):
+        if n.get("lut"):
+            has_lut = True
+            break
+
+    # Color group
+    group_name = None
+    try:
+        group = item.GetColorGroup()
+        group_name = group.GetName() if group else None
+    except Exception as exc:
+        warnings.append(f"GetColorGroup failed: {exc}")
+    structured["color_group"] = {"name": group_name}
+
+    # Item identity
+    item_name = None
+    try:
+        item_name = item.GetName()
+    except Exception:
+        pass
+
+    # Optional coverage (best-effort; coverage_report needs a media pool item)
+    coverage_summary = None
+    coverage_warnings_count = 0
+    if p.get("include_coverage", True):
+        mp_item = _timeline_item_media_pool_item(item)
+        if mp_item is not None:
+            try:
+                project_name = proj.GetName() if proj else None
+                project_id = proj.GetUniqueId() if proj else None
+                clip_id = mp_item.GetUniqueId()
+                target = {"type": "clip", "clip_ids": [clip_id]}
+                # Build a minimal records list directly to avoid the media_pool lookup re-entry.
+                cov_params = dict(p)
+                cov_params["target"] = target
+                cov_params.setdefault("min_source_trust", "medium")
+                records, normalized_target, cov_warnings, target_err = _media_analysis_records_from_target(
+                    proj.GetMediaPool(), cov_params, project=proj,
+                )
+                if target_err:
+                    warnings.append(f"coverage_report skipped: {target_err.get('error', {}).get('message', target_err.get('error'))}")
+                else:
+                    coverage = build_media_analysis_coverage_report(
+                        project_name=project_name,
+                        project_id=project_id,
+                        records=records or [],
+                        target=normalized_target,
+                        params=cov_params,
+                        capabilities={},
+                    )
+                    structured["coverage"] = coverage
+                    coverage_summary = coverage.get("summary")
+                    coverage_warnings_count = len(coverage.get("warnings") or []) + len(cov_warnings or [])
+            except Exception as exc:
+                warnings.append(f"coverage_report failed: {exc}")
+        else:
+            warnings.append("no media pool item for coverage_report")
+
+    # Capabilities (small; useful at the top so the agent knows what's possible)
+    structured["capabilities"] = _grade_capabilities(item, proj)
+
+    evidence = _grade_evidence_line(
+        item_name=item_name,
+        version_label=version_label,
+        num_nodes=num_nodes,
+        has_lut=has_lut,
+        group_name=group_name,
+        coverage_summary=coverage_summary,
+        coverage_warnings_count=coverage_warnings_count,
+    )
+
+    return {
+        "success": True,
+        "evidence_base": evidence,
+        "structured": structured,
+        "warnings": warnings,
+        "notes": [
+            "grade_evidence_base is a pure read — it never mutates.",
+            "Lead any color recommendation with the `evidence_base` line.",
+        ],
+    }
+
 @mcp.tool()
+@_destructive_op("timeline_item_color")
 def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Color grading, versions, LUTs, cache, and AI tools on timeline items. Identify by track_type, track_index, item_index.
 
-    Actions:
-      set_cdl(cdl, ...) -> {success}  — cdl: {NodeIndex, Slope, Offset, Power, Saturation}
-      copy_grades(target_ids, ...) -> {success}
-      add_version(name, type?, ...) -> {success}  — type: 0=local, 1=remote
+    <when_to_use>
+    - For ANY grade recommendation, lead with action="grade_evidence_base" — composes
+      version_snapshot + node_graph + color_group + coverage_report into one line.
+    - For batch matching, use bulk_match_to_hero (returns confirm_token; dry_run first).
+    - To formalize a recommendation, use propose_grade — validated structured output.
+    - PREFER safe_*/probe_*/*_capabilities/*_boundary_report variants over raw mutators.
+    </when_to_use>
+
+    <returns>
+    grade_evidence_base -> {evidence_base: str, structured: {coverage, version_snapshot, node_graph, color_group, warnings}}
+    bulk_match_to_hero  -> {hero, proposals: [{target_id, name, proposed_cdl|copy_source, warnings}], blocked: [...], confirm_token?}
+    propose_grade       -> {accepted: bool, validation, plan_id?, preview_path?, error?}
+    safe_set_cdl        -> {success, validation, normalized}
+    safe_copy_grade     -> {success, targets, missing}
+    safe_apply_drx      -> {success, path, source}  # first call may return confirm_token
+    grade_capabilities  -> {item_methods, graph_sources, lut_export_types, guards}
+    grade_boundary_report -> {capabilities, item, color_groups, gallery}
+    All actions may return {"error": {code, category, retryable, message, remediation, reason?}}.
+    </returns>
+
+    PREFER the safe_* / probe_* / *_capabilities / *_boundary_report variants. They validate inputs,
+    support dry_run, and return structured errors. Raw actions are kept for advanced callers but
+    bypass guardrails.
+
+    Read-only / boundary actions (safe to call any time):
+      grade_evidence_base(include_coverage?, max_nodes?, ...) -> {evidence_base, structured, warnings}
+        PREFERRED PRE-FLIGHT for any color recommendation. Composes version_snapshot +
+        node_graph + color_group + coverage_report into one one-line `evidence_base` summary.
+        Lead your response with the `evidence_base` line.
+        # example: action_help(name='<action_name>')
+      grade_capabilities(...) -> {item_methods, graph_sources, lut_export_types, guards}
+      probe_grade_item(...) -> {methods, versions, node_graph, color_group, cache}
+      probe_node_graph(source?, max_nodes?, ...) -> {available, num_nodes, nodes}
+      grade_version_snapshot(...) -> {current, local, remote}
+      color_group_capabilities(...) -> {count, groups}
+      gallery_capabilities(...) -> {available, still_albums, power_grade_albums}
+      grade_boundary_report(...) -> {capabilities, item, color_groups, gallery}
       get_current_version(...) -> {version}
       get_version_names(type?, ...) -> {names}
+      get_node_graph(layer_index?, ...) -> {available}
+      get_color_group(...) -> {name}
+      get_color_cache(...) -> {enabled}
+      get_fusion_cache(...) -> {enabled}
+
+    Guarded mutators (PREFERRED for grade work):
+      safe_set_cdl(cdl, dry_run?, ...) -> {success, validation, normalized}
+        Validates input, supports dry_run, returns normalized CDL. Use this for primary corrections.
+        # example: action_help(name='<action_name>')
+      safe_copy_grade(target_ids, dry_run?, ...) -> {success, targets, missing}
+        Copies grade to N items; dry_run reports targets without mutating.
+        # example: action_help(name='<action_name>')
+      safe_apply_drx(path, source?, grade_mode?, require_temp_path?) -> {success}
+        REPLACES the target graph. Captures a version snapshot first; require_temp_path defaults True.
+        # example: action_help(name='<action_name>')
+      safe_export_lut(type?, path, require_temp_path?) -> {success, path, size}
+        Sandboxed LUT export.
+      grade_version_restore(name, type?, dry_run?, ...) -> {success}
+
+    Raw mutators (UNSAFE direct mutation — prefer the safe_* sibling):
+      set_cdl(cdl, ...) -> {success}
+        UNSAFE. No validation; no dry_run. Prefer safe_set_cdl.
+      copy_grades(target_ids, ...) -> {success}
+        UNSAFE. No target existence check. Prefer safe_copy_grade.
+      export_lut(type, path, ...) -> {success}
+        UNSAFE. No path sandboxing. Prefer safe_export_lut.
+      reset_all_node_colors(...) -> {success}
+        DESTRUCTIVE. Erases per-node color labels on the item's graph.
+      add_version(name, type?, ...) -> {success}  — type: 0=local, 1=remote
       load_version(name, type?, ...) -> {success}
       rename_version(old_name, new_name, type?, ...) -> {success}
       delete_version(name, type?, ...) -> {success}
-      get_node_graph(layer_index?, ...) -> {available}
-      get_color_group(...) -> {name}
+        DESTRUCTIVE. Deletes a named grade version.
       assign_color_group(group_name, ...) -> {success}
       remove_from_color_group(...) -> {success}
-      export_lut(type, path, ...) -> {success}
-      get_color_cache(...) -> {enabled}
       set_color_cache(enabled, ...) -> {success}
-      get_fusion_cache(...) -> {enabled}
       set_fusion_cache(enabled, ...) -> {success}
-      reset_all_node_colors(...) -> {success}
       stabilize(...) -> {success}
       smart_reframe(...) -> {success}
       create_magic_mask(mode, ...) -> {success}  — mode: "F" forward, "B" backward, "BI" bidirectional
       regenerate_magic_mask(...) -> {success}
-      grade_capabilities(...) -> {item_methods, graph_sources, lut_export_types, guards}
-      probe_grade_item(...) -> {methods, versions, node_graph, color_group, cache}
-      probe_node_graph(source?, max_nodes?, ...) -> {available, num_nodes, nodes}
-      safe_set_cdl(cdl, dry_run?, ...) -> {success, validation, normalized}
-      safe_copy_grade(target_ids, dry_run?, ...) -> {success, targets, missing}
-      safe_apply_drx(path, source?, grade_mode?, require_temp_path?) -> {success}
-      safe_export_lut(type?, path, require_temp_path?) -> {success, path, size}
-      grade_version_snapshot(...) -> {current, local, remote}
-      grade_version_restore(name, type?, dry_run?, ...) -> {success}
-      color_group_capabilities(...) -> {count, groups}
-      gallery_capabilities(...) -> {available, still_albums, power_grade_albums}
-      grade_boundary_report(...) -> {capabilities, item, color_groups, gallery}
 
     Default: track_type="video", track_index=1, item_index=0
+
+    For long-form per-action guidance and a worked example, call:
+      timeline_item_color(action="action_help", params={"name": "<action>"})
     """
     p = params or {}
+    if action == "action_help":
+        return _action_help("timeline_item_color", p)
     _, item, err = _get_item(p)
     if err:
         return err
@@ -14319,6 +16330,12 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
 
     if action == "grade_capabilities":
         return _grade_capabilities(item, proj)
+    elif action == "grade_evidence_base":
+        return _grade_evidence_base(proj, item, p)
+    elif action == "bulk_match_to_hero":
+        return _bulk_match_to_hero(proj, p)
+    elif action == "propose_grade":
+        return _propose_grade(proj, p)
     elif action == "probe_grade_item":
         return _grade_item_snapshot(item, proj, p)
     elif action == "probe_node_graph":
@@ -14412,6 +16429,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_destructive_op("timeline_item_takes")
 def timeline_item_takes(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Take management on timeline items. Identify by track_type, track_index, item_index.
 
@@ -14677,28 +16695,44 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_destructive_op("graph")
 def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Node graph operations (color grading nodes). Source can be timeline, timeline item, or color group.
 
-    Actions:
+    PREFER timeline_item_color.probe_node_graph / safe_apply_drx for inspection and
+    replacement. These raw graph actions do not capture a version snapshot before mutating.
+
+    Read-only:
       get_num_nodes(source?, ...) -> {count}
       get_lut(node_index, source?, ...) -> {lut}
-      set_lut(node_index, lut_path, source?, ...) -> {success}
       get_node_cache(node_index, source?, ...) -> {cache}
-      set_node_cache(node_index, cache_value, source?, ...) -> {success}
       get_node_label(node_index, source?, ...) -> {label}
       get_tools_in_node(node_index, source?, ...) -> {tools}
+
+    Mutators (UNSAFE — bypass grade-version snapshot; prefer timeline_item_color.safe_* where available):
+      set_lut(node_index, lut_path, source?, ...) -> {success}
+        UNSAFE. Assigns a LUT to an existing node. No snapshot/dry_run.
+      set_node_cache(node_index, cache_value, source?, ...) -> {success}
       set_node_enabled(node_index, enabled, source?, ...) -> {success}
       apply_grade_from_drx(path, grade_mode?, source?, ...) -> {success}
+        CATASTROPHIC. REPLACES the entire node graph. Prefer timeline_item_color.safe_apply_drx
+        (which snapshots the current version first). All grade_modes are full replacement —
+        there is no append mode.
         grade_mode: 0="No keyframes" (default), 1="Source Timecode aligned", 2="Start Frames aligned"
-        Note: All modes replace the entire node graph — there is no append mode.
       apply_arri_cdl_lut(source?, ...) -> {success}
+        DESTRUCTIVE. Bakes a CDL LUT into the graph.
       reset_all_grades(source?, ...) -> {success}
+        CATASTROPHIC. Wipes the entire grade on the source.
 
     source: "timeline" (default), "item" (needs track_type/track_index/item_index),
             "color_group_pre"/"color_group_post" (needs group_name)
+
+    For long-form per-action guidance and a worked example, call:
+      graph(action="action_help", params={"name": "<action>"})
     """
     p = params or {}
+    if action == "action_help":
+        return _action_help("graph", p)
     source = p.get("source", "timeline")
 
     # Get the graph object based on source
@@ -14745,10 +16779,31 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     elif action == "set_node_enabled":
         return {"success": bool(g.SetNodeEnabled(p["node_index"], p["enabled"]))}
     elif action == "apply_grade_from_drx":
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="graph.apply_grade_from_drx",
+                params=p,
+                preview={"operation": "graph.apply_grade_from_drx",
+                         "warning": "REPLACES the entire node graph. There is no append mode.",
+                         "path": p.get("path"), "grade_mode": p.get("grade_mode", p.get("mode", 0))},
+            )
+        blocked = _consume_confirm_token(action="graph.apply_grade_from_drx", params=p)
+        if blocked:
+            return blocked
         return {"success": bool(g.ApplyGradeFromDRX(p["path"], p.get("grade_mode", p.get("mode", 0))))}
     elif action == "apply_arri_cdl_lut":
         return {"success": bool(g.ApplyArriCdlLut())}
     elif action == "reset_all_grades":
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="graph.reset_all_grades",
+                params=p,
+                preview={"operation": "graph.reset_all_grades",
+                         "warning": "Wipes the entire grade on the source. Cannot be selectively undone."},
+            )
+        blocked = _consume_confirm_token(action="graph.reset_all_grades", params=p)
+        if blocked:
+            return blocked
         return {"success": bool(g.ResetAllGrades())}
     return _unknown(action, ["get_num_nodes","get_lut","set_lut","get_node_cache","set_node_cache","get_node_label","get_tools_in_node","set_node_enabled","apply_grade_from_drx","apply_arri_cdl_lut","reset_all_grades"])
 
@@ -16927,6 +18982,184 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     return _unknown(action, ["path", "categories", "list", "install", "remove",
                              "read", "validate", "template", "list_templates",
                              "execute", "run_inline", *_EXTENSION_KERNEL_ACTIONS])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MCP Resources — E1 (see local/design/agentic-flow-improvements-gameplan-2.md)
+#
+# Resources are read-only state surfaces that hosts can pull WITHOUT consuming
+# a turn (unlike tools, which require a tool_use round-trip). They mirror
+# state-read tools (get_version, get_current project/timeline, get_caps,
+# capabilities) so hosts that consume MCP resources don't have to spend turns
+# on passive state polling. The equivalent tools are intentionally kept — they
+# remain the lowest-common-denominator path for hosts that ignore resources.
+#
+# All resource handlers MUST be cheap; they're called by the host without
+# user awareness. Heavy work (analysis, Resolve scripting that may block)
+# stays in tools.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _safe_resource(fn):
+    """Wrap a resource handler so an exception returns a structured error dict
+    instead of bubbling out of the MCP transport."""
+    import functools
+
+    @functools.wraps(fn)
+    def _wrap():
+        try:
+            return fn()
+        except Exception as exc:
+            return {"error": {
+                "code": "RESOURCE_FAILED",
+                "category": "resolve_api_failed",
+                "retryable": True,
+                "message": f"{type(exc).__name__}: {exc}",
+            }}
+    return _wrap
+
+
+@mcp.resource("status://mcp_version")
+@_safe_resource
+def _resource_mcp_version() -> Dict[str, Any]:
+    """Server version, build, and update channel. Pure read — no Resolve required."""
+    return {
+        "version": VERSION,
+        "channel": _update_channel_current() if "_update_channel_current" in globals() else "stable",
+    }
+
+
+@mcp.resource("status://resolve_connection")
+@_safe_resource
+def _resource_resolve_connection() -> Dict[str, Any]:
+    """Whether Resolve is currently reachable, and what version. Cheap probe."""
+    r = get_resolve()
+    if r is None:
+        return {"connected": False}
+    try:
+        product = r.GetProductName()
+        version = r.GetVersion()
+        return {"connected": True, "product": product, "version": version}
+    except Exception as exc:
+        return {"connected": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+@mcp.resource("status://current_project")
+@_safe_resource
+def _resource_current_project() -> Dict[str, Any]:
+    """Current Resolve project name + id, or null if no project is open."""
+    r = get_resolve()
+    if r is None:
+        return {"open": False}
+    pm = r.GetProjectManager()
+    if pm is None:
+        return {"open": False}
+    proj = pm.GetCurrentProject()
+    if proj is None:
+        return {"open": False}
+    return {
+        "open": True,
+        "name": proj.GetName(),
+        "id": proj.GetUniqueId() if hasattr(proj, "GetUniqueId") else None,
+    }
+
+
+@mcp.resource("status://current_timeline")
+@_safe_resource
+def _resource_current_timeline() -> Dict[str, Any]:
+    """Current timeline name, id, start/end frame, start TC — or null if none."""
+    r = get_resolve()
+    if r is None:
+        return {"open": False}
+    pm = r.GetProjectManager()
+    if pm is None:
+        return {"open": False}
+    proj = pm.GetCurrentProject()
+    if proj is None:
+        return {"open": False}
+    tl = proj.GetCurrentTimeline()
+    if tl is None:
+        return {"open": False}
+    return {
+        "open": True,
+        "name": tl.GetName(),
+        "id": tl.GetUniqueId() if hasattr(tl, "GetUniqueId") else None,
+        "start_frame": tl.GetStartFrame(),
+        "end_frame": tl.GetEndFrame(),
+        "start_timecode": tl.GetStartTimecode(),
+    }
+
+
+@mcp.resource("status://caps_preset")
+@_safe_resource
+def _resource_caps_preset() -> Dict[str, Any]:
+    """Active analysis caps preset + overrides + effective caps. No Resolve required."""
+    from src.utils import analysis_caps as _ac
+    active = _ac.resolve_caps(_caps_preset_provider(), _caps_overrides_provider())
+    return {
+        "preset": active.preset,
+        "overrides": _caps_overrides_provider() or {},
+        "effective_caps": active.to_dict(),
+        "presets_available": _ac.list_presets(),
+    }
+
+
+@mcp.resource("analysis://recent_reports")
+@_safe_resource
+def _resource_recent_reports() -> Dict[str, Any]:
+    """Last 20 published analysis reports (clip_id, signature, completed_at, path)
+    from the global analysis registry. Catalog read — no Resolve required."""
+    try:
+        from src.utils import analysis_runs  # noqa: F401
+    except Exception:
+        pass
+    registry_path = os.path.join(
+        os.path.expanduser("~"),
+        "Documents",
+        "davinci-resolve-mcp-analysis",
+        "analysis_registry.json",
+    )
+    if not os.path.isfile(registry_path):
+        return {"registry_path": registry_path, "entries": [], "available": False}
+    try:
+        with open(registry_path, "r", encoding="utf-8") as fh:
+            registry = json.load(fh)
+    except Exception as exc:
+        return {"registry_path": registry_path, "entries": [],
+                "error": f"{type(exc).__name__}: {exc}"}
+    # Registry is typically a dict keyed by signature; surface as a list, newest first.
+    entries = []
+    if isinstance(registry, dict):
+        for sig, rec in registry.items():
+            if not isinstance(rec, dict):
+                continue
+            entries.append({
+                "analysis_signature": sig,
+                "clip_id": rec.get("clip_id"),
+                "clip_name": rec.get("clip_name"),
+                "completed_at": rec.get("completed_at") or rec.get("published_at"),
+                "report_path": rec.get("analysis_report_path") or rec.get("path"),
+            })
+    entries.sort(key=lambda e: e.get("completed_at") or "", reverse=True)
+    return {
+        "registry_path": registry_path,
+        "available": True,
+        "entries": entries[:20],
+    }
+
+
+@mcp.resource("capabilities://installed_tools")
+@_safe_resource
+def _resource_installed_tools() -> Dict[str, Any]:
+    """Detected tool installations (ffmpeg, ffprobe, whisper, etc.) — doesn't change mid-session."""
+    return _media_analysis_capabilities_for_request(None)
+
+
+@mcp.resource("capabilities://install_guidance")
+@_safe_resource
+def _resource_install_guidance() -> Dict[str, Any]:
+    """Install guidance for missing analysis tools. Reference data; no installs performed."""
+    caps = _media_analysis_capabilities_for_request(None)
+    return media_analysis_install_guidance(caps)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

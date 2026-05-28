@@ -97,12 +97,14 @@ def test_utils_syntax():
 
 
 def test_compound_tool_count():
-    assert _count_mcp_tools(PROJECT_ROOT / "src" / "server.py") == 32
+    assert _count_mcp_tools(PROJECT_ROOT / "src" / "server.py") == 33
 
 
 def test_prompt_registrations():
     source = (PROJECT_ROOT / "src" / "server.py").read_text()
-    assert source.count("@mcp.prompt") == 2
+    # 2 baseline (davinci_resolve_workflow + analyze_media) + 5 F2 workflow prompts.
+    assert source.count("@mcp.prompt") == 7
+    # Baseline prompts (must not regress).
     assert 'name="analyze_media"' in source
     assert "def analyze_media(" in source
     assert "include_visuals: bool = True" in source
@@ -111,6 +113,12 @@ def test_prompt_registrations():
     assert "include_visuals=false" in source
     assert "Do not silently downgrade media analysis" in source
     assert "session_only=true" in source
+    # F2 workflow prompts (see local/design/agentic-flow-improvements-gameplan-2.md task F2).
+    assert 'name="analyze_and_propose_grade"' in source
+    assert 'name="match_bin_to_hero"' in source
+    assert 'name="verify_timeline_coverage"' in source
+    assert 'name="open_and_analyze_selection"' in source
+    assert 'name="prep_color_handoff"' in source
 
 
 def test_granular_tool_count():

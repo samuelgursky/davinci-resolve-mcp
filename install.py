@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 from src.utils.update_check import (
@@ -34,7 +35,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.24.1"
+VERSION = "2.25.0"
 SUPPORTED_PYTHON_MIN = (3, 10)
 SUPPORTED_PYTHON_MAX = (3, 12)
 
@@ -654,49 +655,315 @@ def _git_failure_message(result, fallback):
     return output or fallback
 
 
-def apply_safe_self_update(project_dir, dry_run=False):
-    """Apply a guarded git fast-forward update for clean checkouts only."""
+def _record_update_history(project_dir, entry):
+    """Append `entry` to `<project_dir>/logs/update_history.json` (best-effort)."""
+    import json as _json
+    log_dir = os.path.join(project_dir, "logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError:
+        return
+    path = os.path.join(log_dir, "update_history.json")
+    history = {"entries": []}
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                loaded = _json.load(fh)
+            if isinstance(loaded, dict) and isinstance(loaded.get("entries"), list):
+                history = loaded
+        except (OSError, ValueError):
+            pass
+    history.setdefault("entries", []).append(entry)
+    # Trim to most recent 200 entries — keep history bounded.
+    if len(history["entries"]) > 200:
+        history["entries"] = history["entries"][-200:]
+    history["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    tmp_path = path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            _json.dump(history, fh, indent=2)
+        os.replace(tmp_path, path)
+    except OSError:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+def _read_current_version(project_dir):
+    """Best-effort read of VERSION constant from src/server.py."""
+    server_path = os.path.join(project_dir, "src", "server.py")
+    try:
+        with open(server_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("VERSION = "):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return None
+
+
+def _record_attempt(project_dir, *, kind, success, reason=None, message=None,
+                    from_version=None, to_version=None, from_sha=None, to_sha=None,
+                    initiator=None, extra=None):
+    """Append a structured row to update_history.json. `extra` is merged in flat."""
+    entry = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "kind": kind,  # "update" | "rollback" | "dry_run"
+        "success": bool(success),
+        "reason": reason,
+        "message": message,
+        "from_version": from_version,
+        "to_version": to_version,
+        "from_sha": from_sha,
+        "to_sha": to_sha,
+        "initiator": initiator,
+    }
+    if isinstance(extra, dict):
+        entry.update(extra)
+    _record_update_history(project_dir, entry)
+
+
+def apply_safe_self_update(project_dir, dry_run=False, *, initiator="cli",
+                           strategy="refuse_on_dirty"):
+    """Apply a guarded git fast-forward update.
+
+    `strategy` controls behavior when the working tree is dirty:
+    - `"refuse_on_dirty"` (default) — return reason="local_changes" without
+      touching anything.
+    - `"stash_if_needed"` — `git stash push`, apply the update, `git stash pop`.
+      If pop conflicts, leave the stash in place and return reason="stash_pop_conflict"
+      with the stash ref so the user can resolve.
+
+    Every attempt — success or failure — is recorded in
+    `<project_dir>/logs/update_history.json` so the dashboard can show what
+    happened and rollback can find the prior SHA.
+    """
     inside = _run_git(project_dir, ["rev-parse", "--is-inside-work-tree"])
     if inside is None or isinstance(inside, subprocess.TimeoutExpired) or inside.returncode != 0:
-        return {"success": False, "reason": "not_git", "message": _git_failure_message(inside, "not a git checkout")}
+        msg = _git_failure_message(inside, "not a git checkout")
+        _record_attempt(project_dir, kind="update", success=False, reason="not_git", message=msg, initiator=initiator)
+        return {"success": False, "reason": "not_git", "message": msg}
 
     status = _run_git(project_dir, ["status", "--porcelain"])
     if status is None or isinstance(status, subprocess.TimeoutExpired) or status.returncode != 0:
-        return {"success": False, "reason": "status_failed", "message": _git_failure_message(status, "could not inspect git status")}
+        msg = _git_failure_message(status, "could not inspect git status")
+        _record_attempt(project_dir, kind="update", success=False, reason="status_failed", message=msg, initiator=initiator)
+        return {"success": False, "reason": "status_failed", "message": msg}
+
+    stash_ref = None
     if status.stdout.strip():
-        return {
-            "success": False,
-            "reason": "local_changes",
-            "message": "local changes are present; continuing with the current build",
-        }
+        if strategy != "stash_if_needed":
+            msg = "local changes are present; continuing with the current build"
+            _record_attempt(project_dir, kind="update", success=False, reason="local_changes", message=msg, initiator=initiator)
+            return {"success": False, "reason": "local_changes", "message": msg}
+        # Auto-stash path: push the working tree onto the stash, remember the
+        # ref so we can pop (or surface) it after the update.
+        stash_msg = f"mcp-update-autostash-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        stash = _run_git(project_dir, ["stash", "push", "-u", "-m", stash_msg], timeout=30)
+        if stash is None or stash.returncode != 0 or "No local changes to save" in (stash.stdout or ""):
+            # If we got here `status` was dirty, so a stash failure means trouble.
+            msg = _git_failure_message(stash, "git stash push failed")
+            _record_attempt(project_dir, kind="update", success=False, reason="stash_failed", message=msg, initiator=initiator)
+            return {"success": False, "reason": "stash_failed", "message": msg}
+        stash_ref = stash_msg
 
     upstream = _run_git(project_dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
     if upstream is None or isinstance(upstream, subprocess.TimeoutExpired) or upstream.returncode != 0:
-        return {
-            "success": False,
-            "reason": "no_upstream",
-            "message": _git_failure_message(upstream, "current branch has no configured upstream"),
-        }
+        msg = _git_failure_message(upstream, "current branch has no configured upstream")
+        _record_attempt(project_dir, kind="update", success=False, reason="no_upstream", message=msg, initiator=initiator)
+        return {"success": False, "reason": "no_upstream", "message": msg}
+
+    # Capture pre-update SHA + version so rollback knows where to revert to.
+    head_before = _run_git(project_dir, ["rev-parse", "HEAD"])
+    from_sha = head_before.stdout.strip() if head_before and head_before.returncode == 0 else None
+    from_version = _read_current_version(project_dir)
 
     if dry_run:
-        return {
-            "success": True,
-            "changed": False,
-            "dry_run": True,
-            "message": f"would fast-forward from {upstream.stdout.strip()}",
-        }
+        msg = f"would fast-forward from {upstream.stdout.strip()}"
+        _record_attempt(project_dir, kind="dry_run", success=True, message=msg,
+                        from_version=from_version, from_sha=from_sha, initiator=initiator)
+        return {"success": True, "changed": False, "dry_run": True, "message": msg}
 
     fetch = _run_git(project_dir, ["fetch", "--tags", "--prune"], timeout=90)
     if fetch is None or isinstance(fetch, subprocess.TimeoutExpired) or fetch.returncode != 0:
-        return {"success": False, "reason": "fetch_failed", "message": _git_failure_message(fetch, "git fetch failed")}
+        msg = _git_failure_message(fetch, "git fetch failed")
+        _record_attempt(project_dir, kind="update", success=False, reason="fetch_failed", message=msg,
+                        from_version=from_version, from_sha=from_sha, initiator=initiator)
+        return {"success": False, "reason": "fetch_failed", "message": msg}
 
     pull = _run_git(project_dir, ["pull", "--ff-only"], timeout=120)
     if pull is None or isinstance(pull, subprocess.TimeoutExpired) or pull.returncode != 0:
-        return {"success": False, "reason": "pull_failed", "message": _git_failure_message(pull, "git pull --ff-only failed")}
+        msg = _git_failure_message(pull, "git pull --ff-only failed")
+        _record_attempt(project_dir, kind="update", success=False, reason="pull_failed", message=msg,
+                        from_version=from_version, from_sha=from_sha, initiator=initiator)
+        return {"success": False, "reason": "pull_failed", "message": msg}
+
+    head_after = _run_git(project_dir, ["rev-parse", "HEAD"])
+    to_sha = head_after.stdout.strip() if head_after and head_after.returncode == 0 else None
+    to_version = _read_current_version(project_dir)
 
     output = "\n".join(part.strip() for part in (pull.stdout, pull.stderr) if part and part.strip())
     changed = "Already up to date." not in output
-    return {"success": True, "changed": changed, "message": output or "update complete"}
+
+    # Integrity verification: confirm our local HEAD matches what GitHub said
+    # was the target SHA. Mismatch could mean: (a) user pushed to a fork mid-
+    # update, (b) the release we resolved was different from the branch tip
+    # (force-pushed), (c) corruption. We don't roll back automatically — the
+    # user may have intentional reasons — but we log it loudly.
+    integrity = {"verified": None, "expected_sha": None, "actual_sha": to_sha}
+    try:
+        from src.utils.update_check import check_for_updates as _cfu  # type: ignore
+        info = _cfu(from_version or "0.0.0", project_dir, force=False)
+        expected = info.get("release_target_sha")
+        if expected:
+            integrity["expected_sha"] = expected
+            # Compare prefixes (release SHA may be a tag name or short SHA).
+            ok = bool(to_sha) and (
+                expected == to_sha
+                or (len(expected) >= 7 and to_sha.startswith(expected[:7]))
+                or (len(to_sha) >= 7 and expected.startswith(to_sha[:7]))
+            )
+            integrity["verified"] = ok
+    except Exception as exc:
+        integrity["error"] = f"{type(exc).__name__}: {exc}"
+
+    # If we stashed changes earlier, try to reapply them now.
+    stash_pop_conflict = False
+    if stash_ref:
+        pop = _run_git(project_dir, ["stash", "pop"], timeout=60)
+        if pop is None or pop.returncode != 0:
+            stash_pop_conflict = True
+
+    result = {
+        "success": True, "changed": changed,
+        "message": output or "update complete",
+        "from_version": from_version, "to_version": to_version,
+        "from_sha": from_sha, "to_sha": to_sha,
+        "stash_ref": stash_ref,
+        "stash_pop_conflict": stash_pop_conflict,
+        "integrity": integrity,
+    }
+    if stash_pop_conflict:
+        # Update applied successfully but the stash pop hit a conflict; the
+        # user's changes are still in the stash. Don't fail the overall update,
+        # but surface the conflict prominently.
+        result["reason"] = "stash_pop_conflict"
+        result["remediation"] = (
+            f"Update applied, but your stashed changes ({stash_ref}) conflict with the new build. "
+            "Resolve via `git stash list` + `git stash pop` after restarting; "
+            "use `git stash drop` if you want to discard them."
+        )
+
+    _record_attempt(project_dir, kind="update", success=True,
+                    message=output or "update complete",
+                    from_version=from_version, to_version=to_version,
+                    from_sha=from_sha, to_sha=to_sha, initiator=initiator,
+                    extra={"stash_ref": stash_ref,
+                           "stash_pop_conflict": stash_pop_conflict,
+                           "integrity": integrity})
+
+    return result
+
+
+def rollback_to_previous_build(project_dir, *, initiator="cli"):
+    """git reset --hard to the from_sha of the most recent successful update.
+
+    Refuses if local changes exist (same guard as apply_safe_self_update) so we
+    never silently lose user work. Records a rollback row in update_history.
+    """
+    import json as _json
+    history_path = os.path.join(project_dir, "logs", "update_history.json")
+    if not os.path.isfile(history_path):
+        return {"success": False, "reason": "no_history", "message": "no update_history.json found"}
+    try:
+        with open(history_path, "r", encoding="utf-8") as fh:
+            history = _json.load(fh)
+    except (OSError, _json.JSONDecodeError) as exc:
+        return {"success": False, "reason": "history_read_failed", "message": str(exc)}
+
+    # Newest first; find the latest successful "update" entry with a from_sha.
+    candidates = [e for e in reversed(history.get("entries") or [])
+                  if e.get("kind") == "update" and e.get("success") and e.get("from_sha")]
+    if not candidates:
+        return {"success": False, "reason": "no_target", "message": "no prior successful update to roll back to"}
+    target = candidates[0]
+    from_sha = target["from_sha"]
+
+    status = _run_git(project_dir, ["status", "--porcelain"])
+    if status is None or status.returncode != 0:
+        return {"success": False, "reason": "status_failed", "message": "could not inspect git status"}
+    if status.stdout.strip():
+        return {"success": False, "reason": "local_changes",
+                "message": "local changes are present; commit or stash before rolling back"}
+
+    head_before = _run_git(project_dir, ["rev-parse", "HEAD"])
+    pre_rollback_sha = head_before.stdout.strip() if head_before and head_before.returncode == 0 else None
+    pre_rollback_version = _read_current_version(project_dir)
+
+    reset = _run_git(project_dir, ["reset", "--hard", from_sha], timeout=60)
+    if reset is None or reset.returncode != 0:
+        msg = _git_failure_message(reset, f"git reset --hard {from_sha} failed")
+        _record_attempt(project_dir, kind="rollback", success=False, reason="reset_failed", message=msg,
+                        from_version=pre_rollback_version, from_sha=pre_rollback_sha,
+                        to_sha=from_sha, initiator=initiator)
+        return {"success": False, "reason": "reset_failed", "message": msg}
+
+    to_version = _read_current_version(project_dir)
+    _record_attempt(project_dir, kind="rollback", success=True,
+                    message=f"rolled back to {from_sha[:10]}",
+                    from_version=pre_rollback_version, to_version=to_version,
+                    from_sha=pre_rollback_sha, to_sha=from_sha, initiator=initiator)
+    return {"success": True, "changed": pre_rollback_sha != from_sha,
+            "message": f"rolled back to {from_sha[:10]}",
+            "from_version": pre_rollback_version, "to_version": to_version,
+            "from_sha": pre_rollback_sha, "to_sha": from_sha}
+
+
+def preview_update(project_dir):
+    """Fetch the target release metadata + scan for breaking-change markers.
+
+    Returns a dict the UI can render before the user confirms the update:
+      {success, latest_version, release_notes, breaking_changes, prerelease,
+       channel, current_version, target_sha}
+    """
+    try:
+        from src.utils.update_check import check_for_updates  # type: ignore
+    except Exception as exc:
+        return {"success": False, "error": f"update_check unavailable: {exc}"}
+    current = _read_current_version(project_dir) or "0.0.0"
+    try:
+        result = check_for_updates(current, project_dir, force=True)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    return {
+        "success": True,
+        "current_version": current,
+        "latest_version": result.get("latest_version"),
+        "release_notes": result.get("release_notes") or "",
+        "breaking_changes": result.get("release_notes_breaking") or [],
+        "prerelease": bool(result.get("prerelease")),
+        "channel": result.get("channel"),
+        "target_sha": result.get("release_target_sha"),
+        "release_url": result.get("release_url"),
+        "status": result.get("status"),
+    }
+
+
+def read_update_history(project_dir, limit=20):
+    """Most-recent-first list of recorded update attempts. For the dashboard."""
+    import json as _json
+    path = os.path.join(project_dir, "logs", "update_history.json")
+    if not os.path.isfile(path):
+        return {"success": True, "entries": []}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            history = _json.load(fh)
+    except (OSError, _json.JSONDecodeError) as exc:
+        return {"success": False, "error": str(exc), "entries": []}
+    entries = (history.get("entries") or [])[-int(limit):]
+    entries.reverse()
+    return {"success": True, "entries": entries}
 
 
 def _restart_installer():

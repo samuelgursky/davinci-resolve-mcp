@@ -1,6 +1,14 @@
 import unittest
 
 import src.server as compound
+from tests._error_envelope_helpers import err_message
+
+
+def _strip_versioning(d):
+    """Return a copy of a result dict with the destructive_hook _versioning key removed."""
+    if not isinstance(d, dict):
+        return d
+    return {k: v for k, v in d.items() if k != "_versioning"}
 
 
 class TimelineStub:
@@ -61,7 +69,7 @@ class TimelineMarkerParamTest(unittest.TestCase):
             },
         )
 
-        self.assertEqual(out, {"success": True, "frame": 42})
+        self.assertEqual(_strip_versioning(out), {"success": True, "frame": 42})
         self.assertEqual(
             self.timeline.add_calls[-1],
             (42, "Blue", "Needs review", "Needs review", 1, "marker-1"),
@@ -70,7 +78,7 @@ class TimelineMarkerParamTest(unittest.TestCase):
     def test_add_defaults_to_current_playhead(self):
         out = compound.timeline_markers("add", {"color": "green"})
 
-        self.assertEqual(out, {"success": True, "frame": 86412})
+        self.assertEqual(_strip_versioning(out), {"success": True, "frame": 86412})
         self.assertEqual(
             self.timeline.add_calls[-1],
             (86412, "Green", "Marker", "", 1, ""),
@@ -84,7 +92,7 @@ class TimelineMarkerParamTest(unittest.TestCase):
             {"timecode": "01:00:10:00", "color": "red", "name": "TC"},
         )
 
-        self.assertEqual(out, {"success": True, "frame": 86640})
+        self.assertEqual(_strip_versioning(out), {"success": True, "frame": 86640})
         self.assertEqual(
             self.timeline.add_calls[-1],
             (86640, "Red", "TC", "", 1, ""),
@@ -93,13 +101,13 @@ class TimelineMarkerParamTest(unittest.TestCase):
     def test_delete_at_frame_accepts_frame_id_alias(self):
         out = compound.timeline_markers("delete_at_frame", {"frameId": 123})
 
-        self.assertEqual(out, {"success": True})
+        self.assertEqual(_strip_versioning(out), {"success": True})
         self.assertEqual(self.timeline.deleted_frames, [123])
 
     def test_invalid_timecode_returns_error(self):
         out = compound.timeline_markers("add", {"timecode": "01:00:00"})
 
-        self.assertEqual(out, {"error": "timecode must use HH:MM:SS:FF format"})
+        self.assertEqual(err_message(out), "timecode must use HH:MM:SS:FF format")
 
     def test_add_marker_falls_back_to_five_arg_overload_when_custom_data_empty(self):
         target = FiveArgMarkerStub()

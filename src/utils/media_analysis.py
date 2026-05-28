@@ -24,7 +24,299 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+
+from src.utils import analysis_caps as _analysis_caps
+
+# Caps preference reader — server.py registers a provider that reads the
+# media-analysis prefs file. Until then, the default preset is used.
+_CAPS_PRESET_PROVIDER: Optional[Callable[[], Optional[str]]] = None
+_CAPS_OVERRIDES_PROVIDER: Optional[Callable[[], Optional[Dict[str, Any]]]] = None
+
+
+def register_caps_preset_provider(fn: Callable[[], Optional[str]]) -> None:
+    global _CAPS_PRESET_PROVIDER
+    _CAPS_PRESET_PROVIDER = fn
+
+
+def register_caps_overrides_provider(fn: Callable[[], Optional[Dict[str, Any]]]) -> None:
+    global _CAPS_OVERRIDES_PROVIDER
+    _CAPS_OVERRIDES_PROVIDER = fn
+
+
+def _resolve_active_caps() -> _analysis_caps.Caps:
+    """Pull the active caps from the registered provider, falling back to defaults."""
+    preset = None
+    overrides = None
+    if _CAPS_PRESET_PROVIDER is not None:
+        try:
+            preset = _CAPS_PRESET_PROVIDER()
+        except Exception:
+            preset = None
+    if _CAPS_OVERRIDES_PROVIDER is not None:
+        try:
+            overrides = _CAPS_OVERRIDES_PROVIDER()
+        except Exception:
+            overrides = None
+    return _analysis_caps.resolve_caps(preset, overrides)
+
+
+def _apply_caps_to_response(payload: Any) -> Any:
+    """Trim a response payload to the active caps.response_chars limit."""
+    caps = _resolve_active_caps()
+    return _analysis_caps.trim_response_payload(payload, caps.response_chars)
+
+
+def _cap_frames_for_active_caps(frame_paths: List[str]) -> List[str]:
+    """Clip `frame_paths` to caps.frames_per_clip (None = uncapped). Also
+    downscales each frame in place to caps.max_frame_dim_pixels."""
+    caps = _resolve_active_caps()
+    capped = frame_paths
+    if caps.frames_per_clip is not None and len(frame_paths) > caps.frames_per_clip:
+        capped = frame_paths[: caps.frames_per_clip]
+    if caps.max_frame_dim_pixels is not None:
+        for path in capped:
+            try:
+                _analysis_caps.downscale_frame_if_needed(path, caps.max_frame_dim_pixels)
+            except Exception:
+                # Downscale is best-effort; original-resolution upload is acceptable.
+                pass
+    return capped
+
+
+# Rough estimates for the pre-call budget check. Different vision providers
+# tokenize images differently — these are deliberately conservative defaults
+# (real cost will usually be a bit lower so refusals only fire on genuine
+# overruns). Override at call sites if you have a tighter measurement.
+AVG_VISION_TOKENS_PER_FRAME = 1000
+AVG_TRANSCRIPTION_TOKENS_PER_SECOND = 10
+
+
+def _check_caps_pre_call(
+    *,
+    project_root: Optional[str],
+    estimated_vision_tokens: int = 0,
+    clip_id: Optional[str] = None,
+    job_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Refuse the call if `estimated_vision_tokens` would blow any cumulative cap.
+
+    Returns None if allowed, else a clean error dict suitable for return-as-is.
+    Silently allows when project_root is unavailable (caps DB lives there).
+    """
+    if not project_root or estimated_vision_tokens <= 0:
+        return None
+    try:
+        caps = _resolve_active_caps()
+        decision = _analysis_caps.check_budget(
+            project_root=project_root, caps=caps,
+            estimated_vision_tokens=estimated_vision_tokens,
+            clip_id=clip_id, job_id=job_id,
+        )
+    except Exception:
+        return None  # never block on infra failure
+    if decision.allowed:
+        return None
+    # Log the refusal so the dashboard can show recent denials. Best-effort —
+    # never let logging failure mask the refusal itself.
+    try:
+        _analysis_caps.log_caps_event(
+            project_root=project_root,
+            event_type="refusal",
+            reason=decision.reason,
+            preset=caps.preset,
+            estimated_vision_tokens=estimated_vision_tokens,
+            current_usage=decision.current_usage,
+            cap=decision.cap,
+            headroom=decision.headroom,
+            clip_id=clip_id,
+            job_id=job_id,
+        )
+    except Exception:
+        pass
+    return {
+        "success": False,
+        "status": "caps_exhausted",
+        "reason": decision.reason,
+        "estimated_vision_tokens": estimated_vision_tokens,
+        "current_usage": decision.current_usage,
+        "cap": decision.cap,
+        "headroom": decision.headroom,
+        "preset": caps.preset,
+        "remediation": (
+            "Raise the cap via `media_analysis.set_caps_preset` (e.g. preset='generous' "
+            "or preset='unlimited'), or wait for the day_bucket to roll over. "
+            f"Most-binding scope: {decision.reason}."
+        ),
+    }
+
+
+def _annotate_clip_vision_failure(clip_result: Dict[str, Any], vision: Any) -> None:
+    """Lift caps-refusal info into a structured error envelope on `clip_result`.
+
+    When vision returns `status="caps_exhausted"` (a pre-call budget refusal),
+    the caller buries the cause in the per-clip `error` string. This helper
+    instead writes a `{code, category, reason, remediation, message}` dict and
+    surfaces a separate `caps_refusal` block with usage/cap/headroom numbers.
+    Falls back to the generic "did not complete" message for non-caps failures.
+    """
+    caps_refusal = (
+        vision
+        if isinstance(vision, dict) and vision.get("status") == "caps_exhausted"
+        else None
+    )
+    if caps_refusal:
+        clip_result.update({
+            "success": False,
+            "error": {
+                "code": "CAPS_REFUSAL",
+                "category": "budget_exhausted",
+                "retryable": False,
+                "reason": caps_refusal.get("reason"),
+                "remediation": caps_refusal.get("remediation"),
+                "message": (
+                    "Visual analysis refused — caps budget exhausted "
+                    f"({caps_refusal.get('reason')})."
+                ),
+            },
+            "caps_refusal": {
+                "preset": caps_refusal.get("preset"),
+                "estimated_vision_tokens": caps_refusal.get("estimated_vision_tokens"),
+                "current_usage": caps_refusal.get("current_usage"),
+                "cap": caps_refusal.get("cap"),
+                "headroom": caps_refusal.get("headroom"),
+            },
+            "visual": vision,
+        })
+    else:
+        clip_result.update({
+            "success": False,
+            "error": "Visual analysis was requested but did not complete.",
+            "visual": vision,
+        })
+
+
+def _annotate_partial_success(manifest: Dict[str, Any]) -> None:
+    """D3 — Mark batch manifests with explicit completed/failed clip-id lists.
+
+    When N-of-M clips fail mid-batch, the caller needs to know exactly which
+    clips succeeded so it can retry only the failed subset instead of redoing
+    everything. We populate:
+        - partial_success: True when there's a mix (some success, some fail);
+          False otherwise (all-success or all-fail).
+        - completed_clip_ids: list of clip_ids whose row.success is True.
+        - failed_clip_ids: list of clip_ids whose row.success is False AND
+          which are not in a vision-pending state (pending isn't a failure).
+
+    For all-fail batches, set an aggregate error envelope with code=PARTIAL_FAILURE,
+    category=batch_partial (per D1) so the caller's retry policy can route on it.
+    """
+    clips = manifest.get("clips") or []
+    if not clips:
+        return
+
+    def _clip_id(row: Dict[str, Any]) -> Optional[str]:
+        record = row.get("record") or {}
+        return record.get("clip_id") or row.get("clip_id")
+
+    completed_ids = [_clip_id(row) for row in clips if row.get("success")]
+    completed_ids = [cid for cid in completed_ids if cid]
+    failed_ids = [
+        _clip_id(row) for row in clips
+        if not row.get("success") and row.get("vision_status") != "pending_host_analysis"
+    ]
+    failed_ids = [cid for cid in failed_ids if cid]
+
+    has_success = bool(completed_ids)
+    has_failure = bool(failed_ids)
+    is_partial = has_success and has_failure
+
+    manifest["partial_success"] = is_partial
+    manifest["completed_clip_ids"] = completed_ids
+    manifest["failed_clip_ids"] = failed_ids
+
+    # Only set a top-level aggregate error envelope when at least one clip
+    # failed and no other top-level error has already been set (e.g. by
+    # _annotate_manifest_caps_refusal). Don't clobber a more specific error.
+    if has_failure and not manifest.get("error"):
+        if is_partial:
+            manifest["error"] = {
+                "code": "PARTIAL_FAILURE",
+                "category": "batch_partial",
+                "retryable": False,
+                "message": (
+                    f"{len(failed_ids)} of {manifest.get('clip_count', len(clips))} "
+                    "clip(s) failed. Other clips completed successfully."
+                ),
+                "remediation": (
+                    "Retry only failed_clip_ids; do not re-run completed_clip_ids."
+                ),
+            }
+
+
+def _annotate_manifest_caps_refusal(manifest: Dict[str, Any]) -> None:
+    """Aggregate per-clip CAPS_REFUSAL errors onto the manifest top-level.
+
+    Counts refusals and, if any fired, copies the first refusal's structured
+    fields onto `manifest["error"]` so server.py's `executed.error` propagation
+    surfaces a CAPS_REFUSAL envelope on the top-level analyze response without
+    callers having to walk `manifest.clips[*].error`.
+    """
+    clips = manifest.get("clips") or []
+    refusal_count = sum(
+        1 for row in clips
+        if isinstance(row.get("error"), dict) and row["error"].get("code") == "CAPS_REFUSAL"
+    )
+    manifest["caps_refusal_clip_count"] = refusal_count
+    if refusal_count <= 0:
+        return
+    first_refusal = next(
+        (row["error"] for row in clips
+         if isinstance(row.get("error"), dict) and row["error"].get("code") == "CAPS_REFUSAL"),
+        None,
+    )
+    if first_refusal:
+        manifest["error"] = {
+            "code": "CAPS_REFUSAL",
+            "category": "budget_exhausted",
+            "retryable": False,
+            "reason": first_refusal.get("reason"),
+            "remediation": first_refusal.get("remediation"),
+            "message": (
+                f"{refusal_count} of {manifest.get('clip_count', refusal_count)} "
+                "clip(s) refused — caps budget exhausted. See manifest.clips[*].caps_refusal."
+            ),
+        }
+
+
+def _record_caps_usage(
+    *,
+    project_root: Optional[str],
+    clip_id: Optional[str] = None,
+    job_id: Optional[str] = None,
+    vision_tokens: int = 0,
+    transcription_tokens: int = 0,
+    frames_uploaded: int = 0,
+    wall_clock_ms: int = 0,
+) -> None:
+    """Best-effort caps usage recording. Silently degrades if the brain DB isn't
+    available (e.g. project_root not resolved)."""
+    if not project_root:
+        return
+    try:
+        caps = _resolve_active_caps()
+        _analysis_caps.record_usage_all_scopes(
+            project_root=project_root,
+            clip_id=clip_id,
+            job_id=job_id,
+            vision_tokens=vision_tokens,
+            transcription_tokens=transcription_tokens,
+            frames_uploaded=frames_uploaded,
+            wall_clock_ms=wall_clock_ms,
+            preset=caps.preset,
+        )
+    except Exception:
+        pass  # caps recording is advisory; never break the analysis pipeline
 
 from src.utils.sync_detection import detect_sync_event_capabilities
 from src.utils import analysis_memory
@@ -63,7 +355,10 @@ ANALYSIS_DIR_NAME = "davinci-resolve-mcp-analysis"
 HIDDEN_ANALYSIS_DIR_NAME = ".davinci-resolve-mcp-analysis"
 ANALYSIS_VERSION = "0.2"
 ANALYSIS_INDEX_FILENAME = "index.sqlite"
+ANALYSIS_REGISTRY_FILENAME = "analysis_registry.json"
 ANALYSIS_INDEX_SCHEMA_VERSION = 1
+ANALYSIS_REGISTRY_SCHEMA_VERSION = 1
+DEFAULT_MAX_RELATED_PROJECT_ROOTS = 32
 COMMAND_TIMEOUT_SECONDS = 300
 HOST_CHAT_PATHS_PROVIDER = "host_chat_paths"
 HOST_CHAT_VISION_PROVIDERS = {
@@ -75,6 +370,32 @@ HOST_CHAT_VISION_PROVIDERS = {
 }
 VISION_SCHEMA_REFERENCE = "davinci_resolve_mcp.visual_analysis.v2"
 DEFAULT_TRANSCRIPTION_ENABLED = True
+SOURCE_TRUST_VALUES = ("auto", "filename", "low", "medium", "high")
+DEFAULT_SOURCE_TRUST = "auto"
+
+
+def _resolve_source_trust(options: Any) -> str:
+    """Return the effective source_trust for an analysis run.
+
+    Pulls from options.source_trust, options.vision.source_trust (and camelCase
+    aliases). Defaults to "auto" (conservative-by-default — see
+    _build_vision_prompt_with_source_trust for trust-tier semantics). Unknown
+    values fall back to the default rather than raising; the prompt-builder
+    surfaces a note in that case.
+    """
+    if not isinstance(options, dict):
+        return DEFAULT_SOURCE_TRUST
+    vision = options.get("vision") if isinstance(options.get("vision"), dict) else {}
+    candidate = (
+        options.get("source_trust") or options.get("sourceTrust")
+        or vision.get("source_trust") or vision.get("sourceTrust")
+    )
+    if not candidate:
+        return DEFAULT_SOURCE_TRUST
+    value = str(candidate).strip().lower()
+    if value in SOURCE_TRUST_VALUES:
+        return value
+    return DEFAULT_SOURCE_TRUST
 MARKER_PLAN_DEFAULT_COLORS = {
     "shot": "Blue",
     "best_moment": "Green",
@@ -370,6 +691,355 @@ def validate_output_root(output_root: Any, source_paths: Optional[Iterable[Any]]
             )
 
     return not errors, errors
+
+
+def _analysis_root_contains_reports(project_root: str) -> bool:
+    clips_root = os.path.join(project_root, "clips")
+    if not os.path.isdir(clips_root):
+        return False
+    for _, _, filenames in os.walk(clips_root):
+        if "analysis.json" in filenames:
+            return True
+    return False
+
+
+def related_analysis_project_roots(project_root: Any, *, limit: int = DEFAULT_MAX_RELATED_PROJECT_ROOTS) -> List[str]:
+    """Return sibling project analysis roots that contain reports.
+
+    Published projects can be duplicated or renamed in Resolve, which changes
+    the active project root while the source media and prior reports remain
+    valid. This bounded sibling scan lets reuse find those reports by signature.
+    """
+    if not project_root:
+        return []
+    active = normalize_path(project_root)
+    base_root = os.path.dirname(active)
+    if not os.path.isdir(base_root):
+        return []
+
+    candidates: List[Tuple[float, str]] = []
+    try:
+        entries = os.listdir(base_root)
+    except OSError:
+        return []
+    for entry in entries:
+        candidate = normalize_path(os.path.join(base_root, entry))
+        if candidate == active or not os.path.isdir(candidate):
+            continue
+        if not _analysis_root_contains_reports(candidate):
+            continue
+        try:
+            mtime = os.path.getmtime(os.path.join(candidate, "clips"))
+        except OSError:
+            mtime = 0.0
+        candidates.append((mtime, candidate))
+
+    candidates.sort(key=lambda row: (-row[0], row[1]))
+    return [candidate for _, candidate in candidates[: max(0, int(limit or 0))]]
+
+
+def _analysis_base_root_for_project_root(project_root: Any) -> Optional[str]:
+    if not project_root:
+        return None
+    return os.path.dirname(normalize_path(project_root))
+
+
+def analysis_registry_path(project_root: Any) -> Optional[str]:
+    base_root = _analysis_base_root_for_project_root(project_root)
+    if not base_root:
+        return None
+    return os.path.join(base_root, ANALYSIS_REGISTRY_FILENAME)
+
+
+def _analysis_report_project_root(path: Any) -> Optional[str]:
+    candidate = normalize_path(path)
+    if os.path.basename(candidate) != "analysis.json":
+        return None
+    clip_dir = os.path.dirname(candidate)
+    clips_dir = os.path.dirname(clip_dir)
+    if os.path.basename(clips_dir) != "clips":
+        return None
+    return os.path.dirname(clips_dir)
+
+
+def _registry_entry_from_report(report_path: str, report: Dict[str, Any]) -> Dict[str, Any]:
+    clip = report.get("clip") if isinstance(report.get("clip"), dict) else {}
+    signature = report.get("analysis_signature") if isinstance(report.get("analysis_signature"), dict) else {}
+    profile = report.get("analysis_profile") if isinstance(report.get("analysis_profile"), dict) else {}
+    project_root = _analysis_report_project_root(report_path)
+    return {
+        "analysis_json": normalize_path(report_path),
+        "project_root": project_root,
+        "source_file": normalize_path(report.get("source_file") or clip.get("file_path")) if (report.get("source_file") or clip.get("file_path")) else "",
+        "clip_id": str(clip.get("clip_id") or ""),
+        "media_id": str(clip.get("media_id") or ""),
+        "clip_name": str(clip.get("clip_name") or ""),
+        "analysis_version": str(report.get("analysis_version") or ""),
+        "analysis_signature": signature,
+        "signature_hash": str(signature.get("signature_hash") or ""),
+        "depth": profile.get("depth", ""),
+        "source_trust": str(profile.get("source_trust") or "") or DEFAULT_SOURCE_TRUST,
+        "vision_enabled": bool(profile.get("vision_enabled", False)),
+        "transcription_enabled": bool(profile.get("transcription_enabled", False)),
+        "analyzed_at": report.get("analyzed_at"),
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def _read_analysis_registry(project_root: Any) -> Dict[str, Any]:
+    path = analysis_registry_path(project_root)
+    if not path or not os.path.isfile(path):
+        return {"entries": []}
+    try:
+        payload = _read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return {"entries": []}
+    if not isinstance(payload, dict):
+        return {"entries": []}
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        payload["entries"] = []
+    return payload
+
+
+def _registry_entry_matches_record(entry: Dict[str, Any], record: Dict[str, Any]) -> bool:
+    entry_source = _normalized_report_match_value(entry.get("source_file"), path_like=True)
+    record_source = _normalized_report_match_value(record.get("file_path"), path_like=True)
+    if entry_source and record_source and entry_source == record_source:
+        return True
+    for key in ("clip_id", "media_id"):
+        entry_value = _normalized_report_match_value(entry.get(key))
+        record_value = _normalized_report_match_value(record.get(key))
+        if entry_value and record_value and entry_value == record_value:
+            return True
+    return False
+
+
+REGISTRY_PRESERVED_FIELDS = ("superseded_by_relink", "superseded_at", "superseded_reason")
+
+
+def update_analysis_registry(project_root: str, report_paths: Optional[Iterable[Any]] = None) -> Dict[str, Any]:
+    """Update the per-analysis-root report registry from known analysis reports.
+
+    Preserves relink-invalidation flags (superseded_by_relink, superseded_at,
+    superseded_reason) across rebuilds so re-running analysis writeback does
+    not silently clear a stale-mark applied by a prior replace_clip event.
+    """
+    root = normalize_path(project_root)
+    base_root = _analysis_base_root_for_project_root(root)
+    registry_path = analysis_registry_path(root)
+    if not base_root or not registry_path:
+        return {"success": False, "error": "Invalid analysis project root for registry"}
+
+    existing = _read_analysis_registry(root)
+    entries_by_path: Dict[str, Dict[str, Any]] = {}
+    preserved_flags_by_path: Dict[str, Dict[str, Any]] = {}
+    for entry in existing.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        report_path = entry.get("analysis_json")
+        if not report_path:
+            continue
+        normalized_path = normalize_path(report_path)
+        preserved = {key: entry[key] for key in REGISTRY_PRESERVED_FIELDS if entry.get(key) not in (None, "", False)}
+        if preserved:
+            preserved_flags_by_path[normalized_path] = preserved
+        if os.path.isfile(normalized_path):
+            entries_by_path[normalized_path] = dict(entry, analysis_json=normalized_path)
+
+    if report_paths is None:
+        candidate_paths = list(_iter_analysis_report_files(root))
+    else:
+        candidate_paths = [normalize_path(path) for path in report_paths if path]
+
+    failed_reports: List[Dict[str, str]] = []
+    updated_count = 0
+    for report_path in candidate_paths:
+        normalized_path = normalize_path(report_path)
+        report_project_root = _analysis_report_project_root(normalized_path)
+        if not report_project_root or not os.path.isfile(normalized_path):
+            continue
+        try:
+            if os.path.commonpath([normalize_path(report_project_root), base_root]) != base_root:
+                continue
+        except ValueError:
+            continue
+        try:
+            report = _read_json(normalized_path)
+        except (OSError, json.JSONDecodeError) as exc:
+            failed_reports.append({"path": normalized_path, "error": str(exc)})
+            continue
+        new_entry = _registry_entry_from_report(normalized_path, report)
+        preserved = preserved_flags_by_path.get(normalized_path)
+        if preserved:
+            new_entry.update(preserved)
+        entries_by_path[normalized_path] = new_entry
+        updated_count += 1
+
+    payload = {
+        "success": True,
+        "schema_version": ANALYSIS_REGISTRY_SCHEMA_VERSION,
+        "analysis_version": ANALYSIS_VERSION,
+        "base_root": base_root,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "entry_count": len(entries_by_path),
+        "updated_count": updated_count,
+        "failed_report_count": len(failed_reports),
+        "failed_reports": failed_reports[:50],
+        "entries": sorted(entries_by_path.values(), key=lambda row: (str(row.get("source_file") or ""), str(row.get("analysis_json") or ""))),
+    }
+    try:
+        _write_json(registry_path, payload)
+    except OSError as exc:
+        return {"success": False, "error": str(exc), "registry_path": registry_path}
+    return {k: v for k, v in payload.items() if k != "entries"} | {"registry_path": registry_path}
+
+
+def mark_registry_stale_for_clip(
+    *,
+    project_name: Any = None,
+    project_id: Any = None,
+    project_root: Any = None,
+    analysis_root: Any = None,
+    clip_id: Any = None,
+    media_id: Any = None,
+    source_file: Any = None,
+    reason: str = "source_relinked",
+) -> Dict[str, Any]:
+    """Mark analysis_registry entries matching this clip as superseded by relink.
+
+    Called from Resolve clip-replacement operations (replace_clip and friends)
+    after a successful mutation so coverage_report and the reuse pipeline stop
+    silently reusing the prior analysis for what is now a different underlying
+    media file.
+
+    Either `project_root` OR `project_name` (with optional `project_id`) must
+    be supplied so the active analysis registry can be located.
+
+    Matches entries by clip_id, media_id, or source_file (any match flags the
+    entry). Does NOT delete the report file on disk — colorists and editors
+    may still want the prior context. Sets `superseded_by_relink=true`,
+    `superseded_at`, and `superseded_reason` on the registry entry; these
+    flags are preserved across future `update_analysis_registry` rebuilds.
+
+    Returns {"success": bool, "matched": int, "registry_path": str, ...}.
+    """
+    if not (clip_id or media_id or source_file):
+        return {
+            "success": False,
+            "error": "mark_registry_stale_for_clip requires at least one of clip_id, media_id, or source_file",
+        }
+
+    resolved_root: Optional[str] = None
+    if project_root:
+        resolved_root = normalize_path(project_root)
+    else:
+        if project_name is None:
+            return {
+                "success": False,
+                "error": "mark_registry_stale_for_clip requires project_root or project_name",
+            }
+        resolved = resolve_output_root(
+            project_name=project_name,
+            project_id=project_id,
+            analysis_root=analysis_root,
+            source_paths=[source_file] if source_file else [],
+            create=False,
+        )
+        if not resolved.get("success"):
+            return {
+                "success": False,
+                "error": "Could not resolve analysis project root for registry invalidation",
+                "details": resolved,
+            }
+        resolved_root = resolved["project_root"]
+
+    registry_path = analysis_registry_path(resolved_root)
+    if not registry_path:
+        return {"success": False, "error": "No registry path available for project root", "project_root": resolved_root}
+    if not os.path.isfile(registry_path):
+        return {
+            "success": True,
+            "matched": 0,
+            "registry_path": registry_path,
+            "project_root": resolved_root,
+            "note": "No registry on disk yet; nothing to invalidate.",
+        }
+
+    payload = _read_analysis_registry(resolved_root)
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        return {"success": False, "error": "Registry corrupted: entries is not a list", "registry_path": registry_path}
+
+    record_like: Dict[str, Any] = {}
+    if clip_id:
+        record_like["clip_id"] = str(clip_id)
+    if media_id:
+        record_like["media_id"] = str(media_id)
+    if source_file:
+        record_like["file_path"] = str(source_file)
+
+    superseded_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    matched_entries: List[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if not _registry_entry_matches_record(entry, record_like):
+            continue
+        entry["superseded_by_relink"] = True
+        entry["superseded_at"] = superseded_at
+        entry["superseded_reason"] = str(reason or "source_relinked")
+        matched_entries.append(str(entry.get("analysis_json") or ""))
+
+    if not matched_entries:
+        return {
+            "success": True,
+            "matched": 0,
+            "registry_path": registry_path,
+            "project_root": resolved_root,
+            "note": "No registry entries matched the supplied clip identifiers.",
+        }
+
+    payload["entries"] = entries
+    payload["updated_at"] = superseded_at
+    try:
+        _write_json(registry_path, payload)
+    except OSError as exc:
+        return {"success": False, "error": str(exc), "registry_path": registry_path}
+    return {
+        "success": True,
+        "matched": len(matched_entries),
+        "matched_report_paths": matched_entries,
+        "registry_path": registry_path,
+        "project_root": resolved_root,
+        "reason": str(reason or "source_relinked"),
+        "superseded_at": superseded_at,
+    }
+
+
+def registry_entry_superseded_info(project_root: Any, report_path: Any) -> Optional[Dict[str, Any]]:
+    """Return the superseded-by-relink metadata for a report path, if any.
+
+    Used by reuse-check and coverage_report to surface relink staleness even
+    when the on-disk report still passes signature checks.
+    """
+    if not project_root or not report_path:
+        return None
+    normalized_path = normalize_path(report_path)
+    payload = _read_analysis_registry(project_root)
+    for entry in payload.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        if normalize_path(entry.get("analysis_json") or "") != normalized_path:
+            continue
+        if entry.get("superseded_by_relink"):
+            return {
+                "superseded_by_relink": True,
+                "superseded_at": entry.get("superseded_at"),
+                "superseded_reason": entry.get("superseded_reason") or "source_relinked",
+            }
+        return None
+    return None
 
 
 def resolve_output_root(
@@ -1025,17 +1695,34 @@ def build_plan(
     elif not isinstance(raw_reuse_project_roots, list):
         raw_reuse_project_roots = []
     reuse_project_roots = []
+    search_related_project_roots = _coerce_bool(
+        params.get("search_related_project_roots", params.get("searchRelatedProjectRoots")),
+        default=True,
+    )
+    max_related_project_roots = int(
+        _coerce_optional_float(params.get("max_related_project_roots", params.get("maxRelatedProjectRoots")))
+        or DEFAULT_MAX_RELATED_PROJECT_ROOTS
+    )
+    related_project_roots = (
+        related_analysis_project_roots(reuse_project_root, limit=max_related_project_roots)
+        if search_related_project_roots
+        else []
+    )
     for candidate_root in [reuse_project_root, *raw_reuse_project_roots]:
         if not candidate_root:
             continue
         normalized_root = normalize_path(candidate_root)
         if normalized_root not in reuse_project_roots:
             reuse_project_roots.append(normalized_root)
+    for candidate_root in related_project_roots:
+        if candidate_root not in reuse_project_roots:
+            reuse_project_roots.append(candidate_root)
 
     clip_plans = []
     for record in records:
         artifacts = _artifact_paths(root["project_root"], record, depth, options)
         request_signature = analysis_request_signature(record, depth, options, frame_count)
+        existing: Optional[Dict[str, Any]] = None
         clip_plan = {
             "record": record,
             "analysis_keyframe_budget": frame_count,
@@ -1048,6 +1735,30 @@ def build_plan(
         elif force_refresh:
             clip_plan["cache_status"] = "refresh_forced"
         else:
+            candidates: List[Dict[str, Any]] = []
+            for report_path in _record_analysis_report_paths(record):
+                candidate = find_reusable_report_from_path(
+                    report_path,
+                    record,
+                    depth,
+                    options,
+                    request_signature=request_signature,
+                    max_report_age_days=max_report_age_days,
+                    reuse_policy=reuse_policy,
+                )
+                if candidate:
+                    candidates.append(candidate)
+            registry_candidate = find_reusable_report_from_registry(
+                reuse_project_root,
+                record,
+                depth,
+                options,
+                request_signature=request_signature,
+                max_report_age_days=max_report_age_days,
+                reuse_policy=reuse_policy,
+            )
+            if registry_candidate:
+                candidates.append(registry_candidate)
             existing = find_reusable_report_across_roots(
                 reuse_project_roots,
                 record,
@@ -1058,6 +1769,13 @@ def build_plan(
                 reuse_policy=reuse_policy,
             )
             if existing:
+                candidates.append(existing)
+            if candidates:
+                reusable_candidates = [row for row in candidates if row.get("reusable")]
+                pool = reusable_candidates or candidates
+                pool.sort(key=_report_reuse_score)
+                existing = pool[0]
+            if existing:
                 clip_plan["existing_report"] = {
                     "path": existing.get("path"),
                     "reusable": existing.get("reusable", False),
@@ -1066,23 +1784,61 @@ def build_plan(
                     "cache_warnings": existing.get("cache_warnings", []),
                     "analyzed_at": existing.get("analyzed_at"),
                     "project_root": existing.get("project_root"),
+                    "source": existing.get("source") or "analysis_root_search",
+                    "registry_path": existing.get("registry_path"),
+                    "superseded_by_relink": bool(existing.get("superseded_by_relink")),
+                    "superseded_at": existing.get("superseded_at"),
+                    "superseded_reason": existing.get("superseded_reason"),
                 }
                 if existing.get("reusable"):
                     clip_plan["skip_execution"] = True
                     clip_plan["cache_status"] = "reusable"
-                    if existing.get("project_root") and existing.get("project_root") != root["project_root"]:
+                    clip_plan["reused_from"] = existing.get("path")
+                    clip_plan["reuse_source"] = existing.get("source") or "analysis_root_search"
+                    if existing.get("source") == "record_analysis_report_path":
+                        clip_plan["reuse_reason"] = "Resolve clip metadata points to an existing analysis report that satisfies the requested depth and modalities."
+                    elif existing.get("source") == "analysis_registry":
+                        clip_plan["reuse_reason"] = "Global analysis registry points to an existing report that satisfies the requested depth and modalities."
+                    elif existing.get("project_root") and existing.get("project_root") != root["project_root"]:
                         clip_plan["reuse_reason"] = "Existing analysis report from a related project version satisfies the requested depth and modalities."
                     else:
                         clip_plan["reuse_reason"] = "Existing analysis report satisfies the requested depth and modalities."
                 else:
                     clip_plan["cache_status"] = "stale_or_incomplete"
+                    clip_plan["why_not_reused"] = _why_not_reused(existing)
             else:
                 clip_plan["cache_status"] = "miss"
+                clip_plan["why_not_reused"] = _why_not_reused(None, provenance_present=_record_has_analysis_provenance(record))
+        if (
+            reuse_existing
+            and not force_refresh
+            and not clip_plan.get("skip_execution")
+            and clip_plan.get("cache_status") not in {"reuse_disabled", "refresh_forced"}
+            and _record_has_analysis_provenance(record)
+        ):
+            _mark_reuse_blocked(clip_plan, record, existing)
         clip_plans.append(clip_plan)
 
     per_clip_seconds = {"quick": 2, "standard": 45, "deep": 180, "custom": 45}.get(depth, 45)
     reusable_count = sum(1 for clip in clip_plans if clip.get("skip_execution"))
     stale_count = sum(1 for clip in clip_plans if clip.get("cache_status") == "stale_or_incomplete")
+    blocked_count = sum(1 for clip in clip_plans if clip.get("reuse_blocked"))
+    miss_count = sum(1 for clip in clip_plans if clip.get("cache_status") == "miss")
+    reused_sources: Dict[str, int] = {}
+    for clip in clip_plans:
+        source = clip.get("reuse_source")
+        if source:
+            reused_sources[str(source)] = reused_sources.get(str(source), 0) + 1
+    reuse_summary = {
+        "checked": reuse_existing and not force_refresh,
+        "reusable_clip_count": reusable_count,
+        "blocked_clip_count": blocked_count,
+        "stale_or_incomplete_clip_count": stale_count,
+        "miss_clip_count": miss_count,
+        "estimated_seconds_saved": per_clip_seconds * reusable_count,
+        "sources": reused_sources,
+        "registry_path": analysis_registry_path(reuse_project_root),
+    }
     return {
         "success": True,
         "analysis_version": ANALYSIS_VERSION,
@@ -1103,8 +1859,12 @@ def build_plan(
         "max_report_age_days": max_report_age_days,
         "reuse_project_root": reuse_project_root,
         "reuse_project_roots": reuse_project_roots,
+        "search_related_project_roots": search_related_project_roots,
+        "related_project_roots": related_project_roots,
         "reusable_clip_count": reusable_count,
         "stale_or_incomplete_clip_count": stale_count,
+        "reuse_blocked_clip_count": blocked_count,
+        "reuse_summary": reuse_summary,
         "clips": clip_plans,
         "notes": notes,
     }
@@ -1131,11 +1891,17 @@ def _run_command(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tup
 
 def _write_json(path: str, payload: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    os.replace(tmp_path, path)
+    tmp_path = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}-{time.time_ns()}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 def _read_json(path: str) -> Dict[str, Any]:
@@ -2078,8 +2844,16 @@ def segments_to_vtt(segments: List[Dict[str, Any]]) -> str:
 
 def _write_text(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
+    tmp_path = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}-{time.time_ns()}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 def _iter_analysis_reports(project_root: str) -> List[Tuple[str, Dict[str, Any]]]:
@@ -2243,6 +3017,11 @@ def find_reusable_report(
             max_report_age_days=max_report_age_days,
             reuse_policy=reuse_policy,
         )
+        superseded = registry_entry_superseded_info(project_root, path)
+        if superseded:
+            cache_issues = list(cache_issues) + [
+                f"source_relinked:{superseded.get('superseded_reason') or 'source_relinked'}"
+            ]
         matches.append({
             "path": path,
             "report": report,
@@ -2251,6 +3030,9 @@ def find_reusable_report(
             "cache_warnings": cache_warnings,
             "analyzed_at": report.get("analyzed_at"),
             "analyzed_timestamp": _timestamp_from_analyzed_at(report.get("analyzed_at")) or 0,
+            "superseded_by_relink": bool(superseded),
+            "superseded_at": (superseded or {}).get("superseded_at"),
+            "superseded_reason": (superseded or {}).get("superseded_reason"),
         })
     if not matches:
         return None
@@ -2259,24 +3041,237 @@ def find_reusable_report(
         -float(row.get("analyzed_timestamp") or 0),
     ))
     best = matches[0]
-    if best["missing_layers"] or best["cache_issues"]:
-        return {
-            "path": best["path"],
-            "missing_layers": best["missing_layers"],
-            "cache_issues": best["cache_issues"],
-            "cache_warnings": best["cache_warnings"],
-            "analyzed_at": best.get("analyzed_at"),
-            "reusable": False,
-        }
-    return {
+    result: Dict[str, Any] = {
         "path": best["path"],
-        "missing_layers": [],
-        "cache_issues": [],
+        "missing_layers": best["missing_layers"],
+        "cache_issues": best["cache_issues"],
         "cache_warnings": best["cache_warnings"],
         "analyzed_at": best.get("analyzed_at"),
-        "reusable": True,
-        "report": best["report"],
     }
+    if best.get("superseded_by_relink"):
+        result["superseded_by_relink"] = True
+        result["superseded_at"] = best.get("superseded_at")
+        result["superseded_reason"] = best.get("superseded_reason")
+    if best["missing_layers"] or best["cache_issues"]:
+        result["reusable"] = False
+        return result
+    result["reusable"] = True
+    result["report"] = best["report"]
+    return result
+
+
+def _record_analysis_report_paths(record: Dict[str, Any]) -> List[str]:
+    paths: List[str] = []
+    for key in (
+        "analysis_report_path",
+        "analysisReportPath",
+        "published_analysis_report_path",
+        "publishedAnalysisReportPath",
+    ):
+        value = record.get(key)
+        if isinstance(value, str):
+            paths.append(value)
+        elif isinstance(value, list):
+            paths.extend(str(item) for item in value if item)
+
+    third_party = record.get("third_party_metadata") or record.get("thirdPartyMetadata")
+    if isinstance(third_party, dict):
+        value = third_party.get("davinci_resolve_mcp.analysis_report_path")
+        if value:
+            paths.append(str(value))
+
+    deduped: List[str] = []
+    for path in paths:
+        normalized = normalize_path(path)
+        if normalized not in deduped:
+            deduped.append(normalized)
+    return deduped
+
+
+def _analysis_project_root_from_report_path(path: str) -> Optional[str]:
+    return _analysis_report_project_root(path)
+
+
+def _record_analysis_provenance(record: Dict[str, Any]) -> Dict[str, Any]:
+    provenance = record.get("analysis_provenance")
+    if isinstance(provenance, dict) and provenance:
+        return dict(provenance)
+
+    found: Dict[str, Any] = {}
+    report_paths = _record_analysis_report_paths(record)
+    if report_paths:
+        found["analysis_report_paths"] = report_paths
+    for key in ("published_analysis_signature", "publishedAnalysisSignature"):
+        if record.get(key):
+            found["analysis_signature"] = record.get(key)
+            break
+    for key in ("published_analysis_at", "publishedAnalysisAt"):
+        if record.get(key):
+            found["published_at"] = record.get(key)
+            break
+    third_party = record.get("third_party_metadata") or record.get("thirdPartyMetadata")
+    if isinstance(third_party, dict):
+        third_party_keys = sorted(
+            key for key in third_party
+            if str(key).startswith("davinci_resolve_mcp.")
+        )
+        if third_party_keys:
+            found["third_party_keys"] = third_party_keys
+    if record.get("analysis_metadata_present"):
+        found["standard_metadata_present"] = True
+        if record.get("analysis_metadata_fields"):
+            found["standard_metadata_fields"] = list(record.get("analysis_metadata_fields") or [])
+    return found
+
+
+def _record_has_analysis_provenance(record: Dict[str, Any]) -> bool:
+    return bool(_record_analysis_provenance(record))
+
+
+def _reuse_issue_summary(existing: Optional[Dict[str, Any]]) -> List[str]:
+    if not existing:
+        return []
+    issues: List[str] = []
+    issues.extend(str(item) for item in existing.get("missing_layers") or [])
+    issues.extend(str(item) for item in existing.get("cache_issues") or [])
+    return issues
+
+
+def _why_not_reused(existing: Optional[Dict[str, Any]], *, provenance_present: bool = False) -> str:
+    if existing:
+        issues = _reuse_issue_summary(existing)
+        if issues:
+            return "Existing analysis was found but could not be reused: " + ", ".join(issues)
+        return "Existing analysis was found but was not marked reusable."
+    if provenance_present:
+        return "Resolve metadata indicates prior MCP analysis, but no reusable analysis report could be validated."
+    return "No existing compatible analysis report was found."
+
+
+def _mark_reuse_blocked(clip_plan: Dict[str, Any], record: Dict[str, Any], existing: Optional[Dict[str, Any]]) -> None:
+    provenance = _record_analysis_provenance(record)
+    clip_plan["cache_status"] = "reuse_blocked"
+    clip_plan["reuse_blocked"] = True
+    clip_plan["analysis_provenance"] = provenance
+    clip_plan["why_not_reused"] = _why_not_reused(existing, provenance_present=True)
+    clip_plan["reuse_block_reason"] = (
+        "Analysis provenance is already published on this Resolve clip, but the planner "
+        "could not validate a compatible report. Pass force_refresh=true to intentionally "
+        "reanalyze, or restore the referenced analysis report."
+    )
+    if existing:
+        clip_plan["reuse_block_issues"] = _reuse_issue_summary(existing)
+
+
+def _report_path_candidate_issue(path: str, issue: str) -> Dict[str, Any]:
+    return {
+        "path": normalize_path(path),
+        "missing_layers": [],
+        "cache_issues": [issue],
+        "cache_warnings": [],
+        "analyzed_at": None,
+        "reusable": False,
+        "source": "record_analysis_report_path",
+    }
+
+
+def find_reusable_report_from_path(
+    report_path: str,
+    record: Dict[str, Any],
+    depth: str,
+    options: Dict[str, Any],
+    *,
+    request_signature: Optional[Dict[str, Any]] = None,
+    max_report_age_days: Optional[float] = None,
+    reuse_policy: str = "compatible",
+) -> Optional[Dict[str, Any]]:
+    """Validate a report path published on the Resolve clip and score it for reuse."""
+    candidate_path = normalize_path(report_path)
+    project_root = _analysis_project_root_from_report_path(candidate_path)
+    if not project_root:
+        return _report_path_candidate_issue(candidate_path, "analysis_report_path_not_analysis_json_layout")
+    if not os.path.isfile(candidate_path):
+        return _report_path_candidate_issue(candidate_path, "analysis_report_path_missing")
+
+    try:
+        report = _read_json(candidate_path)
+    except (OSError, json.JSONDecodeError):
+        return _report_path_candidate_issue(candidate_path, "analysis_report_path_unreadable")
+
+    if not _report_matches_record(report, record):
+        return _report_path_candidate_issue(candidate_path, "analysis_report_path_record_mismatch")
+
+    frame_count = int((request_signature or {}).get("analysis_keyframe_budget") or FRAME_CAPS.get(depth, FRAME_CAPS[DEFAULT_DEPTH]))
+    request_signature = request_signature or analysis_request_signature(record, depth, options, frame_count)
+    missing = _report_missing_layers(report, depth, options)
+    cache_issues, cache_warnings = _report_cache_state(
+        report,
+        request_signature,
+        max_report_age_days=max_report_age_days,
+        reuse_policy=reuse_policy,
+    )
+    superseded = registry_entry_superseded_info(project_root, candidate_path)
+    if superseded:
+        cache_issues = list(cache_issues) + [
+            f"source_relinked:{superseded.get('superseded_reason') or 'source_relinked'}"
+        ]
+    base = {
+        "path": candidate_path,
+        "missing_layers": missing,
+        "cache_issues": cache_issues,
+        "cache_warnings": cache_warnings,
+        "analyzed_at": report.get("analyzed_at"),
+        "project_root": project_root,
+        "source": "record_analysis_report_path",
+    }
+    if superseded:
+        base["superseded_by_relink"] = True
+        base["superseded_at"] = superseded.get("superseded_at")
+        base["superseded_reason"] = superseded.get("superseded_reason")
+    if missing or cache_issues:
+        return {**base, "reusable": False}
+    return {**base, "reusable": True, "report": report}
+
+
+def find_reusable_report_from_registry(
+    project_root: str,
+    record: Dict[str, Any],
+    depth: str,
+    options: Dict[str, Any],
+    *,
+    request_signature: Optional[Dict[str, Any]] = None,
+    max_report_age_days: Optional[float] = None,
+    reuse_policy: str = "compatible",
+) -> Optional[Dict[str, Any]]:
+    registry = _read_analysis_registry(project_root)
+    candidates: List[Dict[str, Any]] = []
+    for entry in registry.get("entries") or []:
+        if not isinstance(entry, dict) or not _registry_entry_matches_record(entry, record):
+            continue
+        report_path = entry.get("analysis_json")
+        if not report_path:
+            continue
+        candidate = find_reusable_report_from_path(
+            str(report_path),
+            record,
+            depth,
+            options,
+            request_signature=request_signature,
+            max_report_age_days=max_report_age_days,
+            reuse_policy=reuse_policy,
+        )
+        if not candidate:
+            continue
+        candidate = dict(candidate)
+        candidate["source"] = "analysis_registry"
+        candidate["registry_path"] = analysis_registry_path(project_root)
+        candidates.append(candidate)
+    if not candidates:
+        return None
+    reusable = [row for row in candidates if row.get("reusable")]
+    pool = reusable or candidates
+    pool.sort(key=_report_reuse_score)
+    return pool[0]
 
 
 def _report_reuse_score(candidate: Optional[Dict[str, Any]]) -> Tuple[int, float]:
@@ -2462,22 +3457,82 @@ def _transcribe(path: str, artifacts: Dict[str, Any], options: Dict[str, Any], c
     if not backend:
         backends = capabilities.get("transcription", {}).get("backends") or []
         backend = backends[0] if backends else None
-    if backend in {"mock", "local_mock"}:
-        segments = transcription.get("segments") or [{"start": 0.0, "end": 1.0, "text": "Mock local transcript segment."}]
-        payload = {"success": True, "backend": backend, "language": transcription.get("language", "unknown"), "segments": segments, "text": " ".join(s.get("text", "") for s in segments)}
-        _write_transcript_artifacts(payload, artifacts)
-        return payload
-    elif backend in {"whisper_cli", "mlx_whisper"}:
-        if not _coerce_bool(transcription.get("allow_model_download"), default=False):
-            return {
-                "success": False,
-                "status": "skipped",
-                "backend": backend,
-                "reason": "Local transcription may download model files; set allow_model_download=true explicitly to run it.",
-            }
-        if backend == "whisper_cli":
-            return _transcribe_with_whisper_cli(path, artifacts, transcription)
-        return _transcribe_with_mlx_whisper(path, artifacts, transcription)
+
+    # Pre-call refusal: transcription token cost roughly scales with audio
+    # duration. We don't always know duration upfront, but if the caller
+    # injected it via options['duration_seconds'] we can estimate and refuse.
+    duration_seconds = 0
+    try:
+        duration_seconds = int(float(options.get("duration_seconds") or transcription.get("duration_seconds") or 0))
+    except (TypeError, ValueError):
+        duration_seconds = 0
+    if duration_seconds > 0:
+        estimated_tokens = duration_seconds * AVG_TRANSCRIPTION_TOKENS_PER_SECOND
+        refusal = _check_caps_pre_call(
+            project_root=options.get("project_root"),
+            estimated_vision_tokens=estimated_tokens,
+            clip_id=options.get("clip_id"),
+            job_id=options.get("job_id"),
+        )
+        if refusal is not None:
+            refusal["backend"] = backend
+            return refusal
+
+    # Wall-clock timeout wrapper. Whisper / mlx_whisper / ffmpeg can hang on a
+    # corrupt file or take far longer than expected on a long clip; cap them.
+    caps = _resolve_active_caps()
+    timeout = caps.wall_clock_seconds_per_call
+    started_at = time.time()
+
+    def _run_backend() -> Dict[str, Any]:
+        if backend in {"mock", "local_mock"}:
+            segments = transcription.get("segments") or [{"start": 0.0, "end": 1.0, "text": "Mock local transcript segment."}]
+            payload = {"success": True, "backend": backend, "language": transcription.get("language", "unknown"), "segments": segments, "text": " ".join(s.get("text", "") for s in segments)}
+            _write_transcript_artifacts(payload, artifacts)
+            return payload
+        if backend in {"whisper_cli", "mlx_whisper"}:
+            if not _coerce_bool(transcription.get("allow_model_download"), default=False):
+                return {
+                    "success": False,
+                    "status": "skipped",
+                    "backend": backend,
+                    "reason": "Local transcription may download model files; set allow_model_download=true explicitly to run it.",
+                }
+            if backend == "whisper_cli":
+                return _transcribe_with_whisper_cli(path, artifacts, transcription)
+            return _transcribe_with_mlx_whisper(path, artifacts, transcription)
+        return {"success": False, "status": "fallthrough", "backend": backend}
+
+    try:
+        result = _analysis_caps.run_with_timeout(_run_backend, timeout)
+    except _analysis_caps.WallClockTimeout as exc:
+        elapsed = round((time.time() - started_at) * 1000)
+        return {
+            "success": False,
+            "status": "wall_clock_timeout",
+            "backend": backend,
+            "reason": str(exc),
+            "elapsed_ms": elapsed,
+        }
+    # Record actual wall-clock for caps usage tracking.
+    try:
+        elapsed_ms = round((time.time() - started_at) * 1000)
+        if options.get("project_root"):
+            _record_caps_usage(
+                project_root=options.get("project_root"),
+                clip_id=options.get("clip_id"),
+                job_id=options.get("job_id"),
+                wall_clock_ms=elapsed_ms,
+            )
+    except Exception:
+        pass
+
+    # The fallthrough for non-(mock|whisper) backends still happens via the
+    # original branches below so behaviour stays identical for those.
+    if result is not None and result.get("status") != "fallthrough":
+        return result
+    if backend in {"mock", "local_mock", "whisper_cli", "mlx_whisper"}:
+        return result if result is not None else {"success": False, "backend": backend}
     elif backend == "whisper_cpp":
         if not transcription.get("model_path"):
             return {
@@ -2763,13 +3818,39 @@ def build_host_chat_paths_payload(
     if project_root:
         commit_params["analysis_root"] = project_root
 
+    effective_source_trust = _resolve_source_trust(options)
+    # Apply caps: clip frame_paths to caps.frames_per_clip and downscale each
+    # frame to caps.max_frame_dim_pixels (in place). frame_metadata stays a
+    # superset — the host can still see what would have been sent at higher caps.
+    frame_paths_capped = _cap_frames_for_active_caps(frame_paths)
+    if len(frame_paths_capped) != len(frame_paths):
+        # Drop metadata rows for frames we excluded; host shouldn't be told to read
+        # files we're not actually sending.
+        kept_set = set(frame_paths_capped)
+        frame_metadata = [m for m in frame_metadata if m.get("frame_path") in kept_set]
+
+    # Pre-call budget refusal: estimate tokens this call WILL spend if the host
+    # processes it, and refuse if any cumulative cap is exhausted. The host
+    # might have a cheaper tokenizer, but estimating high is the safe default —
+    # the alternative is "discovering" the overrun after the fact.
+    estimated_tokens = len(frame_paths_capped) * AVG_VISION_TOKENS_PER_FRAME
+    refusal = _check_caps_pre_call(
+        project_root=project_root,
+        estimated_vision_tokens=estimated_tokens,
+        clip_id=clip_id,
+        job_id=options.get("job_id") if isinstance(options, dict) else None,
+    )
+    if refusal is not None:
+        return refusal
+
     return {
         "success": True,
         "status": "pending_host_analysis",
         "provider": HOST_CHAT_PATHS_PROVIDER,
         "vision_token": vision_token,
-        "frame_count": len(frame_paths),
-        "frame_paths": frame_paths,
+        "source_trust": effective_source_trust,
+        "frame_count": len(frame_paths_capped),
+        "frame_paths": frame_paths_capped,
         "frame_metadata": frame_metadata,
         "clip": {
             "clip_id": clip_id,
@@ -2781,10 +3862,7 @@ def build_host_chat_paths_payload(
         "shot_table": shot_table,
         "prompt": _build_vision_prompt_with_source_trust(
             base_prompt=str(vision.get("prompt") or DEFAULT_VISION_ANALYSIS_PROMPT),
-            source_trust=(
-                options.get("source_trust") or options.get("sourceTrust")
-                or vision.get("source_trust") or vision.get("sourceTrust")
-            ),
+            source_trust=effective_source_trust,
             summary_style=(
                 options.get("analysis_summary_style") or options.get("analysisSummaryStyle")
                 or vision.get("analysis_summary_style") or vision.get("analysisSummaryStyle")
@@ -2797,6 +3875,20 @@ def build_host_chat_paths_payload(
             "tool": "media_analysis",
             "action": "commit_vision",
             "params": commit_params,
+        },
+        # C3 — Host tool_choice hint. Hosts that respect this can hard-lock the
+        # next API turn to media_analysis(action=commit_vision) so the agent
+        # can't drift away from the deferred-vision flow. Hosts that don't
+        # respect it ignore the field; the deferred-payload flow is unchanged.
+        "host_tool_choice_hint": {
+            "type": "tool",
+            "name": "media_analysis",
+            "params_template": {"action": "commit_vision", **commit_params},
+            "rationale": (
+                "Pending visual analysis on clip {clip}. Reading frame_paths and calling "
+                "commit_vision is the only correct next action; skipping it leaves the run "
+                "in pending_host_vision_analysis."
+            ).format(clip=record.get("clip_id") or record.get("clip_name") or "<clip>"),
         },
         "instructions": (
             "Read every file under frame_paths as a local image using your client's "
@@ -2822,6 +3914,12 @@ def _vision_analysis(record: Dict[str, Any], motion: Dict[str, Any], options: Di
     provider = vision.get("provider") or capabilities.get("vision", {}).get("provider") or HOST_CHAT_PATHS_PROVIDER
     if provider in HOST_CHAT_VISION_PROVIDERS:
         payload = build_host_chat_paths_payload(record, motion, options, artifacts)
+        # Pre-call caps refusal is returned as {success: False, status: "caps_exhausted", ...}
+        # with no frame_paths key. Pass it through unchanged so the manifest-level
+        # _annotate_clip_vision_failure can surface a CAPS_REFUSAL envelope instead
+        # of getting overwritten by the no-frames fallthrough below.
+        if not payload.get("success", True):
+            return payload
         if not payload.get("frame_paths"):
             return {
                 "success": False,
@@ -3482,6 +4580,7 @@ def _synthesize_analysis(
             "analysis_keyframe_budget": int(frame_count or 0),
             "transcription_enabled": _coerce_bool(((options or {}).get("transcription") or {}).get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED),
             "vision_enabled": _coerce_bool(((options or {}).get("vision") or {}).get("enabled"), default=False),
+            "source_trust": _resolve_source_trust(options),
         },
         "analyzed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source_file": record.get("file_path"),
@@ -3530,6 +4629,32 @@ async def execute_plan_async(
     keep_artifacts = _coerce_bool(params.get("keep_artifacts"), default=False)
     if not plan.get("success"):
         return plan
+    blocked = [
+        clip for clip in plan.get("clips", [])
+        if isinstance(clip, dict) and clip.get("reuse_blocked")
+    ]
+    if blocked:
+        return {
+            "success": False,
+            "status": "reuse_blocked",
+            "error": (
+                "Analysis provenance exists for one or more Resolve clips, but no reusable "
+                "report could be validated. Pass force_refresh=true to intentionally reanalyze."
+            ),
+            "blocked_clip_count": len(blocked),
+            "reuse_summary": plan.get("reuse_summary"),
+            "clips": [
+                {
+                    "record": clip.get("record"),
+                    "cache_status": clip.get("cache_status"),
+                    "why_not_reused": clip.get("why_not_reused"),
+                    "reuse_block_reason": clip.get("reuse_block_reason"),
+                    "existing_report": clip.get("existing_report"),
+                    "analysis_provenance": clip.get("analysis_provenance"),
+                }
+                for clip in blocked
+            ],
+        }
     if plan.get("capability_gaps"):
         return {
             "success": False,
@@ -3543,6 +4668,12 @@ async def execute_plan_async(
         "transcription": params.get("transcription") or {},
         "vision": params.get("vision") or {},
         "marker_plan": params.get("marker_plan") or params.get("markerPlan") or {},
+        # Thread the batch-runner's job_id (if any) into per-clip options so
+        # _record_caps_usage + _check_caps_pre_call can populate the JOB scope.
+        "job_id": params.get("job_id"),
+        # Same for project_root — caps recording needs it to address the per-
+        # project usage DB; falling back to the plan's output_root is fine.
+        "project_root": params.get("project_root") or output_root,
     }
     keep_frame_artifacts_for_vision = vision_uses_chat_context(options, caps)
     depth = plan.get("depth", DEFAULT_DEPTH)
@@ -3556,6 +4687,7 @@ async def execute_plan_async(
         "keep_artifacts": keep_artifacts,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "project_root": output_root,
+        "reuse_summary": plan.get("reuse_summary"),
         "clips": [],
     }
     _write_json(os.path.join(output_root, "capabilities.json"), caps)
@@ -3578,6 +4710,8 @@ async def execute_plan_async(
                 "reuse_reason": clip_plan.get("reuse_reason"),
                 "cache_status": clip_plan.get("cache_status"),
                 "cache_warnings": existing_report.get("cache_warnings", []),
+                "reuse_source": clip_plan.get("reuse_source"),
+                "reused_from": clip_plan.get("reused_from"),
             })
             manifest["clips"].append(clip_result)
             continue
@@ -3675,11 +4809,7 @@ async def execute_plan_async(
             })
             manifest["vision_pending"] = True
         elif vision_failed:
-            clip_result.update({
-                "success": False,
-                "error": "Visual analysis was requested but did not complete.",
-                "visual": vision,
-            })
+            _annotate_clip_vision_failure(clip_result, vision)
         manifest["clips"].append(clip_result)
 
     manifest["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -3691,6 +4821,11 @@ async def execute_plan_async(
     )
     manifest["vision_pending"] = bool(manifest["vision_pending_clip_count"])
     manifest["success"] = manifest["failed_clip_count"] == 0
+    # D3 — partial-success preservation. When some clips succeeded and others
+    # failed, surface explicit completed/failed clip-id lists so callers can
+    # retry only the failed subset instead of redoing completed work.
+    _annotate_partial_success(manifest)
+    _annotate_manifest_caps_refusal(manifest)
     if manifest["vision_pending"]:
         manifest["pending_action"] = {
             "tool": "media_analysis",
@@ -3709,6 +4844,15 @@ async def execute_plan_async(
         and _coerce_bool(params.get("auto_build_index"), default=True)
     ):
         manifest["index"] = build_analysis_index(output_root)
+
+    if not session_only and manifest["successful_clip_count"]:
+        report_paths = [
+            row.get("analysis_json")
+            for row in manifest["clips"]
+            if row.get("success") and row.get("analysis_json") and os.path.isfile(str(row.get("analysis_json")))
+        ]
+        if report_paths:
+            manifest["analysis_registry"] = update_analysis_registry(output_root, report_paths=report_paths)
 
     # V2 memory + heartbeat layer (per V2 shot schema spec §9).
     # Heartbeat tracks current project state for session-start awareness.
@@ -4228,8 +5372,29 @@ def commit_visual_analysis(
         index_status_info = build_analysis_index(root)
     except Exception as exc:  # noqa: BLE001 — index refresh is best-effort
         index_status_info = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        registry_status = update_analysis_registry(root, report_paths=[analysis_json_path])
+    except Exception as exc:  # noqa: BLE001 — registry refresh is best-effort
+        registry_status = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
-    return {
+    # Record caps usage if the host reported token counts in the visual payload.
+    # Host clients that don't report tokens fall through with zeros (recorded as
+    # frames_uploaded so the per-clip + per-day rollups still show activity).
+    try:
+        visual_dict = visual if isinstance(visual, dict) else {}
+        usage_block = visual_dict.get("usage") if isinstance(visual_dict.get("usage"), dict) else {}
+        vision_tokens = int(usage_block.get("vision_tokens") or usage_block.get("total_tokens") or 0)
+        frames_uploaded = int(usage_block.get("frames_uploaded") or len(record.get("frame_paths") or []) or 0)
+        _record_caps_usage(
+            project_root=root,
+            clip_id=record.get("clip_id") or clip_id,
+            vision_tokens=vision_tokens,
+            frames_uploaded=frames_uploaded,
+        )
+    except Exception:
+        pass
+
+    return _apply_caps_to_response({
         "success": True,
         "analysis_json": analysis_json_path,
         "visual_json": visual_json_path,
@@ -4238,8 +5403,9 @@ def commit_visual_analysis(
         "clip_dir": clip_dir_path,
         "record": record,
         "index": index_status_info,
+        "analysis_registry": registry_status,
         "corrections": corrections_metrics,
-    }
+    })
 
 
 def _safe_report_path(project_root: str, report_path: str) -> Tuple[Optional[str], Optional[str]]:
@@ -4272,12 +5438,15 @@ def load_report(project_root: str, report_path: Optional[str] = None, clip_dir: 
 def summarize_reports(project_root: str) -> Dict[str, Any]:
     root = normalize_path(project_root)
     clips_root = os.path.join(root, "clips")
-    reports = []
+    reports: List[Dict[str, Any]] = []
+    report_paths: List[str] = []
     if os.path.isdir(clips_root):
         for dirpath, _, filenames in os.walk(clips_root):
             if "analysis.json" in filenames:
+                report_path = os.path.join(dirpath, "analysis.json")
                 try:
-                    reports.append(_read_json(os.path.join(dirpath, "analysis.json")))
+                    reports.append(_read_json(report_path))
+                    report_paths.append(report_path)
                 except (OSError, json.JSONDecodeError):
                     continue
     warnings = []
@@ -4285,9 +5454,19 @@ def summarize_reports(project_root: str) -> Dict[str, Any]:
     tags: Dict[str, int] = {}
     signed_report_count = 0
     newest_ts = 0.0
-    for report in reports:
+    # F1 — provenance source list, parallel to `reports`.
+    source_reports: List[Dict[str, Any]] = []
+    missing_reports: List[Dict[str, Any]] = []
+    for report, report_path in zip(reports, report_paths):
         if report.get("analysis_signature"):
             signed_report_count += 1
+        else:
+            # Unsigned reports surface in `missing_reports` so the caller can
+            # tell which contributing clips would need re-analysis to verify.
+            missing_reports.append({
+                "report_path": report_path,
+                "reason": "unsigned_report",
+            })
         analyzed_ts = _timestamp_from_analyzed_at(report.get("analyzed_at")) or 0
         newest_ts = max(newest_ts, analyzed_ts)
         warnings.extend(report.get("technical_warnings") or [])
@@ -4297,6 +5476,15 @@ def summarize_reports(project_root: str) -> Dict[str, Any]:
         editing_notes = visual.get("editing_notes") or {}
         for tag in editing_notes.get("search_tags") or []:
             tags[tag] = tags.get(tag, 0) + 1
+        # F1 source-report citation entry.
+        record = report.get("record") or {}
+        source_reports.append({
+            "clip_id": record.get("clip_id") or report.get("clip_id"),
+            "clip_name": record.get("clip_name") or report.get("clip_name"),
+            "analysis_signature": report.get("analysis_signature"),
+            "analysis_report_path": report_path,
+            "analyzed_at": report.get("analyzed_at"),
+        })
     summary = {
         "success": True,
         "project_root": root,
@@ -4313,9 +5501,447 @@ def summarize_reports(project_root: str) -> Dict[str, Any]:
                 if newest_ts else None
             ),
         },
+        # F1 — provenance citation map. Lets callers (and the model) trace
+        # each summary claim back to the underlying analysis reports, so
+        # cross-clip statements aren't load-bearing without verification.
+        "provenance": {
+            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "scope": {"type": "project", "project_root": root},
+            "source_reports": source_reports,
+            "missing_reports": missing_reports,
+        },
     }
     _write_json(os.path.join(root, "project_summary.json"), summary)
     return summary
+
+
+_SOURCE_TRUST_RANK = {
+    "unknown": -1,
+    "auto": 0,
+    "filename": 1,
+    "low": 2,
+    "medium": 3,
+    "high": 4,
+}
+
+
+def _source_trust_rank(value: Any) -> int:
+    return _SOURCE_TRUST_RANK.get(str(value or "auto").strip().lower(), 0)
+
+
+def _normalize_min_source_trust(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    candidate = str(value).strip().lower()
+    if candidate not in SOURCE_TRUST_VALUES:
+        return None
+    return candidate
+
+
+def _layers_present_in_report(report: Optional[Dict[str, Any]]) -> List[str]:
+    """Return the analysis layers that have meaningful content in this report.
+
+    Layer names match the planner's vocabulary (technical, readthrough,
+    cut_analysis, motion, transcription, vision, marker_plan).
+    """
+    if not isinstance(report, dict):
+        return []
+    present: List[str] = []
+    technical = report.get("technical")
+    if isinstance(technical, dict) and technical:
+        present.append("technical")
+    readthrough = report.get("readthrough")
+    if isinstance(readthrough, dict):
+        if any(
+            isinstance(readthrough.get(k), dict) and readthrough.get(k, {}).get("success") is not False
+            for k in ("loudness", "scenes", "black_frames", "silence", "interlace")
+        ):
+            present.append("readthrough")
+        if isinstance(readthrough.get("cut_analysis"), dict):
+            present.append("cut_analysis")
+    motion = report.get("motion")
+    if isinstance(motion, dict) and (motion.get("analysis_keyframes") or motion.get("overall_motion_level")):
+        present.append("motion")
+    transcript = report.get("transcription")
+    if isinstance(transcript, dict) and (transcript.get("text") or transcript.get("segments")):
+        present.append("transcription")
+    visual = report.get("visual")
+    if isinstance(visual, dict):
+        status = visual.get("status")
+        is_pending = status == "pending_host_analysis" or visual.get("vision_token") is not None
+        has_content = bool(
+            visual.get("clip_summary")
+            or visual.get("shot_descriptions")
+            or visual.get("editorial_classification")
+        )
+        if has_content and not is_pending:
+            present.append("vision")
+    markers = report.get("clip_analysis_markers")
+    if isinstance(markers, dict) and markers:
+        present.append("marker_plan")
+    return present
+
+
+def _recommend_coverage_action(
+    *,
+    cache_status: str,
+    reuse_blocked: bool,
+    below_min_source_trust: bool,
+    superseded_by_relink: bool,
+    missing_layers: List[str],
+    staleness_reasons: List[str],
+    record: Dict[str, Any],
+) -> str:
+    if superseded_by_relink:
+        return (
+            "The Media Pool clip was replaced or relinked after analysis. The prior "
+            "report is preserved for reference but should not be reused. Re-analyze "
+            "with the current source media."
+        )
+    if reuse_blocked:
+        return (
+            "Resolve clip metadata claims prior analysis but no compatible report "
+            "could be validated. Restore the referenced report or pass force_refresh=true."
+        )
+    if below_min_source_trust:
+        return (
+            "Existing analysis is below the requested min_source_trust. Re-run with "
+            "source_trust raised (analyze_clip with source_trust=...) once the higher "
+            "trust is justified."
+        )
+    if cache_status == "miss":
+        clip_id = record.get("clip_id")
+        target = f"clip_id={clip_id}" if clip_id else "this clip"
+        return f"No analysis on disk. Run media_analysis(action=\"analyze_clip\", target={{...{target}...}})."
+    if cache_status == "stale_or_incomplete":
+        if missing_layers:
+            return (
+                "Existing report is missing layers: "
+                + ", ".join(missing_layers)
+                + ". Re-analyze with those layers enabled."
+            )
+        if staleness_reasons:
+            return (
+                "Existing report is stale ("
+                + ", ".join(staleness_reasons)
+                + "). Re-analyze or pass force_refresh=true."
+            )
+        return "Existing report exists but is not currently reusable. Re-analyze."
+    if cache_status == "reusable":
+        return "Report is current and reusable for the requested depth and modalities."
+    return "Coverage state could not be determined; inspect clip details."
+
+
+def _coverage_evidence_line(summary: Dict[str, Any]) -> str:
+    total = int(summary.get("clips_total") or 0)
+    if not total:
+        return "evidence base: no clips in target."
+    analyzed = int(summary.get("clips_analyzed") or 0)
+    stale = int(summary.get("clips_stale") or 0)
+    missing = int(summary.get("clips_missing") or 0)
+    blocked = int(summary.get("clips_reuse_blocked") or 0)
+    needs_trust = int(summary.get("clips_needs_higher_trust") or 0)
+    pct = (analyzed / total) * 100.0
+    fragments = [
+        f"{analyzed}/{total} clips analyzed ({pct:.0f}%)",
+    ]
+    if stale:
+        fragments.append(f"{stale} stale")
+    if missing:
+        fragments.append(f"{missing} missing")
+    if blocked:
+        fragments.append(f"{blocked} reuse-blocked")
+    if needs_trust:
+        fragments.append(f"{needs_trust} below min_source_trust")
+    return "evidence base: " + ", ".join(fragments) + "."
+
+
+def build_coverage_report(
+    *,
+    project_name: Any,
+    project_id: Any = None,
+    records: List[Dict[str, Any]],
+    target: Dict[str, Any],
+    params: Optional[Dict[str, Any]] = None,
+    capabilities: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Pure-read coverage assessment for a target's clips.
+
+    Reports per-clip analysis state (reusable / stale_or_incomplete / miss /
+    reuse_blocked), layer presence, source_trust, and a recommended next action.
+    Never triggers analysis. Builds on the planner's existing reuse pipeline
+    (signature, registry, related project roots, provenance integrity).
+
+    Optional params:
+      min_source_trust: filter clips below this trust tier. Tiers in ascending
+        order: auto < filename < low < medium < high. Clips below the threshold
+        are classified `needs_higher_trust` regardless of report freshness.
+      include_layers: ignored for now — layer expectations follow the planner's
+        depth-driven requirements. Future extension point.
+      max_report_age_days: forwarded to planner for freshness gating.
+    """
+    coverage_params = dict(params or {})
+    coverage_params.setdefault("dry_run", True)
+    coverage_params.setdefault("session_only", False)
+    min_source_trust = _normalize_min_source_trust(coverage_params.pop("min_source_trust", coverage_params.pop("minSourceTrust", None)))
+
+    plan = build_plan(
+        project_name=project_name,
+        project_id=project_id,
+        records=records,
+        target=target,
+        params=coverage_params,
+        capabilities=capabilities,
+    )
+    if not plan.get("success"):
+        return plan
+
+    coverage_clips: List[Dict[str, Any]] = []
+    source_trust_dist: Dict[str, int] = {}
+    layer_coverage: Dict[str, int] = {}
+    summary_counts = {
+        "analyzed": 0,
+        "missing": 0,
+        "stale": 0,
+        "reuse_blocked": 0,
+        "needs_higher_trust": 0,
+    }
+
+    for clip_plan in plan.get("clips") or []:
+        if not isinstance(clip_plan, dict):
+            continue
+        record = clip_plan.get("record") or {}
+        existing = clip_plan.get("existing_report") or {}
+        report_path = existing.get("path")
+        report: Optional[Dict[str, Any]] = None
+        if report_path and os.path.isfile(str(report_path)):
+            try:
+                report = _read_json(str(report_path))
+            except (OSError, json.JSONDecodeError):
+                report = None
+        layers_present = _layers_present_in_report(report)
+        for layer in layers_present:
+            layer_coverage[layer] = layer_coverage.get(layer, 0) + 1
+
+        source_trust = "unknown"
+        if isinstance(report, dict):
+            profile = report.get("analysis_profile") if isinstance(report.get("analysis_profile"), dict) else {}
+            value = profile.get("source_trust")
+            if value:
+                source_trust = str(value).strip().lower()
+        source_trust_dist[source_trust] = source_trust_dist.get(source_trust, 0) + 1
+
+        cache_status = str(clip_plan.get("cache_status") or "not_checked")
+        is_reusable = bool(clip_plan.get("skip_execution"))
+        reuse_blocked = bool(clip_plan.get("reuse_blocked"))
+        missing_layers = list(existing.get("missing_layers") or [])
+        staleness_reasons = list(existing.get("cache_issues") or [])
+        cache_warnings = list(existing.get("cache_warnings") or [])
+        superseded_by_relink = bool(existing.get("superseded_by_relink"))
+
+        below_min_source_trust = False
+        if min_source_trust and source_trust != "unknown":
+            below_min_source_trust = _source_trust_rank(source_trust) < _source_trust_rank(min_source_trust)
+
+        if superseded_by_relink:
+            summary_counts["stale"] += 1
+        elif reuse_blocked:
+            summary_counts["reuse_blocked"] += 1
+        elif below_min_source_trust:
+            summary_counts["needs_higher_trust"] += 1
+        elif is_reusable:
+            summary_counts["analyzed"] += 1
+        elif report_path and (missing_layers or staleness_reasons):
+            summary_counts["stale"] += 1
+        else:
+            summary_counts["missing"] += 1
+
+        recommended_action = _recommend_coverage_action(
+            cache_status=cache_status,
+            reuse_blocked=reuse_blocked,
+            below_min_source_trust=below_min_source_trust,
+            superseded_by_relink=superseded_by_relink,
+            missing_layers=missing_layers,
+            staleness_reasons=staleness_reasons,
+            record=record,
+        )
+
+        coverage_clips.append({
+            "clip_id": record.get("clip_id"),
+            "clip_name": record.get("clip_name"),
+            "file_path": record.get("file_path"),
+            "media_id": record.get("media_id"),
+            "analyzed": is_reusable and not superseded_by_relink,
+            "report_path": report_path,
+            "report_project_root": existing.get("project_root"),
+            "report_source": existing.get("source"),
+            "cache_status": cache_status,
+            "reuse_blocked": reuse_blocked,
+            "superseded_by_relink": superseded_by_relink,
+            "superseded_at": existing.get("superseded_at"),
+            "superseded_reason": existing.get("superseded_reason"),
+            "layers_present": layers_present,
+            "missing_layers": missing_layers,
+            "staleness_reasons": staleness_reasons,
+            "cache_warnings": cache_warnings,
+            "source_trust": source_trust,
+            "below_min_source_trust": below_min_source_trust,
+            "provenance_present": _record_has_analysis_provenance(record),
+            "analyzed_at": existing.get("analyzed_at"),
+            "why_not_reused": clip_plan.get("why_not_reused"),
+            "recommended_action": recommended_action,
+        })
+
+    total = len(coverage_clips)
+    summary = {
+        "clips_total": total,
+        "clips_analyzed": summary_counts["analyzed"],
+        "clips_missing": summary_counts["missing"],
+        "clips_stale": summary_counts["stale"],
+        "clips_reuse_blocked": summary_counts["reuse_blocked"],
+        "clips_needs_higher_trust": summary_counts["needs_higher_trust"],
+        "coverage_percent": (summary_counts["analyzed"] / total * 100.0) if total else 0.0,
+        "layer_coverage": layer_coverage,
+        "source_trust_distribution": source_trust_dist,
+    }
+
+    return {
+        "success": True,
+        "action": "coverage_report",
+        "target": plan.get("target"),
+        "min_source_trust": min_source_trust,
+        "evidence_base": _coverage_evidence_line(summary),
+        "summary": summary,
+        "clips": coverage_clips,
+        "output_root": plan.get("output_root"),
+        "reuse_project_roots": plan.get("reuse_project_roots"),
+        "related_project_roots": plan.get("related_project_roots"),
+        "analysis_version": ANALYSIS_VERSION,
+        "notes": [
+            "coverage_report is a pure read — it never triggers analysis.",
+            "Editorial and color tools should call this first and lead any recommendation with `evidence_base`.",
+        ],
+    }
+
+
+def analysis_root_coverage(project_root: str) -> Dict[str, Any]:
+    """Standalone coverage summary — reads on-disk reports + registry, no Resolve required.
+
+    Powers the control panel Readiness widget. Reports per-layer coverage
+    counts, source_trust distribution, superseded_by_relink counts (from the
+    registry), recent activity, and warning counts. Returns roughly the same
+    shape as `build_coverage_report.summary` plus an `analyzed_clips` list,
+    minus per-clip target/missing-layer detail (those require live records).
+    """
+    root = normalize_path(project_root)
+    if not os.path.isdir(root):
+        return {"success": False, "error": f"Analysis project root not found: {root}"}
+
+    reports: List[Tuple[str, Dict[str, Any]]] = []
+    clips_root = os.path.join(root, "clips")
+    if os.path.isdir(clips_root):
+        for dirpath, _, filenames in os.walk(clips_root):
+            if "analysis.json" not in filenames:
+                continue
+            report_path = os.path.join(dirpath, "analysis.json")
+            try:
+                reports.append((report_path, _read_json(report_path)))
+            except (OSError, json.JSONDecodeError):
+                continue
+
+    registry = _read_analysis_registry(root)
+    superseded_by_path: Dict[str, Dict[str, Any]] = {}
+    for entry in registry.get("entries") or []:
+        if not isinstance(entry, dict) or not entry.get("superseded_by_relink"):
+            continue
+        path = normalize_path(entry.get("analysis_json") or "")
+        if path:
+            superseded_by_path[path] = {
+                "superseded_at": entry.get("superseded_at"),
+                "superseded_reason": entry.get("superseded_reason"),
+            }
+
+    layer_coverage: Dict[str, int] = {}
+    source_trust_dist: Dict[str, int] = {}
+    motion_dist: Dict[str, int] = {}
+    warnings: List[str] = []
+    signed_count = 0
+    newest_ts = 0.0
+    analyzed_clips: List[Dict[str, Any]] = []
+    superseded_count = 0
+
+    for report_path, report in reports:
+        normalized_report_path = normalize_path(report_path)
+        layers = _layers_present_in_report(report)
+        for layer in layers:
+            layer_coverage[layer] = layer_coverage.get(layer, 0) + 1
+
+        profile = report.get("analysis_profile") if isinstance(report.get("analysis_profile"), dict) else {}
+        trust = str(profile.get("source_trust") or "").strip().lower() or "unknown"
+        source_trust_dist[trust] = source_trust_dist.get(trust, 0) + 1
+
+        motion_level = (report.get("motion") or {}).get("overall_motion_level") or "unknown"
+        motion_dist[str(motion_level)] = motion_dist.get(str(motion_level), 0) + 1
+
+        warnings.extend(str(w) for w in (report.get("technical_warnings") or []))
+
+        if report.get("analysis_signature"):
+            signed_count += 1
+        analyzed_ts = _timestamp_from_analyzed_at(report.get("analyzed_at")) or 0
+        newest_ts = max(newest_ts, analyzed_ts)
+
+        clip_info = report.get("clip") if isinstance(report.get("clip"), dict) else {}
+        superseded_info = superseded_by_path.get(normalized_report_path)
+        if superseded_info:
+            superseded_count += 1
+        analyzed_clips.append({
+            "clip_id": clip_info.get("clip_id"),
+            "clip_name": clip_info.get("clip_name"),
+            "source_file": report.get("source_file") or clip_info.get("file_path"),
+            "report_path": normalized_report_path,
+            "analyzed_at": report.get("analyzed_at"),
+            "layers_present": layers,
+            "source_trust": trust,
+            "superseded_by_relink": bool(superseded_info),
+            "superseded_reason": (superseded_info or {}).get("superseded_reason"),
+            "vision_pending": bool(
+                (report.get("visual") or {}).get("status") == "pending_host_analysis"
+                or (report.get("visual") or {}).get("vision_token")
+            ),
+            "depth": profile.get("depth"),
+        })
+
+    return {
+        "success": True,
+        "project_root": root,
+        "registry_path": analysis_registry_path(root),
+        "summary": {
+            "clips_total_with_reports": len(reports),
+            "clips_signed": signed_count,
+            "clips_unsigned": max(0, len(reports) - signed_count),
+            "clips_superseded_by_relink": superseded_count,
+            "clips_vision_pending": sum(1 for clip in analyzed_clips if clip["vision_pending"]),
+            "layer_coverage": layer_coverage,
+            "source_trust_distribution": source_trust_dist,
+            "motion_distribution": motion_dist,
+            "technical_warning_count": len(warnings),
+            "newest_analysis_at": (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(newest_ts)) if newest_ts else None
+            ),
+        },
+        "warnings": warnings[:50],
+        "analyzed_clips": sorted(
+            analyzed_clips,
+            key=lambda row: (
+                0 if row.get("superseded_by_relink") else 1,
+                -float(_timestamp_from_analyzed_at(row.get("analyzed_at")) or 0),
+            ),
+        )[:200],
+        "notes": [
+            "analysis_root_coverage is a standalone read of the analysis directory.",
+            "It does NOT compare against live Resolve clips; use coverage_report (action) for per-target missing-clip detection.",
+        ],
+    }
 
 
 def cleanup_artifacts(project_root: str, *, frames_only: bool = True) -> Dict[str, Any]:
@@ -5044,6 +6670,10 @@ def build_analysis_index(project_root: str, *, index_path: Optional[Any] = None)
         final_conn.close()
     except sqlite3.Error:
         pass
+    try:
+        registry_status = update_analysis_registry(root)
+    except Exception as exc:  # pragma: no cover - registry is an auxiliary cache
+        registry_status = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
     return {
         "success": True,
@@ -5058,6 +6688,7 @@ def build_analysis_index(project_root: str, *, index_path: Optional[Any] = None)
         "failed_report_count": len(failed_reports),
         "failed_reports": failed_reports[:50],
         "size_bytes": os.path.getsize(db_path) if os.path.isfile(db_path) else 0,
+        "analysis_registry": registry_status,
     }
 
 

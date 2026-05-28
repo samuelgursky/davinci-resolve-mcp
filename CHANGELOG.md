@@ -2,6 +2,123 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.25.0
+
+**Agentic flow improvements** — A second-pass review against the Claude
+Certified Architect study material drove a sweep of correctness gains. Every
+tool error now returns a structured envelope (`code` / `category` /
+`retryable` / `reason` / `remediation` / `message`); `retryable` defaults are
+locked per category so a host can make a one-shot retry decision without
+inference. Compound-tool descriptions for `media_analysis` and
+`timeline_item_color` adopt XML semantic tags (`<when_to_use>`, `<actions>`,
+`<returns>`) for cheaper per-turn parsing. Repeated failures on the same
+`(scope, action)` pair attach an `escalation` block on the 3rd response —
+halts auto-retry loops with a `suggested_action` for the host. Batch
+manifests now always carry `partial_success`, `completed_clip_ids`, and
+`failed_clip_ids` for safe targeted retry.
+
+**MCP resources surface** — 8 read-only resource URIs the host can poll
+without paying a tool-turn cost: `status://mcp_version`,
+`status://resolve_connection`, `status://current_project`,
+`status://current_timeline`, `status://caps_preset`,
+`analysis://recent_reports`, `capabilities://installed_tools`,
+`capabilities://install_guidance`. Paired tools still work for hosts that
+don't consume resources.
+
+**MCP prompts surface** — 5 slash-command workflow templates:
+`/davinci-resolve:analyze_and_propose_grade`,
+`/davinci-resolve:match_bin_to_hero`,
+`/davinci-resolve:verify_timeline_coverage`,
+`/davinci-resolve:open_and_analyze_selection`,
+`/davinci-resolve:prep_color_handoff`. First-class agentic intent, no
+re-derivation from SKILL.md prose.
+
+**Color-grading evidence base** — `timeline_item_color.grade_evidence_base`
+composes `version_snapshot` + `node_graph` + `color_group` + coverage report
+into a single `evidence_base` summary string; the SKILL guide now teaches
+agents to lead any color recommendation with that line.
+`timeline_item_color.propose_grade` formalizes a recommendation as a
+validated structured plan (returns `plan_id` + `preview_path`; requires
+explicit `execute=true` re-call). `bulk_match_to_hero` drives CDL-delta or
+copy-grade across many targets with a `confirm_token` gate and dry-run
+preview.
+
+**Analysis caps layer** — Token-budget governance for analysis. 7 cap
+dimensions across vision/transcription/job/clip/day scopes, 4 named presets
+(`minimal` / `standard` / `generous` / `unlimited`), pre-call refusal with
+`CAPS_REFUSAL` / `budget_exhausted` / `retryable: false`. New
+`media_analysis` actions: `get_caps`, `set_caps_preset`. Token usage table
+in the analysis DB plus a control-panel widget with gauges + override
+inputs. Wall-clock timeout helper wraps vision/transcription call sites.
+
+**Timeline versioning + analysis↔timeline marriage** — New
+`timeline_versioning` MCP tool: every destructive timeline edit
+auto-archives the current timeline into an Archive bin (compound, captions,
+ripple, gap close, etc.), so versions can be diffed and rolled back. Run
+scoping, schema v4 migrations, concurrency safety, structural snapshots,
+action filtering, strict mode, auto-save preference, media-pool destructive
+coverage, thumbnails. Backed by new modules `timeline_versioning.py`,
+`timeline_brain_db.py`, `brain_edits.py`, `analysis_runs.py`,
+`media_pool_changes.py`, `destructive_hook.py`. Surfaced in the control
+panel's Review → History view.
+
+**Async opt-in for long-running ops** — `analyze_clip` / `analyze_file` /
+`commit_vision` accept `prefer_handle: true`. When set (and the estimated
+runtime exceeds the configured threshold), the response is a fast handoff
+with `job_id` + `status: "queued"`; poll `batch_job_status({job_id})`.
+Default behavior unchanged.
+
+**Aggregated provenance** — `summarize`,
+`review_timeline_markers`, and `grade_evidence_base` now return a
+`provenance` block: `source_reports[]` (clip_id, signature, report_path,
+analyzed_at), `missing_reports[]` (per reason: `no_report` / `stale_report`
+/ `caps_refused`), and inline `[ref:<clip_id>]` citations in the human
+summary text. Multi-clip claims are now traceable.
+
+**Confirm-token gates on destructive batches** — `propose_grade`,
+`bulk_match_to_hero`, and other multi-target writes now require an explicit
+`confirm_token` on first execute (returned on the dry-run), with a
+`pending_user_decision` error if missing.
+
+**Action-help indirection** — `action_help(name=...)` returns the long-form
+guidance for a single action, keeping the top-level tool descriptions
+compact while preserving full per-action documentation.
+
+**Tool-choice hint emission** — Analyze responses include a
+`host_tool_choice_hint` block. Hosts that respect it pass
+`tool_choice={type:"tool", name:"media_analysis"}` on the next API turn,
+hard-locking the agent into the correct next call.
+
+**Update process hardening** — Five improvements layered onto the
+update-check path: active-job lock prevents updates mid-analysis, auto-stash
+strategy preserves uncommitted work across updates, restart-needed marker
+surfaces to the host, channels (`stable` / `beta` / `dev`), pre-update
+breaking-change scan, integrity SHA verification of downloaded artifacts,
+update history table, eager DB migration on update, and rollback to the
+previous build. New `analysis_caps.py` + `update_check.py` revisions.
+
+**Source-safe guardrails** — `destructive_hook.py` + decorator coverage
+tests ensure every destructive surface goes through the auto-archive path
+and never modifies, transcodes, or creates derivatives of source media.
+
+**Test surface** — 30+ new test modules covering error envelopes,
+failure tracking, partial-success manifests, `prefer_handle`, MCP resources,
+MCP prompts, provenance, XML description shape, `action_help`,
+`grade_evidence_base`, `propose_grade`, `bulk_match_to_hero`,
+`confirm_token`, the analysis caps layer, caps integration / events /
+history, timeline versioning, the timeline-brain DB, destructive decorator
+coverage, the destructive hook, update hardening, and update history.
+
+**Validation** — `tests/test_import.py`, `scripts/audit_api_parity.py`,
+`node bin/davinci-resolve-mcp.mjs --version`, `npm pack --dry-run`, and
+`git diff --check` all pass. 375 focused unit tests pass. Live Resolve
+validation covered the D1–F2 surface end-to-end against project CKY /
+Timeline 7 (D1 `retryable`, D2 XML descriptions, D3 partial-success on
+plans + CAPS_REFUSAL manifests, E1 8 MCP resource URIs, E2 escalation on
+3× repeated failure, E3 `prefer_handle` job handoff with
+`batch_job_status` polling, F1 provenance block) — 6/6 PASS on the
+fourteenth-attempt smoke test. No source media was modified.
+
 ## What's New in v2.24.1
 
 **`npx davinci-resolve-mcp` no longer breaks MCP clients when invoked without a

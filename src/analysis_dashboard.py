@@ -14,10 +14,11 @@ import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from src.utils.media_analysis import (
     analysis_index_status,
+    analysis_root_coverage,
     build_analysis_index,
     detect_capabilities,
     query_analysis_index,
@@ -36,6 +37,9 @@ from src.utils.media_analysis_jobs import (
 )
 from src.utils.platform import setup_environment
 from src.utils.analysis_memory import read_panel_state, write_panel_state
+from src.utils import brain_edits as _brain_edits
+from src.utils import timeline_versioning as _timeline_versioning
+from src.utils import timeline_brain_db as _timeline_brain_db
 
 
 HTML = r"""<!doctype html>
@@ -1360,6 +1364,76 @@ HTML = r"""<!doctype html>
       color: var(--text-tertiary);
       min-height: 14px;
     }
+    /* ─── Readiness card (coverage_report rollup) ─────────────────────── */
+    .readiness-card {
+      margin: var(--space-4) 0;
+      padding: var(--space-3) var(--space-4);
+      border: 1px solid var(--border-default);
+      background: var(--lab-panel-elevated);
+      border-radius: var(--radius-md);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+    .readiness-card-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+    }
+    .readiness-title {
+      font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      font-size: 11px;
+    }
+    .readiness-evidence {
+      flex: 1;
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .readiness-summary-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-3);
+    }
+    .readiness-stat {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 84px;
+      padding: var(--space-2) var(--space-3);
+      border-radius: var(--radius-sm);
+      background: var(--bg-subtle);
+    }
+    .readiness-stat .stat-value {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .readiness-stat .stat-label {
+      font-size: 10.5px;
+      color: var(--text-tertiary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .readiness-stat.warn .stat-value { color: var(--accent-warn, #d18b00); }
+    .readiness-stat.danger .stat-value { color: var(--accent-danger, #d24c4c); }
+    .readiness-stat.good .stat-value { color: var(--accent-success, #4caf50); }
+    .readiness-details {
+      color: var(--text-tertiary);
+      font-size: 11.5px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-3);
+    }
+    .readiness-details .chip {
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--bg-subtle);
+      color: var(--text-secondary);
+    }
     /* ─── V2 Review surface ───────────────────────────────────────────── */
     .review-grid {
       display: grid;
@@ -2087,6 +2161,814 @@ HTML = r"""<!doctype html>
     .review-list .review-clip-card-name { flex: 1 1 auto; }
     .review-list .review-clip-card-meta { flex-shrink: 0; }
     .review-list .review-clip-card-oneliner { flex: 2 1 0; }
+
+    /* ─── C6 Timeline history view ──────────────────────────────────── */
+    .history-layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: var(--space-3);
+      align-items: start;
+    }
+    .history-sidebar {
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--lab-panel-elevated);
+      padding: var(--space-2);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+    .history-sidebar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      font-size: var(--text-sm);
+    }
+    .history-timeline-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+    }
+    .history-timeline-row {
+      cursor: pointer;
+      padding: var(--space-1) var(--space-2);
+      border-radius: var(--radius-sm);
+      border: 1px solid transparent;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--space-2);
+      font-size: var(--text-sm);
+    }
+    .history-timeline-row:hover { background: var(--bg-muted); }
+    .history-timeline-row.is-selected {
+      border-color: var(--accent-primary);
+      background: var(--bg-muted);
+    }
+    .history-timeline-row .name { font-weight: 500; }
+    .history-timeline-row .count {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+    }
+    .history-archive-now {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      margin-top: auto;
+      padding-top: var(--space-2);
+      border-top: 1px solid var(--border-default);
+    }
+    .history-archive-now button { width: 100%; }
+    .history-archive-now input {
+      width: 100%;
+      padding: var(--space-1) var(--space-2);
+      border: 1px solid var(--border-default);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      border-radius: var(--radius-sm);
+      font-size: var(--text-xs);
+    }
+    .history-detail {
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--lab-panel-elevated);
+      padding: var(--space-3);
+      min-height: 300px;
+    }
+    .history-detail-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: var(--space-2);
+      margin-bottom: var(--space-3);
+      padding-bottom: var(--space-2);
+      border-bottom: 1px solid var(--border-default);
+    }
+    .history-detail-header .timeline-name {
+      font-size: var(--text-base);
+      font-weight: 600;
+    }
+    .history-detail-body {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-3);
+    }
+    .history-version-card {
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2);
+      background: var(--bg-base);
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: var(--space-3);
+    }
+    .history-version-card .thumb {
+      aspect-ratio: 16/9;
+      background: var(--bg-muted);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: var(--text-xs);
+    }
+    .history-version-card .thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .history-version-card .body {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+    .history-version-card .version-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      justify-content: space-between;
+    }
+    .history-version-card .version-label {
+      font-size: var(--text-sm);
+      font-weight: 600;
+    }
+    .history-version-card .archived-name {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+    .history-version-card .timestamp {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+    }
+    .history-version-card .reason {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+      font-style: italic;
+    }
+    .history-version-card .drt-collapsed {
+      font-size: var(--text-xs);
+      color: var(--accent-warning);
+    }
+    .history-edits-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: var(--text-xs);
+    }
+    .history-edits-table th, .history-edits-table td {
+      padding: var(--space-1) var(--space-2);
+      border-bottom: 1px solid var(--border-default);
+      text-align: left;
+      vertical-align: top;
+    }
+    .history-edits-table th { color: var(--text-muted); font-weight: 500; }
+    .history-edits-table .edit-type {
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+    }
+    .history-edits-table .metric { color: var(--text-muted); }
+    .history-edits-table .delta-pos { color: var(--accent-success); }
+    .history-edits-table .delta-neg { color: var(--accent-error); }
+    .history-edits-table .delta-zero { color: var(--text-muted); }
+    .history-rollback-btn {
+      background: var(--accent-warning-muted);
+      color: var(--accent-warning);
+      border: 1px solid var(--accent-warning);
+      padding: var(--space-1) var(--space-2);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: var(--text-xs);
+    }
+    .history-rollback-btn:hover { background: var(--accent-warning); color: var(--bg-base); }
+
+    /* ─── Analysis caps preferences widget ──────────────────────────── */
+    .caps-section {
+      margin-top: var(--space-4);
+      padding: var(--space-3);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--lab-panel-elevated, var(--bg-base));
+    }
+    .caps-section + .caps-section { margin-top: var(--space-3); }
+    .caps-section-head {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-bottom: var(--space-2);
+    }
+    .caps-section-title {
+      font-size: var(--text-sm);
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .caps-section-hint {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+    }
+    .caps-section-subtitle {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+      margin-top: var(--space-2);
+      margin-bottom: var(--space-1);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    /* Preset cards */
+    .caps-preset-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: var(--space-2);
+    }
+    .caps-preset-card {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+      padding: var(--space-2) var(--space-3);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      background: var(--bg-base);
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+      color: inherit;
+      font: inherit;
+    }
+    .caps-preset-card:hover {
+      border-color: var(--accent-primary);
+      background: var(--bg-muted);
+    }
+    .caps-preset-card.is-active {
+      border-color: var(--accent-primary);
+      background: var(--accent-primary-muted, rgba(64, 156, 255, 0.12));
+      box-shadow: 0 0 0 1px var(--accent-primary) inset;
+    }
+    .caps-preset-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .caps-preset-card-name {
+      font-size: var(--text-sm);
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+    .caps-preset-card-badge {
+      font-size: 10px;
+      color: var(--accent-primary);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .caps-preset-card-tag {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+    }
+    .caps-preset-card-stats {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 2px var(--space-1);
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+    .caps-preset-card-stats .stat-label { color: var(--text-muted); }
+    .caps-preset-card-stats .stat-value { color: var(--text-primary); text-align: right; }
+    .caps-preset-card.is-active .stat-value { color: var(--accent-primary); }
+
+    /* Gauges */
+    .caps-usage-block {
+      padding: 0;
+      background: transparent;
+      border: 0;
+    }
+    .caps-usage-gauges {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: var(--space-2);
+    }
+    .caps-gauge {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: var(--space-2);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      background: var(--bg-base);
+    }
+    .caps-gauge-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: var(--space-1);
+    }
+    .caps-gauge-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .caps-gauge-bar {
+      height: 6px;
+      background: var(--bg-muted);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .caps-gauge-fill {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--accent-success);
+      transition: width 200ms ease, background 200ms ease;
+    }
+    .caps-gauge[data-state="warn"] .caps-gauge-fill { background: var(--accent-warning); }
+    .caps-gauge[data-state="over"] .caps-gauge-fill { background: var(--accent-error); }
+    .caps-gauge-numbers {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+    }
+
+    /* Advanced overrides */
+    .caps-advanced > summary,
+    .caps-inspector-block > summary {
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      list-style: none;
+      padding: 0;
+      margin: 0 0 var(--space-2);
+    }
+    .caps-advanced > summary::-webkit-details-marker,
+    .caps-inspector-block > summary::-webkit-details-marker { display: none; }
+    .caps-advanced > summary::before,
+    .caps-inspector-block > summary::before {
+      content: '▸';
+      display: inline-block;
+      margin-right: var(--space-1);
+      color: var(--text-muted);
+      transition: transform 120ms ease;
+    }
+    .caps-advanced[open] > summary::before,
+    .caps-inspector-block[open] > summary::before { transform: rotate(90deg); }
+    .caps-override-grid input {
+      width: 100%;
+      padding: var(--space-1) var(--space-2);
+      border: 1px solid var(--border-default);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      border-radius: var(--radius-sm);
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+    }
+    .caps-override-grid input::placeholder {
+      color: var(--text-muted);
+      opacity: 0.7;
+      font-style: italic;
+    }
+
+    /* Safety subsection */
+    .safety-strict-block {
+      margin-top: var(--space-3);
+      padding-top: var(--space-2);
+      border-top: 1px dashed var(--border-default);
+    }
+    .safety-strict-title {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+      margin-bottom: var(--space-1);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .safety-strict-note {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+      margin-top: var(--space-2);
+      line-height: 1.5;
+    }
+
+    /* ─── Caps history chart + inspector + refusals ──────────────── */
+    .caps-history-block { margin-top: var(--space-3); }
+    .caps-history-title {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+      margin-bottom: var(--space-1);
+    }
+    .caps-history-chart {
+      border: 1px solid var(--border-default);
+      background: var(--bg-base);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2);
+      min-height: 100px;
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+    }
+    .caps-history-chart svg { width: 100%; height: 100px; display: block; }
+    .caps-history-chart .axis { stroke: var(--border-default); stroke-width: 0.5; }
+    .caps-history-chart .line { stroke: var(--accent-primary); stroke-width: 1.5; fill: none; }
+    .caps-history-chart .point { fill: var(--accent-primary); }
+    .caps-history-chart .label { fill: var(--text-muted); font-size: 9px; }
+
+    .caps-inspector { margin-top: var(--space-3); }
+    .caps-inspector-row {
+      display: flex;
+      gap: var(--space-2);
+      align-items: end;
+      flex-wrap: wrap;
+    }
+    .caps-inspector-row label { flex: 1 1 200px; }
+    .caps-inspector-row input {
+      width: 100%;
+      padding: var(--space-1) var(--space-2);
+      border: 1px solid var(--border-default);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      border-radius: var(--radius-sm);
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+    }
+    .caps-inspect-result {
+      margin-top: var(--space-2);
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      padding: var(--space-2);
+      background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      min-height: 30px;
+      color: var(--text-muted);
+    }
+    .caps-inspect-result.has-data { color: var(--text-primary); }
+
+    .caps-refusals { margin-top: var(--space-3); }
+    .caps-refusals summary {
+      cursor: pointer;
+      font-size: var(--text-sm);
+      color: var(--text-muted);
+      padding: var(--space-1) 0;
+    }
+    .caps-refusals-list {
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      padding: var(--space-2);
+      background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      max-height: 240px;
+      overflow-y: auto;
+    }
+    .caps-refusal-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: var(--space-2);
+      padding: var(--space-1) 0;
+      border-bottom: 1px solid var(--border-default);
+    }
+    .caps-refusal-row:last-child { border-bottom: 0; }
+    .caps-refusal-row .reason { color: var(--accent-error); }
+    .caps-refusal-row .when { color: var(--text-muted); }
+
+    /* ─── Safety subpage ────────────────────────────────────────── */
+    .checkbox-row {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+    }
+    .checkbox-row .hint {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+      margin-left: 24px;
+    }
+    .strict-actions-list {
+      list-style: none;
+      padding: 0;
+      margin: var(--space-2) 0;
+    }
+    .strict-actions-list li {
+      padding: var(--space-1) var(--space-2);
+      background: var(--bg-base);
+      border-left: 3px solid var(--accent-warning);
+      border-radius: var(--radius-sm);
+      margin-bottom: var(--space-1);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }
+
+    /* ─── Updates subpage rebuild ───────────────────────────────── */
+    .restart-banner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-2) var(--space-3);
+      background: var(--accent-warning-muted);
+      color: var(--accent-warning);
+      border: 1px solid var(--accent-warning);
+      border-radius: var(--radius-sm);
+      margin-bottom: var(--space-3);
+    }
+    .restart-banner-text strong { display: block; }
+    .restart-banner-text span {
+      font-size: var(--text-xs);
+      opacity: 0.8;
+    }
+    .update-actions-block { margin-top: var(--space-2); }
+    .update-status-badge {
+      display: inline-block;
+      padding: var(--space-1) var(--space-2);
+      background: var(--bg-muted);
+      border-radius: var(--radius-sm);
+      font-size: var(--text-xs);
+      margin-bottom: var(--space-2);
+    }
+    .update-status-badge[data-status="update_available"] {
+      background: var(--accent-warning-muted);
+      color: var(--accent-warning);
+    }
+    .update-status-badge[data-status="up_to_date"] {
+      background: var(--accent-success-muted);
+      color: var(--accent-success);
+    }
+    .update-action-row {
+      display: flex;
+      gap: var(--space-2);
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .checkbox-inline {
+      display: inline-flex;
+      gap: var(--space-1);
+      align-items: center;
+      font-size: var(--text-sm);
+    }
+    .update-result {
+      margin-top: var(--space-2);
+      padding: var(--space-2);
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+      background: var(--bg-base);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      max-height: 240px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .update-result:empty { display: none; }
+    .update-history-table {
+      font-size: var(--text-xs);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+    .update-history-row {
+      display: grid;
+      grid-template-columns: 140px 90px 1fr 1fr 100px auto;
+      gap: var(--space-2);
+      padding: var(--space-1) var(--space-2);
+      border-bottom: 1px solid var(--border-default);
+      align-items: center;
+    }
+    .update-history-row:last-child { border-bottom: 0; }
+    .update-history-row.header {
+      background: var(--bg-muted);
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+    .update-history-row .kind { font-family: var(--font-mono); }
+    .update-history-row .status-ok { color: var(--accent-success); }
+    .update-history-row .status-fail { color: var(--accent-error); }
+    .update-history-row .integrity-ok { color: var(--accent-success); }
+    .update-history-row .integrity-bad { color: var(--accent-error); }
+    .update-history-row .integrity-unknown { color: var(--text-muted); }
+
+    /* ─── Run scoping bar ──────────────────────────────────────── */
+    .run-scope-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-2);
+      background: var(--lab-panel-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      margin-bottom: var(--space-2);
+    }
+    .run-scope-status {
+      display: flex;
+      gap: var(--space-2);
+      align-items: center;
+      font-size: var(--text-sm);
+    }
+    .run-scope-indicator {
+      font-family: var(--font-mono);
+      padding: 2px var(--space-2);
+      border-radius: var(--radius-sm);
+      background: var(--bg-muted);
+      color: var(--text-muted);
+    }
+    .run-scope-indicator.active {
+      background: var(--accent-success-muted);
+      color: var(--accent-success);
+    }
+    .run-scope-actions {
+      display: flex;
+      gap: var(--space-2);
+      align-items: center;
+    }
+    .run-scope-actions input {
+      padding: var(--space-1) var(--space-2);
+      border: 1px solid var(--border-default);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      border-radius: var(--radius-sm);
+      font-size: var(--text-xs);
+      min-width: 220px;
+    }
+    .history-sidebar-section {
+      margin-top: var(--space-2);
+      padding-top: var(--space-2);
+      border-top: 1px solid var(--border-default);
+    }
+    .history-recent-runs {
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .history-recent-run-row {
+      padding: var(--space-1) var(--space-2);
+      margin-bottom: 2px;
+      background: var(--bg-base);
+      border-radius: var(--radius-sm);
+    }
+
+    /* ─── History diff view ────────────────────────────────────── */
+    .history-diff-view {
+      margin-top: var(--space-3);
+      padding: var(--space-3);
+      background: var(--lab-panel-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+    }
+    .history-diff-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: var(--space-2);
+    }
+    .history-diff-section {
+      margin-top: var(--space-2);
+      padding: var(--space-2);
+      background: var(--bg-base);
+      border-radius: var(--radius-sm);
+    }
+    .history-diff-section.added { border-left: 3px solid var(--accent-success); }
+    .history-diff-section.removed { border-left: 3px solid var(--accent-error); }
+    .history-diff-section.moved { border-left: 3px solid var(--accent-warning); }
+    .history-diff-section h4 {
+      margin: 0 0 var(--space-1) 0;
+      font-size: var(--text-sm);
+    }
+    .history-diff-section ul {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      margin: 0;
+      padding-left: var(--space-3);
+    }
+
+    .history-version-card .diff-against {
+      font-size: var(--text-xs);
+      padding: var(--space-1);
+      border: 1px solid var(--border-default);
+      background: var(--bg-base);
+      border-radius: var(--radius-sm);
+    }
+
+    /* ─── Media Pool History (was: Provenance) ─────────────────── */
+    .mpc-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      gap: var(--space-2);
+      margin-top: var(--space-2);
+      margin-bottom: var(--space-2);
+    }
+    .mpc-toolbar-field {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+    }
+    .mpc-toolbar-field select,
+    .mpc-toolbar-field input {
+      padding: var(--space-1) var(--space-2);
+      border: 1px solid var(--border-default);
+      background: var(--bg-base);
+      color: var(--text-primary);
+      border-radius: var(--radius-sm);
+      font-size: var(--text-xs);
+      min-width: 160px;
+    }
+    .mpc-toolbar-field input { font-family: var(--font-mono); min-width: 100px; }
+    .mpc-toolbar-toggle {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      font-size: var(--text-xs);
+      color: var(--text-primary);
+      padding-bottom: 4px;
+    }
+    .mpc-meta {
+      flex: 1;
+      text-align: right;
+      font-size: var(--text-xs);
+      color: var(--text-muted);
+      padding-bottom: 4px;
+    }
+    .mpc-table {
+      font-size: var(--text-xs);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      margin-top: var(--space-2);
+    }
+    .mpc-row {
+      display: grid;
+      grid-template-columns: 150px 170px 1fr 120px 110px;
+      gap: var(--space-2);
+      padding: var(--space-1) var(--space-2);
+      border-bottom: 1px solid var(--border-default);
+      align-items: center;
+    }
+    .mpc-row:last-child { border-bottom: 0; }
+    .mpc-row:hover:not(.header):not(.group) { background: var(--bg-muted); }
+    .mpc-row.header {
+      background: var(--bg-muted);
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+    .mpc-row.group {
+      grid-template-columns: 1fr auto;
+      background: var(--bg-muted);
+      font-weight: 600;
+      color: var(--text-primary);
+      font-size: var(--text-xs);
+    }
+    .mpc-row.group .group-count {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .mpc-row .action-name {
+      font-family: var(--font-mono);
+      color: var(--accent-primary);
+    }
+    .mpc-row .target-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .mpc-row .target-cell .target-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mpc-row .target-cell .target-id {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mpc-row .clip-link {
+      color: var(--accent-primary);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .mpc-row .clip-link:hover { text-decoration: underline; }
+    .mpc-row .run-id {
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      font-size: 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .review-search-results {
       display: flex;
       flex-direction: column;
@@ -2895,6 +3777,7 @@ HTML = r"""<!doctype html>
           <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="mcp" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7v10l8 5 8-5V7l-8-5z"></path><path d="m4 7 8 5 8-5"></path><path d="M12 12v10"></path></svg></span>MCP</button>
           <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="storage" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"></path><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"></path></svg></span>Storage</button>
           <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="tools" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l2.1-2.1a6 6 0 0 1-7.6 7.6l-4 4a2.1 2.1 0 0 1-3-3l4-4a6 6 0 0 1 7.6-7.6z"></path></svg></span>Tools</button>
+          <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="media-pool-history" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18"></path><path d="M3 6h18"></path><path d="M3 18h18"></path></svg></span>Media Pool History</button>
         </div>
       </div>
       <div class="control-nav-item">
@@ -2910,6 +3793,7 @@ HTML = r"""<!doctype html>
         <button class="control-tab has-menu" data-panel-target="preferences">Preferences <span class="tab-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></button>
         <div class="nav-dropdown" role="menu" aria-label="Preference pages">
           <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="analysis" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"></path><path d="m19 9-5 5-4-4-3 3"></path></svg></span>Analysis</button>
+          <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="caps" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v9l6 3"></path></svg></span>Caps + Safety</button>
           <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="metadata" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-9"></path><path d="M14 17H5"></path><circle cx="17" cy="17" r="3"></circle><circle cx="7" cy="7" r="3"></circle></svg></span>Metadata And Markers</button>
           <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="paths" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h5l2 3h11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg></span>Paths And Workflow</button>
           <button class="nav-dropdown-item" data-panel-target="preferences" data-subpage-target="updates" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"></path><path d="M21 3v6h-6"></path></svg></span>MCP Updates</button>
@@ -3110,10 +3994,20 @@ HTML = r"""<!doctype html>
         </div>
         <div class="controls" id="reviewControls">
           <button class="secondary" id="reviewRefreshBtn">Refresh</button>
+          <button class="secondary" id="reviewHistoryBtn" title="Timeline edit history (C6)">History</button>
           <button class="secondary" id="reviewBackBtn" style="display:none">← Back</button>
         </div>
       </div>
       <div id="reviewBinView">
+        <div id="reviewReadinessCard" class="readiness-card" hidden>
+          <div class="readiness-card-header">
+            <span class="readiness-title">Project readiness</span>
+            <span id="readinessEvidenceBase" class="readiness-evidence"></span>
+            <button id="readinessRefreshBtn" class="secondary" type="button" title="Refresh readiness summary">Refresh</button>
+          </div>
+          <div id="readinessSummaryRow" class="readiness-summary-row"></div>
+          <div id="readinessDetails" class="readiness-details"></div>
+        </div>
         <div class="review-bin-filters">
           <input id="reviewSearchInput" type="search" placeholder="Search clips, summaries, tags, transcripts…" autocomplete="off">
           <select id="reviewBinFilter" aria-label="Filter by bin">
@@ -3170,6 +4064,51 @@ HTML = r"""<!doctype html>
           <div class="empty">Loading combined review…</div>
         </div>
       </div>
+      <div id="reviewHistoryView" style="display:none">
+        <div id="runScopeBar" class="run-scope-bar">
+          <div class="run-scope-status">
+            <span class="run-scope-label">Active run:</span>
+            <span id="runScopeIndicator" class="run-scope-indicator none">none</span>
+          </div>
+          <div class="run-scope-actions">
+            <input id="runScopeLabel" type="text" placeholder="run label (e.g. 'rough cut tighten')">
+            <button id="runBeginBtn" type="button">Begin run</button>
+            <button id="runEndBtn" class="secondary" type="button">End run</button>
+          </div>
+        </div>
+        <div class="history-layout">
+          <aside class="history-sidebar">
+            <div class="history-sidebar-header">
+              <strong>Timelines</strong>
+              <button id="historyRefreshBtn" class="secondary" type="button">Refresh</button>
+            </div>
+            <div id="historyTimelineList" class="history-timeline-list">
+              <div class="empty">Loading…</div>
+            </div>
+            <div class="history-archive-now">
+              <button id="historyArchiveCurrentBtn" type="button">Archive current timeline</button>
+              <input id="historyArchiveReason" type="text" placeholder="reason (optional)">
+            </div>
+            <div class="history-sidebar-section">
+              <strong>Recent runs</strong>
+              <div id="historyRecentRuns" class="history-recent-runs">loading…</div>
+            </div>
+          </aside>
+          <section class="history-detail">
+            <div id="historyDetailHeader" class="history-detail-header">
+              <span class="empty">Select a timeline.</span>
+            </div>
+            <div id="historyDetailBody" class="history-detail-body"></div>
+            <div id="historyDiffView" class="history-diff-view" hidden>
+              <div class="history-diff-header">
+                <strong>Structural diff</strong>
+                <button id="historyDiffCloseBtn" class="secondary" type="button">Close</button>
+              </div>
+              <div id="historyDiffBody"></div>
+            </div>
+          </section>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -3216,6 +4155,28 @@ HTML = r"""<!doctype html>
       <div class="tool-chip-grid" id="diagnosticsTools">
         <div class="empty">Tool diagnostics pending.</div>
       </div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="diagnostics" data-subpage="media-pool-history">
+      <h2>Media Pool History</h2>
+      <p class="section-copy">Provenance log for destructive media-pool operations — deletes, replaces, relinks. Each row captures the action, the target clip or folder, the analysis run that triggered it, and the initiator. Kept separate from timeline <code>brain_edits</code> because the addressable entity is a media pool item, not a timeline.</p>
+      <div class="mpc-toolbar">
+        <label class="mpc-toolbar-field">Action
+          <select id="mpcActionFilter">
+            <option value="">all actions</option>
+          </select>
+        </label>
+        <label class="mpc-toolbar-field">Limit
+          <input id="mpcLimit" type="number" min="10" max="500" value="50">
+        </label>
+        <label class="mpc-toolbar-toggle">
+          <input id="mpcGroupByClip" type="checkbox">
+          <span>Group by target</span>
+        </label>
+        <button id="mpcRefreshBtn" class="secondary" type="button">Refresh</button>
+        <span id="mpcMeta" class="mpc-meta"></span>
+      </div>
+      <div id="mpcTable" class="mpc-table">loading…</div>
     </section>
   </main>
 
@@ -3336,6 +4297,117 @@ HTML = r"""<!doctype html>
         </div>
     </section>
 
+    <section class="span-12 subpage" data-subpage-scope="preferences" data-subpage="caps">
+        <div class="settings-subhead">Caps + Safety</div>
+        <p class="settings-subtitle">Token + frame budgets for analysis, plus safety rails for destructive edits. Usage is tracked per project in <code>_soul/timeline_brain.sqlite</code>.</p>
+
+        <div class="caps-section">
+          <div class="caps-section-head">
+            <div class="caps-section-title">Budget preset</div>
+            <div class="caps-section-hint">Pick the preset that matches the job. Override individual fields below if needed.</div>
+          </div>
+          <div id="capsPresetCards" class="caps-preset-cards" role="radiogroup" aria-label="Analysis caps preset">
+            <!-- cards rendered by JS -->
+          </div>
+          <input id="prefCapsPreset" type="hidden" value="standard">
+        </div>
+
+        <div class="caps-section">
+          <div class="caps-section-head">
+            <div class="caps-section-title">Vision token usage</div>
+            <div class="caps-section-hint">Live consumption against the active caps. Green = comfortable, amber = approaching, red = at or over budget.</div>
+          </div>
+          <div id="capsUsageBlock" class="caps-usage-block">
+            <div id="capsUsageGauges" class="caps-usage-gauges">
+              <div class="caps-gauge" data-scope="clip">
+                <div class="caps-gauge-row">
+                  <span class="caps-gauge-label">Per&#8209;clip</span>
+                  <span class="caps-gauge-numbers">—</span>
+                </div>
+                <div class="caps-gauge-bar"><span class="caps-gauge-fill"></span></div>
+              </div>
+              <div class="caps-gauge" data-scope="job">
+                <div class="caps-gauge-row">
+                  <span class="caps-gauge-label">Per&#8209;job</span>
+                  <span class="caps-gauge-numbers">—</span>
+                </div>
+                <div class="caps-gauge-bar"><span class="caps-gauge-fill"></span></div>
+              </div>
+              <div class="caps-gauge" data-scope="day">
+                <div class="caps-gauge-row">
+                  <span class="caps-gauge-label">Today</span>
+                  <span class="caps-gauge-numbers">—</span>
+                </div>
+                <div class="caps-gauge-bar"><span class="caps-gauge-fill"></span></div>
+              </div>
+            </div>
+            <div class="caps-history-block">
+              <div class="caps-history-title">Daily vision-token usage (last 30 days)</div>
+              <div id="capsHistoryChart" class="caps-history-chart">loading…</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="caps-section">
+          <div class="caps-section-head">
+            <div class="caps-section-title">Safety</div>
+            <div class="caps-section-hint">Auto-archive timelines before destructive edits and refuse high-blast-radius ops when archive fails.</div>
+          </div>
+          <div class="settings-grid">
+            <label class="checkbox-row">
+              <input id="prefAutoSaveAfterArchive" type="checkbox">
+              <span>Auto-save Resolve project after each archive</span>
+              <small class="hint">When on, <code>project.SaveProject()</code> fires after every version-on-mutate archive. Protects against Resolve crashes losing history.</small>
+            </label>
+          </div>
+          <div class="safety-strict-block">
+            <div class="safety-strict-title">Strict mode — always on for:</div>
+            <ul class="strict-actions-list">
+              <li><code>timeline.delete_timelines</code></li>
+              <li><code>timeline.delete_track</code></li>
+              <li><code>timeline.delete_clips</code> with <code>ripple=true</code></li>
+            </ul>
+            <p class="safety-strict-note">Strict mode REFUSES the underlying call if the pre-mutation archive can't be created. Other destructive ops degrade silently — pass <code>strict=true</code> in any action's params to opt in to refusal for that call.</p>
+          </div>
+        </div>
+
+        <details class="caps-section caps-advanced">
+          <summary>
+            <span class="caps-section-title">Advanced — per-field overrides</span>
+            <span class="caps-section-hint">Leave blank to use the preset value shown in the placeholder. Type a number or <code>unlimited</code> to override.</span>
+          </summary>
+          <div class="settings-grid caps-override-grid">
+            <label>Response chars <input id="capsOvResponseChars" type="text" placeholder="(preset)" data-cap-key="response_chars"></label>
+            <label>Vision tokens / clip <input id="capsOvVisionClip" type="text" placeholder="(preset)" data-cap-key="vision_tokens_per_clip"></label>
+            <label>Frames / clip <input id="capsOvFramesClip" type="text" placeholder="(preset)" data-cap-key="frames_per_clip"></label>
+            <label>Vision tokens / job <input id="capsOvVisionJob" type="text" placeholder="(preset)" data-cap-key="vision_tokens_per_job"></label>
+            <label>Vision tokens / day <input id="capsOvVisionDay" type="text" placeholder="(preset)" data-cap-key="vision_tokens_per_day"></label>
+            <label>Wall clock seconds / call <input id="capsOvWallClock" type="text" placeholder="(preset)" data-cap-key="wall_clock_seconds_per_call"></label>
+            <label>Max frame dimension (px) <input id="capsOvFrameDim" type="text" placeholder="(preset)" data-cap-key="max_frame_dim_pixels"></label>
+          </div>
+        </details>
+
+        <details class="caps-section caps-inspector-block">
+          <summary>
+            <span class="caps-section-title">Inspector &amp; debug</span>
+            <span class="caps-section-hint">Look up usage for a specific clip or batch, browse refusals, or reset today's day-scope rollup.</span>
+          </summary>
+          <div class="caps-inspector">
+            <div class="caps-inspector-row">
+              <label>Clip id <input id="capsInspectClipId" type="text" placeholder="abc123"></label>
+              <label>or Job id <input id="capsInspectJobId" type="text" placeholder="batch_xyz"></label>
+              <button id="capsInspectBtn" type="button">Look up</button>
+              <button id="capsResetDayBtn" class="secondary" type="button" title="Delete today's day-scope usage rows (admin)">Reset today's usage</button>
+            </div>
+            <div id="capsInspectResult" class="caps-inspect-result">enter a clip_id or job_id and press Look up</div>
+          </div>
+          <div class="caps-refusals">
+            <div class="caps-section-subtitle">Recent caps refusals</div>
+            <div id="capsRefusalsList" class="caps-refusals-list">loading…</div>
+          </div>
+        </details>
+    </section>
+
     <section class="span-12 subpage" data-subpage-scope="preferences" data-subpage="metadata">
         <div class="settings-subhead">Metadata And Markers</div>
         <p class="settings-subtitle">Controls for Resolve metadata writes and source-time marker suggestions. Source media remains read-only.</p>
@@ -3430,6 +4502,15 @@ HTML = r"""<!doctype html>
     </section>
 
     <section class="span-12 subpage" data-subpage-scope="preferences" data-subpage="updates">
+        <div id="restartNeededBanner" class="restart-banner" hidden>
+          <div class="restart-banner-text">
+            <strong>MCP server restart needed</strong>
+            <span id="restartBannerDetail"></span>
+          </div>
+          <div class="restart-banner-actions">
+            <button id="restartBannerAck" class="secondary" type="button">Got it</button>
+          </div>
+        </div>
         <div class="settings-subhead">MCP Updates</div>
         <p class="settings-subtitle">Server-wide update-check behavior for the MCP package. Checks are best-effort and should not block startup.</p>
         <div class="settings-grid">
@@ -3441,9 +4522,38 @@ HTML = r"""<!doctype html>
               <option value="never">never</option>
             </select>
           </label>
+          <label>Channel
+            <select id="prefUpdateChannel">
+              <option value="stable">stable</option>
+              <option value="beta">beta</option>
+              <option value="dev">dev</option>
+            </select>
+          </label>
           <label>Check interval hours <input id="prefUpdateIntervalHours" type="number" min="0.1" step="0.1" value="24"></label>
           <label>Snooze hours <input id="prefUpdateSnoozeHours" type="number" min="0.1" step="0.1" value="24"></label>
         </div>
+
+        <div class="update-actions-block">
+          <div class="settings-subhead" style="margin-top:24px">Apply update</div>
+          <div id="updateStatusBadge" class="update-status-badge">Loading status…</div>
+          <div class="update-action-row">
+            <button id="updatePreviewBtn" class="secondary" type="button">Preview release notes</button>
+            <label class="checkbox-inline">
+              <input id="updateStashCheckbox" type="checkbox">
+              <span>Stash local changes if dirty</span>
+            </label>
+            <label class="checkbox-inline">
+              <input id="updateForceJobsCheckbox" type="checkbox">
+              <span>Override active-job lock</span>
+            </label>
+            <button id="updateApplyBtn" type="button">Apply update</button>
+            <button id="updateRollbackBtn" class="secondary" type="button">Rollback last update</button>
+          </div>
+          <div id="updateActionResult" class="update-result"></div>
+        </div>
+
+        <div class="settings-subhead" style="margin-top:24px">Update history</div>
+        <div id="updateHistoryTable" class="update-history-table">loading…</div>
     </section>
 
   </main>
@@ -3589,10 +4699,12 @@ HTML = r"""<!doctype html>
         mcp: 'MCP',
         storage: 'Storage',
         tools: 'Tools',
+        'media-pool-history': 'Media Pool History',
       },
       docs: DOC_LABELS,
       preferences: {
         analysis: 'Analysis',
+        caps: 'Caps + Safety',
         metadata: 'Metadata And Markers',
         paths: 'Paths And Workflow',
         updates: 'MCP Updates',
@@ -5464,6 +6576,776 @@ HTML = r"""<!doctype html>
       return '';
     }
 
+    // ─── C6 timeline-history view ────────────────────────────────────────
+    state.history = state.history || { timelines: [], selectedTimeline: null, payload: null };
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function formatDelta(edit) {
+      const d = edit && edit.delta;
+      if (d === null || d === undefined) return '<span class="delta-zero">—</span>';
+      const cls = d > 0 ? 'delta-pos' : (d < 0 ? 'delta-neg' : 'delta-zero');
+      const sign = d > 0 ? '+' : '';
+      return `<span class="${cls}">${sign}${d}</span>`;
+    }
+
+    function formatVersionDate(iso) {
+      if (!iso) return '';
+      try { return new Date(iso).toLocaleString(); } catch (e) { return iso; }
+    }
+
+    async function refreshHistoryTimelines() {
+      const list = $('historyTimelineList');
+      if (list) list.innerHTML = '<div class="empty">Loading…</div>';
+      const data = await api('/api/timeline_versions').catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        if (list) list.innerHTML = `<div class="empty">Error: ${escapeHtml(data?.error || 'unknown')}</div>`;
+        return;
+      }
+      state.history.timelines = data.timelines || [];
+      renderHistoryTimelineList();
+      // Auto-select first timeline if nothing's selected yet.
+      if (!state.history.selectedTimeline && state.history.timelines.length > 0) {
+        await selectHistoryTimeline(state.history.timelines[0].timeline_name);
+      } else if (state.history.selectedTimeline) {
+        await loadHistoryDetail(state.history.selectedTimeline);
+      } else {
+        renderHistoryDetailEmpty();
+      }
+    }
+
+    function renderHistoryTimelineList() {
+      const list = $('historyTimelineList');
+      if (!list) return;
+      if (!state.history.timelines.length) {
+        list.innerHTML = '<div class="empty">No archived timelines yet. Make a destructive edit (or click Archive current).</div>';
+        return;
+      }
+      list.innerHTML = state.history.timelines.map(tl => {
+        const selected = tl.timeline_name === state.history.selectedTimeline ? ' is-selected' : '';
+        return `
+          <div class="history-timeline-row${selected}" data-tl-name="${escapeHtml(tl.timeline_name)}">
+            <span class="name" title="${escapeHtml(tl.timeline_name)}">${escapeHtml(tl.timeline_name)}</span>
+            <span class="count">v${tl.latest_version} · ${tl.version_count}×</span>
+          </div>`;
+      }).join('');
+      list.querySelectorAll('.history-timeline-row').forEach(row => {
+        row.addEventListener('click', () => {
+          selectHistoryTimeline(row.dataset.tlName).catch(alertError);
+        });
+      });
+    }
+
+    async function selectHistoryTimeline(timelineName) {
+      state.history.selectedTimeline = timelineName;
+      renderHistoryTimelineList();
+      await loadHistoryDetail(timelineName);
+    }
+
+    async function loadHistoryDetail(timelineName) {
+      const body = $('historyDetailBody');
+      const header = $('historyDetailHeader');
+      if (body) body.innerHTML = '<div class="empty">Loading…</div>';
+      if (header) header.innerHTML = `<span class="timeline-name">${escapeHtml(timelineName)}</span>`;
+      const data = await api(`/api/timeline_versions/${encodeURIComponent(timelineName)}`)
+        .catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        if (body) body.innerHTML = `<div class="empty">Error: ${escapeHtml(data?.error || 'unknown')}</div>`;
+        return;
+      }
+      state.history.payload = data;
+      renderHistoryDetail(data);
+    }
+
+    function renderHistoryDetailEmpty() {
+      const body = $('historyDetailBody');
+      const header = $('historyDetailHeader');
+      if (header) header.innerHTML = '<span class="empty">Select a timeline.</span>';
+      if (body) body.innerHTML = '';
+    }
+
+    function renderHistoryDetail(data) {
+      const body = $('historyDetailBody');
+      if (!body) return;
+      const versions = (data.versions || []).slice().reverse(); // newest first
+      const edits = data.edits || [];
+
+      // Bucket edits by archived_timeline_name (timeline_after for the version
+      // they produced). Edits with no matching archive are shown in an "Unbucketed
+      // edits" section at the bottom.
+      const editsByArchive = {};
+      const unbucketed = [];
+      edits.forEach(edit => {
+        const key = edit.timeline_after || edit.timeline_before;
+        if (key && versions.some(v => v.archived_timeline_name === key)) {
+          (editsByArchive[key] = editsByArchive[key] || []).push(edit);
+        } else {
+          unbucketed.push(edit);
+        }
+      });
+
+      const sections = [];
+      if (!versions.length) {
+        sections.push('<div class="empty">No archived versions yet.</div>');
+      }
+      versions.forEach(v => {
+        const versionEdits = editsByArchive[v.archived_timeline_name] || [];
+        const collapsed = v.drt_export_path
+          ? `<span class="drt-collapsed">retention-collapsed → ${escapeHtml(v.drt_export_path)}</span>`
+          : '';
+        const editsTable = versionEdits.length ? `
+          <table class="history-edits-table">
+            <thead>
+              <tr><th>Edit</th><th>Metric</th><th>Before</th><th>After</th><th>Δ</th><th>Rationale</th></tr>
+            </thead>
+            <tbody>
+              ${versionEdits.map(e => `
+                <tr>
+                  <td class="edit-type">${escapeHtml(e.edit_type || '')}</td>
+                  <td class="metric">${escapeHtml(e.target_metric || '—')}</td>
+                  <td>${e.before_value ?? '—'}</td>
+                  <td>${e.after_value ?? '—'}</td>
+                  <td>${formatDelta(e)}</td>
+                  <td>${escapeHtml(e.rationale || '')}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>` : '<div class="empty">No declared brain edits recorded.</div>';
+        const thumbUrl = v.thumbnail_path
+          ? `/api/timeline_thumbnail/${encodeURIComponent(v.thumbnail_path.split('/_soul/timeline_versions/').pop() || '')}`
+          : null;
+        const thumb = thumbUrl
+          ? `<div class="thumb"><img src="${thumbUrl}" alt="v${v.version} thumbnail" loading="lazy"></div>`
+          : `<div class="thumb">no thumbnail</div>`;
+        const diffOptions = versions
+          .filter(other => other.version !== v.version)
+          .map(other => `<option value="${other.version}">v${other.version}</option>`).join('');
+        sections.push(`
+          <div class="history-version-card">
+            ${thumb}
+            <div class="body">
+              <div class="version-row">
+                <span class="version-label">v${v.version}</span>
+                <select class="diff-against" data-diff-against-base="${v.version}" data-diff-timeline="${escapeHtml(data.timeline_name)}">
+                  <option value="">Diff against…</option>
+                  ${diffOptions}
+                </select>
+                <button class="history-rollback-btn" data-rollback-version="${v.version}" data-rollback-timeline="${escapeHtml(data.timeline_name)}">Rollback to v${v.version}</button>
+              </div>
+              <div class="archived-name">${escapeHtml(v.archived_timeline_name)} ${collapsed}</div>
+              <div class="timestamp">${escapeHtml(formatVersionDate(v.created_at))} · run=${escapeHtml(v.analysis_run_id || '—')}</div>
+              ${v.reason ? `<div class="reason">${escapeHtml(v.reason)}</div>` : ''}
+              ${editsTable}
+            </div>
+          </div>`);
+      });
+      if (unbucketed.length) {
+        sections.push(`
+          <div class="history-version-card">
+            <div class="version-label">Recent edits (no matching archive)</div>
+            <table class="history-edits-table">
+              <thead>
+                <tr><th>Edit</th><th>Metric</th><th>Before</th><th>After</th><th>Δ</th><th>Created</th></tr>
+              </thead>
+              <tbody>
+                ${unbucketed.map(e => `
+                  <tr>
+                    <td class="edit-type">${escapeHtml(e.edit_type || '')}</td>
+                    <td class="metric">${escapeHtml(e.target_metric || '—')}</td>
+                    <td>${e.before_value ?? '—'}</td>
+                    <td>${e.after_value ?? '—'}</td>
+                    <td>${formatDelta(e)}</td>
+                    <td>${escapeHtml(formatVersionDate(e.created_at))}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>`);
+      }
+      body.innerHTML = sections.join('');
+      body.querySelectorAll('.history-rollback-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const version = Number(btn.dataset.rollbackVersion);
+          const timelineName = btn.dataset.rollbackTimeline;
+          if (!confirm(`Rollback "${timelineName}" to v${version}? This archives the current state first, then duplicates the archived version back into the project.`)) return;
+          rollbackHistoryVersion(timelineName, version).catch(alertError);
+        });
+      });
+      body.querySelectorAll('select.diff-against').forEach(sel => {
+        sel.addEventListener('change', () => {
+          const against = Number(sel.value);
+          if (!against) return;
+          const base = Number(sel.dataset.diffAgainstBase);
+          const timeline = sel.dataset.diffTimeline;
+          const from = Math.min(base, against);
+          const to = Math.max(base, against);
+          showDiffBetween(timeline, from, to).catch(alertError);
+          sel.value = '';
+        });
+      });
+    }
+
+    async function rollbackHistoryVersion(timelineName, version) {
+      const data = await api('/api/timeline_versions/action', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'rollback', timeline_name: timelineName, version }),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        alert(`Rollback failed: ${data?.error || 'unknown'}`);
+        return;
+      }
+      alert(`Restored as "${data.restored_timeline_name}". Switch to it in Resolve to inspect.`);
+      await refreshHistoryTimelines();
+    }
+
+    async function archiveCurrentTimelineFromUI(reason) {
+      const data = await api('/api/timeline_versions/action', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'archive_current', reason: reason || undefined }),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        alert(`Archive failed: ${data?.error || 'unknown'}`);
+        return;
+      }
+      const reasonInput = $('historyArchiveReason');
+      if (reasonInput) reasonInput.value = '';
+      await refreshHistoryTimelines();
+    }
+
+    // ─── Run scoping controls ──────────────────────────────────────────
+    state.runScope = state.runScope || { current: null, recent: [] };
+
+    async function refreshRunScope() {
+      const data = await api('/api/runs').catch(() => ({ success: false }));
+      if (!data || !data.success) return;
+      state.runScope.current = data.current_run_id || null;
+      state.runScope.recent = data.runs || [];
+      const indicator = $('runScopeIndicator');
+      if (indicator) {
+        if (state.runScope.current) {
+          indicator.textContent = state.runScope.current;
+          indicator.classList.add('active');
+          indicator.classList.remove('none');
+        } else {
+          indicator.textContent = 'none';
+          indicator.classList.remove('active');
+          indicator.classList.add('none');
+        }
+      }
+      const recent = $('historyRecentRuns');
+      if (recent) {
+        if (!state.runScope.recent.length) {
+          recent.innerHTML = '<div class="empty">no runs yet</div>';
+        } else {
+          recent.innerHTML = state.runScope.recent.slice(0, 8).map(r => `
+            <div class="history-recent-run-row">
+              <div><strong>${escapeHtml(r.label || '(no label)')}</strong></div>
+              <div>${escapeHtml(r.id || '')}</div>
+              <div>${escapeHtml(r.ended_at ? 'ended ' + formatVersionDate(r.ended_at) : 'open')}</div>
+            </div>
+          `).join('');
+        }
+      }
+    }
+
+    async function beginRunFromUI() {
+      const label = ($('runScopeLabel')?.value || '').trim();
+      const data = await api('/api/runs/begin', {
+        method: 'POST',
+        body: JSON.stringify({ label: label || undefined }),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        alert(`Begin run failed: ${data?.error || 'unknown'}`);
+        return;
+      }
+      const labelInput = $('runScopeLabel');
+      if (labelInput) labelInput.value = '';
+      await refreshRunScope();
+    }
+
+    async function endRunFromUI() {
+      const data = await api('/api/runs/end', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        alert(`End run failed: ${data?.error || 'unknown'}`);
+        return;
+      }
+      await refreshRunScope();
+    }
+
+    // ─── Structural diff between versions ─────────────────────────────
+    async function showDiffBetween(timelineName, fromVersion, toVersion) {
+      const view = $('historyDiffView');
+      const body = $('historyDiffBody');
+      if (!view || !body) return;
+      view.hidden = false;
+      body.innerHTML = 'loading…';
+      const data = await api('/api/timeline_versions/action', {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'diff_versions', timeline_name: timelineName,
+          from_version: fromVersion, to_version: toVersion,
+        }),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        body.innerHTML = `<div class="empty">diff failed: ${escapeHtml(data?.error || 'unknown')}</div>`;
+        return;
+      }
+      const section = (kind, rows) => `
+        <div class="history-diff-section ${kind}">
+          <h4>${kind} (${rows.length})</h4>
+          ${rows.length
+            ? `<ul>${rows.slice(0, 30).map(r => `<li>${escapeHtml(r.media_pool_item_id)} @ ${escapeHtml(r.track_type)}:${r.track_index} [${r.in_frame}–${r.out_frame}]</li>`).join('')}</ul>`
+            : '<div class="empty">none</div>'}
+        </div>`;
+      body.innerHTML = `
+        <div>v${fromVersion} → v${toVersion}</div>
+        ${section('added', data.added || [])}
+        ${section('removed', data.removed || [])}
+        ${section('moved', data.moved || [])}
+      `;
+    }
+
+    // ─── Caps history chart ───────────────────────────────────────────
+    async function refreshCapsHistory() {
+      const el = $('capsHistoryChart');
+      if (!el) return;
+      const data = await api('/api/caps/history?days=30').catch(() => ({ success: false }));
+      if (!data || !data.success || !(data.history || []).length) {
+        el.innerHTML = '<div class="empty">no usage recorded yet</div>';
+        return;
+      }
+      const rows = (data.history || []).slice().reverse(); // oldest → newest
+      const maxV = Math.max(1, ...rows.map(r => r.vision_tokens || 0));
+      const w = 100, h = 90;
+      const points = rows.map((r, i) => {
+        const x = rows.length === 1 ? 0 : (i / (rows.length - 1)) * w;
+        const y = h - ((r.vision_tokens || 0) / maxV) * (h - 12);
+        return { x, y, value: r.vision_tokens, day: r.day_bucket };
+      });
+      const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+      el.innerHTML = `
+        <svg viewBox="0 0 ${w} ${h + 10}" preserveAspectRatio="none">
+          <line class="axis" x1="0" y1="${h}" x2="${w}" y2="${h}"></line>
+          <path class="line" d="${path}"></path>
+          ${points.map(p => `<circle class="point" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="1.4"><title>${p.day}: ${p.value}</title></circle>`).join('')}
+          <text class="label" x="0" y="${h + 9}">${rows[0].day_bucket}</text>
+          <text class="label" x="${w}" y="${h + 9}" text-anchor="end">${rows[rows.length - 1].day_bucket}</text>
+          <text class="label" x="0" y="9">max ${maxV}</text>
+        </svg>`;
+    }
+
+    // ─── Caps inspector + refusals + reset ──────────────────────────
+    async function inspectCapsFromUI() {
+      const clipId = ($('capsInspectClipId')?.value || '').trim();
+      const jobId = ($('capsInspectJobId')?.value || '').trim();
+      const out = $('capsInspectResult');
+      if (!out) return;
+      if (!clipId && !jobId) {
+        out.textContent = 'enter a clip_id or job_id';
+        out.classList.remove('has-data');
+        return;
+      }
+      const qs = new URLSearchParams();
+      if (clipId) qs.set('clip_id', clipId);
+      if (jobId) qs.set('job_id', jobId);
+      const data = await api(`/api/caps?${qs}`).catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        out.textContent = `lookup failed: ${data?.error || 'unknown'}`;
+        return;
+      }
+      const usage = data.usage || {};
+      out.classList.add('has-data');
+      out.textContent = JSON.stringify(usage, null, 2);
+    }
+
+    async function resetDayUsageFromUI() {
+      if (!confirm('Delete today\'s day-scope usage rows? This is for testing / circuit-breaker reset only.')) return;
+      const data = await api('/api/caps/reset_day', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        alert(`Reset failed: ${data?.error || 'unknown'}`);
+        return;
+      }
+      alert(`Deleted ${data.deleted} row(s) for ${data.day_bucket}.`);
+      await refreshCapsWidget();
+      await refreshCapsHistory();
+    }
+
+    async function refreshCapsRefusals() {
+      const el = $('capsRefusalsList');
+      if (!el) return;
+      const data = await api('/api/caps/refusals?limit=20').catch(() => ({ success: false }));
+      if (!data || !data.success || !(data.events || []).length) {
+        el.innerHTML = '<div class="empty">no refusals recorded</div>';
+        return;
+      }
+      el.innerHTML = (data.events || []).map(e => `
+        <div class="caps-refusal-row">
+          <span class="reason">${escapeHtml(e.reason || '?')}</span>
+          <span>clip=${escapeHtml(e.clip_id || '—')} job=${escapeHtml(e.job_id || '—')} est=${e.estimated_vision_tokens}</span>
+          <span class="when">${escapeHtml(formatVersionDate(e.occurred_at))}</span>
+        </div>
+      `).join('');
+    }
+
+    // ─── Updates page wiring ──────────────────────────────────────────
+    state.updates = state.updates || { restartTimer: null };
+
+    async function refreshUpdateStatus() {
+      const el = $('updateStatusBadge');
+      if (!el) return;
+      const data = await api('/api/update/status').catch(() => ({ success: false }));
+      if (!data || !data.success) { el.textContent = 'status unknown'; el.dataset.status = ''; return; }
+      el.dataset.status = data.status || '';
+      const cur = data.current_version || '?';
+      const latest = data.latest_version || '?';
+      el.textContent = data.status === 'update_available'
+        ? `update available: ${cur} → ${latest}`
+        : (data.status === 'up_to_date' ? `up to date (${cur})` : `${data.status || 'unknown'} — ${cur}`);
+    }
+
+    async function refreshUpdateHistory() {
+      const el = $('updateHistoryTable');
+      if (!el) return;
+      const data = await api('/api/update/history?limit=20').catch(() => ({ success: false }));
+      if (!data || !data.success || !(data.entries || []).length) {
+        el.innerHTML = '<div class="empty">no update history yet</div>';
+        return;
+      }
+      const header = `
+        <div class="update-history-row header">
+          <span>timestamp</span><span>kind</span><span>versions</span><span>reason / msg</span><span>integrity</span><span>by</span>
+        </div>`;
+      const rows = (data.entries || []).map(e => {
+        const v = (e.from_version || '?') + ' → ' + (e.to_version || '?');
+        const statusCls = e.success ? 'status-ok' : 'status-fail';
+        const reason = e.reason || (e.message || '').slice(0, 120);
+        const integ = (e.integrity || {}).verified;
+        const integHtml = integ === true
+          ? '<span class="integrity-ok">verified</span>'
+          : integ === false ? '<span class="integrity-bad">MISMATCH</span>'
+          : '<span class="integrity-unknown">—</span>';
+        return `
+          <div class="update-history-row">
+            <span class="${statusCls}">${escapeHtml(e.timestamp || '')}</span>
+            <span class="kind">${escapeHtml(e.kind || '')}</span>
+            <span>${escapeHtml(v)}</span>
+            <span title="${escapeHtml(reason)}">${escapeHtml(reason || '')}</span>
+            <span>${integHtml}</span>
+            <span>${escapeHtml(e.initiator || '')}</span>
+          </div>`;
+      }).join('');
+      el.innerHTML = header + rows;
+    }
+
+    async function previewUpdateFromUI() {
+      const result = $('updateActionResult');
+      if (result) result.textContent = 'fetching preview…';
+      const data = await api('/api/update/preview').catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        if (result) result.textContent = `preview failed: ${data?.error || 'unknown'}`;
+        return;
+      }
+      const breaking = (data.breaking_changes || []).length
+        ? `⚠️ Breaking changes:\n${(data.breaking_changes || []).map(b => '  - ' + b).join('\n')}\n\n`
+        : '';
+      const body = (data.release_notes || '').slice(0, 4000);
+      if (result) {
+        result.textContent = `current: ${data.current_version}  →  ${data.latest_version} (${data.channel}${data.prerelease ? ', prerelease' : ''})\n\n${breaking}${body}`;
+      }
+    }
+
+    async function applyUpdateFromUI() {
+      const stash = !!$('updateStashCheckbox')?.checked;
+      const force = !!$('updateForceJobsCheckbox')?.checked;
+      const result = $('updateActionResult');
+      if (result) result.textContent = 'applying…';
+      const data = await api('/api/update/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          strategy: stash ? 'stash_if_needed' : 'refuse_on_dirty',
+          force_active_jobs: force,
+        }),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (result) result.textContent = JSON.stringify(data, null, 2);
+      await refreshUpdateStatus();
+      await refreshUpdateHistory();
+      await refreshRestartBanner();
+    }
+
+    async function rollbackUpdateFromUI() {
+      if (!confirm('Rollback to the previous build? This runs git reset --hard to the prior SHA. Requires a clean working tree.')) return;
+      const result = $('updateActionResult');
+      if (result) result.textContent = 'rolling back…';
+      const data = await api('/api/update/rollback', {
+        method: 'POST', body: JSON.stringify({}),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (result) result.textContent = JSON.stringify(data, null, 2);
+      await refreshUpdateHistory();
+      await refreshUpdateStatus();
+    }
+
+    async function refreshRestartBanner() {
+      const banner = $('restartNeededBanner');
+      if (!banner) return;
+      const data = await api('/api/restart_needed').catch(() => ({ needed: false }));
+      if (data && data.needed) {
+        banner.hidden = false;
+        const detail = $('restartBannerDetail');
+        if (detail) {
+          detail.textContent = `from ${data.from_version || '?'} → ${data.to_version || '?'} at ${data.applied_at || ''}`;
+        }
+      } else {
+        banner.hidden = true;
+      }
+    }
+
+    async function ackRestart() {
+      const data = await api('/api/restart_needed/clear', {
+        method: 'POST', body: JSON.stringify({}),
+      }).catch(() => ({ success: false }));
+      await refreshRestartBanner();
+    }
+
+    async function setUpdateChannel(value) {
+      await api('/api/update/channel', {
+        method: 'POST',
+        body: JSON.stringify({ channel: value }),
+      }).catch(() => null);
+      await refreshUpdateStatus();
+    }
+
+    // ─── Media Pool History table (was: Provenance) ─────────────────
+    state.mpc = state.mpc || { allChanges: [], actions: new Set() };
+
+    function populateMpcActionFilter(actions) {
+      const sel = $('mpcActionFilter');
+      if (!sel) return;
+      const prev = sel.value;
+      const sorted = Array.from(actions).sort();
+      sel.innerHTML = '<option value="">all actions</option>' +
+        sorted.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('');
+      if (sorted.includes(prev)) sel.value = prev;
+    }
+
+    function renderMpcRows(rows) {
+      const el = $('mpcTable');
+      if (!el) return;
+      const meta = $('mpcMeta');
+      if (!rows.length) {
+        el.innerHTML = '<div class="empty">no media-pool changes recorded</div>';
+        if (meta) meta.textContent = '';
+        return;
+      }
+      const header = `
+        <div class="mpc-row header">
+          <span>timestamp</span><span>action</span><span>target</span><span>initiator</span><span>run id</span>
+        </div>`;
+      const groupBy = !!$('mpcGroupByClip')?.checked;
+      const renderRow = (c) => {
+        const ts = escapeHtml(formatVersionDate(c.created_at));
+        const action = escapeHtml(c.action || '');
+        const tname = c.target_name || '';
+        const tid = c.target_id || '';
+        const clipId = (c.params && (c.params.clip_id || c.params.id || c.params.target_id)) || null;
+        const targetCell = clipId
+          ? `<div class="target-cell"><a class="clip-link" data-clip-jump="${escapeHtml(clipId)}">${escapeHtml(tname || clipId)}</a><span class="target-id">${escapeHtml(tid || clipId)}</span></div>`
+          : `<div class="target-cell"><span class="target-name">${escapeHtml(tname || tid || '—')}</span>${tid && tname ? `<span class="target-id">${escapeHtml(tid)}</span>` : ''}</div>`;
+        return `
+          <div class="mpc-row">
+            <span>${ts}</span>
+            <span class="action-name">${action}</span>
+            ${targetCell}
+            <span>${escapeHtml(c.initiator || '')}</span>
+            <span class="run-id" title="${escapeHtml(c.analysis_run_id || '')}">${escapeHtml((c.analysis_run_id || '—').slice(0, 18))}</span>
+          </div>`;
+      };
+      let body = '';
+      if (groupBy) {
+        const groups = new Map();
+        for (const c of rows) {
+          const key = (c.target_name || c.target_id || '—');
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(c);
+        }
+        for (const [key, items] of groups) {
+          body += `<div class="mpc-row group"><span>${escapeHtml(key)}</span><span class="group-count">${items.length} change${items.length === 1 ? '' : 's'}</span></div>`;
+          body += items.map(renderRow).join('');
+        }
+      } else {
+        body = rows.map(renderRow).join('');
+      }
+      el.innerHTML = header + body;
+      if (meta) meta.textContent = `${rows.length} record${rows.length === 1 ? '' : 's'}`;
+    }
+
+    async function refreshMpcTable() {
+      const limit = parseInt(($('mpcLimit')?.value || '50'), 10) || 50;
+      const data = await api(`/api/media_pool_changes?limit=${limit}`).catch(() => ({ success: false }));
+      if (!data || !data.success) {
+        renderMpcRows([]);
+        return;
+      }
+      const changes = data.changes || [];
+      state.mpc.allChanges = changes;
+      const actions = new Set(changes.map(c => c.action).filter(Boolean));
+      state.mpc.actions = actions;
+      populateMpcActionFilter(actions);
+      applyMpcFilter();
+    }
+
+    function applyMpcFilter() {
+      const filter = ($('mpcActionFilter')?.value || '').trim();
+      const rows = filter
+        ? state.mpc.allChanges.filter(c => c.action === filter)
+        : state.mpc.allChanges;
+      renderMpcRows(rows);
+    }
+
+    // ─── Analysis caps widget ────────────────────────────────────────────
+    state.caps = state.caps || { preset: 'standard', usage: null, debounce: null, presetsAvailable: null };
+
+    const CAPS_OVERRIDE_FIELDS = [
+      ['capsOvResponseChars', 'response_chars'],
+      ['capsOvVisionClip', 'vision_tokens_per_clip'],
+      ['capsOvFramesClip', 'frames_per_clip'],
+      ['capsOvVisionJob', 'vision_tokens_per_job'],
+      ['capsOvVisionDay', 'vision_tokens_per_day'],
+      ['capsOvWallClock', 'wall_clock_seconds_per_call'],
+      ['capsOvFrameDim', 'max_frame_dim_pixels'],
+    ];
+
+    const CAPS_PRESET_TAGS = {
+      minimal: 'Preview / triage',
+      standard: 'Realistic default',
+      generous: 'High-fidelity, few clips',
+      unlimited: 'Guards off — use with care',
+    };
+
+    const CAPS_PRESET_STAT_ORDER = [
+      ['response_chars', 'response chars'],
+      ['vision_tokens_per_clip', 'tokens / clip'],
+      ['frames_per_clip', 'frames / clip'],
+      ['vision_tokens_per_job', 'tokens / job'],
+      ['vision_tokens_per_day', 'tokens / day'],
+      ['wall_clock_seconds_per_call', 'wall clock (s)'],
+      ['max_frame_dim_pixels', 'frame dim px'],
+    ];
+
+    function formatCapValue(v) {
+      if (v === null || v === undefined) return '∞';
+      if (typeof v === 'number') {
+        if (v >= 1000) return (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1).replace(/\.0$/, '') + 'k';
+        return String(v);
+      }
+      return String(v);
+    }
+
+    function renderCapsPresetCards() {
+      const container = $('capsPresetCards');
+      if (!container) return;
+      const presets = state.caps.presetsAvailable || {};
+      const order = ['minimal', 'standard', 'generous', 'unlimited'];
+      const active = state.caps.preset || 'standard';
+      container.innerHTML = order.filter(k => presets[k]).map(key => {
+        const p = presets[key];
+        const stats = CAPS_PRESET_STAT_ORDER.map(([field, label]) => `
+          <span class="stat-label">${escapeHtml(label)}</span>
+          <span class="stat-value">${escapeHtml(formatCapValue(p[field]))}</span>
+        `).join('');
+        return `
+          <button type="button" class="caps-preset-card${key === active ? ' is-active' : ''}" data-preset-card="${escapeHtml(key)}" role="radio" aria-checked="${key === active ? 'true' : 'false'}">
+            <div class="caps-preset-card-head">
+              <span class="caps-preset-card-name">${escapeHtml(key)}</span>
+              ${key === active ? '<span class="caps-preset-card-badge">Active</span>' : ''}
+            </div>
+            <div class="caps-preset-card-tag">${escapeHtml(CAPS_PRESET_TAGS[key] || '')}</div>
+            <div class="caps-preset-card-stats">${stats}</div>
+          </button>
+        `;
+      }).join('');
+    }
+
+    function applyCapsOverridePlaceholders(presetKey) {
+      const presets = state.caps.presetsAvailable || {};
+      const p = presets[presetKey] || presets[state.caps.preset] || {};
+      for (const [domId, key] of CAPS_OVERRIDE_FIELDS) {
+        const el = $(domId);
+        if (!el) continue;
+        const val = p[key];
+        el.placeholder = (val === null || val === undefined) ? '∞' : `${presetKey}: ${val}`;
+      }
+    }
+
+    async function refreshCapsWidget() {
+      const data = await api('/api/caps').catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) return;
+      state.caps.preset = data.preset;
+      state.caps.usage = data.usage || null;
+      state.caps.presetsAvailable = data.presets_available || state.caps.presetsAvailable;
+      const presetEl = $('prefCapsPreset');
+      if (presetEl) presetEl.value = data.preset;
+      renderCapsPresetCards();
+      applyCapsOverridePlaceholders(data.preset);
+      // Render usage gauges (only if a project is open, otherwise the usage
+      // block stays at its placeholder).
+      const usage = data.usage;
+      if (usage) {
+        renderCapsGauge('clip', usage.usage?.clip?.vision_tokens, usage.caps?.vision_tokens_per_clip, usage.percent_consumed?.clip);
+        renderCapsGauge('job', usage.usage?.job?.vision_tokens, usage.caps?.vision_tokens_per_job, usage.percent_consumed?.job);
+        renderCapsGauge('day', usage.usage?.day?.vision_tokens, usage.caps?.vision_tokens_per_day, usage.percent_consumed?.day);
+      }
+    }
+
+    function renderCapsGauge(scope, used, cap, percent) {
+      const gauge = document.querySelector(`.caps-gauge[data-scope="${scope}"]`);
+      if (!gauge) return;
+      const fill = gauge.querySelector('.caps-gauge-fill');
+      const numbers = gauge.querySelector('.caps-gauge-numbers');
+      const u = used ?? 0;
+      if (cap === null || cap === undefined) {
+        fill.style.width = '0%';
+        numbers.textContent = `${formatCapValue(u)} / ∞`;
+        gauge.dataset.state = '';
+        return;
+      }
+      const p = percent != null ? percent : (cap > 0 ? Math.min(100, 100 * u / cap) : 0);
+      fill.style.width = `${p}%`;
+      numbers.textContent = `${formatCapValue(u)} / ${formatCapValue(cap)}  ·  ${p.toFixed(0)}%`;
+      gauge.dataset.state = p >= 90 ? 'over' : (p >= 70 ? 'warn' : '');
+    }
+
+    function persistCapsFromUI() {
+      const presetEl = $('prefCapsPreset');
+      const preset = (presetEl && presetEl.value) || 'standard';
+      const overrides = {};
+      for (const [domId, key] of CAPS_OVERRIDE_FIELDS) {
+        const el = $(domId);
+        if (!el) continue;
+        const raw = (el.value || '').trim();
+        if (!raw) continue;
+        overrides[key] = raw === 'unlimited' ? null : (Number.isFinite(+raw) ? +raw : raw);
+      }
+      clearTimeout(state.caps.debounce);
+      state.caps.debounce = setTimeout(async () => {
+        const result = await api('/api/caps', {
+          method: 'POST',
+          body: JSON.stringify({ preset, overrides }),
+        }).catch(err => ({ success: false, error: String(err) }));
+        if (!result || !result.success) {
+          console.warn('caps save failed:', result?.error);
+        }
+        await refreshCapsWidget();
+      }, 300);
+    }
+
     function reviewSetView(view, opts = {}) {
       state.review.view = view;
       $('reviewBinView').style.display = view === 'bin' ? '' : 'none';
@@ -5473,6 +7355,8 @@ HTML = r"""<!doctype html>
       if (transcriptEl) transcriptEl.style.display = view === 'transcript' ? '' : 'none';
       const combinedEl = $('reviewCombinedView');
       if (combinedEl) combinedEl.style.display = view === 'combined' ? '' : 'none';
+      const historyEl = $('reviewHistoryView');
+      if (historyEl) historyEl.style.display = view === 'history' ? '' : 'none';
       const back = $('reviewBackBtn');
       if (back) back.style.display = view === 'bin' ? 'none' : '';
       const meta = $('reviewMeta');
@@ -5482,6 +7366,7 @@ HTML = r"""<!doctype html>
         else if (view === 'shot') meta.textContent = `Shot ${state.review.currentShotIndex} of ${state.review.currentClipData?.card?.clip_name || 'clip'}`;
         else if (view === 'transcript') meta.textContent = `Transcript · ${state.review.currentClipData?.card?.clip_name || 'clip'}`;
         else if (view === 'combined') meta.textContent = `Combined review · ${state.review.combinedData?.clip_count || '?'} clips`;
+        else if (view === 'history') meta.textContent = 'Timeline history · versions and brain edits per timeline (C6)';
       }
       if (opts.writePanelState !== false) {
         writePanelStateAsync({
@@ -5500,7 +7385,62 @@ HTML = r"""<!doctype html>
       state.review.clipList = data;
       populateBinFilter();
       renderReviewBin();
+      // Coverage runs in parallel — failures here must not block the clip grid.
+      refreshReadinessCard().catch(() => {});
     }
+
+    async function refreshReadinessCard() {
+      const card = $('reviewReadinessCard');
+      if (!card) return;
+      const data = await api('/api/coverage').catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        card.hidden = true;
+        return;
+      }
+      card.hidden = false;
+      const summary = data.summary || {};
+      const evidence = $('readinessEvidenceBase');
+      const row = $('readinessSummaryRow');
+      const details = $('readinessDetails');
+      const total = summary.clips_total_with_reports || 0;
+      const signed = summary.clips_signed || 0;
+      const superseded = summary.clips_superseded_by_relink || 0;
+      const visionPending = summary.clips_vision_pending || 0;
+      const warnings = summary.technical_warning_count || 0;
+      const pct = total ? Math.round((signed / total) * 100) : 0;
+      const trustDist = summary.source_trust_distribution || {};
+      const layers = summary.layer_coverage || {};
+      const fragments = [`${signed}/${total} clips analyzed (${pct}%)`];
+      if (superseded) fragments.push(`${superseded} relink-superseded`);
+      if (visionPending) fragments.push(`${visionPending} vision pending`);
+      if (warnings) fragments.push(`${warnings} warnings`);
+      if (evidence) evidence.textContent = 'evidence base: ' + fragments.join(', ') + '.';
+      if (row) {
+        row.innerHTML = [
+          { label: 'Analyzed', value: signed, kind: 'good' },
+          { label: 'Superseded', value: superseded, kind: superseded ? 'danger' : '' },
+          { label: 'Vision pending', value: visionPending, kind: visionPending ? 'warn' : '' },
+          { label: 'Warnings', value: warnings, kind: warnings ? 'warn' : '' },
+        ].map(stat => `<div class="readiness-stat ${stat.kind}"><span class="stat-value">${stat.value}</span><span class="stat-label">${escapeHtml(stat.label)}</span></div>`).join('');
+      }
+      if (details) {
+        const trustChips = Object.entries(trustDist)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `<span class="chip" title="source_trust">${escapeHtml(k)}: ${v}</span>`)
+          .join('');
+        const layerChips = ['technical', 'motion', 'transcription', 'vision', 'cut_analysis', 'readthrough']
+          .map(layer => `<span class="chip" title="layer present count">${escapeHtml(layer)}: ${layers[layer] || 0}</span>`)
+          .join('');
+        details.innerHTML = `<span class="chip" style="background:none">source_trust:</span>${trustChips}<span class="chip" style="background:none">layers:</span>${layerChips}`;
+      }
+    }
+
+    document.addEventListener('click', (e) => {
+      const target = e.target;
+      if (target && target.id === 'readinessRefreshBtn') {
+        refreshReadinessCard().catch(() => {});
+      }
+    });
 
     function populateBinFilter() {
       const data = state.review.clipList;
@@ -7791,6 +9731,109 @@ HTML = r"""<!doctype html>
       if (state.review && state.review.panelStateTimer) clearInterval(state.review.panelStateTimer);
     });
     $('reviewRefreshBtn').onclick = () => refreshReviewBin().catch(alertError);
+    const historyBtnEl = $('reviewHistoryBtn');
+    if (historyBtnEl) {
+      historyBtnEl.onclick = () => {
+        reviewSetView('history');
+        refreshHistoryTimelines().catch(alertError);
+      };
+    }
+    const historyRefreshEl = $('historyRefreshBtn');
+    if (historyRefreshEl) {
+      historyRefreshEl.onclick = () => refreshHistoryTimelines().catch(alertError);
+    }
+    const historyArchiveBtnEl = $('historyArchiveCurrentBtn');
+    if (historyArchiveBtnEl) {
+      historyArchiveBtnEl.onclick = () => {
+        const reason = ($('historyArchiveReason')?.value || '').trim();
+        archiveCurrentTimelineFromUI(reason).catch(alertError);
+      };
+    }
+    // Caps widget bootstrap + listeners
+    const capsPresetCardsEl = $('capsPresetCards');
+    if (capsPresetCardsEl) {
+      capsPresetCardsEl.addEventListener('click', (ev) => {
+        const card = ev.target.closest('[data-preset-card]');
+        if (!card) return;
+        const preset = card.dataset.presetCard;
+        if (!preset) return;
+        const hidden = $('prefCapsPreset');
+        if (hidden) hidden.value = preset;
+        state.caps.preset = preset;
+        // Optimistic UI: re-render cards + override placeholders immediately.
+        renderCapsPresetCards();
+        applyCapsOverridePlaceholders(preset);
+        persistCapsFromUI();
+      });
+    }
+    for (const [domId] of CAPS_OVERRIDE_FIELDS) {
+      const el = $(domId);
+      if (el) el.addEventListener('input', persistCapsFromUI);
+    }
+    refreshCapsWidget().catch(() => {});
+    refreshCapsHistory().catch(() => {});
+    refreshCapsRefusals().catch(() => {});
+
+    // Caps inspector + reset
+    $('capsInspectBtn')?.addEventListener('click', () => inspectCapsFromUI().catch(alertError));
+    $('capsResetDayBtn')?.addEventListener('click', () => resetDayUsageFromUI().catch(alertError));
+
+    // Run scoping bar
+    $('runBeginBtn')?.addEventListener('click', () => beginRunFromUI().catch(alertError));
+    $('runEndBtn')?.addEventListener('click', () => endRunFromUI().catch(alertError));
+    refreshRunScope().catch(() => {});
+
+    // History diff close
+    $('historyDiffCloseBtn')?.addEventListener('click', () => {
+      const view = $('historyDiffView');
+      if (view) view.hidden = true;
+    });
+
+    // Updates page wiring
+    $('updatePreviewBtn')?.addEventListener('click', () => previewUpdateFromUI().catch(alertError));
+    $('updateApplyBtn')?.addEventListener('click', () => applyUpdateFromUI().catch(alertError));
+    $('updateRollbackBtn')?.addEventListener('click', () => rollbackUpdateFromUI().catch(alertError));
+    $('prefUpdateChannel')?.addEventListener('change', e => setUpdateChannel(e.target.value).catch(() => {}));
+    $('restartBannerAck')?.addEventListener('click', () => ackRestart().catch(() => {}));
+    refreshUpdateStatus().catch(() => {});
+    refreshUpdateHistory().catch(() => {});
+    refreshRestartBanner().catch(() => {});
+    // Poll for restart marker every 30s
+    if (state.updates.restartTimer) clearInterval(state.updates.restartTimer);
+    state.updates.restartTimer = setInterval(() => refreshRestartBanner().catch(() => {}), 30000);
+
+    // Auto-save preference (server-side preference; reads via /api/setup/defaults)
+    $('prefAutoSaveAfterArchive')?.addEventListener('change', async e => {
+      const data = await api('/api/setup/defaults', {
+        method: 'POST',
+        body: JSON.stringify({ timeline_versioning_auto_save_after_archive: !!e.target.checked }),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        alert(`Save failed: ${data?.error || 'unknown'}`);
+      }
+    });
+
+    // Media Pool History (Diagnostics)
+    $('mpcRefreshBtn')?.addEventListener('click', () => refreshMpcTable().catch(alertError));
+    $('mpcLimit')?.addEventListener('change', () => refreshMpcTable().catch(alertError));
+    $('mpcActionFilter')?.addEventListener('change', () => applyMpcFilter());
+    $('mpcGroupByClip')?.addEventListener('change', () => applyMpcFilter());
+    $('mpcTable')?.addEventListener('click', (ev) => {
+      const link = ev.target.closest('[data-clip-jump]');
+      if (!link) return;
+      ev.preventDefault();
+      const clipId = link.dataset.clipJump;
+      if (!clipId) return;
+      try {
+        setPanel('analysis', { subpage: 'review' });
+        if (typeof openClipDetail === 'function') {
+          openClipDetail(clipId).catch(err => console.warn('clip-jump failed', err));
+        }
+      } catch (err) {
+        console.warn('clip-jump failed', err);
+      }
+    });
+    refreshMpcTable().catch(() => {});
     $('reviewBackBtn').onclick = () => {
       if (state.review.view === 'shot') {
         state.review.currentShotIndex = null;
@@ -7814,6 +9857,8 @@ HTML = r"""<!doctype html>
       } else if (state.review.view === 'clip') {
         state.review.currentClipId = null;
         state.review.currentClipData = null;
+        reviewSetView('bin');
+      } else if (state.review.view === 'history') {
         reviewSetView('bin');
       }
     };
@@ -10007,6 +12052,68 @@ def _v2_open_clip_in_resolve(body: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+# ─── C6: timeline version chain + brain-edit history helpers ─────────────────
+
+
+def list_timelines_with_versions(project_root: str) -> Dict[str, Any]:
+    """Every timeline that has at least one archived version, with counts."""
+    try:
+        conn = _timeline_brain_db.connect(project_root)
+    except Exception as exc:
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}", "timelines": []}
+    rows = conn.execute(
+        """
+        SELECT timeline_name,
+               COUNT(*) AS version_count,
+               MAX(version) AS latest_version,
+               MAX(created_at) AS most_recent
+        FROM timeline_versions
+        GROUP BY timeline_name
+        ORDER BY most_recent DESC NULLS LAST
+        """
+    ).fetchall()
+    return {
+        "success": True,
+        "timelines": [dict(r) for r in rows],
+    }
+
+
+def get_timeline_history_payload(
+    project_root: str, timeline_name: str, *, history_limit: int = 200,
+) -> Dict[str, Any]:
+    """Combined payload: version chain + brain edits for a single timeline."""
+    versions = _timeline_versioning.list_timeline_versions(
+        project_root=project_root, timeline_name=timeline_name,
+    )
+    edits = _brain_edits.get_brain_edit_history(
+        project_root=project_root, timeline_name=timeline_name, limit=history_limit,
+    )
+    return {
+        "success": True,
+        "timeline_name": timeline_name,
+        "versions": versions,
+        "edits": edits,
+    }
+
+
+def proxy_timeline_versioning_action(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Bridge dashboard → MCP server timeline_versioning tool.
+
+    Body shape: {action, ...params}. Used for write actions (archive, rollback,
+    prune) that need a live Resolve connection.
+    """
+    action = (body.get("action") or "").strip()
+    if not action:
+        return {"success": False, "error": "action required"}
+    try:
+        from src.server import timeline_versioning as _tv_tool
+        params = {k: v for k, v in body.items() if k != "action"}
+        return _tv_tool(action, params=params)
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+
 def _v2_enrich_search_results(project_root: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Augment /api/index/query results with fps, shot_index, and a thumbnail frame.
 
@@ -10491,17 +12598,62 @@ def _mcp_uninstall_payload(client_id: str) -> Dict[str, Any]:
     return {"success": True, "message": f"Removed davinci-resolve from {config_path}", "client_id": client_id}
 
 
-def _update_apply_payload() -> Dict[str, Any]:
+def _list_active_batch_jobs(project_root: str) -> List[Dict[str, Any]]:
+    """Across the analysis base root, find batch jobs with status='running'.
+
+    Used by the update apply path: refuse to update mid-job because it would
+    corrupt in-flight clip analysis state (the new build's schema may not match
+    what the running batch was started against).
+    """
+    out: List[Dict[str, Any]] = []
+    if not project_root:
+        return out
+    base = os.path.dirname(os.path.normpath(project_root))
+    if not os.path.isdir(base):
+        return out
+    for entry in sorted(os.listdir(base)):
+        candidate = os.path.join(base, entry)
+        if not os.path.isdir(candidate):
+            continue
+        try:
+            payload = list_batch_jobs(candidate, limit=200)
+        except Exception:
+            continue
+        for job in payload.get("jobs") or []:
+            if (job.get("status") or "").lower() == "running":
+                out.append({
+                    "project_root": candidate,
+                    "job_id": job.get("job_id"),
+                    "status": job.get("status"),
+                    "started_at": job.get("started_at"),
+                })
+    return out
+
+
+def _update_apply_payload(*, strategy: str = "refuse_on_dirty", force_active_jobs: bool = False,
+                          project_root: Optional[str] = None) -> Dict[str, Any]:
     """Apply a guarded git fast-forward update by delegating to install.py's
     existing apply_safe_self_update. Returns a structured result for the UI.
     """
+    # Active-job lock — refuse to update if a batch analysis job is mid-flight.
+    # Pass force_active_jobs=true to override (the user explicitly accepts the
+    # risk of in-flight state being inconsistent with the new build).
+    if not force_active_jobs and project_root:
+        active = _list_active_batch_jobs(project_root)
+        if active:
+            return {
+                "success": False,
+                "reason": "active_jobs",
+                "message": f"{len(active)} batch analysis job(s) are currently running. Cancel them or pass force=true to override.",
+                "active_jobs": active,
+            }
     try:
         sys.path.insert(0, _repo_root())
         from install import apply_safe_self_update  # type: ignore
     except Exception as exc:
         return {"success": False, "error": f"update helper unavailable: {exc}"}
     try:
-        result = apply_safe_self_update(_repo_root(), dry_run=False)
+        result = apply_safe_self_update(_repo_root(), dry_run=False, initiator="dashboard", strategy=strategy)
     except Exception as exc:
         return {"success": False, "error": str(exc)}
     out: Dict[str, Any] = {
@@ -10510,10 +12662,146 @@ def _update_apply_payload() -> Dict[str, Any]:
         "reason": result.get("reason"),
         "message": result.get("message"),
         "current_version": _mcp_version(),
+        "from_version": result.get("from_version"),
+        "to_version": result.get("to_version"),
+        "from_sha": result.get("from_sha"),
+        "to_sha": result.get("to_sha"),
     }
     if result.get("success") and result.get("changed"):
         out["restart_required"] = True
+        # Eagerly migrate per-project DBs so schema bumps in the new build
+        # surface immediately instead of waiting for the next analysis call.
+        out["db_migrations"] = _eager_migrate_after_update(project_root)
+        # Drop a restart-needed marker the host / dashboard can poll for.
+        _write_restart_marker(_repo_root(), result)
+    # Surface stash status on the result.
+    for k in ("stash_ref", "stash_pop_conflict", "remediation"):
+        if k in result and result[k] is not None:
+            out[k] = result[k]
     return out
+
+
+def _write_restart_marker(repo_root: str, update_result: Dict[str, Any]) -> None:
+    """Drop a `.mcp_restart_needed` marker file with update metadata.
+
+    The MCP server is a child process of the host (Claude Code, etc.) so we
+    can't restart it ourselves. The marker is a hint the host can poll via
+    `/api/restart_needed` or by reading the file directly.
+    """
+    log_dir = os.path.join(repo_root, "logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        marker = {
+            "needed": True,
+            "from_version": update_result.get("from_version"),
+            "to_version": update_result.get("to_version"),
+            "from_sha": update_result.get("from_sha"),
+            "to_sha": update_result.get("to_sha"),
+            "applied_at": _now_iso_safe(),
+        }
+        with open(os.path.join(log_dir, ".mcp_restart_needed"), "w", encoding="utf-8") as fh:
+            json.dump(marker, fh, indent=2)
+    except OSError:
+        pass
+
+
+def _now_iso_safe() -> str:
+    import time as _time
+    return _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+
+
+def _read_restart_marker(repo_root: str) -> Dict[str, Any]:
+    path = os.path.join(repo_root, "logs", ".mcp_restart_needed")
+    if not os.path.isfile(path):
+        return {"needed": False}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        if isinstance(payload, dict):
+            payload.setdefault("needed", True)
+            return payload
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"needed": True, "marker_path": path}
+
+
+def _clear_restart_marker(repo_root: str) -> Dict[str, Any]:
+    path = os.path.join(repo_root, "logs", ".mcp_restart_needed")
+    try:
+        os.remove(path)
+    except OSError:
+        return {"success": False, "error": "marker not present or unreadable"}
+    return {"success": True}
+
+
+def _eager_migrate_after_update(project_root: Optional[str] = None) -> Dict[str, Any]:
+    """Walk every project under the analysis base root and open + migrate its
+    timeline_brain.sqlite. Surfaces schema bumps from the new build right after
+    `git pull` instead of on next per-project work."""
+    if project_root:
+        base = os.path.dirname(os.path.normpath(project_root))
+    else:
+        base = os.path.expanduser("~/Documents/davinci-resolve-mcp-analysis")
+    migrated: List[Dict[str, Any]] = []
+    if not os.path.isdir(base):
+        return {"success": True, "migrated": migrated, "note": "no base root found"}
+    for entry in sorted(os.listdir(base)):
+        candidate = os.path.join(base, entry)
+        if not os.path.isdir(os.path.join(candidate, "_soul")):
+            continue
+        try:
+            _timeline_brain_db.connect(candidate)
+            migrated.append({"project_root": candidate, "ok": True})
+        except Exception as exc:
+            migrated.append({"project_root": candidate, "ok": False, "error": str(exc)})
+    return {"success": True, "migrated": migrated}
+
+
+def _update_rollback_payload() -> Dict[str, Any]:
+    try:
+        sys.path.insert(0, _repo_root())
+        from install import rollback_to_previous_build  # type: ignore
+    except Exception as exc:
+        return {"success": False, "error": f"rollback helper unavailable: {exc}"}
+    try:
+        result = rollback_to_previous_build(_repo_root(), initiator="dashboard")
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    out: Dict[str, Any] = dict(result)
+    out["current_version"] = _mcp_version()
+    if result.get("success"):
+        out["restart_required"] = True
+    return out
+
+
+def _update_history_payload(limit: int = 20) -> Dict[str, Any]:
+    try:
+        sys.path.insert(0, _repo_root())
+        from install import read_update_history  # type: ignore
+    except Exception as exc:
+        return {"success": False, "error": f"history helper unavailable: {exc}", "entries": []}
+    try:
+        return read_update_history(_repo_root(), limit=limit)
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "entries": []}
+
+
+def _update_preview_payload() -> Dict[str, Any]:
+    """Render the about-to-apply update for user confirmation.
+
+    Returns release notes, flagged breaking changes, channel, prerelease flag,
+    and the target SHA so the dashboard can show a meaningful modal before
+    `git pull` actually runs.
+    """
+    try:
+        sys.path.insert(0, _repo_root())
+        from install import preview_update  # type: ignore
+    except Exception as exc:
+        return {"success": False, "error": f"preview helper unavailable: {exc}"}
+    try:
+        return preview_update(_repo_root())
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
 def _update_status_payload(project_root: Optional[str], *, force: bool = False) -> Dict[str, Any]:
@@ -10706,6 +12994,19 @@ class Handler(BaseHTTPRequestHandler):
             force = (query.get("force") or ["0"])[0].lower() in {"1", "true", "yes"}
             self._json(_update_status_payload(self.state.project_root, force=force))
             return
+        if path == "/api/update/history":
+            try:
+                limit = int((query.get("limit") or ["20"])[0])
+            except (TypeError, ValueError):
+                limit = 20
+            self._json(_update_history_payload(limit=limit))
+            return
+        if path == "/api/restart_needed":
+            self._json(_read_restart_marker(_repo_root()))
+            return
+        if path == "/api/update/preview":
+            self._json(_update_preview_payload())
+            return
         if path == "/api/mcp/status":
             self._json(_mcp_status_payload())
             return
@@ -10742,12 +13043,117 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/index/status":
             self._json(analysis_index_status(self.state.project_root))
             return
+        if path == "/api/coverage":
+            # Standalone readiness rollup — no live Resolve required. The
+            # `coverage_report` action gives target-vs-records detail; this
+            # endpoint summarizes what the analysis directory already knows.
+            self._json(analysis_root_coverage(self.state.project_root))
+            return
         if path == "/api/index/query":
             q = (query.get("q") or [""])[0]
             payload = query_analysis_index(self.state.project_root, q, limit=(query.get("limit") or [20])[0])
             if payload.get("success") and payload.get("results"):
                 payload["results"] = _v2_enrich_search_results(self.state.project_root, payload["results"])
             self._json(payload)
+            return
+        # ─── C6 timeline-history surface ───────────────────────────────
+        if path == "/api/timeline_versions":
+            self._json(list_timelines_with_versions(self.state.project_root))
+            return
+        if path.startswith("/api/timeline_versions/"):
+            timeline_name = unquote(path[len("/api/timeline_versions/"):])
+            if not timeline_name:
+                self._json({"success": False, "error": "timeline_name required"}, HTTPStatus.BAD_REQUEST)
+                return
+            self._json(get_timeline_history_payload(self.state.project_root, timeline_name))
+            return
+        if path == "/api/brain_edits/registry":
+            self._json({"success": True, **_brain_edits.read_brain_edits_registry(self.state.project_root)})
+            return
+        if path == "/api/caps/history":
+            try:
+                from src.utils import analysis_caps as _ac
+                days = int((query.get("days") or ["30"])[0])
+                self._json({
+                    "success": True,
+                    "history": _ac.get_usage_history(project_root=self.state.project_root, days=days),
+                })
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/caps/refusals":
+            try:
+                from src.utils import analysis_caps as _ac
+                limit = int((query.get("limit") or ["20"])[0])
+                self._json({
+                    "success": True,
+                    "events": _ac.get_caps_events(
+                        project_root=self.state.project_root,
+                        event_type=(query.get("event_type") or ["refusal"])[0] or "refusal",
+                        limit=limit,
+                    ),
+                })
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/media_pool_changes":
+            try:
+                from src.utils import media_pool_changes as _mpc
+                limit = int((query.get("limit") or ["50"])[0])
+                self._json({
+                    "success": True,
+                    "changes": _mpc.get_media_pool_change_history(
+                        project_root=self.state.project_root, limit=limit,
+                    ),
+                })
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/runs":
+            try:
+                from src.utils import analysis_runs as _ar
+                limit = int((query.get("limit") or ["50"])[0])
+                self._json({
+                    "success": True,
+                    "runs": _ar.list_runs(project_root=self.state.project_root, limit=limit),
+                    "current_run_id": _ar.current_run_id(),
+                })
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/caps":
+            # Effective caps + per-project usage rollup. Proxies into the
+            # media_analysis tool's get_caps action which already does the
+            # preference lookup + DB rollup.
+            try:
+                from src.server import media_analysis as _ma_tool
+                import asyncio
+                result = asyncio.run(_ma_tool("get_caps", params={}))
+                self._json(result)
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path.startswith("/api/timeline_thumbnail/"):
+            rel = unquote(path[len("/api/timeline_thumbnail/"):])
+            # Path is <slug>/<vNN.png>; constrain it to live under _soul/timeline_versions
+            base = os.path.join(self.state.project_root, "_soul", "timeline_versions")
+            full = os.path.realpath(os.path.join(base, rel))
+            if not full.startswith(os.path.realpath(base) + os.sep) and full != os.path.realpath(base):
+                self._json({"success": False, "error": "path escape"}, HTTPStatus.FORBIDDEN)
+                return
+            if not os.path.isfile(full):
+                self._json({"success": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
+                return
+            try:
+                with open(full, "rb") as fh:
+                    data = fh.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except OSError as exc:
+                self._json({"success": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         # ─── V2 Review API ──────────────────────────────────────────────
         if path == "/api/clips":
@@ -10818,7 +13224,27 @@ class Handler(BaseHTTPRequestHandler):
             if not _request_is_loopback(self):
                 self._json({"success": False, "error": "Self-update is only available to loopback clients."}, HTTPStatus.FORBIDDEN)
                 return
-            self._json(_update_apply_payload())
+            strategy = (body.get("strategy") or "refuse_on_dirty").strip().lower()
+            if strategy not in {"refuse_on_dirty", "stash_if_needed"}:
+                strategy = "refuse_on_dirty"
+            force_active_jobs = bool(body.get("force_active_jobs") or body.get("force"))
+            self._json(_update_apply_payload(
+                strategy=strategy,
+                force_active_jobs=force_active_jobs,
+                project_root=self.state.project_root,
+            ))
+            return
+        if path == "/api/restart_needed/clear":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Loopback only."}, HTTPStatus.FORBIDDEN)
+                return
+            self._json(_clear_restart_marker(_repo_root()))
+            return
+        if path == "/api/update/rollback":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Rollback is only available to loopback clients."}, HTTPStatus.FORBIDDEN)
+                return
+            self._json(_update_rollback_payload())
             return
         if path.startswith("/api/clips/") and path.endswith("/transcript/regenerate"):
             if not _request_is_loopback(self):
@@ -10920,6 +13346,80 @@ class Handler(BaseHTTPRequestHandler):
             with self.state.lock:
                 payload = self.state.set_context(body)
             self._json(payload, 200 if payload.get("success") else 400)
+            return
+        # ─── C6 timeline-history write actions (loopback only) ─────────
+        if path == "/api/timeline_versions/action":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Timeline versioning writes are loopback-only."}, HTTPStatus.FORBIDDEN)
+                return
+            self._json(proxy_timeline_versioning_action(body))
+            return
+        if path == "/api/caps":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Caps writes are loopback-only."}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                from src.server import media_analysis as _ma_tool
+                import asyncio
+                result = asyncio.run(_ma_tool("set_caps_preset", params=body))
+                self._json(result, 200 if result.get("success") else 400)
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/caps/reset_day":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Loopback only."}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                from src.utils import analysis_caps as _ac
+                result = _ac.reset_day_usage(
+                    project_root=self.state.project_root,
+                    day_bucket=body.get("day_bucket"),
+                )
+                self._json(result)
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/runs/begin":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Loopback only."}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                from src.utils import analysis_runs as _ar
+                result = _ar.begin_run(
+                    project_root=self.state.project_root,
+                    label=body.get("label"),
+                    initiator=body.get("initiator") or "dashboard",
+                )
+                self._json(result)
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/runs/end":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Loopback only."}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                from src.utils import analysis_runs as _ar
+                result = _ar.end_run(
+                    project_root=self.state.project_root,
+                    analysis_run_id=body.get("analysis_run_id"),
+                )
+                self._json(result)
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/update/channel":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Loopback only."}, HTTPStatus.FORBIDDEN)
+                return
+            channel = (body.get("channel") or "stable").strip().lower()
+            if channel not in {"stable", "beta", "dev"}:
+                self._json({"success": False, "error": "channel must be stable | beta | dev"}, HTTPStatus.BAD_REQUEST)
+                return
+            os.environ["DAVINCI_RESOLVE_MCP_UPDATE_CHANNEL"] = channel
+            self._json({"success": True, "channel": channel,
+                        "note": "Set for this process; persist via env var to survive restart."})
             return
         # ─── V2 Review API (writes) ─────────────────────────────────────
         if path == "/api/panel_state":

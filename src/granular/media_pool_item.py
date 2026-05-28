@@ -1,8 +1,41 @@
 """MediaPoolItem operations and metadata helpers."""
 
 from src.granular.common import *  # noqa: F401,F403
+from src.utils.media_analysis import mark_registry_stale_for_clip as _mark_analysis_registry_stale
 
 resolve = ResolveProxy()
+
+
+def _invalidate_analysis_registry_for_clip(project, clip, *, reason: str) -> Optional[Dict[str, Any]]:
+    """Best-effort: mark cached analysis stale after a Resolve clip replace.
+
+    Called from replace_clip / replace_media_pool_clip / preserve_sub_clip
+    after the Resolve API confirms the mutation. Failures here must NEVER
+    block the Resolve mutation — we return the result for diagnostics but
+    swallow exceptions so registry trouble does not corrupt the user's edit.
+    """
+    if project is None or clip is None:
+        return None
+    try:
+        project_name = project.GetName() if hasattr(project, "GetName") else None
+        project_id = project.GetUniqueId() if hasattr(project, "GetUniqueId") else None
+        clip_id = clip.GetUniqueId() if hasattr(clip, "GetUniqueId") else None
+        media_id = clip.GetMediaId() if hasattr(clip, "GetMediaId") else None
+        source_file = None
+        try:
+            source_file = clip.GetClipProperty("File Path") if hasattr(clip, "GetClipProperty") else None
+        except Exception:
+            source_file = None
+        return _mark_analysis_registry_stale(
+            project_name=project_name,
+            project_id=project_id,
+            clip_id=clip_id,
+            media_id=media_id,
+            source_file=source_file,
+            reason=reason,
+        )
+    except Exception as exc:  # noqa: BLE001 — never break a Resolve mutation
+        return {"success": False, "error": f"registry invalidation skipped: {type(exc).__name__}: {exc}"}
 
 @mcp.tool(annotations=EXTERNAL_DESTRUCTIVE_TOOL)
 def link_proxy_media(clip_name: str, proxy_file_path: str) -> str:
@@ -118,6 +151,9 @@ def replace_clip(clip_name: str, replacement_path: str) -> str:
     try:
         result = target_clip.ReplaceClip(replacement_path)
         if result:
+            _invalidate_analysis_registry_for_clip(
+                current_project, target_clip, reason="replace_clip"
+            )
             return f"Successfully replaced clip '{clip_name}' with '{replacement_path}'"
         else:
             return f"Failed to replace clip '{clip_name}'"
@@ -674,14 +710,21 @@ def replace_media_pool_clip(clip_id: str, new_file_path: str) -> Dict[str, Any]:
         clip_id: Unique ID of the clip to replace.
         new_file_path: Absolute path to the new media file.
     """
-    _, mp, err = _get_mp()
+    project, mp, err = _get_mp()
     if err:
         return err
     clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
     if not clip:
         return {"error": f"Clip {clip_id} not found"}
     result = clip.ReplaceClip(new_file_path)
-    return {"success": bool(result)}
+    response: Dict[str, Any] = {"success": bool(result)}
+    if result:
+        registry = _invalidate_analysis_registry_for_clip(
+            project, clip, reason="replace_media_pool_clip"
+        )
+        if registry is not None:
+            response["analysis_registry_invalidation"] = registry
+    return response
 
 
 @mcp.tool()
@@ -692,7 +735,7 @@ def replace_media_pool_clip_preserve_sub_clip(clip_id: str, file_path: str) -> D
         clip_id: Unique ID of the clip to replace.
         file_path: Absolute path to the replacement media file.
     """
-    _, mp, err = _get_mp()
+    project, mp, err = _get_mp()
     if err:
         return err
     clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
@@ -702,7 +745,14 @@ def replace_media_pool_clip_preserve_sub_clip(clip_id: str, file_path: str) -> D
     if missing:
         return missing
     result = clip.ReplaceClipPreserveSubClip(file_path)
-    return {"success": bool(result)}
+    response: Dict[str, Any] = {"success": bool(result)}
+    if result:
+        registry = _invalidate_analysis_registry_for_clip(
+            project, clip, reason="replace_media_pool_clip_preserve_sub_clip"
+        )
+        if registry is not None:
+            response["analysis_registry_invalidation"] = registry
+    return response
 
 
 @mcp.tool()

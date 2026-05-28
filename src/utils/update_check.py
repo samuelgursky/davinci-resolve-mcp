@@ -18,6 +18,8 @@ DEFAULT_REPO = "samuelgursky/davinci-resolve-mcp"
 DEFAULT_INTERVAL_HOURS = 24.0
 DEFAULT_TIMEOUT_SECONDS = 3.0
 DEFAULT_SNOOZE_HOURS = 24.0
+DEFAULT_CHANNEL = "stable"
+VALID_CHANNELS = ("stable", "beta", "dev")
 
 ENV_ENABLED = "DAVINCI_RESOLVE_MCP_UPDATE_CHECK"
 ENV_INTERVAL_HOURS = "DAVINCI_RESOLVE_MCP_UPDATE_INTERVAL_HOURS"
@@ -26,6 +28,7 @@ ENV_REPO = "DAVINCI_RESOLVE_MCP_UPDATE_REPO"
 ENV_SNOOZE_HOURS = "DAVINCI_RESOLVE_MCP_UPDATE_SNOOZE_HOURS"
 ENV_URL = "DAVINCI_RESOLVE_MCP_UPDATE_URL"
 ENV_STATE_PATH = "DAVINCI_RESOLVE_MCP_UPDATE_STATE"
+ENV_CHANNEL = "DAVINCI_RESOLVE_MCP_UPDATE_CHANNEL"
 
 _FALSE_VALUES = {"0", "false", "no", "off", "disabled"}
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
@@ -490,15 +493,28 @@ def _interval_seconds(env: Mapping[str, str]) -> float:
     return max(hours, 0.1) * 60 * 60
 
 
-def _release_api_url(env: Mapping[str, str]) -> str:
+def get_update_channel(env: Optional[Mapping[str, str]] = None) -> str:
+    """Resolve the active update channel: stable | beta | dev."""
+    values = os.environ if env is None else env
+    raw = str(values.get(ENV_CHANNEL) or DEFAULT_CHANNEL).strip().lower()
+    return raw if raw in VALID_CHANNELS else DEFAULT_CHANNEL
+
+
+def _release_api_url(env: Mapping[str, str], *, channel: Optional[str] = None) -> str:
     if env.get(ENV_URL):
         return str(env[ENV_URL])
     repo = str(env.get(ENV_REPO) or DEFAULT_REPO).strip().strip("/")
-    return f"https://api.github.com/repos/{repo}/releases/latest"
+    ch = (channel or get_update_channel(env)).lower()
+    # `stable` → latest non-prerelease only (GitHub's /releases/latest).
+    # `beta`, `dev` → list endpoint so we can pick prereleases too.
+    if ch == "stable":
+        return f"https://api.github.com/repos/{repo}/releases/latest"
+    return f"https://api.github.com/repos/{repo}/releases?per_page=10"
 
 
 def _fetch_latest_release(env: Mapping[str, str], timeout: float) -> Dict[str, Any]:
-    url = _release_api_url(env)
+    channel = get_update_channel(env)
+    url = _release_api_url(env, channel=channel)
     request = urllib.request.Request(
         url,
         headers={
@@ -514,9 +530,33 @@ def _fetch_latest_release(env: Mapping[str, str], timeout: float) -> Dict[str, A
     except urllib.error.URLError as exc:
         raise RuntimeError(f"GitHub update check failed: {exc.reason}") from exc
     payload = json.loads(data)
-    if not isinstance(payload, dict):
-        raise RuntimeError("GitHub update check returned an unexpected response")
-    return payload
+
+    if channel == "stable":
+        if not isinstance(payload, dict):
+            raise RuntimeError("GitHub update check returned an unexpected response")
+        payload["_channel"] = channel
+        return payload
+
+    # beta/dev: payload is a LIST of releases ordered newest-first by created_at.
+    if not isinstance(payload, list) or not payload:
+        raise RuntimeError("GitHub update check returned no releases")
+    selected: Optional[Dict[str, Any]] = None
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        tag = str(entry.get("tag_name") or "").lower()
+        if channel == "beta":
+            # Allow non-prerelease stable releases AND prereleases tagged -beta.
+            if (not entry.get("prerelease")) or "beta" in tag:
+                selected = entry
+                break
+        else:  # dev — accept anything including all prereleases.
+            selected = entry
+            break
+    if selected is None:
+        selected = payload[0]
+    selected["_channel"] = channel
+    return selected
 
 
 def _result_from_release(
@@ -538,6 +578,7 @@ def _result_from_release(
         status = "up_to_date"
 
     repo = str(env.get(ENV_REPO) or DEFAULT_REPO).strip().strip("/")
+    body = str(release.get("body") or "").strip()
     return {
         "status": status,
         "current_version": current_version,
@@ -545,9 +586,34 @@ def _result_from_release(
         "latest_tag": latest_tag,
         "release_url": release.get("html_url")
         or f"https://github.com/{repo}/releases/latest",
+        "release_notes": body,
+        "release_notes_breaking": _scan_for_breaking_changes(body),
+        "release_target_sha": release.get("target_commitish") or release.get("tag_sha"),
+        "prerelease": bool(release.get("prerelease")),
+        "channel": release.get("_channel") or get_update_channel(env),
         "checked_at": checked_at,
         "checked_at_iso": _format_timestamp(checked_at),
     }
+
+
+_BREAKING_RE = re.compile(
+    r"(?:^|\n)\s*(?:[-*]\s*)?"
+    r"(?:\*\*)?(?:BREAKING(?:\s+CHANGE)?[: ]|⚠️|:warning:|MIGRATION\s+REQUIRED[: ])(?:\*\*)?"
+    r"(?P<rest>[^\n]+)",
+    re.IGNORECASE,
+)
+
+
+def _scan_for_breaking_changes(body: str) -> list:
+    """Pluck BREAKING/⚠️/MIGRATION-REQUIRED markers out of a release-notes blob."""
+    if not body:
+        return []
+    found: list = []
+    for match in _BREAKING_RE.finditer(body):
+        snippet = (match.group("rest") or "").strip(" -*\t")
+        if snippet:
+            found.append(snippet)
+    return found
 
 
 def _version_text(value: Any) -> str:

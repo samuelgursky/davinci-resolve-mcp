@@ -236,7 +236,7 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
             result = _safe_import_sequence(mp, {"pattern": pattern, "start_index": 1, "end_index": 3})
 
         self.assertIn("error", result)
-        self.assertIn("Missing sequence frames", result["error"])
+        self.assertIn("Missing sequence frames", (result["error"].get("message","") if isinstance(result["error"], dict) else result["error"]))
 
     def test_normalize_metadata_dry_run_reports_target_keys(self):
         result = _normalize_metadata(

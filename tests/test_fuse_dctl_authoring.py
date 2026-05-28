@@ -305,7 +305,7 @@ class TestFusePluginAction(unittest.TestCase):
     def test_unknown_action_lists_valid(self):
         r = fuse_plugin('not-a-real-action')
         self.assertIn('error', r)
-        self.assertIn('list_templates', r['error'])
+        self.assertIn('list_templates', (r["error"].get("message","") if isinstance(r["error"], dict) else r["error"]))
 
     def test_path_returns_string(self):
         r = fuse_plugin('path')
@@ -391,7 +391,7 @@ class TestDctlAction(unittest.TestCase):
     def test_unknown_action_lists_valid(self):
         r = dctl('not-a-real-action')
         self.assertIn('error', r)
-        self.assertIn('list_templates', r['error'])
+        self.assertIn('list_templates', (r["error"].get("message","") if isinstance(r["error"], dict) else r["error"]))
 
     def test_path_each_category(self):
         for cat in ('lut', 'aces_idt', 'aces_odt'):

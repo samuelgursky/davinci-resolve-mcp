@@ -242,7 +242,7 @@ class TestScriptPluginAction(unittest.TestCase):
     def test_unknown_action(self):
         r = script_plugin('not-a-real-action')
         self.assertIn('error', r)
-        self.assertIn('list_templates', r['error'])
+        self.assertIn('list_templates', (r["error"].get("message","") if isinstance(r["error"], dict) else r["error"]))
 
     def test_categories(self):
         r = script_plugin('categories')
@@ -590,7 +590,7 @@ class TestScriptExecution(unittest.TestCase):
             'timeout': 1,
         })
         self.assertIn('error', r)
-        self.assertIn('timed out', r['error'])
+        self.assertIn('timed out', (r["error"].get("message","") if isinstance(r["error"], dict) else r["error"]))
 
     def test_execute_missing_script(self):
         r = script_plugin('execute', {
@@ -669,7 +669,7 @@ class TestScriptExecution(unittest.TestCase):
             'name': 'LuaNoResolve', 'category': 'Utility', 'language': 'lua',
         })
         self.assertIn('error', r)
-        self.assertIn("isn't running", r['error'])
+        self.assertIn("isn't running", (r["error"].get("message","") if isinstance(r["error"], dict) else r["error"]))
 
     # ── run_inline Python ──────────────────────────────────────────────────
 

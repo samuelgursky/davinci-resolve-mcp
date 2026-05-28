@@ -188,10 +188,15 @@ class CompoundCreateClipInfoBuilderTest(unittest.TestCase):
         self.assertEqual(out["recordFrame"], 108000)
 
     def test_missing_record_frame_uses_err_helper(self):
+        from tests._error_envelope_helpers import err_message
+
         _, err = compound_build_create_clip_info_dict(
             self.root, {"clip_id": "abc", "start_frame": 0, "end_frame": 1}, 2,
         )
-        self.assertEqual(err, {"error": "clip_infos[2] requires record_frame/recordFrame (timeline record frame)"})
+        self.assertEqual(
+            err_message(err),
+            "clip_infos[2] requires record_frame/recordFrame (timeline record frame)",
+        )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -222,7 +227,7 @@ class SubtitleSettingsBuilderTest(unittest.TestCase):
     def test_unknown_language_returns_error(self):
         _, err = _build_subtitle_settings(self.r, language="klingon")
         self.assertIsNotNone(err)
-        self.assertIn("Unknown language 'klingon'", err["error"])
+        self.assertIn("Unknown language 'klingon'", (err["error"].get("message","") if isinstance(err["error"], dict) else err["error"]))
 
     def test_full_dict_korean_netflix(self):
         settings, err = _build_subtitle_settings(
@@ -242,18 +247,18 @@ class SubtitleSettingsBuilderTest(unittest.TestCase):
         for invalid in [0, 61, -1, "42"]:
             _, err = _build_subtitle_settings(self.r, chars_per_line=invalid)
             self.assertIsNotNone(err, msg=f"value {invalid!r} should fail")
-            self.assertIn("chars_per_line", err["error"])
+            self.assertIn("chars_per_line", (err["error"].get("message","") if isinstance(err["error"], dict) else err["error"]))
 
     def test_gap_out_of_range(self):
         for invalid in [-1, 11, "5"]:
             _, err = _build_subtitle_settings(self.r, gap=invalid)
             self.assertIsNotNone(err, msg=f"value {invalid!r} should fail")
-            self.assertIn("gap", err["error"])
+            self.assertIn("gap", (err["error"].get("message","") if isinstance(err["error"], dict) else err["error"]))
 
     def test_unknown_preset_returns_error(self):
         _, err = _build_subtitle_settings(self.r, preset="amazon")
         self.assertIsNotNone(err)
-        self.assertIn("Unknown preset 'amazon'", err["error"])
+        self.assertIn("Unknown preset 'amazon'", (err["error"].get("message","") if isinstance(err["error"], dict) else err["error"]))
 
 
 if __name__ == "__main__":

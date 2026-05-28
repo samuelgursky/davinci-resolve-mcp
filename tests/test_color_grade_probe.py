@@ -200,7 +200,7 @@ class ColorGradeProbeTest(unittest.TestCase):
         result = _safe_export_lut(ItemStub(), {"path": os.path.join(os.getcwd(), "look.cube")})
 
         self.assertIn("error", result)
-        self.assertIn("system temp", result["error"])
+        self.assertIn("system temp", (result["error"].get("message","") if isinstance(result["error"], dict) else result["error"]))
 
     def test_safe_export_lut_writes_temp_file(self):
         path = os.path.join(tempfile.mkdtemp(), "look.cube")

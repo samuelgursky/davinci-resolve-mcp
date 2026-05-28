@@ -714,6 +714,9 @@ def run_batch_job_slice(
             try:
                 slice_params = copy.deepcopy(params)
                 slice_params["auto_build_index"] = False
+                # C6 caps integration: thread the job_id so per-job usage
+                # rollups populate (otherwise JOB scope stays at zero).
+                slice_params["job_id"] = job_id
                 manifest = execute_plan(mini_plan, params=slice_params, capabilities=capabilities or detect_capabilities())
                 clip_result = (manifest.get("clips") or [{}])[0] if isinstance(manifest, dict) else {}
                 completed_at = _utc_now()

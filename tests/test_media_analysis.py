@@ -43,7 +43,9 @@ from src.utils.media_analysis import (
     VISION_SCHEMA_REFERENCE,
     analysis_request_signature,
     analysis_index_status,
+    analysis_root_coverage,
     build_analysis_index,
+    build_coverage_report,
     build_host_chat_paths_payload,
     build_plan,
     cleanup_artifacts,
@@ -53,11 +55,14 @@ from src.utils.media_analysis import (
     execute_plan,
     execute_plan_async,
     load_report,
+    mark_registry_stale_for_clip,
     query_analysis_index,
+    registry_entry_superseded_info,
     resolve_output_root,
     _sample_times,
     summarize_reports,
     stable_clip_directory,
+    update_analysis_registry,
     vision_is_pending_host_analysis,
 )
 from src.utils.media_analysis_jobs import (
@@ -72,11 +77,13 @@ from src.utils.media_analysis_jobs import (
 
 
 class ClipStub:
-    def __init__(self, name, clip_id, file_path, media_id=None):
+    def __init__(self, name, clip_id, file_path, media_id=None, third_party=None, metadata=None):
         self.name = name
         self.clip_id = clip_id
         self.file_path = file_path
         self.media_id = media_id or f"media-{clip_id}"
+        self.third_party = dict(third_party or {})
+        self.metadata = dict(metadata or {})
 
     def GetName(self):
         return self.name
@@ -98,6 +105,16 @@ class ClipStub:
         if key:
             return props.get(key)
         return props
+
+    def GetThirdPartyMetadata(self, key=""):
+        if key:
+            return self.third_party.get(key, "")
+        return dict(self.third_party)
+
+    def GetMetadata(self, key=""):
+        if key:
+            return self.metadata.get(key, "")
+        return dict(self.metadata)
 
 
 class MarkerClipStub:
@@ -759,7 +776,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             )
 
             self.assertFalse(result["success"])
-            self.assertIn("vision_token mismatch", result["error"])
+            self.assertIn("vision_token mismatch", (result["error"].get("message","") if isinstance(result["error"], dict) else result["error"]))
 
     def test_publish_clip_metadata_uses_pre_resolved_report_path_bypassing_reanalysis(self):
         """commit_vision auto-publish must NOT re-run analysis after a successful merge.
@@ -2107,6 +2124,431 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertEqual(plan["clips"][0]["existing_report"]["project_root"], previous_root)
         self.assertTrue(plan["clips"][0]["artifacts"]["analysis_json"].startswith(active_root))
 
+    def test_build_plan_searches_related_project_roots_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001_C001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"current")
+            record = {
+                "clip_id": "clip-current-version",
+                "clip_name": "A001_C001.mov",
+                "file_path": source,
+                "media_id": "media-current-version",
+            }
+            analysis_root = os.path.join(tmp, "analysis")
+            previous_root = resolve_output_root(
+                project_name="Example Project",
+                project_id="version-001",
+                analysis_root=analysis_root,
+                source_paths=[source],
+                create=True,
+            )["project_root"]
+            active_root = resolve_output_root(
+                project_name="Example Project",
+                project_id="version-002",
+                analysis_root=analysis_root,
+                source_paths=[source],
+                create=False,
+            )["project_root"]
+            clip_dir = os.path.join(previous_root, "clips", stable_clip_directory(record))
+            os.makedirs(clip_dir)
+            report_path = os.path.join(clip_dir, "analysis.json")
+            signature = analysis_request_signature(record, "standard", {"transcription": {"enabled": False}, "vision": {}}, 8)
+            with open(report_path, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "success": True,
+                    "analysis_version": "0.2",
+                    "analysis_signature": signature,
+                    "analyzed_at": "2026-05-17T12:00:00Z",
+                    "source_file": source,
+                    "clip": record,
+                    "technical": {"format": {"duration_seconds": 1.0}},
+                    "readthrough": {"success": True, "cut_analysis": {"success": True}},
+                    "motion": {"success": True, "analysis_keyframes": []},
+                    "transcription": {"success": True, "status": "skipped"},
+                    "visual": {"success": True, "status": "skipped"},
+                    "clip_analysis_markers": {"success": True, "marker_count": 1, "markers": []},
+                }, handle)
+
+            plan = build_plan(
+                project_name="Example Project",
+                project_id="version-002",
+                records=[record],
+                target={"type": "clips", "clip_ids": ["clip-current-version"]},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities={
+                    "tools": {
+                        "ffprobe": {"available": True},
+                        "ffmpeg": {"available": True},
+                    },
+                    "transcription": {"available": False},
+                    "vision": {"available": False},
+                },
+            )
+
+        self.assertTrue(plan["success"])
+        self.assertEqual(plan["output_root"]["project_root"], active_root)
+        self.assertIn(previous_root, plan["related_project_roots"])
+        self.assertIn(previous_root, plan["reuse_project_roots"])
+        self.assertEqual(plan["reusable_clip_count"], 1)
+        self.assertTrue(plan["clips"][0]["skip_execution"])
+        self.assertEqual(plan["clips"][0]["existing_report"]["path"], report_path)
+
+    def test_build_plan_can_disable_related_project_root_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001_C001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"current")
+            record = {
+                "clip_id": "clip-current-version",
+                "clip_name": "A001_C001.mov",
+                "file_path": source,
+                "media_id": "media-current-version",
+            }
+            analysis_root = os.path.join(tmp, "analysis")
+            previous_root = resolve_output_root(
+                project_name="Example Project",
+                project_id="version-001",
+                analysis_root=analysis_root,
+                source_paths=[source],
+                create=True,
+            )["project_root"]
+            os.makedirs(os.path.join(previous_root, "clips", stable_clip_directory(record)))
+            with open(os.path.join(previous_root, "clips", stable_clip_directory(record), "analysis.json"), "w", encoding="utf-8") as handle:
+                json.dump({
+                    "success": True,
+                    "analysis_version": "0.2",
+                    "analysis_signature": analysis_request_signature(record, "standard", {"transcription": {"enabled": False}, "vision": {}}, 8),
+                    "analyzed_at": "2026-05-17T12:00:00Z",
+                    "source_file": source,
+                    "clip": record,
+                    "technical": {"format": {"duration_seconds": 1.0}},
+                    "readthrough": {"success": True, "cut_analysis": {"success": True}},
+                    "motion": {"success": True, "analysis_keyframes": []},
+                    "transcription": {"success": True, "status": "skipped"},
+                    "visual": {"success": True, "status": "skipped"},
+                    "clip_analysis_markers": {"success": True, "marker_count": 1, "markers": []},
+                }, handle)
+
+            plan = build_plan(
+                project_name="Example Project",
+                project_id="version-002",
+                records=[record],
+                target={"type": "clips", "clip_ids": ["clip-current-version"]},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                    "search_related_project_roots": False,
+                },
+                capabilities={
+                    "tools": {
+                        "ffprobe": {"available": True},
+                        "ffmpeg": {"available": True},
+                    },
+                    "transcription": {"available": False},
+                    "vision": {"available": False},
+                },
+            )
+
+        self.assertTrue(plan["success"])
+        self.assertEqual(plan["related_project_roots"], [])
+        self.assertEqual(plan["reusable_clip_count"], 0)
+        self.assertEqual(plan["clips"][0]["cache_status"], "miss")
+
+    def test_build_plan_reuses_report_path_from_clip_record_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001_C001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"current")
+            analysis_root = os.path.join(tmp, "analysis")
+            previous_root = resolve_output_root(
+                project_name="Example Project",
+                project_id="version-001",
+                analysis_root=analysis_root,
+                source_paths=[source],
+                create=True,
+            )["project_root"]
+            active_root = resolve_output_root(
+                project_name="Example Project",
+                project_id="version-002",
+                analysis_root=analysis_root,
+                source_paths=[source],
+                create=False,
+            )["project_root"]
+            record = {
+                "clip_id": "clip-current-version",
+                "clip_name": "A001_C001.mov",
+                "file_path": source,
+                "media_id": "media-current-version",
+            }
+            clip_dir = os.path.join(previous_root, "clips", stable_clip_directory(record))
+            os.makedirs(clip_dir)
+            report_path = os.path.join(clip_dir, "analysis.json")
+            signature = analysis_request_signature(record, "standard", {"transcription": {"enabled": False}, "vision": {}}, 8)
+            with open(report_path, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "success": True,
+                    "analysis_version": "0.2",
+                    "analysis_signature": signature,
+                    "analyzed_at": "2026-05-17T12:00:00Z",
+                    "source_file": source,
+                    "clip": record,
+                    "technical": {"format": {"duration_seconds": 1.0}},
+                    "readthrough": {"success": True, "cut_analysis": {"success": True}},
+                    "motion": {"success": True, "analysis_keyframes": []},
+                    "transcription": {"success": True, "status": "skipped"},
+                    "visual": {"success": True, "status": "skipped"},
+                    "clip_analysis_markers": {"success": True, "marker_count": 1, "markers": []},
+                }, handle)
+
+            record_with_metadata = {
+                **record,
+                "analysis_report_path": report_path,
+                "published_analysis_signature": signature["signature_hash"],
+            }
+            plan = build_plan(
+                project_name="Example Project",
+                project_id="version-002",
+                records=[record_with_metadata],
+                target={"type": "clips", "clip_ids": ["clip-current-version"]},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities={
+                    "tools": {
+                        "ffprobe": {"available": True},
+                        "ffmpeg": {"available": True},
+                    },
+                    "transcription": {"available": False},
+                    "vision": {"available": False},
+                },
+            )
+
+        self.assertTrue(plan["success"])
+        self.assertEqual(plan["output_root"]["project_root"], active_root)
+        self.assertEqual(plan["reusable_clip_count"], 1)
+        self.assertTrue(plan["clips"][0]["skip_execution"])
+        self.assertEqual(plan["clips"][0]["existing_report"]["path"], report_path)
+        self.assertEqual(plan["clips"][0]["existing_report"]["project_root"], previous_root)
+        self.assertEqual(plan["clips"][0]["existing_report"]["source"], "record_analysis_report_path")
+        self.assertIn("Resolve clip metadata", plan["clips"][0]["reuse_reason"])
+
+    def test_records_from_target_carries_published_analysis_report_path(self):
+        clip = ClipStub(
+            "A001_C001.mov",
+            "clip-123",
+            "/tmp/A001_C001.mov",
+            third_party={
+                "davinci_resolve_mcp.analysis_report_path": "/tmp/analysis/project/clips/a001/analysis.json",
+                "davinci_resolve_mcp.analysis_signature": "abc123",
+                "davinci_resolve_mcp.published_at": "2026-05-17T12:00:00Z",
+            },
+        )
+        mp = MarkerMediaPoolStub([clip])
+
+        records, target, warnings, err = _media_analysis_records_from_target(
+            mp,
+            {"target": {"type": "clip", "clip_id": "clip-123"}},
+        )
+
+        self.assertIsNone(err)
+        self.assertEqual(warnings, [])
+        self.assertEqual(target["type"], "clip")
+        self.assertEqual(records[0]["analysis_report_path"], "/tmp/analysis/project/clips/a001/analysis.json")
+        self.assertEqual(records[0]["published_analysis_signature"], "abc123")
+        self.assertEqual(records[0]["published_analysis_at"], "2026-05-17T12:00:00Z")
+
+    def test_records_from_target_flags_standard_metadata_provenance(self):
+        clip = ClipStub(
+            "A001_C001.mov",
+            "clip-123",
+            "/tmp/A001_C001.mov",
+            metadata={
+                "Comments": "Assistant note\n\n[DaVinci Resolve MCP Analysis]\nold\n[/DaVinci Resolve MCP Analysis]",
+            },
+        )
+        mp = MarkerMediaPoolStub([clip])
+
+        records, _, warnings, err = _media_analysis_records_from_target(
+            mp,
+            {"target": {"type": "clip", "clip_id": "clip-123"}},
+        )
+
+        self.assertIsNone(err)
+        self.assertEqual(warnings, [])
+        self.assertTrue(records[0]["analysis_metadata_present"])
+        self.assertEqual(records[0]["analysis_metadata_fields"], ["Comments"])
+        self.assertIn("standard_metadata_fields", records[0]["analysis_provenance"])
+
+    def test_build_plan_reuses_global_registry_when_related_search_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001_C001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"current")
+            record = {
+                "clip_id": "clip-current-version",
+                "clip_name": "A001_C001.mov",
+                "file_path": source,
+                "media_id": "media-current-version",
+            }
+            analysis_root = os.path.join(tmp, "analysis")
+            previous_root = resolve_output_root(
+                project_name="Example Project",
+                project_id="version-001",
+                analysis_root=analysis_root,
+                source_paths=[source],
+                create=True,
+            )["project_root"]
+            clip_dir = os.path.join(previous_root, "clips", stable_clip_directory(record))
+            os.makedirs(clip_dir)
+            report_path = os.path.join(clip_dir, "analysis.json")
+            signature = analysis_request_signature(record, "standard", {"transcription": {"enabled": False}, "vision": {}}, 8)
+            with open(report_path, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "success": True,
+                    "analysis_version": "0.2",
+                    "analysis_signature": signature,
+                    "analyzed_at": "2026-05-17T12:00:00Z",
+                    "source_file": source,
+                    "clip": record,
+                    "technical": {"format": {"duration_seconds": 1.0}},
+                    "readthrough": {"success": True, "cut_analysis": {"success": True}},
+                    "motion": {"success": True, "analysis_keyframes": []},
+                    "transcription": {"success": True, "status": "skipped"},
+                    "visual": {"success": True, "status": "skipped"},
+                    "clip_analysis_markers": {"success": True, "marker_count": 1, "markers": []},
+                }, handle)
+            registry = update_analysis_registry(previous_root, report_paths=[report_path])
+            self.assertTrue(registry["success"])
+
+            plan = build_plan(
+                project_name="Example Project",
+                project_id="version-002",
+                records=[record],
+                target={"type": "clips", "clip_ids": ["clip-current-version"]},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                    "search_related_project_roots": False,
+                },
+                capabilities={
+                    "tools": {
+                        "ffprobe": {"available": True},
+                        "ffmpeg": {"available": True},
+                    },
+                    "transcription": {"available": False},
+                    "vision": {"available": False},
+                },
+            )
+
+        self.assertTrue(plan["success"])
+        self.assertEqual(plan["related_project_roots"], [])
+        self.assertEqual(plan["reusable_clip_count"], 1)
+        self.assertTrue(plan["clips"][0]["skip_execution"])
+        self.assertEqual(plan["clips"][0]["existing_report"]["source"], "analysis_registry")
+        self.assertEqual(plan["reuse_summary"]["sources"]["analysis_registry"], 1)
+
+    def test_plan_blocks_silent_reanalysis_when_provenance_report_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001_C001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"current")
+            record = {
+                "clip_id": "clip-current-version",
+                "clip_name": "A001_C001.mov",
+                "file_path": source,
+                "media_id": "media-current-version",
+                "analysis_report_path": os.path.join(tmp, "analysis", "missing", "clips", "a001", "analysis.json"),
+                "published_analysis_signature": "abc123",
+            }
+            plan = build_plan(
+                project_name="Example Project",
+                project_id="version-002",
+                records=[record],
+                target={"type": "clips", "clip_ids": ["clip-current-version"]},
+                params={
+                    "analysis_root": os.path.join(tmp, "analysis"),
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities={
+                    "tools": {
+                        "ffprobe": {"available": True},
+                        "ffmpeg": {"available": True},
+                    },
+                    "transcription": {"available": False},
+                    "vision": {"available": False},
+                },
+            )
+            executed = execute_plan(plan, params={"transcription": {"enabled": False}}, capabilities={
+                "tools": {
+                    "ffprobe": {"available": True},
+                    "ffmpeg": {"available": True},
+                },
+                "transcription": {"available": False},
+                "vision": {"available": False},
+            })
+
+        self.assertTrue(plan["success"])
+        self.assertEqual(plan["reuse_blocked_clip_count"], 1)
+        self.assertEqual(plan["clips"][0]["cache_status"], "reuse_blocked")
+        self.assertIn("analysis_report_path_missing", plan["clips"][0]["reuse_block_issues"])
+        self.assertFalse(executed["success"])
+        self.assertEqual(executed["status"], "reuse_blocked")
+
+    def test_force_refresh_bypasses_reuse_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001_C001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"current")
+            record = {
+                "clip_id": "clip-current-version",
+                "clip_name": "A001_C001.mov",
+                "file_path": source,
+                "media_id": "media-current-version",
+                "analysis_report_path": os.path.join(tmp, "analysis", "missing", "clips", "a001", "analysis.json"),
+                "published_analysis_signature": "abc123",
+            }
+
+            plan = build_plan(
+                project_name="Example Project",
+                project_id="version-002",
+                records=[record],
+                target={"type": "clips", "clip_ids": ["clip-current-version"]},
+                params={
+                    "analysis_root": os.path.join(tmp, "analysis"),
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                    "force_refresh": True,
+                },
+                capabilities={
+                    "tools": {
+                        "ffprobe": {"available": True},
+                        "ffmpeg": {"available": True},
+                    },
+                    "transcription": {"available": False},
+                    "vision": {"available": False},
+                },
+            )
+
+        self.assertTrue(plan["success"])
+        self.assertEqual(plan["reuse_blocked_clip_count"], 0)
+        self.assertEqual(plan["clips"][0]["cache_status"], "refresh_forced")
+
     def test_build_plan_force_refresh_bypasses_reuse(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = os.path.join(tmp, "source", "A001_C001.mov")
@@ -2813,7 +3255,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertTrue(status["success"])
         self.assertFalse(status["exists"])
         self.assertFalse(result["success"])
-        self.assertIn("Analysis index not found", result["error"])
+        self.assertIn("Analysis index not found", (result["error"].get("message","") if isinstance(result["error"], dict) else result["error"]))
 
     def test_batch_job_slice_runs_and_builds_index(self):
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
@@ -2904,6 +3346,587 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             resumed = resume_batch_job(job["project_root"], job["job_id"])
             self.assertEqual(resumed["status"], "queued")
             self.assertEqual(resumed["pending_clips"], 1)
+
+
+class MediaAnalysisCoverageTests(unittest.TestCase):
+    """Pre-flight coverage_report assessment used by editorial / color / online guardrails."""
+
+    def _write_report(
+        self,
+        *,
+        analysis_root: str,
+        project_name: str,
+        project_id: str,
+        source: str,
+        record: Dict[str, Any],
+        depth: str = "standard",
+        options: Optional[Dict[str, Any]] = None,
+        analyzed_at: str = "2026-05-20T12:00:00Z",
+        source_trust: str = "auto",
+        with_transcription: bool = False,
+        with_visual: bool = False,
+        signature_override: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        opts = options or {"transcription": {"enabled": with_transcription}, "vision": {"enabled": with_visual}}
+        project_root = resolve_output_root(
+            project_name=project_name,
+            project_id=project_id,
+            analysis_root=analysis_root,
+            source_paths=[source],
+            create=True,
+        )["project_root"]
+        clip_dir = os.path.join(project_root, "clips", stable_clip_directory(record))
+        os.makedirs(clip_dir, exist_ok=True)
+        report_path = os.path.join(clip_dir, "analysis.json")
+        signature = signature_override or analysis_request_signature(record, depth, opts, 8)
+        report = {
+            "success": True,
+            "analysis_version": "0.2",
+            "analysis_signature": signature,
+            "analysis_profile": {
+                "depth": depth,
+                "analysis_keyframe_budget": 8,
+                "transcription_enabled": with_transcription,
+                "vision_enabled": with_visual,
+                "source_trust": source_trust,
+            },
+            "analyzed_at": analyzed_at,
+            "source_file": source,
+            "clip": record,
+            "technical": {"format": {"duration_seconds": 1.0}},
+            "readthrough": {"success": True, "cut_analysis": {"success": True}},
+            "motion": {"success": True, "analysis_keyframes": [{"time_seconds": 0.0}], "overall_motion_level": "low"},
+            "transcription": (
+                {"success": True, "text": "hello world", "segments": [{"start": 0.0, "end": 1.0, "text": "hello world"}]}
+                if with_transcription else {"success": True, "status": "skipped"}
+            ),
+            "visual": (
+                {"success": True, "clip_summary": "A test clip.", "shot_descriptions": [{"shot_index": 1, "description": "Clip overview."}]}
+                if with_visual else {"success": True, "status": "skipped"}
+            ),
+            "clip_analysis_markers": {"success": True, "marker_count": 1, "markers": []},
+        }
+        with open(report_path, "w", encoding="utf-8") as handle:
+            json.dump(report, handle)
+        update_analysis_registry(project_root, report_paths=[report_path])
+        return report_path
+
+    def _base_capabilities(self) -> Dict[str, Any]:
+        return {
+            "tools": {"ffprobe": {"available": True}, "ffmpeg": {"available": True}},
+            "transcription": {"available": False},
+            "vision": {"available": False},
+        }
+
+    def test_coverage_report_empty_target_returns_zero_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            coverage = build_coverage_report(
+                project_name="Empty Project",
+                project_id="v1",
+                records=[],
+                target={"type": "bin", "path": "Master"},
+                params={"analysis_root": os.path.join(tmp, "analysis"), "depth": "standard"},
+                capabilities=self._base_capabilities(),
+            )
+        self.assertTrue(coverage["success"])
+        self.assertEqual(coverage["summary"]["clips_total"], 0)
+        self.assertEqual(coverage["summary"]["clips_analyzed"], 0)
+        self.assertEqual(coverage["clips"], [])
+        self.assertIn("evidence base: no clips in target", coverage["evidence_base"])
+
+    def test_coverage_report_all_current_reports_100_percent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"x" * 100)
+            record = {"clip_id": "clip-1", "clip_name": "A001.mov", "file_path": source, "media_id": "media-1"}
+            analysis_root = os.path.join(tmp, "analysis")
+            self._write_report(
+                analysis_root=analysis_root,
+                project_name="Current Project",
+                project_id="v1",
+                source=source,
+                record=record,
+                source_trust="medium",
+            )
+
+            coverage = build_coverage_report(
+                project_name="Current Project",
+                project_id="v1",
+                records=[record],
+                target={"type": "bin", "path": "Master"},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities=self._base_capabilities(),
+            )
+        self.assertTrue(coverage["success"])
+        self.assertEqual(coverage["summary"]["clips_total"], 1)
+        self.assertEqual(coverage["summary"]["clips_analyzed"], 1)
+        self.assertEqual(coverage["summary"]["coverage_percent"], 100.0)
+        self.assertEqual(coverage["summary"]["source_trust_distribution"], {"medium": 1})
+        clip = coverage["clips"][0]
+        self.assertTrue(clip["analyzed"])
+        self.assertEqual(clip["cache_status"], "reusable")
+        self.assertEqual(clip["source_trust"], "medium")
+        self.assertIn("technical", clip["layers_present"])
+        self.assertIn("motion", clip["layers_present"])
+        self.assertIn("evidence base: 1/1 clips analyzed (100%)", coverage["evidence_base"])
+
+    def test_coverage_report_flags_missing_transcription_layer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"x" * 100)
+            record = {"clip_id": "clip-1", "clip_name": "A001.mov", "file_path": source, "media_id": "media-1"}
+            analysis_root = os.path.join(tmp, "analysis")
+            # Report exists but without transcription
+            self._write_report(
+                analysis_root=analysis_root,
+                project_name="Missing Layer Project",
+                project_id="v1",
+                source=source,
+                record=record,
+                with_transcription=False,
+            )
+
+            # Request requires transcription — report is incomplete
+            coverage = build_coverage_report(
+                project_name="Missing Layer Project",
+                project_id="v1",
+                records=[record],
+                target={"type": "bin", "path": "Master"},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": True},
+                },
+                capabilities=self._base_capabilities(),
+            )
+        self.assertEqual(coverage["summary"]["clips_stale"], 1)
+        clip = coverage["clips"][0]
+        self.assertFalse(clip["analyzed"])
+        self.assertIn("transcription", clip["missing_layers"])
+        self.assertIn("missing layers", clip["recommended_action"])
+        self.assertIn("transcription", clip["recommended_action"])
+
+    def test_coverage_report_marks_signature_drift_as_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"original")
+            record = {"clip_id": "clip-1", "clip_name": "A001.mov", "file_path": source, "media_id": "media-1"}
+            analysis_root = os.path.join(tmp, "analysis")
+            # Persist report with the current signature.
+            self._write_report(
+                analysis_root=analysis_root,
+                project_name="Signature Drift Project",
+                project_id="v1",
+                source=source,
+                record=record,
+            )
+            # Now modify the source file so its mtime+size change → signature mismatch.
+            import time as _time
+            _time.sleep(0.05)
+            with open(source, "wb") as handle:
+                handle.write(b"changed bytes here change change change")
+
+            coverage = build_coverage_report(
+                project_name="Signature Drift Project",
+                project_id="v1",
+                records=[record],
+                target={"type": "bin", "path": "Master"},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities=self._base_capabilities(),
+            )
+        clip = coverage["clips"][0]
+        self.assertEqual(clip["cache_status"], "stale_or_incomplete")
+        self.assertTrue(any("source_" in reason for reason in clip["staleness_reasons"]))
+        self.assertEqual(coverage["summary"]["clips_stale"], 1)
+
+    def test_coverage_report_surfaces_reuse_blocked_from_provenance_orphan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"x" * 100)
+            record = {
+                "clip_id": "clip-1",
+                "clip_name": "A001.mov",
+                "file_path": source,
+                "media_id": "media-1",
+                # Provenance claims a report exists, but the path is missing
+                "analysis_report_path": os.path.join(tmp, "analysis", "ghost", "clips", "missing", "analysis.json"),
+                "published_analysis_signature": "ghost-signature",
+            }
+            analysis_root = os.path.join(tmp, "analysis")
+
+            coverage = build_coverage_report(
+                project_name="Orphan Provenance Project",
+                project_id="v1",
+                records=[record],
+                target={"type": "bin", "path": "Master"},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities=self._base_capabilities(),
+            )
+        clip = coverage["clips"][0]
+        self.assertTrue(clip["reuse_blocked"])
+        self.assertEqual(clip["cache_status"], "reuse_blocked")
+        self.assertEqual(coverage["summary"]["clips_reuse_blocked"], 1)
+        self.assertIn("force_refresh=true", clip["recommended_action"])
+
+    def test_coverage_report_min_source_trust_filters_below_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"x" * 100)
+            record = {"clip_id": "clip-1", "clip_name": "A001.mov", "file_path": source, "media_id": "media-1"}
+            analysis_root = os.path.join(tmp, "analysis")
+            self._write_report(
+                analysis_root=analysis_root,
+                project_name="Trust Filter Project",
+                project_id="v1",
+                source=source,
+                record=record,
+                source_trust="low",
+            )
+
+            coverage = build_coverage_report(
+                project_name="Trust Filter Project",
+                project_id="v1",
+                records=[record],
+                target={"type": "bin", "path": "Master"},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                    "min_source_trust": "high",
+                },
+                capabilities=self._base_capabilities(),
+            )
+        clip = coverage["clips"][0]
+        # Report exists and is layer-complete, but trust is below threshold
+        self.assertEqual(coverage["min_source_trust"], "high")
+        self.assertTrue(clip["below_min_source_trust"])
+        self.assertEqual(clip["source_trust"], "low")
+        self.assertEqual(coverage["summary"]["clips_needs_higher_trust"], 1)
+        # And it should NOT be counted as analyzed for evidence-base purposes
+        self.assertEqual(coverage["summary"]["clips_analyzed"], 0)
+
+    def test_mark_registry_stale_flags_matching_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"x" * 100)
+            record = {"clip_id": "clip-1", "clip_name": "A001.mov", "file_path": source, "media_id": "media-1"}
+            analysis_root = os.path.join(tmp, "analysis")
+            report_path = self._write_report(
+                analysis_root=analysis_root,
+                project_name="Relink Project",
+                project_id="v1",
+                source=source,
+                record=record,
+            )
+
+            result = mark_registry_stale_for_clip(
+                project_name="Relink Project",
+                project_id="v1",
+                analysis_root=analysis_root,
+                clip_id="clip-1",
+                reason="replace_clip",
+            )
+            self.assertTrue(result["success"])
+            self.assertEqual(result["matched"], 1)
+
+            superseded = registry_entry_superseded_info(
+                resolve_output_root(
+                    project_name="Relink Project",
+                    project_id="v1",
+                    analysis_root=analysis_root,
+                    source_paths=[source],
+                    create=False,
+                )["project_root"],
+                report_path,
+            )
+            self.assertIsNotNone(superseded)
+            self.assertTrue(superseded["superseded_by_relink"])
+            self.assertEqual(superseded["superseded_reason"], "replace_clip")
+
+    def test_mark_registry_stale_survives_registry_rebuild(self):
+        """update_analysis_registry must preserve superseded_by_relink across rebuilds."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"x" * 100)
+            record = {"clip_id": "clip-1", "clip_name": "A001.mov", "file_path": source, "media_id": "media-1"}
+            analysis_root = os.path.join(tmp, "analysis")
+            report_path = self._write_report(
+                analysis_root=analysis_root,
+                project_name="Rebuild Project",
+                project_id="v1",
+                source=source,
+                record=record,
+            )
+            mark_registry_stale_for_clip(
+                project_name="Rebuild Project",
+                project_id="v1",
+                analysis_root=analysis_root,
+                clip_id="clip-1",
+                reason="replace_clip",
+            )
+
+            project_root = resolve_output_root(
+                project_name="Rebuild Project",
+                project_id="v1",
+                analysis_root=analysis_root,
+                source_paths=[source],
+                create=False,
+            )["project_root"]
+            # Rebuild — simulates what commit_visual_analysis does after analysis.
+            update_analysis_registry(project_root, report_paths=[report_path])
+
+            superseded = registry_entry_superseded_info(project_root, report_path)
+            self.assertIsNotNone(superseded, "superseded flag must survive registry rebuild")
+            self.assertEqual(superseded["superseded_reason"], "replace_clip")
+
+    def test_coverage_report_surfaces_superseded_by_relink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"x" * 100)
+            record = {"clip_id": "clip-1", "clip_name": "A001.mov", "file_path": source, "media_id": "media-1"}
+            analysis_root = os.path.join(tmp, "analysis")
+            self._write_report(
+                analysis_root=analysis_root,
+                project_name="Relink Coverage Project",
+                project_id="v1",
+                source=source,
+                record=record,
+            )
+            mark_registry_stale_for_clip(
+                project_name="Relink Coverage Project",
+                project_id="v1",
+                analysis_root=analysis_root,
+                clip_id="clip-1",
+                reason="replace_clip",
+            )
+
+            coverage = build_coverage_report(
+                project_name="Relink Coverage Project",
+                project_id="v1",
+                records=[record],
+                target={"type": "bin", "path": "Master"},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities=self._base_capabilities(),
+            )
+        clip = coverage["clips"][0]
+        self.assertTrue(clip["superseded_by_relink"])
+        self.assertFalse(clip["analyzed"])  # relink defeats reusability
+        self.assertEqual(coverage["summary"]["clips_stale"], 1)
+        self.assertEqual(coverage["summary"]["clips_analyzed"], 0)
+        self.assertIn("replaced", clip["recommended_action"].lower() + " " + clip["recommended_action"].lower())
+        self.assertIn("re-analyze", clip["recommended_action"].lower())
+
+    def test_coverage_report_fires_reuse_blocked_on_signature_drifted_provenance(self):
+        """Provenance points to a report that exists but is signature-drifted → reuse_blocked, not silent stale."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"original")
+            record_initial = {"clip_id": "clip-1", "clip_name": "A001.mov", "file_path": source, "media_id": "media-1"}
+            analysis_root = os.path.join(tmp, "analysis")
+            report_path = self._write_report(
+                analysis_root=analysis_root,
+                project_name="Signature Drift Provenance Project",
+                project_id="v1",
+                source=source,
+                record=record_initial,
+            )
+            # Drift the source so signature no longer matches
+            import time as _time
+            _time.sleep(0.05)
+            with open(source, "wb") as handle:
+                handle.write(b"changed bytes here change change change")
+
+            record_with_provenance = {
+                **record_initial,
+                "analysis_report_path": report_path,
+                "published_analysis_signature": "any-signature-string",
+            }
+            coverage = build_coverage_report(
+                project_name="Signature Drift Provenance Project",
+                project_id="v1",
+                records=[record_with_provenance],
+                target={"type": "bin", "path": "Master"},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities=self._base_capabilities(),
+            )
+        clip = coverage["clips"][0]
+        self.assertTrue(clip["reuse_blocked"])
+        self.assertEqual(coverage["summary"]["clips_reuse_blocked"], 1)
+        self.assertIn("force_refresh=true", clip["recommended_action"])
+
+    def test_coverage_report_does_not_fire_reuse_blocked_without_provenance(self):
+        """Plain stale report without Resolve-side provenance must NOT escalate to reuse_blocked."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"original")
+            record = {"clip_id": "clip-1", "clip_name": "A001.mov", "file_path": source, "media_id": "media-1"}
+            analysis_root = os.path.join(tmp, "analysis")
+            self._write_report(
+                analysis_root=analysis_root,
+                project_name="No Provenance Project",
+                project_id="v1",
+                source=source,
+                record=record,
+            )
+            import time as _time
+            _time.sleep(0.05)
+            with open(source, "wb") as handle:
+                handle.write(b"drift drift drift drift drift drift")
+
+            coverage = build_coverage_report(
+                project_name="No Provenance Project",
+                project_id="v1",
+                records=[record],  # no analysis_report_path field
+                target={"type": "bin", "path": "Master"},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities=self._base_capabilities(),
+            )
+        clip = coverage["clips"][0]
+        self.assertFalse(clip["reuse_blocked"])
+        self.assertEqual(clip["cache_status"], "stale_or_incomplete")
+        self.assertEqual(coverage["summary"]["clips_reuse_blocked"], 0)
+        self.assertEqual(coverage["summary"]["clips_stale"], 1)
+
+    def test_analysis_root_coverage_summarizes_disk(self):
+        """Standalone coverage helper powers the control panel Readiness card."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"x" * 100)
+            record_a = {"clip_id": "clip-a", "clip_name": "A001.mov", "file_path": source, "media_id": "media-a"}
+            record_b = {
+                "clip_id": "clip-b",
+                "clip_name": "B001.mov",
+                "file_path": os.path.join(tmp, "source", "B001.mov"),
+                "media_id": "media-b",
+            }
+            os.makedirs(os.path.dirname(record_b["file_path"]), exist_ok=True)
+            with open(record_b["file_path"], "wb") as handle:
+                handle.write(b"y" * 100)
+            analysis_root = os.path.join(tmp, "analysis")
+            self._write_report(
+                analysis_root=analysis_root,
+                project_name="Standalone Coverage Project",
+                project_id="v1",
+                source=source,
+                record=record_a,
+                source_trust="high",
+                with_transcription=True,
+            )
+            self._write_report(
+                analysis_root=analysis_root,
+                project_name="Standalone Coverage Project",
+                project_id="v1",
+                source=record_b["file_path"],
+                record=record_b,
+                source_trust="medium",
+            )
+            mark_registry_stale_for_clip(
+                project_name="Standalone Coverage Project",
+                project_id="v1",
+                analysis_root=analysis_root,
+                clip_id="clip-b",
+                reason="replace_clip",
+            )
+
+            project_root = resolve_output_root(
+                project_name="Standalone Coverage Project",
+                project_id="v1",
+                analysis_root=analysis_root,
+                source_paths=[source],
+                create=False,
+            )["project_root"]
+            payload = analysis_root_coverage(project_root)
+
+        self.assertTrue(payload["success"])
+        summary = payload["summary"]
+        self.assertEqual(summary["clips_total_with_reports"], 2)
+        self.assertEqual(summary["clips_signed"], 2)
+        self.assertEqual(summary["clips_superseded_by_relink"], 1)
+        self.assertEqual(summary["source_trust_distribution"], {"high": 1, "medium": 1})
+        # Transcription was enabled on clip-a only.
+        self.assertEqual(summary["layer_coverage"].get("transcription"), 1)
+        self.assertEqual(summary["layer_coverage"].get("technical"), 2)
+        # The superseded clip should appear first in the prioritized list.
+        self.assertTrue(payload["analyzed_clips"][0]["superseded_by_relink"])
+
+    def test_coverage_report_persists_source_trust_via_analysis_profile(self):
+        """source_trust persisted by _build_clip_analysis_report flows through to coverage."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source", "A001.mov")
+            os.makedirs(os.path.dirname(source))
+            with open(source, "wb") as handle:
+                handle.write(b"x" * 100)
+            record = {"clip_id": "clip-1", "clip_name": "A001.mov", "file_path": source, "media_id": "media-1"}
+            analysis_root = os.path.join(tmp, "analysis")
+            self._write_report(
+                analysis_root=analysis_root,
+                project_name="Trust Persistence Project",
+                project_id="v1",
+                source=source,
+                record=record,
+                source_trust="high",
+            )
+
+            coverage = build_coverage_report(
+                project_name="Trust Persistence Project",
+                project_id="v1",
+                records=[record],
+                target={"type": "bin", "path": "Master"},
+                params={
+                    "analysis_root": analysis_root,
+                    "depth": "standard",
+                    "transcription": {"enabled": False},
+                },
+                capabilities=self._base_capabilities(),
+            )
+        self.assertEqual(coverage["clips"][0]["source_trust"], "high")
+        self.assertEqual(coverage["summary"]["source_trust_distribution"], {"high": 1})
 
 
 if __name__ == "__main__":

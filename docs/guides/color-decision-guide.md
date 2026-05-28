@@ -345,6 +345,45 @@ Do not promise node labels or node colors unless the available API path can
 actually write them. Existing labels, LUTs, tools, and cache state can be
 inspected and reported.
 
+## Pre-flight Coverage Check (required)
+
+Before answering any shot-matching, look-development, or per-clip grade question,
+call `timeline_item_color(action="grade_evidence_base", params={...})` against the
+target clip. The action is a pure read — it never mutates and never triggers
+analysis. It composes the version snapshot, node graph, color group, and
+`coverage_report` for the underlying media pool item into a single one-line
+`evidence_base` string. **Lead your response with that line — before any grade
+recommendation.**
+
+For sequence-wide checks (multiple clips, bin, timeline), use
+`media_analysis(action="coverage_report")` as before — the broader pre-flight
+covers all targets in one call.
+
+The response carries an `evidence_base` string and per-clip details: layer
+presence, source-trust tier, staleness reasons, relink supersedure, and a
+`recommended_action`. **Lead your response to the user with the `evidence_base`
+line — before any grade recommendation.**
+
+For color work, source-trust matters more than for editorial. Use the
+`min_source_trust` parameter to gate recommendations:
+
+- `coverage_report(min_source_trust="medium")` for routine corrections.
+- `coverage_report(min_source_trust="high")` for hero shots, look-development
+  passes, and any decision that depends on confident scene/lighting recognition.
+
+Clips below the threshold appear in `summary.clips_needs_higher_trust` and
+should be re-analyzed with an explicit higher `source_trust` before being graded
+from their visual descriptions.
+
+Relink-superseded clips (`superseded_by_relink=true`) must never be reasoned
+about as if the prior analysis still describes the current media. The prior
+report is preserved for reference, but a re-analysis is required before
+shot-matching or look development is grounded.
+
+If existing analysis flags exposure issues, clipped highlights, color cast
+warnings, or scene-of-interest notes, surface those before proposing CDL or
+node-graph changes.
+
 ## Agent Response Rules
 
 When answering a color request, classify the requested operation:
@@ -368,6 +407,7 @@ DCTL, or CDL is equivalent to a full colorist pass.
 
 ## Useful MCP Calls
 
+- `media_analysis(action="coverage_report", params={...})` — pre-flight evidence-base check
 - `resolve_control(action="open_page", params={"page": "color"})`
 - `timeline_item_color(action="grade_boundary_report", params={...})`
 - `timeline_item_color(action="probe_grade_item", params={...})`

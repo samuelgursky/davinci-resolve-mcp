@@ -105,7 +105,7 @@ class FusionCompTargetingTests(unittest.TestCase):
 
         comp, err = server._get_fusion_comp_on_timeline_item(item, {"comp_index": 3})
         self.assertIsNone(comp)
-        self.assertIn("item has 2 comp(s)", err["error"])
+        self.assertIn("item has 2 comp(s)", (err["error"].get("message","") if isinstance(err["error"], dict) else err["error"]))
 
 
 if __name__ == "__main__":

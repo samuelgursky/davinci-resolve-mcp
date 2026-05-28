@@ -131,6 +131,11 @@ Code's Read tool handles JPG/PNG natively), produce the JSON, and call
 `pending_host_vision_analysis` — surface that explicitly; do not call the
 analysis complete.
 
+The deferred payload also includes a `host_tool_choice_hint` block. Hosts that
+respect this hint pass it as `tool_choice={type:"tool", name:"media_analysis"}`
+on the next API turn, hard-locking the agent into the correct next call. Hosts
+that don't recognize the field ignore it — the flow is unchanged for them.
+
 ## Local Control Panel
 
 If the user asks to open, launch, or inspect the Resolve MCP control panel, run
@@ -146,6 +151,11 @@ localhost URL. The panel is local and single-user; it is an operational surface
 for server status, Resolve clips, source-safe analysis jobs, preferences, and
 diagnostics as those sections are added.
 
+The **Review tab → History** button opens the timeline-history surface:
+per-timeline version chain, brain-edit deltas, manual archive, and rollback.
+Backed by `timeline_versioning` MCP actions; see that tool's section below for
+the underlying primitives.
+
 ---
 
 ## Editorial Memory And Decision-Making
@@ -159,8 +169,15 @@ screen geography, continuity, and coverage variety.
 Before analyzing or rebuilding anything, check whether the active project already
 contains useful evidence:
 
-- `media_analysis(action="summarize")`
-- `media_analysis(action="get_report")` when a manifest or report path is known
+- `media_analysis(action="coverage_report", params={"target": {...}})` — the
+  pre-flight contract. Pure read; never triggers analysis. Returns per-clip
+  state (analyzed / stale / missing / reuse_blocked / superseded_by_relink),
+  layer presence, `source_trust` tier, and a `recommended_action`. The response
+  carries an `evidence_base` summary string — **lead any editorial or color
+  recommendation with that line, before the creative answer.**
+- `media_analysis(action="summarize")` for project-wide rollup of warnings,
+  motion distribution, and signed-report counts.
+- `media_analysis(action="get_report")` when a manifest or report path is known.
 - `timeline(action="list")`
 - `timeline(action="get_current")`
 - `timeline(action="probe_timeline_structure")`
@@ -168,14 +185,23 @@ contains useful evidence:
 - `timeline_markers(action="get_all")`
 - `media_analysis(action="review_timeline_markers")` when marker imagery matters
 
-Reuse prior analysis unless it is stale, incomplete, or missing the modality the
-user is asking for. For example, do not re-run visual analysis just because the
-edit task is new if a current report already has keyframes, motion variance, and
-usable visual descriptions. Add transcription, host_chat_paths vision (followed
-by commit_vision), marker review, or source range checks only when that missing
-evidence changes the decision. Use `force_refresh=true` only when the user asks for a fresh read or
+Reuse prior analysis unless it is stale, incomplete, missing a modality, or
+flagged `superseded_by_relink` because Resolve's source clip was replaced after
+analysis ran. Coverage_report surfaces all of these in one read. Do not re-run
+visual analysis just because the edit task is new if a current report already
+has keyframes, motion variance, and usable visual descriptions. Add
+transcription, host_chat_paths vision (followed by commit_vision), marker
+review, or source range checks only when that missing evidence changes the
+decision. Use `force_refresh=true` only when the user asks for a fresh read or
 when cache signatures show the source, prompt, depth, or requested modality has
 changed.
+
+Source-trust filtering: `coverage_report` accepts `min_source_trust` (one of
+`auto`, `filename`, `low`, `medium`, `high`). Clips below the threshold appear
+in `summary.clips_needs_higher_trust` and are reported with
+`below_min_source_trust=true`. Use `medium` for routine work, `high` for
+shot-matching or look-development passes where confident scene/identity reads
+matter.
 
 For finished-video editorial work, scene detection and motion variance are
 guardrails, not story. Use them to avoid black frames, flash frames, corrupt
@@ -216,6 +242,13 @@ Be explicit about the API boundary:
 - Not directly creatable from structured params: new node trees, Lift/Gamma/Gain
   wheel values, log/HDR palette values, curves, qualifiers, power windows,
   tracking, Color Warper, and detailed ResolveFX/OFX parameter edits.
+
+Before any color recommendation, run
+`media_analysis(action="coverage_report", params={"target": {...},
+"min_source_trust": "medium"})` (use `"high"` for shot-matching or
+look-development passes). Lead the response with the returned `evidence_base`
+line before the grade plan. Coverage_report surfaces relink-superseded clips
+that must be re-analyzed before being graded from prior visual descriptions.
 
 For safe color work, start with `timeline_item_color(action="grade_boundary_report")`,
 `timeline_item_color(action="grade_version_snapshot")`,
@@ -415,12 +448,13 @@ report reuse, persisted analysis execution, host_chat_paths visual review
 metadata/marker writeback, and timeline-level editorial helpers.
 
 Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
-`analyze_file`, `analyze_clip`, `analyze_bin`, `analyze_project`,
-`detect_sync_events`, `add_sync_event_markers`, `publish_clip_metadata`,
-`commit_vision`, `summarize`, `get_report`, `build_index`, `index_status`,
-`query_index`, `start_batch_job`, `run_batch_job_slice`, `batch_job_status`,
-`list_batch_jobs`, `cancel_batch_job`, `resume_batch_job`,
-`review_timeline_markers`, and `cleanup_artifacts`.
+`coverage_report`, `analyze_file`, `analyze_clip`, `analyze_bin`,
+`analyze_project`, `detect_sync_events`, `add_sync_event_markers`,
+`publish_clip_metadata`, `commit_vision`, `summarize`, `get_report`,
+`build_index`, `index_status`, `query_index`, `start_batch_job`,
+`run_batch_job_slice`, `batch_job_status`, `list_batch_jobs`,
+`cancel_batch_job`, `resume_batch_job`, `review_timeline_markers`, and
+`cleanup_artifacts`.
 The tool never installs
 dependencies and validates that outputs stay under
 `davinci-resolve-mcp-analysis` project roots rather than beside source media.
@@ -434,14 +468,29 @@ for existing reports. `quick` uses ffprobe metadata; `standard` adds ffmpeg
 read-through checks,
 cut-boundary analysis from full-stream scene detection, flash-frame candidates,
 motion/variance scoring, analysis keyframes, and sidecar reports.
-By default, planning checks the active project's analysis root for existing
-reports and marks matching clips `skip_execution=true` when those reports already
-contain the requested technical, motion, transcription, and vision layers.
+By default, planning checks the active project's analysis root and bounded
+related project-version roots for existing reports, then marks matching clips
+`skip_execution=true` when those reports already contain the requested
+technical, motion, transcription, and vision layers.
+Resolve clip records also carry the published third-party
+`davinci_resolve_mcp.analysis_report_path` when metadata writeback has run; use
+that provenance as a first-class reuse hint even if the report lives under a
+previous project-version analysis root.
+The planner also maintains an `analysis_registry.json` under the analysis base
+root. This registry indexes report paths by source path, clip id, media id, and
+signature so project renames and versioned Resolve projects can still find prior
+work quickly.
 Reports include cache signatures with source stat, depth, frame budget, prompt
 hash, and requested modalities. Use `force_refresh=true` for a fresh read,
 `max_report_age_days` for freshness limits, and `reuse_policy="fresh"` when
 unsigned older reports should not be reused. Pass `reuse_existing=false` only
-when the user explicitly wants to ignore memory.
+when the user explicitly wants to ignore memory; pass
+`search_related_project_roots=false` only for intentionally isolated runs.
+If Resolve metadata shows prior MCP analysis but the planner cannot validate a
+matching report, execution returns `status="reuse_blocked"` instead of silently
+reanalyzing. Treat that as a project-memory integrity warning; restore the
+report or pass `force_refresh=true` only when the user explicitly wants fresh
+analysis.
 Transcription, visual analysis, metadata writeback, and Media Pool marker
 writeback are default-on. Vision uses
 `vision.provider="host_chat_paths"`: analyze actions extract representative
@@ -466,6 +515,10 @@ plus before/after cut-boundary frames as the sampled set. Skipping
 `commit_vision` leaves the run in `pending_host_vision_analysis` — that is a
 failure mode to surface, not a silent downgrade. The local mock providers are
 for tests and do not send frames off-machine.
+
+When creating timelines through `media_pool`, use `if_exists="reuse"` for
+idempotent reruns, `if_exists="version"` for deliberate alternate cuts, and
+`if_exists="fail"` when duplicate names indicate a workflow error.
 Use `detect_sync_events` before multicam setup, deliverable QC, or single-camera
 sync review when the user needs likely 2-pop or slate-clap locations. It reads
 source audio through FFmpeg/FFprobe only, returns advisory frames/timecodes and
@@ -496,6 +549,111 @@ only when that mutation is intentional.
 ---
 
 ### Timelines
+
+**`timeline_versioning`** — Version-on-mutate, archive, rollback, brain-edit history (C6).
+
+Every destructive timeline op (compound, captions, ripple delete, gap close,
+retime, marker batch, track add/delete, take swaps, color grade, etc.) auto-
+archives the working timeline to the `Archive` bin under an `analysis_run_id`
+before the mutation runs. This tool surfaces and controls that history.
+
+Key actions:
+- `begin_run(label?, initiator?, analysis_run_id?)` — open a multi-step run.
+  Subsequent destructive calls auto-thread this run's ID, so a brain
+  operation that touches 5 clips creates ONE archive + 5 logged edits
+  instead of 5 separate archives.
+- `end_run(analysis_run_id?)` — close the run; aggregates brain_edits into
+  per-metric rollup in `analysis_runs.summary_json`.
+- `list_runs(limit?)` — recent runs newest first with their summaries.
+- `archive_current(reason?, analysis_run_id?)` — manual checkpoint of the
+  current timeline. Idempotent within an `analysis_run_id`. Also captures a
+  structural snapshot (every clip's placement, written to `timeline_clip_usage`)
+  and a thumbnail (when the Color page has a current clip).
+- `list_versions(timeline_name)` — version chain, oldest first. Each row
+  includes `archived_timeline_name`, `created_at`, `analysis_run_id`,
+  `initiator`, `thumbnail_path`, and `drt_export_path` (set when the version
+  was retention-collapsed to disk).
+- `diff_versions(timeline_name, from_version, to_version)` — structural diff
+  between two snapshots: `{added, removed, moved}` lists of clips by
+  media_pool_item_id and timeline position.
+- `get_history(timeline_name?, analysis_run_id?, limit?)` — brain-edit rows
+  with `edit_type`, `target_metric`, `before_value`, `after_value`, `delta`,
+  `rationale`, and `initiator`. Filter by timeline or run; defaults to 50.
+- `media_pool_changes(analysis_run_id?, media_pool_action?, limit?)` —
+  destructive media-pool history (deletes, replaces, relinks) from the
+  `media_pool_changes` table. Separate from brain_edits because the
+  addressable entity is a media_pool_item, not a timeline.
+- `rollback(timeline_name, version, analysis_run_id?)` — archive current first,
+  then duplicate the archived version back as a new `<name>_rolled_back_<HHMMSS>`.
+- `prune(timeline_name, keep_n=10)` — collapse old versions to `.drt` exports
+  under `<project>/_soul/timeline_versions/<slug>/` and remove them from the
+  bin. DB row preserved with `drt_export_path` populated for later rollback.
+- `registry()` — cross-project brain-edits registry that lives at the analysis
+  base root (one level above each project_root). Mirrors `analysis_registry.json`.
+
+**Strict mode** — `timeline.delete_timelines`, `timeline.delete_track`, and
+`timeline.delete_clips(ripple=True)` REFUSE to run when the pre-mutation
+archive can't be created. Pass `strict=true` on any destructive op to opt in.
+This prevents catastrophic ops from proceeding when versioning is broken.
+
+**Action filtering** — `timeline_item.set_property(key='Notes')` and
+`timeline.set_clip_property(key='Notes'|'Comments')` bypass versioning because
+free-text metadata isn't worth archiving. See `NO_ARCHIVE_ON_KEYS` in
+`src/utils/destructive_hook.py` to add more.
+
+**Preferences** — `timeline_versioning_auto_save_after_archive` (default false)
+triggers `project.SaveProject()` after every archive so Resolve crashes don't
+lose history. Configure via the `setup` tool's preferences.
+
+### Analysis Caps
+
+`media_analysis` honors a project-wide caps preset that controls 7 dimensions
+of analysis cost: response payload size, frames per clip, vision tokens per
+clip / per job / per day, wall-clock seconds per call, and the maximum frame
+image dimension before upload. Four named presets, plus per-field overrides.
+
+| Dimension                     | minimal | standard | generous  | unlimited |
+|------------------------------:|--------:|---------:|----------:|----------:|
+| response_chars                | 5,000   | 25,000   | 100,000   | none      |
+| vision_tokens_per_clip        | 5,000   | 25,000   | 100,000   | none      |
+| frames_per_clip               | 4       | 8        | 24        | none      |
+| vision_tokens_per_job         | 50,000  | 250,000  | 1,000,000 | none      |
+| vision_tokens_per_day         | 100,000 | 500,000  | 2,000,000 | none      |
+| wall_clock_seconds_per_call   | 30      | 90       | 300       | none      |
+| max_frame_dim_pixels          | 512     | 768      | 1280      | none      |
+
+Default preset: `standard`. Set via `media_analysis(action="set_caps_preset",
+preset=…, overrides={...})` or the dashboard's **Preferences → Analysis Caps**
+panel. Inspect via `media_analysis(action="get_caps")` which returns the
+effective values + a usage rollup (clip / job / day) with percent-consumed.
+`media_analysis(action="get_usage", scope="day"|"job"|"clip")` returns raw
+counts for one scope. Usage is tracked in
+`<project>/_soul/timeline_brain.sqlite` (`analysis_token_usage` table).
+
+The caps layer:
+- Slices `frame_paths` to `frames_per_clip` before the host LLM sees them.
+- Downscales each sampled frame in place to `max_frame_dim_pixels` (Pillow;
+  degrades silently to original-resolution upload if not installed).
+- Trims the analysis response payload to `response_chars`, dropping the
+  largest list/string fields first and marking the trim under `_trimmed`.
+- Records actual token usage from the host's `commit_vision` payload's
+  optional `usage: {vision_tokens, ...}` block. Hosts that don't report
+  tokens still get `frames_uploaded` recorded.
+
+Wall-clock timeout + cumulative-budget refusal are implemented in
+`src/utils/analysis_caps.py` and ready to hook at additional call sites in
+the analysis pipeline; the initial integration is at frame sampling +
+response construction + commit_vision usage recording.
+
+**Declared edits** — when the brain (or an agent acting deliberately) wants to
+measure an edit, pass `metric`, `direction`, and `rationale` in the params of
+the destructive call. The hook captures `before_value` and `after_value` from
+the live timeline (using the metric vocabulary in `brain_edits.py`) and writes
+them to the `brain_edits` row. Without these, the edit is still logged but with
+null metric — gives history without requiring deliberate intent.
+
+Supported metrics: `duration_seconds`, `avg_performance_score`, `clip_count`,
+`gap_count`, `total_gap_seconds`, `redundancy_score`.
 
 **`timeline`** — Timeline operations: tracks, clips, import/export, generators.
 

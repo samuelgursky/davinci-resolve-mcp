@@ -38,6 +38,35 @@ the user explicitly needs. A new request for edit advice is not automatically a
 reason to re-run visual analysis if the prior report already has current
 technical data, motion/keyframe evidence, and useful visual descriptions.
 
+## Pre-flight Coverage Check (required)
+
+Before answering any cut, pacing, story-structure, or shot-selection question,
+call `media_analysis(action="coverage_report")` against the target you're about
+to reason about (timeline, bin, selection, or project). The action is a pure
+read — it never triggers analysis.
+
+The response includes an `evidence_base` string (e.g. `"evidence base: 38/40
+clips analyzed (95%), 1 stale, 1 reuse-blocked."`) and a per-clip breakdown
+covering layer presence, source-trust tier, staleness reasons, relink
+supersedure, and a `recommended_action`.
+
+**The response to the user must lead with the `evidence_base` line — before any
+creative recommendation.** This mirrors the `pending_host_vision_analysis`
+honesty pattern: do not silently answer from incomplete evidence. If coverage
+is below the threshold the user's question depends on, surface that gap first
+and offer to fill it (e.g. "3 of the clips on this timeline have no transcript;
+analyzing them first will materially change my cut-point suggestions — run it
+now?").
+
+When the gap is small and the user is okay proceeding, still answer — but mark
+the answer as evidence-thin so they can re-ask once gaps are filled. Do NOT
+auto-trigger analysis to fix gaps unless the user explicitly asks.
+
+Relink-superseded clips (`superseded_by_relink=true`) must never be reasoned
+about as if the prior analysis still describes them. The prior report is
+preserved for reference, but a re-analysis is required before the recommendation
+is grounded.
+
 ## Frame Choice
 
 Find the decisive frame, not just the technically clean frame. Useful cut points

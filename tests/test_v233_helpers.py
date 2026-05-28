@@ -113,7 +113,7 @@ class CloudSettingsBuilderTest(unittest.TestCase):
     def test_unknown_sync_mode_returns_error(self):
         _, err = _build_cloud_settings(self.r, sync_mode="bidirectional")
         self.assertIsNotNone(err)
-        self.assertIn("Unknown sync_mode 'bidirectional'", err["error"])
+        self.assertIn("Unknown sync_mode 'bidirectional'", (err["error"].get("message","") if isinstance(err["error"], dict) else err["error"]))
 
     def test_load_only_3_keys_via_omission(self):
         # LoadCloudProject only honours name, media_path, sync_mode — caller omits the others
@@ -166,7 +166,7 @@ class AudioSyncSettingsBuilderTest(unittest.TestCase):
     def test_unknown_sync_mode(self):
         _, err = _build_audio_sync_settings(self.r, sync_mode="zerocross")
         self.assertIsNotNone(err)
-        self.assertIn("Unknown sync_mode 'zerocross'", err["error"])
+        self.assertIn("Unknown sync_mode 'zerocross'", (err["error"].get("message","") if isinstance(err["error"], dict) else err["error"]))
 
     def test_channel_number_special_strings(self):
         for alias, expected in [("automatic", -1), ("auto", -1), ("MIX", -2), ("mix", -2)]:
@@ -182,12 +182,12 @@ class AudioSyncSettingsBuilderTest(unittest.TestCase):
     def test_unknown_channel_string(self):
         _, err = _build_audio_sync_settings(self.r, channel_number="left")
         self.assertIsNotNone(err)
-        self.assertIn("Unknown channel_number 'left'", err["error"])
+        self.assertIn("Unknown channel_number 'left'", (err["error"].get("message","") if isinstance(err["error"], dict) else err["error"]))
 
     def test_invalid_channel_type(self):
         _, err = _build_audio_sync_settings(self.r, channel_number=1.5)
         self.assertIsNotNone(err)
-        self.assertIn("channel_number must be int", err["error"])
+        self.assertIn("channel_number must be int", (err["error"].get("message","") if isinstance(err["error"], dict) else err["error"]))
 
 
 # ────────────────────────────────────────────────────────────────────────────
