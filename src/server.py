@@ -498,9 +498,10 @@ def prep_color_handoff(output_dir: str = "") -> str:
 _py_ver = sys.version_info[:2]
 if _py_ver >= (3, 13):
     logger.warning(
-        f"Python {_py_ver[0]}.{_py_ver[1]} detected. DaVinci Resolve's scripting API "
-        f"may not work with Python 3.13+. If scriptapp('Resolve') returns None, "
-        f"recreate the venv with Python 3.10-3.12."
+        f"Python {_py_ver[0]}.{_py_ver[1]} detected. This is verified working on recent "
+        f"Resolve builds (Studio 20.3.2), but older builds may not load the scripting "
+        f"bridge on 3.13+. If scriptapp('Resolve') returns None, recreate the venv with "
+        f"Python 3.10-3.12."
     )
 
 # ─── Resolve Connection (lazy) ───────────────────────────────────────────────

@@ -144,5 +144,37 @@ class InstallConfigTests(unittest.TestCase):
         self.assertIn('newline=""', source)
 
 
+class PythonVersionGateTests(unittest.TestCase):
+    def test_floor_and_above_accepted(self):
+        # The only hard requirement is the 3.10 floor (MCP SDK). Everything
+        # above it is accepted, including 3.13/3.14.
+        for minor in (10, 11, 12, 13, 14):
+            self.assertTrue(install.is_supported_python_version((3, minor, 0)))
+
+    def test_below_minimum_rejected(self):
+        self.assertFalse(install.is_supported_python_version((3, 9, 0)))
+        self.assertFalse(install.is_supported_python_version((2, 7, 0)))
+
+    def test_abi_risk_flagged_for_313_plus(self):
+        self.assertFalse(install.is_abi_risk_python_version((3, 12, 0)))
+        self.assertTrue(install.is_abi_risk_python_version((3, 13, 0)))
+        self.assertTrue(install.is_abi_risk_python_version((3, 14, 3)))
+
+    def test_314_is_supported_but_flagged(self):
+        # 3.14 must NOT be refused (it works on recent Resolve), only flagged.
+        self.assertTrue(install.is_supported_python_version((3, 14, 3)))
+        self.assertTrue(install.is_abi_risk_python_version((3, 14, 3)))
+
+    def test_require_supported_python_accepts_314_with_note(self):
+        with patch.object(install, "_version_for_python", return_value=(3, 14, 3)):
+            version = install.require_supported_python("/usr/bin/python3.14")
+        self.assertEqual(version, (3, 14, 3))
+
+    def test_require_supported_python_exits_below_floor(self):
+        with patch.object(install, "_version_for_python", return_value=(3, 9, 0)):
+            with self.assertRaises(SystemExit):
+                install.require_supported_python("/usr/bin/python3.9")
+
+
 if __name__ == "__main__":
     unittest.main()

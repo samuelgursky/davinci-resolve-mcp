@@ -11,6 +11,16 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const VERSION = readPackageVersion();
 const MANAGED_MARKER = ".davinci-resolve-mcp-managed.json";
 
+// The only hard Python floor is the MCP SDK: mcp[cli] requires 3.10+.
+// We do NOT cap the upper bound. Resolve's scripting bridge (fusionscript)
+// loads cleanly into newer interpreters on recent builds — Python 3.14 is
+// verified working against Resolve Studio 20.3.2. Older Resolve builds may
+// fail to connect on 3.13+, but the version number is a poor proxy for that;
+// the connection check in `setup`/`doctor` is the real signal, so we proceed
+// with a soft heads-up rather than refusing to run.
+const PY_MIN_MINOR = 10;
+const PY_ABI_RISK_MINOR = 13;
+
 const SYNC_ITEMS = [
   "bin",
   "src",
@@ -54,7 +64,8 @@ Examples:
 
 Environment:
   DAVINCI_RESOLVE_MCP_INSTALL_ROOT   Override the managed install directory.
-  DAVINCI_RESOLVE_MCP_PYTHON         Python executable to use.
+  DAVINCI_RESOLVE_MCP_PYTHON         Python executable to use (3.10+). Set this to
+                                     pin a specific interpreter, e.g. python3.12.
   PYTHON                             Fallback Python executable to use.
 `;
 }
@@ -193,17 +204,24 @@ function pythonCandidates() {
   if (explicit) {
     candidates.push(explicit);
   }
+  // Prefer the lowest-ABI-risk interpreters first, then newer ones, then the
+  // generic launchers. All 3.10+ are accepted; ordering just picks the safest
+  // when several are installed.
   if (process.platform === "win32" && commandExists("py")) {
     candidates.push(
       { command: "py", args: ["-3.12"] },
       { command: "py", args: ["-3.11"] },
-      { command: "py", args: ["-3.10"] }
+      { command: "py", args: ["-3.10"] },
+      { command: "py", args: ["-3.13"] },
+      { command: "py", args: ["-3.14"] }
     );
   }
   candidates.push(
     { command: "python3.12", args: [] },
     { command: "python3.11", args: [] },
     { command: "python3.10", args: [] },
+    { command: "python3.13", args: [] },
+    { command: "python3.14", args: [] },
     { command: "python3", args: [] },
     { command: "python", args: [] }
   );
@@ -224,8 +242,9 @@ function checkPython(candidate) {
   }
   try {
     const info = JSON.parse(result.stdout.trim());
-    const supported = info.major === 3 && info.minor >= 10 && info.minor <= 12;
-    return { ...candidate, ...info, supported };
+    const supported = info.major === 3 && info.minor >= PY_MIN_MINOR;
+    const abiRisk = info.major === 3 && info.minor >= PY_ABI_RISK_MINOR;
+    return { ...candidate, ...info, supported, abiRisk };
   } catch {
     return null;
   }
@@ -244,8 +263,40 @@ function findSupportedPython() {
     }
   }
 
-  const suffix = checked.length ? ` Found: ${checked.join(", ")}.` : "";
-  throw new Error(`Python 3.10-3.12 is required for Resolve scripting compatibility.${suffix}`);
+  throw new Error(unsupportedPythonMessage(checked));
+}
+
+// Print the 3.13+ heads-up for run modes that never invoke install.py
+// (server/control-panel/batch). setup/doctor stay quiet here because
+// install.py emits a richer, connection-aware note of its own.
+function maybeWarnAbiRisk(info) {
+  if (info && info.abiRisk) {
+    console.warn(abiRiskNote(info));
+  }
+}
+
+function abiRiskNote(info) {
+  return (
+    `Note: using Python ${info.major}.${info.minor}.${info.micro}. ` +
+    `This is verified working on recent Resolve builds (Studio 20.3.2). ` +
+    `If Resolve fails to connect (scriptapp("Resolve") returns None), install ` +
+    `Python 3.10-3.12 and pin it with DAVINCI_RESOLVE_MCP_PYTHON=/path/to/python3.12.`
+  );
+}
+
+function unsupportedPythonMessage(checked) {
+  const found = checked.length ? ` Found: ${checked.join(", ")}.` : "";
+  const lines = [
+    `Python 3.${PY_MIN_MINOR} or newer is required (the MCP SDK needs Python 3.${PY_MIN_MINOR}+).${found}`,
+    "",
+    "How to fix:",
+    "  - Install Python 3.12 (the lowest-risk version for Resolve), e.g.:",
+    "      macOS:   brew install python@3.12   (or: pyenv install 3.12)",
+    "      Linux:   pyenv install 3.12          (or your distro's python3.12 package)",
+    "      Windows: install Python 3.12 from python.org",
+    `  - Point the launcher at it:  DAVINCI_RESOLVE_MCP_PYTHON=/path/to/python3.12 npx ${APP_NAME} setup`,
+  ];
+  return lines.join("\n");
 }
 
 function venvPython(root) {
@@ -258,7 +309,10 @@ function venvPython(root) {
   }
   const info = checkPython({ command: executable, args: [] });
   if (!info || !info.supported) {
-    throw new Error(`Managed venv Python must be 3.10-3.12. Re-run setup to recreate it: ${executable}`);
+    throw new Error(
+      `Managed venv Python must be 3.${PY_MIN_MINOR} or newer. ` +
+        `Re-run setup to recreate it: ${executable}`
+    );
   }
   return info;
 }
@@ -326,6 +380,7 @@ function commandDoctor(args) {
 function commandServer(args) {
   const root = syncManagedInstall(installRoot());
   const python = venvPython(root) || findSupportedPython();
+  maybeWarnAbiRisk(python);
   const serverScript = path.join(root, "src", "server.py");
   const [command, ...commandArgs] = pythonCommandLine(python, [serverScript, ...args]);
   run(command, commandArgs, { cwd: root });
@@ -334,6 +389,7 @@ function commandServer(args) {
 function commandControlPanel(args) {
   const root = syncManagedInstall(installRoot());
   const python = venvPython(root) || findSupportedPython();
+  maybeWarnAbiRisk(python);
   const [command, ...commandArgs] = pythonCommandLine(python, ["-m", "src.control_panel", ...args]);
   run(command, commandArgs, { cwd: root });
 }
@@ -341,6 +397,7 @@ function commandControlPanel(args) {
 function commandBatch(args) {
   const root = syncManagedInstall(installRoot());
   const python = venvPython(root) || findSupportedPython();
+  maybeWarnAbiRisk(python);
   const [command, ...commandArgs] = pythonCommandLine(python, ["-m", "src.batch_cli", ...args]);
   run(command, commandArgs, { cwd: root });
 }

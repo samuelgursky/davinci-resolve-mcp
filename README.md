@@ -133,7 +133,7 @@ Extension authoring references live in [docs/authoring](docs/authoring/). Resolv
 ## Requirements
 
 - DaVinci Resolve Studio 18.5+ on macOS, Windows, or Linux. The free edition does not support external scripting.
-- Python 3.10-3.12 recommended. Python 3.13+ may have ABI incompatibilities with Resolve's scripting library.
+- Python 3.10+ (3.10-3.12 is the lowest-risk range). Python 3.13/3.14 also work on recent Resolve builds (verified on Studio 20.3.2); older builds may fail to connect on 3.13+, in which case use 3.10-3.12.
 - Resolve external scripting set to **Local**.
 
 Resolve 19.1.3 remains the compatibility baseline. Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2. Resolve 21 beta APIs are intentionally deferred until stable.

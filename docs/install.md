@@ -5,8 +5,17 @@ This guide covers Resolve requirements, the universal installer, supported MCP c
 ## Requirements
 
 - **DaVinci Resolve Studio** 18.5+ (macOS, Windows, or Linux) — the free edition does not support external scripting
-- **Python 3.10–3.12** recommended (3.13+ may have ABI incompatibilities with Resolve's scripting library)
+- **Python 3.10+** (the MCP SDK requires 3.10). **3.10–3.12 is the lowest-risk
+  choice**; 3.13/3.14 also work on recent Resolve builds — see below
 - DaVinci Resolve running with **Preferences > General > "External scripting using"** set to **Local**
+
+> **Python 3.13 / 3.14:** these are **allowed** — setup will use them and warn.
+> Python 3.14 is verified working against DaVinci Resolve Studio 20.3.2. On
+> *older* Resolve builds the scripting bridge may fail to load on 3.13+
+> (`scriptapp("Resolve")` returns `None`); setup's connection check will tell you
+> if that happens. If it does, install a 3.10–3.12 interpreter
+> (`brew install python@3.12`, `pyenv install 3.12`, or python.org on Windows) and
+> point the launcher at it with `DAVINCI_RESOLVE_MCP_PYTHON=/path/to/python3.12`.
 
 Validated live coverage is based on **DaVinci Resolve 19.1.3 Studio** for the original API surface, plus **DaVinci Resolve 20.3.2 Studio** for the Resolve 20.0-20.2.2 scripting additions. Resolve 21 beta APIs are intentionally deferred until a stable release.
 
