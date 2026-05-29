@@ -2,6 +2,43 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.27.0
+
+**Frame-sampling modes (issue #46)** — how many frames a clip gets for visual
+analysis is now governed by a `sampling_mode`, decoupled from `depth` (which
+still controls which layers run). A fixed frame count over-sampled short clips
+and under-covered long ones; the demand-driven engine already scaled by
+duration/content, but the caps layer was flat-truncating its output back to 8
+frames — that flat cap was the real cause of long-clip under-coverage.
+
+Four clearly-tiered modes, organized so token cost is predictable per tier:
+
+- **Economy** (`fixed`) — flat N evenly-spaced, content-blind frames. Cheapest and
+  most predictable; good for proxies/triage.
+- **Balanced** (`per_minute`) — `clamp(minutes × frames_per_minute, floor, ceiling)`
+  (defaults 4/min, 3–80). Cost is linear in footage length; content-blind.
+- **Thorough** (`adaptive_capped`, recommended/default) — content-aware: samples
+  shot boundaries, representatives, and flash candidates, bounded to `[floor,
+  ceiling]`. Best coverage with a bounded cost.
+- **Thorough (uncapped)** (`adaptive`) — content-aware with no per-clip ceiling
+  (up to the 512-frame hard cap). Use only when clips are short or few.
+
+The first time you analyze without a saved default, the tool returns a
+`confirmation_required` response with a `sampling_mode_prompt`; choosing a mode
+saves it as your standing default (mirrors `timed_markers_default`). Pass
+`sampling_mode` per call any time for a one-off that doesn't change the default.
+Tunables (`frames_per_minute`, `frame_floor`, `frame_ceiling`) and the mode are
+all exposed in the control panel (Preferences → Frame sampling mode) with a live
+per-clip token-cost estimate; batch jobs honor the saved default.
+
+Analysis-caps presets were retuned so `frames_per_clip` is now a *safety ceiling*
+(minimal/standard/generous = 12/80/200), not the primary frame dial, and the
+per-clip/job/day vision-token caps were raised so the default Thorough mode isn't
+refused by the per-clip token cap. Cache reuse re-samples only when switching up
+the thoroughness rank; a richer prior report still satisfies a cheaper mode. Adds
+`tests/test_sampling_modes.py` (30 tests). Validated end-to-end on a synthetic
+multi-shot clip with real ffmpeg frame extraction.
+
 ## What's New in v2.26.1
 
 **Python 3.13 / 3.14 support (issue #45)** — `npx davinci-resolve-mcp setup`

@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 329-tool granular server instead
 """
 
-VERSION = "2.26.1"
+VERSION = "2.27.0"
 
 import base64
 import os

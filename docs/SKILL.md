@@ -468,6 +468,16 @@ for existing reports. `quick` uses ffprobe metadata; `standard` adds ffmpeg
 read-through checks,
 cut-boundary analysis from full-stream scene detection, flash-frame candidates,
 motion/variance scoring, analysis keyframes, and sidecar reports.
+`depth` controls which layers run; a separate `sampling_mode` controls how many
+frames each clip gets for visual analysis (and thus token cost): `fixed`
+(Economy, flat content-blind frames), `per_minute` (Balanced, frames scale with
+duration), `adaptive_capped` (Thorough, content-aware bounded to
+`[frame_floor, frame_ceiling]` — recommended/default), or `adaptive` (Thorough
+uncapped). When no default is saved, the first analyze returns
+`confirmation_required` with a `sampling_mode_prompt`; choosing a mode saves it
+as the default. Pass `sampling_mode` per call for a one-off. The mode owns frame
+count — `analysis_caps.frames_per_clip` is a safety ceiling above it, not the
+primary dial.
 By default, planning checks the active project's analysis root and bounded
 related project-version roots for existing reports, then marks matching clips
 `skip_execution=true` when those reports already contain the requested
