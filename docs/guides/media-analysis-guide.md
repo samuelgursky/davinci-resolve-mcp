@@ -93,6 +93,33 @@ FFprobe is required. If missing:
   via host_chat_paths (finalized per clip with commit_vision, ~2-5 minutes per
   file plus host-chat read time)
 
+`depth` controls *which layers run*. How many frames each clip gets for visual
+analysis is a separate axis — the **sampling mode** — because a fixed frame count
+over-samples short clips and under-covers long ones.
+
+### 3b. Frame-sampling mode
+
+Pass `sampling_mode` on any analyze action, or set a standing default in the
+control panel (Preferences → Frame sampling mode). The mode owns frame count and
+thus token cost; `analysis_caps.frames_per_clip` is now a safety ceiling above it,
+not the primary dial.
+
+- **Economy** (`fixed`) — flat N frames (depth-derived, default 8) regardless of
+  clip length. Cheapest and most predictable; good for proxies/triage.
+- **Balanced** (`per_minute`) — `frames = clamp(minutes × frames_per_minute, floor,
+  ceiling)` (defaults 4/min, 3–80). Cost is linear in footage length; content-blind.
+- **Thorough** (`adaptive_capped`, **recommended**) — content-aware: samples shot
+  boundaries, representatives, and flash candidates, bounded to `[floor, ceiling]`
+  (3–80). Best coverage with a bounded cost.
+- **Thorough (uncapped)** (`adaptive`) — content-aware with no per-clip ceiling
+  (up to the absolute 512-frame hard cap). Use only when clips are short or few.
+
+Tunables (`frames_per_minute`, `frame_floor`, `frame_ceiling`) apply to Balanced
+and Thorough. The first time you analyze without a saved default, the tool returns
+a `confirmation_required` response with a `sampling_mode_prompt`; re-run with
+`sampling_mode=<choice>` (which saves it as your default) or pick it in the panel.
+Pass `sampling_mode` explicitly any time for a one-off that doesn't change the default.
+
 ---
 
 ## Analysis Commands

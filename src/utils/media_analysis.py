@@ -624,6 +624,103 @@ FRAME_CAPS = {
 }
 HARD_FRAME_CAP = 512
 
+# ── Frame-sampling modes ─────────────────────────────────────────────────────
+# How many frames a clip gets is governed by a `sampling_mode`. `depth` still
+# governs *which* analysis layers run; the mode governs frame coverage + cost.
+#
+#   fixed           "Economy"            — flat N frames (depth-derived / max_analysis_frames),
+#                                          independent of clip length. Most predictable cost.
+#   per_minute      "Balanced"           — N = clamp(minutes * frames_per_minute, floor, ceiling).
+#                                          Cost is linear in footage length; content-blind.
+#   adaptive_capped "Thorough"           — content-aware (per-shot boundaries + flashes), bounded
+#                                          by [floor, frame_ceiling]. Best coverage, bounded cost.
+#   adaptive        "Thorough (uncapped)" — content-aware, bounded only by the absolute HARD_FRAME_CAP.
+#                                          Use only when clips are known to be short/few.
+#
+# The math-layer default is `adaptive` so any caller that doesn't thread a
+# sampling config keeps the legacy demand-driven behaviour. The *product*
+# default (what new analysis runs use) is resolved at the preference layer in
+# server.py and recommends "adaptive_capped" (Thorough).
+SAMPLING_MODES = {"fixed", "per_minute", "adaptive", "adaptive_capped"}
+DEFAULT_SAMPLING_MODE = "adaptive"
+RECOMMENDED_SAMPLING_MODE = "adaptive_capped"
+DEFAULT_FRAMES_PER_MINUTE = 4.0
+DEFAULT_FRAME_FLOOR = 3
+DEFAULT_FRAME_CEILING = 80
+
+# Thoroughness ranking — used for cache reuse: a richer prior report satisfies a
+# cheaper mode, but switching *up* forces a re-sample.
+SAMPLING_MODE_RANK = {"fixed": 0, "per_minute": 1, "adaptive_capped": 2, "adaptive": 3}
+
+# User-facing labels (prompt + control panel).
+SAMPLING_MODE_LABELS = {
+    "fixed": "Economy",
+    "per_minute": "Balanced",
+    "adaptive_capped": "Thorough",
+    "adaptive": "Thorough (uncapped)",
+}
+
+_SAMPLING_MODE_ALIASES = {
+    "economy": "fixed", "fixed": "fixed", "flat": "fixed",
+    "balanced": "per_minute", "per_minute": "per_minute", "perminute": "per_minute",
+    "per-minute": "per_minute", "duration": "per_minute",
+    "thorough": "adaptive_capped", "adaptive_capped": "adaptive_capped",
+    "adaptive-capped": "adaptive_capped", "capped": "adaptive_capped",
+    "thorough_uncapped": "adaptive", "thorough (uncapped)": "adaptive",
+    "adaptive": "adaptive", "uncapped": "adaptive",
+}
+
+
+def normalize_sampling_mode(value: Any, default: Optional[str] = None) -> Optional[str]:
+    """Resolve a user-supplied mode string (label or key) to a canonical mode."""
+    raw = str(value or "").strip().lower().replace("_", "_")
+    return _SAMPLING_MODE_ALIASES.get(raw, default)
+
+
+def _resolve_sampling_config(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Read sampling mode + tunables from analysis params, applying defaults."""
+    params = params or {}
+
+    def _first(*keys: str) -> Any:
+        for key in keys:
+            if key in params and params[key] is not None:
+                return params[key]
+        return None
+
+    mode = normalize_sampling_mode(
+        _first("sampling_mode", "samplingMode"), default=DEFAULT_SAMPLING_MODE
+    ) or DEFAULT_SAMPLING_MODE
+
+    def _pos_float(value: Any, fallback: float) -> float:
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        return f if f > 0 else fallback
+
+    rate = _pos_float(_first("frames_per_minute", "framesPerMinute"), DEFAULT_FRAMES_PER_MINUTE)
+    floor = int(_pos_float(_first("frame_floor", "frameFloor"), DEFAULT_FRAME_FLOOR))
+    ceiling = int(_pos_float(_first("frame_ceiling", "frameCeiling"), DEFAULT_FRAME_CEILING))
+    if ceiling < floor:
+        ceiling = floor
+    return {
+        "mode": mode,
+        "frames_per_minute": rate,
+        "frame_floor": floor,
+        "frame_ceiling": ceiling,
+    }
+
+
+def _clamp_int(value: Any, low: int, high: int) -> int:
+    if high < low:
+        high = low
+    v = int(value)
+    if v < low:
+        return low
+    if v > high:
+        return high
+    return v
+
 
 def slugify(value: Any, fallback: str = "untitled") -> str:
     raw = str(value or "").strip().lower()
@@ -1441,13 +1538,14 @@ def analysis_request_signature(
     depth: str,
     options: Dict[str, Any],
     frame_count: int,
+    sampling: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return the cache signature for a requested analysis profile."""
     transcription = options.get("transcription") or {}
     vision = options.get("vision") or {}
     marker_plan = options.get("marker_plan") or {}
     vision_prompt = vision.get("prompt") or DEFAULT_VISION_ANALYSIS_PROMPT
-    return {
+    signature = {
         "analysis_version": ANALYSIS_VERSION,
         "depth": depth,
         "analysis_keyframe_budget": int(frame_count or 0),
@@ -1506,6 +1604,16 @@ def analysis_request_signature(
             },
         }),
     }
+    # Recorded outside signature_hash so it doesn't bust pre-existing caches;
+    # mode changes are reconciled by thoroughness rank in _report_cache_state.
+    if sampling:
+        signature["analysis_sampling"] = {
+            "mode": sampling.get("mode"),
+            "frames_per_minute": sampling.get("frames_per_minute"),
+            "frame_floor": sampling.get("frame_floor"),
+            "frame_ceiling": sampling.get("frame_ceiling"),
+        }
+    return signature
 
 
 def _timestamp_from_analyzed_at(value: Any) -> Optional[float]:
@@ -1659,6 +1767,7 @@ def build_plan(
     }
     gaps = _required_capability_gaps(depth, options, caps)
     frame_count = _bounded_frame_count(depth, params.get("max_analysis_frames"))
+    sampling_config = _resolve_sampling_config(params)
     transcription_enabled = _coerce_bool((options.get("transcription") or {}).get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED)
     notes = [
         "Plans describe analysis before execution.",
@@ -1721,11 +1830,12 @@ def build_plan(
     clip_plans = []
     for record in records:
         artifacts = _artifact_paths(root["project_root"], record, depth, options)
-        request_signature = analysis_request_signature(record, depth, options, frame_count)
+        request_signature = analysis_request_signature(record, depth, options, frame_count, sampling=sampling_config)
         existing: Optional[Dict[str, Any]] = None
         clip_plan = {
             "record": record,
             "analysis_keyframe_budget": frame_count,
+            "sampling": sampling_config,
             "analysis_signature": request_signature,
             "cache_status": "not_checked",
             "artifacts": artifacts,
@@ -1853,6 +1963,8 @@ def build_plan(
         "estimated_seconds": per_clip_seconds * len(records),
         "estimated_seconds_after_reuse": per_clip_seconds * max(0, len(records) - reusable_count),
         "analysis_keyframe_budget_per_clip": frame_count,
+        "sampling": sampling_config,
+        "sampling_mode": sampling_config.get("mode"),
         "reuse_existing": reuse_existing,
         "force_refresh": force_refresh,
         "reuse_policy": reuse_policy,
@@ -2414,24 +2526,19 @@ def _cut_boundary_analysis(
     }
 
 
-def _compute_demand_driven_budget(
-    requested_budget: int,
-    cut_analysis: Optional[Dict[str, Any]],
+def _demand_frame_count(
+    cut_analysis: Dict[str, Any],
     duration_seconds: Optional[float],
 ) -> int:
-    """Compute the effective frame-sampling budget driven by analysis demand.
+    """Frames the content *demands* so vision can populate the per-shot schema.
 
-    Demand sources (so vision can populate the V2 per-shot schema):
+    Demand sources:
       - Per shot: 1 representative (midpoint) + 2 boundary frames + duration-scaled extras
         (+1 for shots >5s, +1 for shots >15s, +1 per additional 15s beyond 30s)
       - Per flash_candidate: 1 mid-frame for vision adjudication (preserve all)
       - Per cut_point: a small buffer for cuts not covered by shot boundaries
-
-    Safety ceiling: HARD_FRAME_CAP capped by duration so a 10s clip cannot request 500 frames.
+      - Clip-level: first_usable, last_usable, midpoint
     """
-    if not isinstance(cut_analysis, dict):
-        return min(max(int(requested_budget or 0), 0), HARD_FRAME_CAP)
-
     per_shot_demand = 0
     for shot in cut_analysis.get("shot_ranges") or []:
         if not isinstance(shot, dict):
@@ -2458,13 +2565,84 @@ def _compute_demand_driven_budget(
     # Clip-level frames (first_usable, last_usable, midpoint)
     clip_buffer = 4
 
-    demand = per_shot_demand + flash_count + cut_buffer + clip_buffer
+    return per_shot_demand + flash_count + cut_buffer + clip_buffer
 
-    # Duration-scaled safety ceiling: clips can't request hundreds of frames per second.
-    # Floor at 64 so short clips still have headroom; ceiling at HARD_FRAME_CAP.
-    duration_cap = max(64, min(HARD_FRAME_CAP, int((duration_seconds or 0) * 2)))
 
-    return min(max(int(requested_budget or 0), demand), duration_cap)
+def _compute_demand_driven_budget(
+    requested_budget: int,
+    cut_analysis: Optional[Dict[str, Any]],
+    duration_seconds: Optional[float],
+    sampling: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Resolve the effective frame-sampling budget for the active sampling mode.
+
+    Modes (see SAMPLING_MODES):
+      - fixed:           flat `requested_budget`, duration-independent.
+      - per_minute:      clamp(minutes * frames_per_minute, floor, ceiling); content-blind.
+      - adaptive_capped: content demand (see _demand_frame_count), clamped to [floor, ceiling].
+      - adaptive:        content demand, clamped only by a generous duration-scaled HARD_FRAME_CAP
+                         (legacy behaviour; the default when no sampling config is threaded).
+
+    `requested_budget` (depth-derived / max_analysis_frames) acts as a floor for the
+    adaptive modes so an explicit request is never undercut.
+    """
+    sampling = sampling or {}
+    mode = normalize_sampling_mode(sampling.get("mode"), default=DEFAULT_SAMPLING_MODE) or DEFAULT_SAMPLING_MODE
+    rate = sampling.get("frames_per_minute") or DEFAULT_FRAMES_PER_MINUTE
+    floor = int(sampling.get("frame_floor") or DEFAULT_FRAME_FLOOR)
+    ceiling = int(sampling.get("frame_ceiling") or DEFAULT_FRAME_CEILING)
+    if ceiling < floor:
+        ceiling = floor
+    requested = max(int(requested_budget or 0), 0)
+    minutes = max(0.0, float(duration_seconds or 0) / 60.0)
+    per_minute_count = int(round(minutes * float(rate)))
+
+    if mode == "fixed":
+        return min(requested, HARD_FRAME_CAP)
+
+    if mode == "per_minute":
+        return _clamp_int(per_minute_count, floor, min(ceiling, HARD_FRAME_CAP))
+
+    # Adaptive modes need shot/cut analysis. Without it, fall back to a duration
+    # estimate (adaptive_capped) or the legacy requested-only budget (adaptive).
+    if not isinstance(cut_analysis, dict):
+        if mode == "adaptive_capped":
+            return _clamp_int(max(requested, per_minute_count), floor, min(ceiling, HARD_FRAME_CAP))
+        return min(max(requested, 0), HARD_FRAME_CAP)
+
+    demand = _demand_frame_count(cut_analysis, duration_seconds)
+    target = max(requested, demand, floor)
+
+    if mode == "adaptive_capped":
+        return _clamp_int(target, floor, min(ceiling, HARD_FRAME_CAP))
+
+    # adaptive (uncapped): only the absolute hard cap, scaled by duration so a
+    # 10s clip cannot request 500 frames. Floor at 64 for short-clip headroom.
+    duration_cap = max(64, min(HARD_FRAME_CAP, int(float(duration_seconds or 0) * 2)))
+    return _clamp_int(target, floor, duration_cap)
+
+
+def _even_interval_samples(
+    duration: float,
+    count: int,
+    frame_step: float,
+) -> List[Dict[str, Any]]:
+    """Content-blind evenly-spaced samples (Economy / Balanced modes).
+
+    Returns exactly `count` frames at the midpoints of `count` equal slices of
+    [0, duration], so cost is a clean function of `count` and never inflated by
+    shot/cut demand. Used when the user has chosen a predictable, content-blind mode.
+    """
+    if count <= 0 or duration <= 0:
+        return []
+    out: List[Dict[str, Any]] = []
+    for i in range(count):
+        t = duration * (i + 0.5) / count
+        out.append({
+            "time_seconds": _clamp_sample_time(float(t), duration),
+            "selection_reason": "interval",
+        })
+    return out
 
 
 def _sample_times(
@@ -2474,21 +2652,25 @@ def _sample_times(
     *,
     fps: Optional[float] = None,
     cut_analysis: Optional[Dict[str, Any]] = None,
+    sampling: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Two-pass frame allocation.
+    """Frame allocation. Content-blind for Economy/Balanced; demand-driven otherwise.
 
-    Pass 1 (reservations, always allocated — demand-driven, not budget-bounded):
-      - Per shot: shot_representative (midpoint), shot_start, shot_end boundaries,
-        duration-scaled progress samples (+1 for shots >5s, +1 for shots >15s,
-        +1 per 15s beyond 30s).
-      - Per flash_candidate: mid-frame for vision adjudication.
+    Economy (fixed) / Balanced (per_minute): exactly `budget` evenly-spaced frames
+    (see _even_interval_samples) — predictable cost, ignores shot structure.
 
-    Pass 2 (priority fill, consumes remaining budget):
-      - cut_before/cut_after pairs (for cuts not covered by shot boundaries)
-      - first_usable, last_usable, scene_change, midpoint, interval fillers
+    Thorough (adaptive / adaptive_capped) — two-pass demand-driven allocation:
+      Pass 1 (reservations, always allocated — demand-driven, not budget-bounded):
+        - Per shot: shot_representative (midpoint), shot_start, shot_end boundaries,
+          duration-scaled progress samples (+1 for shots >5s, +1 for shots >15s,
+          +1 per 15s beyond 30s).
+        - Per flash_candidate: mid-frame for vision adjudication.
+      Pass 2 (priority fill, consumes remaining budget):
+        - cut_before/cut_after pairs (for cuts not covered by shot boundaries)
+        - first_usable, last_usable, scene_change, midpoint, interval fillers
 
-    The caller passes `budget` as the soft target. Reservations always land
-    (demand-driven); priority fill is what `budget` constrains.
+      The caller passes `budget` as the soft target. Reservations always land
+      (demand-driven); priority fill is what `budget` constrains.
 
     Returns a time-sorted list of sample candidates.
     """
@@ -2497,6 +2679,12 @@ def _sample_times(
     duration = duration or 0
     cut_analysis = cut_analysis if isinstance(cut_analysis, dict) else {}
     frame_step = _frame_step_seconds(fps)
+
+    # Content-blind modes: even-interval sampling of exactly `budget` frames so
+    # cost stays predictable and is not inflated by per-shot reservations.
+    mode = normalize_sampling_mode((sampling or {}).get("mode"), default=DEFAULT_SAMPLING_MODE) or DEFAULT_SAMPLING_MODE
+    if mode in {"fixed", "per_minute"}:
+        return _even_interval_samples(duration, budget, frame_step)
 
     # ===================== Pass 1: Reservations =====================
     reserved: List[Dict[str, Any]] = []
@@ -2729,6 +2917,7 @@ def _motion_and_keyframes(
     fps: Optional[float] = None,
     cut_analysis: Optional[Dict[str, Any]] = None,
     write_frames: bool = True,
+    sampling: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     sampled = []
     previous_raw = None
@@ -2736,8 +2925,8 @@ def _motion_and_keyframes(
     if isinstance(cut_analysis, dict):
         required_boundary_frames += len(cut_analysis.get("cut_points") or []) * 2
         required_boundary_frames += len(cut_analysis.get("flash_frame_candidates") or [])
-    effective_budget = _compute_demand_driven_budget(budget, cut_analysis, duration)
-    times = _sample_times(duration, scene_items, effective_budget, fps=fps, cut_analysis=cut_analysis)
+    effective_budget = _compute_demand_driven_budget(budget, cut_analysis, duration, sampling=sampling)
+    times = _sample_times(duration, scene_items, effective_budget, fps=fps, cut_analysis=cut_analysis, sampling=sampling)
     frames_dir = artifacts.get("frames_dir")
     for index, sample in enumerate(times, 1):
         time_seconds = float(sample.get("time_seconds") or 0.0)
@@ -2970,6 +3159,15 @@ def _report_cache_state(
     request_budget = int(request_signature.get("analysis_keyframe_budget") or 0)
     if report_budget < request_budget:
         issues.append("analysis_keyframe_budget_lower_than_requested")
+
+    # Sampling-mode reconciliation: a prior report sampled under a less-thorough
+    # mode can't satisfy a request for a more-thorough one. The reverse (richer
+    # report, cheaper request) is reused as a free upgrade.
+    report_mode = (report_signature.get("analysis_sampling") or {}).get("mode")
+    request_mode = (request_signature.get("analysis_sampling") or {}).get("mode")
+    if request_mode and report_mode and request_mode != report_mode:
+        if SAMPLING_MODE_RANK.get(request_mode, 0) > SAMPLING_MODE_RANK.get(report_mode, 0):
+            issues.append("sampling_mode_increased")
 
     report_layers = report_signature.get("layers") or {}
     request_layers = request_signature.get("layers") or {}
@@ -4747,6 +4945,7 @@ async def execute_plan_async(
                 fps=fps,
                 cut_analysis=readthrough.get("cut_analysis"),
                 write_frames=keep_frame_artifacts_for_vision or not _coerce_bool(params.get("cleanup_frames"), default=False),
+                sampling=clip_plan.get("sampling"),
             )
             if artifacts.get("motion_json"):
                 _write_json(artifacts["motion_json"], motion)
