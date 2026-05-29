@@ -4272,6 +4272,21 @@ HTML = r"""<!doctype html>
             </select>
           </label>
           <label>Default sample frames <input id="prefFrames" type="number" min="0" max="48" value="8"></label>
+          <label>Frame sampling mode
+            <select id="prefSamplingMode" onchange="updateSamplingModeHint()">
+              <option value="ask">ask · choose on first analysis</option>
+              <option value="fixed">Economy · flat frames, cheapest &amp; most predictable</option>
+              <option value="per_minute">Balanced · frames scale with duration (linear cost)</option>
+              <option value="adaptive_capped">Thorough · content-aware, bounded cost (recommended)</option>
+              <option value="adaptive">Thorough (uncapped) · content-aware, up to 512 frames</option>
+            </select>
+          </label>
+          <small class="pref-hint" id="samplingModeHint" style="display:block;margin:-4px 0 8px;opacity:0.75;"></small>
+          <div class="pref-inline-row" style="display:flex;gap:10px;flex-wrap:wrap;">
+            <label>Frames / minute <input id="prefSamplingRate" type="number" min="0.1" step="0.5" value="4" oninput="updateSamplingModeHint()"></label>
+            <label>Frame floor <input id="prefSamplingFloor" type="number" min="1" value="3" oninput="updateSamplingModeHint()"></label>
+            <label>Frame ceiling <input id="prefSamplingCeiling" type="number" min="1" value="80" oninput="updateSamplingModeHint()"></label>
+          </div>
           <label>Persistence
             <select id="prefAnalysisPersistence">
               <option value="session_only">session only</option>
@@ -4755,6 +4770,10 @@ HTML = r"""<!doctype html>
       prefVisionDefault: 'Controls whether visual frame analysis is used by default when an operation supports it.',
       prefTranscriptionDefault: 'Sets the default answer for transcript generation on audio-bearing clips.',
       prefSlateDetectionDefault: 'Controls whether slate detection should run or ask before adding slate-informed context.',
+      prefSamplingMode: 'Chooses how many frames each clip gets for visual analysis: Economy (flat), Balanced (scales with duration), or Thorough (content-aware, bounded). Drives both coverage and token cost.',
+      prefSamplingRate: 'Frames sampled per minute in Balanced mode (also seeds Thorough on short clips).',
+      prefSamplingFloor: 'Minimum frames per clip for duration/content-scaled modes.',
+      prefSamplingCeiling: 'Maximum frames per clip for Balanced and Thorough modes (the Thorough per-clip cap).',
       prefAnalysisPersistence: 'Chooses whether analysis artifacts stay session-only or keep reusable reports and frames.',
       prefAnalysisSummaryStyle: 'Tunes the language of generated summaries for editorial, QC, producer, or full-detail review.',
       prefReportFormat: 'Chooses compact readable reports, full reports, or machine-readable output for downstream agents.',
@@ -9088,6 +9107,12 @@ HTML = r"""<!doctype html>
       setControlValue('prefSourceTrust', media.source_trust || 'auto');
       setControlValue('prefDepth', media.default_depth || 'standard');
       setControlValue('prefFrames', media.default_sample_frames ?? 8);
+      // sampling_mode_default is null when unset → show "ask".
+      setControlValue('prefSamplingMode', media.sampling_mode_default || 'ask');
+      setControlValue('prefSamplingRate', media.sampling_frames_per_minute ?? 4);
+      setControlValue('prefSamplingFloor', media.sampling_frame_floor ?? 3);
+      setControlValue('prefSamplingCeiling', media.sampling_frame_ceiling ?? 80);
+      updateSamplingModeHint();
       setControlValue('prefAnalysisPersistence', media.analysis_persistence);
       const legacySummaryMap = { assistant_editor: 'creative', producer: 'creative', qc: 'technical' };
       const summaryStyle = legacySummaryMap[media.analysis_summary_style] || media.analysis_summary_style || 'concise';
@@ -9182,6 +9207,38 @@ HTML = r"""<!doctype html>
       };
     }
 
+    // Rough per-frame vision cost for the estimate (≈768px frame at typical
+    // tokenization). The engine's pre-call refusal estimates more conservatively.
+    const SAMPLING_TOKENS_PER_FRAME = 450;
+    function _fmtTokens(frames) {
+      const k = (frames * SAMPLING_TOKENS_PER_FRAME) / 1000;
+      return k >= 1 ? `~${k.toFixed(k < 10 ? 1 : 0)}k tokens` : `~${Math.round(k * 1000)} tokens`;
+    }
+    function updateSamplingModeHint() {
+      const hintEl = document.getElementById('samplingModeHint');
+      if (!hintEl) return;
+      const mode = ($('prefSamplingMode') || {}).value || 'ask';
+      const rate = Number(($('prefSamplingRate') || {}).value) || 4;
+      const floor = Number(($('prefSamplingFloor') || {}).value) || 3;
+      const ceil = Number(($('prefSamplingCeiling') || {}).value) || 80;
+      const fixed = Number(($('prefFrames') || {}).value) || 8;
+      let msg = '';
+      if (mode === 'ask') {
+        msg = 'You will be asked to pick a mode the first time you analyze. Recommended: Thorough.';
+      } else if (mode === 'fixed') {
+        msg = `Economy — flat ${fixed} frames per clip regardless of length (${_fmtTokens(fixed)}/clip). Most predictable.`;
+      } else if (mode === 'per_minute') {
+        const oneMin = Math.max(floor, Math.min(ceil, Math.round(rate)));
+        const tenMin = Math.max(floor, Math.min(ceil, Math.round(rate * 10)));
+        msg = `Balanced — ${rate}/min, bounded ${floor}–${ceil}. ~${oneMin}f (${_fmtTokens(oneMin)}) for 1 min · ~${tenMin}f (${_fmtTokens(tenMin)}) for 10 min. Linear cost.`;
+      } else if (mode === 'adaptive_capped') {
+        msg = `Thorough — content-aware (shot boundaries + flashes), bounded ${floor}–${ceil} frames/clip (${_fmtTokens(floor)}–${_fmtTokens(ceil)}). Best coverage, bounded cost.`;
+      } else if (mode === 'adaptive') {
+        msg = `Thorough (uncapped) — content-aware, no per-clip ceiling (up to 512 frames, ${_fmtTokens(512)}). Use only for short/few clips.`;
+      }
+      hintEl.textContent = msg;
+    }
+
     function setupPreferencePayload() {
       let markerColors = {};
       try {
@@ -9197,6 +9254,10 @@ HTML = r"""<!doctype html>
           source_trust: $('prefSourceTrust').value,
           default_depth: $('prefDepth').value,
           default_sample_frames: Number($('prefFrames').value || 8),
+          sampling_mode_default: $('prefSamplingMode').value,
+          sampling_frames_per_minute: Number($('prefSamplingRate').value || 4),
+          sampling_frame_floor: Number($('prefSamplingFloor').value || 3),
+          sampling_frame_ceiling: Number($('prefSamplingCeiling').value || 80),
           analysis_persistence: $('prefAnalysisPersistence').value,
           analysis_summary_style: $('prefAnalysisSummaryStyle').value,
           report_format: $('prefReportFormat').value,
@@ -13299,6 +13360,27 @@ class Handler(BaseHTTPRequestHandler):
                 "cleanup_frames": True,
                 "reuse_project_roots": self.state.related_project_roots(),
             }
+            # Honor the saved frame-sampling mode (or an explicit per-job override)
+            # so batch runs match the user's chosen coverage/cost. Falls back to the
+            # recommended mode when the user hasn't set a default yet (batch jobs
+            # shouldn't block on the first-run prompt).
+            try:
+                from src.server import (
+                    _media_analysis_effective_preferences as _ma_eff_prefs,
+                )
+                from src.utils import media_analysis as _ma_mod
+                _ma_prefs = _ma_eff_prefs()
+                params["sampling_mode"] = (
+                    body.get("sampling_mode")
+                    or _ma_prefs.get("sampling_mode_default")
+                    or _ma_mod.RECOMMENDED_SAMPLING_MODE
+                )
+                params["frames_per_minute"] = body.get("frames_per_minute") or _ma_prefs.get("sampling_frames_per_minute")
+                params["frame_floor"] = body.get("frame_floor") or _ma_prefs.get("sampling_frame_floor")
+                params["frame_ceiling"] = body.get("frame_ceiling") or _ma_prefs.get("sampling_frame_ceiling")
+            except Exception:
+                # Best-effort; the engine still applies its own defaults.
+                pass
             with self.state.lock:
                 created = create_batch_job_from_paths(
                     project_name=self.state.project_name,

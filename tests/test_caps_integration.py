@@ -46,10 +46,10 @@ class PreCallRefusal(unittest.TestCase):
         self.assertIsNone(result, msg=f"unexpected refusal: {result}")
 
     def test_pre_call_check_refuses_when_over_clip_cap(self) -> None:
-        # minimal preset = 5_000 tokens per clip; record 4500 then ask 1000.
+        # minimal preset = 16_000 tokens per clip; record 15500 then ask 1000.
         analysis_caps.record_usage(
             project_root=self.project_root, scope=analysis_caps.SCOPE_CLIP,
-            scope_key="c1", vision_tokens=4500,
+            scope_key="c1", vision_tokens=15_500,
         )
         result = media_analysis._check_caps_pre_call(
             project_root=self.project_root,

@@ -6312,6 +6312,18 @@ _MEDIA_ANALYSIS_DEFAULT_PREFS = {
     "source_trust": "auto",
     "default_depth": "standard",
     "default_sample_frames": 8,
+    # Frame-sampling mode — how many frames a clip gets for visual analysis.
+    # "ask" prompts the user to choose a standing default the first time they
+    # analyze; the choice is then saved here. Canonical modes (see
+    # media_analysis.SAMPLING_MODES): fixed (Economy), per_minute (Balanced),
+    # adaptive_capped (Thorough, recommended), adaptive (Thorough uncapped).
+    "sampling_mode_default": "ask",
+    # Tunables shared by Balanced + Thorough modes. frames_per_minute drives the
+    # Balanced target; frame_floor/frame_ceiling bound every duration/content
+    # scaled mode (the ceiling is also the Thorough per-clip cap).
+    "sampling_frames_per_minute": 4.0,
+    "sampling_frame_floor": 3,
+    "sampling_frame_ceiling": 80,
     "preferred_analysis_root": None,
     "preferred_generated_media_folder": None,
     "default_post_operation_page": "stay_put",
@@ -6580,6 +6592,29 @@ def _media_analysis_effective_preferences() -> Dict[str, Any]:
     except (TypeError, ValueError):
         sample_frames_int = 8
     effective["default_sample_frames"] = max(0, min(48, sample_frames_int))
+    # sampling_mode_default normalizes to a canonical mode, or None when unset /
+    # "ask" (None means "not yet chosen" → first-run prompt fires).
+    effective["sampling_mode_default"] = _normalize_sampling_mode_default(effective.get("sampling_mode_default"))
+
+    def _pos_number(value: Any, fallback: float) -> float:
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        return f if f > 0 else fallback
+
+    effective["sampling_frames_per_minute"] = _pos_number(
+        effective.get("sampling_frames_per_minute"), _media_analysis_module.DEFAULT_FRAMES_PER_MINUTE
+    )
+    effective["sampling_frame_floor"] = int(_pos_number(
+        effective.get("sampling_frame_floor"), _media_analysis_module.DEFAULT_FRAME_FLOOR
+    ))
+    ceiling = int(_pos_number(
+        effective.get("sampling_frame_ceiling"), _media_analysis_module.DEFAULT_FRAME_CEILING
+    ))
+    if ceiling < effective["sampling_frame_floor"]:
+        ceiling = effective["sampling_frame_floor"]
+    effective["sampling_frame_ceiling"] = ceiling
     effective["default_post_operation_page"] = _normalize_setup_choice(
         effective.get("default_post_operation_page"),
         ["stay_put", "media", "cut", "edit", "fusion", "color", "fairlight", "deliver"],
@@ -6739,6 +6774,148 @@ def _media_analysis_timed_marker_decision(p: Dict[str, Any]) -> Dict[str, Any]:
         "source": source,
         "prompt_required": source == "prompt_required" or choice == "ask",
         "saved_default": saved or (saved_default if saved_default in {"yes", "no"} else None),
+        "preferences_path": _media_analysis_preferences_path(),
+    }
+
+
+def _normalize_sampling_mode_default(value: Any) -> Optional[str]:
+    """Resolve a stored sampling_mode_default to a canonical mode, or None.
+
+    None means "not chosen yet" — covers an unset value and the "ask" sentinel,
+    both of which should trigger the first-run prompt.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if raw in {"", "ask", "prompt", "ask_me", "ask_user", "none", "unset", "default"}:
+        return None
+    return _media_analysis_module.normalize_sampling_mode(value, default=None)
+
+
+def _sampling_mode_choice_from_params(p: Dict[str, Any]) -> Optional[str]:
+    """Read an explicit sampling-mode choice from analysis params.
+
+    Returns a canonical mode, the "ask" sentinel, or None when unspecified.
+    """
+    raw = _first_param(
+        p,
+        "sampling_mode",
+        "samplingMode",
+        "frame_sampling_mode",
+        "frameSamplingMode",
+        "analysis_mode",
+        "analysisMode",
+    )
+    if raw is None and isinstance(p.get("sampling"), dict):
+        raw = _first_param(p["sampling"], "mode", "sampling_mode", "samplingMode")
+    if raw is None:
+        return None
+    if str(raw).strip().lower() in {"ask", "prompt", "ask_me", "ask_user"}:
+        return "ask"
+    return _media_analysis_module.normalize_sampling_mode(raw, default=None)
+
+
+def _media_analysis_sampling_mode_prompt() -> Dict[str, Any]:
+    """First-run prompt offering the four sampling modes (Thorough recommended).
+
+    Each option saves the chosen mode as the standing default (save_sampling_default)
+    so the user is only asked once. Pass `sampling_mode` alone, without the save
+    flag, for a one-off run that doesn't change the default.
+    """
+    return {
+        "question": (
+            "How should frames be sampled for visual analysis? This sets your "
+            "default for future runs (pass sampling_mode per-call for a one-off)."
+        ),
+        "default_behavior": "Recommended: Thorough — content-aware coverage with a bounded, predictable cost.",
+        "options": [
+            {
+                "id": "fixed",
+                "label": "Economy",
+                "description": (
+                    "Flat ~8 frames per clip regardless of length. Cheapest and most "
+                    "predictable; good for proxies, triage, or known-short clips."
+                ),
+                "params": {"sampling_mode": "fixed", "save_sampling_default": True},
+            },
+            {
+                "id": "per_minute",
+                "label": "Balanced",
+                "description": (
+                    "Frames scale with duration (~4/min, bounded 3–80). Cost is linear "
+                    "in footage length and easy to predict; content-blind."
+                ),
+                "params": {"sampling_mode": "per_minute", "save_sampling_default": True},
+            },
+            {
+                "id": "adaptive_capped",
+                "label": "Thorough (recommended)",
+                "description": (
+                    "Content-aware: samples shot boundaries, representatives, and flash "
+                    "frames, bounded 3–80 per clip. Best coverage with a bounded cost."
+                ),
+                "params": {"sampling_mode": "adaptive_capped", "save_sampling_default": True},
+            },
+            {
+                "id": "adaptive",
+                "label": "Thorough (uncapped)",
+                "description": (
+                    "Content-aware with no per-clip ceiling (up to 512 frames). Use only "
+                    "when clips are known to be short or few — cost can grow fast."
+                ),
+                "params": {"sampling_mode": "adaptive", "save_sampling_default": True},
+            },
+        ],
+        "recommended": _media_analysis_module.RECOMMENDED_SAMPLING_MODE,
+    }
+
+
+def _media_analysis_sampling_mode_decision(p: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve the frame-sampling mode for an analysis run.
+
+    Resolution order:
+      1. Explicit `sampling_mode` param → one-off (persisted only if save flag set).
+      2. Saved `sampling_mode_default` preference → used silently.
+      3. Otherwise → prompt_required (first run); falls back to the recommended
+         mode so previews/automation still work, but the entry point surfaces the
+         prompt and blocks real execution.
+    """
+    choice = _sampling_mode_choice_from_params(p)
+    save_default = _media_analysis_bool(
+        _first_param(p, "save_sampling_default", "saveSamplingDefault", "set_sampling_default", "setSamplingDefault"),
+        False,
+    )
+    preferences = _read_media_analysis_preferences()
+    explicit_saved = "sampling_mode_default" in preferences
+    saved_default = _media_analysis_effective_preferences().get("sampling_mode_default")
+
+    recommended = _media_analysis_module.RECOMMENDED_SAMPLING_MODE
+    saved = None
+
+    if choice and choice != "ask":
+        mode = choice
+        source = "explicit"
+        if save_default:
+            saved = mode
+            preferences["sampling_mode_default"] = mode
+            preferences["sampling_mode_default_updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            _write_media_analysis_preferences(preferences)
+            source = "saved_default"
+    elif choice == "ask":
+        mode = recommended
+        source = "prompt_required"
+    elif saved_default:
+        mode = saved_default
+        source = "saved_default" if explicit_saved else "default"
+    else:
+        mode = recommended
+        source = "prompt_required"
+
+    return {
+        "mode": mode,
+        "source": source,
+        "prompt_required": source == "prompt_required",
+        "saved_default": saved or saved_default,
         "preferences_path": _media_analysis_preferences_path(),
     }
 
@@ -8086,6 +8263,23 @@ def _media_analysis_apply_setup_defaults(action: str, p: Dict[str, Any]) -> Dict
                     )
                     applied["transcription_default"] = transcription_default
 
+    # Frame-sampling mode: resolve from explicit param > saved default > first-run
+    # prompt (recommended fallback). Inject mode + tunables so the analysis engine
+    # picks them up via _resolve_sampling_config; stash the decision so the entry
+    # point can surface the first-run prompt.
+    if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "start_batch_job"}:
+        sampling_decision = _media_analysis_sampling_mode_decision(out)
+        if not _has_any_param(out, "sampling_mode", "samplingMode", "frame_sampling_mode", "frameSamplingMode"):
+            out["sampling_mode"] = sampling_decision["mode"]
+            applied["sampling_mode"] = sampling_decision["mode"]
+        if not _has_any_param(out, "frames_per_minute", "framesPerMinute"):
+            out["frames_per_minute"] = prefs.get("sampling_frames_per_minute")
+        if not _has_any_param(out, "frame_floor", "frameFloor"):
+            out["frame_floor"] = prefs.get("sampling_frame_floor")
+        if not _has_any_param(out, "frame_ceiling", "frameCeiling"):
+            out["frame_ceiling"] = prefs.get("sampling_frame_ceiling")
+        out["_sampling_mode_decision"] = sampling_decision
+
     if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "start_batch_job", "publish_clip_metadata"}:
         if not _has_any_param(
             out,
@@ -9391,7 +9585,9 @@ def _setup_media_analysis_defaults() -> Dict[str, Any]:
             "source_trust": ["auto", "filename", "low", "medium", "high"],
             "default_depth": ["quick", "standard", "deep"],
             "default_post_operation_page": ["stay_put", "media", "cut", "edit", "fusion", "color", "fairlight", "deliver"],
+            "sampling_mode_default": ["ask", "fixed", "per_minute", "adaptive_capped", "adaptive"],
         },
+        "sampling_mode_labels": dict(_media_analysis_module.SAMPLING_MODE_LABELS),
     }
 
 
@@ -9512,6 +9708,24 @@ def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: 
         "defaultsampleframes": "default_sample_frames",
         "sample_frames": "default_sample_frames",
         "sampleframes": "default_sample_frames",
+        "sampling_mode_default": "sampling_mode_default",
+        "samplingmodedefault": "sampling_mode_default",
+        "sampling_mode": "sampling_mode_default",
+        "samplingmode": "sampling_mode_default",
+        "analysis_mode": "sampling_mode_default",
+        "analysismode": "sampling_mode_default",
+        "sampling_frames_per_minute": "sampling_frames_per_minute",
+        "samplingframesperminute": "sampling_frames_per_minute",
+        "frames_per_minute": "sampling_frames_per_minute",
+        "framesperminute": "sampling_frames_per_minute",
+        "sampling_frame_floor": "sampling_frame_floor",
+        "samplingframefloor": "sampling_frame_floor",
+        "frame_floor": "sampling_frame_floor",
+        "framefloor": "sampling_frame_floor",
+        "sampling_frame_ceiling": "sampling_frame_ceiling",
+        "samplingframeceiling": "sampling_frame_ceiling",
+        "frame_ceiling": "sampling_frame_ceiling",
+        "frameceiling": "sampling_frame_ceiling",
     }
 
     requested: Dict[str, Any] = {}
@@ -9640,6 +9854,37 @@ def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: 
             except (TypeError, ValueError):
                 return _err("default_sample_frames must be an integer between 0 and 48.")
             set_or_clear(key, raw_value, max(0, min(48, frames_int)))
+        elif key == "sampling_mode_default":
+            # "ask" clears the saved default so the first-run prompt fires again;
+            # otherwise normalize a canonical key or friendly label.
+            if _setup_text_key(raw_value) in {"ask", "prompt", "askme", "askuser"}:
+                next_preferences.pop("sampling_mode_default", None)
+                next_preferences.pop("sampling_mode_default_updated_at", None)
+                updates[key] = {"before": before.get(key), "after": None, "cleared": True}
+            else:
+                normalized = _media_analysis_module.normalize_sampling_mode(raw_value, default=None)
+                if normalized is None:
+                    return _err(
+                        "Unsupported sampling_mode_default. Use ask, fixed/economy, "
+                        "per_minute/balanced, adaptive_capped/thorough, or adaptive."
+                    )
+                set_or_clear(key, raw_value, normalized)
+        elif key == "sampling_frames_per_minute":
+            try:
+                rate = float(raw_value)
+            except (TypeError, ValueError):
+                return _err("sampling_frames_per_minute must be a positive number.")
+            if rate <= 0:
+                return _err("sampling_frames_per_minute must be greater than 0.")
+            set_or_clear(key, raw_value, rate)
+        elif key in {"sampling_frame_floor", "sampling_frame_ceiling"}:
+            try:
+                n = int(raw_value) if not isinstance(raw_value, bool) else 0
+            except (TypeError, ValueError):
+                return _err(f"{key} must be a positive integer.")
+            if n <= 0:
+                return _err(f"{key} must be a positive integer.")
+            set_or_clear(key, raw_value, n)
         elif key == "default_post_operation_page":
             normalized = _normalize_setup_choice(
                 raw_value,
@@ -9797,6 +10042,10 @@ def _setup_clear_defaults(keys: Any, dry_run: bool) -> Dict[str, Any]:
         "metadata_writeback_default": "media_analysis.metadata_writeback_default",
         "ask_before_metadata_publish": "media_analysis.ask_before_metadata_publish",
         "dry_run_first_default": "media_analysis.dry_run_first_default",
+        "sampling_mode_default": "media_analysis.sampling_mode_default",
+        "sampling_frames_per_minute": "media_analysis.sampling_frames_per_minute",
+        "sampling_frame_floor": "media_analysis.sampling_frame_floor",
+        "sampling_frame_ceiling": "media_analysis.sampling_frame_ceiling",
     }
     media_payload: Dict[str, Any] = {}
     if clear_all or "media_analysis" in normalized_keys:
@@ -9899,6 +10148,14 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 "media_analysis.metadata_writeback_default": {"values": [True, False], "storage": _media_analysis_preferences_path()},
                 "media_analysis.ask_before_metadata_publish": {"values": [True, False], "storage": _media_analysis_preferences_path()},
                 "media_analysis.dry_run_first_default": {"values": [True, False], "storage": _media_analysis_preferences_path()},
+                "media_analysis.sampling_mode_default": {
+                    "description": "Frame-sampling mode for visual analysis. 'ask' prompts on first analysis to set a standing default. fixed=Economy (flat frames), per_minute=Balanced (duration-scaled), adaptive_capped=Thorough (content-aware, bounded — recommended), adaptive=Thorough uncapped.",
+                    "values": ["ask", "fixed", "per_minute", "adaptive_capped", "adaptive"],
+                    "storage": _media_analysis_preferences_path(),
+                },
+                "media_analysis.sampling_frames_per_minute": {"description": "Frames per minute for Balanced mode (also seeds Thorough on short clips).", "values": "number > 0 (default 4)", "storage": _media_analysis_preferences_path()},
+                "media_analysis.sampling_frame_floor": {"description": "Minimum frames per clip for duration/content-scaled modes.", "values": "integer > 0 (default 3)", "storage": _media_analysis_preferences_path()},
+                "media_analysis.sampling_frame_ceiling": {"description": "Maximum frames per clip for Balanced + Thorough modes (the Thorough per-clip cap).", "values": "integer > 0 (default 80)", "storage": _media_analysis_preferences_path()},
                 "updates.mode": {
                     "description": "Local MCP update policy.",
                     "values": sorted(_SETUP_UPDATE_MODES),
@@ -13190,6 +13447,31 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
     model is vision-capable; no sampling/createMessage support required.
     """
     p = _media_analysis_apply_setup_defaults(action, dict(params or {}))
+
+    # First-run frame-sampling prompt: if the user has never chosen a sampling
+    # mode (and didn't pass one this call), ask before spending any vision
+    # tokens. Re-running with sampling_mode=<choice> saves it as the default;
+    # passing sampling_mode explicitly any time is a one-off that skips this.
+    _sampling_decision = p.get("_sampling_mode_decision") if isinstance(p, dict) else None
+    if (
+        isinstance(_sampling_decision, dict)
+        and _sampling_decision.get("prompt_required")
+        and action in {"analyze_clip", "analyze_file", "analyze_bin", "analyze_project", "analyze_sequence", "analyze_timeline", "start_batch_job"}
+    ):
+        return {
+            "success": True,
+            "status": "confirmation_required",
+            "confirmation_required": True,
+            "sampling_mode_prompt": _media_analysis_sampling_mode_prompt(),
+            "recommended_sampling_mode": _media_analysis_module.RECOMMENDED_SAMPLING_MODE,
+            "message": (
+                "Choose a frame-sampling mode for visual analysis. Re-run with "
+                "sampling_mode set to one of fixed/per_minute/adaptive_capped/adaptive "
+                "(the chosen value is saved as your default), or set it in the control "
+                "panel under Analysis Modes. Pass sampling_mode per-call any time for a one-off."
+            ),
+            "preferences_path": _media_analysis_preferences_path(),
+        }
 
     # E2 — capture original action + scope before the dispatch may rewrite
     # `action` (e.g. analyze_clip → plan). Used by _e2_wrap below to attach

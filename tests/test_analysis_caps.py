@@ -37,7 +37,7 @@ class PresetResolution(unittest.TestCase):
         self.assertEqual(caps.vision_tokens_per_clip, 12345)
         self.assertEqual(caps.max_frame_dim_pixels, 256)
         # Other fields untouched.
-        self.assertEqual(caps.frames_per_clip, 8)
+        self.assertEqual(caps.frames_per_clip, 80)
 
     def test_unlimited_string_override_lifts_cap(self) -> None:
         caps = analysis_caps.resolve_caps(
@@ -97,10 +97,10 @@ class BudgetEnforcement(unittest.TestCase):
 
     def test_per_clip_cap_blocks_when_exceeded(self) -> None:
         caps = analysis_caps.resolve_caps(analysis_caps.PRESET_MINIMAL)
-        # minimal.vision_tokens_per_clip = 5000.
+        # minimal.vision_tokens_per_clip = 16000.
         analysis_caps.record_usage(
             project_root=self.project_root, scope=analysis_caps.SCOPE_CLIP,
-            scope_key="c1", vision_tokens=4500,
+            scope_key="c1", vision_tokens=15_500,
         )
         # Need 1000 more, only 500 left.
         decision = analysis_caps.check_budget(
@@ -113,13 +113,13 @@ class BudgetEnforcement(unittest.TestCase):
 
     def test_per_day_cap_blocks_when_exceeded(self) -> None:
         caps = analysis_caps.resolve_caps(analysis_caps.PRESET_MINIMAL)
-        # minimal.vision_tokens_per_day = 100_000. Spend 99k under DAY scope.
+        # minimal.vision_tokens_per_day = 150_000. Spend 149k under DAY scope.
         analysis_caps.record_usage(
             project_root=self.project_root, scope=analysis_caps.SCOPE_DAY,
-            scope_key=None, vision_tokens=99_000,
+            scope_key=None, vision_tokens=149_000,
         )
-        # Try to spend 2k — would push to 101k (over day). Pass no clip_id so the
-        # check doesn't trip the smaller clip cap (5k) first.
+        # Try to spend 2k — would push to 151k (over day). Pass no clip_id so the
+        # check doesn't trip the smaller clip cap first.
         decision = analysis_caps.check_budget(
             project_root=self.project_root, caps=caps,
             estimated_vision_tokens=2_000,
@@ -144,12 +144,12 @@ class BudgetEnforcement(unittest.TestCase):
         caps = analysis_caps.resolve_caps(analysis_caps.PRESET_MINIMAL)
         analysis_caps.record_usage(
             project_root=self.project_root, scope=analysis_caps.SCOPE_DAY,
-            scope_key=None, vision_tokens=50_000,
+            scope_key=None, vision_tokens=75_000,
         )
         rollup = analysis_caps.get_usage_rollup(
             project_root=self.project_root, caps=caps,
         )
-        # 50000 / 100000 = 50%
+        # 75000 / 150000 = 50% (minimal.vision_tokens_per_day = 150_000)
         self.assertAlmostEqual(rollup["percent_consumed"]["day"], 50.0)
 
 

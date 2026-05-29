@@ -18,17 +18,26 @@ deferred a "$ cost cap" axis. Token budgets are the unit of currency here.
 
 | Dimension | minimal | standard | generous | unlimited |
 |-----------|--------:|---------:|---------:|----------:|
-| response_chars                | 5,000   | 25,000    | 100,000    | None |
-| vision_tokens_per_clip        | 5,000   | 25,000    | 100,000    | None |
-| frames_per_clip               | 4       | 8         | 24         | None |
-| vision_tokens_per_job         | 50,000  | 250,000   | 1,000,000  | None |
-| vision_tokens_per_day         | 100,000 | 500,000   | 2,000,000  | None |
-| wall_clock_seconds_per_call   | 30      | 90        | 300        | None |
-| max_frame_dim_pixels          | 512     | 768       | 1280       | None |
+| response_chars                | 5,000   | 25,000     | 100,000    | None |
+| vision_tokens_per_clip        | 16,000  | 100,000    | 250,000    | None |
+| frames_per_clip               | 12      | 80         | 200        | None |
+| vision_tokens_per_job         | 60,000  | 1,000,000  | 3,000,000  | None |
+| vision_tokens_per_day         | 150,000 | 2,000,000  | 6,000,000  | None |
+| wall_clock_seconds_per_call   | 30      | 90         | 300        | None |
+| max_frame_dim_pixels          | 512     | 768        | 1280       | None |
 
 `minimal` = preview/triage mode. `standard` = realistic per-project default.
 `generous` = high-fidelity analysis on a few specific clips. `unlimited` = all
 guards off; use only when you're certain about the input size.
+
+NOTE on `frames_per_clip`: this is a *safety ceiling*, not the primary frame
+dial. How many frames a clip actually gets is chosen by the `sampling_mode`
+(Economy/Balanced/Thorough — see media_analysis.SAMPLING_MODES), which is
+duration- and content-aware. `frames_per_clip` only clips the result if the mode
+would exceed it. The standard ceiling (80) matches the default Thorough ceiling
+so the mode is never silently truncated; lower it to hard-cap cost, raise it for
+unusually long/cutty clips. (Before sampling modes existed this defaulted to 8
+and *was* the frame dial — that flat cap is what made long clips under-covered.)
 """
 
 from __future__ import annotations
@@ -74,30 +83,30 @@ CAP_PRESETS: Dict[str, Caps] = {
     PRESET_MINIMAL: Caps(
         preset=PRESET_MINIMAL,
         response_chars=5_000,
-        vision_tokens_per_clip=5_000,
-        frames_per_clip=4,
-        vision_tokens_per_job=50_000,
-        vision_tokens_per_day=100_000,
+        vision_tokens_per_clip=16_000,
+        frames_per_clip=12,
+        vision_tokens_per_job=60_000,
+        vision_tokens_per_day=150_000,
         wall_clock_seconds_per_call=30,
         max_frame_dim_pixels=512,
     ),
     PRESET_STANDARD: Caps(
         preset=PRESET_STANDARD,
         response_chars=25_000,
-        vision_tokens_per_clip=25_000,
-        frames_per_clip=8,
-        vision_tokens_per_job=250_000,
-        vision_tokens_per_day=500_000,
+        vision_tokens_per_clip=100_000,
+        frames_per_clip=80,
+        vision_tokens_per_job=1_000_000,
+        vision_tokens_per_day=2_000_000,
         wall_clock_seconds_per_call=90,
         max_frame_dim_pixels=768,
     ),
     PRESET_GENEROUS: Caps(
         preset=PRESET_GENEROUS,
         response_chars=100_000,
-        vision_tokens_per_clip=100_000,
-        frames_per_clip=24,
-        vision_tokens_per_job=1_000_000,
-        vision_tokens_per_day=2_000_000,
+        vision_tokens_per_clip=250_000,
+        frames_per_clip=200,
+        vision_tokens_per_job=3_000_000,
+        vision_tokens_per_day=6_000_000,
         wall_clock_seconds_per_call=300,
         max_frame_dim_pixels=1280,
     ),
