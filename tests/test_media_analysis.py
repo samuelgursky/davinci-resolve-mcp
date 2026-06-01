@@ -3929,5 +3929,161 @@ class MediaAnalysisCoverageTests(unittest.TestCase):
         self.assertEqual(coverage["summary"]["source_trust_distribution"], {"high": 1})
 
 
+class PathExistenceProbeTests(unittest.TestCase):
+    """Parallel/cached file-existence probing for the Resolve media inventory."""
+
+    def setUp(self):
+        from src import analysis_dashboard as dash
+        self.dash = dash
+        dash._PATH_EXISTS_CACHE.clear()
+
+    def test_fresh_probe_reports_real_and_missing_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = os.path.join(tmp, "a.mov")
+            open(real, "w").close()
+            missing = os.path.join(tmp, "gone.mov")
+            result = self.dash._probe_paths_exist([real, missing, None, ""], probe=True)
+        self.assertTrue(result[real])
+        self.assertFalse(result[missing])
+        # Empty/None entries are ignored, not probed.
+        self.assertNotIn("", result)
+
+    def test_background_poll_reuses_cache_without_restating(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = os.path.join(tmp, "a.mov")
+            open(real, "w").close()
+            # Warm the cache with a real probe, then delete the file.
+            self.dash._probe_paths_exist([real], probe=True)
+            os.remove(real)
+            # Background poll must not stat — it trusts the cached True.
+            result = self.dash._probe_paths_exist([real], probe=False)
+        self.assertTrue(result[real])
+
+    def test_background_poll_assumes_present_for_uncached_path(self):
+        # No cache entry + no probe → trust Resolve's own status, assume present.
+        result = self.dash._probe_paths_exist(["/nonexistent/never-probed.mov"], probe=False)
+        self.assertTrue(result["/nonexistent/never-probed.mov"])
+
+    def test_fresh_probe_restats_after_cache_cleared(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = os.path.join(tmp, "a.mov")
+            open(real, "w").close()
+            self.dash._probe_paths_exist([real], probe=True)
+            os.remove(real)
+            self.dash._PATH_EXISTS_CACHE.clear()  # simulate TTL expiry
+            result = self.dash._probe_paths_exist([real], probe=True)
+        self.assertFalse(result[real])
+
+    def test_finalize_clip_record_sets_status_from_existence(self):
+        rec = {"file_path": "/x/b.mov", "clip_name": "b", "media_type": "Video", "_props": {}}
+        self.dash._finalize_clip_record(rec, True)
+        self.assertEqual(rec["status"], "online")
+        self.assertTrue(rec["file_exists"])
+        self.assertNotIn("_props", rec)
+
+        rec2 = {"file_path": "/x/c.mov", "clip_name": "c", "media_type": "Video", "_props": {}}
+        self.dash._finalize_clip_record(rec2, False)
+        self.assertEqual(rec2["status"], "missing_file")
+        self.assertFalse(rec2["file_exists"])
+
+
+class InventoryCacheReuseTests(unittest.TestCase):
+    """Background-poll reuse of the cached Resolve walk + analysis overlay."""
+
+    def setUp(self):
+        from src import analysis_dashboard as dash
+        self.dash = dash
+        dash._INVENTORY_CACHE.clear()
+
+    def _entry(self):
+        analyzed = {"file_path": "/x/a.mov", "clip_name": "a", "media_type": "Video",
+                    "status": "online", "source_clip": True, "analyzable": True,
+                    "selected": True, "clip_key": "a-key"}
+        plain = {"file_path": "/x/b.mov", "clip_name": "b", "media_type": "Video",
+                 "status": "online", "source_clip": True, "analyzable": True,
+                 "selected": False, "clip_key": "b-key"}
+        return {"base_records": [analyzed, plain], "project": {"name": "P", "id": "1"},
+                "selected_count": 1, "truncated": False, "limit": 500, "warnings": []}
+
+    def test_assemble_applies_overlay_without_contaminating_base(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            entry = self._entry()
+            payload = self.dash._assemble_inventory_payload(tmp, entry)
+            self.assertTrue(payload["resolve_available"])
+            self.assertEqual(payload["counts"]["total"], 2)
+            self.assertEqual(payload["counts"]["analyzed"], 0)
+            self.assertEqual(payload["counts"]["selected"], 1)
+            # The cached base must stay free of the per-call analysis overlay.
+            self.assertNotIn("analysis_status", entry["base_records"][0])
+
+    def test_overlay_reflects_new_analysis_without_resolve(self):
+        # The whole point of poll-reuse: analysis progress is picked up from disk
+        # on every assemble, with no Resolve walk.
+        with tempfile.TemporaryDirectory() as tmp:
+            entry = self._entry()
+            self.assertEqual(self.dash._assemble_inventory_payload(tmp, entry)["counts"]["analyzed"], 0)
+            os.makedirs(os.path.join(tmp, "clips", "a-key"))
+            with open(os.path.join(tmp, "clips", "a-key", "analysis.json"), "w") as fh:
+                fh.write("{}")
+            self.assertEqual(self.dash._assemble_inventory_payload(tmp, entry)["counts"]["analyzed"], 1)
+
+    def test_reuse_cached_serves_from_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.dash._store_cached_inventory(tmp, self._entry())
+            payload = self.dash.resolve_media_inventory(tmp, reuse_cached=True)
+            self.assertTrue(payload["resolve_available"])
+            self.assertEqual(payload["counts"]["total"], 2)
+
+    def test_reuse_miss_falls_through_to_build(self):
+        # No cache entry → full build; without Resolve that surfaces as unavailable
+        # rather than silently returning empty cached data.
+        payload = self.dash.resolve_media_inventory("/no/such/cache/root", reuse_cached=True)
+        self.assertFalse(payload["resolve_available"])
+
+    def test_resolve_identity_lock_is_reentrant(self):
+        # _resolve_identity is lock-decorated and calls _connect (same RLock):
+        # must return, not deadlock, when Resolve is absent.
+        ident = self.dash._resolve_identity()
+        self.assertIn("available", ident)
+
+    def test_reuse_serves_cache_when_project_id_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.dash._store_cached_inventory(tmp, self._entry())  # cached id == "1"
+            original = self.dash._current_resolve_project_id
+            self.dash._current_resolve_project_id = lambda: ("1", None)
+            try:
+                payload = self.dash.resolve_media_inventory(tmp, reuse_cached=True)
+            finally:
+                self.dash._current_resolve_project_id = original
+            self.assertTrue(payload["resolve_available"])
+            self.assertEqual(payload["counts"]["total"], 2)
+
+    def test_reuse_rebuilds_when_resolve_project_switched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.dash._store_cached_inventory(tmp, self._entry())  # cached id == "1"
+            original = self.dash._current_resolve_project_id
+            self.dash._current_resolve_project_id = lambda: ("2", None)  # different project
+            try:
+                payload = self.dash.resolve_media_inventory(tmp, reuse_cached=True)
+            finally:
+                self.dash._current_resolve_project_id = original
+            # Confirmed mismatch → full rebuild, which is unavailable without Resolve.
+            self.assertFalse(payload["resolve_available"])
+
+    def test_reuse_keeps_cache_when_current_project_unknown(self):
+        # Transient inability to read the current project must not trigger an
+        # expensive rebuild on every poll — keep serving the cache.
+        with tempfile.TemporaryDirectory() as tmp:
+            self.dash._store_cached_inventory(tmp, self._entry())
+            original = self.dash._current_resolve_project_id
+            self.dash._current_resolve_project_id = lambda: (None, "Resolve unavailable")
+            try:
+                payload = self.dash.resolve_media_inventory(tmp, reuse_cached=True)
+            finally:
+                self.dash._current_resolve_project_id = original
+            self.assertTrue(payload["resolve_available"])
+            self.assertEqual(payload["counts"]["total"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

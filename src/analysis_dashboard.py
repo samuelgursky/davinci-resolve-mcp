@@ -4,13 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import functools
+import hashlib
 import json
 import os
 import re
 import sqlite3
 import sys
 import threading
+import time
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
@@ -4636,6 +4640,8 @@ HTML = r"""<!doctype html>
       allProjects: null,
       activeContext: null,
       resolveMedia: null,
+      resolveMediaStale: false,
+      mediaETag: null,
       mediaPollTimer: null,
       mediaRefreshing: false,
       mediaLastRefresh: null,
@@ -5032,18 +5038,34 @@ HTML = r"""<!doctype html>
       const clips = sourceClips();
       const hiddenRecords = Math.max(0, Number(counts.total || 0) - Number(counts.source_clips || clips.length));
       const sequences = sequenceCount(media);
+      // Connection state comes from the /api/boot handshake, which returns as soon
+      // as the Resolve bridge is reachable — independent of the media inventory,
+      // which can take a long time to probe network source media. inventoryPending
+      // means Resolve is live but /api/resolve/media hasn't returned yet.
+      const bootResolve = state.boot?.resolve || {};
+      const resolveConnected = bootResolve.available === true || !!media?.resolve_available;
+      const inventoryPending = resolveConnected && !media;
       const projectName = state.activeContext?.project_name || media?.project?.name || state.boot?.project_name || 'Resolve project';
-      const resolveProject = media?.project?.name || 'No Resolve project';
-      const resolveStatus = media?.resolve_available ? `Resolve: ${resolveProject} · read-only` : (media?.status || 'Connection pending');
+      const resolveProject = media?.project?.name || (resolveConnected ? 'Loading project…' : 'No Resolve project');
+      let resolveStatus;
+      if (media?.resolve_available) {
+        resolveStatus = `Resolve: ${resolveProject} · read-only`;
+      } else if (inventoryPending) {
+        resolveStatus = 'Resolve connected · loading inventory…';
+      } else if (resolveConnected) {
+        resolveStatus = media?.status || media?.error || 'Resolve connected';
+      } else {
+        resolveStatus = media?.status || bootResolve.error || 'Connection pending';
+      }
       const index = indexSummary();
       const readyClips = clips.filter(clip => clip.analyzable).length;
       const analyzedClips = clips.filter(clip => ['analyzed', 'succeeded', 'skipped'].includes(String(clip.analysis_status || ''))).length;
       const onlineClips = clips.filter(clip => String(clip.status || '') === 'online').length;
       const missingClips = clips.filter(clip => ['missing_file', 'offline'].includes(String(clip.status || ''))).length;
-      const mediaStatusLabel = media?.resolve_available ? `${onlineClips} online` : 'Unavailable';
+      const mediaStatusLabel = media?.resolve_available ? `${onlineClips} online` : (inventoryPending ? 'Loading…' : 'Unavailable');
       const mediaStatusDetail = media?.resolve_available
         ? `${missingClips} missing/offline · ${hiddenRecords} non-source records`
-        : (media?.error || media?.status || 'Resolve inventory pending');
+        : (inventoryPending ? 'Reading Media Pool inventory…' : (media?.error || media?.status || 'Resolve inventory pending'));
 
       setText('overviewUpdated', `Updated ${new Date().toLocaleTimeString()}`);
       setText('overviewProject', projectName);
@@ -5056,7 +5078,10 @@ HTML = r"""<!doctype html>
       setText('overviewMediaStatusDetail', mediaStatusDetail);
 
       if (!media?.resolve_available) {
-        setHtml('overviewStatusList', `<div class="empty">${escapeHtml(media?.error || 'Open Resolve with a project loaded to inspect clips.')}</div>`);
+        const emptyMsg = inventoryPending
+          ? 'Resolve connected — loading Media Pool inventory…'
+          : (media?.error || 'Open Resolve with a project loaded to inspect clips.');
+        setHtml('overviewStatusList', `<div class="empty">${escapeHtml(emptyMsg)}</div>`);
       } else {
         const ICONS = {
           project: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 3h11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
@@ -5109,9 +5134,13 @@ HTML = r"""<!doctype html>
       const index = indexSummary();
       const resolveInfo = state.boot?.resolve || {};
       const warnings = media?.warnings || [];
-      const resolveOnline = !!media?.resolve_available;
-      const resolveTone = resolveOnline ? 'pill-ok' : (media ? 'pill-err' : 'pill-mute');
-      const resolveLabel = resolveOnline ? 'Connected' : (media ? 'Offline' : 'Pending');
+      // The boot handshake establishes the connection; media inventory loads after.
+      const handshake = resolveInfo.available === true;
+      const resolveOnline = !!media?.resolve_available || handshake;
+      const inventoryPending = handshake && !media;
+      const offline = (media || resolveInfo.error) && !resolveOnline;
+      const resolveTone = resolveOnline ? 'pill-ok' : (offline ? 'pill-err' : 'pill-mute');
+      const resolveLabel = resolveOnline ? 'Connected' : (offline ? 'Offline' : 'Pending');
 
       const connectionCard = `
         <div class="diag-card">
@@ -5123,7 +5152,7 @@ HTML = r"""<!doctype html>
             ${diagRow('Product', resolveInfo.product || (resolveOnline ? 'DaVinci Resolve' : 'Unavailable'), { muted: !resolveOnline })}
             ${diagRow('Version', resolveInfo.version_string || '—', { muted: !resolveInfo.version_string })}
             ${diagRow('Active page', resolveInfo.page || '—', { muted: !resolveInfo.page })}
-            ${diagRow('Status', resolveOnline ? 'Read-only API live' : (media?.error || media?.status || 'Waiting for handshake'))}
+            ${diagRow('Status', inventoryPending ? 'Read-only API live · loading inventory…' : (resolveOnline ? 'Read-only API live' : (media?.error || resolveInfo.error || media?.status || 'Waiting for handshake')))}
           </div>
         </div>`;
 
@@ -5926,6 +5955,14 @@ HTML = r"""<!doctype html>
       syncPreferencesPanel();
       applyPreferencesToControls(prefs);
       renderVersionBadge();
+      // Paint the previous inventory immediately (stale) so a slow first
+      // /api/resolve/media — common with network source media — doesn't leave the
+      // panel blank. The live fetch below replaces it and clears the stale flag.
+      const cachedInventory = loadInventorySnapshot();
+      if (cachedInventory) {
+        state.resolveMediaStale = true;
+        renderResolveMedia(cachedInventory);
+      }
       await refreshProjectContexts();
       renderControlPanels();
       await refreshIndex();
@@ -6057,12 +6094,53 @@ HTML = r"""<!doctype html>
       state.mediaRefreshing = true;
       updateMediaPollStatus('refreshing');
       try {
-        const payload = await api('/api/resolve/media?limit=500');
+        // Background polls reuse the cached Resolve walk and skip the network FS
+        // probe (the server re-applies only the local analysis overlay); manual /
+        // first loads do a full Media Pool walk with a fresh probe. The ETag lets
+        // an unchanged poll short-circuit to 304 and skip the table re-render.
+        const query = options.silent ? '&probe=0&reuse=1' : '';
+        const headers = {};
+        if (state.mediaETag) headers['If-None-Match'] = state.mediaETag;
+        const res = await fetch(`/api/resolve/media?limit=500${query}`, { headers, cache: 'no-store' });
         state.mediaLastRefresh = new Date();
+        state.resolveMediaStale = false;
+        if (res.status === 304) return;
+        const payload = await res.json();
+        if (!res.ok || payload.success === false) {
+          throw new Error(payload.error || res.statusText);
+        }
+        state.mediaETag = res.headers.get('ETag') || state.mediaETag;
         renderResolveMedia(payload);
+        saveInventorySnapshot(payload);
       } finally {
         state.mediaRefreshing = false;
         updateMediaPollStatus();
+      }
+    }
+
+    // Persist the last good inventory so reopening the dashboard paints the
+    // previous snapshot instantly (with a "refreshing" hint) instead of sitting
+    // on "connection pending" until the first fetch returns.
+    function inventorySnapshotKey() {
+      return 'resolveMcpInventory:' + (state.activeContext?.project_root || state.boot?.project_root || state.boot?.project_name || 'default');
+    }
+    function saveInventorySnapshot(payload) {
+      if (!payload?.resolve_available) return;
+      try {
+        localStorage.setItem(inventorySnapshotKey(), JSON.stringify({ saved_at: Date.now(), payload }));
+      } catch (error) {
+        // Quota or serialization failure is non-fatal — the snapshot is a nicety.
+        console.warn('Could not cache inventory snapshot', error);
+      }
+    }
+    function loadInventorySnapshot() {
+      try {
+        const raw = localStorage.getItem(inventorySnapshotKey());
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed?.payload?.resolve_available ? parsed.payload : null;
+      } catch (error) {
+        return null;
       }
     }
 
@@ -6550,7 +6628,8 @@ HTML = r"""<!doctype html>
       const poll = enabled ? `polling every ${Math.round(interval / 1000)}s` : 'polling off';
       const visible = state.resolveMedia?.clips ? clipLabel(filteredResolveClips(state.resolveMedia.clips).length) : 'no media snapshot';
       const prefix = state.mediaRefreshing ? 'refreshing' : poll;
-      el.textContent = `${prefix} · last ${last} · ${visible}${extra ? ` · ${extra}` : ''}`;
+      const stale = state.resolveMediaStale ? 'cached · ' : '';
+      el.textContent = `${stale}${prefix} · last ${last} · ${visible}${extra ? ` · ${extra}` : ''}`;
     }
 
     function rerenderResolveMedia() {
@@ -10504,27 +10583,74 @@ def _safe_id(obj: Any) -> Optional[str]:
     return str(value) if value else None
 
 
+# ── Resolve scripting API serialization ─────────────────────────────────────
+# The dashboard runs on a ThreadingHTTPServer, so /api/boot, /api/projects and
+# /api/resolve/media can land on separate threads concurrently (especially at
+# startup). DaVinci's scripting API is not thread-safe, so every entry point that
+# talks to it acquires this re-entrant lock for the full duration of its calls.
+_RESOLVE_API_LOCK = threading.RLock()
+_RESOLVE_ENV_READY = False
+
+
+def _serialize_resolve(func):
+    """Decorator: hold the Resolve API lock for the whole call."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _RESOLVE_API_LOCK:
+            return func(*args, **kwargs)
+    return wrapper
+
+
 def _connect_resolve_read_only() -> Tuple[Any, Optional[str]]:
-    try:
-        setup_environment()
-        paths = os.environ.get("PYTHONPATH", "")
-        modules_path = os.environ.get("RESOLVE_SCRIPT_API")
-        if modules_path:
-            candidate = os.path.join(modules_path, "Modules")
-            if candidate not in sys.path:
-                sys.path.append(candidate)
-        import DaVinciResolveScript as dvr_script  # type: ignore
-    except Exception as exc:
-        return None, f"Resolve scripting API unavailable: {exc}"
-    try:
-        resolve = dvr_script.scriptapp("Resolve")
-    except Exception as exc:
-        return None, f"Resolve connection failed: {exc}"
-    if resolve is None:
-        return None, "DaVinci Resolve is not connected. Open Resolve Studio with a project loaded."
-    return resolve, None
+    global _RESOLVE_ENV_READY
+    with _RESOLVE_API_LOCK:
+        # Environment + sys.path setup is pure overhead and never goes stale, so
+        # run it once per process rather than on every connection.
+        if not _RESOLVE_ENV_READY:
+            try:
+                setup_environment()
+                modules_path = os.environ.get("RESOLVE_SCRIPT_API")
+                if modules_path:
+                    candidate = os.path.join(modules_path, "Modules")
+                    if candidate not in sys.path:
+                        sys.path.append(candidate)
+                _RESOLVE_ENV_READY = True
+            except Exception as exc:
+                return None, f"Resolve scripting API unavailable: {exc}"
+        try:
+            import DaVinciResolveScript as dvr_script  # type: ignore
+        except Exception as exc:
+            return None, f"Resolve scripting API unavailable: {exc}"
+        try:
+            resolve = dvr_script.scriptapp("Resolve")
+        except Exception as exc:
+            return None, f"Resolve connection failed: {exc}"
+        if resolve is None:
+            return None, "DaVinci Resolve is not connected. Open Resolve Studio with a project loaded."
+        return resolve, None
 
 
+@_serialize_resolve
+def _current_resolve_project_id() -> Tuple[Optional[str], Optional[str]]:
+    """(project_id, error) for the currently-open Resolve project.
+
+    A handful of cheap API calls — used by the media-poll reuse path to detect
+    when the user has switched projects in Resolve since the inventory was cached,
+    without paying for a full Media Pool walk.
+    """
+    resolve, error = _connect_resolve_read_only()
+    if error or resolve is None:
+        return None, error or "Resolve unavailable"
+    pm, pm_error = _safe_call(resolve, "GetProjectManager")
+    if not pm or pm_error:
+        return None, pm_error or "Project manager unavailable"
+    project, _ = _safe_call(pm, "GetCurrentProject")
+    if not project:
+        return None, "No Resolve project open"
+    return _safe_id(project), None
+
+
+@_serialize_resolve
 def _resolve_identity() -> Dict[str, Any]:
     resolve, error = _connect_resolve_read_only()
     if not resolve:
@@ -10555,7 +10681,64 @@ def _first_prop(props: Dict[str, Any], keys: Tuple[str, ...]) -> Any:
     return None
 
 
-def _media_status(props: Dict[str, Any], file_path: Optional[str]) -> str:
+# ── File-existence probing ──────────────────────────────────────────────────
+# stat() calls on mounted network storage dominate inventory time (300+ source
+# clips on a Z:\ share can take tens of seconds serially). We probe paths in a
+# thread pool and memoize results for a short TTL so the recurring media poll
+# does not re-stat unchanged paths every few seconds.
+_PATH_EXISTS_TTL = 60.0
+_PATH_PROBE_WORKERS = 16
+_PATH_EXISTS_CACHE: Dict[str, Tuple[float, bool]] = {}
+_PATH_EXISTS_LOCK = threading.Lock()
+
+
+def _cached_path_exists(path: str, now: float, ttl: float) -> Optional[bool]:
+    with _PATH_EXISTS_LOCK:
+        entry = _PATH_EXISTS_CACHE.get(path)
+    if entry is not None and (now - entry[0]) <= ttl:
+        return entry[1]
+    return None
+
+
+def _store_path_exists(path: str, exists: bool, now: float) -> None:
+    with _PATH_EXISTS_LOCK:
+        _PATH_EXISTS_CACHE[path] = (now, exists)
+
+
+def _probe_paths_exist(paths: Any, *, probe: bool = True, ttl: float = _PATH_EXISTS_TTL) -> Dict[str, bool]:
+    """Resolve a collection of file paths to existence booleans.
+
+    With ``probe=True`` (first load / manual refresh) any cache entry older than
+    ``ttl`` is re-stat'd, and uncached paths are probed in parallel. With
+    ``probe=False`` (background poll) the filesystem is never touched: cached
+    values are reused at any age and unknown paths fall back to ``True`` —
+    Resolve's own online/offline Status property still flags clips it knows are
+    missing, so we trust it rather than paying for a network round-trip on every
+    poll.
+    """
+    distinct = {str(p) for p in paths if p}
+    result: Dict[str, bool] = {}
+    to_probe: List[str] = []
+    now = time.time()
+    lookup_ttl = ttl if probe else float("inf")
+    for path in distinct:
+        cached = _cached_path_exists(path, now, lookup_ttl)
+        if cached is not None:
+            result[path] = cached
+        elif probe:
+            to_probe.append(path)
+        else:
+            result[path] = True
+    if to_probe:
+        workers = max(1, min(_PATH_PROBE_WORKERS, len(to_probe)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for path, exists in zip(to_probe, pool.map(os.path.exists, to_probe)):
+                result[path] = bool(exists)
+                _store_path_exists(path, bool(exists), now)
+    return result
+
+
+def _media_status(props: Dict[str, Any], file_path: Optional[str], *, file_exists: Optional[bool] = None) -> str:
     status_text = str(_first_prop(props, ("Status", "Media Status", "Online Status", "Offline")) or "").strip().lower()
     if not file_path:
         return "no_path"
@@ -10563,7 +10746,11 @@ def _media_status(props: Dict[str, Any], file_path: Optional[str]) -> str:
         return "offline"
     if "missing" in status_text:
         return "missing_file"
-    if not os.path.exists(str(file_path)):
+    # Pass `file_exists` in to reuse a single os.path.exists() probe — stat calls on
+    # network source media are slow, so the caller avoids probing the same path twice.
+    if file_exists is None:
+        file_exists = os.path.exists(str(file_path))
+    if not file_exists:
         return "missing_file"
     return "online"
 
@@ -10644,9 +10831,18 @@ def _resolve_clip_record(clip: Any, bin_path: str, selected_ids: set) -> Dict[st
         "resolve_status": _first_prop(props, ("Status", "Media Status", "Online Status", "Offline")),
         "selected": bool(clip_id and clip_id in selected_ids),
     }
-    record["file_exists"] = bool(record["file_path"] and os.path.exists(str(record["file_path"])))
-    record["status"] = _media_status(props, record["file_path"])
+    # File-existence is resolved in a single parallel batch after every clip's
+    # Resolve properties are gathered (see resolve_media_inventory), so we stash
+    # the props and defer existence-dependent fields to _finalize_clip_record.
     record["clip_key"] = stable_clip_directory(record)
+    record["_props"] = props
+    return record
+
+
+def _finalize_clip_record(record: Dict[str, Any], file_exists: bool) -> Dict[str, Any]:
+    props = record.pop("_props", {}) or {}
+    record["file_exists"] = file_exists
+    record["status"] = _media_status(props, record["file_path"], file_exists=file_exists)
     record["source_clip"], record["source_clip_reason"] = _source_clip_status(record, props)
     record["analyzable"], record["analyzable_reason"] = _analyzable_clip_status(record, props)
     return record
@@ -10786,77 +10982,36 @@ def _analysis_status_by_clip(project_root: str, records: List[Dict[str, Any]]) -
     return status_by_key
 
 
-def resolve_media_inventory(project_root: str, *, limit: Any = 500, recursive: bool = True) -> Dict[str, Any]:
-    try:
-        max_items = max(1, min(int(limit), 2000))
-    except (TypeError, ValueError):
-        max_items = 500
-    resolve, resolve_error = _connect_resolve_read_only()
-    if resolve_error:
-        return {
-            "success": True,
-            "resolve_available": False,
-            "status": "Resolve unavailable",
-            "error": resolve_error,
-            "clips": [],
-            "counts": _empty_media_counts(),
-        }
-    pm, pm_error = _safe_call(resolve, "GetProjectManager")
-    project = None
-    if pm and not pm_error:
-        project, _ = _safe_call(pm, "GetCurrentProject")
-    if not project:
-        return {
-            "success": True,
-            "resolve_available": False,
-            "status": "No Resolve project",
-            "error": "DaVinci Resolve is connected, but no project is open.",
-            "clips": [],
-            "counts": _empty_media_counts(),
-        }
-    media_pool, mp_error = _safe_call(project, "GetMediaPool")
-    if not media_pool or mp_error:
-        return {
-            "success": True,
-            "resolve_available": False,
-            "status": "Media Pool unavailable",
-            "error": mp_error or "Failed to get Resolve Media Pool",
-            "clips": [],
-            "counts": _empty_media_counts(),
-        }
-    root_folder, root_error = _safe_call(media_pool, "GetRootFolder")
-    if not root_folder or root_error:
-        return {
-            "success": True,
-            "resolve_available": False,
-            "status": "Root folder unavailable",
-            "error": root_error or "Failed to get Resolve root folder",
-            "clips": [],
-            "counts": _empty_media_counts(),
-        }
+# Last full Resolve walk per project_root, kept overlay-free so the analysis
+# status can be re-applied cheaply on every background poll without re-walking
+# the Media Pool (the expensive, non-parallelizable GetClipProperty pass).
+_INVENTORY_CACHE: Dict[str, Dict[str, Any]] = {}
+_INVENTORY_LOCK = threading.Lock()
 
-    selected_ids = set()
-    selected_clips, _ = _safe_call(media_pool, "GetSelectedClips")
-    for clip in selected_clips or []:
-        clip_id = _safe_id(clip)
-        if clip_id:
-            selected_ids.add(clip_id)
 
-    warnings: List[str] = []
-    records: List[Dict[str, Any]] = []
-    truncated = _append_folder_media(
-        root_folder,
-        bin_path="Master",
-        recursive=recursive,
-        selected_ids=selected_ids,
-        records=records,
-        warnings=warnings,
-        limit=max_items,
-    )
+def _get_cached_inventory(project_root: str) -> Optional[Dict[str, Any]]:
+    with _INVENTORY_LOCK:
+        return _INVENTORY_CACHE.get(project_root)
+
+
+def _store_cached_inventory(project_root: str, entry: Dict[str, Any]) -> None:
+    with _INVENTORY_LOCK:
+        _INVENTORY_CACHE[project_root] = entry
+
+
+def _assemble_inventory_payload(project_root: str, entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply the (local, cheap) analysis-status overlay onto cached base records.
+
+    Base records hold the Resolve-derived fields plus file existence; the analysis
+    overlay (queued/running/analyzed, report paths, job ids) is re-read from disk
+    every call so a background poll reflects job progress without touching Resolve.
+    Records are copied so the cached base stays overlay-free across polls.
+    """
+    records = [dict(record) for record in entry["base_records"]]
     status_by_key = _analysis_status_by_clip(project_root, records)
     counts = _empty_media_counts()
     counts["total"] = len(records)
-    counts["selected"] = len(selected_ids)
+    counts["selected"] = entry.get("selected_count", sum(1 for r in records if r.get("selected")))
     for record in records:
         status = record.get("status") or "unknown"
         if status in counts:
@@ -10879,17 +11034,140 @@ def resolve_media_inventory(project_root: str, *, limit: Any = 500, recursive: b
         "success": True,
         "resolve_available": True,
         "status": "Resolve connected",
-        "project": {
-            "name": _safe_name(project, "Resolve Project"),
-            "id": _safe_id(project),
-        },
+        "project": entry["project"],
         "project_root": project_root,
         "clips": records,
         "counts": counts,
+        "truncated": bool(entry.get("truncated")),
+        "limit": entry.get("limit"),
+        "warnings": entry.get("warnings", []),
+    }
+
+
+def resolve_media_inventory(
+    project_root: str,
+    *,
+    limit: Any = 500,
+    recursive: bool = True,
+    probe_paths: bool = True,
+    reuse_cached: bool = False,
+) -> Dict[str, Any]:
+    try:
+        max_items = max(1, min(int(limit), 2000))
+    except (TypeError, ValueError):
+        max_items = 500
+
+    # Background polls only need to surface analysis progress (a local, disk-backed
+    # signal), so they reuse the last Resolve walk instead of paying for ~N serial
+    # GetClipProperty round-trips again. A cheap project-id check still catches a
+    # project switch made directly in Resolve (a handful of API calls vs a full
+    # walk); we rebuild only on a confirmed mismatch. If the current project can't
+    # be determined (Resolve down / no project open), we keep serving the cache —
+    # a transient blip shouldn't trigger an expensive rebuild on every poll.
+    if reuse_cached:
+        cached = _get_cached_inventory(project_root)
+        if cached is not None:
+            current_id, id_error = _current_resolve_project_id()
+            cached_id = (cached.get("project") or {}).get("id")
+            project_changed = (
+                id_error is None
+                and current_id is not None
+                and str(current_id) != str(cached_id)
+            )
+            if not project_changed:
+                return _assemble_inventory_payload(project_root, cached)
+
+    # Everything that touches the Resolve scripting API stays under the lock; the
+    # parallel path probe and the disk overlay run outside it.
+    with _RESOLVE_API_LOCK:
+        resolve, resolve_error = _connect_resolve_read_only()
+        if resolve_error:
+            return {
+                "success": True,
+                "resolve_available": False,
+                "status": "Resolve unavailable",
+                "error": resolve_error,
+                "clips": [],
+                "counts": _empty_media_counts(),
+            }
+        pm, pm_error = _safe_call(resolve, "GetProjectManager")
+        project = None
+        if pm and not pm_error:
+            project, _ = _safe_call(pm, "GetCurrentProject")
+        if not project:
+            return {
+                "success": True,
+                "resolve_available": False,
+                "status": "No Resolve project",
+                "error": "DaVinci Resolve is connected, but no project is open.",
+                "clips": [],
+                "counts": _empty_media_counts(),
+            }
+        media_pool, mp_error = _safe_call(project, "GetMediaPool")
+        if not media_pool or mp_error:
+            return {
+                "success": True,
+                "resolve_available": False,
+                "status": "Media Pool unavailable",
+                "error": mp_error or "Failed to get Resolve Media Pool",
+                "clips": [],
+                "counts": _empty_media_counts(),
+            }
+        root_folder, root_error = _safe_call(media_pool, "GetRootFolder")
+        if not root_folder or root_error:
+            return {
+                "success": True,
+                "resolve_available": False,
+                "status": "Root folder unavailable",
+                "error": root_error or "Failed to get Resolve root folder",
+                "clips": [],
+                "counts": _empty_media_counts(),
+            }
+
+        selected_ids = set()
+        selected_clips, _ = _safe_call(media_pool, "GetSelectedClips")
+        for clip in selected_clips or []:
+            clip_id = _safe_id(clip)
+            if clip_id:
+                selected_ids.add(clip_id)
+
+        warnings: List[str] = []
+        records: List[Dict[str, Any]] = []
+        truncated = _append_folder_media(
+            root_folder,
+            bin_path="Master",
+            recursive=recursive,
+            selected_ids=selected_ids,
+            records=records,
+            warnings=warnings,
+            limit=max_items,
+        )
+        project_info = {
+            "name": _safe_name(project, "Resolve Project"),
+            "id": _safe_id(project),
+        }
+        selected_count = len(selected_ids)
+
+    # Resolve every clip's file path in one parallel, cache-backed batch, then
+    # finalize existence-dependent fields (status / analyzable).
+    existence = _probe_paths_exist(
+        (record.get("file_path") for record in records),
+        probe=probe_paths,
+    )
+    for record in records:
+        file_path = record.get("file_path")
+        _finalize_clip_record(record, bool(file_path) and existence.get(str(file_path), False))
+
+    entry = {
+        "base_records": records,
+        "project": project_info,
+        "selected_count": selected_count,
         "truncated": bool(truncated),
         "limit": max_items,
         "warnings": warnings,
     }
+    _store_cached_inventory(project_root, entry)
+    return _assemble_inventory_payload(project_root, entry)
 
 
 _PROJECT_CONTEXT_RE = re.compile(r"^(?P<slug>.+)-(?P<hash>[0-9a-f]{10})$")
@@ -10941,6 +11219,7 @@ def _context_from_project_root(base_root: str, project_root: str, *, source: str
     }
 
 
+@_serialize_resolve
 def _current_resolve_project_context(base_root: str) -> Optional[Dict[str, Any]]:
     resolve, resolve_error = _connect_resolve_read_only()
     if resolve_error:
@@ -11001,6 +11280,7 @@ def _project_folder_label(folder_path: List[str]) -> str:
     return " / ".join(folder_path) if folder_path else "Root"
 
 
+@_serialize_resolve
 def _resolve_all_project_contexts(base_root: str, *, max_depth: int = 12, max_projects: int = 2000) -> Dict[str, Any]:
     resolve, resolve_error = _connect_resolve_read_only()
     if resolve_error:
@@ -11123,6 +11403,7 @@ def _resolve_all_project_contexts(base_root: str, *, max_depth: int = 12, max_pr
     }
 
 
+@_serialize_resolve
 def _resolve_project_contexts(base_root: str) -> Dict[str, Any]:
     resolve, resolve_error = _connect_resolve_read_only()
     if resolve_error:
@@ -11196,6 +11477,7 @@ def _resolve_project_contexts(base_root: str) -> Dict[str, Any]:
     }
 
 
+@_serialize_resolve
 def _load_resolve_project_context(base_root: str, project_name: Any, folder_path: Any = None) -> Dict[str, Any]:
     target_name = str(project_name or "").strip()
     if not target_name:
@@ -12960,6 +13242,27 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _json_etag(self, payload: Dict[str, Any]) -> None:
+        """JSON response with an ETag so unchanged polls short-circuit to 304.
+
+        The Resolve media inventory is re-fetched every few seconds; when the
+        serialized payload is byte-identical to what the client already holds we
+        skip both the body transfer and the client-side re-render of the table.
+        """
+        raw = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        etag = '"' + hashlib.md5(raw).hexdigest() + '"'
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(HTTPStatus.NOT_MODIFIED)
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("ETag", etag)
+        self.end_headers()
+        self.wfile.write(raw)
+
     def _serve_file(self, path: str, content_type: str = "application/octet-stream") -> None:
         try:
             with open(path, "rb") as handle:
@@ -13089,11 +13392,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json(_setup_defaults("get_defaults"))
             return
         if path == "/api/resolve/media":
-            self._json(
+            self._json_etag(
                 resolve_media_inventory(
                     self.state.project_root,
                     limit=(query.get("limit") or [500])[0],
                     recursive=(query.get("recursive") or ["true"])[0].lower() not in {"0", "false", "no"},
+                    probe_paths=(query.get("probe") or ["1"])[0].lower() not in {"0", "false", "no"},
+                    reuse_cached=(query.get("reuse") or ["0"])[0].lower() in {"1", "true", "yes"},
                 )
             )
             return
@@ -13556,6 +13861,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _warm_inventory_cache(project_root: str) -> None:
+    """Build the first Resolve inventory in the background at startup.
+
+    Populates the inventory + path-existence caches before the browser connects so
+    the first dashboard open paints live data immediately instead of waiting on a
+    cold Media Pool walk. Best-effort: if Resolve isn't up yet this no-ops and the
+    first real request builds normally.
+    """
+    try:
+        resolve_media_inventory(project_root)
+    except Exception:  # noqa: BLE001 — warm-up must never crash startup
+        pass
+
+
 def main() -> None:
     args = parse_args()
     state = DashboardState(args.project_name, args.project_id, args.analysis_root)
@@ -13564,6 +13883,7 @@ def main() -> None:
     url = f"http://{args.host}:{args.port}"
     print(f"DaVinci Resolve MCP: {url}")
     print(f"Project analysis root: {state.project_root}")
+    threading.Thread(target=_warm_inventory_cache, args=(state.project_root,), daemon=True).start()
     if args.open:
         webbrowser.open(url)
     try:
