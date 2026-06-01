@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.27.1
+
+**Faster control-panel startup with network source media (issue #50)** — on
+first open the control panel could sit on "connection pending" for a long time
+when Media Pool clips lived on mounted network storage, because the UI only
+treated the connection as live once the full media inventory finished loading,
+and that inventory probed every clip's file path on disk.
+
+Fixes and performance work:
+
+- **Connection state is decoupled from the media inventory.** The overview and
+  diagnostics panels now derive "connected" from the `/api/boot` handshake (which
+  returns as soon as the Resolve bridge is reachable) and show inventory loading
+  separately, so Resolve reads as live immediately while clips stream in.
+- **Parallel, cached file-existence probing.** `os.path.exists` for every clip
+  now runs in a thread pool and is memoized for a short TTL, instead of two serial
+  `stat()` calls per clip — the dominant cost on network storage.
+- **Background polls reuse the cached Media Pool walk.** The recurring poll no
+  longer re-runs the ~N serial `GetClipProperty` calls; it reuses the last walk
+  and re-applies only the local, disk-backed analysis-status overlay. A cheap
+  project-id check still catches a project switched directly in Resolve, and a
+  manual refresh always does a full walk.
+- **Resolve scripting API access is serialized.** A re-entrant lock guards every
+  scripting-API entry point, since the dashboard's threaded HTTP server could
+  previously fire concurrent (thread-unsafe) Resolve calls at startup.
+- **ETag/304 on the inventory endpoint** skips transfer and table re-render when
+  nothing changed; the last good inventory is cached client-side and painted
+  instantly on reload; and the first inventory build is warmed in a background
+  thread at server start.
+
+No public MCP tool surface changed. Adds regression tests in
+`tests/test_media_analysis.py` (path-existence probing, inventory cache reuse,
+project-switch detection, lock reentrancy).
+
 ## What's New in v2.27.0
 
 **Frame-sampling modes (issue #46)** — how many frames a clip gets for visual
