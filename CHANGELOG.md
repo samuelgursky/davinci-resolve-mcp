@@ -2,6 +2,43 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.27.2
+
+**Control panel under-counted analyzed clips after a Media Pool rename (issue
+#51)** — with every clip analyzed (e.g. 303/303 reports on disk), the overview
+and Media tab could report something like "108 / 303 analyzed". The panel only
+recognized a report when a folder's name exactly matched the clip's *current*
+display name, so renaming clips after analysis hid their existing reports even
+though the underlying media was unchanged.
+
+Root cause and fix:
+
+- **Lookups are keyed by a rename-stable hash, not the display-name folder.**
+  Report folders are named `<display-slug>-<hash>`; the count now matches on the
+  trailing hash (and the ids inside each report), so a renamed clip still
+  resolves to its existing folder. Both the disk path and the jobs-DB fallback
+  were corrected.
+- **The hash is now anchored to the normalized file path (canonical basis).**
+  Previously the basis was a `clip_id`-first cascade, so the same media hashed
+  differently depending on which fields a record carried — Resolve inventory
+  (clip_id) vs path-based batch jobs (file path) disagreed on the same clip.
+  Anchoring to the file path removes that cross-basis mismatch. Legacy folders
+  (clip_id-based, or raw-path-based) still resolve via a migration-safe set of
+  candidate hashes, so **no on-disk migration is required**.
+- **Writes reuse an existing report folder** (matched by canonical or legacy
+  hash) instead of minting a new `<newslug>-<hash>` directory, eliminating
+  orphaned duplicate folders when a renamed clip is re-analyzed.
+- **A persisted clip index (`clips/index.json`)** maps every stable id found in
+  a report (normalized + raw file path, clip_id, media_id) to its folder, so the
+  count can still match a clip by any id it carries — including an offline clip
+  that no longer reports a file path but retains its clip_id. The index is
+  refreshed only when a report is added, removed, or rewritten (cheap signature
+  check), so the recurring poll stays inexpensive.
+
+No public MCP tool surface changed. Adds regression tests in
+`tests/test_media_analysis.py` covering rename, cross-basis, legacy-folder reuse,
+the jobs-DB fallback, and the offline/no-path case.
+
 ## What's New in v2.27.1
 
 **Faster control-panel startup with network source media (issue #50)** — on

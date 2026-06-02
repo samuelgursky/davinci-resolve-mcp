@@ -739,16 +739,225 @@ def project_directory_name(project_name: Any, project_id: Any = None) -> str:
     return f"{slugify(project_name, 'project')}-{short_hash(basis)}"
 
 
-def stable_clip_directory(record: Dict[str, Any]) -> str:
-    basis = (
+def stable_clip_basis(record: Dict[str, Any]) -> str:
+    """Return the canonical rename-stable identity used to hash a report folder.
+
+    The canonical basis is the *normalized file path*: it is present on both
+    Resolve-derived and path-based batch records, it survives a Media Pool
+    rename, and a genuine relink to a different file is handled separately as a
+    superseded source. Resolve-internal ids (clip_id/media_id) are absent from
+    path-based records and not portable across project copies, so they are only
+    used when no file path is available; the display name is the last resort.
+
+    Folder *resolution* (matching an existing report) must tolerate the legacy
+    bases too — see :func:`stable_clip_match_hashes`.
+    """
+    file_path = record.get("file_path")
+    if file_path:
+        return normalize_path(file_path)
+    return str(
         record.get("clip_id")
         or record.get("media_id")
-        or record.get("file_path")
         or record.get("clip_name")
         or "clip"
     )
+
+
+def stable_clip_hash(record: Dict[str, Any]) -> str:
+    """Return the canonical 12-char hash that anchors a clip's report folder."""
+    return short_hash(stable_clip_basis(record), 12)
+
+
+def stable_clip_match_hashes(record: Dict[str, Any]) -> List[str]:
+    """All folder hashes that could identify this clip's existing report.
+
+    Returns the canonical hash first, followed by legacy bases so reports
+    written before the canonical file-path scheme (clip_id-first, or a raw
+    un-normalized path) still resolve without an on-disk migration. The display
+    name is only used when nothing more unique is available, so two different
+    clips that merely share a name are never matched to the same report.
+    """
+    hashes: List[str] = []
+    seen: set = set()
+
+    def add(value: Any) -> None:
+        if not value:
+            return
+        digest = short_hash(value, 12)
+        if digest not in seen:
+            seen.add(digest)
+            hashes.append(digest)
+
+    file_path = record.get("file_path")
+    if file_path:
+        add(normalize_path(file_path))  # canonical
+        add(str(file_path))             # legacy: raw, un-normalized path
+    add(record.get("clip_id"))          # legacy: clip_id-first scheme
+    add(record.get("media_id"))
+    if not hashes:
+        add(record.get("clip_name") or "clip")
+    return hashes
+
+
+def clip_directory_hash(name: Any) -> Optional[str]:
+    """Extract the trailing stable hash from a clip report folder name.
+
+    Folder names are ``<label>-<hash>`` where ``<label>`` is the (rename-prone)
+    display slug and ``<hash>`` is :func:`stable_clip_hash`. A bare ``<hash>``
+    folder (no slug) is also accepted. Returns the hash, or ``None`` if the
+    trailing token is not a 12-char hex hash.
+    """
+    base = os.path.basename(str(name or "").rstrip("/\\"))
+    suffix = base.rsplit("-", 1)[-1]
+    if re.fullmatch(r"[0-9a-f]{12}", suffix):
+        return suffix
+    return None
+
+
+def stable_clip_directory(record: Dict[str, Any]) -> str:
     label = slugify(record.get("clip_name") or Path(str(record.get("file_path") or "clip")).stem, "clip")
-    return f"{label}-{short_hash(basis, 12)}"
+    return f"{label}-{stable_clip_hash(record)}"
+
+
+def resolve_clip_directory(project_root: str, record: Dict[str, Any]) -> str:
+    """Return the report directory for a clip, reusing an existing one if found.
+
+    Writes go through here so a clip that was renamed, or analyzed under a legacy
+    hash basis (e.g. clip_id-first, or a path-based batch report), reuses its
+    existing folder instead of orphaning it under a freshly minted name. Matches
+    by canonical hash first, then any legacy hash; falls back to the canonical
+    new path when nothing exists yet.
+    """
+    clips_root = os.path.join(project_root, "clips")
+    # Fast path: the canonical folder already exists by exact name. This is the
+    # steady state (re-analysis of an already-canonical clip) and avoids a full
+    # directory scan per clip on a batch run.
+    canonical_dir = os.path.join(clips_root, stable_clip_directory(record))
+    if os.path.isdir(canonical_dir):
+        return normalize_path(canonical_dir)
+    match = stable_clip_match_hashes(record)
+    if match and os.path.isdir(clips_root):
+        canonical = match[0]
+        match_set = set(match)
+        legacy_hit: Optional[str] = None
+        try:
+            entries = sorted(os.listdir(clips_root))
+        except OSError:
+            entries = []
+        for entry in entries:
+            candidate = os.path.join(clips_root, entry)
+            if not os.path.isdir(candidate):
+                continue
+            folder_hash = clip_directory_hash(entry)
+            if not folder_hash:
+                continue
+            if folder_hash == canonical:
+                return normalize_path(candidate)
+            if folder_hash in match_set and legacy_hit is None:
+                legacy_hit = candidate
+        if legacy_hit:
+            return normalize_path(legacy_hit)
+    return normalize_path(os.path.join(clips_root, stable_clip_directory(record)))
+
+
+CLIP_INDEX_SCHEMA_VERSION = 1
+
+
+def clip_index_path(project_root: str) -> str:
+    """Path of the per-project clip index (a sidecar under clips/)."""
+    return os.path.join(project_root, "clips", "index.json")
+
+
+def _clip_dir_signature(clips_root: str) -> str:
+    """Cheap fingerprint of the analyzed clip dirs (each analysis.json's name,
+    mtime, and size) so the persisted index can be reused until a report is
+    added, removed, or rewritten — without reparsing every report each poll."""
+    parts: List[str] = []
+    try:
+        entries = sorted(os.listdir(clips_root))
+    except OSError:
+        return "0:none"
+    for entry in entries:
+        report = os.path.join(clips_root, entry, "analysis.json")
+        try:
+            stat = os.stat(report)
+        except OSError:
+            continue
+        parts.append(f"{entry}:{stat.st_mtime_ns}:{stat.st_size}")
+    return f"{len(parts)}:{short_hash('|'.join(parts), 16)}"
+
+
+def build_clip_index(project_root: str) -> Dict[str, Any]:
+    """Build and persist a hash -> folder index for the project's reports.
+
+    Unlike a folder-name scan (which only knows the single hash baked into each
+    directory name), this reads each report's ``clip`` block and indexes ALL of
+    its stable ids (normalized + raw file path, clip_id, media_id). That lets the
+    analyzed-count match a clip by any id it still carries — e.g. an offline clip
+    that no longer reports a file path but still has its clip_id. See #51.
+    """
+    clips_root = os.path.join(project_root, "clips")
+    hash_to_folder: Dict[str, str] = {}
+    if os.path.isdir(clips_root):
+        try:
+            entries = sorted(os.listdir(clips_root))
+        except OSError:
+            entries = []
+        for entry in entries:
+            report_path = os.path.join(clips_root, entry, "analysis.json")
+            if not os.path.isfile(report_path):
+                continue
+            try:
+                report = _read_json(report_path)
+            except (OSError, json.JSONDecodeError):
+                continue
+            clip_block = report.get("clip") if isinstance(report.get("clip"), dict) else {}
+            hashes = set(stable_clip_match_hashes(clip_block))
+            folder_hash = clip_directory_hash(entry)  # the hash baked into the name
+            if folder_hash:
+                hashes.add(folder_hash)
+            for digest in hashes:
+                hash_to_folder.setdefault(digest, entry)
+    payload = {
+        "schema_version": CLIP_INDEX_SCHEMA_VERSION,
+        "signature": _clip_dir_signature(clips_root),
+        "hash_to_folder": hash_to_folder,
+    }
+    if os.path.isdir(clips_root):
+        try:
+            _write_json(clip_index_path(project_root), payload)
+        except OSError:
+            pass
+    return payload
+
+
+def load_clip_index(project_root: str, *, rebuild_if_stale: bool = True) -> Dict[str, Any]:
+    """Load the persisted clip index, rebuilding it if missing or stale.
+
+    Freshness is decided by the cheap directory signature, so the common poll
+    pays a stat-per-report instead of a full JSON reparse; a rebuild only happens
+    when a report is added, removed, or rewritten.
+    """
+    clips_root = os.path.join(project_root, "clips")
+    current_sig = _clip_dir_signature(clips_root)
+    try:
+        data = _read_json(clip_index_path(project_root))
+    except (OSError, json.JSONDecodeError):
+        data = None
+    if (
+        isinstance(data, dict)
+        and data.get("schema_version") == CLIP_INDEX_SCHEMA_VERSION
+        and data.get("signature") == current_sig
+        and isinstance(data.get("hash_to_folder"), dict)
+    ):
+        return data
+    if rebuild_if_stale:
+        return build_clip_index(project_root)
+    return {
+        "schema_version": CLIP_INDEX_SCHEMA_VERSION,
+        "signature": current_sig,
+        "hash_to_folder": {},
+    }
 
 
 def normalize_path(path: Any) -> str:
@@ -1681,7 +1890,7 @@ def _bounded_frame_count(depth: str, requested: Any = None) -> int:
 
 
 def _artifact_paths(project_root: str, record: Dict[str, Any], depth: str, options: Dict[str, Any]) -> Dict[str, Any]:
-    clip_dir = normalize_path(os.path.join(project_root, "clips", stable_clip_directory(record)))
+    clip_dir = resolve_clip_directory(project_root, record)
     artifacts: Dict[str, Any] = {
         "clip_dir": clip_dir,
         "analysis_json": os.path.join(clip_dir, "analysis.json"),
