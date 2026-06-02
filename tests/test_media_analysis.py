@@ -36,6 +36,7 @@ from src.analysis_dashboard import (
     get_analyzed_clip_shot,
     get_clip_frame_path,
     read_clip_corrections,
+    _analysis_status_by_clip,
 )
 from src.utils import update_check
 from src.utils.media_analysis import (
@@ -61,7 +62,14 @@ from src.utils.media_analysis import (
     resolve_output_root,
     _sample_times,
     summarize_reports,
+    build_clip_index,
+    clip_directory_hash,
+    clip_index_path,
+    load_clip_index,
+    resolve_clip_directory,
     stable_clip_directory,
+    stable_clip_hash,
+    stable_clip_match_hashes,
     update_analysis_registry,
     vision_is_pending_host_analysis,
 )
@@ -442,6 +450,268 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertNotIn("..", dirname)
         self.assertNotIn("/", dirname)
         self.assertTrue(dirname.startswith("a001-c001.mov-"))
+
+    def test_stable_clip_hash_survives_media_pool_rename(self):
+        """The folder hash is anchored to stable Resolve ids, not the display name."""
+        before = {
+            "clip_name": "c0001.mp4",
+            "clip_id": "clip-123",
+            "file_path": "/Volumes/Media/c0001.mp4",
+        }
+        after = dict(before, clip_name="ice_c0001.mp4")
+
+        # The leading slug changes, but the trailing hash is identical.
+        self.assertNotEqual(stable_clip_directory(before), stable_clip_directory(after))
+        self.assertEqual(stable_clip_hash(before), stable_clip_hash(after))
+        self.assertEqual(
+            clip_directory_hash(stable_clip_directory(before)),
+            clip_directory_hash(stable_clip_directory(after)),
+        )
+
+    def test_clip_directory_hash_extracts_trailing_hex_only(self):
+        self.assertEqual(clip_directory_hash("c0001.mp4-c923852545ed"), "c923852545ed")
+        self.assertEqual(clip_directory_hash("ice_c0001.mp4-c923852545ed"), "c923852545ed")
+        # A bare hash folder (no slug) is also a valid clip report folder.
+        self.assertEqual(clip_directory_hash("c923852545ed"), "c923852545ed")
+        # No trailing 12-char hex token -> not a clip report folder.
+        self.assertIsNone(clip_directory_hash("not-a-clip-folder"))
+        self.assertIsNone(clip_directory_hash("plainname"))
+
+    def test_canonical_hash_agrees_across_resolve_and_path_based_records(self):
+        """Same media -> same canonical hash whether or not clip_id is present.
+
+        The Resolve inventory carries clip_id; path-based batch records do not.
+        Anchoring the canonical hash to the (normalized) file path removes that
+        cross-basis mismatch so both surfaces agree on one folder.
+        """
+        resolve_record = {
+            "clip_name": "c0001.mp4",
+            "clip_id": "clip-123",
+            "media_id": "media-9",
+            "file_path": "/Volumes/Media/c0001.mp4",
+        }
+        path_based = {
+            "clip_name": "c0001.mp4",
+            "clip_id": None,
+            "media_id": None,
+            "file_path": "/Volumes/Media/c0001.mp4",
+        }
+        self.assertEqual(stable_clip_hash(resolve_record), stable_clip_hash(path_based))
+        # Each record can still resolve the other's folder via the match set.
+        self.assertIn(stable_clip_hash(path_based), stable_clip_match_hashes(resolve_record))
+        self.assertIn(stable_clip_hash(resolve_record), stable_clip_match_hashes(path_based))
+
+    def test_resolve_clip_directory_reuses_legacy_clip_id_folder(self):
+        """Migration: a folder written under the old clip_id-first basis is
+        reused on the next write instead of being orphaned under a new name."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            record = {
+                "clip_name": "c0001.mp4",
+                "clip_id": "clip-123",
+                "file_path": "/Volumes/Media/c0001.mp4",
+            }
+            # Legacy folder name: slug + hash(clip_id) (pre-canonical scheme).
+            from src.utils.media_analysis import short_hash
+            legacy_dir = os.path.join(
+                project_root, "clips", f"c0001.mp4-{short_hash('clip-123', 12)}"
+            )
+            os.makedirs(legacy_dir, exist_ok=True)
+
+            resolved = resolve_clip_directory(project_root, record)
+            self.assertEqual(os.path.realpath(resolved), os.path.realpath(legacy_dir))
+
+    def test_resolve_clip_directory_reuses_folder_after_rename(self):
+        """A renamed clip writes back into its existing folder (no orphan)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            record = {
+                "clip_name": "c0001.mp4",
+                "clip_id": "clip-123",
+                "file_path": "/Volumes/Media/c0001.mp4",
+            }
+            original = resolve_clip_directory(project_root, record)
+            os.makedirs(original, exist_ok=True)
+
+            renamed = dict(record, clip_name="ice_c0001.mp4")
+            self.assertEqual(
+                os.path.realpath(resolve_clip_directory(project_root, renamed)),
+                os.path.realpath(original),
+            )
+
+    def test_resolve_clip_directory_mints_canonical_path_when_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            record = {
+                "clip_name": "c0001.mp4",
+                "clip_id": "clip-123",
+                "file_path": "/Volumes/Media/c0001.mp4",
+            }
+            resolved = resolve_clip_directory(project_root, record)
+            self.assertEqual(
+                os.path.basename(resolved.rstrip("/")), stable_clip_directory(record)
+            )
+
+    def _write_report(self, project_root, folder, clip_block):
+        clip_dir = os.path.join(project_root, "clips", folder)
+        os.makedirs(clip_dir, exist_ok=True)
+        with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as handle:
+            json.dump({"clip": clip_block}, handle)
+        return clip_dir
+
+    def test_clip_index_indexes_all_stable_ids_from_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            self._write_report(
+                project_root,
+                "c0001.mp4-deadbeef0001",
+                {"clip_id": "clip-123", "media_id": "media-9",
+                 "file_path": "/Volumes/Media/c0001.mp4", "clip_name": "c0001.mp4"},
+            )
+            index = build_clip_index(project_root)
+            self.assertTrue(os.path.isfile(clip_index_path(project_root)))
+            h2f = index["hash_to_folder"]
+            # Every stable id of the clip resolves to the same folder.
+            for record in (
+                {"file_path": "/Volumes/Media/c0001.mp4"},
+                {"clip_id": "clip-123"},
+                {"media_id": "media-9"},
+            ):
+                hashes = stable_clip_match_hashes(record)
+                self.assertTrue(any(h in h2f for h in hashes), record)
+                folders = {h2f[h] for h in hashes if h in h2f}
+                self.assertEqual(folders, {"c0001.mp4-deadbeef0001"})
+
+    def test_clip_index_matches_offline_clip_without_file_path(self):
+        """The edge the manifest exists for: a clip analyzed while online (folder
+        hashed on file path) that the live inventory later reports offline with
+        no file path, only a clip_id. The index still resolves it. #51."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            online = {
+                "clip_name": "c0001.mp4",
+                "clip_id": "clip-123",
+                "file_path": "/Volumes/Media/c0001.mp4",
+            }
+            folder = stable_clip_directory(online)
+            self._write_report(project_root, folder, dict(online))
+
+            # Live record went offline: no file_path, basis falls back to clip_id.
+            offline = {"clip_name": "c0001.mp4", "clip_id": "clip-123", "file_path": None}
+            offline["clip_key"] = stable_clip_directory(offline)
+            self.assertNotEqual(offline["clip_key"], folder)
+            self.assertNotIn(
+                stable_clip_hash(online), stable_clip_match_hashes(offline)
+            )  # a folder-name scan would miss it
+
+            status = _analysis_status_by_clip(project_root, [offline])
+            entry = status.get(offline["clip_key"])
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry["analysis_status"], "analyzed")
+
+    def test_clip_index_rebuilds_when_report_added(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            self._write_report(
+                project_root, "a-aaaaaaaa0001",
+                {"clip_id": "clip-a", "file_path": "/m/a.mp4", "clip_name": "a.mp4"},
+            )
+            first = load_clip_index(project_root)
+            self.assertEqual(len(first["hash_to_folder"]) >= 1, True)
+
+            # Add a second report; a stale signature must trigger a rebuild.
+            self._write_report(
+                project_root, "b-bbbbbbbb0002",
+                {"clip_id": "clip-b", "file_path": "/m/b.mp4", "clip_name": "b.mp4"},
+            )
+            second = load_clip_index(project_root)
+            self.assertNotEqual(first["signature"], second["signature"])
+            self.assertIn(stable_clip_hash({"clip_id": "clip-b", "file_path": "/m/b.mp4"}),
+                          second["hash_to_folder"])
+
+    def test_analysis_status_counts_renamed_clip_as_analyzed(self):
+        """Issue #51: a clip renamed after analysis still counts as analyzed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "project-root")
+            record = {
+                "clip_name": "c0001.mp4",
+                "clip_id": "clip-123",
+                "file_path": "/Volumes/Media/c0001.mp4",
+            }
+            # Report was written under the ORIGINAL name.
+            original_dir = os.path.join(project_root, "clips", stable_clip_directory(record))
+            os.makedirs(original_dir, exist_ok=True)
+            with open(os.path.join(original_dir, "analysis.json"), "w", encoding="utf-8") as handle:
+                json.dump({"clip": {"clip_id": "clip-123"}}, handle)
+
+            # The clip is now renamed in the Media Pool; clip_key is recomputed
+            # from the NEW name (as resolve_media_inventory would do).
+            renamed = dict(record, clip_name="ice_c0001.mp4")
+            renamed["clip_key"] = stable_clip_directory(renamed)
+            self.assertFalse(
+                os.path.isdir(os.path.join(project_root, "clips", renamed["clip_key"]))
+            )
+
+            status = _analysis_status_by_clip(project_root, [renamed])
+            entry = status.get(renamed["clip_key"])
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry["analysis_status"], "analyzed")
+            self.assertTrue(os.path.isfile(entry["analysis_report_path"]))
+
+    def test_analysis_status_counts_renamed_clip_from_reused_job_report(self):
+        """Issue #51: rename also resolves via the jobs DB when the report is
+        a reused batch report living outside the local clips/ dir."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = os.path.join(tmp, "active-root")
+            os.makedirs(project_root, exist_ok=True)
+            record = {
+                "clip_name": "c0001.mp4",
+                "clip_id": "clip-123",
+                "file_path": "/Volumes/Media/c0001.mp4",
+            }
+            old_key = stable_clip_directory(record)
+
+            # The actual report lives in a *different* project root (batch reuse),
+            # not under {project_root}/clips/.
+            source_dir = os.path.join(tmp, "source-root", "clips", old_key)
+            os.makedirs(source_dir, exist_ok=True)
+            report_path = os.path.join(source_dir, "analysis.json")
+            with open(report_path, "w", encoding="utf-8") as handle:
+                json.dump({"clip": {"clip_id": "clip-123"}}, handle)
+
+            # The jobs DB recorded the clip under its OLD clip_key.
+            conn = sqlite3.connect(os.path.join(project_root, "jobs.sqlite"))
+            try:
+                conn.execute(
+                    "CREATE TABLE jobs (job_id TEXT, name TEXT, updated_at TEXT)"
+                )
+                conn.execute(
+                    "CREATE TABLE job_clips (job_id TEXT, clip_key TEXT, status TEXT, "
+                    "cache_status TEXT, report_path TEXT, error TEXT, updated_at TEXT)"
+                )
+                conn.execute(
+                    "INSERT INTO jobs (job_id, name, updated_at) VALUES (?, ?, ?)",
+                    ("job-1", "batch", "2026-06-01T10:00:00Z"),
+                )
+                conn.execute(
+                    "INSERT INTO job_clips (job_id, clip_key, status, cache_status, "
+                    "report_path, error, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("job-1", old_key, "skipped", "reused", report_path, None,
+                     "2026-06-01T10:00:00Z"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            # Clip renamed in the Media Pool -> clip_key recomputed from new name.
+            renamed = dict(record, clip_name="ice_c0001.mp4")
+            renamed["clip_key"] = stable_clip_directory(renamed)
+            self.assertNotEqual(renamed["clip_key"], old_key)
+
+            status = _analysis_status_by_clip(project_root, [renamed])
+            entry = status.get(renamed["clip_key"])
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry["analysis_status"], "analyzed")
 
     def test_capability_detection_never_installs(self):
         caps = detect_capabilities(env={})

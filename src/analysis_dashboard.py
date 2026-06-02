@@ -27,7 +27,10 @@ from src.utils.media_analysis import (
     detect_capabilities,
     query_analysis_index,
     resolve_output_root,
+    clip_directory_hash,
+    load_clip_index,
     stable_clip_directory,
+    stable_clip_match_hashes,
 )
 from src.utils.media_analysis_jobs import (
     MEDIA_EXTENSIONS,
@@ -10912,11 +10915,32 @@ def _analysis_status_by_clip(project_root: str, records: List[Dict[str, Any]]) -
     status_by_key: Dict[str, Dict[str, Any]] = {}
     if not keys:
         return status_by_key
+
+    # Resolve each clip to its report via the persisted clip index, which maps
+    # every stable id found in a report (normalized + raw file path, clip_id,
+    # media_id) to its folder. This survives a Media Pool rename, a legacy hash
+    # basis, AND an offline clip that no longer reports a file path but still
+    # carries its clip_id — none of which a folder-name scan can match. See #51.
+    clips_root = os.path.join(project_root, "clips")
+    hash_to_folder = load_clip_index(project_root).get("hash_to_folder") or {}
+
     for record in records:
         clip_key = record.get("clip_key")
         if not clip_key:
             continue
         report_path = os.path.join(project_root, "clips", str(clip_key), "analysis.json")
+        if not os.path.isfile(report_path):
+            # Renamed/legacy/offline clip: the recomputed clip_key no longer
+            # matches the folder on disk. Fall back to any of the clip's stable
+            # hashes via the index.
+            for clip_hash in stable_clip_match_hashes(record):
+                folder = hash_to_folder.get(clip_hash)
+                if not folder:
+                    continue
+                candidate = os.path.join(clips_root, folder, "analysis.json")
+                if os.path.isfile(candidate):
+                    report_path = candidate
+                    break
         if os.path.isfile(report_path):
             status_by_key[str(clip_key)] = {
                 "analysis_status": "analyzed",
@@ -10926,32 +10950,24 @@ def _analysis_status_by_clip(project_root: str, records: List[Dict[str, Any]]) -
     db_path = os.path.join(project_root, "jobs.sqlite")
     if not os.path.isfile(db_path):
         return status_by_key
-    placeholders = ",".join("?" for _ in keys)
-    try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            f"""
-            SELECT jc.clip_key, jc.status, jc.cache_status, jc.report_path, jc.error,
-                   j.job_id, j.name AS job_name, j.updated_at
-            FROM job_clips jc
-            JOIN jobs j ON j.job_id = jc.job_id
-            WHERE jc.clip_key IN ({placeholders})
-            ORDER BY jc.updated_at DESC
-            """,
-            keys,
-        ).fetchall()
-    except Exception:
-        return status_by_key
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-    for row in rows:
-        clip_key = str(row["clip_key"])
-        if clip_key in status_by_key and status_by_key[clip_key].get("analysis_status") == "analyzed":
+
+    # The jobs DB stores each clip under the clip_key it had when analyzed. A
+    # clip renamed afterwards produces a new clip_key, so an exact-key match
+    # misses its job row. Index unresolved records by their rename-stable hash
+    # so a DB row recorded under the old name (e.g. a reused batch report living
+    # outside the local clips/ dir) still maps back to the current clip. #51.
+    key_set = {str(k) for k in keys}
+    pending_hash_to_key: Dict[str, str] = {}
+    for record in records:
+        clip_key = record.get("clip_key")
+        if not clip_key or str(clip_key) in status_by_key:
             continue
+        for folder_hash in stable_clip_match_hashes(record):
+            pending_hash_to_key.setdefault(folder_hash, str(clip_key))
+
+    def _apply_row(row: sqlite3.Row, target_key: str) -> None:
+        if status_by_key.get(target_key, {}).get("analysis_status") == "analyzed":
+            return
         db_status = row["status"]
         report_path = row["report_path"]
         # In media_analysis_jobs, 'succeeded' = fresh analysis written this run,
@@ -10969,7 +10985,7 @@ def _analysis_status_by_clip(project_root: str, records: List[Dict[str, Any]]) -
         normalized = db_status
         if db_status in ("succeeded", "skipped") and report_resolves:
             normalized = "analyzed"
-        status_by_key[clip_key] = {
+        status_by_key[target_key] = {
             "analysis_status": normalized,
             "job_status": db_status,
             "cache_status": row["cache_status"],
@@ -10979,6 +10995,45 @@ def _analysis_status_by_clip(project_root: str, records: List[Dict[str, Any]]) -
             "job_name": row["job_name"],
             "job_updated_at": row["updated_at"],
         }
+
+    select_cols = (
+        "SELECT jc.clip_key, jc.status, jc.cache_status, jc.report_path, jc.error, "
+        "j.job_id, j.name AS job_name, j.updated_at "
+        "FROM job_clips jc JOIN jobs j ON j.job_id = jc.job_id"
+    )
+    placeholders = ",".join("?" for _ in keys)
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"{select_cols} WHERE jc.clip_key IN ({placeholders}) ORDER BY jc.updated_at DESC",
+            keys,
+        ).fetchall()
+        for row in rows:
+            _apply_row(row, str(row["clip_key"]))
+        # Only pay for the unfiltered scan when a rename actually left a record
+        # unresolved by the disk pass and exact-key match above.
+        unresolved = {
+            h: k for h, k in pending_hash_to_key.items() if k not in status_by_key
+        }
+        if unresolved:
+            for row in conn.execute(
+                f"{select_cols} ORDER BY jc.updated_at DESC"
+            ).fetchall():
+                raw_key = str(row["clip_key"])
+                if raw_key in key_set:
+                    continue
+                row_hash = clip_directory_hash(raw_key)
+                target_key = unresolved.get(row_hash) if row_hash else None
+                if target_key:
+                    _apply_row(row, target_key)
+    except Exception:
+        return status_by_key
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
     return status_by_key
 
 
