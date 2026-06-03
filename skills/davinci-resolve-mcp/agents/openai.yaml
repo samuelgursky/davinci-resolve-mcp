@@ -1,0 +1,13 @@
+interface:
+  display_name: "DaVinci Resolve MCP"
+  short_description: "Work with Resolve projects through MCP."
+  default_prompt: "Use $davinci-resolve-mcp to inspect and modify my open DaVinci Resolve project."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "davinci-resolve"
+      description: "Local DaVinci Resolve MCP server configured in the active MCP client."
+
+policy:
+  allow_implicit_invocation: true
