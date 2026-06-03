@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import Mock, patch
 
 import src.server as compound
+from src.utils import destructive_hook
 from tests._error_envelope_helpers import err_message
 
 
@@ -37,6 +39,9 @@ class TimelineStub:
         self.deleted_frames.append(frame)
         return True
 
+    def GetCurrentClipThumbnailImage(self):
+        return None
+
 
 class FiveArgMarkerStub:
     def __init__(self):
@@ -52,11 +57,14 @@ class FiveArgMarkerStub:
 class TimelineMarkerParamTest(unittest.TestCase):
     def setUp(self):
         self.original_get_tl = compound._get_tl
+        self.original_versioning_provider = destructive_hook._PROVIDER
         self.timeline = TimelineStub()
         compound._get_tl = lambda: (None, self.timeline, None)
+        destructive_hook._PROVIDER = None
 
     def tearDown(self):
         compound._get_tl = self.original_get_tl
+        destructive_hook._PROVIDER = self.original_versioning_provider
 
     def test_add_accepts_frame_id_alias_and_defaults_name_duration(self):
         out = compound.timeline_markers(
@@ -109,6 +117,13 @@ class TimelineMarkerParamTest(unittest.TestCase):
 
         self.assertEqual(err_message(out), "timecode must use HH:MM:SS:FF format")
 
+    def test_get_thumbnail_returns_error_dict_when_resolve_returns_nil(self):
+        out = compound.timeline_markers("get_thumbnail")
+
+        self.assertEqual(out["success"], False)
+        self.assertIsNone(out["thumbnail"])
+        self.assertIn("did not return a thumbnail", out["error"])
+
     def test_add_marker_falls_back_to_five_arg_overload_when_custom_data_empty(self):
         target = FiveArgMarkerStub()
 
@@ -126,6 +141,37 @@ class TimelineMarkerParamTest(unittest.TestCase):
 
         self.assertEqual(out, {"success": True, "frame": 12})
         self.assertEqual(target.add_calls, [(12, "Blue", "Fallback", "", 1)])
+
+
+class OutputBlankingUiTest(unittest.TestCase):
+    def test_output_blanking_aliases_include_common_ratios(self):
+        self.assertEqual(
+            compound._output_blanking_candidate_labels("4:3"),
+            ["1.33", "1.33:1", "4:3"],
+        )
+        self.assertEqual(
+            compound._output_blanking_candidate_labels("2.39"),
+            ["2.39", "2.39:1"],
+        )
+
+    def test_output_blanking_dry_run_does_not_call_osascript(self):
+        with patch.object(compound.sys, "platform", "darwin"), patch.object(compound.subprocess, "run") as run:
+            out = compound._set_output_blanking_ui({"aspect": "2.39", "dry_run": True})
+
+        self.assertTrue(out["success"])
+        self.assertTrue(out["dry_run"])
+        self.assertEqual(out["menu_path"], "Timeline > Output Blanking")
+        self.assertEqual(out["candidate_labels"], ["2.39", "2.39:1"])
+        run.assert_not_called()
+
+    def test_output_blanking_reports_accessibility_error(self):
+        proc = Mock(returncode=1, stdout="", stderr="System Events got an error: osascript has no assistive access (-1719)")
+        with patch.object(compound.sys, "platform", "darwin"), patch.object(compound.subprocess, "run", return_value=proc):
+            out = compound._set_output_blanking_ui({"aspect": "2.39"})
+
+        self.assertFalse(out["success"])
+        self.assertEqual(out["returncode"], 1)
+        self.assertIn("Accessibility permission", out["accessibility_note"])
 
 
 if __name__ == "__main__":

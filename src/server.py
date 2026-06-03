@@ -4941,6 +4941,123 @@ def _probe_interchange_roundtrip(proj, mp, tl, p: Dict[str, Any]):
     }
 
 
+def _sanitize_media_path(path: Any, *, keep_filename: bool = True) -> Optional[str]:
+    if not path:
+        return None
+    text = str(path)
+    filename = os.path.basename(text.rstrip(os.sep))
+    parts = [part for part in text.split(os.sep) if part]
+    if text.startswith("/Volumes/") and len(parts) >= 2:
+        root = f"/Volumes/{parts[1]}"
+        return f"{root}/.../{filename}" if keep_filename and filename else f"{root}/..."
+    if text.startswith(os.sep):
+        return f"/.../{filename}" if keep_filename and filename else "/..."
+    return f".../{filename}" if keep_filename and filename else "..."
+
+
+def _media_path_volume_root(path: Any) -> Optional[str]:
+    if not path:
+        return None
+    text = str(path)
+    parts = [part for part in text.split(os.sep) if part]
+    if text.startswith("/Volumes/") and len(parts) >= 2:
+        return f"/Volumes/{parts[1]}"
+    if text.startswith(os.sep) and parts:
+        return os.sep + parts[0]
+    return None
+
+
+def _missing_media_diagnosis(missing_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    by_media_pool_item: Dict[str, Dict[str, Any]] = {}
+    missing_volumes: Dict[str, Dict[str, Any]] = {}
+    missing_folders: Dict[str, Dict[str, Any]] = {}
+
+    for row in missing_rows:
+        file_path = row.get("file_path")
+        media_pool_item_id = row.get("media_pool_item_id") or file_path or row.get("name")
+        basename = os.path.basename(str(file_path or row.get("media_pool_item_name") or row.get("name") or ""))
+        item = by_media_pool_item.setdefault(
+            str(media_pool_item_id),
+            {
+                "media_pool_item_id": row.get("media_pool_item_id"),
+                "media_pool_item_name": row.get("media_pool_item_name") or row.get("name"),
+                "wanted_basename": basename,
+                "file_path_sanitized": _sanitize_media_path(file_path),
+                "volume_root_sanitized": _sanitize_media_path(_media_path_volume_root(file_path), keep_filename=False),
+                "timeline_occurrence_count": 0,
+                "track_refs": [],
+            },
+        )
+        item["timeline_occurrence_count"] += 1
+        item["track_refs"].append(
+            {
+                "track_type": row.get("track_type"),
+                "track_index": row.get("track_index"),
+                "timeline_item_id": row.get("timeline_item_id"),
+            }
+        )
+
+        volume_root = _media_path_volume_root(file_path)
+        if volume_root:
+            volume_row = missing_volumes.setdefault(
+                volume_root,
+                {
+                    "volume_root_sanitized": _sanitize_media_path(volume_root, keep_filename=False),
+                    "mounted": os.path.isdir(volume_root),
+                    "clip_count": 0,
+                    "sample_basenames": [],
+                },
+            )
+            volume_row["clip_count"] += 1
+            if basename and basename not in volume_row["sample_basenames"] and len(volume_row["sample_basenames"]) < 8:
+                volume_row["sample_basenames"].append(basename)
+
+        folder = os.path.dirname(str(file_path)) if file_path else ""
+        if folder:
+            folder_row = missing_folders.setdefault(
+                folder,
+                {
+                    "folder_sanitized": _sanitize_media_path(folder, keep_filename=False),
+                    "exists": os.path.isdir(folder),
+                    "clip_count": 0,
+                    "sample_basenames": [],
+                },
+            )
+            folder_row["clip_count"] += 1
+            if basename and basename not in folder_row["sample_basenames"] and len(folder_row["sample_basenames"]) < 8:
+                folder_row["sample_basenames"].append(basename)
+
+    unique_items = list(by_media_pool_item.values())
+    missing_volume_rows = list(missing_volumes.values())
+    missing_folder_rows = list(missing_folders.values())
+    absent_volumes = [row for row in missing_volume_rows if not row.get("mounted")]
+    absent_folders = [row for row in missing_folder_rows if not row.get("exists")]
+    primary_cause = "none"
+    recommended_next_step = "No offline media detected."
+    if absent_volumes:
+        primary_cause = "volume_not_mounted"
+        labels = ", ".join(row["volume_root_sanitized"] for row in absent_volumes[:3])
+        recommended_next_step = f"Mount the missing volume(s): {labels}."
+    elif absent_folders:
+        primary_cause = "folder_not_found"
+        labels = ", ".join(row["folder_sanitized"] for row in absent_folders[:3])
+        recommended_next_step = f"Attach or locate the missing media folder(s): {labels}."
+    elif unique_items:
+        primary_cause = "files_missing_or_renamed"
+        recommended_next_step = "Search approved media roots for the wanted basenames, then relink with media_pool.safe_relink."
+
+    return {
+        "unique_media_pool_item_count": len(unique_items),
+        "timeline_occurrence_count": len(missing_rows),
+        "primary_cause": primary_cause,
+        "recommended_next_step": recommended_next_step,
+        "missing_volumes": missing_volume_rows,
+        "missing_folders": missing_folder_rows,
+        "unique_media_pool_items": unique_items,
+        "sanitized": True,
+    }
+
+
 def _detect_missing_media_from_snapshot(snapshot: Dict[str, Any]):
     missing = []
     present = []
@@ -4966,12 +5083,80 @@ def _detect_missing_media_from_snapshot(snapshot: Dict[str, Any]):
                     missing.append(row)
                 else:
                     present.append(row)
-    return {"missing": missing, "present_count": len(present), "missing_count": len(missing)}
+    diagnosis = _missing_media_diagnosis(missing)
+    return {
+        "missing": missing,
+        "present_count": len(present),
+        "missing_count": len(missing),
+        "diagnosis": diagnosis,
+    }
 
 
 def _detect_missing_media(tl, p: Dict[str, Any]):
     snapshot = _timeline_conform_snapshot(tl, {**p, "include_clip_properties": True})
-    return _detect_missing_media_from_snapshot(snapshot)
+    report = _detect_missing_media_from_snapshot(snapshot)
+    if p.get("sanitize_paths") or p.get("sanitized"):
+        report = dict(report)
+        report["missing"] = [
+            {
+                **row,
+                "file_path_sanitized": _sanitize_media_path(row.get("file_path")),
+                "file_path": None if p.get("omit_raw_paths", True) else row.get("file_path"),
+            }
+            for row in report.get("missing", [])
+        ]
+    return report
+
+
+def _bounded_basename_matches(
+    wanted: str,
+    search_roots: List[str],
+    p: Dict[str, Any],
+) -> Tuple[List[str], Dict[str, Any]]:
+    started = time.monotonic()
+    max_seconds = float(p.get("max_seconds", p.get("timeout_seconds", 20)) or 20)
+    max_files = int(p.get("max_files_scanned", p.get("maxFilesScanned", 50000)) or 50000)
+    max_depth_raw = p.get("max_depth", p.get("maxDepth"))
+    max_depth = int(max_depth_raw) if max_depth_raw is not None else None
+    all_matches = bool(p.get("all_matches", False))
+    matches: List[str] = []
+    files_scanned = 0
+    dirs_scanned = 0
+    stopped_reason = None
+
+    for root in search_roots:
+        root_depth = len(os.path.abspath(root).rstrip(os.sep).split(os.sep))
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirs_scanned += 1
+            if max_depth is not None:
+                current_depth = len(os.path.abspath(dirpath).rstrip(os.sep).split(os.sep)) - root_depth
+                if current_depth >= max_depth:
+                    dirnames[:] = []
+            files_scanned += len(filenames)
+            if wanted in filenames:
+                matches.append(os.path.join(dirpath, wanted))
+                if not all_matches:
+                    return matches, {
+                        "files_scanned": files_scanned,
+                        "dirs_scanned": dirs_scanned,
+                        "stopped_reason": "first_match",
+                    }
+            if files_scanned >= max_files:
+                stopped_reason = "max_files_scanned"
+                break
+            if time.monotonic() - started >= max_seconds:
+                stopped_reason = "max_seconds"
+                break
+        if matches and not all_matches:
+            break
+        if stopped_reason:
+            break
+
+    return matches, {
+        "files_scanned": files_scanned,
+        "dirs_scanned": dirs_scanned,
+        "stopped_reason": stopped_reason,
+    }
 
 
 def _build_relink_plan(tl, p: Dict[str, Any]):
@@ -4982,26 +5167,55 @@ def _build_relink_plan(tl, p: Dict[str, Any]):
     if invalid:
         return _err(f"search_roots must be existing directories: {invalid}")
     missing_report = _detect_missing_media(tl, p)
+    diagnosis = missing_report.get("diagnosis") or _missing_media_diagnosis(missing_report.get("missing", []))
+    if p.get("skip_search_when_volume_missing", True) and any(
+        not row.get("mounted") for row in diagnosis.get("missing_volumes", [])
+    ):
+        return {
+            "success": True,
+            "dry_run": True,
+            "search_skipped": True,
+            "skip_reason": "missing_source_volume_not_mounted",
+            "search_roots": [_sanitize_media_path(root, keep_filename=False) for root in search_roots],
+            "candidate_count": 0,
+            "missing_count": missing_report.get("missing_count", 0),
+            "diagnosis": diagnosis,
+            "candidates": [],
+            "execution_note": "Mount the missing source volume or pass skip_search_when_volume_missing=false to scan approved roots.",
+        }
     candidates = []
+    rows_by_basename: Dict[str, List[Dict[str, Any]]] = {}
     for row in missing_report.get("missing", []):
         wanted = os.path.basename(str(row.get("file_path") or row.get("media_pool_item_name") or row.get("name") or ""))
-        matches = []
         if wanted:
-            for root in search_roots:
-                for dirpath, _, filenames in os.walk(root):
-                    if wanted in filenames:
-                        matches.append(os.path.join(dirpath, wanted))
-                        if not p.get("all_matches", False):
-                            break
-                if matches and not p.get("all_matches", False):
-                    break
-        candidates.append({**row, "wanted_basename": wanted, "candidate_paths": matches, "candidate_count": len(matches)})
+            rows_by_basename.setdefault(wanted, []).append(row)
+    for wanted, rows in rows_by_basename.items():
+        row = rows[0]
+        matches = []
+        scan = {"files_scanned": 0, "dirs_scanned": 0, "stopped_reason": None}
+        if wanted:
+            matches, scan = _bounded_basename_matches(wanted, search_roots, p)
+        sanitized_matches = [_sanitize_media_path(path) for path in matches]
+        candidates.append(
+            {
+                **row,
+                "wanted_basename": wanted,
+                "timeline_occurrence_count": len(rows),
+                "candidate_paths": [] if p.get("sanitize_paths") or p.get("sanitized") else matches,
+                "candidate_paths_sanitized": sanitized_matches,
+                "candidate_count": len(matches),
+                "scan": scan,
+            }
+        )
     return {
         "success": True,
         "dry_run": True,
-        "search_roots": search_roots,
+        "search_roots": [] if p.get("sanitize_paths") or p.get("sanitized") else search_roots,
+        "search_roots_sanitized": [_sanitize_media_path(root, keep_filename=False) for root in search_roots],
         "candidate_count": sum(1 for row in candidates if row["candidate_count"]),
         "missing_count": missing_report.get("missing_count", 0),
+        "unique_missing_basename_count": len(candidates),
+        "diagnosis": diagnosis,
         "candidates": candidates,
         "execution_note": "Review this plan, then use media_pool.safe_relink with explicit synthetic or approved paths if desired.",
     }
@@ -8017,6 +8231,13 @@ def _media_analysis_transcription_options(enabled: bool) -> Dict[str, Any]:
     return options
 
 
+def _media_analysis_vision_options(enabled: bool) -> Dict[str, Any]:
+    options = {"enabled": bool(enabled)}
+    if enabled:
+        options["provider"] = HOST_CHAT_PATHS_PROVIDER
+    return options
+
+
 def _media_analysis_metadata_writeback_enabled(p: Dict[str, Any]) -> bool:
     raw = _first_param(
         p,
@@ -8233,20 +8454,21 @@ def _media_analysis_apply_setup_defaults(action: str, p: Dict[str, Any]) -> Dict
 
     if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "start_batch_job", "review_timeline_markers", "publish_clip_metadata"}:
         include_visuals = _first_param(out, "include_visuals", "includeVisuals")
-        if not _has_any_param(out, "vision"):
+        if isinstance(out.get("vision"), bool):
+            out["vision"] = _media_analysis_vision_options(out["vision"])
+            applied["vision_shorthand"] = out["vision"]["enabled"]
+        elif not _has_any_param(out, "vision"):
             if include_visuals is not None:
                 visuals_enabled = _media_analysis_bool(include_visuals, True)
-                out["vision"] = {"enabled": visuals_enabled}
-                if visuals_enabled:
-                    out["vision"]["provider"] = HOST_CHAT_PATHS_PROVIDER
+                out["vision"] = _media_analysis_vision_options(visuals_enabled)
                 applied["include_visuals"] = visuals_enabled
             else:
                 vision_default = prefs.get("vision_default")
                 if vision_default == "on":
-                    out["vision"] = {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER}
+                    out["vision"] = _media_analysis_vision_options(True)
                     applied["vision_default"] = vision_default
                 elif vision_default in {"off", "technical_only"}:
-                    out["vision"] = {"enabled": False}
+                    out["vision"] = _media_analysis_vision_options(False)
                     applied["vision_default"] = vision_default
         include_transcription = _first_param(out, "include_transcription", "includeTranscription")
         if not _has_any_param(out, "transcription"):
@@ -13358,6 +13580,153 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
     return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","add_flag","get_flags","clear_flags","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip"])
 
 
+_OUTPUT_BLANKING_ALIASES = {
+    "1.33": ["1.33", "1.33:1", "4:3"],
+    "4:3": ["1.33", "1.33:1", "4:3"],
+    "1.66": ["1.66", "1.66:1"],
+    "1.77": ["1.77", "1.77:1", "1.78", "1.78:1", "16:9"],
+    "16:9": ["1.77", "1.77:1", "1.78", "1.78:1", "16:9"],
+    "1.85": ["1.85", "1.85:1"],
+    "2.0": ["2.0", "2.00", "2.0:1", "2.00:1", "2:1"],
+    "2.35": ["2.35", "2.35:1"],
+    "2.39": ["2.39", "2.39:1"],
+    "2.40": ["2.40", "2.4", "2.40:1", "2.4:1"],
+    "none": ["None", "No Blanking", "Reset", "Off"],
+    "off": ["None", "No Blanking", "Reset", "Off"],
+    "reset": ["None", "No Blanking", "Reset", "Off"],
+}
+
+
+def _output_blanking_candidate_labels(aspect: Any) -> List[str]:
+    raw = str(aspect or "").strip()
+    if not raw:
+        return []
+    key = raw.lower().replace(" ", "")
+    aliases = _OUTPUT_BLANKING_ALIASES.get(key)
+    if aliases:
+        return aliases
+    if raw.endswith(":1"):
+        return [raw[:-2], raw]
+    return [raw, f"{raw}:1"]
+
+
+def _applescript_list(values: List[str]) -> str:
+    return "{" + ", ".join(json.dumps(value) for value in values) + "}"
+
+
+def _set_output_blanking_ui(p: Dict[str, Any]) -> Dict[str, Any]:
+    aspect = p.get("aspect", p.get("ratio", p.get("preset")))
+    candidates = _output_blanking_candidate_labels(aspect)
+    if not candidates:
+        return _err("set_output_blanking_ui requires aspect, ratio, or preset")
+    if sys.platform != "darwin":
+        return _err("set_output_blanking_ui is macOS-only because it uses System Events UI automation")
+
+    if p.get("dry_run"):
+        return _ok(
+            dry_run=True,
+            aspect=aspect,
+            candidate_labels=candidates,
+            menu_path="Timeline > Output Blanking",
+            accessibility_required=True,
+        )
+
+    timeout = int(p.get("timeout", 8))
+    script = f"""
+tell application "DaVinci Resolve" to activate
+delay 0.4
+tell application "System Events"
+  tell process "DaVinci Resolve"
+    set frontmost to true
+    set timelineMenuLabels to {_applescript_list(["Timeline", "Zeitleiste"])}
+    set outputMenuLabels to {_applescript_list(["Output Blanking", "Ausgabe-Austastung"])}
+    set targetLabels to {_applescript_list(candidates)}
+    set clickedLabel to ""
+    set timelineMenuLabel to ""
+    set outputMenuLabel to ""
+
+    repeat with timelineCandidate in timelineMenuLabels
+      try
+        set timelineMenuLabel to timelineCandidate as text
+        set timelineMenu to menu 1 of menu bar item timelineMenuLabel of menu bar 1
+        exit repeat
+      on error errMsg number errNum
+        if errNum is -1719 then error errMsg number errNum
+        set timelineMenuLabel to ""
+      end try
+    end repeat
+    if timelineMenuLabel is "" then error "Timeline menu not found"
+
+    repeat with outputCandidate in outputMenuLabels
+      try
+        set outputMenuLabel to outputCandidate as text
+        set outputMenu to menu 1 of menu item outputMenuLabel of timelineMenu
+        exit repeat
+      on error errMsg number errNum
+        if errNum is -1719 then error errMsg number errNum
+        set outputMenuLabel to ""
+      end try
+    end repeat
+    if outputMenuLabel is "" then error "Output Blanking submenu not found"
+
+    repeat with targetCandidate in targetLabels
+      try
+        set clickedLabel to targetCandidate as text
+        click menu item clickedLabel of outputMenu
+        exit repeat
+      on error errMsg number errNum
+        if errNum is -1719 then error errMsg number errNum
+        set clickedLabel to ""
+      end try
+    end repeat
+    if clickedLabel is "" then
+      set availableLabels to name of menu items of outputMenu
+      error "Output Blanking preset not found. Available: " & (availableLabels as text)
+    end if
+    return clickedLabel
+  end tell
+end tell
+"""
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return _err(f"Timed out while clicking Timeline > Output Blanking after {timeout}s")
+    except Exception as exc:
+        return _err(f"Failed to run osascript: {exc}")
+
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        accessibility_note = None
+        if "-1719" in stderr or "Hilfszugriff" in stderr or "assistive" in stderr.lower():
+            accessibility_note = (
+                "Grant Accessibility permission in System Settings > Privacy & Security > Accessibility "
+                "for the app/process running the MCP client or for osascript/Terminal, then retry."
+            )
+        return {
+            "success": False,
+            "error": stderr or stdout or f"osascript exited {proc.returncode}",
+            "returncode": proc.returncode,
+            "aspect": aspect,
+            "candidate_labels": candidates,
+            "menu_path": "Timeline > Output Blanking",
+            "accessibility_note": accessibility_note,
+        }
+
+    return _ok(
+        aspect=aspect,
+        clicked_label=stdout,
+        candidate_labels=candidates,
+        menu_path="Timeline > Output Blanking",
+        note="Clicked Resolve's native Output Blanking menu via macOS UI automation.",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOOL 15: media_analysis
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -14306,6 +14675,9 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         UNSAFE. No path sandboxing. Prefer export_timeline_checked.
       get_setting(name?) -> {settings}
       set_setting(name, value) -> {success}
+      output_blanking_ui_capabilities() -> {presets, aliases, menu_path}
+      set_output_blanking_ui(aspect, dry_run?, timeout?) -> {success}
+        macOS-only UI automation for Resolve's native Timeline > Output Blanking menu.
       insert_generator(name) -> {success}
       insert_fusion_generator(name) -> {success}
       insert_fusion_composition() -> {success}
@@ -14335,8 +14707,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       import_timeline_checked(path, options?, timeline_name?, import_source_clips?, require_temp_path?, dry_run?) -> {success, name, id}
       compare_timelines(right_timeline_id?|right_timeline_index?|left_snapshot?, right_snapshot?) -> {match, differences}
       probe_interchange_roundtrip(format?, output_dir?, cleanup_imported?) -> {success, export, import, comparison}
-      detect_missing_media() -> {missing, missing_count}
-      build_relink_plan(search_roots) -> {candidates}
+      detect_missing_media(sanitized?|sanitize_paths?, omit_raw_paths?) -> {missing, missing_count, diagnosis}
+      build_relink_plan(search_roots, max_depth?, max_seconds?, max_files_scanned?, skip_search_when_volume_missing?, sanitized?) -> {candidates, diagnosis}
       conform_boundary_report(...) -> {capabilities, timeline, gaps_overlaps, source_ranges, missing_media}
       audio_capabilities() -> {supported, partially_supported, unsupported}
       probe_audio_item(track_type?, track_index?, item_index?) -> {summary, audio_properties, source_audio_mapping}
@@ -14572,6 +14944,20 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return {"settings": _ser(tl.GetSetting(p.get("name", "")))}
     elif action == "set_setting":
         return {"success": bool(tl.SetSetting(p["name"], p["value"]))}
+    elif action == "output_blanking_ui_capabilities":
+        return _ok(
+            platform=sys.platform,
+            supported=sys.platform == "darwin",
+            menu_path="Timeline > Output Blanking",
+            aliases=_OUTPUT_BLANKING_ALIASES,
+            accessibility_required=True,
+            note=(
+                "Uses macOS System Events to click Resolve's native menu. "
+                "Grant Accessibility permission to the MCP host or osascript first."
+            ),
+        )
+    elif action == "set_output_blanking_ui":
+        return _set_output_blanking_ui(p)
     elif action == "insert_generator":
         r = tl.InsertGeneratorIntoTimeline(p["name"])
         return _ok() if r else _err("Failed to insert generator")
@@ -14799,7 +15185,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if mp_err:
             return mp_err
         return _fairlight_boundary_report(proj, mp, tl, p)
-    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","story_spine_report","create_variant_from_ranges","bulk_set_item_properties","apply_look_to_items","thumbnail_contact_sheet","marker_thumbnail_review","edit_kernel_capabilities","probe_edit_kernel_item","title_property_scan","set_title_text","bulk_set_title_text","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges","audio_mix_capability_report",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
+    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","story_spine_report","create_variant_from_ranges","bulk_set_item_properties","apply_look_to_items","thumbnail_contact_sheet","marker_thumbnail_review","edit_kernel_capabilities","probe_edit_kernel_item","title_property_scan","set_title_text","bulk_set_title_text","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","output_blanking_ui_capabilities","set_output_blanking_ui","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges","audio_mix_capability_report",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -14877,7 +15263,14 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
         it = tl.GetCurrentVideoItem()
         return {"name": it.GetName(), "id": it.GetUniqueId()} if it else {"name": None, "id": None}
     elif action == "get_thumbnail":
-        return _ser(tl.GetCurrentClipThumbnailImage())
+        thumbnail = tl.GetCurrentClipThumbnailImage()
+        if thumbnail is None:
+            return {
+                "success": False,
+                "thumbnail": None,
+                "error": "Resolve did not return a thumbnail for the current playhead. Open the Color page and ensure a video item is under the playhead.",
+            }
+        return _ser(thumbnail)
     elif action == "get_thumbnail_image":
         thumbnail = tl.GetCurrentClipThumbnailImage()
         if not thumbnail:

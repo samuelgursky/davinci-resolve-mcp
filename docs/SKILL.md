@@ -738,9 +738,18 @@ structure, interchange, comparison, missing-media, and relink-planning helpers:
 - `import_timeline_checked(path, options?, timeline_name?, import_source_clips?, require_temp_path?, dry_run?)`
 - `compare_timelines(right_timeline_id?|right_timeline_index?|left_snapshot?, right_snapshot?)`
 - `probe_interchange_roundtrip(format?, output_dir?, cleanup_imported?)`
-- `detect_missing_media`
-- `build_relink_plan(search_roots)`
+- `detect_missing_media(sanitized?|sanitize_paths?, omit_raw_paths?)`
+- `build_relink_plan(search_roots, max_depth?, max_seconds?, max_files_scanned?, skip_search_when_volume_missing?, sanitized?)`
 - `conform_boundary_report`
+
+For offline media, prefer the sanitized readback first:
+`timeline(action="detect_missing_media", params={"sanitized": true})`. The
+response includes a `diagnosis` block with deduplicated Media Pool items,
+missing volume roots, sample basenames, and a recommended next step. If a source
+volume such as a camera card is not mounted, `build_relink_plan` skips broad
+search by default and reports `skip_reason="missing_source_volume_not_mounted"`;
+mount the volume or pass `skip_search_when_volume_missing=false` only when a
+bounded scan of approved roots is intentional.
 
 Audio / Fairlight kernel actions (v2.14.0+) add live-tested audio state,
 mapping, voice-isolation, sync, transcription, subtitle, and Fairlight boundary

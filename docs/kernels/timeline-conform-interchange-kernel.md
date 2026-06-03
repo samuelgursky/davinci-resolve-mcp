@@ -35,8 +35,8 @@ All actions are exposed through `timeline`.
 | `import_timeline_checked` | Guard timeline imports from temp locations and normalize import options. |
 | `compare_timelines` | Compare current timeline to another timeline or two supplied snapshots. |
 | `probe_interchange_roundtrip` | Export, import, compare, and optionally delete the imported timeline. |
-| `detect_missing_media` | Detect missing/offline media using Resolve status fields and file-path existence. |
-| `build_relink_plan` | Read-only search-root scan for relink candidates by missing file basename. |
+| `detect_missing_media` | Detect missing/offline media using Resolve status fields and file-path existence, with a sanitized diagnosis block for mounted-volume/folder/file failure modes. |
+| `build_relink_plan` | Read-only, bounded search-root scan for relink candidates by missing file basename. Skips broad scans by default when the source volume is not mounted. |
 | `conform_boundary_report` | Return capabilities, timeline structure, gaps/overlaps, source ranges, and missing-media summary. |
 
 ## Interchange Matrix
@@ -64,8 +64,9 @@ Supported aliases include `aaf`, `drt`, `edl`, `edl_cdl`, `edl_sdl`,
 - FCPXML directory-style exports are normalized with a `primary_file` path.
 - DRT export/import/compare round-trip succeeded and cleaned up the imported
   timeline.
-- Synthetic-only unlink, missing-media detection, relink candidate planning,
-  and safe relink all worked through generated media.
+- Synthetic-only unlink, missing-media detection, sanitized missing-volume
+  diagnosis, relink candidate planning, and safe relink all worked through
+  generated media.
 
 ## Boundaries
 
@@ -74,8 +75,11 @@ Supported aliases include `aaf`, `drt`, `edl`, `edl_cdl`, `edl_sdl`,
   relationships.
 - The public API exposes timeline items, source ranges, markers, and some media
   references, but not full transition/effect/retime semantics for every format.
-- `build_relink_plan` is intentionally read-only. Execute relinks through
-  `media_pool.safe_relink` only with synthetic or explicitly approved paths.
+- `build_relink_plan` is intentionally read-only. It deduplicates missing
+  basenames, supports `max_depth`, `max_seconds`, and `max_files_scanned`, and
+  skips broad scans by default when a source volume such as a camera card is not
+  mounted. Execute relinks through `media_pool.safe_relink` only with synthetic
+  or explicitly approved paths.
 - Missing-media status fields vary by Resolve build. The kernel combines status
   text with local file existence when a file path is available.
 - Export and import helpers require temp paths by default because they write

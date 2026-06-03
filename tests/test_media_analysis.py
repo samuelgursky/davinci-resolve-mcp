@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from typing import Any, Dict, Optional
 
 from src import server as _server_module
 from src.server import (
@@ -1935,6 +1936,14 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 self.assertEqual(visuals_on["vision"], {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER})
                 self.assertTrue(visuals_on["_setup_defaults_applied"]["include_visuals"])
 
+                vision_bool = _media_analysis_apply_setup_defaults("analyze_clip", {"vision": True})
+                self.assertEqual(vision_bool["vision"], {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER})
+                self.assertTrue(vision_bool["_setup_defaults_applied"]["vision_shorthand"])
+
+                vision_false = _media_analysis_apply_setup_defaults("analyze_clip", {"vision": False})
+                self.assertEqual(vision_false["vision"], {"enabled": False})
+                self.assertFalse(vision_false["_setup_defaults_applied"]["vision_shorthand"])
+
                 transcription_on = _media_analysis_apply_setup_defaults("analyze_clip", {"include_transcription": True})
                 self.assertEqual(transcription_on["transcription"], {"enabled": True, "allow_model_download": True})
                 self.assertTrue(transcription_on["_setup_defaults_applied"]["include_transcription"])
@@ -3226,6 +3235,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 "cleanup_frames": False,
                 "max_analysis_frames": 1,
                 "vision": {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER},
+                "transcription": {"enabled": False},
             }
             caps = detect_capabilities(env={})
             plan = build_plan(
@@ -3280,6 +3290,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 "cleanup_frames": True,
                 "max_analysis_frames": 3,
                 "vision": {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER},
+                "transcription": {"enabled": False},
             }
             caps = detect_capabilities(env={})
             plan = build_plan(
