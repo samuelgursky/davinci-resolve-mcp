@@ -295,6 +295,41 @@ class TimelineVersioning(unittest.TestCase):
         # mpi_c was unchanged — should appear in none.
         self.assertNotIn("mpi_c", added_ids | removed_ids | moved_ids)
 
+    def test_diff_versions_summary_and_trimmed(self) -> None:
+        # v1: a (0-100), b (100-200)
+        self.timeline.set_tracks({
+            ("video", 1): [
+                _MockTimelineItem(0, 100, "mpi_a"),
+                _MockTimelineItem(100, 200, "mpi_b"),
+            ],
+        })
+        timeline_versioning.archive_current_timeline(
+            resolve=None, project=self.project, project_root=self.project_root,
+            analysis_run_id="run_1",
+        )
+        # v2: a trimmed (0-80, same in_frame), b unchanged
+        self.timeline.set_tracks({
+            ("video", 1): [
+                _MockTimelineItem(0, 80, "mpi_a"),     # trimmed (out 100 -> 80)
+                _MockTimelineItem(100, 200, "mpi_b"),  # unchanged
+            ],
+        })
+        timeline_versioning.archive_current_timeline(
+            resolve=None, project=self.project, project_root=self.project_root,
+            analysis_run_id="run_2",
+        )
+        diff = timeline_versioning.diff_versions(
+            project_root=self.project_root, timeline_name="Edit",
+            from_version=1, to_version=2,
+        )
+        self.assertEqual([r["media_pool_item_id"] for r in diff["trimmed"]], ["mpi_a"])
+        self.assertEqual(diff["trimmed"][0]["out_frame_before"], 100)
+        self.assertEqual(diff["trimmed"][0]["out_frame"], 80)
+        self.assertIn("summary", diff)
+        self.assertEqual(diff["summary"]["trimmed"], 1)
+        self.assertEqual(diff["summary"]["before_clip_count"], 2)
+        self.assertEqual(diff["summary"]["after_clip_count"], 2)
+
     def test_prune_collapses_old_versions_to_drt(self) -> None:
         for rid in [f"run_{i}" for i in range(5)]:
             timeline_versioning.archive_current_timeline(

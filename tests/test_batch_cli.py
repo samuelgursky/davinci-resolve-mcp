@@ -188,5 +188,63 @@ class BatchCliRunIntegrationTests(unittest.TestCase):
             self.assertEqual(events[-1].get("status"), "completed")
 
 
+class BatchCliSpecCommandTests(unittest.TestCase):
+    """plan-spec / apply argparse plumbing + exit-code mapping. The spec action
+    itself (project_spec) is covered by tests/test_project_spec.py; here we mock
+    _run_spec_action so no Resolve connection is needed."""
+
+    def test_help_lists_spec_subcommands(self):
+        parser = batch_cli._build_parser()
+        with self.assertRaises(SystemExit):
+            with redirect_stdout(io.StringIO()) as buf:
+                parser.parse_args(["--help"])
+        text = buf.getvalue()
+        self.assertIn("plan-spec", text)
+        self.assertIn("apply", text)
+
+    def test_apply_requires_spec(self):
+        parser = batch_cli._build_parser()
+        with self.assertRaises(SystemExit):
+            with redirect_stdout(io.StringIO()), patch("sys.stderr", io.StringIO()):
+                parser.parse_args(["apply"])
+
+    def test_plan_spec_emits_plan_and_exits_ok(self):
+        plan = {"project": "Show", "change_count": 1,
+                "actions": [{"op": "create", "target": "project:Show", "detail": ""}],
+                "diff": {}}
+        with patch.object(batch_cli, "_run_spec_action", return_value=plan):
+            with redirect_stdout(io.StringIO()):
+                rc = batch_cli.main(["plan-spec", "/tmp/spec.json"])
+        self.assertEqual(rc, batch_cli.EXIT_OK)
+
+    def test_apply_success_exit_ok(self):
+        result = {"success": True, "applied_count": 3, "applied": [], "failures": []}
+        with patch.object(batch_cli, "_run_spec_action", return_value=result):
+            with redirect_stdout(io.StringIO()):
+                rc = batch_cli.main(["apply", "/tmp/spec.json"])
+        self.assertEqual(rc, batch_cli.EXIT_OK)
+
+    def test_apply_partial_exit_2(self):
+        result = {"success": False, "applied_count": 1, "applied": [],
+                  "failures": [{"target": "timeline:A"}]}
+        with patch.object(batch_cli, "_run_spec_action", return_value=result):
+            with redirect_stdout(io.StringIO()):
+                rc = batch_cli.main(["apply", "/tmp/spec.json"])
+        self.assertEqual(rc, batch_cli.EXIT_PARTIAL)
+
+    def test_not_connected_exit_fatal(self):
+        with patch.object(batch_cli, "_run_spec_action", return_value=None):
+            with redirect_stdout(io.StringIO()):
+                rc = batch_cli.main(["apply", "/tmp/spec.json"])
+        self.assertEqual(rc, batch_cli.EXIT_FATAL)
+
+    def test_spec_error_envelope_exit_fatal(self):
+        result = {"error": {"message": "bad spec", "category": "invalid_input"}}
+        with patch.object(batch_cli, "_run_spec_action", return_value=result):
+            with redirect_stdout(io.StringIO()):
+                rc = batch_cli.main(["plan-spec", "/tmp/spec.json"])
+        self.assertEqual(rc, batch_cli.EXIT_FATAL)
+
+
 if __name__ == "__main__":
     unittest.main()

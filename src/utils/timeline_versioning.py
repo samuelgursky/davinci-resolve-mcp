@@ -347,32 +347,54 @@ def diff_versions(
 
     before = _snapshot(from_version)
     after = _snapshot(to_version)
-    # Key on (media_pool_item_id, track_type, track_index, in_frame) — a clip
-    # moved to a different track or trimmed differently counts as a change.
+    # Position key: (media id, track type, track index, in_frame). Same key in
+    # both versions = same placement; a differing out_frame on that same key is
+    # a *trim*. A differing track/in_frame for the same media id is a *move*.
     def _key(row: Dict[str, Any]) -> Tuple[str, str, int, int]:
         return (row["media_pool_item_id"], row["track_type"], row["track_index"], row["in_frame"])
 
-    before_keys = {_key(r) for r in before}
-    after_keys = {_key(r) for r in after}
+    before_by_key = {_key(r): r for r in before}
+    after_by_key = {_key(r): r for r in after}
+    before_keys = set(before_by_key)
+    after_keys = set(after_by_key)
+
     added = [r for r in after if _key(r) not in before_keys]
     removed = [r for r in before if _key(r) not in after_keys]
-    # "moved" approximation: same media id, different (track or in_frame).
+
+    # Trimmed: same placement key in both, but the out_frame differs.
+    trimmed: List[Dict[str, Any]] = []
+    for key in before_keys & after_keys:
+        if before_by_key[key]["out_frame"] != after_by_key[key]["out_frame"]:
+            row = dict(after_by_key[key])
+            row["out_frame_before"] = before_by_key[key]["out_frame"]
+            trimmed.append(row)
+
+    # Moved: same media id present on both sides but at a different placement
+    # (so it shows up in both `added` and `removed` above). Report it once.
     before_by_id: Dict[str, List[Dict[str, Any]]] = {}
     for r in before:
         before_by_id.setdefault(r["media_pool_item_id"], []).append(r)
     moved: List[Dict[str, Any]] = []
-    for r in after:
+    for r in added:
         prevs = before_by_id.get(r["media_pool_item_id"])
-        if not prevs:
-            continue
-        if any(_key(p) != _key(r) for p in prevs):
+        if prevs and any(_key(p) != _key(r) for p in prevs):
             moved.append(r)
+
     return {
         "from_version": from_version,
         "to_version": to_version,
         "added": added,
         "removed": removed,
         "moved": moved,
+        "trimmed": trimmed,
+        "summary": {
+            "added": len(added),
+            "removed": len(removed),
+            "moved": len(moved),
+            "trimmed": len(trimmed),
+            "before_clip_count": len(before),
+            "after_clip_count": len(after),
+        },
     }
 
 

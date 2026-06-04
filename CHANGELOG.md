@@ -2,6 +2,59 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.28.0
+
+This release adds a structural timeline-diff engine, a declarative project spec
+you can `apply` like infrastructure-as-code, a project health `lint`, a clip
+query DSL, and a machine-readable `state` field on error responses.
+
+**Timeline version diff — see exactly what an edit changed.** Comparing two
+archived timeline versions now reports clips that were **added, removed, moved,
+and trimmed**, plus summary counts and before/after clip totals. A new reusable
+diff engine aligns clips by a rename-stable identity (so a reordered or renamed
+clip reads as a move/change, not a delete-and-re-add).
+
+- `timeline_versioning(action="diff_versions", timeline_name, from_version, to_version)`
+  now returns `{added, removed, moved, trimmed, summary}` (the previous
+  `added`/`removed`/`moved` keys are unchanged).
+- Dashboard endpoint `GET /api/timeline_versions/diff?timeline_name=&from_version=&to_version=`
+  exposes the same diff to the control panel.
+
+**Declarative project spec + `apply` — reproducible project setup.** Describe a
+project's desired settings, color preset, timelines, and markers in a
+`project.dvr.yaml` (or `.json`), then reconcile the live project toward it. Runs
+are **idempotent** — applying twice is a no-op — and a dry run previews every
+change before anything is touched.
+
+- New MCP actions on `project_manager`:
+  - `diff_to_spec(spec_path | spec)` — preview drift without mutating.
+  - `plan_spec(spec_path | spec)` — the ordered action list (dry run).
+  - `apply_spec(spec_path | spec, dry_run?, run_hooks?, continue_on_error?)` —
+    reconcile. Color/HDR settings apply in dependency order; markers are only
+    added when absent; an explicit `color_preset` can be overridden by explicit
+    `settings`. Failures can abort on first error or accumulate.
+- New headless CLI commands: `davinci-resolve-mcp batch plan-spec SPEC` and
+  `davinci-resolve-mcp batch apply SPEC [--dry-run] [--run-hooks] [--continue-on-error]`.
+  Exit codes follow the existing convention (`0` ok, `2` partial, `3` fatal).
+- Optional before/after shell **hooks** in the spec run only when `run_hooks` is
+  passed (opt-in).
+
+**Project health `lint` — a pre-flight before editing.** `project_manager(action="lint")`
+returns a graded issue list (errors / warnings / info) covering: no project, no
+current timeline, mixed frame rates across timelines, empty timelines, unset
+render format, unmanaged color science, offline media, and unanalyzed clips.
+
+**Clip query DSL — find clips in one call.** `timeline(action="clip_where", ...)`
+returns the clips on the current timeline matching named filters (AND), instead
+of enumerating tracks by hand. Live filters: `track_type`, `track_index`,
+`name_contains`, `duration_lt`, `duration_gt`. A typo'd filter name is rejected
+rather than silently matching everything.
+
+**Machine-readable error context.** Structured error responses can now carry an
+optional `state` object — a snapshot of the relevant values at failure time
+(e.g. which filter was unknown, which spec failed and where) — so an agent can
+react without parsing prose. Existing error fields are unchanged.
+
 ## What's New in v2.27.2
 
 **Control panel under-counted analyzed clips after a Media Pool rename (issue

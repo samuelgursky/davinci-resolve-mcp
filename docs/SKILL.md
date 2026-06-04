@@ -355,6 +355,26 @@ lifecycle, settings, database, preset, and archive boundary helpers:
 - `preset_lifecycle_probe`
 - `project_boundary_report`
 
+Health check and declarative spec (v2.28.0+):
+
+- `lint` — graded project health pre-flight returning `{ok, counts, issues}`.
+  Issues (error / warning / info) cover: no project, no current timeline, mixed
+  frame rates across timelines, empty timeline, render format unset, color
+  science unmanaged, offline media, and unanalyzed clips. Composed from existing
+  probes; safe read-only.
+- `diff_to_spec(spec_path | spec)` — preview drift between a declarative spec and
+  the live project WITHOUT mutating. Returns `{actions, diff, change_count}`.
+- `plan_spec(spec_path | spec)` — the ordered action list as a dry run.
+- `apply_spec(spec_path | spec, dry_run?, run_hooks?, continue_on_error?)` —
+  reconcile the project toward the spec. Idempotent (re-runs are no-ops); color/
+  HDR settings apply in dependency order; markers added only when absent; explicit
+  `settings` override a named `color_preset`; before/after shell hooks run only
+  with `run_hooks=true`. The spec is YAML or JSON:
+  `{project, color_preset?, settings?, timelines:[{name, fps?, settings?, markers?}], hooks?}`.
+  Note: `apply_spec` reconciles the **currently open or already-existing** project;
+  creating a brand-new project from a spec depends on Resolve's `CreateProject`
+  succeeding (it can return None when an unsaved project blocks the switch).
+
 Safe project actions require `_mcp_` names and temp paths by default. Database
 switching dry-runs by default because Resolve closes open projects when
 switching databases. Archive source media/cache/proxy flags are rejected unless
@@ -584,8 +604,10 @@ Key actions:
   `initiator`, `thumbnail_path`, and `drt_export_path` (set when the version
   was retention-collapsed to disk).
 - `diff_versions(timeline_name, from_version, to_version)` — structural diff
-  between two snapshots: `{added, removed, moved}` lists of clips by
-  media_pool_item_id and timeline position.
+  between two snapshots: `{added, removed, moved, trimmed, summary}`. `trimmed`
+  lists clips kept in place but re-trimmed (carries `out_frame_before`); `summary`
+  has per-bucket counts plus `before_clip_count`/`after_clip_count`. Clips are
+  keyed by media_pool_item_id and timeline position.
 - `get_history(timeline_name?, analysis_run_id?, limit?)` — brain-edit rows
   with `edit_type`, `target_metric`, `before_value`, `after_value`, `delta`,
   `rationale`, and `initiator`. Filter by timeline or run; defaults to 50.
@@ -674,6 +696,11 @@ Key actions:
 - `get_track_count(track_type)` — track_type: `"video"`, `"audio"`, `"subtitle"`
 - `add_track(track_type, sub_type?)` / `delete_track(track_type, index)`
 - `get_items(track_type, index)` — items on a track
+- `clip_where(track_type?, track_index?, name_contains?, duration_lt?, duration_gt?)` —
+  (v2.28.0+) return clips on the current timeline matching named filters (AND),
+  instead of walking tracks by hand. Filters may be passed inline or as a
+  `filters` dict; a mistyped filter name is rejected rather than silently
+  matching everything. Returns `{clips, match_count, total_clips}`.
 - `delete_clips(clip_ids, ripple?)` — IDs are unique IDs from `get_items`
 - `duplicate_clips(clip_ids?, selected?, target_track_index?, track_offset?, placement?, record_frame?, record_frame_offset?, copy_properties?, include_linked?)` —
   duplicate existing video timeline items by re-appending the same Media Pool
