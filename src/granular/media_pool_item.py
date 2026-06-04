@@ -162,12 +162,16 @@ def replace_clip(clip_name: str, replacement_path: str) -> str:
 
 
 @mcp.tool()
-def transcribe_audio(clip_name: str, language: str = "en-US") -> str:
+def transcribe_audio(clip_name: str, use_speaker_detection: Optional[bool] = None) -> str:
     """Transcribe audio for a clip.
-    
+
+    The transcription language follows the project's Speech Recognition setting
+    (Project Settings > Subtitles), not a per-call argument.
+
     Args:
         clip_name: Name of the clip to transcribe
-        language: Language code for transcription (default: en-US)
+        use_speaker_detection: Optional (Resolve 21+). Enable speaker detection.
+            If omitted, the project's setting is used.
     """
     pm, current_project = get_current_project()
     if not current_project:
@@ -189,10 +193,15 @@ def transcribe_audio(clip_name: str, language: str = "en-US") -> str:
     if not target_clip:
         return f"Error: Clip '{clip_name}' not found in Media Pool"
     
+    # Resolve 21's signature is TranscribeAudio(useSpeakerDetection=None); pass the
+    # bool only when supplied so older Resolve builds (no arg) keep working.
     try:
-        result = target_clip.TranscribeAudio(language)
+        if use_speaker_detection is None:
+            result = target_clip.TranscribeAudio()
+        else:
+            result = target_clip.TranscribeAudio(use_speaker_detection)
         if result:
-            return f"Successfully started audio transcription for clip '{clip_name}' in language '{language}'"
+            return f"Successfully started audio transcription for clip '{clip_name}'"
         else:
             return f"Failed to start audio transcription for clip '{clip_name}'"
     except Exception as e:

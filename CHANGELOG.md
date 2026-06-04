@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.28.1
+
+Bug-fix release.
+
+**Audio transcription no longer passes an invalid `language` argument.** The
+`transcribe_audio` (clip) and `transcribe_folder_audio` tools in the full
+(`--full`) server were calling `TranscribeAudio(language)` with a language
+string, but the Resolve scripting API has never accepted a language positional —
+its signature is `TranscribeAudio(useSpeakerDetection=None)`. The string was
+silently coerced to a truthy boolean and misread as a speaker-detection flag,
+and the success message falsely claimed a transcription language. The language
+is controlled by the project's Speech Recognition setting, not per call.
+
+- `transcribe_audio(clip_name, use_speaker_detection=None)` — the `language`
+  parameter is replaced with an optional `use_speaker_detection` boolean
+  (Resolve 21+). Omit it to use the project's setting.
+- `transcribe_folder_audio(folder_name, use_speaker_detection=None)` — same
+  change for the folder-level tool.
+- Both pass the boolean through only when supplied, so older Resolve builds
+  (which take no argument) keep working.
+
+The consolidated 32-tool server was unaffected — its `folder`/`media_pool_item`
+`transcribe_audio` actions already called `TranscribeAudio()` correctly.
+
 ## What's New in v2.28.0
 
 This release adds a structural timeline-diff engine, a declarative project spec

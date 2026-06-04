@@ -58,12 +58,16 @@ def export_folder(folder_name: str, export_path: str, export_type: str = "DRB") 
 
 
 @mcp.tool()
-def transcribe_folder_audio(folder_name: str, language: str = "en-US") -> str:
+def transcribe_folder_audio(folder_name: str, use_speaker_detection: Optional[bool] = None) -> str:
     """Transcribe audio for all clips in a folder.
-    
+
+    The transcription language follows the project's Speech Recognition setting
+    (Project Settings > Subtitles), not a per-call argument.
+
     Args:
         folder_name: Name of the folder containing clips to transcribe
-        language: Language code for transcription (default: en-US)
+        use_speaker_detection: Optional (Resolve 21+). Enable speaker detection.
+            If omitted, the project's setting is used.
     """
     pm, current_project = get_current_project()
     if not current_project:
@@ -90,11 +94,16 @@ def transcribe_folder_audio(folder_name: str, language: str = "en-US") -> str:
     if not target_folder:
         return f"Error: Folder '{folder_name}' not found in Media Pool"
     
-    # Transcribe audio in the folder
+    # Transcribe audio in the folder.
+    # Resolve 21's signature is TranscribeAudio(useSpeakerDetection=None); pass the
+    # bool only when supplied so older Resolve builds (no arg) keep working.
     try:
-        result = target_folder.TranscribeAudio(language)
+        if use_speaker_detection is None:
+            result = target_folder.TranscribeAudio()
+        else:
+            result = target_folder.TranscribeAudio(use_speaker_detection)
         if result:
-            return f"Successfully started audio transcription for folder '{folder_name}' in language '{language}'"
+            return f"Successfully started audio transcription for folder '{folder_name}'"
         else:
             return f"Failed to start audio transcription for folder '{folder_name}'"
     except Exception as e:
