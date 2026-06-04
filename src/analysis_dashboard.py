@@ -13481,6 +13481,25 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/timeline_versions":
             self._json(list_timelines_with_versions(self.state.project_root))
             return
+        if path == "/api/timeline_versions/diff":
+            timeline_name = (query.get("timeline_name") or [""])[0]
+            try:
+                from_version = int((query.get("from_version") or [""])[0])
+                to_version = int((query.get("to_version") or [""])[0])
+            except (ValueError, TypeError):
+                self._json({"success": False, "error": "from_version and to_version (ints) required"},
+                           HTTPStatus.BAD_REQUEST)
+                return
+            if not timeline_name:
+                self._json({"success": False, "error": "timeline_name required"}, HTTPStatus.BAD_REQUEST)
+                return
+            self._json({"success": True, **_timeline_versioning.diff_versions(
+                project_root=self.state.project_root,
+                timeline_name=timeline_name,
+                from_version=from_version,
+                to_version=to_version,
+            )})
+            return
         if path.startswith("/api/timeline_versions/"):
             timeline_name = unquote(path[len("/api/timeline_versions/"):])
             if not timeline_name:

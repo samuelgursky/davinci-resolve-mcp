@@ -110,6 +110,17 @@ class ErrorEnvelopeContractTest(unittest.TestCase):
         out = _err("x")
         self.assertNotIsInstance(out["error"], str)
 
+    def test_state_field_carried_when_provided(self):
+        """state= surfaces a machine-readable snapshot at failure time."""
+        out = _err("no render job", category="resolve_api_failed",
+                   state={"queue_size": 0, "format": "mov"})
+        self.assertEqual(out["error"]["state"], {"queue_size": 0, "format": "mov"})
+
+    def test_state_omitted_when_empty(self):
+        """Empty/None state must not bloat the envelope."""
+        self.assertNotIn("state", _err("x")["error"])
+        self.assertNotIn("state", _err("x", state={})["error"])
+
     def test_check_emits_structured_not_connected_when_resolve_absent(self):
         """Integration smoke: _check returns a NOT_CONNECTED error when Resolve is unreachable."""
         import src.server as compound
