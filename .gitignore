@@ -46,6 +46,8 @@ claude_desktop_config.json
 .vscode/
 *.sublime-project
 *.sublime-workspace
+.specstory/
+.cursorindexingignore
 
 # Session-specific files
 *.session
