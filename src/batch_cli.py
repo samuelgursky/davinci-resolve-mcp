@@ -318,6 +318,65 @@ def _cmd_cancel(args: argparse.Namespace) -> int:
     return EXIT_OK if payload.get("success") else EXIT_FATAL
 
 
+def _run_spec_action(action: str, params: Dict[str, Any]):
+    """Connect to Resolve (auto-launch) and run a project_manager spec action.
+
+    Imported lazily so the analysis commands stay free of the MCP/Resolve import.
+    """
+    from src.server import get_resolve, _spec_action  # lazy: pulls mcp + resolve
+
+    r = get_resolve()
+    if r is None:
+        return None
+    return _spec_action(r, r.GetProjectManager(), action, params)
+
+
+def _emit_spec_result(result, *, json_mode: bool) -> int:
+    if result is None:
+        _emit("Could not connect to DaVinci Resolve.",
+              json_mode=json_mode,
+              payload={"success": False, "error": "not_connected"})
+        return EXIT_FATAL
+    if json_mode:
+        _emit("", json_mode=True, payload=result)
+    err = result.get("error")
+    if err:
+        _emit(f"Spec error: {err.get('message')}", json_mode=False)
+        return EXIT_FATAL
+    if "actions" in result:  # plan / diff
+        changed = result.get("change_count", 0)
+        _emit(f"Project   : {result.get('project')}", json_mode=False)
+        _emit(f"Changes   : {changed}", json_mode=False)
+        for a in result.get("actions", []):
+            if a.get("op") != "noop":
+                _emit(f"  [{a['op']:>6}] {a['target']}  {a.get('detail', '')}", json_mode=False)
+        return EXIT_OK
+    # apply
+    failures = result.get("failures") or []
+    _emit(f"Applied   : {result.get('applied_count', 0)}", json_mode=False)
+    if failures:
+        for f in failures:
+            _emit(f"  [failed] {f.get('target')}", json_mode=False)
+        return EXIT_PARTIAL
+    _emit("Done: spec applied", json_mode=False)
+    return EXIT_OK
+
+
+def _cmd_plan_spec(args: argparse.Namespace) -> int:
+    result = _run_spec_action("diff_to_spec", {"spec_path": args.spec})
+    return _emit_spec_result(result, json_mode=args.json)
+
+
+def _cmd_apply(args: argparse.Namespace) -> int:
+    result = _run_spec_action("apply_spec", {
+        "spec_path": args.spec,
+        "dry_run": args.dry_run,
+        "run_hooks": args.run_hooks,
+        "continue_on_error": args.continue_on_error,
+    })
+    return _emit_spec_result(result, json_mode=args.json)
+
+
 def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("paths", nargs="+", help="Files or directories to analyze")
     parser.add_argument(
@@ -431,6 +490,26 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cancel.add_argument("job_id")
     p_cancel.add_argument("--project-root", required=True)
 
+    p_plan_spec = sub.add_parser(
+        "plan-spec",
+        help="Preview drift between a declarative project spec and live Resolve",
+        parents=[common],
+    )
+    p_plan_spec.add_argument("spec", help="Path to project.dvr.yaml (or .json)")
+
+    p_apply = sub.add_parser(
+        "apply",
+        help="Reconcile the Resolve project toward a declarative spec (idempotent)",
+        parents=[common],
+    )
+    p_apply.add_argument("spec", help="Path to project.dvr.yaml (or .json)")
+    p_apply.add_argument("--dry-run", action="store_true",
+                         help="Compute the plan without mutating")
+    p_apply.add_argument("--run-hooks", action="store_true",
+                         help="Execute the spec's before/after shell hooks (opt-in)")
+    p_apply.add_argument("--continue-on-error", action="store_true",
+                         help="Accumulate failures instead of aborting on the first")
+
     return parser
 
 
@@ -441,6 +520,8 @@ _HANDLERS = {
     "list": _cmd_list,
     "resume": _cmd_resume,
     "cancel": _cmd_cancel,
+    "plan-spec": _cmd_plan_spec,
+    "apply": _cmd_apply,
 }
 
 

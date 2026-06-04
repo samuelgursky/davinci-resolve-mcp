@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 329-tool granular server instead
 """
 
-VERSION = "2.27.2"
+VERSION = "2.28.0"
 
 import base64
 import os
@@ -104,6 +104,9 @@ from src.utils import analysis_runs as _analysis_runs
 from src.utils import brain_edits as _brain_edits
 from src.utils import media_pool_changes as _media_pool_changes
 from src.utils import timeline_versioning as _timeline_versioning
+from src.utils import project_spec as _project_spec
+from src.utils import project_lint as _project_lint
+from src.utils import clip_query as _clip_query
 from src.utils import destructive_hook as _destructive_hook
 from src.utils.destructive_hook import destructive_op as _destructive_op
 
@@ -774,7 +777,7 @@ _RETRYABLE_UNSET = object()
 
 
 def _err(message, *, code=None, category=None, retryable=_RETRYABLE_UNSET,
-         remediation=None, reason=None):
+         remediation=None, reason=None, state=None):
     """Return a structured error envelope.
 
     Callers may pass just a message string for back-compat with the legacy shape;
@@ -787,9 +790,15 @@ def _err(message, *, code=None, category=None, retryable=_RETRYABLE_UNSET,
         - Pass True/False explicitly to override the default (rare; usually the
           default is correct).
 
+    `state`:
+        - Optional dict snapshot of the relevant values at failure time
+          (e.g. {"queue_size": 0, "format": "mov"}). Machine-readable context so
+          the agent doesn't have to parse `reason` prose. Omitted when empty.
+
     Shape:
         {"error": {"message": str, "code": str, "category": str,
-                   "retryable": bool, "reason": str?, "remediation": str?}}
+                   "retryable": bool, "reason": str?, "remediation": str?,
+                   "state": dict?}}
     """
     cat = category if category in ERROR_CATEGORIES else "resolve_api_failed"
     if retryable is _RETRYABLE_UNSET:
@@ -806,6 +815,8 @@ def _err(message, *, code=None, category=None, retryable=_RETRYABLE_UNSET,
         body["reason"] = str(reason)
     if remediation:
         body["remediation"] = str(remediation)
+    if state:
+        body["state"] = state
     return {"error": body}
 
 def _ok(**kw):
@@ -2049,6 +2060,57 @@ def _timeline_item_summary(item, track_info=None):
         "media_pool_item_name": _safe_media_pool_item_name(media_pool_item),
     }
     return summary
+
+
+# Filters the live timeline adapter can populate from a timeline-item summary.
+# Analysis-aware filters in clip_query (analyzed/has_transcription/shot_type/
+# marker_color) require an analysis-DB join not yet wired here; reject them at
+# the boundary rather than return silently-wrong (empty) matches.
+_LIVE_CLIP_WHERE_FILTERS = {
+    "track_type", "track_index", "name_contains", "duration_lt", "duration_gt",
+}
+
+
+def _timeline_clip_where(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    """clip_where action: return timeline clips matching named filters (AND).
+
+    Filters may be passed as a `filters` dict or as top-level params. Only the
+    structural filters in `_LIVE_CLIP_WHERE_FILTERS` are supported live.
+    """
+    filters = p.get("filters")
+    if not isinstance(filters, dict):
+        # Top-level convenience: treat every param as a filter and validate it,
+        # so a typo'd key is rejected rather than silently matching everything.
+        filters = {k: v for k, v in p.items() if k != "filters"}
+    ok, unknown = _clip_query.validate_filters(filters)
+    if not ok:
+        return _err(
+            f"Unknown clip_where filter(s): {unknown}",
+            code="UNKNOWN_FILTER", category="invalid_input",
+            state={"unknown": unknown, "supported": sorted(_clip_query.SUPPORTED_FILTERS)},
+        )
+    not_live = [k for k in filters if k not in _LIVE_CLIP_WHERE_FILTERS]
+    if not_live:
+        return _err(
+            f"Filter(s) not yet supported on a live timeline: {not_live}",
+            code="FILTER_NOT_LIVE", category="unsupported",
+            remediation="Use structural filters (track_type, track_index, name_contains, duration_lt, duration_gt).",
+            state={"not_live": not_live, "live_supported": sorted(_LIVE_CLIP_WHERE_FILTERS)},
+        )
+    clips: List[Dict[str, Any]] = []
+    for tt in ("video", "audio", "subtitle"):
+        try:
+            count = int(tl.GetTrackCount(tt) or 0)
+        except Exception:
+            continue
+        for ti in range(1, count + 1):
+            for item in (tl.GetItemListInTrack(tt, ti) or []):
+                summary = _timeline_item_summary(item, (tt, ti))
+                if summary:
+                    clips.append(summary)
+    matches = _clip_query.filter_clips(clips, filters)
+    return _ok(filters=filters, match_count=len(matches),
+               total_clips=len(clips), clips=matches)
 
 
 def _serialize_appended_timeline_item(item, index: int, *, allow_empty_timeline_item_id: bool = False):
@@ -11988,6 +12050,252 @@ def _project_boundary_report(resolve_obj, pm, project, p: Dict[str, Any]) -> Dic
     }
 
 
+def _find_project_timeline(project, name: str):
+    """Return the timeline named `name` in `project`, or None."""
+    try:
+        count = int(project.GetTimelineCount() or 0)
+    except Exception:
+        return None
+    for i in range(1, count + 1):
+        tl = project.GetTimelineByIndex(i)
+        try:
+            if tl and tl.GetName() == name:
+                return tl
+        except Exception:
+            continue
+    return None
+
+
+class _SpecLiveExecutor:
+    """Live executor for project_spec.apply_spec — adapts a Resolve project to
+    the duck-typed executor contract. Spec-aware so live_state() only reads the
+    setting keys the spec cares about."""
+
+    def __init__(self, r, pm, spec):
+        self._r = r
+        self._pm = pm
+        self._spec = spec
+        self._proj = pm.GetCurrentProject()
+
+    def live_state(self) -> Dict[str, Any]:
+        proj = self._proj
+        projects = list(self._pm.GetProjectListInCurrentFolder() or [])
+        settings: Dict[str, Any] = {}
+        if proj:
+            for k in _project_spec.effective_settings(self._spec):
+                try:
+                    v = proj.GetSetting(k)
+                except Exception:
+                    v = None
+                if v is not None:
+                    settings[k] = v
+        spec_names = {t.name for t in self._spec.timelines}
+        timelines: List[Dict[str, Any]] = []
+        if proj:
+            count = int(proj.GetTimelineCount() or 0)
+            for i in range(1, count + 1):
+                tl = proj.GetTimelineByIndex(i)
+                if not tl:
+                    continue
+                name = tl.GetName()
+                if name not in spec_names:
+                    timelines.append({"name": name})
+                    continue
+                tspec = next((t for t in self._spec.timelines if t.name == name), None)
+                keys = set((tspec.settings if tspec else {})) | {"timelineFrameRate"}
+                tl_settings: Dict[str, Any] = {}
+                for k in keys:
+                    try:
+                        v = tl.GetSetting(k)
+                    except Exception:
+                        v = None
+                    if v is not None:
+                        tl_settings[k] = v
+                markers: List[Dict[str, Any]] = []
+                try:
+                    for frame, m in (tl.GetMarkers() or {}).items():
+                        entry = {"frame": int(frame)}
+                        if isinstance(m, dict):
+                            entry.update({kk: m.get(kk) for kk in
+                                          ("color", "name", "note", "duration", "customData")})
+                        markers.append(entry)
+                except Exception:
+                    pass
+                timelines.append({"name": name, "settings": tl_settings, "markers": markers})
+        return {
+            "project": proj.GetName() if proj else None,
+            "projects": projects,
+            "settings": settings,
+            "timelines": timelines,
+        }
+
+    def ensure_project(self, name: str) -> bool:
+        if self._proj and self._proj.GetName() == name:
+            return True
+        projects = list(self._pm.GetProjectListInCurrentFolder() or [])
+        proj = self._pm.LoadProject(name) if name in projects else self._pm.CreateProject(name)
+        if proj:
+            self._proj = proj
+            return True
+        return False
+
+    def set_project_setting(self, key: str, value: Any) -> bool:
+        if not self._proj:
+            return False
+        try:
+            return bool(self._proj.SetSetting(key, str(value)))
+        except Exception:
+            return False
+
+    def ensure_timeline(self, name: str, fps: Optional[float]) -> bool:
+        if not self._proj:
+            return False
+        tl = _find_project_timeline(self._proj, name)
+        if tl is None:
+            mp = self._proj.GetMediaPool()
+            if mp is None:
+                return False
+            tl = mp.CreateEmptyTimeline(name)
+            if tl is None:
+                return False
+        if fps is not None:
+            try:
+                tl.SetSetting("timelineFrameRate", str(fps))
+            except Exception:
+                pass
+        return True
+
+    def set_timeline_setting(self, tl_name: str, key: str, value: Any) -> bool:
+        tl = _find_project_timeline(self._proj, tl_name) if self._proj else None
+        if tl is None:
+            return False
+        try:
+            return bool(tl.SetSetting(key, str(value)))
+        except Exception:
+            return False
+
+    def add_marker(self, tl_name: str, marker: Dict[str, Any]) -> bool:
+        tl = _find_project_timeline(self._proj, tl_name) if self._proj else None
+        if tl is None:
+            return False
+        try:
+            return bool(tl.AddMarker(
+                int(marker.get("frame", 0)),
+                marker.get("color", "Blue"),
+                marker.get("name", ""),
+                marker.get("note", ""),
+                int(marker.get("duration", 1)),
+                marker.get("customData", marker.get("custom_data", "")),
+            ))
+        except Exception:
+            return False
+
+
+def _make_spec_hook_runner(timeout: float = 120.0):
+    """Return a callable that runs a Hook's shell command (opt-in only)."""
+    import subprocess
+
+    def _run(hook) -> bool:
+        try:
+            proc = subprocess.run(hook.command, shell=True, timeout=timeout)
+            return proc.returncode == 0
+        except Exception as exc:
+            logger.warning("spec hook '%s' failed: %s", hook.name or hook.command, exc)
+            return False
+
+    return _run
+
+
+def _spec_action(r, pm, action: str, p: Dict[str, Any]) -> Dict[str, Any]:
+    """plan_spec / apply_spec / diff_to_spec — declarative project reconcile."""
+    spec_path = p.get("spec_path") or p.get("path")
+    try:
+        if spec_path:
+            spec = _project_spec.load_spec(str(spec_path))
+        elif isinstance(p.get("spec"), dict):
+            spec = _project_spec.spec_from_dict(p["spec"])
+        else:
+            return _err("Provide spec_path (file) or an inline spec dict.",
+                        code="NO_SPEC", category="invalid_input")
+    except _project_spec.SpecError as exc:
+        return _err(str(exc), code="SPEC_INVALID", category="invalid_input", state=exc.state)
+
+    executor = _SpecLiveExecutor(r, pm, spec)
+    if action == "diff_to_spec":
+        return _ok(project=spec.project, **_project_spec.plan_spec(spec, executor.live_state()))
+    if action == "plan_spec":
+        return _ok(project=spec.project,
+                   **_project_spec.apply_spec(spec, executor, dry_run=True))
+    # apply_spec
+    run_hooks = bool(p.get("run_hooks", False))
+    try:
+        result = _project_spec.apply_spec(
+            spec, executor,
+            dry_run=bool(p.get("dry_run", False)),
+            run_hooks=run_hooks,
+            continue_on_error=bool(p.get("continue_on_error", False)),
+            run_hook=_make_spec_hook_runner() if run_hooks else None,
+        )
+    except _project_spec.SpecError as exc:
+        return _err(str(exc), code="SPEC_APPLY_FAILED",
+                    category="batch_partial", state=exc.state)
+    return _ok(**result) if result.get("success") else {"success": False, **result}
+
+
+def _project_lint_live(r, pm) -> Dict[str, Any]:
+    """Gather live project state and run the lint health-check."""
+    proj = pm.GetCurrentProject()
+    if not proj:
+        return _ok(**_project_lint.lint_report({"project": None}))
+    state: Dict[str, Any] = {"project": proj.GetName()}
+    try:
+        cur = proj.GetCurrentTimeline()
+        state["current_timeline"] = cur.GetName() if cur else None
+    except Exception:
+        state["current_timeline"] = None
+    timelines: List[Dict[str, Any]] = []
+    try:
+        count = int(proj.GetTimelineCount() or 0)
+    except Exception:
+        count = 0
+    for i in range(1, count + 1):
+        tl = proj.GetTimelineByIndex(i)
+        if not tl:
+            continue
+        fps = None
+        try:
+            fps = float(tl.GetSetting("timelineFrameRate"))
+        except Exception:
+            pass
+        item_count = 0
+        try:
+            vc = int(tl.GetTrackCount("video") or 0)
+            for ti in range(1, vc + 1):
+                item_count += len(tl.GetItemListInTrack("video", ti) or [])
+        except Exception:
+            pass
+        timelines.append({"name": tl.GetName(), "fps": fps, "item_count": item_count})
+    state["timelines"] = timelines
+    settings: Dict[str, Any] = {}
+    try:
+        csm = proj.GetSetting("colorScienceMode")
+        if csm is not None:
+            settings["colorScienceMode"] = csm
+    except Exception:
+        pass
+    state["settings"] = settings
+    render: Dict[str, Any] = {}
+    try:
+        rf = proj.GetCurrentRenderFormatAndCodec() or {}
+        if rf.get("format"):
+            render["format"] = rf.get("format")
+        render["codec"] = rf.get("codec")
+    except Exception:
+        pass
+    state["render"] = render
+    return _ok(**_project_lint.lint_report(state))
+
+
 @mcp.tool()
 def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage DaVinci Resolve projects.
@@ -12019,6 +12327,16 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       safe_set_current_database(db_info, dry_run?, allow_switch?) -> {success}
       preset_lifecycle_probe() -> {project_presets, render_presets, layout_presets, ...}
       project_boundary_report() -> {capabilities, project_manager, settings, database, presets, cloud}
+      lint() -> {ok, counts, issues} — graded project health pre-flight (no project, no
+        current timeline, mixed fps, empty timeline, render/color-science unset, offline media).
+      diff_to_spec(spec_path|spec) -> {actions, diff, change_count} — preview drift vs a
+        declarative spec WITHOUT mutating. Spec is YAML/JSON: {project, color_preset?, settings?,
+        timelines:[{name,fps?,settings?,markers?}], hooks?}.
+      plan_spec(spec_path|spec) -> {dry_run, actions, diff, change_count} — same as apply with dry_run.
+      apply_spec(spec_path|spec, dry_run?, run_hooks?, continue_on_error?) -> {success, applied, failures}
+        Reconcile the project toward the spec (idempotent: re-runs are no-ops). Color/HDR
+        settings are applied in dependency order; markers only added if absent. Hooks run only
+        when run_hooks=true (executes shell from the spec — opt-in).
     """
     p = params or {}
     r = get_resolve()
@@ -12026,6 +12344,10 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
     pm = r.GetProjectManager()
 
+    if action == "lint":
+        return _project_lint_live(r, pm)
+    if action in {"diff_to_spec", "plan_spec", "apply_spec"}:
+        return _spec_action(r, pm, action, p)
     if action == "project_capabilities":
         return _project_capabilities(pm, pm.GetCurrentProject(), r)
     elif action == "probe_project_lifecycle":
@@ -12091,7 +12413,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             p.get("src_media", True), p.get("render_cache", True), p.get("proxy_media", False)))}
     elif action == "restore":
         return {"success": bool(pm.RestoreProject(p["path"], p.get("name")))}
-    return _unknown(action, ["list","get_current","create","load","save","close","delete","import_project","export_project","archive","restore", *_PROJECT_KERNEL_ACTIONS])
+    return _unknown(action, ["list","get_current","create","load","save","close","delete","import_project","export_project","archive","restore","lint","diff_to_spec","plan_spec","apply_spec", *_PROJECT_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -14630,6 +14952,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       get_track_name(track_type, index) -> {name}
       set_track_name(track_type, index, name) -> {success}
       get_items(track_type, index) -> {items}
+      clip_where(filters|track_type?, track_index?, name_contains?, duration_lt?, duration_gt?) -> {clips, match_count, total_clips}
+        Find clips on the current timeline matching named filters (AND). Pass filters
+        inline or as a `filters` dict. Live filters: track_type, track_index,
+        name_contains, duration_lt, duration_gt (frames). No clip enumeration needed.
       delete_clips(clip_ids, ripple?) -> {success}  — clip_ids: list of unique IDs
         DESTRUCTIVE. ripple=True is CATASTROPHIC (closes the gap; cannot be selectively undone).
       set_clips_linked(clip_ids, linked) -> {success}
@@ -14774,6 +15100,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     if not tl:
         return _err("No current timeline")
 
+    if action == "clip_where":
+        return _timeline_clip_where(tl, p)
     if action == "get_current":
         return {"name": tl.GetName(), "id": tl.GetUniqueId(), "start_frame": tl.GetStartFrame(), "end_frame": tl.GetEndFrame(), "start_timecode": tl.GetStartTimecode()}
     elif action == "get_name":
