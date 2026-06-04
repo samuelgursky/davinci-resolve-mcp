@@ -2,6 +2,38 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.30.0
+
+Adds the **Resolve 21 AI-ops ledger** — usage/time/file accounting for the
+Resolve-local AI operations added in v2.29.0 (audio classification, IntelliSearch,
+slate, motion-deblur, speech generation). These run on Resolve's own GPU/AI engine
+and do **not** consume the Claude-side analysis token budget, so they get their
+own ledger instead of being metered by the analysis-caps layer.
+
+**What's tracked.** Every run of the five 21.0 ops records: op name, op class
+(`analysis` vs `render`), clip id, success/failure, wall-clock time, and — for the
+two media-creating ops (`remove_motion_blur`, `generate_speech`) — the output
+file path and byte size. The reliable signal is invocation counts + the
+file/disk accounting for the creators; durations for the bool-returning analysis
+ops reflect the script-call time (some queue work inside Resolve).
+
+- **New table** `resolve_ai_op_usage` (timeline_brain DB schema v7).
+- **New module** `src/utils/resolve_ai_ledger.py` — `timed()` context manager +
+  `record_op` / `get_usage` / `get_summary`. All writes are best-effort and never
+  block or mask the underlying Resolve op.
+- **Instrumentation** wraps the consolidated `folder` / `media_pool_item`
+  `perform_audio_classification` / `clear_audio_classification` /
+  `analyze_for_intellisearch` / `analyze_for_slate` / `remove_motion_blur`
+  handlers and `project_settings.generate_speech`.
+- **New MCP action** `media_analysis(action="get_resolve_ai_usage", session_only?, op?, limit?)`
+  returns the per-op summary + recent runs.
+- **Control panel**: a read-only "Resolve 21 AI ops" card (`/api/resolve_ai_usage`)
+  shows runs, success/fail, total time, and files/bytes created.
+
+Phase 1 of a staged build (ledger → interactive console → governance). Granular
+`--full` server instrumentation is deferred — the ledger covers the consolidated
+server, which is the default surface. Validated live against Resolve Studio 21.0.0.47.
+
 ## What's New in v2.29.0
 
 Adds the **DaVinci Resolve 21.0** scripting-API additions. Every new method is

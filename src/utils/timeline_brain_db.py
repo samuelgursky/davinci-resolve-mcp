@@ -29,7 +29,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 
 logger = logging.getLogger("resolve-mcp.timeline-brain-db")
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 DB_FILENAME = "timeline_brain.sqlite"
 SOUL_DIRNAME = "_soul"
 
@@ -418,6 +418,48 @@ def _migrate_v6_caps_events(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS ix_caps_events_day ON caps_events(day_bucket);
         CREATE INDEX IF NOT EXISTS ix_caps_events_type ON caps_events(event_type);
+        """
+    )
+
+
+# ── v7 migration: resolve_ai_op_usage ledger for Resolve 21 GPU/AI ops ──────
+
+
+@register_migration(7)
+def _migrate_v7_resolve_ai_op_usage(conn: sqlite3.Connection) -> None:
+    """Ledger for Resolve-local AI ops (audio classification, IntelliSearch,
+    slate, motion-deblur, speech generation).
+
+    These run on Resolve's own GPU/AI engine and do NOT consume the Claude-side
+    analysis token budget tracked in `analysis_token_usage`, so they get their
+    own ledger. The value is the wall-clock + file/byte accounting for the two
+    media-creating ops (remove_motion_blur, generate_speech). `op_class` is
+    'analysis' (no media produced) or 'render' (new media file written).
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS resolve_ai_op_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            op TEXT NOT NULL,
+            op_class TEXT NOT NULL DEFAULT 'analysis',
+            clip_id TEXT,
+            session_id TEXT,
+            success INTEGER NOT NULL DEFAULT 0,
+            wall_clock_ms INTEGER NOT NULL DEFAULT 0,
+            output_path TEXT,
+            output_bytes INTEGER,
+            extra_required TEXT,
+            error TEXT,
+            occurred_at TEXT NOT NULL,
+            day_bucket TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_resolve_ai_op_usage_op
+            ON resolve_ai_op_usage(op);
+        CREATE INDEX IF NOT EXISTS ix_resolve_ai_op_usage_session
+            ON resolve_ai_op_usage(session_id);
+        CREATE INDEX IF NOT EXISTS ix_resolve_ai_op_usage_day
+            ON resolve_ai_op_usage(day_bucket);
         """
     )
 

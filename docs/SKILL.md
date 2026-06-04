@@ -668,6 +668,15 @@ effective values + a usage rollup (clip / job / day) with percent-consumed.
 counts for one scope. Usage is tracked in
 `<project>/_soul/timeline_brain.sqlite` (`analysis_token_usage` table).
 
+Resolve 21's local AI ops (audio classification, IntelliSearch, slate,
+motion-deblur, speech generation) run on Resolve's own GPU/AI engine and do NOT
+spend the Claude analysis token budget — they are tracked separately in the
+`resolve_ai_op_usage` table. Inspect with
+`media_analysis(action="get_resolve_ai_usage", session_only?, op?, limit?)` →
+`{summary, recent}` (invocation counts, wall-clock, and files/bytes created by
+`remove_motion_blur` / `generate_speech`). The control panel shows the same as a
+read-only "Resolve 21 AI ops" card.
+
 The caps layer:
 - Slices `frame_paths` to `frames_per_clip` before the host LLM sees them.
 - Downscales each sampled frame in place to `max_frame_dim_pixels` (Pillow;

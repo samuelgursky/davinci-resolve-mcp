@@ -4372,6 +4372,24 @@ HTML = r"""<!doctype html>
 
         <div class="caps-section">
           <div class="caps-section-head">
+            <div class="caps-section-title">Resolve 21 AI ops</div>
+            <div class="caps-section-hint">Local Resolve AI operations (audio classification, IntelliSearch, slate, motion-deblur, speech). These run on Resolve's GPU/AI engine and do <strong>not</strong> consume the Claude analysis token budget above — tracked here for invocations, time, and files created.</div>
+          </div>
+          <div id="resolveAiOpsBlock" class="caps-usage-block">
+            <div id="resolveAiOpsSummary" class="caps-section-hint">loading…</div>
+            <table id="resolveAiOpsTable" class="resolve-ai-ops-table" style="display:none; width:100%; border-collapse:collapse; margin-top:8px; font-size:12px;">
+              <thead><tr style="text-align:left; opacity:0.7;">
+                <th style="padding:4px 6px;">Op</th><th style="padding:4px 6px;">Runs</th>
+                <th style="padding:4px 6px;">OK</th><th style="padding:4px 6px;">Time</th>
+                <th style="padding:4px 6px;">Files</th><th style="padding:4px 6px;">Created</th>
+              </tr></thead>
+              <tbody id="resolveAiOpsRows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="caps-section">
+          <div class="caps-section-head">
             <div class="caps-section-title">Safety</div>
             <div class="caps-section-hint">Auto-archive timelines before destructive edits and refuse high-blast-radius ops when archive fails.</div>
           </div>
@@ -7038,6 +7056,59 @@ HTML = r"""<!doctype html>
           <text class="label" x="${w}" y="${h + 9}" text-anchor="end">${rows[rows.length - 1].day_bucket}</text>
           <text class="label" x="0" y="9">max ${maxV}</text>
         </svg>`;
+    }
+
+    // ─── Resolve 21 AI ops ledger (read-only) ───────────────────────
+    function fmtMs(ms) {
+      ms = ms || 0;
+      if (ms < 1000) return ms + 'ms';
+      const s = ms / 1000;
+      return s < 60 ? s.toFixed(1) + 's' : (s / 60).toFixed(1) + 'm';
+    }
+    function fmtBytes(n) {
+      n = n || 0;
+      if (!n) return '—';
+      const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let i = 0; let v = n;
+      while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+      return v.toFixed(v < 10 && i > 0 ? 1 : 0) + ' ' + u[i];
+    }
+    async function refreshResolveAiOps() {
+      const summaryEl = $('resolveAiOpsSummary');
+      const tableEl = $('resolveAiOpsTable');
+      const rowsEl = $('resolveAiOpsRows');
+      if (!summaryEl || !tableEl || !rowsEl) return;
+      const data = await api('/api/resolve_ai_usage').catch(() => ({ success: false }));
+      if (!data || !data.success) {
+        summaryEl.textContent = 'ledger unavailable';
+        tableEl.style.display = 'none';
+        return;
+      }
+      const totals = (data.summary && data.summary.totals) || {};
+      const byOp = (data.summary && data.summary.by_op) || {};
+      const ops = Object.keys(byOp).sort();
+      if (!ops.length) {
+        summaryEl.textContent = 'No Resolve AI ops recorded yet for this project.';
+        tableEl.style.display = 'none';
+        return;
+      }
+      summaryEl.innerHTML = `<strong>${totals.runs || 0}</strong> runs · `
+        + `<strong>${totals.successes || 0}</strong> ok / ${totals.failures || 0} failed · `
+        + `${fmtMs(totals.wall_clock_ms)} total · `
+        + `<strong>${totals.files_created || 0}</strong> files (${fmtBytes(totals.bytes_created)}) created`;
+      rowsEl.innerHTML = ops.map(op => {
+        const b = byOp[op];
+        const isRender = b.op_class === 'render';
+        return `<tr style="border-top:1px solid rgba(255,255,255,0.06);">
+          <td style="padding:4px 6px;">${escapeHtml(op)}${isRender ? ' <span style="opacity:0.6;">(media)</span>' : ''}</td>
+          <td style="padding:4px 6px;">${b.runs}</td>
+          <td style="padding:4px 6px;">${b.successes}</td>
+          <td style="padding:4px 6px;">${fmtMs(b.wall_clock_ms)}</td>
+          <td style="padding:4px 6px;">${b.files_created || '—'}</td>
+          <td style="padding:4px 6px;">${b.bytes_created ? fmtBytes(b.bytes_created) : '—'}</td>
+        </tr>`;
+      }).join('');
+      tableEl.style.display = '';
     }
 
     // ─── Caps inspector + refusals + reset ──────────────────────────
@@ -9916,6 +9987,7 @@ HTML = r"""<!doctype html>
     refreshCapsWidget().catch(() => {});
     refreshCapsHistory().catch(() => {});
     refreshCapsRefusals().catch(() => {});
+    refreshResolveAiOps().catch(() => {});
 
     // Caps inspector + reset
     $('capsInspectBtn')?.addEventListener('click', () => inspectCapsFromUI().catch(alertError));
@@ -13610,6 +13682,20 @@ class Handler(BaseHTTPRequestHandler):
                 import asyncio
                 result = asyncio.run(_ma_tool("get_caps", params={}))
                 self._json(result)
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/resolve_ai_usage":
+            # Ledger of Resolve-local 21.0 AI ops (read straight from this
+            # project's brain DB — no Resolve round-trip needed).
+            try:
+                from src.utils import resolve_ai_ledger as _ledger
+                root = self.state.project_root
+                self._json({
+                    "success": True,
+                    "summary": _ledger.get_summary(project_root=root),
+                    "recent": _ledger.get_usage(project_root=root, limit=50),
+                })
             except Exception as exc:
                 self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
             return

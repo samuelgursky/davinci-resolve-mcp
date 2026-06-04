@@ -9,9 +9,11 @@ Covers the consolidated-server actions added in v2.29.0:
   - capability detection (_transcription_capabilities) reports the new method flags
   - version guarding: legacy objects (no 21.0 method) return a "requires 21.0" error
 """
+import tempfile
 import unittest
 
 import src.server as compound
+from src.utils import resolve_ai_ledger as _ledger
 
 
 # ── Stubs ────────────────────────────────────────────────────────────────────
@@ -170,9 +172,23 @@ class Resolve21FolderActionsTest(unittest.TestCase):
         self.mp = MediaPoolStub(folder=self.folder)
         self._orig_get_mp = compound._get_mp
         compound._get_mp = lambda: (None, None, self.mp, None)
+        # Isolate the AI-ops ledger to a temp project root (also avoids the real
+        # _destructive_versioning_provider hitting a live Resolve during tests).
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_root = compound._ai_ledger_root
+        compound._ai_ledger_root = lambda: self._tmp.name
 
     def tearDown(self):
         compound._get_mp = self._orig_get_mp
+        compound._ai_ledger_root = self._orig_root
+        self._tmp.cleanup()
+
+    def test_op_is_recorded_in_ledger(self):
+        compound.folder("analyze_for_slate", {"marker_color": "Sky"})
+        rows = _ledger.get_usage(project_root=self._tmp.name)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["op"], "analyze_for_slate")
+        self.assertEqual(rows[0]["success"], 1)
 
     def test_perform_audio_classification(self):
         out = compound.folder("perform_audio_classification", {})
@@ -233,10 +249,24 @@ class Resolve21ClipActionsTest(unittest.TestCase):
         self._orig_find_clip = compound._find_clip
         compound._get_mp = lambda: (None, None, self.mp, None)
         compound._find_clip = lambda root, cid: self.clip
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_root = compound._ai_ledger_root
+        compound._ai_ledger_root = lambda: self._tmp.name
 
     def tearDown(self):
         compound._get_mp = self._orig_get_mp
         compound._find_clip = self._orig_find_clip
+        compound._ai_ledger_root = self._orig_root
+        self._tmp.cleanup()
+
+    def test_remove_motion_blur_records_clip_id_in_ledger(self):
+        pending = compound.media_pool_item("remove_motion_blur", {"clip_id": "c1"})
+        out = compound.media_pool_item("remove_motion_blur", {"clip_id": "c1", "confirm_token": pending["confirm_token"]})
+        self.assertTrue(out["success"])
+        rows = _ledger.get_usage(project_root=self._tmp.name, op="remove_motion_blur")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["clip_id"], "c1")
+        self.assertEqual(rows[0]["op_class"], "render")
 
     def test_perform_audio_classification(self):
         out = compound.media_pool_item("perform_audio_classification", {"clip_id": "c1"})
@@ -295,9 +325,14 @@ class Resolve21GenerateSpeechTest(unittest.TestCase):
         self.proj = Project21()
         self._orig_check = compound._check
         compound._check = lambda: (None, self.proj, None)
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_root = compound._ai_ledger_root
+        compound._ai_ledger_root = lambda: self._tmp.name
 
     def tearDown(self):
         compound._check = self._orig_check
+        compound._ai_ledger_root = self._orig_root
+        self._tmp.cleanup()
 
     def test_requires_text_input(self):
         out = compound.project_settings("generate_speech", {"speech_generation_settings": {"VoiceModel": "Female 1"}})

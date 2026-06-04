@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.29.0"
+VERSION = "2.30.0"
 
 import base64
 import os
@@ -637,6 +637,42 @@ def _destructive_versioning_provider() -> Optional[Tuple[Any, Any, str, Optional
 
 
 _destructive_hook.register_project_root_provider(_destructive_versioning_provider)
+
+
+# ─── Resolve 21 AI-ops ledger plumbing ────────────────────────────────────────
+
+import uuid as _ledger_uuid
+from src.utils import resolve_ai_ledger as _resolve_ai_ledger
+
+# One id per server process so the ledger / dashboard can scope "this session".
+_AI_LEDGER_SESSION_ID = _ledger_uuid.uuid4().hex
+
+
+def _ai_ledger_root() -> Optional[str]:
+    """Best-effort project_root for the AI-ops ledger. None disables recording."""
+    try:
+        provider = _destructive_versioning_provider()
+        return provider[2] if provider else None
+    except Exception:
+        return None
+
+
+def _clip_file_size(item: Any) -> Tuple[Optional[str], Optional[int]]:
+    """(file_path, size_bytes) for a MediaPoolItem, or (path|None, None)."""
+    try:
+        path = item.GetClipProperty("File Path")
+        if isinstance(path, str) and path and os.path.exists(path):
+            return path, os.path.getsize(path)
+        return (path if isinstance(path, str) and path else None), None
+    except Exception:
+        return None, None
+
+
+def _ai_ledger_timed(op: str, *, clip_id: Optional[str] = None):
+    """Ledger context manager bound to the current project_root + session."""
+    return _resolve_ai_ledger.timed(
+        _ai_ledger_root(), op, clip_id=clip_id, session_id=_AI_LEDGER_SESSION_ID
+    )
 
 
 def _destructive_preference_provider(key: str) -> Any:
@@ -12427,10 +12463,17 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
         blocked = _consume_confirm_token(action="project_settings.generate_speech", params=p)
         if blocked:
             return blocked
-        new_item = proj.GenerateSpeech(settings, timecode)
+        with _ai_ledger_timed("generate_speech") as _rec:
+            new_item = proj.GenerateSpeech(settings, timecode)
+            _rec.success = bool(new_item)
+            if new_item:
+                path, nbytes = _clip_file_size(new_item)
+                _rec.output_path = path
+                _rec.output_bytes = nbytes
         if not new_item:
             return {"success": False}
-        return {"success": True, "new": new_item.GetName(), "new_id": new_item.GetUniqueId()}
+        return {"success": True, "new": new_item.GetName(), "new_id": new_item.GetUniqueId(),
+                "output_path": _rec.output_path, "output_bytes": _rec.output_bytes}
     return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset","generate_speech"])
 
 
@@ -13414,19 +13457,28 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         missing = _requires_method(f, "PerformAudioClassification", "21.0")
         if missing:
             return missing
-        return {"success": bool(f.PerformAudioClassification())}
+        with _ai_ledger_timed("perform_audio_classification") as _rec:
+            ok = bool(f.PerformAudioClassification())
+            _rec.success = ok
+        return {"success": ok}
     elif action == "clear_audio_classification":
         missing = _requires_method(f, "ClearAudioClassification", "21.0")
         if missing:
             return missing
-        return {"success": bool(f.ClearAudioClassification())}
+        with _ai_ledger_timed("clear_audio_classification") as _rec:
+            ok = bool(f.ClearAudioClassification())
+            _rec.success = ok
+        return {"success": ok}
     elif action == "analyze_for_intellisearch":
         missing = _requires_method(f, "AnalyzeForIntellisearch", "21.0")
         if missing:
             return missing
         identify_faces = bool(_first_param(p, "identify_faces", "identifyFaces", default=False))
         is_better_mode = bool(_first_param(p, "is_better_mode", "isBetterMode", default=False))
-        return {"success": bool(f.AnalyzeForIntellisearch(identify_faces, is_better_mode))}
+        with _ai_ledger_timed("analyze_for_intellisearch") as _rec:
+            ok = bool(f.AnalyzeForIntellisearch(identify_faces, is_better_mode))
+            _rec.success = ok
+        return {"success": ok}
     elif action == "analyze_for_slate":
         missing = _requires_method(f, "AnalyzeForSlate", "21.0")
         if missing:
@@ -13434,7 +13486,10 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         marker_color = _first_param(p, "marker_color", "markerColor", default="Blue")
         if marker_color not in _MARKER_COLORS:
             return _err(f"Invalid marker_color {marker_color!r}. Valid colors: {', '.join(_MARKER_COLORS)}")
-        return {"success": bool(f.AnalyzeForSlate(marker_color))}
+        with _ai_ledger_timed("analyze_for_slate") as _rec:
+            ok = bool(f.AnalyzeForSlate(marker_color))
+            _rec.success = ok
+        return {"success": ok}
     elif action == "remove_motion_blur":
         missing = _requires_method(f, "RemoveMotionBlur", "21.0")
         if missing:
@@ -13454,14 +13509,25 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         blocked = _consume_confirm_token(action="folder.remove_motion_blur", params=p)
         if blocked:
             return blocked
-        result = f.RemoveMotionBlur(deblur)
-        created = []
-        for pair in (result or []):
-            try:
-                orig, new = pair
-                created.append({"original": orig.GetName(), "new": new.GetName(), "new_id": new.GetUniqueId()})
-            except Exception:
-                continue
+        with _ai_ledger_timed("remove_motion_blur") as _rec:
+            result = f.RemoveMotionBlur(deblur)
+            _rec.success = bool(result)
+            created = []
+            total_bytes = 0
+            for pair in (result or []):
+                try:
+                    orig, new = pair
+                    path, nbytes = _clip_file_size(new)
+                    if nbytes:
+                        total_bytes += nbytes
+                    created.append({"original": orig.GetName(), "new": new.GetName(),
+                                    "new_id": new.GetUniqueId(), "output_path": path, "output_bytes": nbytes})
+                except Exception:
+                    continue
+            # Folder deblur creates many files; record the first path + summed bytes.
+            if created:
+                _rec.output_path = created[0].get("output_path")
+                _rec.output_bytes = total_bytes or None
         return {"success": bool(result), "created": created}
     return _unknown(action, ["get_clips","get_name","get_subfolders","is_stale","get_unique_id","export","transcribe_audio","clear_transcription","perform_audio_classification","clear_audio_classification","analyze_for_intellisearch","analyze_for_slate","remove_motion_blur"])
 
@@ -13701,19 +13767,28 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         missing = _requires_method(clip, "PerformAudioClassification", "21.0")
         if missing:
             return missing
-        return {"success": bool(clip.PerformAudioClassification())}
+        with _ai_ledger_timed("perform_audio_classification", clip_id=p.get("clip_id")) as _rec:
+            ok = bool(clip.PerformAudioClassification())
+            _rec.success = ok
+        return {"success": ok}
     elif action == "clear_audio_classification":
         missing = _requires_method(clip, "ClearAudioClassification", "21.0")
         if missing:
             return missing
-        return {"success": bool(clip.ClearAudioClassification())}
+        with _ai_ledger_timed("clear_audio_classification", clip_id=p.get("clip_id")) as _rec:
+            ok = bool(clip.ClearAudioClassification())
+            _rec.success = ok
+        return {"success": ok}
     elif action == "analyze_for_intellisearch":
         missing = _requires_method(clip, "AnalyzeForIntellisearch", "21.0")
         if missing:
             return missing
         identify_faces = bool(_first_param(p, "identify_faces", "identifyFaces", default=False))
         is_better_mode = bool(_first_param(p, "is_better_mode", "isBetterMode", default=False))
-        return {"success": bool(clip.AnalyzeForIntellisearch(identify_faces, is_better_mode))}
+        with _ai_ledger_timed("analyze_for_intellisearch", clip_id=p.get("clip_id")) as _rec:
+            ok = bool(clip.AnalyzeForIntellisearch(identify_faces, is_better_mode))
+            _rec.success = ok
+        return {"success": ok}
     elif action == "analyze_for_slate":
         missing = _requires_method(clip, "AnalyzeForSlate", "21.0")
         if missing:
@@ -13721,7 +13796,10 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         marker_color = _first_param(p, "marker_color", "markerColor", default="Blue")
         if marker_color not in _MARKER_COLORS:
             return _err(f"Invalid marker_color {marker_color!r}. Valid colors: {', '.join(_MARKER_COLORS)}")
-        return {"success": bool(clip.AnalyzeForSlate(marker_color))}
+        with _ai_ledger_timed("analyze_for_slate", clip_id=p.get("clip_id")) as _rec:
+            ok = bool(clip.AnalyzeForSlate(marker_color))
+            _rec.success = ok
+        return {"success": ok}
     elif action == "remove_motion_blur":
         missing = _requires_method(clip, "RemoveMotionBlur", "21.0")
         if missing:
@@ -13741,10 +13819,17 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         blocked = _consume_confirm_token(action="media_pool_item.remove_motion_blur", params=p)
         if blocked:
             return blocked
-        new_clip = clip.RemoveMotionBlur(deblur)
+        with _ai_ledger_timed("remove_motion_blur", clip_id=p.get("clip_id")) as _rec:
+            new_clip = clip.RemoveMotionBlur(deblur)
+            _rec.success = bool(new_clip)
+            if new_clip:
+                path, nbytes = _clip_file_size(new_clip)
+                _rec.output_path = path
+                _rec.output_bytes = nbytes
         if not new_clip:
             return {"success": False}
-        return {"success": True, "new": new_clip.GetName(), "new_id": new_clip.GetUniqueId()}
+        return {"success": True, "new": new_clip.GetName(), "new_id": new_clip.GetUniqueId(),
+                "output_path": _rec.output_path, "output_bytes": _rec.output_bytes}
     elif action == "get_audio_mapping":
         return {"mapping": clip.GetAudioMapping()}
     elif action == "get_mark_in_out":
@@ -13893,6 +13978,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       get_caps(clip_id?, job_id?) -> {preset, caps, presets_available, usage?} — effective caps + usage rollup (vision tokens consumed per scope, percent of budget).
       set_caps_preset(preset, overrides?) -> {success, preset, overrides} — preset is minimal | standard | generous | unlimited. Overrides is a dict of {field: int|"unlimited"} that wins over the preset.
       get_usage(scope?, scope_key?, clip_id?, job_id?) -> {scope, usage} — raw usage rollup for one scope (clip | job | day).
+      get_resolve_ai_usage(session_only?, op?, limit?) -> {summary, recent} — ledger of Resolve 21 local AI ops (audio classification, IntelliSearch, slate, motion-deblur, speech). Tracks invocations, wall-clock, and files/bytes created by the two media-creating ops. Separate from get_caps/get_usage (those meter Claude-side tokens; these ops don't spend them).
       resolve_output_root(analysis_root?, source_paths?) -> {project_root}
       plan(target, depth?, analysis_root?, transcription?, vision?, dry_run?) -> {clips, artifacts}
       analyze_file(path|file_path, dry_run?, session_only?, persist?) -> {clips, manifest}
@@ -14045,6 +14131,27 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         except Exception as exc:
             out["usage_error"] = f"{type(exc).__name__}: {exc}"
         return out
+    if action == "get_resolve_ai_usage":
+        # Ledger of Resolve-local 21.0 AI ops (audio classification, IntelliSearch,
+        # slate, motion-deblur, speech generation). Distinct from get_caps/get_usage,
+        # which meter Claude-side analysis tokens — these ops don't spend those.
+        try:
+            vctx = _destructive_versioning_provider()
+            if vctx is None:
+                return _err("No project context — open a Resolve project first")
+            _r, _proj, project_root, _name = vctx
+            session_only = bool(p.get("session_only", False))
+            session_id = _AI_LEDGER_SESSION_ID if session_only else None
+            limit = int(p.get("limit", 50))
+            return {
+                "success": True,
+                "session_id": _AI_LEDGER_SESSION_ID,
+                "scope": "session" if session_only else "project",
+                "summary": _resolve_ai_ledger.get_summary(project_root=project_root, session_id=session_id),
+                "recent": _resolve_ai_ledger.get_usage(project_root=project_root, session_id=session_id, op=p.get("op"), limit=limit),
+            }
+        except Exception as exc:
+            return _err(f"{type(exc).__name__}: {exc}")
     if action == "set_caps_preset":
         preset = (p.get("preset") or "").strip().lower()
         from src.utils import analysis_caps as _ac
