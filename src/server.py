@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.31.0"
+VERSION = "2.32.0"
 
 import base64
 import os
@@ -673,6 +673,37 @@ def _ai_ledger_timed(op: str, *, clip_id: Optional[str] = None):
     return _resolve_ai_ledger.timed(
         _ai_ledger_root(), op, clip_id=clip_id, session_id=_AI_LEDGER_SESSION_ID
     )
+
+
+# ─── Resolve 21 AI-ops governance (soft tiers over the ledger) ────────────────
+
+from src.utils import resolve_ai_governance as _resolve_ai_governance
+
+
+def _ai_governance_preset() -> Optional[str]:
+    try:
+        return _read_media_analysis_preferences().get("resolve_ai_governance_preset")
+    except Exception:
+        return None
+
+
+def _ai_governance_overrides() -> Optional[Dict[str, Any]]:
+    try:
+        raw = _read_media_analysis_preferences().get("resolve_ai_governance_overrides") or {}
+        return raw if isinstance(raw, dict) else None
+    except Exception:
+        return None
+
+
+def _ai_governance_check(op: str) -> Dict[str, Any]:
+    """Advisory governance status for the next run of `op` (best-effort)."""
+    try:
+        return _resolve_ai_governance.check(
+            project_root=_ai_ledger_root(), session_id=_AI_LEDGER_SESSION_ID, op=op,
+            preset=_ai_governance_preset(), overrides=_ai_governance_overrides(),
+        )
+    except Exception:
+        return {"applies": False}
 
 
 def _destructive_preference_provider(key: str) -> Any:
@@ -6459,6 +6490,11 @@ _MEDIA_ANALYSIS_DEFAULT_PREFS = {
     # vision_tokens_per_job, vision_tokens_per_day, wall_clock_seconds_per_call,
     # max_frame_dim_pixels). Pass an integer or "unlimited" to lift that cap.
     "analysis_caps_overrides": {},
+    # Soft governance tier for the media-creating Resolve 21 AI ops (deblur /
+    # speech): off | lenient | standard | strict. Advisory only — surfaced in the
+    # confirm preview + panel; never hard-blocks (the ops are confirm-gated).
+    "resolve_ai_governance_preset": "standard",
+    "resolve_ai_governance_overrides": {},
 }
 
 
@@ -12458,6 +12494,7 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
                     "voice_model": settings.get("VoiceModel"),
                     "add_to_timeline": bool(settings.get("AddToTimeline")),
                     "timecode": timecode,
+                    "governance": _ai_governance_check("generate_speech"),
                 },
             )
         blocked = _consume_confirm_token(action="project_settings.generate_speech", params=p)
@@ -13504,6 +13541,7 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
                     "warning": "Renders NEW deblurred media files for clips in the folder; source media is not modified.",
                     "folder": f.GetName(),
                     "deblur_option": deblur,
+                    "governance": _ai_governance_check("remove_motion_blur"),
                 },
             )
         blocked = _consume_confirm_token(action="folder.remove_motion_blur", params=p)
@@ -13814,6 +13852,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
                     "warning": "Renders a NEW deblurred media file; the source clip is not modified.",
                     "clip": clip.GetName(),
                     "deblur_option": deblur,
+                    "governance": _ai_governance_check("remove_motion_blur"),
                 },
             )
         blocked = _consume_confirm_token(action="media_pool_item.remove_motion_blur", params=p)
@@ -13979,6 +14018,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       set_caps_preset(preset, overrides?) -> {success, preset, overrides} — preset is minimal | standard | generous | unlimited. Overrides is a dict of {field: int|"unlimited"} that wins over the preset.
       get_usage(scope?, scope_key?, clip_id?, job_id?) -> {scope, usage} — raw usage rollup for one scope (clip | job | day).
       get_resolve_ai_usage(session_only?, op?, limit?) -> {summary, recent} — ledger of Resolve 21 local AI ops (audio classification, IntelliSearch, slate, motion-deblur, speech). Tracks invocations, wall-clock, and files/bytes created by the two media-creating ops. Separate from get_caps/get_usage (those meter Claude-side tokens; these ops don't spend them).
+      get_ai_governance() -> {tier, thresholds, usage, tiers_available} — soft governance tier (off|lenient|standard|strict) for the media-creating AI ops vs this session's render usage. Advisory; surfaced in the confirm preview + panel, never blocks.
+      set_ai_governance(preset, overrides?) -> {success, tier, overrides} — set the governance tier. Overrides keys: deblur_runs, speech_runs, render_bytes, render_wall_clock_ms (int or "unlimited").
       resolve_output_root(analysis_root?, source_paths?) -> {project_root}
       plan(target, depth?, analysis_root?, transcription?, vision?, dry_run?) -> {clips, artifacts}
       analyze_file(path|file_path, dry_run?, session_only?, persist?) -> {clips, manifest}
@@ -14152,6 +14193,31 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             }
         except Exception as exc:
             return _err(f"{type(exc).__name__}: {exc}")
+    if action == "get_ai_governance":
+        # Soft-tier governance for the media-creating AI ops (deblur / speech).
+        # Advisory only — reports this session's render usage vs the active tier.
+        try:
+            project_root = _ai_ledger_root()
+            st = _resolve_ai_governance.status(
+                project_root=project_root, session_id=_AI_LEDGER_SESSION_ID,
+                preset=_ai_governance_preset(), overrides=_ai_governance_overrides(),
+            )
+            return {"success": True, "session_id": _AI_LEDGER_SESSION_ID, **st}
+        except Exception as exc:
+            return _err(f"{type(exc).__name__}: {exc}")
+    if action == "set_ai_governance":
+        preset = (p.get("preset") or "").strip().lower()
+        if preset not in _resolve_ai_governance.VALID_TIERS:
+            return _err(f"unknown tier '{preset}'. Valid: {sorted(_resolve_ai_governance.VALID_TIERS)}")
+        prefs = _read_media_analysis_preferences()
+        prefs["resolve_ai_governance_preset"] = preset
+        if isinstance(p.get("overrides"), dict):
+            prefs["resolve_ai_governance_overrides"] = p["overrides"]
+        path = _media_analysis_preferences_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(prefs, fh, indent=2)
+        return {"success": True, "tier": preset, "overrides": prefs.get("resolve_ai_governance_overrides") or {}}
     if action == "set_caps_preset":
         preset = (p.get("preset") or "").strip().lower()
         from src.utils import analysis_caps as _ac

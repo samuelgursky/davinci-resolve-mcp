@@ -4179,6 +4179,13 @@ HTML = r"""<!doctype html>
       </div>
 
       <div class="caps-section" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Governance</div>
+          <div class="caps-section-hint">Soft per-session limits for the two media-creating ops (deblur, speech). Advisory only — you'll be warned in the confirm dialog, but never blocked (the ops are confirm-gated). Pick the tier that matches the job.</div></div>
+        <div id="aiGovTiers" class="caps-preset-cards" role="radiogroup" aria-label="AI governance tier"></div>
+        <div id="aiGovUsage" class="caps-usage-gauges" style="margin-top:10px;"></div>
+      </div>
+
+      <div class="caps-section" style="margin-top:12px;">
         <div class="caps-section-head"><div class="caps-section-title">Target</div>
           <div class="caps-section-hint">Folder ops run on the current Media Pool folder in Resolve. Choose <em>Specific clip</em> and paste a clip id (from <code>media_pool.get_clips</code>) to target one clip.</div></div>
         <div class="settings-grid">
@@ -7377,10 +7384,14 @@ HTML = r"""<!doctype html>
         // Confirm-token two-step for the media-creating ops.
         if (res && res.status === 'confirmation_required') {
           const preview = res.preview || {};
+          const gov = preview.governance || {};
+          const govWarn = (gov.applies && (gov.warnings || []).length)
+            ? '\n\nGovernance (' + (gov.tier || '') + '):\n• ' + gov.warnings.join('\n• ')
+            : '';
           const proceed = await brandedConfirm({
-            kicker: 'Creates new media',
+            kicker: gov.exceeded ? 'Over governance limit' : 'Creates new media',
             title: AI_OP_LABELS[op] || op,
-            body: preview.warning || 'This operation creates new media. Proceed?',
+            body: (preview.warning || 'This operation creates new media. Proceed?') + govWarn,
             detail: JSON.stringify(preview, null, 2),
             confirmLabel: 'Run it',
             tone: 'danger',
@@ -7392,20 +7403,101 @@ HTML = r"""<!doctype html>
           }).catch(err => ({ success: false, error: String(err && err.message || err) }));
         }
         aiShowResult(op, res, !(res && res.success));
-        // Refresh the ledger widget so creators' file/byte totals update.
+        // Refresh the ledger + governance widgets so totals stay current.
         refreshResolveAiOps().catch(() => {});
+        refreshGovernance().catch(() => {});
       } finally {
         buttons.forEach(b => { b.disabled = false; });
       }
     }
 
+    // ─── Governance tier selector + consumption ─────────────────────
+    const AI_GOV_TIER_ORDER = ['off', 'lenient', 'standard', 'strict'];
+    const AI_GOV_TIER_TAGS = {
+      off: 'No limits',
+      lenient: 'Big jobs',
+      standard: 'Sensible default',
+      strict: 'Tight leash',
+    };
+    state.aiGov = state.aiGov || { tier: 'standard', thresholds: {}, usage: {} };
+
+    function aiGovFmt(dim, v) {
+      if (v == null) return '∞';
+      if (dim === 'render_bytes') return fmtBytes(v);
+      if (dim === 'render_wall_clock_ms') return fmtMs(v);
+      return String(v);
+    }
+    function renderGovTiers() {
+      const el = $('aiGovTiers');
+      if (!el) return;
+      const tiers = state.aiGov.tiersAvailable || {};
+      const active = state.aiGov.tier || 'standard';
+      el.innerHTML = AI_GOV_TIER_ORDER.filter(k => tiers[k]).map(key => {
+        const t = tiers[key];
+        const stats = [['deblur_runs','Deblur runs'],['speech_runs','Speech runs'],
+          ['render_bytes','Media'],['render_wall_clock_ms','Render time']].map(([d,label]) =>
+          `<span class="stat-label">${escapeHtml(label)}</span><span class="stat-value">${escapeHtml(aiGovFmt(d, t[d]))}</span>`).join('');
+        return `<button type="button" class="caps-preset-card${key === active ? ' is-active' : ''}" data-gov-tier="${escapeHtml(key)}" role="radio" aria-checked="${key === active}">
+          <div class="caps-preset-card-head"><span class="caps-preset-card-name">${escapeHtml(key)}</span>${key === active ? '<span class="caps-preset-card-badge">Active</span>' : ''}</div>
+          <div class="caps-preset-card-tag">${escapeHtml(AI_GOV_TIER_TAGS[key] || '')}</div>
+          <div class="caps-preset-card-stats">${stats}</div>
+        </button>`;
+      }).join('');
+    }
+    function renderGovUsage() {
+      const el = $('aiGovUsage');
+      if (!el) return;
+      const usage = state.aiGov.usage || {};
+      const th = state.aiGov.thresholds || {};
+      const dims = [['deblur_runs','Deblur runs'],['speech_runs','Speech runs'],
+        ['render_bytes','Media created'],['render_wall_clock_ms','Render time']];
+      el.innerHTML = dims.map(([d,label]) => {
+        const used = usage[d] || 0;
+        const cap = th[d];
+        const pct = (cap == null || cap === 0) ? 0 : Math.min(100, Math.round((used / cap) * 100));
+        const tone = pct >= 100 ? '#e06c5a' : (pct >= 80 ? '#e0a83a' : '#34a853');
+        return `<div class="caps-gauge">
+          <div class="caps-gauge-top"><span class="caps-gauge-label">${escapeHtml(label)}</span>
+            <span class="caps-gauge-numbers">${escapeHtml(aiGovFmt(d, used))}${cap == null ? '' : ' / ' + escapeHtml(aiGovFmt(d, cap))}</span></div>
+          <div class="caps-gauge-bar"><span class="caps-gauge-fill" style="width:${pct}%; background:${tone};"></span></div>
+        </div>`;
+      }).join('');
+    }
+    async function refreshGovernance() {
+      const data = await api('/api/resolve_ai/governance').catch(() => ({ success: false }));
+      if (!data || !data.success) return;
+      state.aiGov.tier = data.tier;
+      state.aiGov.thresholds = data.thresholds || {};
+      state.aiGov.usage = data.usage || {};
+      state.aiGov.tiersAvailable = data.tiers_available || {};
+      renderGovTiers();
+      renderGovUsage();
+    }
+    async function setGovernanceTier(tier) {
+      state.aiGov.tier = tier;
+      renderGovTiers();
+      const res = await api('/api/resolve_ai/governance', {
+        method: 'POST', body: JSON.stringify({ preset: tier }),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (!res || !res.success) console.warn('governance save failed:', res && res.error);
+      await refreshGovernance();
+    }
+
     function initAiConsole() {
-      if (_aiConsoleInit) { renderAiConsole(); return; }
+      if (_aiConsoleInit) { renderAiConsole(); refreshGovernance().catch(() => {}); return; }
       _aiConsoleInit = true;
       renderAiConsole();
       document.querySelectorAll('#panel-aiconsole .ai-op-btn').forEach(btn => {
         btn.addEventListener('click', () => runAiOp(btn.dataset.aiOp));
       });
+      const govEl = $('aiGovTiers');
+      if (govEl) {
+        govEl.addEventListener('click', (ev) => {
+          const card = ev.target.closest('[data-gov-tier]');
+          if (card && card.dataset.govTier) setGovernanceTier(card.dataset.govTier);
+        });
+      }
+      refreshGovernance().catch(() => {});
     }
 
     // ─── Caps inspector + refusals + reset ──────────────────────────
@@ -14048,6 +14140,16 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
             return
+        if path == "/api/resolve_ai/governance":
+            # Effective governance tier + this project's render usage. Proxies
+            # into the media_analysis get_ai_governance action.
+            try:
+                from src.server import media_analysis as _ma_tool
+                import asyncio
+                self._json(asyncio.run(_ma_tool("get_ai_governance", params={})))
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
         if path.startswith("/api/timeline_thumbnail/"):
             rel = unquote(path[len("/api/timeline_thumbnail/"):])
             # Path is <slug>/<vNN.png>; constrain it to live under _soul/timeline_versions
@@ -14314,6 +14416,18 @@ class Handler(BaseHTTPRequestHandler):
                 result = _run_resolve_ai_op(body)
                 ok = bool(result.get("success")) or result.get("status") == "confirmation_required"
                 self._json(result, 200 if ok else 400)
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/resolve_ai/governance":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Loopback only."}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                from src.server import media_analysis as _ma_tool
+                import asyncio
+                result = asyncio.run(_ma_tool("set_ai_governance", params=body))
+                self._json(result, 200 if result.get("success") else 400)
             except Exception as exc:
                 self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
             return

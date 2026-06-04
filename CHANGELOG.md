@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.32.0
+
+Adds **governance tiers** for the media-creating Resolve 21 AI ops (Phase 3, the
+final phase of the AI-ops build: ledger → console → governance).
+
+The two ops that render new files — `remove_motion_blur` and `generate_speech` —
+now have **soft, per-session limits** chosen by a named tier:
+
+| dimension | off | lenient | standard | strict |
+|---|---|---|---|---|
+| deblur runs | ∞ | 50 | 15 | 5 |
+| speech runs | ∞ | 50 | 15 | 5 |
+| media created | ∞ | 50 GB | 10 GB | 2 GB |
+| render time | ∞ | 1 h | 20 min | 5 min |
+
+Governance is **advisory** — it never hard-blocks (the ops are already
+confirm-token gated). When you're near or over the active tier, the confirmation
+dialog surfaces a warning before you proceed; the limits are computed from the
+v2.30.0 AI-ops ledger for the current session.
+
+- **New module** `src/utils/resolve_ai_governance.py` — tiers + `check()` (status
+  for the next run) + `status()` (session usage vs tier). Default tier: `standard`.
+- **New MCP actions** `media_analysis(action="get_ai_governance")` and
+  `media_analysis(action="set_ai_governance", preset, overrides?)`. Override keys:
+  `deblur_runs`, `speech_runs`, `render_bytes`, `render_wall_clock_ms` (int or `"unlimited"`).
+- **Confirm preview** for the two creators now carries a `governance` block
+  (current usage, projected, warnings, exceeded/near flags).
+- **Control panel** — the AI Console gains a **Governance** section: a tier picker
+  (off/lenient/standard/strict, with each tier's thresholds) plus live
+  consumption gauges, and the confirm dialog shows the warning inline.
+
+This completes the staged AI-ops build. Validated live against Resolve Studio
+21.0.0.47 (tier switching, persistence, gauges, confirm-dialog warnings).
+
 ## What's New in v2.31.0
 
 Adds the **AI Console** to the control panel — an interactive surface for the

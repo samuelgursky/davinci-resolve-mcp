@@ -677,6 +677,14 @@ spend the Claude analysis token budget — they are tracked separately in the
 `remove_motion_blur` / `generate_speech`). The control panel shows the same as a
 read-only "Resolve 21 AI ops" card.
 
+The two media-creating ops also have **soft governance tiers**
+(`off`|`lenient`|`standard`|`strict`, default `standard`) capping per-session
+deblur/speech runs, bytes, and render time. It is advisory — the confirm dialog
+warns when near/over the tier but never blocks (the ops are confirm-gated).
+Inspect/set with `media_analysis(action="get_ai_governance")` and
+`media_analysis(action="set_ai_governance", preset=…, overrides={...})`; the AI
+Console's Governance section offers a tier picker + consumption gauges.
+
 The caps layer:
 - Slices `frame_paths` to `frames_per_clip` before the host LLM sees them.
 - Downscales each sampled frame in place to `max_frame_dim_pixels` (Pillow;
