@@ -2378,6 +2378,51 @@ HTML = r"""<!doctype html>
       font-size: var(--text-xs);
       color: var(--text-muted);
     }
+    .ai-op-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-3);
+      grid-column: 1 / -1;
+      margin: var(--space-1) 0;
+    }
+    .ai-op-btn {
+      padding: 6px 14px;
+      border-radius: var(--radius-sm, 6px);
+      border: 1px solid var(--border, rgba(255,255,255,0.18));
+      background: var(--accent, #3b82f6);
+      color: #fff;
+      font-size: var(--text-sm, 13px);
+      cursor: pointer;
+    }
+    .ai-op-btn:hover { filter: brightness(1.08); }
+    .ai-op-btn:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
+    .ai-op-btn.ghost { background: transparent; color: var(--text, inherit); }
+    .ai-op-btn.danger { background: #b4452f; }
+    .ai-caps-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: var(--space-2);
+      margin-top: var(--space-2);
+    }
+    .ai-caps-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: var(--text-xs);
+    }
+    .ai-caps-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+    .ai-caps-dot.on { background: #34a853; }
+    .ai-caps-dot.off { background: rgba(255,255,255,0.25); }
+    .ai-caps-extra { opacity: 0.6; }
+    .ai-console-result {
+      white-space: pre-wrap;
+      font-family: var(--mono, ui-monospace, monospace);
+      max-height: 240px;
+      overflow: auto;
+    }
+    .ai-console-result.ok { color: var(--text, inherit); }
+    .ai-console-result.err { color: #e06c5a; }
     .caps-section-subtitle {
       font-size: var(--text-xs);
       color: var(--text-muted);
@@ -3777,6 +3822,7 @@ HTML = r"""<!doctype html>
           <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="review" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="m21 17-5-5-9 9"></path></svg></span>Review</button>
         </div>
       </div>
+      <button class="control-tab" data-panel-target="aiconsole">AI Console</button>
       <div class="control-nav-item">
         <button class="control-tab has-menu" data-panel-target="diagnostics">Setup <span class="tab-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></button>
         <div class="nav-dropdown" role="menu" aria-label="Diagnostic pages">
@@ -4115,6 +4161,94 @@ HTML = r"""<!doctype html>
             </div>
           </section>
         </div>
+      </div>
+    </section>
+  </main>
+
+  <main id="panel-aiconsole" class="panel control-grid">
+    <section class="span-12">
+      <div class="section-top">
+        <div>
+          <h2>Resolve 21 AI Console</h2>
+          <p class="section-sub">Run Resolve's local AI operations on the current Media Pool folder or a specific clip. These run on Resolve's GPU/AI engine — the analysis and slate ops are safe and reversible; <strong>motion-deblur</strong> and <strong>speech generation</strong> create new media files and ask for confirmation first. Source media is never modified. Every run is recorded in the <em>Resolve 21 AI ops</em> ledger (Preferences → Caps + Safety).</p>
+        </div>
+      </div>
+
+      <div id="aiConsoleCaps" class="caps-section" style="margin-top:12px;">
+        <div class="caps-section-hint">Checking which AI methods this Resolve build exposes…</div>
+      </div>
+
+      <div class="caps-section" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Target</div>
+          <div class="caps-section-hint">Folder ops run on the current Media Pool folder in Resolve. Choose <em>Specific clip</em> and paste a clip id (from <code>media_pool.get_clips</code>) to target one clip.</div></div>
+        <div class="settings-grid">
+          <label class="checkbox-row"><input type="radio" name="aiTarget" value="folder" checked><span>Current folder</span></label>
+          <label class="checkbox-row"><input type="radio" name="aiTarget" value="clip"><span>Specific clip</span></label>
+          <label>Clip id <input id="aiClipId" type="text" placeholder="(clip UniqueId)"></label>
+        </div>
+      </div>
+
+      <div class="caps-section" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Analysis</div>
+          <div class="caps-section-hint">Safe, reversible. IntelliSearch and Slate require their AI Extras (Extras Download Manager).</div></div>
+        <div class="settings-grid">
+          <div class="ai-op-row"><button class="ai-op-btn" data-ai-op="perform_audio_classification">Classify audio</button>
+            <button class="ai-op-btn ghost" data-ai-op="clear_audio_classification">Clear classification</button></div>
+          <div class="ai-op-row">
+            <button class="ai-op-btn" data-ai-op="analyze_for_intellisearch">IntelliSearch</button>
+            <label class="checkbox-row"><input id="aiIdentifyFaces" type="checkbox"><span>Identify faces</span></label>
+            <label class="checkbox-row"><input id="aiBetterMode" type="checkbox"><span>Better mode</span></label>
+          </div>
+          <div class="ai-op-row">
+            <button class="ai-op-btn" data-ai-op="analyze_for_slate">Analyze for slate</button>
+            <label>Marker <select id="aiSlateColor"></select></label>
+          </div>
+          <div class="ai-op-row">
+            <button class="ai-op-btn" data-ai-op="transcribe_audio">Transcribe</button>
+            <label class="checkbox-row"><input id="aiSpeakerDetection" type="checkbox"><span>Speaker detection</span></label>
+            <button class="ai-op-btn ghost" data-ai-op="clear_transcription">Clear transcription</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="caps-section" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Motion deblur</div>
+          <div class="caps-section-hint">Renders new deblurred media. Creates files; asks for confirmation. Leave fields blank for Resolve defaults.</div></div>
+        <div class="settings-grid">
+          <label>Format <input id="aiDeblurFormat" type="text" placeholder="mov"></label>
+          <label>Codec <input id="aiDeblurCodec" type="text" placeholder="ProRes422"></label>
+          <label class="checkbox-row"><input id="aiDeblurExtreme" type="checkbox"><span>Extreme mode</span></label>
+          <label class="checkbox-row"><input id="aiDeblurMarkInOut" type="checkbox"><span>Use mark in/out</span></label>
+          <label class="checkbox-row"><input id="aiDeblurSourceRes" type="checkbox"><span>Render at source res</span></label>
+          <div class="ai-op-row"><button class="ai-op-btn danger" data-ai-op="remove_motion_blur">Remove motion blur</button></div>
+        </div>
+      </div>
+
+      <div class="caps-section" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Speech generator</div>
+          <div class="caps-section-hint">AI text-to-speech. Requires the AI Speech Generator Extra. Creates a new audio item; asks for confirmation.</div></div>
+        <div class="settings-grid">
+          <label style="grid-column:1/-1;">Text <textarea id="aiSpeechText" rows="2" placeholder="Text to synthesize"></textarea></label>
+          <label>Voice model <input id="aiSpeechVoice" type="text" placeholder="Female 1"></label>
+          <label>Speed <input id="aiSpeechSpeed" type="number" placeholder="(default)"></label>
+          <label>Pitch <input id="aiSpeechPitch" type="number" placeholder="(default)"></label>
+          <label>Variation <input id="aiSpeechVariation" type="number" placeholder="(default)"></label>
+          <label class="checkbox-row"><input id="aiSpeechAddTimeline" type="checkbox"><span>Add to timeline</span></label>
+          <label>Timecode <input id="aiSpeechTimecode" type="text" placeholder="01:00:00:00"></label>
+          <label>Audio track <input id="aiSpeechTrack" type="number" placeholder="(default)"></label>
+          <div class="ai-op-row"><button class="ai-op-btn danger" data-ai-op="generate_speech">Generate speech</button></div>
+        </div>
+      </div>
+
+      <div class="caps-section" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Session</div>
+          <div class="caps-section-hint">Quiet Resolve's background tasks for this session before heavy work. Resets on restart.</div></div>
+        <div class="ai-op-row"><button class="ai-op-btn ghost" data-ai-op="disable_background_tasks">Disable background tasks</button></div>
+      </div>
+
+      <div class="caps-section" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Result</div></div>
+        <div id="aiConsoleResult" class="ai-console-result caps-section-hint">No op run yet.</div>
       </div>
     </section>
   </main>
@@ -4712,6 +4846,7 @@ HTML = r"""<!doctype html>
     const PANEL_LABELS = {
       overview: 'Overview',
       analysis: 'Analysis',
+      aiconsole: 'AI Console',
       diagnostics: 'Setup',
       projects: 'Projects',
       docs: 'Docs',
@@ -4720,6 +4855,7 @@ HTML = r"""<!doctype html>
     const PANEL_ICONS = {
       overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>',
       analysis: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="m19 9-5 5-4-4-3 3"></path></svg>',
+      aiconsole: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"></path><rect x="4" y="12" width="16" height="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg>',
       diagnostics: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l2.1-2.1a6 6 0 0 1-7.6 7.6l-4 4a2.1 2.1 0 0 1-3-3l4-4a6 6 0 0 1 7.6-7.6z"></path></svg>',
       projects: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 3h11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><path d="M7 7V5a2 2 0 0 1 2-2h3l2 2h3a2 2 0 0 1 2 2v3"></path></svg>',
       docs: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"></path></svg>',
@@ -4881,6 +5017,9 @@ HTML = r"""<!doctype html>
       if (next === 'preferences') {
         syncPreferencesPanel();
         refreshSetupDefaults().catch(alertError);
+      }
+      if (next === 'aiconsole') {
+        initAiConsole();
       }
       if (next === 'docs' && subpage) {
         loadDoc(subpage, { updateHash: false }).catch(alertError);
@@ -7109,6 +7248,164 @@ HTML = r"""<!doctype html>
         </tr>`;
       }).join('');
       tableEl.style.display = '';
+    }
+
+    // ─── Resolve 21 AI Console ──────────────────────────────────────
+    const AI_MARKER_COLORS = ['Blue','Cyan','Green','Yellow','Red','Pink','Purple',
+      'Fuchsia','Rose','Lavender','Sky','Mint','Lemon','Sand','Cocoa','Cream'];
+    const AI_OP_LABELS = {
+      perform_audio_classification: 'Classify audio',
+      clear_audio_classification: 'Clear classification',
+      analyze_for_intellisearch: 'IntelliSearch',
+      analyze_for_slate: 'Analyze for slate',
+      transcribe_audio: 'Transcribe',
+      clear_transcription: 'Clear transcription',
+      remove_motion_blur: 'Remove motion blur',
+      generate_speech: 'Generate speech',
+      disable_background_tasks: 'Disable background tasks',
+    };
+    // Which features gate which buttons (key in resolve.ai_features.features).
+    const AI_OP_FEATURE = {
+      perform_audio_classification: 'perform_audio_classification',
+      clear_audio_classification: 'clear_audio_classification',
+      analyze_for_intellisearch: 'analyze_for_intellisearch',
+      analyze_for_slate: 'analyze_for_slate',
+      remove_motion_blur: 'remove_motion_blur',
+      generate_speech: 'generate_speech',
+      disable_background_tasks: 'disable_background_tasks',
+    };
+    let _aiConsoleInit = false;
+
+    function renderAiConsole() {
+      const feats = (state.boot?.resolve?.ai_features) || {};
+      const features = feats.features || {};
+      const requiresExtra = feats.requires_extra || {};
+      const capsEl = $('aiConsoleCaps');
+      if (capsEl) {
+        if (state.boot?.resolve?.available !== true) {
+          capsEl.innerHTML = '<div class="caps-section-hint">Resolve is not connected. Open a project in DaVinci Resolve, then reload.</div>';
+        } else {
+          const items = Object.keys(AI_OP_LABELS)
+            .filter(op => op in AI_OP_FEATURE)
+            .map(op => {
+              const key = AI_OP_FEATURE[op];
+              const on = !!features[key];
+              const extra = requiresExtra[key];
+              return `<div class="ai-caps-item"><span class="ai-caps-dot ${on ? 'on' : 'off'}"></span>`
+                + `<span>${escapeHtml(AI_OP_LABELS[op])}</span>`
+                + (extra ? `<span class="ai-caps-extra">· needs ${escapeHtml(extra)}</span>` : '')
+                + `</div>`;
+            }).join('');
+          capsEl.innerHTML = `<div class="caps-section-head"><div class="caps-section-title">Available on this Resolve build</div>`
+            + `<div class="caps-section-hint">A grey dot means the method is absent (older Resolve). "needs …" means the method is present but requires that Extra to actually run — install via Extras Download Manager.</div></div>`
+            + `<div class="ai-caps-grid">${items}</div>`;
+        }
+      }
+      // Slate color dropdown (once).
+      const sel = $('aiSlateColor');
+      if (sel && !sel.options.length) {
+        sel.innerHTML = AI_MARKER_COLORS.map(c => `<option value="${c}">${c}</option>`).join('');
+      }
+    }
+
+    function aiTarget() {
+      const checked = document.querySelector('input[name="aiTarget"]:checked');
+      return checked ? checked.value : 'folder';
+    }
+
+    function aiBuildParams(op) {
+      const params = {};
+      if (op === 'analyze_for_intellisearch') {
+        params.identify_faces = !!$('aiIdentifyFaces')?.checked;
+        params.is_better_mode = !!$('aiBetterMode')?.checked;
+      } else if (op === 'analyze_for_slate') {
+        params.marker_color = $('aiSlateColor')?.value || 'Blue';
+      } else if (op === 'transcribe_audio') {
+        if ($('aiSpeakerDetection')?.checked) params.use_speaker_detection = true;
+      } else if (op === 'remove_motion_blur') {
+        const d = {};
+        const fmt = ($('aiDeblurFormat')?.value || '').trim(); if (fmt) d.Format = fmt;
+        const codec = ($('aiDeblurCodec')?.value || '').trim(); if (codec) d.Codec = codec;
+        if ($('aiDeblurExtreme')?.checked) d.UseExtremeMode = true;
+        if ($('aiDeblurMarkInOut')?.checked) d.UseMarkInMarkOut = true;
+        if ($('aiDeblurSourceRes')?.checked) d.RenderAtSourceRes = true;
+        params.deblur_option = d;
+      } else if (op === 'generate_speech') {
+        const text = ($('aiSpeechText')?.value || '').trim();
+        const settings = { TextInput: text };
+        const voice = ($('aiSpeechVoice')?.value || '').trim(); if (voice) settings.VoiceModel = voice;
+        const num = (id) => { const v = ($(id)?.value || '').trim(); return v === '' ? null : Number(v); };
+        const speed = num('aiSpeechSpeed'); if (speed != null) settings.Speed = speed;
+        const pitch = num('aiSpeechPitch'); if (pitch != null) settings.Pitch = pitch;
+        const variation = num('aiSpeechVariation'); if (variation != null) settings.Variation = variation;
+        if ($('aiSpeechAddTimeline')?.checked) {
+          settings.AddToTimeline = true;
+          const track = num('aiSpeechTrack'); if (track != null) settings.AudioTrack = track;
+        }
+        params.speech_generation_settings = settings;
+        const tc = ($('aiSpeechTimecode')?.value || '').trim(); if (tc) params.timecode = tc;
+      }
+      return params;
+    }
+
+    function aiShowResult(op, payload, isErr) {
+      const el = $('aiConsoleResult');
+      if (!el) return;
+      el.classList.toggle('err', !!isErr);
+      el.classList.toggle('ok', !isErr);
+      const head = `${AI_OP_LABELS[op] || op} — ${new Date().toLocaleTimeString()}\n`;
+      el.textContent = head + JSON.stringify(payload, null, 2);
+    }
+
+    async function runAiOp(op) {
+      const target = (op === 'generate_speech' || op === 'disable_background_tasks') ? 'folder' : aiTarget();
+      const params = aiBuildParams(op);
+      if (target === 'clip') {
+        const clipId = ($('aiClipId')?.value || '').trim();
+        if (!clipId) { aiShowResult(op, { error: 'Enter a clip id, or switch target to Current folder.' }, true); return; }
+        params.clip_id = clipId;
+      }
+      if (op === 'generate_speech' && !params.speech_generation_settings?.TextInput) {
+        aiShowResult(op, { error: 'Enter text to synthesize.' }, true); return;
+      }
+      const buttons = document.querySelectorAll('.ai-op-btn');
+      buttons.forEach(b => { b.disabled = true; });
+      try {
+        let res = await api('/api/resolve_ai/run', {
+          method: 'POST', body: JSON.stringify({ op, target, params }),
+        }).catch(err => ({ success: false, error: String(err && err.message || err) }));
+        // Confirm-token two-step for the media-creating ops.
+        if (res && res.status === 'confirmation_required') {
+          const preview = res.preview || {};
+          const proceed = await brandedConfirm({
+            kicker: 'Creates new media',
+            title: AI_OP_LABELS[op] || op,
+            body: preview.warning || 'This operation creates new media. Proceed?',
+            detail: JSON.stringify(preview, null, 2),
+            confirmLabel: 'Run it',
+            tone: 'danger',
+          });
+          if (!proceed) { aiShowResult(op, { cancelled: true }, false); return; }
+          const params2 = { ...params, confirm_token: res.confirm_token };
+          res = await api('/api/resolve_ai/run', {
+            method: 'POST', body: JSON.stringify({ op, target, params: params2 }),
+          }).catch(err => ({ success: false, error: String(err && err.message || err) }));
+        }
+        aiShowResult(op, res, !(res && res.success));
+        // Refresh the ledger widget so creators' file/byte totals update.
+        refreshResolveAiOps().catch(() => {});
+      } finally {
+        buttons.forEach(b => { b.disabled = false; });
+      }
+    }
+
+    function initAiConsole() {
+      if (_aiConsoleInit) { renderAiConsole(); return; }
+      _aiConsoleInit = true;
+      renderAiConsole();
+      document.querySelectorAll('#panel-aiconsole .ai-op-btn').forEach(btn => {
+        btn.addEventListener('click', () => runAiOp(btn.dataset.aiOp));
+      });
     }
 
     // ─── Caps inspector + refusals + reset ──────────────────────────
@@ -10783,6 +11080,58 @@ def _resolve_identity() -> Dict[str, Any]:
     }
 
 
+# ── Resolve 21 AI Console: op dispatch ──────────────────────────────────────
+# Folder/clip-level ops are routed to the consolidated `folder` /
+# `media_pool_item` tools; project/resolve-level ops to their tools. The
+# consolidated tools own the confirm-token gate for the two media-creators, so
+# this dispatcher just relays params (incl. confirm_token) and the result.
+
+_AI_CONSOLE_FOLDER_OPS = frozenset({
+    "perform_audio_classification", "clear_audio_classification",
+    "analyze_for_intellisearch", "analyze_for_slate", "remove_motion_blur",
+    "transcribe_audio", "clear_transcription",
+})
+
+
+def _run_resolve_ai_op(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Dispatch one AI Console op to the right consolidated server tool.
+
+    body = {op, target?, params?}. target is 'folder' (current Media Pool
+    folder, default) or 'clip' (params.clip_id required). Returns the tool's
+    response verbatim — including a {status:'confirmation_required', confirm_token,
+    preview} shape for the gated media-creating ops.
+    """
+    op = (body.get("op") or "").strip()
+    target = (body.get("target") or "folder").strip()
+    params = dict(body.get("params") or {})
+    if not op:
+        return {"success": False, "error": "op is required"}
+    try:
+        from src.server import (
+            folder as _folder_tool,
+            media_pool_item as _mpi_tool,
+            project_settings as _ps_tool,
+            resolve_control as _rc_tool,
+        )
+    except Exception as exc:  # pragma: no cover - import guard
+        return {"success": False, "error": f"server tools unavailable: {exc}"}
+
+    if op == "disable_background_tasks":
+        return _rc_tool("disable_background_tasks_for_current_session", {})
+    if op == "generate_speech":
+        return _ps_tool("generate_speech", params)
+    if op not in _AI_CONSOLE_FOLDER_OPS:
+        return {"success": False, "error": f"unknown op {op!r}"}
+    if target == "clip":
+        clip_id = params.get("clip_id") or body.get("clip_id")
+        if not clip_id:
+            return {"success": False, "error": "clip target requires a clip_id"}
+        params["clip_id"] = clip_id
+        return _mpi_tool(op, params)
+    # default: operate on the current Media Pool folder
+    return _folder_tool(op, params)
+
+
 def _clip_props(clip: Any) -> Dict[str, Any]:
     props, _ = _safe_call(clip, "GetClipProperty", "")
     return props if isinstance(props, dict) else {}
@@ -13950,6 +14299,21 @@ class Handler(BaseHTTPRequestHandler):
                 import asyncio
                 result = asyncio.run(_ma_tool("set_caps_preset", params=body))
                 self._json(result, 200 if result.get("success") else 400)
+            except Exception as exc:
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/resolve_ai/run":
+            # Run a Resolve 21 AI op from the panel. Loopback-only because it
+            # mutates Resolve (and the media-creators write new files). The
+            # confirm-token two-step is handled by the consolidated tool; the
+            # 'confirmation_required' shape is relayed to the panel as 200.
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Loopback only."}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                result = _run_resolve_ai_op(body)
+                ok = bool(result.get("success")) or result.get("status") == "confirmation_required"
+                self._json(result, 200 if ok else 400)
             except Exception as exc:
                 self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
             return

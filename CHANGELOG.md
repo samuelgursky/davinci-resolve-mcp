@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.31.0
+
+Adds the **AI Console** to the control panel — an interactive surface for the
+Resolve 21 local AI operations (Phase 2 of the staged AI-ops build: ledger →
+console → governance).
+
+A new **AI Console** tab runs the 21.0 ops against the current Media Pool folder
+or a specific clip:
+
+- **Capability matrix** — shows which AI methods this Resolve build exposes (green
+  = available, grey = absent on older builds) and which Extra each gated method
+  needs to actually run.
+- **Analysis** — Classify audio / Clear classification, IntelliSearch (with
+  identify-faces and Better-mode toggles), Analyze for slate (16-color marker
+  picker), Transcribe (with speaker-detection toggle), Clear transcription.
+- **Motion deblur** and **Speech generator** — full options forms; because both
+  create new media files they route through a confirmation modal (the same
+  confirm-token gate the MCP tools use) before running.
+- **Session** — Disable background tasks for the current Resolve session.
+- A live result readout, and the *Resolve 21 AI ops* ledger refreshes after each
+  run so file/byte totals stay current.
+
+Backend: a loopback-only `POST /api/resolve_ai/run` endpoint dispatches each op
+to the consolidated `folder` / `media_pool_item` / `project_settings` /
+`resolve_control` tools, relaying the confirm-token two-step. No new MCP tools or
+Resolve API surface — the console reuses the existing v2.29.0 actions. Validated
+live end-to-end against Resolve Studio 21.0.0.47.
+
 ## What's New in v2.30.0
 
 Adds the **Resolve 21 AI-ops ledger** — usage/time/file accounting for the
