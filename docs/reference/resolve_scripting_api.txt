@@ -1,4 +1,4 @@
-Last Updated: 7 Oct 2025
+Last Updated: 5 May 2026
 -------------------------
 In this package, you will find a brief introduction to the Scripting API for DaVinci Resolve Studio. Apart from this README.txt file, this package contains folders containing the basic import
 modules for scripting access (DaVinciResolve.py) and some representative examples.
@@ -105,6 +105,7 @@ Resolve
   GetKeyframeMode()                               --> keyframeMode       # Returns the currently set keyframe mode (int). Refer to section 'Keyframe Mode information' below for details.
   SetKeyframeMode(keyframeMode)                   --> Bool               # Returns True when 'keyframeMode'(enum) is successfully set. Refer to section 'Keyframe Mode information' below for details.
   GetFairlightPresets()                           --> [presetNames...].  # Returns a list of Fairlight presets by name
+  DisableBackgroundTasksForCurrentResolveSession()--> None               # Disables all background tasks for current Resolve session.
 
 ProjectManager
   ArchiveProject(projectName,
@@ -199,6 +200,7 @@ Project
   AddColorGroup(groupName)                        --> ColorGroup         # Creates a new ColorGroup. groupName must be a unique string.
   DeleteColorGroup(colorGroup)                    --> Bool               # Deletes the given color group and sets clips to ungrouped.
   ApplyFairlightPresetToCurrentTimeline(name)     --> Bool               # Apply Fairlight Preset of given name to the current timeline, returns True if successful, False otherwise.
+  GenerateSpeech({speechGenerationSettings}, timecode) --> MediaPoolItem # Generates an audio MediaPoolItem based on the given speechGenerationSettings and adds it to the timeline at the stated timecode if "AddToTimeline" is True. Returns the newly generated MediaPoolItem.
 
 MediaStorage
   GetMountedVolumeList()                          --> [paths...]         # Returns list of folder paths corresponding to mounted volumes displayed in Resolve’s Media Storage.
@@ -263,8 +265,13 @@ Folder
   GetIsFolderStale()                              --> bool               # Returns true if folder is stale in collaboration mode, false otherwise
   GetUniqueId()                                   --> string             # Returns a unique ID for the media pool folder
   Export(filePath)                                --> bool               # Returns true if export of DRB folder to filePath is successful, false otherwise
-  TranscribeAudio()                               --> Bool               # Transcribes audio of the MediaPoolItems within the folder and nested folders. Returns True if successful; False otherwise
+  TranscribeAudio(useSpeakerDetection=None)       --> Bool               # Transcribes audio of the MediaPoolItems within the folder and nested folders. Returns True if successful; False otherwise
   ClearTranscription()                            --> Bool               # Clears audio transcription of the MediaPoolItems within the folder and nested folders. Returns True if successful; False otherwise.
+  PerformAudioClassification()                    --> Bool               # Analyzes and classifies the audio of the MediaPoolItems within the folder and nested folders into categories and subcategories.
+  ClearAudioClassification()                      --> Bool               # Clears audio classification of the MediaPoolItems within the folder and nested folders.
+  RemoveMotionBlur({deblurOption})                --> [[MediaPoolItem, MediaPoolItem]...]   # Applies motion deblur on MediaPoolItems in the folder. Returns a list of pairs mapping original to newly created MediaPoolItems.
+  AnalyzeForIntellisearch(identifyFaces, isBetterMode) --> Bool          # Performs Intellisearch analysis on all MediaPoolItems in the folder. identifyFaces specifies whether to identify faces; isBetterMode specifies whether to use Better mode. Returns True if required packages are installed and analysis is successful.
+  AnalyzeForSlate(markerColor)                    --> Bool               # Performs Slate analysis on all MediaPoolItems in the folder using the current settings and specified markerColor. Returns True if required packages are installed and analysis is successful.
 
 MediaPoolItem
   GetName()                                       --> string             # Returns the clip name.
@@ -304,8 +311,13 @@ MediaPoolItem
   ReplaceClip(filePath)                           --> Bool               # Replaces the underlying asset and metadata of MediaPoolItem with the specified absolute clip path.
   ReplaceClipPreserveSubClip(filePath)            --> Bool               # Replaces the underlying asset and metadata of a video or audio clip with the specified absolute clip path, preserving original sub clip extents.
   GetUniqueId()                                   --> string             # Returns a unique ID for the media pool item
-  TranscribeAudio()                               --> Bool               # Transcribes audio of the MediaPoolItem. Returns True if successful; False otherwise
+  TranscribeAudio(useSpeakerDetection=None)       --> Bool               # Transcribes audio of the MediaPoolItem. Returns True if successful; False otherwise
   ClearTranscription()                            --> Bool               # Clears audio transcription of the MediaPoolItem. Returns True if successful; False otherwise.
+  PerformAudioClassification()                    --> Bool               # Analyzes and classifies the audio of a MediaPoolItem into categories and subcategories.
+  ClearAudioClassification()                      --> Bool               # Clears audio classification of the MediaPoolItem.
+  RemoveMotionBlur({deblurOption})                --> MediaPoolItem      # Applies motion deblur on the MediaPoolItem. Returns the newly created MediaPoolItem.
+  AnalyzeForIntellisearch(identifyFaces, isBetterMode) --> Bool          # Performs Intellisearch analysis on the MediaPoolItem. identifyFaces specifies whether to identify faces; isBetterMode specifies whether to use Better mode. Returns True if required packages are installed and analysis is successful.
+  AnalyzeForSlate(markerColor)                    --> Bool               # Performs Slate analysis on the MediaPoolItem using the current settings and specified markerColor. Returns True if required packages are installed and analysis is successful.
   GetAudioMapping()                               --> json formatted string # Returns a string with MediaPoolItem's audio mapping information. Check 'Audio Mapping' section below for more information.
   GetMarkInOut()                                  --> {mark}             # Returns dict of in/out marks set (keys omitted if not set), example:
                                                                          # {'video': {'in': 0, 'out': 134}, 'audio': {'in': 0, 'out': 134}}

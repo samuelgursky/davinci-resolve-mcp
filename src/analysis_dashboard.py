@@ -10654,6 +10654,45 @@ def _current_resolve_project_id() -> Tuple[Optional[str], Optional[str]]:
 
 
 @_serialize_resolve
+def _resolve_ai_features(resolve: Any) -> Dict[str, Any]:
+    """Report which Resolve 21.0 AI scripting methods are available on the
+    connected build, plus the Extra each AI-gated method requires. Presence is
+    detected via getattr (no Resolve round-trips beyond fetching the handles),
+    so this stays cheap enough for the boot handshake.
+    """
+    def has(obj: Any, name: str) -> bool:
+        return bool(obj) and callable(getattr(obj, name, None))
+
+    project = folder = None
+    try:
+        pm = resolve.GetProjectManager()
+        project = pm.GetCurrentProject() if pm else None
+        mp = project.GetMediaPool() if project else None
+        folder = mp.GetRootFolder() if mp else None
+    except Exception:
+        pass
+
+    features = {
+        "disable_background_tasks": has(resolve, "DisableBackgroundTasksForCurrentResolveSession"),
+        "generate_speech": has(project, "GenerateSpeech"),
+        "perform_audio_classification": has(folder, "PerformAudioClassification"),
+        "clear_audio_classification": has(folder, "ClearAudioClassification"),
+        "analyze_for_intellisearch": has(folder, "AnalyzeForIntellisearch"),
+        "analyze_for_slate": has(folder, "AnalyzeForSlate"),
+        "remove_motion_blur": has(folder, "RemoveMotionBlur"),
+    }
+    return {
+        "features": features,
+        "available_count": sum(1 for v in features.values() if v),
+        # Methods that additionally need an Extras download to actually run.
+        "requires_extra": {
+            "analyze_for_intellisearch": "AI IntelliSearch",
+            "analyze_for_slate": "AI Slate ID",
+            "generate_speech": "AI Speech Generator",
+        },
+    }
+
+
 def _resolve_identity() -> Dict[str, Any]:
     resolve, error = _connect_resolve_read_only()
     if not resolve:
@@ -10668,6 +10707,7 @@ def _resolve_identity() -> Dict[str, Any]:
         "version_string": str(version_string) if version_string else None,
         "version": list(version_tuple) if isinstance(version_tuple, (list, tuple)) else None,
         "page": str(page) if page else None,
+        "ai_features": _resolve_ai_features(resolve),
     }
 
 

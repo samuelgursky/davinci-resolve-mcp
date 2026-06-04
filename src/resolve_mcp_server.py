@@ -34,7 +34,7 @@ from src.utils.update_check import start_background_update_check
 if __name__ == "__main__":
     try:
         start_background_update_check(VERSION, project_dir, logger)
-        logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION} (329 granular tools)")
+        logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION} (341 granular tools)")
         run_fastmcp_stdio(mcp)
     except KeyboardInterrupt:
         logger.info("Server shutdown requested")

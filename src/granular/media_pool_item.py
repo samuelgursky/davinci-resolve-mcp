@@ -909,3 +909,112 @@ def clear_clip_mark_in_out(clip_id: str) -> Dict[str, Any]:
         return {"error": f"Clip {clip_id} not found"}
     result = clip.ClearMarkInOut()
     return {"success": bool(result)}
+
+
+_MARKER_COLORS = [
+    "Blue", "Cyan", "Green", "Yellow", "Red", "Pink", "Purple", "Fuchsia",
+    "Rose", "Lavender", "Sky", "Mint", "Lemon", "Sand", "Cocoa", "Cream",
+]
+
+
+@mcp.tool()
+def perform_clip_audio_classification(clip_id: str) -> Dict[str, Any]:
+    """Classify a clip's audio into categories and subcategories (Resolve 21+).
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    if not hasattr(clip, "PerformAudioClassification"):
+        return {"error": "PerformAudioClassification requires DaVinci Resolve 21+"}
+    return {"success": bool(clip.PerformAudioClassification())}
+
+
+@mcp.tool()
+def clear_clip_audio_classification(clip_id: str) -> Dict[str, Any]:
+    """Clear a clip's audio classification (Resolve 21+).
+
+    Args:
+        clip_id: Unique ID of the clip.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    if not hasattr(clip, "ClearAudioClassification"):
+        return {"error": "ClearAudioClassification requires DaVinci Resolve 21+"}
+    return {"success": bool(clip.ClearAudioClassification())}
+
+
+@mcp.tool()
+def analyze_clip_for_intellisearch(clip_id: str, identify_faces: bool = False, is_better_mode: bool = False) -> Dict[str, Any]:
+    """Run IntelliSearch analysis on a clip (Resolve 21+, requires AI IntelliSearch Extra).
+
+    Args:
+        clip_id: Unique ID of the clip.
+        identify_faces: Whether to identify faces.
+        is_better_mode: Use Better mode (vs Faster).
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    if not hasattr(clip, "AnalyzeForIntellisearch"):
+        return {"error": "AnalyzeForIntellisearch requires DaVinci Resolve 21+"}
+    return {"success": bool(clip.AnalyzeForIntellisearch(bool(identify_faces), bool(is_better_mode)))}
+
+
+@mcp.tool()
+def analyze_clip_for_slate(clip_id: str, marker_color: str = "Blue") -> Dict[str, Any]:
+    """Run Slate analysis on a clip (Resolve 21+, requires AI Slate ID Extra).
+
+    Args:
+        clip_id: Unique ID of the clip.
+        marker_color: Marker color for detected slates (Blue, Cyan, Green, Yellow, Red, Pink,
+            Purple, Fuchsia, Rose, Lavender, Sky, Mint, Lemon, Sand, Cocoa, Cream).
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    if not hasattr(clip, "AnalyzeForSlate"):
+        return {"error": "AnalyzeForSlate requires DaVinci Resolve 21+"}
+    if marker_color not in _MARKER_COLORS:
+        return {"error": f"Invalid marker_color '{marker_color}'. Valid: {', '.join(_MARKER_COLORS)}"}
+    return {"success": bool(clip.AnalyzeForSlate(marker_color))}
+
+
+@mcp.tool()
+def remove_clip_motion_blur(clip_id: str, deblur_option: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Render a motion-deblurred copy of a clip (Resolve 21+).
+
+    Creates a NEW media file; the source clip is not modified.
+
+    Args:
+        clip_id: Unique ID of the clip.
+        deblur_option: Settings dict (FileName, Format, Codec, EncodingProfile,
+            UseExtremeMode, UseMarkInMarkOut, RenderAtSourceRes, UseMoreGpuMemory).
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    if not hasattr(clip, "RemoveMotionBlur"):
+        return {"error": "RemoveMotionBlur requires DaVinci Resolve 21+"}
+    new_clip = clip.RemoveMotionBlur(deblur_option or {})
+    if not new_clip:
+        return {"success": False}
+    return {"success": True, "new": new_clip.GetName(), "new_id": new_clip.GetUniqueId()}

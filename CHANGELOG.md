@@ -2,6 +2,49 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.29.0
+
+Adds the **DaVinci Resolve 21.0** scripting-API additions. Every new method is
+runtime-detected (`_requires_method`/capability flags), so the tools stay inert
+on older Resolve builds and activate automatically on Resolve 21+.
+
+**New AI analysis actions** on the `folder` and `media_pool_item` compound tools
+(and mirrored as granular `--full` tools):
+
+- `perform_audio_classification` / `clear_audio_classification` — classify clip
+  audio into categories and subcategories.
+- `analyze_for_intellisearch(identify_faces?, is_better_mode?)` — IntelliSearch
+  analysis with optional face identification. Requires the *AI IntelliSearch* Extra.
+- `analyze_for_slate(marker_color?)` — slate/clapboard detection that drops a
+  marker of the chosen color (validated against the 16 Resolve marker colors).
+  Requires the *AI Slate ID* Extra.
+- `remove_motion_blur(deblur_option?)` — renders motion-deblurred copies. This
+  **creates new media files** (source media is never modified) and is therefore
+  **confirm-token gated**: the first call returns a preview + token, the second
+  call (with the token) runs.
+
+**Speaker-detection transcription.** `transcribe_audio` now accepts an optional
+`use_speaker_detection` boolean (Resolve 21+); omit it to use the project's
+Speech Recognition setting.
+
+**Speech generation.** `project_settings(action="generate_speech", ...)` wraps
+`Project.GenerateSpeech` (AI text-to-speech). It creates a new audio item and
+optionally places it on the timeline, so it is also confirm-token gated.
+Requires the *AI Speech Generator* Extra. Granular `--full` tool: `generate_speech`.
+
+**Session control.** `resolve_control(action="disable_background_tasks_for_current_session")`
+wraps `Resolve.DisableBackgroundTasksForCurrentResolveSession()` to quiet
+background work during heavy scripted runs.
+
+**Capability surface.** The `media_analysis` transcription-capability report and
+the control panel's boot payload (`resolve.ai_features`) now list which 21.0 AI
+methods are available and which Extras each gated method needs.
+
+Notes: these are Resolve-local GPU/AI operations and do not consume the
+Claude-side analysis token budget, so they are not metered by the analysis-caps
+layer; the derivative-creating ones are protected by the confirm-token gate
+instead. The granular `--full` server grew from 329 to 341 tools.
+
 ## What's New in v2.28.1
 
 Bug-fix release.

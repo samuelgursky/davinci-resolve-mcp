@@ -8,10 +8,10 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 329-tool granular server instead
+    python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.28.1"
+VERSION = "2.29.0"
 
 import base64
 import os
@@ -658,6 +658,12 @@ _TOKEN_GATED_DESTRUCTIVE_ACTIONS = frozenset({
     ("timeline", "delete_track"),
     ("graph", "apply_grade_from_drx"),
     ("graph", "reset_all_grades"),
+    # 21.0 AI ops that render/generate NEW media files (additive, but expensive
+    # and irreversible without manual cleanup) — gated so they never run by
+    # surprise. They never modify source media.
+    ("folder", "remove_motion_blur"),
+    ("media_pool_item", "remove_motion_blur"),
+    ("project_settings", "generate_speech"),
 })
 
 
@@ -5404,6 +5410,11 @@ def _transcription_capabilities(mp, p: Dict[str, Any]):
                 "summary": _media_pool_item_summary(clip),
                 "transcribe_audio": _has_method(clip, "TranscribeAudio"),
                 "clear_transcription": _has_method(clip, "ClearTranscription"),
+                "perform_audio_classification": _has_method(clip, "PerformAudioClassification"),
+                "clear_audio_classification": _has_method(clip, "ClearAudioClassification"),
+                "analyze_for_intellisearch": _has_method(clip, "AnalyzeForIntellisearch"),
+                "analyze_for_slate": _has_method(clip, "AnalyzeForSlate"),
+                "remove_motion_blur": _has_method(clip, "RemoveMotionBlur"),
             }
             for clip in clips
         ],
@@ -5411,10 +5422,16 @@ def _transcription_capabilities(mp, p: Dict[str, Any]):
             "name": current_folder.GetName() if current_folder else None,
             "transcribe_audio": _has_method(current_folder, "TranscribeAudio") if current_folder else False,
             "clear_transcription": _has_method(current_folder, "ClearTranscription") if current_folder else False,
+            "perform_audio_classification": _has_method(current_folder, "PerformAudioClassification") if current_folder else False,
+            "clear_audio_classification": _has_method(current_folder, "ClearAudioClassification") if current_folder else False,
+            "analyze_for_intellisearch": _has_method(current_folder, "AnalyzeForIntellisearch") if current_folder else False,
+            "analyze_for_slate": _has_method(current_folder, "AnalyzeForSlate") if current_folder else False,
+            "remove_motion_blur": _has_method(current_folder, "RemoveMotionBlur") if current_folder else False,
         },
         "notes": [
-            "This action reports capability only; use media_pool_item/folder transcription actions to mutate disposable or approved clips.",
-            "Transcription may require Resolve Studio AI components and can run asynchronously.",
+            "This action reports capability only; use media_pool_item/folder actions to mutate disposable or approved clips.",
+            "Transcription/audio-classification may require Resolve Studio AI components and can run asynchronously.",
+            "analyze_for_intellisearch requires the 'AI IntelliSearch' Extra; analyze_for_slate requires 'AI Slate ID'; remove_motion_blur creates new media and is confirm-gated (Resolve 21+).",
         ],
     }
 
@@ -10336,6 +10353,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       quit() -> {success}
       get_fairlight_presets() -> {presets}
       set_high_priority() -> {success}
+      disable_background_tasks_for_current_session() -> {success}  — Resolve 21+
       open_control_panel(port?, host?, open_browser?) -> {success, url, pid, port, status}
         — Launches the analysis control panel (src/analysis_dashboard.py) as a background process.
           Idempotent: returns the existing URL if already running.
@@ -10429,7 +10447,13 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"presets": _ser(r.GetFairlightPresets())}
     elif action == "set_high_priority":
         return {"success": bool(r.SetHighPriority())}
-    return _unknown(action, ["launch","get_version","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    elif action == "disable_background_tasks_for_current_session":
+        missing = _requires_method(r, "DisableBackgroundTasksForCurrentResolveSession", "21.0")
+        if missing:
+            return missing
+        r.DisableBackgroundTasksForCurrentResolveSession()
+        return _ok()
+    return _unknown(action, ["launch","get_version","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
@@ -12327,6 +12351,7 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
       add_color_group(name) -> {success, name}
       delete_color_group(name) -> {success}
       apply_fairlight_preset(preset_name) -> {success}
+      generate_speech(speech_generation_settings, timecode?) -> {success, new, new_id}  — Resolve 21+, AI Speech Generator; creates new audio media (confirm-gated)
     """
     p = params or {}
     _, proj, err = _check()
@@ -12376,7 +12401,37 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
         if missing:
             return missing
         return {"success": bool(proj.ApplyFairlightPresetToCurrentTimeline(p["preset_name"]))}
-    return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset"])
+    elif action == "generate_speech":
+        missing = _requires_method(proj, "GenerateSpeech", "21.0")
+        if missing:
+            return missing
+        settings = _first_param(p, "speech_generation_settings", "speechGenerationSettings", "settings", default=None) or {}
+        if not isinstance(settings, dict) or not settings.get("TextInput"):
+            return _err("generate_speech requires speech_generation_settings with a 'TextInput' string. "
+                        "Optional keys: VoiceModel, CustomVoiceFile, Speed, Variation, Pitch, GenerationID, Filename, AddToTimeline, AudioTrack.")
+        timecode = _first_param(p, "timecode", default="") or ""
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="project_settings.generate_speech",
+                params=p,
+                preview={
+                    "operation": "project_settings.generate_speech",
+                    "warning": "Generates a NEW AI text-to-speech audio item"
+                               + (" and adds it to the timeline." if settings.get("AddToTimeline") else "."),
+                    "text_input": settings.get("TextInput"),
+                    "voice_model": settings.get("VoiceModel"),
+                    "add_to_timeline": bool(settings.get("AddToTimeline")),
+                    "timecode": timecode,
+                },
+            )
+        blocked = _consume_confirm_token(action="project_settings.generate_speech", params=p)
+        if blocked:
+            return blocked
+        new_item = proj.GenerateSpeech(settings, timecode)
+        if not new_item:
+            return {"success": False}
+        return {"success": True, "new": new_item.GetName(), "new_id": new_item.GetUniqueId()}
+    return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset","generate_speech"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -13316,8 +13371,13 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       is_stale(path?) -> {stale}
       get_unique_id(path?) -> {id}
       export(path?, export_path) -> {success}
-      transcribe_audio(path?) -> {success}
+      transcribe_audio(path?, use_speaker_detection?) -> {success}  — use_speaker_detection is Resolve 21+
       clear_transcription(path?) -> {success}
+      perform_audio_classification(path?) -> {success}  — Resolve 21+
+      clear_audio_classification(path?) -> {success}  — Resolve 21+
+      analyze_for_intellisearch(path?, identify_faces?, is_better_mode?) -> {success}  — Resolve 21+, AI IntelliSearch Extra
+      analyze_for_slate(path?, marker_color?) -> {success}  — Resolve 21+, AI Slate ID Extra
+      remove_motion_blur(path?, deblur_option?) -> {success, created}  — Resolve 21+; renders NEW media (confirm-gated)
     """
     p = params or {}
     _, _, mp, err = _get_mp()
@@ -13344,10 +13404,66 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     elif action == "export":
         return {"success": bool(f.Export(p["export_path"]))}
     elif action == "transcribe_audio":
-        return {"success": bool(f.TranscribeAudio())}
+        usd = _first_param(p, "use_speaker_detection", "useSpeakerDetection")
+        if usd is None:
+            return {"success": bool(f.TranscribeAudio())}
+        return {"success": bool(f.TranscribeAudio(bool(usd)))}
     elif action == "clear_transcription":
         return {"success": bool(f.ClearTranscription())}
-    return _unknown(action, ["get_clips","get_name","get_subfolders","is_stale","get_unique_id","export","transcribe_audio","clear_transcription"])
+    elif action == "perform_audio_classification":
+        missing = _requires_method(f, "PerformAudioClassification", "21.0")
+        if missing:
+            return missing
+        return {"success": bool(f.PerformAudioClassification())}
+    elif action == "clear_audio_classification":
+        missing = _requires_method(f, "ClearAudioClassification", "21.0")
+        if missing:
+            return missing
+        return {"success": bool(f.ClearAudioClassification())}
+    elif action == "analyze_for_intellisearch":
+        missing = _requires_method(f, "AnalyzeForIntellisearch", "21.0")
+        if missing:
+            return missing
+        identify_faces = bool(_first_param(p, "identify_faces", "identifyFaces", default=False))
+        is_better_mode = bool(_first_param(p, "is_better_mode", "isBetterMode", default=False))
+        return {"success": bool(f.AnalyzeForIntellisearch(identify_faces, is_better_mode))}
+    elif action == "analyze_for_slate":
+        missing = _requires_method(f, "AnalyzeForSlate", "21.0")
+        if missing:
+            return missing
+        marker_color = _first_param(p, "marker_color", "markerColor", default="Blue")
+        if marker_color not in _MARKER_COLORS:
+            return _err(f"Invalid marker_color {marker_color!r}. Valid colors: {', '.join(_MARKER_COLORS)}")
+        return {"success": bool(f.AnalyzeForSlate(marker_color))}
+    elif action == "remove_motion_blur":
+        missing = _requires_method(f, "RemoveMotionBlur", "21.0")
+        if missing:
+            return missing
+        deblur = _first_param(p, "deblur_option", "deblurOption", default=None) or {}
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="folder.remove_motion_blur",
+                params=p,
+                preview={
+                    "operation": "folder.remove_motion_blur",
+                    "warning": "Renders NEW deblurred media files for clips in the folder; source media is not modified.",
+                    "folder": f.GetName(),
+                    "deblur_option": deblur,
+                },
+            )
+        blocked = _consume_confirm_token(action="folder.remove_motion_blur", params=p)
+        if blocked:
+            return blocked
+        result = f.RemoveMotionBlur(deblur)
+        created = []
+        for pair in (result or []):
+            try:
+                orig, new = pair
+                created.append({"original": orig.GetName(), "new": new.GetName(), "new_id": new.GetUniqueId()})
+            except Exception:
+                continue
+        return {"success": bool(result), "created": created}
+    return _unknown(action, ["get_clips","get_name","get_subfolders","is_stale","get_unique_id","export","transcribe_audio","clear_transcription","perform_audio_classification","clear_audio_classification","analyze_for_intellisearch","analyze_for_slate","remove_motion_blur"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -13378,8 +13494,13 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       monitor_growing_file(clip_id) -> {success}
       replace_clip_preserve_sub_clip(clip_id, path) -> {success}
       get_unique_id(clip_id) -> {id}
-      transcribe_audio(clip_id) -> {success}
+      transcribe_audio(clip_id, use_speaker_detection?) -> {success}  — use_speaker_detection is Resolve 21+
       clear_transcription(clip_id) -> {success}
+      perform_audio_classification(clip_id) -> {success}  — Resolve 21+
+      clear_audio_classification(clip_id) -> {success}  — Resolve 21+
+      analyze_for_intellisearch(clip_id, identify_faces?, is_better_mode?) -> {success}  — Resolve 21+, AI IntelliSearch Extra
+      analyze_for_slate(clip_id, marker_color?) -> {success}  — Resolve 21+, AI Slate ID Extra
+      remove_motion_blur(clip_id, deblur_option?) -> {success, new, new_id}  — Resolve 21+; renders NEW media (confirm-gated)
       get_audio_mapping(clip_id) -> {mapping}
       get_mark_in_out(clip_id) -> {mark}
       set_mark_in_out(clip_id, mark_in, mark_out, type?) -> {success}
@@ -13570,9 +13691,60 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "get_unique_id":
         return {"id": clip.GetUniqueId()}
     elif action == "transcribe_audio":
-        return {"success": bool(clip.TranscribeAudio())}
+        usd = _first_param(p, "use_speaker_detection", "useSpeakerDetection")
+        if usd is None:
+            return {"success": bool(clip.TranscribeAudio())}
+        return {"success": bool(clip.TranscribeAudio(bool(usd)))}
     elif action == "clear_transcription":
         return {"success": bool(clip.ClearTranscription())}
+    elif action == "perform_audio_classification":
+        missing = _requires_method(clip, "PerformAudioClassification", "21.0")
+        if missing:
+            return missing
+        return {"success": bool(clip.PerformAudioClassification())}
+    elif action == "clear_audio_classification":
+        missing = _requires_method(clip, "ClearAudioClassification", "21.0")
+        if missing:
+            return missing
+        return {"success": bool(clip.ClearAudioClassification())}
+    elif action == "analyze_for_intellisearch":
+        missing = _requires_method(clip, "AnalyzeForIntellisearch", "21.0")
+        if missing:
+            return missing
+        identify_faces = bool(_first_param(p, "identify_faces", "identifyFaces", default=False))
+        is_better_mode = bool(_first_param(p, "is_better_mode", "isBetterMode", default=False))
+        return {"success": bool(clip.AnalyzeForIntellisearch(identify_faces, is_better_mode))}
+    elif action == "analyze_for_slate":
+        missing = _requires_method(clip, "AnalyzeForSlate", "21.0")
+        if missing:
+            return missing
+        marker_color = _first_param(p, "marker_color", "markerColor", default="Blue")
+        if marker_color not in _MARKER_COLORS:
+            return _err(f"Invalid marker_color {marker_color!r}. Valid colors: {', '.join(_MARKER_COLORS)}")
+        return {"success": bool(clip.AnalyzeForSlate(marker_color))}
+    elif action == "remove_motion_blur":
+        missing = _requires_method(clip, "RemoveMotionBlur", "21.0")
+        if missing:
+            return missing
+        deblur = _first_param(p, "deblur_option", "deblurOption", default=None) or {}
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="media_pool_item.remove_motion_blur",
+                params=p,
+                preview={
+                    "operation": "media_pool_item.remove_motion_blur",
+                    "warning": "Renders a NEW deblurred media file; the source clip is not modified.",
+                    "clip": clip.GetName(),
+                    "deblur_option": deblur,
+                },
+            )
+        blocked = _consume_confirm_token(action="media_pool_item.remove_motion_blur", params=p)
+        if blocked:
+            return blocked
+        new_clip = clip.RemoveMotionBlur(deblur)
+        if not new_clip:
+            return {"success": False}
+        return {"success": True, "new": new_clip.GetName(), "new_id": new_clip.GetUniqueId()}
     elif action == "get_audio_mapping":
         return {"mapping": clip.GetAudioMapping()}
     elif action == "get_mark_in_out":
@@ -13581,7 +13753,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"success": bool(clip.SetMarkInOut(p["mark_in"], p["mark_out"], p.get("type", "all")))}
     elif action == "clear_mark_in_out":
         return {"success": bool(clip.ClearMarkInOut(p.get("type", "all")))}
-    return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip","get_unique_id","transcribe_audio","clear_transcription","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out","open_in_viewer"])
+    return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip","get_unique_id","transcribe_audio","clear_transcription","perform_audio_classification","clear_audio_classification","analyze_for_intellisearch","analyze_for_slate","remove_motion_blur","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out","open_in_viewer"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -20106,9 +20278,9 @@ def _resource_install_guidance() -> Dict[str, Any]:
 if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
 
-    # Support --full flag to run the 329-tool granular server instead
+    # Support --full flag to run the 341-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 329-tool granular server...")
+        logger.info("Starting full 341-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 

@@ -123,7 +123,7 @@ def test_prompt_registrations():
 
 def test_granular_tool_count():
     total = sum(_count_mcp_tools(py_file) for py_file in GRANULAR_DIR.glob("*.py"))
-    assert total == 329
+    assert total == 341
 
 
 def test_reported_granular_tools_have_explicit_annotations():

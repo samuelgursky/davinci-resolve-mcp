@@ -293,6 +293,23 @@ def delete_layout_preset_tool(preset_name: str) -> Dict[str, Any]:
     return {"success": bool(result), "preset_name": preset_name}
 
 
+@mcp.tool()
+def disable_background_tasks_for_current_session() -> Dict[str, Any]:
+    """Disable all background tasks for the current Resolve session (Resolve 21+).
+
+    Useful before heavy scripted operations so Resolve does not run background
+    work that competes for resources. Resets when Resolve restarts.
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "DisableBackgroundTasksForCurrentResolveSession", "21.0")
+    if missing:
+        return missing
+    resolve.DisableBackgroundTasksForCurrentResolveSession()
+    return {"success": True}
+
+
 @mcp.resource("resolve://app/state")
 def get_app_state_endpoint() -> Dict[str, Any]:
     """Get DaVinci Resolve application state information."""

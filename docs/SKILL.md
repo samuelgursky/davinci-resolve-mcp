@@ -101,7 +101,7 @@ before mutating Resolve state.
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
 | Compound (default) | `src/server.py` | 32 tools | Most workflows — keeps context lean |
-| Granular (full) | `src/server.py --full` | 329 tools | Power users needing one tool per API method |
+| Granular (full) | `src/server.py --full` | 341 tools | Power users needing one tool per API method |
 
 This skill document covers the **compound server** (the default). Each compound
 tool accepts an `action` string and an optional `params` object.
@@ -442,7 +442,10 @@ Note: `folder path` arguments use slash notation like `"Master/SubFolder"`.
 **`folder`** — Operations on a specific Media Pool folder.
 
 Key actions: `get_clips(path?)`, `get_subfolders(path?)`, `export(path?, export_path)`,
-`transcribe_audio(path?)`, `clear_transcription(path?)`
+`transcribe_audio(path?, use_speaker_detection?)`, `clear_transcription(path?)`,
+`perform_audio_classification(path?)`, `analyze_for_intellisearch(path?, identify_faces?, is_better_mode?)`,
+`analyze_for_slate(path?, marker_color?)`, `remove_motion_blur(path?, deblur_option?)` (Resolve 21+;
+the last three need AI Extras, and `remove_motion_blur` is confirm-token gated)
 
 **`media_pool_item`** — Read/write clip metadata and properties. All actions
 require a `clip_id` (the UUID returned by `GetUniqueId()`).
@@ -452,7 +455,10 @@ Key actions: `get_name`, `get_metadata(key?)`, `set_metadata(key, value)`,
 `set_clip_color(color)`, `link_proxy(proxy_path)`, `replace_clip(path)`,
 `set_name(name)`, `link_full_resolution_media(path)`,
 `replace_clip_preserve_sub_clip(path)`, `monitor_growing_file`,
-`transcribe_audio`, `get_audio_mapping`, `get_mark_in_out`, `set_mark_in_out`
+`transcribe_audio(use_speaker_detection?)`, `perform_audio_classification`,
+`analyze_for_intellisearch(identify_faces?, is_better_mode?)`, `analyze_for_slate(marker_color?)`,
+`remove_motion_blur(deblur_option?)` (Resolve 21+; AI Extras / confirm-token gated as noted above),
+`get_audio_mapping`, `get_mark_in_out`, `set_mark_in_out`
 
 **`media_pool_item_markers`** — Markers and flags on clips in the Media Pool.
 All actions require a `clip_id`.

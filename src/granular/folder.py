@@ -294,3 +294,127 @@ def folder_clear_transcription(folder_path: str = "") -> Dict[str, Any]:
         folder = mp.GetCurrentFolder()
     result = folder.ClearTranscription()
     return {"success": bool(result)}
+
+
+def _resolve_folder(mp, folder_path):
+    """Return (folder, error). Empty path -> current folder."""
+    if folder_path:
+        folder = _navigate_to_folder(mp, folder_path)
+        if not folder:
+            return None, {"error": f"Folder '{folder_path}' not found"}
+        return folder, None
+    return mp.GetCurrentFolder(), None
+
+
+_MARKER_COLORS = [
+    "Blue", "Cyan", "Green", "Yellow", "Red", "Pink", "Purple", "Fuchsia",
+    "Rose", "Lavender", "Sky", "Mint", "Lemon", "Sand", "Cocoa", "Cream",
+]
+
+
+@mcp.tool()
+def folder_perform_audio_classification(folder_path: str = "") -> Dict[str, Any]:
+    """Classify audio of all clips in a Media Pool folder into categories (Resolve 21+).
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    folder, err = _resolve_folder(mp, folder_path)
+    if err:
+        return err
+    if not hasattr(folder, "PerformAudioClassification"):
+        return {"error": "PerformAudioClassification requires DaVinci Resolve 21+"}
+    return {"success": bool(folder.PerformAudioClassification())}
+
+
+@mcp.tool()
+def folder_clear_audio_classification(folder_path: str = "") -> Dict[str, Any]:
+    """Clear audio classification for all clips in a Media Pool folder (Resolve 21+).
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    folder, err = _resolve_folder(mp, folder_path)
+    if err:
+        return err
+    if not hasattr(folder, "ClearAudioClassification"):
+        return {"error": "ClearAudioClassification requires DaVinci Resolve 21+"}
+    return {"success": bool(folder.ClearAudioClassification())}
+
+
+@mcp.tool()
+def folder_analyze_for_intellisearch(folder_path: str = "", identify_faces: bool = False, is_better_mode: bool = False) -> Dict[str, Any]:
+    """Run IntelliSearch analysis on all clips in a folder (Resolve 21+, requires AI IntelliSearch Extra).
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+        identify_faces: Whether to identify faces.
+        is_better_mode: Use Better mode (vs Faster).
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    folder, err = _resolve_folder(mp, folder_path)
+    if err:
+        return err
+    if not hasattr(folder, "AnalyzeForIntellisearch"):
+        return {"error": "AnalyzeForIntellisearch requires DaVinci Resolve 21+"}
+    return {"success": bool(folder.AnalyzeForIntellisearch(bool(identify_faces), bool(is_better_mode)))}
+
+
+@mcp.tool()
+def folder_analyze_for_slate(folder_path: str = "", marker_color: str = "Blue") -> Dict[str, Any]:
+    """Run Slate analysis on all clips in a folder (Resolve 21+, requires AI Slate ID Extra).
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+        marker_color: Marker color for detected slates (Blue, Cyan, Green, Yellow, Red, Pink,
+            Purple, Fuchsia, Rose, Lavender, Sky, Mint, Lemon, Sand, Cocoa, Cream).
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    folder, err = _resolve_folder(mp, folder_path)
+    if err:
+        return err
+    if not hasattr(folder, "AnalyzeForSlate"):
+        return {"error": "AnalyzeForSlate requires DaVinci Resolve 21+"}
+    if marker_color not in _MARKER_COLORS:
+        return {"error": f"Invalid marker_color '{marker_color}'. Valid: {', '.join(_MARKER_COLORS)}"}
+    return {"success": bool(folder.AnalyzeForSlate(marker_color))}
+
+
+@mcp.tool()
+def folder_remove_motion_blur(folder_path: str = "", deblur_option: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Render motion-deblurred copies of all clips in a folder (Resolve 21+).
+
+    Creates NEW media files; source media is not modified.
+
+    Args:
+        folder_path: Path from root. Empty for current folder.
+        deblur_option: Settings dict (FileName, Format, Codec, EncodingProfile,
+            UseExtremeMode, UseMarkInMarkOut, RenderAtSourceRes, UseMoreGpuMemory).
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    folder, err = _resolve_folder(mp, folder_path)
+    if err:
+        return err
+    if not hasattr(folder, "RemoveMotionBlur"):
+        return {"error": "RemoveMotionBlur requires DaVinci Resolve 21+"}
+    result = folder.RemoveMotionBlur(deblur_option or {})
+    created = []
+    for pair in (result or []):
+        try:
+            orig, new = pair
+            created.append({"original": orig.GetName(), "new": new.GetName(), "new_id": new.GetUniqueId()})
+        except Exception:
+            continue
+    return {"success": bool(result), "created": created}

@@ -87,7 +87,7 @@ The MCP server comes in two modes:
 | Mode | File | Tools | Best For |
 |------|------|-------|----------|
 | **Compound** (default) | `src/server.py` | 32 | Most users — fast, clean, low context usage |
-| **Full** | `src/resolve_mcp_server.py` | 329 | Power users who want one tool per API method |
+| **Full** | `src/resolve_mcp_server.py` | 341 | Power users who want one tool per API method |
 
 The compound server's `timeline_item` tool includes dedicated actions for common workflows:
 
@@ -102,7 +102,7 @@ The compound server's `timeline_item` tool includes dedicated actions for common
 
 The installer uses the compound server by default. To use the full server:
 ```bash
-python src/server.py --full    # Launch full 329-tool server
+python src/server.py --full    # Launch full 341-tool server
 # Or point your MCP config directly at src/resolve_mcp_server.py
 ```
 

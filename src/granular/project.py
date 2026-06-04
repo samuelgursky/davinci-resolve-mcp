@@ -1592,3 +1592,59 @@ def load_cloud_project(project_name: str, project_media_path: str, sync_mode: st
     if project:
         return {"success": True, "project_name": project.GetName()}
     return {"success": False, "error": "Failed to load cloud project. Check cloud settings and connectivity."}
+
+
+@mcp.tool()
+def generate_speech(text_input: str, voice_model: str = "", timecode: str = "",
+                    add_to_timeline: bool = False, audio_track: Optional[int] = None,
+                    custom_voice_file: str = "", speed: Optional[int] = None,
+                    variation: Optional[int] = None, pitch: Optional[int] = None,
+                    generation_id: Optional[int] = None, filename: str = "") -> Dict[str, Any]:
+    """Generate AI text-to-speech audio and add it to the media pool (Resolve 21+).
+
+    Requires the AI Speech Generator Extra. Creates a NEW audio MediaPoolItem; if
+    add_to_timeline is True it is placed on the timeline at the given timecode.
+
+    Args:
+        text_input: Text to synthesize (required).
+        voice_model: Voice model name (e.g. "Female 1", "Male 1", "Custom Voice").
+        timecode: Timeline timecode to place the clip at when add_to_timeline is True.
+        add_to_timeline: Whether to add the generated clip to the timeline.
+        audio_track: Audio track index for timeline placement.
+        custom_voice_file: Full path to a custom voice file (for "Custom Voice").
+        speed: Speech speed.
+        variation: Voice variation.
+        pitch: Voice pitch.
+        generation_id: Generation ID.
+        filename: Output filename.
+    """
+    pm, current_project = get_current_project()
+    if not current_project:
+        return {"error": "No project currently open"}
+    if not hasattr(current_project, "GenerateSpeech"):
+        return {"error": "GenerateSpeech requires DaVinci Resolve 21+ and the AI Speech Generator Extra"}
+    if not text_input:
+        return {"error": "text_input is required"}
+    settings: Dict[str, Any] = {"TextInput": text_input}
+    if voice_model:
+        settings["VoiceModel"] = voice_model
+    if custom_voice_file:
+        settings["CustomVoiceFile"] = custom_voice_file
+    if speed is not None:
+        settings["Speed"] = speed
+    if variation is not None:
+        settings["Variation"] = variation
+    if pitch is not None:
+        settings["Pitch"] = pitch
+    if generation_id is not None:
+        settings["GenerationID"] = generation_id
+    if filename:
+        settings["Filename"] = filename
+    if add_to_timeline:
+        settings["AddToTimeline"] = True
+        if audio_track is not None:
+            settings["AudioTrack"] = audio_track
+    new_item = current_project.GenerateSpeech(settings, timecode or "")
+    if not new_item:
+        return {"success": False, "error": "GenerateSpeech returned no media item"}
+    return {"success": True, "new": new_item.GetName(), "new_id": new_item.GetUniqueId()}
