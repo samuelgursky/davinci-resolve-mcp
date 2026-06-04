@@ -17,6 +17,10 @@ This skill is portable. Do not hard-code user-specific paths. Prefer:
 - `CODEX_HOME` for Codex configuration
 - repo-relative helper paths when this skill is used from the checkout
 
+Current upstream baseline: `v2.28.0`. This adds project lint, declarative
+project specs, timeline-version structural diff, clip query filters, and
+machine-readable error `state` fields.
+
 ## Local Setup
 
 - MCP checkout: `$DAVINCI_MCP_REPO` or the repository containing this skill
@@ -171,6 +175,49 @@ If those actions are unavailable, run:
 ```bash
 python -m src.control_panel --no-open
 ```
+
+## Project Lint And Specs
+
+Use v2.28.0 project-management actions when a user asks for project setup,
+health checks, repeatable project templates, or "make this project match this
+spec":
+
+- `project_manager(action="lint")`: read-only project health pre-flight.
+  Reports errors/warnings/info for missing project/timeline, mixed frame rates,
+  empty timelines, unset render format, unmanaged color science, offline media,
+  and unanalyzed clips.
+- `project_manager(action="diff_to_spec", params={"spec_path": "..."} )` or
+  `params={"spec": {...}}`: preview drift without mutating.
+- `project_manager(action="plan_spec", params={...})`: ordered dry-run action
+  list.
+- `project_manager(action="apply_spec", params={"spec_path": "...",
+  "dry_run": true})`: reconcile only after reviewing the dry run. Shell hooks
+  run only with `run_hooks=true`.
+
+Specs are YAML or JSON and may include `project`, `color_preset`, `settings`,
+`timelines`, `markers`, and opt-in `hooks`. Treat `apply_spec` as a Resolve
+project mutation. Run dry-run first and ask for explicit approval before a
+non-dry-run apply.
+
+If a tool error includes a `state` object, read that structured state instead
+of parsing prose; it is intended for agent recovery.
+
+## Timeline Diff And Clip Query
+
+Use v2.28.0 timeline tools to avoid manual track walking:
+
+- `timeline_versioning(action="diff_versions", params={"timeline_name": "...",
+  "from_version": 1, "to_version": 2})`: structural diff between archived
+  timeline snapshots. Returns added, removed, moved, trimmed, and summary
+  counts.
+- `timeline(action="clip_where", params={"filters": {...}})`: find current
+  timeline clips with AND filters such as `track_type`, `track_index`,
+  `name_contains`, `duration_lt`, and `duration_gt`. Unknown filters are
+  rejected instead of silently matching everything.
+
+Use `diff_versions` after major automated edits to explain exactly what changed.
+Use `clip_where` before edits when the target clips can be described by name,
+track, or duration.
 
 ## Tool Families
 

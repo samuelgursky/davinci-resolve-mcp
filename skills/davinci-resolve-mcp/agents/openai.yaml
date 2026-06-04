@@ -1,6 +1,6 @@
 interface:
   display_name: "DaVinci Resolve MCP"
-  short_description: "Work with Resolve projects through MCP."
+  short_description: "Work with Resolve projects through MCP, including project lint/spec workflows, timeline diffing, clip queries, media analysis, and safe edit/delivery operations."
   default_prompt: "Use $davinci-resolve-mcp to inspect and modify my open DaVinci Resolve project."
 
 dependencies:
@@ -11,3 +11,15 @@ dependencies:
 
 policy:
   allow_implicit_invocation: true
+  source_media_safety: "Never modify source media unless explicitly requested."
+  preferred_first_calls:
+    - "resolve_control(action='launch')"
+    - "resolve_control(action='get_version')"
+    - "project_manager(action='lint')"
+  v2_28_highlights:
+    - "project_manager.lint"
+    - "project_manager.diff_to_spec"
+    - "project_manager.plan_spec"
+    - "project_manager.apply_spec"
+    - "timeline_versioning.diff_versions"
+    - "timeline.clip_where"
