@@ -60,6 +60,118 @@ class FakeTimeline:
         return self._tracks.get(track_type, {}).get(track_index, [])
 
 
+class FakeFusionInput:
+    """Minimal stand-in for a Fusion Input object.
+
+    `inp[time] = value` records a keyframe only conceptually; in real Fusion it
+    sets a STATIC value unless a spline modifier is attached first.
+    """
+
+    def __init__(self, connected_output=None):
+        self._connected_output = connected_output
+        self.assignments = {}
+
+    def __bool__(self):
+        return True
+
+    def GetConnectedOutput(self):
+        return self._connected_output
+
+    def __setitem__(self, time, value):
+        self.assignments[time] = value
+
+
+class FakeFusionTool:
+    def __init__(self, inputs):
+        self._inputs = inputs
+        self.modifiers_added = []
+
+    def __getitem__(self, name):
+        return self._inputs.get(name)
+
+    def AddModifier(self, input_name, modifier_type):
+        self.modifiers_added.append((input_name, modifier_type))
+        # Mirror Fusion: once a modifier is attached the input is now connected.
+        inp = self._inputs.get(input_name)
+        if inp is not None:
+            inp._connected_output = object()
+        return True
+
+
+class FakeFusionComp:
+    def __init__(self, tools):
+        self._tools = tools
+        self.lock_count = 0
+        self.unlock_count = 0
+
+    def FindTool(self, name):
+        return self._tools.get(name)
+
+    def Lock(self):
+        self.lock_count += 1
+
+    def Unlock(self):
+        self.unlock_count += 1
+
+
+class FusionAddKeyframeTests(unittest.TestCase):
+    def _run(self, comp, params):
+        with patch.object(server, "_resolve_fusion_comp", return_value=(comp, None)):
+            return server.fusion_comp("add_keyframe", params)
+
+    def test_attaches_bezierspline_on_virgin_input(self):
+        inp = FakeFusionInput(connected_output=None)
+        tool = FakeFusionTool({"Size": inp})
+        comp = FakeFusionComp({"Transform1": tool})
+
+        result = self._run(comp, {
+            "tool_name": "Transform1", "input_name": "Size", "time": 0, "value": 1.0,
+        })
+
+        self.assertTrue(result.get("success"))
+        self.assertEqual(tool.modifiers_added, [("Size", "BezierSpline")])
+        self.assertEqual(inp.assignments, {0: 1.0})
+        self.assertEqual((comp.lock_count, comp.unlock_count), (1, 1))
+
+    def test_skips_modifier_when_already_animated(self):
+        inp = FakeFusionInput(connected_output=object())
+        tool = FakeFusionTool({"Size": inp})
+        comp = FakeFusionComp({"Transform1": tool})
+
+        result = self._run(comp, {
+            "tool_name": "Transform1", "input_name": "Size", "time": 75, "value": 1.4,
+        })
+
+        self.assertTrue(result.get("success"))
+        self.assertEqual(tool.modifiers_added, [])
+        self.assertEqual(inp.assignments, {75: 1.4})
+
+    def test_honors_custom_modifier_param(self):
+        inp = FakeFusionInput(connected_output=None)
+        tool = FakeFusionTool({"Center": inp})
+        comp = FakeFusionComp({"Transform1": tool})
+
+        self._run(comp, {
+            "tool_name": "Transform1", "input_name": "Center",
+            "time": 0, "value": [0.5, 0.5], "modifier": "Path",
+        })
+
+        self.assertEqual(tool.modifiers_added, [("Center", "Path")])
+
+    def test_missing_input_returns_error_and_unlocks(self):
+        tool = FakeFusionTool({})
+        comp = FakeFusionComp({"Transform1": tool})
+
+        result = self._run(comp, {
+            "tool_name": "Transform1", "input_name": "Nope", "time": 0, "value": 1.0,
+        })
+
+        self.assertIn("error", result)
+        self.assertEqual(tool.modifiers_added, [])
+        # comp must be unlocked even on the error path.
+        self.assertEqual((comp.lock_count, comp.unlock_count), (1, 1))
+
+
 class FusionCompTargetingTests(unittest.TestCase):
     def test_active_comp_fallback_does_not_require_timeline(self):
         active_comp = object()
