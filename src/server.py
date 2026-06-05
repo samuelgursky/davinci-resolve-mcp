@@ -18663,7 +18663,17 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             inp = tool[p["input_name"]]
             if not inp:
                 return _err(f"Input '{p['input_name']}' not found on tool '{p['tool_name']}'")
-            inp[p["time"]] = p["value"]
+            # Attach a BezierSpline modifier the first time this input is animated.
+            # Without a spline, `inp[time] = value` only sets a STATIC value (the last
+            # write wins) and never creates a keyframe. See the Fusion Scripting Guide.
+            # Optional `modifier` lets callers pass e.g. "Path" for Point inputs.
+            try:
+                _already_animated = inp.GetConnectedOutput() is not None
+            except Exception:
+                _already_animated = False
+            if not _already_animated:
+                tool.AddModifier(p["input_name"], p.get("modifier", "BezierSpline"))
+            tool[p["input_name"]][p["time"]] = p["value"]
             return _ok()
         finally:
             comp.Unlock()
