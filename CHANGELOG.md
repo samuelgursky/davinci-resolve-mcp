@@ -2,6 +2,25 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.32.1
+
+Fixes `fusion_comp(action="add_keyframe")` so it actually **animates** the input.
+
+Previously the handler did `inp[time] = value` on the input directly. On an input
+with no animation spline, that only assigns a **static** value (last write wins) —
+no keyframe is created. Symptoms: `get_keyframes` returned `[]`, `get_input` at
+different times returned the same value, and the clip never animated.
+
+The handler now attaches a `BezierSpline` modifier the first time an input is
+animated, then sets the keyframe. A new optional `modifier` param lets callers
+pass e.g. `"Path"` for Point inputs such as `Center`. Behavior is unchanged for
+inputs that are already animated or otherwise connected.
+
+- **Fixed** `add_keyframe` now creates real, editable keyframes (live-validated on
+  DaVinci Resolve Studio 21.0.0).
+- **Added** optional `modifier` param to `add_keyframe`.
+- Thanks to @sandypoli-boop for the diagnosis and fix ([#56](https://github.com/samuelgursky/davinci-resolve-mcp/pull/56)).
+
 ## What's New in v2.32.0
 
 Adds **governance tiers** for the media-creating Resolve 21 AI ops (Phase 3, the
