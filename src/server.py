@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.32.1"
+VERSION = "2.32.2"
 
 import base64
 import os
@@ -18685,11 +18685,17 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         inp = tool[p["input_name"]]
         if not inp:
             return _err(f"Input '{p['input_name']}' not found on tool '{p['tool_name']}'")
+        # GetKeyFrames() returns {1-based index: frame_position}, NOT
+        # {time: value}. Iterating it directly puts the index in `time` and the
+        # frame position in `value`. Read the actual keyframed value back from
+        # the input at each frame position via GetInput.
         keyframes = []
         kfs = inp.GetKeyFrames()
         if kfs:
-            for t in kfs:
-                keyframes.append({"time": t, "value": _ser(kfs[t])})
+            for idx in sorted(kfs):
+                frame = kfs[idx]
+                value = tool.GetInput(p["input_name"], frame)
+                keyframes.append({"time": frame, "value": _ser(value)})
         return {"keyframes": keyframes}
 
     elif action == "delete_keyframe":

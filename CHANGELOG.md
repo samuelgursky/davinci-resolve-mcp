@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.32.2
+
+Fixes `fusion_comp(action="get_keyframes")` serialization.
+
+The handler iterated `Input.GetKeyFrames()` as if it returned `{time: value}`,
+but Fusion returns `{1-based index: frame_position}`. The result put the
+keyframe **index** in `time` and the **frame position** in `value` — the actual
+keyframed values were never reported.
+
+The handler now treats the dict values as frame positions and reads each
+keyframed value back via `GetInput(input_name, frame)`.
+
+- **Fixed** `get_keyframes` now returns `[{"time": <frame>, "value": <value>}, ...]`
+  in frame order (live-validated on DaVinci Resolve Studio 21.0.0:
+  `Size` keyed `1.0@f0` / `1.4@f75` → `[{0.0: 1.0}, {75.0: 1.4}]`).
+- Follow-up to the `add_keyframe` fix in v2.32.1; flagged by @sandypoli-boop in #56.
+
 ## What's New in v2.32.1
 
 Fixes `fusion_comp(action="add_keyframe")` so it actually **animates** the input.

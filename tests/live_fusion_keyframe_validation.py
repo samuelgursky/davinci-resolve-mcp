@@ -88,13 +88,25 @@ def main():
     print(f"get_input(Size, 0)  = {v0}")
     print(f"get_input(Size, 37) = {v37}")
     print(f"get_input(Size, 75) = {v75}")
-    print(f"GetKeyFrames()      = {kfs}")
+    print(f"GetKeyFrames()      = {kfs}  (raw {{index: frame}})")
+
+    # Mirror the fixed get_keyframes handler: frame positions are the VALUES of
+    # GetKeyFrames(); read each keyframed value back via GetInput(frame).
+    serialized = [
+        {"time": kfs[idx], "value": tool.GetInput("Size", kfs[idx])}
+        for idx in sorted(kfs)
+    ]
+    print(f"get_keyframes()     = {serialized}")
 
     ok = (
         abs(v0 - 1.0) < 1e-6
         and abs(v75 - 1.4) < 1e-6
         and 1.0 < v37 < 1.4  # genuine interpolation between the keyframes
         and bool(kfs)
+        and serialized == [
+            {"time": 0.0, "value": 1.0},
+            {"time": 75.0, "value": 1.4},
+        ]
     )
     print("RESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1

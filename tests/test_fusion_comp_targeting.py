@@ -67,9 +67,11 @@ class FakeFusionInput:
     sets a STATIC value unless a spline modifier is attached first.
     """
 
-    def __init__(self, connected_output=None):
+    def __init__(self, connected_output=None, keyframe_values=None):
         self._connected_output = connected_output
         self.assignments = {}
+        # frame_position -> value, modelling existing keyframes on the input.
+        self.keyframe_values = dict(keyframe_values or {})
 
     def __bool__(self):
         return True
@@ -80,6 +82,11 @@ class FakeFusionInput:
     def __setitem__(self, time, value):
         self.assignments[time] = value
 
+    def GetKeyFrames(self):
+        # Mirror Fusion: {1-based index: frame_position}, sorted by frame.
+        frames = sorted(self.keyframe_values)
+        return {i + 1: frame for i, frame in enumerate(frames)} or None
+
 
 class FakeFusionTool:
     def __init__(self, inputs):
@@ -88,6 +95,10 @@ class FakeFusionTool:
 
     def __getitem__(self, name):
         return self._inputs.get(name)
+
+    def GetInput(self, name, frame):
+        inp = self._inputs.get(name)
+        return inp.keyframe_values.get(frame) if inp is not None else None
 
     def AddModifier(self, input_name, modifier_type):
         self.modifiers_added.append((input_name, modifier_type))
@@ -170,6 +181,40 @@ class FusionAddKeyframeTests(unittest.TestCase):
         self.assertEqual(tool.modifiers_added, [])
         # comp must be unlocked even on the error path.
         self.assertEqual((comp.lock_count, comp.unlock_count), (1, 1))
+
+
+class FusionGetKeyframesTests(unittest.TestCase):
+    def test_returns_frame_positions_and_values(self):
+        # GetKeyFrames yields {index: frame}; the handler must report the frame
+        # position as `time` and the GetInput(frame) result as `value`.
+        inp = FakeFusionInput(
+            connected_output=object(),
+            keyframe_values={0.0: 1.0, 75.0: 1.4},
+        )
+        tool = FakeFusionTool({"Size": inp})
+        comp = FakeFusionComp({"Transform1": tool})
+
+        with patch.object(server, "_resolve_fusion_comp", return_value=(comp, None)):
+            result = server.fusion_comp(
+                "get_keyframes", {"tool_name": "Transform1", "input_name": "Size"}
+            )
+
+        self.assertEqual(
+            result["keyframes"],
+            [{"time": 0.0, "value": 1.0}, {"time": 75.0, "value": 1.4}],
+        )
+
+    def test_no_keyframes_returns_empty_list(self):
+        inp = FakeFusionInput(connected_output=None, keyframe_values={})
+        tool = FakeFusionTool({"Size": inp})
+        comp = FakeFusionComp({"Transform1": tool})
+
+        with patch.object(server, "_resolve_fusion_comp", return_value=(comp, None)):
+            result = server.fusion_comp(
+                "get_keyframes", {"tool_name": "Transform1", "input_name": "Size"}
+            )
+
+        self.assertEqual(result["keyframes"], [])
 
 
 class FusionCompTargetingTests(unittest.TestCase):
