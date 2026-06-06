@@ -1885,6 +1885,89 @@ def _navigate_folder(mp, path):
     return current
 
 
+def _project_summary(proj, *, include_clips=False, clip_limit=50):
+    """Live structural readout of a project: page, timelines, media-pool inventory.
+
+    Distinct from the analysis-derived bin summary — this is a cheap "what's in
+    this project right now" snapshot that needs no prior analysis.
+    """
+    by_type: Dict[str, int] = {}
+    sample_clips: List[Dict[str, Any]] = []
+    folder_count = 0
+    clip_count = 0
+
+    mp = proj.GetMediaPool()
+    root = mp.GetRootFolder() if mp else None
+
+    def walk(folder):
+        nonlocal folder_count, clip_count
+        folder_count += 1
+        for clip in (folder.GetClipList() or []):
+            clip_count += 1
+            try:
+                ctype = clip.GetClipProperty("Type") or "Unknown"
+            except Exception:
+                ctype = "Unknown"
+            by_type[ctype] = by_type.get(ctype, 0) + 1
+            if include_clips and len(sample_clips) < clip_limit:
+                sample_clips.append({
+                    "name": _clip_name(clip),
+                    "type": ctype,
+                    "id": clip.GetUniqueId(),
+                })
+        for sub in (folder.GetSubFolderList() or []):
+            walk(sub)
+
+    if root:
+        walk(root)
+
+    cur_tl = proj.GetCurrentTimeline()
+    r = get_resolve()
+    return {
+        "project": proj.GetName(),
+        "current_page": r.GetCurrentPage() if r else None,
+        "timeline_count": proj.GetTimelineCount(),
+        "current_timeline": cur_tl.GetName() if cur_tl else None,
+        "media_pool": {
+            "folder_count": folder_count,
+            "clip_count": clip_count,
+            "by_type": by_type,
+        },
+        "clips": sample_clips if include_clips else None,
+    }
+
+
+def _timeline_transcript(tl, *, with_timecodes=False):
+    """Read a timeline's subtitle track(s) as transcript text."""
+    try:
+        track_count = tl.GetTrackCount("subtitle")
+    except Exception:
+        track_count = 0
+    cues: List[Dict[str, Any]] = []
+    for ti in range(1, (track_count or 0) + 1):
+        for item in (tl.GetItemListInTrack("subtitle", ti) or []):
+            text = ""
+            try:
+                text = item.GetName() or ""
+            except Exception:
+                text = ""
+            cue = {"text": text}
+            if with_timecodes:
+                try:
+                    cue["start"] = item.GetStart()
+                    cue["end"] = item.GetEnd()
+                except Exception:
+                    pass
+            cues.append(cue)
+    full = " ".join(c["text"] for c in cues if c.get("text"))
+    return {
+        "text": full,
+        "cue_count": len(cues),
+        "has_subtitles": bool(cues),
+        "cues": cues,
+    }
+
+
 def _normalize_record_frame(
     ci: Dict[str, Any],
     index: int,
@@ -12484,6 +12567,8 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
       refresh_luts() -> {success}
       get_gallery() -> {available}
       export_frame_as_still(path) -> {success}
+      project_summary(include_clips?, clip_limit?) -> {project, current_page, timeline_count, current_timeline, media_pool}
+        Live structural readout — what's in this project right now (no analysis needed).
       load_burnin_preset(name) -> {success}
       insert_audio(media_path, start_offset?, duration?) -> {success}
       get_color_groups() -> {groups}
@@ -12524,6 +12609,12 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
         if parent and not os.path.isdir(parent):
             return _err(f"export_frame_as_still target directory does not exist: {parent}")
         return {"success": bool(proj.ExportCurrentFrameAsStill(still_path))}
+    elif action == "project_summary":
+        return _project_summary(
+            proj,
+            include_clips=bool(p.get("include_clips")),
+            clip_limit=int(p.get("clip_limit", 50)),
+        )
     elif action == "load_burnin_preset":
         return {"success": bool(proj.LoadBurnInPreset(p["name"]))}
     elif action == "insert_audio":
@@ -12584,7 +12675,7 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
             return {"success": False}
         return {"success": True, "new": new_item.GetName(), "new_id": new_item.GetUniqueId(),
                 "output_path": _rec.output_path, "output_bytes": _rec.output_bytes}
-    return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset","generate_speech"])
+    return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","project_summary","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset","generate_speech"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -15078,6 +15169,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       get_unique_id() -> {id}
       get_node_graph() -> {available}
       get_media_pool_item() -> {name, id}
+      get_transcript(with_timecodes?) -> {text, cue_count, has_subtitles, cues}
+        Read the timeline's subtitle track(s) as transcript text.
       get_mark_in_out() -> {mark}
       set_mark_in_out(mark_in, mark_out, type?) -> {success}
       clear_mark_in_out(type?) -> {success}
@@ -15363,6 +15456,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "get_media_pool_item":
         mpi = tl.GetMediaPoolItem()
         return {"name": mpi.GetName(), "id": mpi.GetUniqueId()} if mpi else {"name": None, "id": None}
+    elif action == "get_transcript":
+        return _timeline_transcript(tl, with_timecodes=bool(p.get("with_timecodes")))
     elif action == "get_mark_in_out":
         return _ser(tl.GetMarkInOut())
     elif action == "set_mark_in_out":
@@ -15566,7 +15661,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if mp_err:
             return mp_err
         return _fairlight_boundary_report(proj, mp, tl, p)
-    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","story_spine_report","create_variant_from_ranges","bulk_set_item_properties","apply_look_to_items","thumbnail_contact_sheet","marker_thumbnail_review","edit_kernel_capabilities","probe_edit_kernel_item","title_property_scan","set_title_text","bulk_set_title_text","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges","audio_mix_capability_report",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
+    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","story_spine_report","create_variant_from_ranges","bulk_set_item_properties","apply_look_to_items","thumbnail_contact_sheet","marker_thumbnail_review","edit_kernel_capabilities","probe_edit_kernel_item","title_property_scan","set_title_text","bulk_set_title_text","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_transcript","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges","audio_mix_capability_report",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
