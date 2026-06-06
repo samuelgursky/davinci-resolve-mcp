@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.34.0"
+VERSION = "2.34.1"
 
 import base64
 import os
@@ -46,6 +46,7 @@ from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
 from src.utils.contracts import validate as _validate_params
 from src.utils.cut_ir import build_cut_list as _build_cut_list
+from src.utils.page_lock import open_page_serialized as _open_page_serialized
 from src.utils.proc import safe_run
 from src.utils.readback import verify_by_readback
 from src.utils.update_check import (
@@ -10672,7 +10673,9 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         valid_pages = ["media", "cut", "edit", "color", "fusion", "fairlight", "deliver"]
         if p["page"] not in valid_pages:
             return _err(f"Invalid page '{p['page']}'. Valid pages: {', '.join(valid_pages)}")
-        return {"success": bool(r.OpenPage(p["page"]))}
+        # Serialize page switches so concurrent agents can't flip the single
+        # globally-active page underneath each other.
+        return {"success": bool(_open_page_serialized(r, p["page"]))}
     elif action == "get_keyframe_mode":
         return {"mode": r.GetKeyframeMode()}
     elif action == "set_keyframe_mode":

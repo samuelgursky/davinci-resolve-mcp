@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.34.1
+
+Page-switch serialization — the concurrency primitive for safe multi-agent use.
+
+- **Added** `src/utils/page_lock.py` — Resolve has a single globally-active page,
+  so two agents that flip pages concurrently corrupt each other. `page_lock()`
+  serializes page switches: a reentrant intra-process lock plus a best-effort
+  inter-process advisory file lock around the outermost section. The `open_page`
+  action now routes through it. This must be in place before any concurrent-agent
+  feature ships.
+- Networked transport, sandboxed scripting, and capability/role scoping (the rest
+  of the safe remote/multi-user design) are security-critical and remain a
+  separate, sign-off-gated phase — they are intentionally not shipped here.
+
 ## What's New in v2.34.0
 
 First phase of transcript-driven editing: a Cut intermediate representation and a
