@@ -2,6 +2,47 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.33.0
+
+Fusion node-graph layout and duplication, plus performance and robustness
+improvements across the compound server. Live-validated on DaVinci Resolve
+Studio 21.0.0.
+
+### Fusion node layout & duplication
+
+- **Added** `fusion_comp(action="get_position")` and `set_position` — read and
+  write a node's position on the FlowView canvas. `set_position` confirms the
+  move by reading the position back.
+- **Added** `fusion_comp(action="copy_tool")` — duplicate a node, optionally
+  renaming and repositioning it. Settings are carried through a temporary
+  `.setting` file, which round-trips reliably across the Python bridge where the
+  in-memory `SaveSettings()`/`Paste()` table form fails.
+- **Added** `fusion_comp(action="auto_arrange")` — lay tools out in a row
+  (`direction="horizontal"`) or column (`"vertical"`) at a given spacing.
+
+### Performance
+
+- **Changed** Resolve object inspection walks `dir(obj)` once instead of once for
+  methods and again for properties, skips `inspect.signature()` for C-extension
+  methods (slow and almost always raising there), and reads `__doc__` directly.
+  Each attribute access on a Resolve object is a bridge round-trip, so this
+  roughly halves inspection cost on the `resolve_control` path.
+- **Changed** Media-pool find-by-name lookups walk the folder tree lazily and
+  stop at the first match instead of materializing the entire project tree.
+
+### Robustness & fixes
+
+- **Fixed** `export_frame_as_still` rejects an empty path or a nonexistent target
+  directory instead of silently returning failure.
+- **Fixed** `set_mark_in_out` (clip and timeline) rejects `mark_in > mark_out`.
+- **Fixed** Auto-sync audio resolves `AUDIO_SYNC_*` enum constants via the live
+  Resolve handle, closing a path where a stale module handle silently degraded
+  `AutoSyncAudio` to rejected string keys.
+- **Changed** Every `subprocess` call that can run while the MCP stdio server is
+  active now sets `stdin=subprocess.DEVNULL`, so a child process cannot consume
+  bytes from the JSON-RPC protocol stream; the spec-hook runner also captures its
+  child's output. Applies to both the compound and granular launchers.
+
 ## What's New in v2.32.2
 
 Fixes `fusion_comp(action="get_keyframes")` serialization.

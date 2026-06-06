@@ -979,6 +979,12 @@ Key actions:
 - `get_inputs(tool_name)` / `get_outputs(tool_name)`
 - `set_attrs(tool_name, attrs)` / `get_attrs(tool_name)`
 - `add_keyframe(tool_name, input_name, time, value)`
+- `get_position(tool_name)` / `set_position(tool_name, x, y)` — read/write a node's
+  position on the FlowView canvas; `set_position` returns a position read-back
+- `copy_tool(tool_name, name?, x?, y?)` — duplicate a node (settings copied via a
+  temp `.setting` file), optionally renaming and repositioning it
+- `auto_arrange(tool_names?, direction?, spacing?, x?, y?)` — lay tools out in a row
+  (`direction="horizontal"`, default) or column (`"vertical"`)
 - `get_comp_info`, `set_frame_range(start, end)`, `render`
 - `start_undo(name?)` / `end_undo(keep?)`
 - `bulk_set_inputs(ops)` — batch set inputs across multiple timeline item comps in
