@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.33.4
+
+Internal reliability framework.
+
+- **Added** `verify_by_readback` (`src/utils/readback.py`) — a primitive for
+  mutating Resolve ops that verifies an action by reading the real post-state
+  back instead of trusting the API's frequently-unreliable return value. A
+  contradiction (reported success but a failing readback) is logged as a
+  reliability signal.
+- **Changed** Auto-sync audio now runs through `verify_by_readback` as its first
+  user and reports a `verified` field alongside `linked`/`newly_linked`. Behavior
+  is unchanged; the bespoke readback loop is replaced by the shared primitive.
+
 ## What's New in v2.33.3
 
 Two read tools that surface existing project state.
