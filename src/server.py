@@ -43,6 +43,7 @@ for p in [current_dir, project_dir]:
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.mcp_stdio import run_fastmcp_stdio
+from src.utils.readback import verify_by_readback
 from src.utils.update_check import (
     check_for_updates,
     clear_update_prompt_preferences,
@@ -5535,19 +5536,34 @@ def _safe_auto_sync_audio(mp, p: Dict[str, Any]):
     # Read-back verification: AutoSyncAudio's boolean return is unreliable, so
     # capture each clip's "Synced Audio" linkage before and after and report the
     # delta. Trust `linked`/`newly_linked`, not `success`.
-    before = [_synced_audio(c) for c in clips]
-    ok = bool(mp.AutoSyncAudio(clips, settings))
-    linked, newly_linked, already_linked = [], [], []
-    for c, was in zip(clips, before):
-        name = _clip_name(c)
-        if _synced_audio(c):
-            linked.append(name)
-            (already_linked if was else newly_linked).append(name)
+    def _categorize(before, observed):
+        linked, newly, already = [], [], []
+        for c, was, now in zip(clips, before, observed):
+            if now:
+                name = _clip_name(c)
+                linked.append(name)
+                (already if was else newly).append(name)
+        return {
+            "linked": linked,
+            "newly_linked": newly,
+            "already_linked": already,
+            "verified": bool(linked),
+        }
+
+    res = verify_by_readback(
+        mutate=lambda: mp.AutoSyncAudio(clips, settings),
+        observe=lambda: [_synced_audio(c) for c in clips],
+        snapshot=lambda: [_synced_audio(c) for c in clips],
+        compare=_categorize,
+        label="auto_sync_audio",
+        intent={"clip_count": len(clips)},
+    )
     return {
-        "success": ok,
-        "linked": linked,
-        "newly_linked": newly_linked,
-        "already_linked": already_linked,
+        "success": res["success_raw"],
+        "verified": res["verified"],
+        "linked": res["linked"],
+        "newly_linked": res["newly_linked"],
+        "already_linked": res["already_linked"],
         "count": len(clips),
         "missing": missing,
         "settings": settings,
