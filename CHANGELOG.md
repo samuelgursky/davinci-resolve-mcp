@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.33.8
+
+Bridge-call performance instrumentation.
+
+- **Added** `src/utils/bridge_metrics.py` — a counting proxy that wraps a Resolve
+  handle and tallies attribute accesses and method calls (each a COM/socket
+  round-trip), so the real bridge cost of an operation is measured rather than
+  guessed.
+- **Added** `scripts/measure_bridge_cost.py` — runs a representative media-pool
+  traversal through the proxy and reports round-trips per clip. A minimal
+  name+type walk measured ~6.7 round-trips per clip, confirming round-trips scale
+  linearly with traversal size. A property cache remains gated on profiling
+  *repeated*-read patterns in real workflows (don't cache blind).
+
 ## What's New in v2.33.7
 
 Read/write symmetry audit and a gap it surfaced.
