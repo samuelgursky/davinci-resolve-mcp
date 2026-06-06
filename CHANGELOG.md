@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.33.3
+
+Two read tools that surface existing project state.
+
+- **Added** `project_settings(action="project_summary")` returns a live
+  structural readout — current page, timeline count and current timeline, and a
+  media-pool inventory (folder/clip counts, clips by type, optional clip
+  sample). A cheap "what's in this project right now" snapshot that needs no
+  prior analysis.
+- **Added** `timeline(action="get_transcript")` reads the current timeline's
+  subtitle track(s) as transcript text `{text, cue_count, has_subtitles, cues}`,
+  with optional per-cue timecodes. Complements the clip-level
+  `get_transcription`.
+
 ## What's New in v2.33.2
 
 Documentation: a guide for hand-authoring DaVinci Resolve `.setting` template

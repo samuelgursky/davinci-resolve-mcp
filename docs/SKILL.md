@@ -402,7 +402,9 @@ Key actions: `get_name`, `set_name(name)`, `get_setting(name?)`,
 `set_setting(name, value)`, `get_color_groups`, `add_color_group(name)`,
 `delete_color_group(name)`, `export_frame_as_still(path)`,
 `load_burnin_preset(name)`, `insert_audio(media_path, ...)`,
-`apply_fairlight_preset(preset_name)`
+`apply_fairlight_preset(preset_name)`,
+`project_summary(include_clips?, clip_limit?)` — live structural readout
+(current page, timeline count, media-pool inventory by type)
 
 ---
 
@@ -723,6 +725,8 @@ Key actions:
 - `get_current` — current timeline info
 - `set_current(index)` — switch timeline by 1-based index
 - `get_track_count(track_type)` — track_type: `"video"`, `"audio"`, `"subtitle"`
+- `get_transcript(with_timecodes?)` — read the subtitle track(s) as transcript
+  text `{text, cue_count, has_subtitles, cues}`
 - `add_track(track_type, sub_type?)` / `delete_track(track_type, index)`
 - `get_items(track_type, index)` — items on a track
 - `clip_where(track_type?, track_index?, name_contains?, duration_lt?, duration_gt?)` —
