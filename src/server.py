@@ -1173,6 +1173,18 @@ def _requires_method(obj, method_name, min_version):
         return None
     return _err(f"{method_name} requires DaVinci Resolve {min_version}+")
 
+def _is_truncated(text):
+    """True if a transcription preview was cut off.
+
+    Resolve's `Transcription` clip property is a preview that ends with an
+    ellipsis (… or ...) when the full transcript is longer than the property
+    exposes, so the caller knows the returned text is partial.
+    """
+    if not isinstance(text, str):
+        return False
+    t = text.rstrip()
+    return t.endswith("…") or t.endswith("...")
+
 _MARKER_COLORS = [
     "Blue", "Cyan", "Green", "Yellow", "Red", "Pink", "Purple", "Fuchsia",
     "Rose", "Lavender", "Sky", "Mint", "Lemon", "Sand", "Cocoa", "Cream",
@@ -5408,6 +5420,22 @@ def _audio_mapping_report(mp, tl, p: Dict[str, Any]):
     return {"timeline_items": timeline_items, "media_pool_items": clip_rows}
 
 
+def _clip_name(clip):
+    try:
+        return clip.GetName()
+    except Exception:
+        return None
+
+
+def _synced_audio(clip):
+    """Best-effort read of whether a clip currently has synced audio linked."""
+    try:
+        v = clip.GetClipProperty("Synced Audio")
+    except Exception:
+        return False
+    return bool(v) and str(v).strip() not in ("", "None", "0", "Off", "No")
+
+
 def _safe_auto_sync_audio(mp, p: Dict[str, Any]):
     root = mp.GetRootFolder()
     resolved, err = _clips_from_params(root, mp, p)
@@ -5421,7 +5449,26 @@ def _safe_auto_sync_audio(mp, p: Dict[str, Any]):
     settings = _normalize_auto_sync_settings(dict(p.get("settings") or {}), get_resolve())
     if p.get("dry_run", True):
         return _ok(would_auto_sync=True, clips=_clip_summaries(clips), missing=missing, settings=settings)
-    return {"success": bool(mp.AutoSyncAudio(clips, settings)), "count": len(clips), "missing": missing, "settings": settings}
+    # Read-back verification: AutoSyncAudio's boolean return is unreliable, so
+    # capture each clip's "Synced Audio" linkage before and after and report the
+    # delta. Trust `linked`/`newly_linked`, not `success`.
+    before = [_synced_audio(c) for c in clips]
+    ok = bool(mp.AutoSyncAudio(clips, settings))
+    linked, newly_linked, already_linked = [], [], []
+    for c, was in zip(clips, before):
+        name = _clip_name(c)
+        if _synced_audio(c):
+            linked.append(name)
+            (already_linked if was else newly_linked).append(name)
+    return {
+        "success": ok,
+        "linked": linked,
+        "newly_linked": newly_linked,
+        "already_linked": already_linked,
+        "count": len(clips),
+        "missing": missing,
+        "settings": settings,
+    }
 
 
 def _resolve_audio_constant(resolve_obj, name: str, fallback):
@@ -13626,6 +13673,9 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       get_unique_id(clip_id) -> {id}
       transcribe_audio(clip_id, use_speaker_detection?) -> {success}  — use_speaker_detection is Resolve 21+
       clear_transcription(clip_id) -> {success}
+      get_transcription(clip_id) -> {text, truncated, status, has_transcription}
+        Read a clip's transcription. `truncated` flags when Resolve's preview
+        property cut the text off (the full transcript is longer).
       perform_audio_classification(clip_id) -> {success}  — Resolve 21+
       clear_audio_classification(clip_id) -> {success}  — Resolve 21+
       analyze_for_intellisearch(clip_id, identify_faces?, is_better_mode?) -> {success}  — Resolve 21+, AI IntelliSearch Extra
@@ -13827,6 +13877,20 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"success": bool(clip.TranscribeAudio(bool(usd)))}
     elif action == "clear_transcription":
         return {"success": bool(clip.ClearTranscription())}
+    elif action == "get_transcription":
+        raw = clip.GetClipProperty("Transcription")
+        text = raw if isinstance(raw, str) else ("" if raw is None else str(raw))
+        try:
+            status = clip.GetClipProperty("Transcription Status")
+        except Exception:
+            status = None
+        return {
+            "clip_id": p.get("clip_id"),
+            "text": text,
+            "truncated": _is_truncated(text),
+            "status": status or None,
+            "has_transcription": bool(text.strip()),
+        }
     elif action == "perform_audio_classification":
         missing = _requires_method(clip, "PerformAudioClassification", "21.0")
         if missing:
@@ -13905,7 +13969,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"success": bool(clip.SetMarkInOut(p["mark_in"], p["mark_out"], p.get("type", "all")))}
     elif action == "clear_mark_in_out":
         return {"success": bool(clip.ClearMarkInOut(p.get("type", "all")))}
-    return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip","get_unique_id","transcribe_audio","clear_transcription","perform_audio_classification","clear_audio_classification","analyze_for_intellisearch","analyze_for_slate","remove_motion_blur","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out","open_in_viewer"])
+    return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip","get_unique_id","transcribe_audio","clear_transcription","get_transcription","perform_audio_classification","clear_audio_classification","analyze_for_intellisearch","analyze_for_slate","remove_motion_blur","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out","open_in_viewer"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

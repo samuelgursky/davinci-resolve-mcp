@@ -64,6 +64,62 @@ class SafeAutoSyncTest(unittest.TestCase):
         self.assertTrue(out["success"])
         self.assertEqual(captured["settings"]["__MODE__"], "__TIMECODE__")
 
+    def test_readback_reports_newly_and_already_linked(self):
+        # The readback verification must report linkage by reading "Synced Audio"
+        # before/after, not by trusting AutoSyncAudio's boolean.
+        class SyncClip:
+            def __init__(self, name, synced):
+                self.name = name
+                self._synced = synced
+
+            def GetName(self):
+                return self.name
+
+            def GetClipProperty(self, key):
+                if key == "Synced Audio":
+                    return "linked.wav" if self._synced else ""
+                return ""
+
+        c_new = SyncClip("v_new", synced=False)   # becomes linked
+        c_old = SyncClip("v_old", synced=True)     # already linked
+        clips = [c_new, c_old]
+        fake_mp = mock.Mock()
+
+        def do_sync(cs, settings):
+            for c in cs:
+                c._synced = True
+            return True
+
+        fake_mp.AutoSyncAudio.side_effect = do_sync
+        with mock.patch.object(s, "get_resolve", return_value=FakeResolve()), \
+             mock.patch.object(s, "_clips_from_params", return_value=((clips, []), None)):
+            out = s._safe_auto_sync_audio(fake_mp, {"settings": {}, "dry_run": False})
+        self.assertEqual(out["newly_linked"], ["v_new"])
+        self.assertEqual(out["already_linked"], ["v_old"])
+        self.assertEqual(set(out["linked"]), {"v_new", "v_old"})
+
+    def test_readback_unlinked_stays_out(self):
+        class SyncClip:
+            def __init__(self, name):
+                self.name = name
+
+            def GetName(self):
+                return self.name
+
+            def GetClipProperty(self, key):
+                return ""  # never links
+
+        clips = [SyncClip("v1")]
+        fake_mp = mock.Mock()
+        fake_mp.AutoSyncAudio.return_value = True  # lies: says success
+        with mock.patch.object(s, "get_resolve", return_value=FakeResolve()), \
+             mock.patch.object(s, "_clips_from_params", return_value=((clips, []), None)):
+            out = s._safe_auto_sync_audio(fake_mp, {"settings": {}, "dry_run": False})
+        # success boolean is True but readback shows nothing actually linked
+        self.assertTrue(out["success"])
+        self.assertEqual(out["linked"], [])
+        self.assertEqual(out["newly_linked"], [])
+
     def test_regression_module_global_resolve_none_does_not_degrade(self):
         # Even if the module global `resolve` is None, the fix routes through
         # get_resolve(), so constants still resolve.
