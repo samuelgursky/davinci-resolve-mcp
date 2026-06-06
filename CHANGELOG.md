@@ -2,6 +2,21 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.33.1
+
+Clip transcription read-back and more trustworthy auto-sync reporting.
+
+- **Added** `media_pool_item(action="get_transcription")` returns
+  `{text, truncated, status, has_transcription}`. Transcription could previously
+  be triggered but never read back. Resolve's `Transcription` clip property is a
+  preview that ends in an ellipsis when the full transcript is longer, so
+  `truncated` tells callers the returned text is partial.
+- **Changed** Auto-sync audio now verifies linkage by reading each clip's
+  `Synced Audio` property before and after the call and reporting
+  `linked` / `newly_linked` / `already_linked`, instead of trusting
+  `AutoSyncAudio`'s unreliable boolean. The boolean is still returned as
+  `success`, but callers should trust `linked`.
+
 ## What's New in v2.33.0
 
 Fusion node-graph layout and duplication, plus performance and robustness

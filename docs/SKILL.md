@@ -455,7 +455,10 @@ Key actions: `get_name`, `get_metadata(key?)`, `set_metadata(key, value)`,
 `set_clip_color(color)`, `link_proxy(proxy_path)`, `replace_clip(path)`,
 `set_name(name)`, `link_full_resolution_media(path)`,
 `replace_clip_preserve_sub_clip(path)`, `monitor_growing_file`,
-`transcribe_audio(use_speaker_detection?)`, `perform_audio_classification`,
+`transcribe_audio(use_speaker_detection?)`, `clear_transcription`,
+`get_transcription` (read back `{text, truncated, status, has_transcription}`;
+`truncated` flags when Resolve's preview cut the text off),
+`perform_audio_classification`,
 `analyze_for_intellisearch(identify_faces?, is_better_mode?)`, `analyze_for_slate(marker_color?)`,
 `remove_motion_blur(deblur_option?)` (Resolve 21+; AI Extras / confirm-token gated as noted above),
 `get_audio_mapping`, `get_mark_in_out`, `set_mark_in_out`
