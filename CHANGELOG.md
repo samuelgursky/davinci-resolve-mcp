@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.35.2
+
+Verification observability and a validator consolidation.
+
+- **Added** `resolve_control(action="verification_stats")` returns a
+  process-level tally of readback-verification outcomes
+  (verified / contradicted / unverified) since server start. A rising
+  `contradicted` count means the Resolve API reported success but a readback
+  disagreed. No connection required.
+- **Changed** `open_page` now validates its `page` argument through the declarative
+  contract layer (`contracts.validate`) instead of a hand-written enum check —
+  behavior unchanged; part of folding scattered validation into one place.
+
 ## What's New in v2.35.1
 
 - **Added** `media_pool_item(action="extract_frames", clip_id, timestamps, output_dir?)`

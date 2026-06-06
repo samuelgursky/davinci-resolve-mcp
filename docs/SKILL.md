@@ -320,6 +320,8 @@ Key actions:
 - `get_version` — returns `{product, version, version_string}`
 - `api_truth(query?)` — look up behaviorally-verified facts about quirky/unreliable
   Resolve API behavior (no connection needed); filter by substring
+- `verification_stats` — readback-verification tally (verified/contradicted/
+  unverified) since server start (no connection needed)
 - `get_page` / `open_page(page)` — read or switch the active page
 - `get_keyframe_mode` / `set_keyframe_mode(mode)`
 - `get_fairlight_presets` — Resolve 20.2.2+; returns available Fairlight
