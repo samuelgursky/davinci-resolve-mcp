@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.33.7
+
+Read/write symmetry audit and a gap it surfaced.
+
+- **Added** `scripts/audit_readwrite_symmetry.py` + generated
+  `docs/reference/readwrite-symmetry.md` — scans every tool's action surface and
+  reports `set_`/`add_`/`create_` writes that lack a read counterpart, so
+  write-without-read gaps surface before users hit them. A repeatable
+  feature-discovery method.
+- **Added** `fusion_comp(action="get_frame_range")` — reads the comp's render
+  frame range, the read counterpart to `set_frame_range` (a gap the audit found).
+
 ## What's New in v2.33.6
 
 Internal consolidation: a declarative parameter-contract validator and centralized

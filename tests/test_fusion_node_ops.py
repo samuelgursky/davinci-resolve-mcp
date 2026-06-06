@@ -81,6 +81,12 @@ class FakeComp:
     def Unlock(self):
         self.locks -= 1
 
+    def GetAttrs(self):
+        return dict(getattr(self, "_attrs", {}))
+
+    def SetAttrs(self, d):
+        self._attrs = {**getattr(self, "_attrs", {}), **d}
+
     def AddTool(self, regid, x=-32768, y=-32768):
         self._added += 1
         name = f"{regid}_{self._added}"
@@ -191,6 +197,15 @@ class AutoArrangeTest(unittest.TestCase):
     def test_empty(self):
         out = _dispatch(FakeComp(), "auto_arrange", {})
         self.assertIn("error", out)
+
+
+class FrameRangeTest(unittest.TestCase):
+    def test_set_then_get_roundtrip(self):
+        comp = FakeComp()
+        _dispatch(comp, "set_frame_range", {"start": 0, "end": 100})
+        out = _dispatch(comp, "get_frame_range", {})
+        self.assertEqual(out["start"], 0)
+        self.assertEqual(out["end"], 100)
 
 
 if __name__ == "__main__":

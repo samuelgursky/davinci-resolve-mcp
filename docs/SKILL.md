@@ -997,7 +997,7 @@ Key actions:
   temp `.setting` file), optionally renaming and repositioning it
 - `auto_arrange(tool_names?, direction?, spacing?, x?, y?)` — lay tools out in a row
   (`direction="horizontal"`, default) or column (`"vertical"`)
-- `get_comp_info`, `set_frame_range(start, end)`, `render`
+- `get_comp_info`, `set_frame_range(start, end)`, `get_frame_range`, `render`
 - `start_undo(name?)` / `end_undo(keep?)`
 - `bulk_set_inputs(ops)` — batch set inputs across multiple timeline item comps in
   one call; each op requires timeline scope plus `tool_name`, `input_name`, `value`

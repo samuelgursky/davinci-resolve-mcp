@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.33.6"
+VERSION = "2.33.7"
 
 import base64
 import os
@@ -18730,6 +18730,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       auto_arrange(tool_names?, direction?, spacing?, x?, y?) -> {success, arranged, count}
         Lay tools out in a row (direction="horizontal", default) or column ("vertical").
       set_frame_range(start, end) -> {success}
+      get_frame_range() -> {start, end}  — read the comp's render frame range
       render() -> {success}
       start_undo(name?) -> {success}
       end_undo(keep?) -> {success}
@@ -19021,6 +19022,13 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         comp.SetAttrs({"COMPN_RenderStartTime": p["start"], "COMPN_RenderEndTime": p["end"]})
         return _ok()
 
+    elif action == "get_frame_range":
+        attrs = comp.GetAttrs() or {}
+        return {
+            "start": attrs.get("COMPN_RenderStartTime"),
+            "end": attrs.get("COMPN_RenderEndTime"),
+        }
+
     elif action == "render":
         comp.Render()
         return _ok()
@@ -19159,7 +19167,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "connect","disconnect","get_inputs","get_outputs",
         "set_input","get_input","set_attrs","get_attrs",
         "add_keyframe","get_keyframes","delete_keyframe",
-        "get_comp_info","set_frame_range","render",
+        "get_comp_info","set_frame_range","get_frame_range","render",
         "start_undo","end_undo",
         "get_position","set_position","copy_tool","auto_arrange",
         "bulk_set_inputs",
