@@ -11,99 +11,111 @@ This module provides functions for inspecting DaVinci Resolve API objects:
 
 import sys
 import inspect
+import logging
 from typing import Any, Dict, List, Optional, Union, Callable
+
+logger = logging.getLogger(__name__)
+
+
+def get_object_members(
+    obj: Any,
+    include_methods: bool = True,
+    include_properties: bool = True,
+) -> Dict[str, Any]:
+    """
+    Inspect a DaVinci Resolve object's methods and/or properties in a single pass.
+
+    DaVinci Resolve API objects are C extensions: every attribute access is a
+    bridge round-trip, so we walk ``dir(obj)`` exactly once and classify each
+    attribute, rather than walking it separately for methods and properties.
+
+    Args:
+        obj: A DaVinci Resolve API object
+        include_methods: Collect callable attributes
+        include_properties: Collect non-callable attributes
+
+    Returns:
+        A dict with ``"methods"`` and/or ``"properties"`` keys, or ``{"error": ...}``
+    """
+    if obj is None:
+        return {"error": "Cannot inspect None object"}
+
+    methods: Dict[str, Dict[str, Any]] = {}
+    properties: Dict[str, Dict[str, Any]] = {}
+
+    for attr_name in dir(obj):
+        # Skip private/internal attributes
+        if attr_name.startswith('_'):
+            continue
+
+        try:
+            attr = getattr(obj, attr_name)
+        except Exception as e:
+            if include_methods:
+                methods[attr_name] = {"error": str(e), "type": "error"}
+            if include_properties:
+                properties[attr_name] = {"error": str(e), "type_category": "error"}
+            continue
+
+        if callable(attr):
+            if not include_methods:
+                continue
+            # Only real Python functions/methods carry an introspectable
+            # signature. Resolve API methods are C extensions where
+            # inspect.signature() is slow and almost always raises, so we skip
+            # the attempt and default to "()" for them.
+            if inspect.isfunction(attr) or inspect.ismethod(attr):
+                try:
+                    signature = str(inspect.signature(attr))
+                except (ValueError, TypeError):
+                    signature = "()"
+            else:
+                signature = "()"
+
+            # Read __doc__ directly instead of inspect.getdoc() to avoid the
+            # MRO walk for inherited docstrings (irrelevant for C-ext methods).
+            doc = (getattr(attr, "__doc__", "") or "").strip()
+
+            methods[attr_name] = {
+                "signature": signature,
+                "doc": doc,
+                "type": "method",
+            }
+        else:
+            if not include_properties:
+                continue
+            properties[attr_name] = {
+                "value": str(attr),
+                "type": type(attr).__name__,
+                "type_category": "property",
+            }
+
+    result: Dict[str, Any] = {}
+    if include_methods:
+        result["methods"] = methods
+    if include_properties:
+        result["properties"] = properties
+    return result
 
 
 def get_object_methods(obj: Any) -> Dict[str, Dict[str, Any]]:
     """
     Get all methods of a DaVinci Resolve object with their documentation.
-    
-    Args:
-        obj: A DaVinci Resolve API object
-        
-    Returns:
-        A dictionary of method names and their details
+
+    Thin wrapper over :func:`get_object_members` kept for backwards compatibility.
     """
-    if obj is None:
-        return {"error": "Cannot inspect None object"}
-    
-    methods = {}
-    
-    # Get all object attributes
-    for attr_name in dir(obj):
-        # Skip private/internal attributes
-        if attr_name.startswith('_'):
-            continue
-            
-        try:
-            attr = getattr(obj, attr_name)
-            
-            # Check if it's a callable method
-            if callable(attr):
-                # Get the method signature if possible
-                try:
-                    signature = str(inspect.signature(attr))
-                except (ValueError, TypeError):
-                    signature = "()"
-                    
-                # Get the docstring if available
-                doc = inspect.getdoc(attr) or ""
-                
-                methods[attr_name] = {
-                    "signature": signature,
-                    "doc": doc,
-                    "type": "method"
-                }
-        except Exception as e:
-            methods[attr_name] = {
-                "error": str(e),
-                "type": "error"
-            }
-    
-    return methods
+    res = get_object_members(obj, include_methods=True, include_properties=False)
+    return res.get("methods", res)
 
 
 def get_object_properties(obj: Any) -> Dict[str, Dict[str, Any]]:
     """
     Get all properties (non-callable attributes) of a DaVinci Resolve object.
-    
-    Args:
-        obj: A DaVinci Resolve API object
-        
-    Returns:
-        A dictionary of property names and their details
+
+    Thin wrapper over :func:`get_object_members` kept for backwards compatibility.
     """
-    if obj is None:
-        return {"error": "Cannot inspect None object"}
-    
-    properties = {}
-    
-    # Get all object attributes
-    for attr_name in dir(obj):
-        # Skip private/internal attributes
-        if attr_name.startswith('_'):
-            continue
-            
-        try:
-            attr = getattr(obj, attr_name)
-            
-            # Skip if it's a method
-            if callable(attr):
-                continue
-                
-            # Get the property value and type
-            properties[attr_name] = {
-                "value": str(attr),
-                "type": type(attr).__name__,
-                "type_category": "property"
-            }
-        except Exception as e:
-            properties[attr_name] = {
-                "error": str(e),
-                "type_category": "error"
-            }
-    
-    return properties
+    res = get_object_members(obj, include_methods=False, include_properties=True)
+    return res.get("properties", res)
 
 
 def inspect_object(obj: Any, max_depth: int = 1) -> Dict[str, Any]:
@@ -120,12 +132,13 @@ def inspect_object(obj: Any, max_depth: int = 1) -> Dict[str, Any]:
     if obj is None:
         return {"error": "Cannot inspect None object"}
     
+    members = get_object_members(obj)
     result = {
         "type": type(obj).__name__,
-        "methods": get_object_methods(obj),
-        "properties": get_object_properties(obj),
+        "methods": members.get("methods", {}),
+        "properties": members.get("properties", {}),
     }
-    
+
     # Add string representation
     try:
         result["str"] = str(obj)
@@ -252,9 +265,10 @@ def print_object_help(obj: Any) -> str:
         return "Cannot provide help for None object"
     
     obj_type = type(obj).__name__
-    methods = get_object_methods(obj)
-    properties = get_object_properties(obj)
-    
+    members = get_object_members(obj)
+    methods = members.get("methods", {})
+    properties = members.get("properties", {})
+
     help_text = [f"Help for {obj_type} object:"]
     help_text.append("\n" + "=" * 40 + "\n")
     

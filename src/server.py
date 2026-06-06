@@ -559,19 +559,19 @@ def _launch_resolve():
         if not os.path.exists(app_path):
             logger.error(f"DaVinci Resolve not found at {app_path}")
             return False
-        subprocess.Popen(["open", app_path])
+        subprocess.Popen(["open", app_path], stdin=subprocess.DEVNULL)
     elif sys_name == "windows":
         app_path = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"
         if not os.path.exists(app_path):
             logger.error(f"DaVinci Resolve not found at {app_path}")
             return False
-        subprocess.Popen([app_path])
+        subprocess.Popen([app_path], stdin=subprocess.DEVNULL)
     elif sys_name == "linux":
         app_path = "/opt/resolve/bin/resolve"
         if not os.path.exists(app_path):
             logger.error(f"DaVinci Resolve not found at {app_path}")
             return False
-        subprocess.Popen([app_path])
+        subprocess.Popen([app_path], stdin=subprocess.DEVNULL)
     else:
         return False
     logger.info("Launched DaVinci Resolve, waiting for it to respond...")
@@ -1058,6 +1058,7 @@ def _activate_resolve_window() -> Dict[str, Any]:
             proc = subprocess.run(
                 ["osascript", "-e", 'tell application "DaVinci Resolve" to activate'],
                 capture_output=True, text=True, timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1071,6 +1072,7 @@ def _activate_resolve_window() -> Dict[str, Any]:
                  "$s = New-Object -ComObject WScript.Shell; "
                  "$null = $s.AppActivate('DaVinci Resolve')"],
                 capture_output=True, text=True, timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1083,6 +1085,7 @@ def _activate_resolve_window() -> Dict[str, Any]:
             proc = subprocess.run(
                 ["wmctrl", "-a", "DaVinci Resolve"],
                 capture_output=True, text=True, timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1093,6 +1096,7 @@ def _activate_resolve_window() -> Dict[str, Any]:
             proc = subprocess.run(
                 ["xdotool", "search", "--name", "DaVinci Resolve", "windowactivate"],
                 capture_output=True, text=True, timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1124,6 +1128,7 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
             proc = subprocess.run(
                 ["osascript", "-e", script],
                 capture_output=True, text=True, timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "sent": proc.returncode == 0,
@@ -1139,6 +1144,7 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
                  "Start-Sleep -Milliseconds 150; "
                  "[System.Windows.Forms.SendKeys]::SendWait('+i')"],
                 capture_output=True, text=True, timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "sent": proc.returncode == 0,
@@ -1152,6 +1158,7 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
             proc = subprocess.run(
                 ["xdotool", "search", "--name", "DaVinci Resolve", "key", "--window", "%@", "shift+i"],
                 capture_output=True, text=True, timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {"sent": proc.returncode == 0, "platform": "linux", "tool": "xdotool", "shortcut": "Shift+I"}
         return {"sent": False, "platform": sys.platform, "note": "no key-send tool found"}
@@ -5407,7 +5414,11 @@ def _safe_auto_sync_audio(mp, p: Dict[str, Any]):
     if err:
         return err
     clips, missing = resolved
-    settings = _normalize_auto_sync_settings(dict(p.get("settings") or {}), resolve)
+    # Use get_resolve() rather than the module global `resolve`, which is None
+    # until populated and can be reset to None by a mid-call reconnect. A None
+    # here makes _normalize_auto_sync_settings fall back to string enum keys,
+    # which AutoSyncAudio silently rejects (returns False).
+    settings = _normalize_auto_sync_settings(dict(p.get("settings") or {}), get_resolve())
     if p.get("dry_run", True):
         return _ok(would_auto_sync=True, clips=_clip_summaries(clips), missing=missing, settings=settings)
     return {"success": bool(mp.AutoSyncAudio(clips, settings)), "count": len(clips), "missing": missing, "settings": settings}
@@ -10897,6 +10908,7 @@ def _pick_dashboard_python(repo_root: str) -> Tuple[str, Optional[str]]:
                 capture_output=True,
                 timeout=5,
                 check=False,
+                stdin=subprocess.DEVNULL,
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -10956,6 +10968,7 @@ def _port_owner_pid(host: str, port: int) -> Optional[int]:
         result = subprocess.run(
             ["lsof", "-nP", "-iTCP:" + str(port), "-sTCP:LISTEN", "-t"],
             capture_output=True, timeout=3, text=True, check=False,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -12071,7 +12084,14 @@ def _make_spec_hook_runner(timeout: float = 120.0):
 
     def _run(hook) -> bool:
         try:
-            proc = subprocess.run(hook.command, shell=True, timeout=timeout)
+            proc = subprocess.run(
+                hook.command,
+                shell=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+            )
             return proc.returncode == 0
         except Exception as exc:
             logger.warning("spec hook '%s' failed: %s", hook.name or hook.command, exc)
@@ -12450,7 +12470,13 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
         g = proj.GetGallery()
         return {"available": g is not None}
     elif action == "export_frame_as_still":
-        return {"success": bool(proj.ExportCurrentFrameAsStill(p["path"]))}
+        still_path = p.get("path")
+        if not still_path:
+            return _err("export_frame_as_still requires a non-empty 'path'")
+        parent = os.path.dirname(os.path.expanduser(still_path))
+        if parent and not os.path.isdir(parent):
+            return _err(f"export_frame_as_still target directory does not exist: {parent}")
+        return {"success": bool(proj.ExportCurrentFrameAsStill(still_path))}
     elif action == "load_burnin_preset":
         return {"success": bool(proj.LoadBurnInPreset(p["name"]))}
     elif action == "insert_audio":
@@ -13874,6 +13900,8 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "get_mark_in_out":
         return _ser(clip.GetMarkInOut())
     elif action == "set_mark_in_out":
+        if p["mark_in"] > p["mark_out"]:
+            return _err(f"mark_in ({p['mark_in']}) must be <= mark_out ({p['mark_out']})")
         return {"success": bool(clip.SetMarkInOut(p["mark_in"], p["mark_out"], p.get("type", "all")))}
     elif action == "clear_mark_in_out":
         return {"success": bool(clip.ClearMarkInOut(p.get("type", "all")))}
@@ -15274,6 +15302,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "get_mark_in_out":
         return _ser(tl.GetMarkInOut())
     elif action == "set_mark_in_out":
+        if p["mark_in"] > p["mark_out"]:
+            return _err(f"mark_in ({p['mark_in']}) must be <= mark_out ({p['mark_out']})")
         return {"success": bool(tl.SetMarkInOut(p["mark_in"], p["mark_out"], p.get("type", "all")))}
     elif action == "clear_mark_in_out":
         return {"success": bool(tl.ClearMarkInOut(p.get("type", "all")))}
@@ -18782,7 +18812,8 @@ def _validate_lua_syntax(source: str) -> Dict[str, Any]:
     luac = None
     for candidate in ("luac", "luac5.1", "luac5.3", "luac5.4"):
         try:
-            subprocess.run([candidate, "-v"], capture_output=True, check=True, timeout=5)
+            subprocess.run([candidate, "-v"], capture_output=True, check=True, timeout=5,
+                           stdin=subprocess.DEVNULL)
             luac = candidate
             break
         except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -18794,7 +18825,8 @@ def _validate_lua_syntax(source: str) -> Dict[str, Any]:
         f.write(source)
         tmp = f.name
     try:
-        result = subprocess.run([luac, "-p", tmp], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([luac, "-p", tmp], capture_output=True, text=True, timeout=10,
+                                stdin=subprocess.DEVNULL)
         if result.returncode == 0:
             return {"valid": True, "errors": None, "checker": luac}
         return {"valid": False, "errors": result.stderr.strip() or result.stdout.strip(),
@@ -19352,7 +19384,7 @@ def _execute_python_script(path: str, args: List[str],
     try:
         result = subprocess.run(cmd, env=_python_env_for_resolve(),
                                  capture_output=True, text=True,
-                                 timeout=timeout)
+                                 timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as e:
         return _err(f"Script timed out after {timeout}s. "
                     f"Partial stdout: {(e.stdout or '')[:1000]}")
