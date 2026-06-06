@@ -729,6 +729,8 @@ Key actions:
 - `get_track_count(track_type)` — track_type: `"video"`, `"audio"`, `"subtitle"`
 - `get_transcript(with_timecodes?)` — read the subtitle track(s) as transcript
   text `{text, cue_count, has_subtitles, cues}`
+- `propose_cuts(cues?, long_pause_frames?)` — DRY-RUN: mechanically detect
+  candidate cuts (fillers, long pauses, repeats) from the transcript; proposes only
 - `add_track(track_type, sub_type?)` / `delete_track(track_type, index)`
 - `get_items(track_type, index)` — items on a track
 - `clip_where(track_type?, track_index?, name_contains?, duration_lt?, duration_gt?)` —

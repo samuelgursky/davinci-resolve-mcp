@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.34.0
+
+First phase of transcript-driven editing: a Cut intermediate representation and a
+mechanical cut proposer.
+
+- **Added** `src/utils/cut_ir.py` — the Cut-IR: a typed representation of an
+  editorial cut ({kind, span, action, confidence, rationale, evidence}) plus a
+  deterministic Pass-1 detector that flags filler words, long pauses, and
+  repeated lines from a timestamped transcript. No LLM.
+- **Added** `timeline(action="propose_cuts", cues?, long_pause_frames?)` — a
+  DRY-RUN that runs Pass-1 over the timeline's subtitle transcript (or provided
+  cues) and returns a CutList. It proposes only; it applies nothing. The semantic
+  Pass-2 and the governed timeline executor are subsequent phases.
+
 ## What's New in v2.33.8
 
 Bridge-call performance instrumentation.
