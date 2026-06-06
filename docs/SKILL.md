@@ -731,6 +731,9 @@ Key actions:
   text `{text, cue_count, has_subtitles, cues}`
 - `propose_cuts(cues?, long_pause_frames?)` — DRY-RUN: mechanically detect
   candidate cuts (fillers, long pauses, repeats) from the transcript; proposes only
+- `apply_cuts(cuts, dry_run?, confirm_token?)` — apply a CutList as lift/ripple
+  deletes. DRY-RUN by default; applying is destructive (confirm-token gated, a
+  timeline version is archived first). Cuts apply latest-first
 - `add_track(track_type, sub_type?)` / `delete_track(track_type, index)`
 - `get_items(track_type, index)` — items on a track
 - `clip_where(track_type?, track_index?, name_contains?, duration_lt?, duration_gt?)` —

@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.35.0
+
+The Cut-IR executor — transcript-driven editing now closes the loop onto the
+timeline.
+
+- **Added** `timeline(action="apply_cuts", cuts, dry_run?, confirm_token?)` applies
+  a CutList (from `propose_cuts`) to the timeline as lift / ripple deletes. It is
+  **DRY-RUN by default**; applying is destructive and fully governed: confirm-token
+  gated, and a timeline version is archived first (so it is reversible), through
+  the existing destructive hook. Cuts apply latest-first so ripple deletes do not
+  invalidate earlier spans. Live-validated end-to-end (propose -> token -> apply ->
+  version archived).
+
 ## What's New in v2.34.1
 
 Page-switch serialization — the concurrency primitive for safe multi-agent use.

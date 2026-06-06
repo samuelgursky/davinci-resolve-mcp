@@ -70,6 +70,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "duplicate_range",
         "overwrite_range",
         "lift_range",
+        "apply_cuts",
         "create_stereo_clip",
         "auto_sync_audio",
         "create_compound_clip",

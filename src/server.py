@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.34.1"
+VERSION = "2.35.0"
 
 import base64
 import os
@@ -729,6 +729,7 @@ _destructive_hook.register_preference_provider(_destructive_preference_provider)
 # a version. Keep in sync with the _issue_confirm_token call sites.
 _TOKEN_GATED_DESTRUCTIVE_ACTIONS = frozenset({
     ("timeline", "delete_track"),
+    ("timeline", "apply_cuts"),
     ("graph", "apply_grade_from_drx"),
     ("graph", "reset_all_grades"),
     # 21.0 AI ops that render/generate NEW media files (additive, but expensive
@@ -15209,6 +15210,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       propose_cuts(cues?, long_pause_frames?) -> {cuts, cut_count, basis_cue_count, pass, note}
         DRY-RUN. Mechanically detect candidate cuts (filler words, long pauses,
         repeated lines) from the subtitle transcript. Proposes only; applies nothing.
+      apply_cuts(cuts, dry_run?, confirm_token?, allow_partial_item_delete?) -> {applied, total, results}
+        Apply a CutList (from propose_cuts) as lift/ripple deletes. DRY-RUN by
+        default; applying is DESTRUCTIVE — confirm-token gated and a timeline
+        version is archived first. Cuts apply latest-first.
       get_mark_in_out() -> {mark}
       set_mark_in_out(mark_in, mark_out, type?) -> {success}
       clear_mark_in_out(type?) -> {success}
@@ -15503,6 +15508,61 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if cues is None:
             cues = _timeline_transcript(tl, with_timecodes=True)["cues"]
         return _build_cut_list(cues, long_pause_frames=int(p.get("long_pause_frames", 48)))
+    elif action == "apply_cuts":
+        # Apply a CutList (from propose_cuts) to the timeline. DRY-RUN by default;
+        # applying is destructive (confirm-token gated, a version is archived
+        # first by the destructive hook). Cuts are applied latest-first so ripple
+        # deletes don't invalidate earlier spans.
+        cuts = p.get("cuts")
+        if not isinstance(cuts, list):
+            return _err("apply_cuts requires 'cuts' (a list, e.g. from propose_cuts)")
+        applicable = [
+            c for c in cuts
+            if isinstance(c, dict) and c.get("action") in ("lift", "ripple_delete")
+            and isinstance(c.get("span"), dict)
+            and c["span"].get("start") is not None and c["span"].get("end") is not None
+        ]
+        applicable.sort(key=lambda c: c["span"]["start"], reverse=True)
+        plan = [{"action": c["action"], "span": c["span"], "kind": c.get("kind")} for c in applicable]
+
+        if p.get("dry_run", True):
+            return {
+                "dry_run": True,
+                "would_apply": len(applicable),
+                "plan": plan,
+                "note": "No edits made. Re-run with dry_run=false (and a confirm_token) to apply.",
+            }
+
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="timeline.apply_cuts", params=p,
+                preview={
+                    "operation": "timeline.apply_cuts",
+                    "warning": "Applies lift/ripple deletes to the timeline; ripple closes "
+                               "gaps and cannot be selectively undone. A timeline version is "
+                               "archived first.",
+                    "would_apply": len(applicable),
+                    "plan": plan,
+                },
+            )
+        blocked = _consume_confirm_token(action="timeline.apply_cuts", params=p)
+        if blocked:
+            return blocked
+
+        allow_partial = bool(p.get("allow_partial_item_delete", True))
+        results = []
+        for c in applicable:
+            sp = c["span"]
+            res = _timeline_lift_range_impl(tl, {
+                "start_frame": sp["start"],
+                "end_frame": sp["end"],
+                "ripple": c["action"] == "ripple_delete",
+                "allow_partial_item_delete": allow_partial,
+            })
+            results.append({"action": c["action"], "span": sp, "result": res})
+        applied = sum(1 for r in results
+                      if isinstance(r["result"], dict) and r["result"].get("success"))
+        return {"success": True, "applied": applied, "total": len(applicable), "results": results}
     elif action == "get_mark_in_out":
         return _ser(tl.GetMarkInOut())
     elif action == "set_mark_in_out":
@@ -15712,7 +15772,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if mp_err:
             return mp_err
         return _fairlight_boundary_report(proj, mp, tl, p)
-    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","story_spine_report","create_variant_from_ranges","bulk_set_item_properties","apply_look_to_items","thumbnail_contact_sheet","marker_thumbnail_review","edit_kernel_capabilities","probe_edit_kernel_item","title_property_scan","set_title_text","bulk_set_title_text","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_transcript","propose_cuts","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges","audio_mix_capability_report",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
+    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","story_spine_report","create_variant_from_ranges","bulk_set_item_properties","apply_look_to_items","thumbnail_contact_sheet","marker_thumbnail_review","edit_kernel_capabilities","probe_edit_kernel_item","title_property_scan","set_title_text","bulk_set_title_text","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_transcript","propose_cuts","apply_cuts","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges","audio_mix_capability_report",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
