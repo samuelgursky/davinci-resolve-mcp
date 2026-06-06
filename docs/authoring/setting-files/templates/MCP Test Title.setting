@@ -1,0 +1,105 @@
+{
+	Tools = ordered() {
+		MinimalTitle = GroupOperator {
+			Inputs = ordered() {
+				TextContent = InstanceInput {
+					SourceOp = "Text",
+					Source = "StyledText",
+					Name = "Text",
+				},
+				Font = InstanceInput {
+					SourceOp = "Text",
+					Source = "Font",
+					ControlGroup = 2,
+				},
+				Style = InstanceInput {
+					SourceOp = "Text",
+					Source = "Style",
+					ControlGroup = 2,
+				},
+				Size = InstanceInput {
+					SourceOp = "Text",
+					Source = "Size",
+					Name = "Size",
+					Default = 0.08,
+					MinScale = 0.01,
+					MaxScale = 0.5,
+				},
+				Position = InstanceInput {
+					SourceOp = "Text",
+					Source = "Center",
+					Name = "Position",
+				},
+				Red = InstanceInput {
+					SourceOp = "Text",
+					Source = "Red",
+					Name = "Color",
+					ControlGroup = 10,
+					Default = 1,
+				},
+				Green = InstanceInput {
+					SourceOp = "Text",
+					Source = "Green",
+					Name = "Color",
+					ControlGroup = 10,
+					Default = 1,
+				},
+				Blue = InstanceInput {
+					SourceOp = "Text",
+					Source = "Blue",
+					Name = "Color",
+					ControlGroup = 10,
+					Default = 1,
+				},
+				Alpha = InstanceInput {
+					SourceOp = "Text",
+					Source = "Alpha",
+					Name = "Color",
+					ControlGroup = 10,
+					Default = 1,
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "Stretcher",
+					Source = "Result",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				Text = TextPlus {
+					Inputs = {
+						GlobalOut = Input { Value = 500, },
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						StyledText = Input { Value = "SAMPLE TITLE", },
+						Font = Input { Value = "Open Sans", },
+						Style = Input { Value = "Bold", },
+						Size = Input { Value = 0.08, },
+						VerticalJustificationNew = Input { Value = 3, },
+						HorizontalJustificationNew = Input { Value = 3, },
+						Red = Input { Value = 1, },
+						Green = Input { Value = 1, },
+						Blue = Input { Value = 1, },
+						Alpha = Input { Value = 1, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+				Stretcher = KeyStretcher {
+					Inputs = {
+						Keyframes = Input {
+							SourceOp = "Text",
+							Source = "Output",
+						},
+						SourceEnd = Input { Value = 119, },
+						StretchStart = Input { Value = 10, },
+						StretchEnd = Input { Value = 100, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 100, 0 } },
+				},
+			},
+		},
+	},
+	ActiveTool = "MinimalTitle",
+}

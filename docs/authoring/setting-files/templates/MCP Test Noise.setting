@@ -1,0 +1,74 @@
+{
+	Tools = ordered() {
+		MinimalGenerator = GroupOperator {
+			Inputs = ordered() {
+				Detail = InstanceInput {
+					SourceOp = "Noise1",
+					Source = "Detail",
+					Name = "Detail",
+					Default = 5,
+					MinScale = 0,
+					MaxScale = 10,
+				},
+				Contrast = InstanceInput {
+					SourceOp = "Noise1",
+					Source = "Contrast",
+					Default = 1,
+					MinScale = 0,
+					MaxScale = 10,
+				},
+				XScale = InstanceInput {
+					SourceOp = "Noise1",
+					Source = "XScale",
+					Name = "Scale",
+					Default = 10,
+					MinScale = 1,
+					MaxScale = 50,
+				},
+				SeetheRate = InstanceInput {
+					SourceOp = "Noise1",
+					Source = "SeetheRate",
+					Name = "Animation Speed",
+					Default = 0.1,
+					MinScale = 0,
+					MaxScale = 1,
+				},
+				GradientColor = InstanceInput {
+					SourceOp = "Noise1",
+					Source = "Gradient",
+					Name = "Gradient",
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "Noise1",
+					Source = "Output",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				Noise1 = FastNoise {
+					Inputs = {
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						Detail = Input { Value = 5, },
+						Contrast = Input { Value = 1, },
+						XScale = Input { Value = 10, },
+						SeetheRate = Input { Value = 0.1, },
+						Gradient = Input {
+							Value = Gradient {
+								Colors = {
+									[0] = { 0, 0, 0, 1 },
+									[1] = { 1, 1, 1, 1 }
+								}
+							},
+						},
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+			},
+		},
+	},
+	ActiveTool = "MinimalGenerator",
+}

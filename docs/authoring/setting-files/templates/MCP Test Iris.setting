@@ -1,0 +1,127 @@
+{
+	Tools = ordered() {
+		MCPTestIris = GroupOperator {
+			Inputs = ordered() {
+				MainInput1 = InstanceInput {
+					SourceOp = "IrisDissolve",
+					Source = "Background",
+				},
+				MainInput2 = InstanceInput {
+					SourceOp = "IrisDissolve",
+					Source = "Foreground",
+				},
+				Center = InstanceInput {
+					SourceOp = "IrisMask",
+					Source = "Center",
+					Name = "Center",
+					Page = "Controls",
+				},
+				Softness = InstanceInput {
+					SourceOp = "IrisDissolve",
+					Source = "DFTLumaRamp.Softness",
+					Name = "Edge Softness",
+					Default = 0.1,
+					MinScale = 0,
+					MaxScale = 1,
+					Page = "Controls",
+				},
+				EllipseWidth = InstanceInput {
+					SourceOp = "IrisMask",
+					Source = "Width",
+					Name = "Ellipse Width",
+					Default = 1,
+					MinScale = 0.1,
+					MaxScale = 2,
+					Page = "Controls",
+				},
+				EllipseHeight = InstanceInput {
+					SourceOp = "IrisMask",
+					Source = "Height",
+					Name = "Ellipse Height",
+					Default = 1,
+					MinScale = 0.1,
+					MaxScale = 2,
+					Page = "Controls",
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "IrisDissolve",
+					Source = "Output",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				IrisMask = EllipseMask {
+					Inputs = {
+						Filter = Input { Value = FuID { "Fast Gaussian" }, },
+						MaskWidth = Input { Value = 1920, },
+						MaskHeight = Input { Value = 1080, },
+						PixelAspect = Input { Value = { 1, 1 }, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						ClippingMode = Input { Value = FuID { "None" }, },
+						Center = Input { Value = { 0.5, 0.5 }, },
+						Width = Input { Value = 1, },
+						Height = Input { Value = 1, },
+					},
+					ViewInfo = OperatorInfo { Pos = { -300, -100 } },
+				},
+				MaskToImage = Background {
+					Inputs = {
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						EffectMask = Input {
+							SourceOp = "IrisMask",
+							Source = "Mask",
+						},
+						TopLeftRed = Input { Value = 1, },
+						TopLeftGreen = Input { Value = 1, },
+						TopLeftBlue = Input { Value = 1, },
+						TopLeftAlpha = Input { Value = 1, },
+					},
+					ViewInfo = OperatorInfo { Pos = { -150, 0 } },
+				},
+				IrisDissolve = Dissolve {
+					Inputs = {
+						Operation = Input { Value = FuID { "DFTLumaRamp" }, },
+						Mix = Input {
+							SourceOp = "ProgressCurve",
+							Source = "Value",
+						},
+						Map = Input {
+							SourceOp = "MaskToImage",
+							Source = "Output",
+						},
+						["DFTLumaRamp.Softness"] = Input { Value = 0.1, },
+						["DFTLumaRamp.Border"] = Input { Value = 0, },
+						["DFTLumaRamp.BorderSoftness"] = Input { Value = 0, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+				ProgressCurve = LUTLookup {
+					Inputs = {
+						Source = Input { Value = FuID { "Duration" }, },
+						Curve = Input { Value = FuID { "Easing" }, },
+						EaseIn = Input { Value = FuID { "Cubic" }, },
+						EaseOut = Input { Value = FuID { "Cubic" }, },
+						Lookup = Input {
+							SourceOp = "ProgressCurveLookup",
+							Source = "Value",
+						},
+					},
+				},
+				ProgressCurveLookup = LUTBezier {
+					KeyColorSplines = {
+						[0] = {
+							[0] = { 0, RH = { 0.333333333333333, 0.333333333333333 }, Flags = { Linear = true } },
+							[1] = { 1, LH = { 0.666666666666667, 0.666666666666667 }, Flags = { Linear = true } }
+						}
+					},
+					SplineColor = { Red = 255, Green = 255, Blue = 255 },
+				},
+			},
+		},
+	},
+	ActiveTool = "MCPTestIris",
+}

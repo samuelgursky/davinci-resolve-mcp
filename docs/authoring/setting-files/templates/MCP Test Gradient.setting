@@ -1,0 +1,52 @@
+{
+	Tools = ordered() {
+		MCPTestGradient = GroupOperator {
+			Inputs = ordered() {
+				Start = InstanceInput {
+					SourceOp = "Grad",
+					Source = "Start",
+					Name = "Start Point",
+				},
+				End = InstanceInput {
+					SourceOp = "Grad",
+					Source = "End",
+					Name = "End Point",
+				},
+				GradientColors = InstanceInput {
+					SourceOp = "Grad",
+					Source = "Gradient",
+					Name = "Colors",
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "Grad",
+					Source = "Output",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				Grad = Background {
+					Inputs = {
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						Type = Input { Value = FuID { "Gradient" }, },
+						Start = Input { Value = { 0, 0.5 }, },
+						End = Input { Value = { 1, 0.5 }, },
+						Gradient = Input {
+							Value = Gradient {
+								Colors = {
+									[0] = { 0.8, 0.2, 0.4, 1 },
+									[1] = { 0.2, 0.4, 0.8, 1 }
+								}
+							},
+						},
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+			},
+		},
+	},
+	ActiveTool = "MCPTestGradient",
+}

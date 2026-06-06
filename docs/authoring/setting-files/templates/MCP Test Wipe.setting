@@ -1,0 +1,98 @@
+{
+	Tools = ordered() {
+		MinimalTransition = GroupOperator {
+			Inputs = ordered() {
+				MainInput1 = InstanceInput {
+					SourceOp = "Dissolve1",
+					Source = "Background",
+				},
+				MainInput2 = InstanceInput {
+					SourceOp = "Dissolve1",
+					Source = "Foreground",
+				},
+				Softness = InstanceInput {
+					SourceOp = "Dissolve1",
+					Source = "DFTLumaRamp.Softness",
+					Name = "Softness",
+					Default = 0.1,
+					MinScale = 0,
+					MaxScale = 1,
+					Page = "Controls",
+				},
+				EaseInOut = InstanceInput {
+					SourceOp = "ProgressCurve",
+					Source = "Curve",
+					Name = "Ease Curve",
+					Page = "Controls",
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "Dissolve1",
+					Source = "Output",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				Dissolve1 = Dissolve {
+					Inputs = {
+						Operation = Input { Value = FuID { "DFTLumaRamp" }, },
+						Mix = Input {
+							SourceOp = "ProgressCurve",
+							Source = "Value",
+						},
+						Map = Input {
+							SourceOp = "WipeShape",
+							Source = "Output",
+						},
+						["DFTLumaRamp.Softness"] = Input { Value = 0.1, },
+						["DFTLumaRamp.Border"] = Input { Value = 0, },
+						["DFTLumaRamp.BorderSoftness"] = Input { Value = 0, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+				WipeShape = Background {
+					Inputs = {
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						Type = Input { Value = FuID { "Gradient" }, },
+						Gradient = Input {
+							Value = Gradient {
+								Colors = {
+									[0] = { 0, 0, 0, 1 },
+									[1] = { 1, 1, 1, 1 }
+								}
+							},
+						},
+						Start = Input { Value = { 0, 0.5 }, },
+						End = Input { Value = { 1, 0.5 }, },
+					},
+					ViewInfo = OperatorInfo { Pos = { -200, 0 } },
+				},
+				ProgressCurve = LUTLookup {
+					Inputs = {
+						Source = Input { Value = FuID { "Duration" }, },
+						Curve = Input { Value = FuID { "Easing" }, },
+						EaseIn = Input { Value = FuID { "Cubic" }, },
+						EaseOut = Input { Value = FuID { "Cubic" }, },
+						Lookup = Input {
+							SourceOp = "ProgressCurveLookup",
+							Source = "Value",
+						},
+					},
+				},
+				ProgressCurveLookup = LUTBezier {
+					KeyColorSplines = {
+						[0] = {
+							[0] = { 0, RH = { 0.333333333333333, 0.333333333333333 }, Flags = { Linear = true } },
+							[1] = { 1, LH = { 0.666666666666667, 0.666666666666667 }, Flags = { Linear = true } }
+						}
+					},
+					SplineColor = { Red = 255, Green = 255, Blue = 255 },
+				},
+			},
+		},
+	},
+	ActiveTool = "MinimalTransition",
+}

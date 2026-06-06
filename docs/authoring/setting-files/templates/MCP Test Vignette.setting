@@ -1,0 +1,98 @@
+{
+	Tools = ordered() {
+		MCPTestVignette = GroupOperator {
+			Inputs = ordered() {
+				MainInput1 = InstanceInput {
+					SourceOp = "VignetteMerge",
+					Source = "Background",
+				},
+				Size = InstanceInput {
+					SourceOp = "VignetteMask",
+					Source = "Width",
+					Name = "Size",
+					Default = 0.8,
+					MinScale = 0.1,
+					MaxScale = 1.5,
+					Page = "Controls",
+				},
+				Softness = InstanceInput {
+					SourceOp = "VignetteMask",
+					Source = "SoftEdge",
+					Name = "Softness",
+					Default = 0.3,
+					MinScale = 0,
+					MaxScale = 1,
+					Page = "Controls",
+				},
+				Darkness = InstanceInput {
+					SourceOp = "VignetteMerge",
+					Source = "Blend",
+					Name = "Darkness",
+					Default = 0.7,
+					MinScale = 0,
+					MaxScale = 1,
+					Page = "Controls",
+				},
+				Center = InstanceInput {
+					SourceOp = "VignetteMask",
+					Source = "Center",
+					Name = "Center",
+					Page = "Controls",
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "VignetteMerge",
+					Source = "Output",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				VignetteMask = EllipseMask {
+					Inputs = {
+						Filter = Input { Value = FuID { "Fast Gaussian" }, },
+						MaskWidth = Input { Value = 1920, },
+						MaskHeight = Input { Value = 1080, },
+						PixelAspect = Input { Value = { 1, 1 }, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						ClippingMode = Input { Value = FuID { "None" }, },
+						Center = Input { Value = { 0.5, 0.5 }, },
+						Width = Input { Value = 0.8, },
+						Height = Input { Value = 0.8, },
+						SoftEdge = Input { Value = 0.3, },
+						Invert = Input { Value = 1, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, -100 } },
+				},
+				BlackBG = Background {
+					Inputs = {
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						TopLeftRed = Input { Value = 0, },
+						TopLeftGreen = Input { Value = 0, },
+						TopLeftBlue = Input { Value = 0, },
+						TopLeftAlpha = Input { Value = 1, },
+					},
+					ViewInfo = OperatorInfo { Pos = { -200, 0 } },
+				},
+				VignetteMerge = Merge {
+					Inputs = {
+						Foreground = Input {
+							SourceOp = "BlackBG",
+							Source = "Output",
+						},
+						EffectMask = Input {
+							SourceOp = "VignetteMask",
+							Source = "Mask",
+						},
+						PerformDepthMerge = Input { Value = 0, },
+						Blend = Input { Value = 0.7, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+			},
+		},
+	},
+	ActiveTool = "MCPTestVignette",
+}

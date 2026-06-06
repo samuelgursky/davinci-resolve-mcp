@@ -1,0 +1,57 @@
+{
+	Tools = ordered() {
+		MCPTestCrossDissolve = GroupOperator {
+			Inputs = ordered() {
+				MainInput1 = InstanceInput {
+					SourceOp = "CrossDissolve",
+					Source = "Background",
+				},
+				MainInput2 = InstanceInput {
+					SourceOp = "CrossDissolve",
+					Source = "Foreground",
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "CrossDissolve",
+					Source = "Output",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				CrossDissolve = Dissolve {
+					Inputs = {
+						Operation = Input { Value = FuID { "DFTDissolve" }, },
+						Mix = Input {
+							SourceOp = "ProgressCurve",
+							Source = "Value",
+						},
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+				ProgressCurve = LUTLookup {
+					Inputs = {
+						Source = Input { Value = FuID { "Duration" }, },
+						Curve = Input { Value = FuID { "Easing" }, },
+						EaseIn = Input { Value = FuID { "Linear" }, },
+						EaseOut = Input { Value = FuID { "Linear" }, },
+						Lookup = Input {
+							SourceOp = "ProgressCurveLookup",
+							Source = "Value",
+						},
+					},
+				},
+				ProgressCurveLookup = LUTBezier {
+					KeyColorSplines = {
+						[0] = {
+							[0] = { 0, RH = { 0.333333333333333, 0.333333333333333 }, Flags = { Linear = true } },
+							[1] = { 1, LH = { 0.666666666666667, 0.666666666666667 }, Flags = { Linear = true } }
+						}
+					},
+					SplineColor = { Red = 255, Green = 255, Blue = 255 },
+				},
+			},
+		},
+	},
+	ActiveTool = "MCPTestCrossDissolve",
+}

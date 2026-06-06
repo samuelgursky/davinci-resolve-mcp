@@ -53,7 +53,10 @@ restart-required classification, Python installed-script execution, and
 Python/Lua `run_inline`. Use `docs/kernels/extension-authoring-kernel.md` for the
 kernel boundary map, `docs/authoring/fuse-dctl-authoring.md` for the Fuse + DCTL coverage
 matrix, and `docs/authoring/script-plugin-authoring.md` for the script DSL spec and the
-conversational-execution model.
+conversational-execution model. For hand-authoring `.setting` template files
+(Edit effects/transitions/titles/generators and Fusion macros) — the format,
+control catalog, thumbnail conventions, install paths, and gotchas, plus copyable
+starter templates — see `docs/authoring/setting-files/`.
 
 Extension Authoring kernel actions (v2.16.0+) are exposed through
 `script_plugin`:

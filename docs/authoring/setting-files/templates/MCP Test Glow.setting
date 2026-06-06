@@ -1,0 +1,55 @@
+{
+	Tools = ordered() {
+		MinimalFusionMacro = GroupOperator {
+			CtrlWZoom = false,
+			Inputs = ordered() {
+				Comments = Input { Value = "Minimal Fusion tool macro — applies a glow to the input.", },
+				MainInput1 = InstanceInput {
+					SourceOp = "SoftGlow1",
+					Source = "Input",
+				},
+				GlowAmount = InstanceInput {
+					SourceOp = "SoftGlow1",
+					Source = "Glow",
+					Name = "Glow Amount",
+					Default = 2,
+					MinScale = 0,
+					MaxScale = 20,
+				},
+				Threshold = InstanceInput {
+					SourceOp = "SoftGlow1",
+					Source = "Threshold",
+					Default = 0.6,
+					MinScale = 0,
+					MaxScale = 1,
+				},
+				Gain = InstanceInput {
+					SourceOp = "SoftGlow1",
+					Source = "Gain",
+					Default = 1,
+					MinScale = 0,
+					MaxScale = 5,
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "SoftGlow1",
+					Source = "Output",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				SoftGlow1 = SoftGlow {
+					Inputs = {
+						Filter = Input { Value = FuID { "Fast Gaussian" }, },
+						Glow = Input { Value = 2, },
+						Threshold = Input { Value = 0.6, },
+						Gain = Input { Value = 1, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+			},
+		},
+	},
+	ActiveTool = "MinimalFusionMacro",
+}

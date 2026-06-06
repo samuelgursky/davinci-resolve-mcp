@@ -1,0 +1,192 @@
+{
+	Tools = ordered() {
+		MCPTestLowerThird = GroupOperator {
+			Inputs = ordered() {
+				TextContent = InstanceInput {
+					SourceOp = "Text",
+					Source = "StyledText",
+					Name = "Text",
+				},
+				Font = InstanceInput {
+					SourceOp = "Text",
+					Source = "Font",
+					ControlGroup = 2,
+				},
+				Style = InstanceInput {
+					SourceOp = "Text",
+					Source = "Style",
+					ControlGroup = 2,
+				},
+				Size = InstanceInput {
+					SourceOp = "Text",
+					Source = "Size",
+					Default = 0.05,
+					MinScale = 0.01,
+					MaxScale = 0.2,
+				},
+				TextPos = InstanceInput {
+					SourceOp = "Text",
+					Source = "Center",
+					Name = "Text Position",
+					DefaultX = 0.25,
+					DefaultY = 0.2,
+				},
+				TextR = InstanceInput {
+					SourceOp = "Text",
+					Source = "Red",
+					Name = "Text Color",
+					ControlGroup = 4,
+					Default = 1,
+				},
+				TextG = InstanceInput {
+					SourceOp = "Text",
+					Source = "Green",
+					ControlGroup = 4,
+					Default = 1,
+				},
+				TextB = InstanceInput {
+					SourceOp = "Text",
+					Source = "Blue",
+					ControlGroup = 4,
+					Default = 1,
+				},
+				TextA = InstanceInput {
+					SourceOp = "Text",
+					Source = "Alpha",
+					ControlGroup = 4,
+					Default = 1,
+				},
+				BarR = InstanceInput {
+					SourceOp = "Bar",
+					Source = "TopLeftRed",
+					Name = "Bar Color",
+					ControlGroup = 8,
+					Default = 0,
+				},
+				BarG = InstanceInput {
+					SourceOp = "Bar",
+					Source = "TopLeftGreen",
+					ControlGroup = 8,
+					Default = 0,
+				},
+				BarB = InstanceInput {
+					SourceOp = "Bar",
+					Source = "TopLeftBlue",
+					ControlGroup = 8,
+					Default = 0,
+				},
+				BarA = InstanceInput {
+					SourceOp = "Bar",
+					Source = "TopLeftAlpha",
+					ControlGroup = 8,
+					Default = 0.75,
+				},
+				BarWidth = InstanceInput {
+					SourceOp = "BarMask",
+					Source = "Width",
+					Name = "Bar Width",
+					Default = 0.5,
+					MinScale = 0.1,
+					MaxScale = 1,
+				},
+				BarHeight = InstanceInput {
+					SourceOp = "BarMask",
+					Source = "Height",
+					Name = "Bar Height",
+					Default = 0.1,
+					MinScale = 0.02,
+					MaxScale = 0.3,
+				},
+				BarPos = InstanceInput {
+					SourceOp = "BarMask",
+					Source = "Center",
+					Name = "Bar Position",
+					DefaultX = 0.25,
+					DefaultY = 0.2,
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "Stretcher",
+					Source = "Result",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				BarMask = RectangleMask {
+					Inputs = {
+						Filter = Input { Value = FuID { "Fast Gaussian" }, },
+						MaskWidth = Input { Value = 1920, },
+						MaskHeight = Input { Value = 1080, },
+						PixelAspect = Input { Value = { 1, 1 }, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						ClippingMode = Input { Value = FuID { "None" }, },
+						Center = Input { Value = { 0.25, 0.2 }, },
+						Width = Input { Value = 0.5, },
+						Height = Input { Value = 0.1, },
+					},
+					ViewInfo = OperatorInfo { Pos = { -200, -100 } },
+				},
+				Bar = Background {
+					Inputs = {
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						EffectMask = Input {
+							SourceOp = "BarMask",
+							Source = "Mask",
+						},
+						TopLeftRed = Input { Value = 0, },
+						TopLeftGreen = Input { Value = 0, },
+						TopLeftBlue = Input { Value = 0, },
+						TopLeftAlpha = Input { Value = 0.75, },
+					},
+					ViewInfo = OperatorInfo { Pos = { -50, -100 } },
+				},
+				Text = TextPlus {
+					Inputs = {
+						GlobalOut = Input { Value = 500, },
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						StyledText = Input { Value = "LOWER THIRD", },
+						Font = Input { Value = "Open Sans", },
+						Style = Input { Value = "Bold", },
+						Size = Input { Value = 0.05, },
+						Center = Input { Value = { 0.25, 0.2 }, },
+						VerticalJustificationNew = Input { Value = 3, },
+						HorizontalJustificationNew = Input { Value = 3, },
+					},
+					ViewInfo = OperatorInfo { Pos = { -50, 0 } },
+				},
+				TextOverBar = Merge {
+					Inputs = {
+						Background = Input {
+							SourceOp = "Bar",
+							Source = "Output",
+						},
+						Foreground = Input {
+							SourceOp = "Text",
+							Source = "Output",
+						},
+						PerformDepthMerge = Input { Value = 0, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 100, -50 } },
+				},
+				Stretcher = KeyStretcher {
+					Inputs = {
+						Keyframes = Input {
+							SourceOp = "TextOverBar",
+							Source = "Output",
+						},
+						SourceEnd = Input { Value = 119, },
+						StretchStart = Input { Value = 10, },
+						StretchEnd = Input { Value = 100, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 250, -50 } },
+				},
+			},
+		},
+	},
+	ActiveTool = "MCPTestLowerThird",
+}

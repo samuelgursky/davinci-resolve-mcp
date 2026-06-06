@@ -1,0 +1,78 @@
+{
+	Tools = ordered() {
+		MCPTestColorTint = GroupOperator {
+			Inputs = ordered() {
+				MainInput1 = InstanceInput {
+					SourceOp = "TintMerge",
+					Source = "Background",
+				},
+				Red = InstanceInput {
+					SourceOp = "TintColor",
+					Source = "TopLeftRed",
+					Name = "Tint Color",
+					ControlGroup = 4,
+					Default = 1,
+				},
+				Green = InstanceInput {
+					SourceOp = "TintColor",
+					Source = "TopLeftGreen",
+					ControlGroup = 4,
+					Default = 0.5,
+				},
+				Blue = InstanceInput {
+					SourceOp = "TintColor",
+					Source = "TopLeftBlue",
+					ControlGroup = 4,
+					Default = 0,
+				},
+				Alpha = InstanceInput {
+					SourceOp = "TintColor",
+					Source = "TopLeftAlpha",
+					ControlGroup = 4,
+					Default = 1,
+				},
+				Strength = InstanceInput {
+					SourceOp = "TintMerge",
+					Source = "Blend",
+					Name = "Strength",
+					Default = 0.3,
+					MinScale = 0,
+					MaxScale = 1,
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "TintMerge",
+					Source = "Output",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				TintColor = Background {
+					Inputs = {
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						TopLeftRed = Input { Value = 1, },
+						TopLeftGreen = Input { Value = 0.5, },
+						TopLeftBlue = Input { Value = 0, },
+						TopLeftAlpha = Input { Value = 1, },
+					},
+					ViewInfo = OperatorInfo { Pos = { -200, 0 } },
+				},
+				TintMerge = Merge {
+					Inputs = {
+						Foreground = Input {
+							SourceOp = "TintColor",
+							Source = "Output",
+						},
+						PerformDepthMerge = Input { Value = 0, },
+						Blend = Input { Value = 0.3, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+			},
+		},
+	},
+	ActiveTool = "MCPTestColorTint",
+}

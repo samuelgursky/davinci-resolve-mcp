@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.33.2
+
+Documentation: a guide for hand-authoring DaVinci Resolve `.setting` template
+files.
+
+- **Added** `docs/authoring/setting-files/` — how to author Edit effects,
+  transitions, titles, generators, and Fusion macros as `.setting` files: the
+  Lua-table format, the `InstanceInput`/`UserControls` control catalog, thumbnail
+  conventions, Templates install paths, and a set of hard-won gotchas (ordered
+  vs unordered `Inputs`, `ControlGroup` anchoring, transition easing via
+  `LUTLookup`, `KeyStretcher` on titles, the category-subfolder rule, OFX
+  boilerplate, and more). Includes 13 copyable starter templates and is linked
+  from `docs/SKILL.md`.
+
 ## What's New in v2.33.1
 
 Clip transcription read-back and more trustworthy auto-sync reporting.

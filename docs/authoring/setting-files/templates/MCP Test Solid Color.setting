@@ -1,0 +1,55 @@
+{
+	Tools = ordered() {
+		MCPTestSolidColor = GroupOperator {
+			Inputs = ordered() {
+				Red = InstanceInput {
+					SourceOp = "Solid",
+					Source = "TopLeftRed",
+					Name = "Color",
+					ControlGroup = 4,
+					Default = 0.2,
+				},
+				Green = InstanceInput {
+					SourceOp = "Solid",
+					Source = "TopLeftGreen",
+					ControlGroup = 4,
+					Default = 0.4,
+				},
+				Blue = InstanceInput {
+					SourceOp = "Solid",
+					Source = "TopLeftBlue",
+					ControlGroup = 4,
+					Default = 0.8,
+				},
+				Alpha = InstanceInput {
+					SourceOp = "Solid",
+					Source = "TopLeftAlpha",
+					ControlGroup = 4,
+					Default = 1,
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "Solid",
+					Source = "Output",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				Solid = Background {
+					Inputs = {
+						Width = Input { Value = 1920, },
+						Height = Input { Value = 1080, },
+						UseFrameFormatSettings = Input { Value = 1, },
+						TopLeftRed = Input { Value = 0.2, },
+						TopLeftGreen = Input { Value = 0.4, },
+						TopLeftBlue = Input { Value = 0.8, },
+						TopLeftAlpha = Input { Value = 1, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+			},
+		},
+	},
+	ActiveTool = "MCPTestSolidColor",
+}

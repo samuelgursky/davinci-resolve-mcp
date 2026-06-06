@@ -1,0 +1,46 @@
+{
+	Tools = ordered() {
+		MinimalEffect = GroupOperator {
+			Inputs = ordered() {
+				MainInput1 = InstanceInput {
+					SourceOp = "Blur1",
+					Source = "Input",
+				},
+				Strength = InstanceInput {
+					SourceOp = "Blur1",
+					Source = "XBlurSize",
+					Name = "Strength",
+					Default = 5,
+					MinScale = 0,
+					MaxScale = 100,
+					Page = "Controls",
+				},
+				LockXY = InstanceInput {
+					SourceOp = "Blur1",
+					Source = "LockXY",
+					Name = "Lock X/Y",
+					Default = 1,
+					Page = "Controls",
+				},
+			},
+			Outputs = {
+				MainOutput1 = InstanceOutput {
+					SourceOp = "Blur1",
+					Source = "Output",
+				},
+			},
+			ViewInfo = GroupInfo { Pos = { 0, 0 } },
+			Tools = ordered() {
+				Blur1 = Blur {
+					Inputs = {
+						Filter = Input { Value = FuID { "Fast Gaussian" }, },
+						XBlurSize = Input { Value = 5, },
+						LockXY = Input { Value = 1, },
+					},
+					ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+				},
+			},
+		},
+	},
+	ActiveTool = "MinimalEffect",
+}
