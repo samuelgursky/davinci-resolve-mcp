@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.33.5"
+VERSION = "2.33.6"
 
 import base64
 import os
@@ -44,6 +44,8 @@ for p in [current_dir, project_dir]:
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
+from src.utils.contracts import validate as _validate_params
+from src.utils.proc import safe_run
 from src.utils.readback import verify_by_readback
 from src.utils.update_check import (
     check_for_updates,
@@ -12626,13 +12628,12 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
         g = proj.GetGallery()
         return {"available": g is not None}
     elif action == "export_frame_as_still":
-        still_path = p.get("path")
-        if not still_path:
-            return _err("export_frame_as_still requires a non-empty 'path'")
-        parent = os.path.dirname(os.path.expanduser(still_path))
-        if parent and not os.path.isdir(parent):
-            return _err(f"export_frame_as_still target directory does not exist: {parent}")
-        return {"success": bool(proj.ExportCurrentFrameAsStill(still_path))}
+        err, clean = _validate_params(p, {
+            "path": {"type": str, "required": True, "non_empty": True, "parent_dir_exists": True},
+        })
+        if err:
+            return _err(err)
+        return {"success": bool(proj.ExportCurrentFrameAsStill(clean["path"]))}
     elif action == "project_summary":
         return _project_summary(
             proj,
@@ -14079,9 +14080,15 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "get_mark_in_out":
         return _ser(clip.GetMarkInOut())
     elif action == "set_mark_in_out":
-        if p["mark_in"] > p["mark_out"]:
-            return _err(f"mark_in ({p['mark_in']}) must be <= mark_out ({p['mark_out']})")
-        return {"success": bool(clip.SetMarkInOut(p["mark_in"], p["mark_out"], p.get("type", "all")))}
+        err, clean = _validate_params(
+            p,
+            {"mark_in": {"type": int, "required": True}, "mark_out": {"type": int, "required": True}},
+            invariants=[lambda c: f"mark_in ({c['mark_in']}) must be <= mark_out ({c['mark_out']})"
+                        if c["mark_in"] > c["mark_out"] else None],
+        )
+        if err:
+            return _err(err)
+        return {"success": bool(clip.SetMarkInOut(clean["mark_in"], clean["mark_out"], p.get("type", "all")))}
     elif action == "clear_mark_in_out":
         return {"success": bool(clip.ClearMarkInOut(p.get("type", "all")))}
     return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip","get_unique_id","transcribe_audio","clear_transcription","get_transcription","perform_audio_classification","clear_audio_classification","analyze_for_intellisearch","analyze_for_slate","remove_motion_blur","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out","open_in_viewer"])
@@ -15485,9 +15492,15 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "get_mark_in_out":
         return _ser(tl.GetMarkInOut())
     elif action == "set_mark_in_out":
-        if p["mark_in"] > p["mark_out"]:
-            return _err(f"mark_in ({p['mark_in']}) must be <= mark_out ({p['mark_out']})")
-        return {"success": bool(tl.SetMarkInOut(p["mark_in"], p["mark_out"], p.get("type", "all")))}
+        err, clean = _validate_params(
+            p,
+            {"mark_in": {"type": int, "required": True}, "mark_out": {"type": int, "required": True}},
+            invariants=[lambda c: f"mark_in ({c['mark_in']}) must be <= mark_out ({c['mark_out']})"
+                        if c["mark_in"] > c["mark_out"] else None],
+        )
+        if err:
+            return _err(err)
+        return {"success": bool(tl.SetMarkInOut(clean["mark_in"], clean["mark_out"], p.get("type", "all")))}
     elif action == "clear_mark_in_out":
         return {"success": bool(tl.ClearMarkInOut(p.get("type", "all")))}
     elif action == "convert_to_stereo":
@@ -19757,9 +19770,8 @@ def _execute_python_script(path: str, args: List[str],
     get_resolve()
     cmd = [sys.executable, path] + [str(a) for a in args]
     try:
-        result = subprocess.run(cmd, env=_python_env_for_resolve(),
-                                 capture_output=True, text=True,
-                                 timeout=timeout, stdin=subprocess.DEVNULL)
+        result = safe_run(cmd, env=_python_env_for_resolve(),
+                          capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
         return _err(f"Script timed out after {timeout}s. "
                     f"Partial stdout: {(e.stdout or '')[:1000]}")

@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.33.6
+
+Internal consolidation: a declarative parameter-contract validator and centralized
+subprocess hygiene.
+
+- **Added** `src/utils/contracts.py` `validate(params, rules, invariants)` — one
+  validator for required/type/enum/min/max/non-empty/parent-dir-exists plus custom
+  invariants, returning consistent agent-friendly errors with coercion + defaults
+  applied. Replaces scattered, hand-written validation.
+- **Changed** `export_frame_as_still` and `set_mark_in_out` (clip + timeline) now
+  validate through contracts. Behavior is preserved (same rejections); `mark_in`/
+  `mark_out` are now coerced to int.
+- **Added** `src/utils/proc.py` `safe_run`/`safe_popen` — subprocess wrappers that
+  default `stdin` to DEVNULL so a child can't consume the MCP stdio protocol
+  stream. Inline Python execution now routes through `safe_run`.
+
 ## What's New in v2.33.5
 
 A queryable ledger of verified Resolve API behavior.
