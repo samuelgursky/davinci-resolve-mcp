@@ -318,6 +318,8 @@ Key actions:
 - `launch` — connect to or start Resolve; call this first if any tool returns a
   "Not connected" error
 - `get_version` — returns `{product, version, version_string}`
+- `api_truth(query?)` — look up behaviorally-verified facts about quirky/unreliable
+  Resolve API behavior (no connection needed); filter by substring
 - `get_page` / `open_page(page)` — read or switch the active page
 - `get_keyframe_mode` / `set_keyframe_mode(mode)`
 - `get_fairlight_presets` — Resolve 20.2.2+; returns available Fairlight

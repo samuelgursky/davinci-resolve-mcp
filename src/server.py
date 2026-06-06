@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.33.4"
+VERSION = "2.33.5"
 
 import base64
 import os
@@ -43,6 +43,7 @@ for p in [current_dir, project_dir]:
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.mcp_stdio import run_fastmcp_stdio
+from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
 from src.utils.readback import verify_by_readback
 from src.utils.update_check import (
     check_for_updates,
@@ -10575,6 +10576,8 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       ignore_mcp_update() -> {success, version, update, decision}
       snooze_mcp_update(hours?) -> {success, version, update, decision}
       clear_mcp_update_preferences() -> {success, version, update, decision}
+      api_truth(query?) -> {verified_on, count, facts}  — look up behaviorally-verified
+        facts about quirky/unreliable Resolve API behavior (no connection needed).
       get_page() -> {page}
       open_page(page) -> {success}  — page: edit, cut, color, fusion, fairlight, deliver
       get_keyframe_mode() -> {mode}
@@ -10594,6 +10597,11 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         — Returns Resolve to a previously-saved state.
     """
     p = params or {}
+
+    # api_truth is a static knowledge lookup — no Resolve connection needed.
+    if action == "api_truth":
+        facts = lookup_api_truth(p.get("query"))
+        return {"verified_on": _API_TRUTH_VERIFIED_ON, "count": len(facts), "facts": facts}
 
     # Control-panel actions don't require Resolve to be running.
     if action == "open_control_panel":
@@ -10682,7 +10690,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             return missing
         r.DisableBackgroundTasksForCurrentResolveSession()
         return _ok()
-    return _unknown(action, ["launch","get_version","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["launch","get_version","api_truth","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────

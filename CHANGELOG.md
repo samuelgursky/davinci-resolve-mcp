@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.33.5
+
+A queryable ledger of verified Resolve API behavior.
+
+- **Added** `resolve_control(action="api_truth", query?)` returns
+  behaviorally-verified facts about quirky or unreliable Resolve scripting-API
+  behavior — methods that live on unexpected objects, return values that lie,
+  silently-rejected string keys, and calls that don't exist. Each fact records
+  the reality, a recommended approach, and the Resolve build it was verified on.
+  No connection required. Backed by `src/utils/api_truth.py`, seeded from
+  hard-won findings (AutoSyncAudio, Fusion Paste, FlowView positions,
+  GetTimelineByName, project render methods, transcription truncation, the
+  CreateProject modal, stdio subprocess hygiene) and meant to grow over time.
+
 ## What's New in v2.33.4
 
 Internal reliability framework.
