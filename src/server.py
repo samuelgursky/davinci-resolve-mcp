@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.35.0"
+VERSION = "2.35.1"
 
 import base64
 import os
@@ -5508,6 +5508,55 @@ def _audio_mapping_report(mp, tl, p: Dict[str, Any]):
             "audio_mapping": {"value": mapping, "error": mapping_error} if mapping_error else mapping,
         })
     return {"timeline_items": timeline_items, "media_pool_items": clip_rows}
+
+
+def _extract_clip_frames(clip, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract still frames from a clip's source media at given timestamps.
+
+    Source-safe: reads the source file with ffmpeg and writes JPEGs to a scratch
+    output directory only — it never modifies, transcodes, or proxies the source.
+    `timestamps` is a list of seconds. Returns the written frame paths.
+    """
+    try:
+        src = clip.GetClipProperty("File Path")
+    except Exception:
+        src = None
+    if not src or not os.path.isfile(src):
+        return _err("Clip has no readable source file (File Path)")
+    timestamps = p.get("timestamps")
+    if not isinstance(timestamps, list) or not timestamps:
+        return _err("extract_frames requires 'timestamps' (a non-empty list of seconds)")
+    if not shutil.which("ffmpeg"):
+        return _err("ffmpeg not found on PATH")
+    out_dir = p.get("output_dir") or tempfile.mkdtemp(prefix="mcp_frames_")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as exc:
+        return _err(f"Could not create output_dir: {exc}")
+    paths, errors = [], []
+    for i, ts in enumerate(timestamps):
+        out_path = os.path.join(out_dir, f"frame_{i:04d}.jpg")
+        try:
+            safe_run(
+                ["ffmpeg", "-y", "-ss", str(float(ts)), "-i", src,
+                 "-frames:v", "1", "-q:v", "2", out_path],
+                capture_output=True, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            errors.append({"timestamp": ts, "error": str(exc)})
+            continue
+        if os.path.isfile(out_path):
+            paths.append(out_path)
+        else:
+            errors.append({"timestamp": ts, "error": "no frame written (timestamp out of range?)"})
+    return {
+        "success": bool(paths),
+        "source": src,
+        "output_dir": out_dir,
+        "frame_paths": paths,
+        "count": len(paths),
+        "errors": errors,
+    }
 
 
 def _clip_name(clip):
@@ -13797,6 +13846,9 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       get_transcription(clip_id) -> {text, truncated, status, has_transcription}
         Read a clip's transcription. `truncated` flags when Resolve's preview
         property cut the text off (the full transcript is longer).
+      extract_frames(clip_id, timestamps, output_dir?) -> {frame_paths, output_dir, count, errors}
+        Extract still JPEGs from the clip's source at the given timestamps (seconds)
+        via ffmpeg. Source-safe: reads source, writes only to a scratch dir.
       perform_audio_classification(clip_id) -> {success}  — Resolve 21+
       clear_audio_classification(clip_id) -> {success}  — Resolve 21+
       analyze_for_intellisearch(clip_id, identify_faces?, is_better_mode?) -> {success}  — Resolve 21+, AI IntelliSearch Extra
@@ -14012,6 +14064,8 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             "status": status or None,
             "has_transcription": bool(text.strip()),
         }
+    elif action == "extract_frames":
+        return _extract_clip_frames(clip, p)
     elif action == "perform_audio_classification":
         missing = _requires_method(clip, "PerformAudioClassification", "21.0")
         if missing:
@@ -14096,7 +14150,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"success": bool(clip.SetMarkInOut(clean["mark_in"], clean["mark_out"], p.get("type", "all")))}
     elif action == "clear_mark_in_out":
         return {"success": bool(clip.ClearMarkInOut(p.get("type", "all")))}
-    return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip","get_unique_id","transcribe_audio","clear_transcription","get_transcription","perform_audio_classification","clear_audio_classification","analyze_for_intellisearch","analyze_for_slate","remove_motion_blur","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out","open_in_viewer"])
+    return _unknown(action, ["get_name","get_metadata","set_metadata","get_third_party_metadata","set_third_party_metadata","get_media_id","get_clip_property","set_clip_property","get_clip_color","set_clip_color","clear_clip_color","link_proxy","unlink_proxy","replace_clip","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip","get_unique_id","transcribe_audio","clear_transcription","get_transcription","extract_frames","perform_audio_classification","clear_audio_classification","analyze_for_intellisearch","analyze_for_slate","remove_motion_blur","get_audio_mapping","get_mark_in_out","set_mark_in_out","clear_mark_in_out","open_in_viewer"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

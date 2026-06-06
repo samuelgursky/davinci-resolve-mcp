@@ -2,6 +2,15 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.35.1
+
+- **Added** `media_pool_item(action="extract_frames", clip_id, timestamps, output_dir?)`
+  extracts still JPEGs from a clip's source media at the given timestamps (seconds)
+  via ffmpeg. Source-safe: it reads the source and writes only to a scratch output
+  directory — it never modifies, transcodes, or proxies the source. (Closes a
+  read/write-symmetry gap: the analysis sampler existed internally but had no
+  standalone frame-extraction tool.)
+
 ## What's New in v2.35.0
 
 The Cut-IR executor — transcript-driven editing now closes the loop onto the
