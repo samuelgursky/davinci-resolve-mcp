@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.35.2"
+VERSION = "2.36.0"
 
 import base64
 import os
@@ -21040,6 +21040,23 @@ if __name__ == "__main__":
 
         run_fastmcp_stdio(granular_mcp)
         sys.exit(0)
+
+    # --transport stdio (default) | sse | streamable-http. Networked modes bind
+    # loopback by default and require a bearer token (see src/utils/mcp_transport).
+    transport = "stdio"
+    if "--transport" in sys.argv:
+        _i = sys.argv.index("--transport")
+        if _i + 1 < len(sys.argv):
+            transport = sys.argv[_i + 1]
+            del sys.argv[_i:_i + 2]
+    if transport in ("sse", "streamable-http"):
+        from src.utils.mcp_transport import run_networked
+        logger.info(f"Starting DaVinci Resolve MCP Server ({transport} transport)")
+        run_networked(mcp, transport)
+        sys.exit(0)
+    if transport != "stdio":
+        logger.error(f"Unknown --transport {transport!r}; use stdio|sse|streamable-http")
+        sys.exit(2)
 
     logger.info(f"Starting DaVinci Resolve MCP Server (32 compound tools)")
     run_fastmcp_stdio(mcp)

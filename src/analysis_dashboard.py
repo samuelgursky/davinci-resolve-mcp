@@ -5495,7 +5495,36 @@ HTML = r"""<!doctype html>
             <span>${apiOk && libOk ? 'Auto-detected from standard install paths' : 'Install via install.py if paths cannot be detected'}</span>
           </div>
         </div>`;
-      setHtml('diagnosticsMcpServer', serverCard + resolveCard);
+      const tr = data.transport || { networked: false, mode: 'stdio (local)' };
+      const trPill = tr.networked
+        ? (tr.loopback ? statusPill('pill-ok', 'Networked · loopback')
+                       : statusPill('pill-warn', 'Networked · EXPOSED'))
+        : statusPill('pill-ok', 'Local (stdio)');
+      const transportCard = `
+        <div class="diag-card">
+          <div class="diag-card-header">
+            <div class="diag-card-title">${DIAG_ICONS.connection}Transport</div>
+            ${trPill}
+          </div>
+          <div class="diag-card-rows">
+            ${diagRow('Mode', tr.mode || 'stdio (local)')}
+            ${tr.networked ? diagRow('URL', tr.url || '—') : ''}
+            ${tr.networked ? diagRow('Auth', tr.has_token ? 'Bearer token required' : 'NONE') : ''}
+            ${tr.networked && tr.token ? diagRow('Token', tr.token) : ''}
+          </div>
+          <div class="diag-card-footer">
+            <span>${tr.networked
+              ? (tr.loopback ? 'Reachable on this machine only; every request needs the bearer token.'
+                             : 'WARNING: bound to a non-loopback host — exposed on the network.')
+              : 'Default. Networked access is opt-in (launch with --transport sse|streamable-http).'}</span>
+            <button class="secondary transport-toggle-btn" data-transport-action="${tr.networked ? 'stop' : 'start'}">
+              ${tr.networked ? 'Stop networked' : 'Start networked'}</button>
+          </div>
+        </div>`;
+      setHtml('diagnosticsMcpServer', serverCard + resolveCard + transportCard);
+      serverEl.querySelectorAll('.transport-toggle-btn').forEach(btn => {
+        btn.addEventListener('click', () => toggleTransport(btn.dataset.transportAction, btn).catch(alertError));
+      });
 
       const clients = data.clients || [];
       if (!clients.length) {
@@ -5588,6 +5617,28 @@ HTML = r"""<!doctype html>
         setText('mcpInstallStatus', result.success ? (result.message || `Removed from ${clientId}.`) : `Remove failed (${clientId}): ${result.error || 'unknown error'}`);
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = original || 'Remove'; }
+        await refreshMcpStatus();
+      }
+    }
+
+    async function toggleTransport(action, btn) {
+      if (action === 'start') {
+        const proceed = await brandedConfirm({
+          kicker: 'MCP Transport',
+          title: 'Start networked transport?',
+          body: 'Starts a second MCP server instance over streamable-http, bound to loopback (127.0.0.1) and protected by a bearer token. Local stdio is unaffected. The connection URL + token will appear here.',
+          confirmLabel: 'Start',
+          cancelLabel: 'Cancel',
+        });
+        if (!proceed) return;
+      }
+      const original = btn?.textContent;
+      if (btn) { btn.disabled = true; btn.textContent = action === 'start' ? 'Starting…' : 'Stopping…'; }
+      try {
+        const ep = action === 'start' ? '/api/mcp/transport/start' : '/api/mcp/transport/stop';
+        await api(ep, { method: 'POST', body: '{}' });
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = original; }
         await refreshMcpStatus();
       }
     }
@@ -13483,7 +13534,71 @@ def _mcp_status_payload() -> Dict[str, Any]:
             "resolve_lib_detected": bool(paths.get("lib_path")),
         },
         "clients": clients_out,
+        "transport": _transport_status(),
     }
+
+
+def _transport_status() -> Dict[str, Any]:
+    """Live networked-transport status (or local-only) for the MCP diagnostics card."""
+    try:
+        from src.utils.mcp_transport import read_transport_state
+    except Exception:
+        return {"networked": False, "mode": "stdio (local)"}
+    state = read_transport_state()
+    if not state:
+        return {"networked": False, "mode": "stdio (local)"}
+    return {
+        "networked": True,
+        "mode": state.get("transport"),
+        "url": state.get("url"),
+        "loopback": state.get("loopback", True),
+        "has_token": bool(state.get("token")),
+        "token": state.get("token"),
+        "pid": state.get("pid"),
+    }
+
+
+def _transport_start() -> Dict[str, Any]:
+    """Spawn a networked MCP instance (streamable-http, loopback + token)."""
+    import subprocess as _sp
+    from src.utils.mcp_transport import read_transport_state
+    if read_transport_state():
+        return {"success": False, "error": "A networked transport instance is already running."}
+    paths = _resolve_mcp_paths()
+    py, script = paths.get("python_path"), paths.get("server_path")
+    if not py or not script:
+        return {"success": False, "error": "Could not resolve the Python interpreter or server script path."}
+    try:
+        _sp.Popen(
+            [py, script, "--transport", "streamable-http"],
+            stdin=_sp.DEVNULL, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return {"success": False, "error": f"Failed to launch: {exc}"}
+    import time as _t
+    for _ in range(15):
+        _t.sleep(0.2)
+        if read_transport_state():
+            return {"success": True, "transport": _transport_status()}
+    return {"success": True, "note": "Launch initiated; status will appear shortly."}
+
+
+def _transport_stop() -> Dict[str, Any]:
+    """Stop the running networked MCP instance via its state-file PID."""
+    import signal as _sig
+    from src.utils.mcp_transport import read_transport_state, clear_transport_state
+    state = read_transport_state()
+    if not state:
+        return {"success": True, "note": "No networked transport running."}
+    pid = state.get("pid")
+    if isinstance(pid, int):
+        try:
+            os.kill(pid, _sig.SIGTERM)
+        except (OSError, ProcessLookupError):
+            pass
+    clear_transport_state()
+    return {"success": True}
 
 
 def _mcp_install_payload(client_id: str) -> Dict[str, Any]:
@@ -14303,6 +14418,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"success": False, "error": "client_id is required"}, HTTPStatus.BAD_REQUEST)
                 return
             self._json(_mcp_uninstall_payload(client_id))
+            return
+        if path == "/api/mcp/transport/start":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Transport management is loopback-only."}, HTTPStatus.FORBIDDEN)
+                return
+            self._json(_transport_start())
+            return
+        if path == "/api/mcp/transport/stop":
+            if not _request_is_loopback(self):
+                self._json({"success": False, "error": "Transport management is loopback-only."}, HTTPStatus.FORBIDDEN)
+                return
+            self._json(_transport_stop())
             return
         if path == "/api/jobs":
             paths = body.get("paths") or []

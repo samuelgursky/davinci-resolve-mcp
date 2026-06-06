@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.36.0
+
+Optional networked transport — run the MCP server over the network, safely, with
+control-panel management. Local stdio remains the default and is unchanged.
+
+- **Added** `--transport stdio|sse|streamable-http` (default `stdio`). The networked
+  modes bind to **loopback (127.0.0.1) by default** and **require a bearer token** on
+  every request (from `$DAVINCI_MCP_TOKEN`, or generated + logged at startup). A
+  non-loopback bind logs a loud security warning. stdio is untouched; you can run a
+  local stdio instance and a networked instance against the same Resolve at once.
+- **Added** control-panel management (Setup → MCP): a Transport card showing the live
+  mode / URL / token / loopback status, with Start/Stop buttons (loopback-only). Backed
+  by `/api/mcp/transport/{start,stop}` and a transport field on `/api/mcp/status`.
+- The page-switch lock (v2.34.1) already serializes concurrent page switches across the
+  local and networked instances.
+
 ## What's New in v2.35.2
 
 Verification observability and a validator consolidation.
