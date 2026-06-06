@@ -330,17 +330,17 @@ def _launch_resolve():
         app_path = "/Applications/DaVinci Resolve/DaVinci Resolve.app"
         if not os.path.exists(app_path):
             return False
-        subprocess.Popen(["open", app_path])
+        subprocess.Popen(["open", app_path], stdin=subprocess.DEVNULL)
     elif sys_name == "windows":
         app_path = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"
         if not os.path.exists(app_path):
             return False
-        subprocess.Popen([app_path])
+        subprocess.Popen([app_path], stdin=subprocess.DEVNULL)
     elif sys_name == "linux":
         app_path = "/opt/resolve/bin/resolve"
         if not os.path.exists(app_path):
             return False
-        subprocess.Popen([app_path])
+        subprocess.Popen([app_path], stdin=subprocess.DEVNULL)
     else:
         return False
     logger.info("Launched DaVinci Resolve, waiting for it to respond...")
@@ -380,22 +380,36 @@ def get_current_project():
     proj = pm.GetCurrentProject()
     return pm, proj
 
-def get_all_media_pool_clips(media_pool):
-    """Get all clips from media pool recursively including subfolders."""
-    clips = []
+def iter_all_media_pool_clips(media_pool):
+    """Yield every clip in the media pool, walking subfolders lazily.
+
+    Unlike get_all_media_pool_clips(), this does not materialize the whole tree.
+    A caller that breaks early (e.g. find-by-name) stops the walk as soon as it
+    has a match, avoiding a full traversal. Each folder access is a Resolve
+    bridge round-trip, so early exit is a real win on large projects.
+
+    Yields in the same pre-order (parent clips before descendants, siblings in
+    listed order) as the eager get_all_media_pool_clips().
+    """
     root_folder = media_pool.GetRootFolder()
-    
-    def process_folder(folder):
+    if not root_folder:
+        return
+    stack = [root_folder]
+    while stack:
+        folder = stack.pop()
         folder_clips = folder.GetClipList()
         if folder_clips:
-            clips.extend(folder_clips)
-        
+            for clip in folder_clips:
+                yield clip
         sub_folders = folder.GetSubFolderList()
-        for sub_folder in sub_folders:
-            process_folder(sub_folder)
-    
-    process_folder(root_folder)
-    return clips
+        if sub_folders:
+            # Reversed so the LIFO stack pops siblings in their listed order.
+            stack.extend(reversed(list(sub_folders)))
+
+
+def get_all_media_pool_clips(media_pool):
+    """Get all clips from media pool recursively including subfolders."""
+    return list(iter_all_media_pool_clips(media_pool))
 
 def get_all_media_pool_folders(media_pool):
     """Get all folders from media pool recursively."""

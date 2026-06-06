@@ -53,10 +53,10 @@ def link_proxy_media(clip_name: str, proxy_file_path: str) -> str:
     if not media_pool:
         return "Error: Failed to get Media Pool"
     
-    # Find the clip by name
-    clips = get_all_media_pool_clips(media_pool)
+    # Find the clip by name (lazy walk; stops at the first match)
+    clips = iter_all_media_pool_clips(media_pool)
     target_clip = None
-    
+
     for clip in clips:
         if clip.GetName() == clip_name:
             target_clip = clip
@@ -94,10 +94,10 @@ def unlink_proxy_media(clip_name: str) -> str:
     if not media_pool:
         return "Error: Failed to get Media Pool"
     
-    # Find the clip by name
-    clips = get_all_media_pool_clips(media_pool)
+    # Find the clip by name (lazy walk; stops at the first match)
+    clips = iter_all_media_pool_clips(media_pool)
     target_clip = None
-    
+
     for clip in clips:
         if clip.GetName() == clip_name:
             target_clip = clip
@@ -132,10 +132,10 @@ def replace_clip(clip_name: str, replacement_path: str) -> str:
     if not media_pool:
         return "Error: Failed to get Media Pool"
     
-    # Find the clip by name
-    clips = get_all_media_pool_clips(media_pool)
+    # Find the clip by name (lazy walk; stops at the first match)
+    clips = iter_all_media_pool_clips(media_pool)
     target_clip = None
-    
+
     for clip in clips:
         if clip.GetName() == clip_name:
             target_clip = clip
@@ -181,10 +181,10 @@ def transcribe_audio(clip_name: str, use_speaker_detection: Optional[bool] = Non
     if not media_pool:
         return "Error: Failed to get Media Pool"
     
-    # Find the clip by name
-    clips = get_all_media_pool_clips(media_pool)
+    # Find the clip by name (lazy walk; stops at the first match)
+    clips = iter_all_media_pool_clips(media_pool)
     target_clip = None
-    
+
     for clip in clips:
         if clip.GetName() == clip_name:
             target_clip = clip
@@ -223,10 +223,10 @@ def clear_transcription(clip_name: str) -> str:
     if not media_pool:
         return "Error: Failed to get Media Pool"
     
-    # Find the clip by name
-    clips = get_all_media_pool_clips(media_pool)
+    # Find the clip by name (lazy walk; stops at the first match)
+    clips = iter_all_media_pool_clips(media_pool)
     target_clip = None
-    
+
     for clip in clips:
         if clip.GetName() == clip_name:
             target_clip = clip

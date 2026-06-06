@@ -18435,6 +18435,71 @@ def _fusion_boundary_report(comp, p: Dict[str, Any]):
 
 
 @mcp.tool()
+def _parse_pos(raw):
+    """Normalize a FlowView position return into (x, y) floats, or None.
+
+    Depending on the bridge, position reads come back as a 1-indexed Lua table,
+    a dict ({1: x, 2: y} / {"x": .., "y": ..}), or an (x, y) tuple/list. Be
+    liberal in what we accept.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        for ka, kb in ((1, 2), ("1", "2"), ("x", "y"), ("X", "Y")):
+            if ka in raw and kb in raw:
+                try:
+                    return float(raw[ka]), float(raw[kb])
+                except (TypeError, ValueError):
+                    return None
+        vals = list(raw.values())
+        if len(vals) >= 2:
+            try:
+                return float(vals[0]), float(vals[1])
+            except (TypeError, ValueError):
+                return None
+        return None
+    if isinstance(raw, (list, tuple)):
+        if len(raw) >= 2:
+            try:
+                return float(raw[0]), float(raw[1])
+            except (TypeError, ValueError):
+                return None
+        return None
+    # Lua table object with numeric indexing.
+    try:
+        return float(raw[1]), float(raw[2])
+    except Exception:
+        return None
+
+
+def _fusion_flow_view(comp):
+    """Return the comp's FlowView (node-graph canvas), or None if unavailable."""
+    try:
+        cf = comp.CurrentFrame
+        if cf is None:
+            return None
+        return cf.FlowView
+    except Exception:
+        return None
+
+
+def _iter_fusion_tools(comp):
+    """Yield (tool_name, tool) for every tool in the comp."""
+    tools = comp.GetToolList() or {}
+    for idx in tools:
+        t = tools[idx]
+        try:
+            name = t.GetAttrs().get("TOOLS_Name", "")
+        except Exception:
+            name = ""
+        yield name, t
+
+
+def _fusion_tool_names(comp):
+    """Return the set-friendly list of tool names currently in the comp."""
+    return [name for name, _ in _iter_fusion_tools(comp)]
+
+
 def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fusion composition node graph operations.
 
@@ -18463,6 +18528,11 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       get_keyframes(tool_name, input_name) -> {keyframes}
       delete_keyframe(tool_name, input_name, time) -> {success}
       get_comp_info() -> {name, tool_count, attrs}
+      get_position(tool_name) -> {tool_name, x, y}  — read a node's FlowView position
+      set_position(tool_name, x, y) -> {success, x, y, readback}  — move a node
+      copy_tool(tool_name, name?, x?, y?) -> {success, new_tool, new_tools}  — duplicate a node
+      auto_arrange(tool_names?, direction?, spacing?, x?, y?) -> {success, arranged, count}
+        Lay tools out in a row (direction="horizontal", default) or column ("vertical").
       set_frame_range(start, end) -> {success}
       render() -> {success}
       start_undo(name?) -> {success}
@@ -18767,6 +18837,116 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         comp.EndUndo(p.get("keep", True))
         return _ok()
 
+    # --- Node Layout (FlowView) ---
+    elif action == "get_position":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        flow = _fusion_flow_view(comp)
+        if flow is None:
+            return _err("FlowView unavailable on this comp")
+        pos = _parse_pos(flow.GetPosTable(tool))
+        if pos is None:
+            return _err(f"Could not read position for tool '{p['tool_name']}'")
+        return {"tool_name": p["tool_name"], "x": pos[0], "y": pos[1]}
+
+    elif action == "set_position":
+        if "x" not in p or "y" not in p:
+            return _err("set_position requires x and y")
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        flow = _fusion_flow_view(comp)
+        if flow is None:
+            return _err("FlowView unavailable on this comp")
+        x, y = float(p["x"]), float(p["y"])
+        comp.Lock()
+        try:
+            flow.SetPos(tool, x, y)
+        finally:
+            comp.Unlock()
+        # SetPos has no reliable return; confirm by reading the position back.
+        pos = _parse_pos(flow.GetPosTable(tool))
+        return {
+            "success": True,
+            "tool_name": p["tool_name"],
+            "x": x,
+            "y": y,
+            "readback": {"x": pos[0], "y": pos[1]} if pos else None,
+        }
+
+    elif action == "copy_tool":
+        src = comp.FindTool(p["tool_name"])
+        if not src:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        # Identify the pasted node by diffing tool names before/after, since
+        # Paste does not return a handle to the new tool.
+        before = set(_fusion_tool_names(comp))
+        comp.Lock()
+        try:
+            settings = src.SaveSettings()
+            if not settings:
+                return _err(f"SaveSettings returned nothing for '{p['tool_name']}'")
+            comp.Paste(settings)
+        finally:
+            comp.Unlock()
+        new_names = [n for n in _fusion_tool_names(comp) if n not in before]
+        if not new_names:
+            return _err("Copy produced no new tool (paste may have failed)")
+        new_name = new_names[0]
+        new_tool = comp.FindTool(new_name)
+        rename = p.get("name")
+        if rename and new_tool:
+            comp.Lock()
+            try:
+                new_tool.SetAttrs({"TOOLS_Name": rename})
+            finally:
+                comp.Unlock()
+            new_name = rename
+        if new_tool and "x" in p and "y" in p:
+            flow = _fusion_flow_view(comp)
+            if flow is not None:
+                comp.Lock()
+                try:
+                    flow.SetPos(new_tool, float(p["x"]), float(p["y"]))
+                finally:
+                    comp.Unlock()
+        return {
+            "success": True,
+            "source": p["tool_name"],
+            "new_tool": new_name,
+            "new_tools": new_names,
+        }
+
+    elif action == "auto_arrange":
+        flow = _fusion_flow_view(comp)
+        if flow is None:
+            return _err("FlowView unavailable on this comp")
+        names = p.get("tool_names")
+        if names:
+            tools = [(n, comp.FindTool(n)) for n in names]
+            tools = [(n, t) for n, t in tools if t]
+        else:
+            tools = list(_iter_fusion_tools(comp))
+        if not tools:
+            return _err("No tools to arrange")
+        direction = (p.get("direction") or "horizontal").strip().lower()
+        spacing = float(p.get("spacing", 2.0))
+        x0, y0 = float(p.get("x", 0.0)), float(p.get("y", 0.0))
+        arranged = []
+        comp.Lock()
+        try:
+            for i, (name, tool) in enumerate(tools):
+                if direction == "vertical":
+                    x, y = x0, y0 + i * spacing
+                else:
+                    x, y = x0 + i * spacing, y0
+                flow.SetPos(tool, x, y)
+                arranged.append({"tool_name": name, "x": x, "y": y})
+        finally:
+            comp.Unlock()
+        return {"success": True, "arranged": arranged, "count": len(arranged)}
+
     return _unknown(action, [
         "add_tool","delete_tool","get_tool_list","find_tool",
         "connect","disconnect","get_inputs","get_outputs",
@@ -18774,6 +18954,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "add_keyframe","get_keyframes","delete_keyframe",
         "get_comp_info","set_frame_range","render",
         "start_undo","end_undo",
+        "get_position","set_position","copy_tool","auto_arrange",
         "bulk_set_inputs",
         "bulk_set_expressions",
         *_FUSION_GROUP_KERNEL_ACTIONS,
