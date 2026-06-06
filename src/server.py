@@ -18879,31 +18879,42 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         src = comp.FindTool(p["tool_name"])
         if not src:
             return _err(f"Tool '{p['tool_name']}' not found")
-        # Identify the pasted node by diffing tool names before/after, since
-        # Paste does not return a handle to the new tool.
+        regid = src.GetAttrs().get("TOOLS_RegID")
+        if not regid:
+            return _err(f"Could not determine the tool type of '{p['tool_name']}'")
+        # Duplicate by adding a same-type tool and loading the source's settings
+        # through a temp .setting FILE. Passing SaveSettings()'s in-memory table
+        # back into Paste/LoadSettings fails across the Python bridge; a file path
+        # round-trips reliably. New node is found by diffing tool names.
         before = set(_fusion_tool_names(comp))
+        fd, settings_path = tempfile.mkstemp(suffix=".setting")
+        os.close(fd)
+        new_tool = None
         comp.Lock()
         try:
-            settings = src.SaveSettings()
-            if not settings:
-                return _err(f"SaveSettings returned nothing for '{p['tool_name']}'")
-            comp.Paste(settings)
+            if not src.SaveSettings(settings_path):
+                return _err(f"SaveSettings failed for '{p['tool_name']}'")
+            new_tool = comp.AddTool(regid, -32768, -32768)
+            if not new_tool:
+                return _err(f"Failed to create a duplicate of '{p['tool_name']}'")
+            new_tool.LoadSettings(settings_path)
         finally:
             comp.Unlock()
+            try:
+                os.remove(settings_path)
+            except OSError:
+                pass
         new_names = [n for n in _fusion_tool_names(comp) if n not in before]
-        if not new_names:
-            return _err("Copy produced no new tool (paste may have failed)")
-        new_name = new_names[0]
-        new_tool = comp.FindTool(new_name)
+        new_name = new_names[0] if new_names else new_tool.GetAttrs().get("TOOLS_Name", "")
         rename = p.get("name")
-        if rename and new_tool:
+        if rename:
             comp.Lock()
             try:
                 new_tool.SetAttrs({"TOOLS_Name": rename})
             finally:
                 comp.Unlock()
             new_name = rename
-        if new_tool and "x" in p and "y" in p:
+        if "x" in p and "y" in p:
             flow = _fusion_flow_view(comp)
             if flow is not None:
                 comp.Lock()

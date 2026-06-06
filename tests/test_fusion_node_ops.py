@@ -29,20 +29,28 @@ class _CF:
 
 
 class FakeTool:
-    def __init__(self, name, comp):
+    def __init__(self, name, comp, regid="Background"):
         self.name = name
         self.comp = comp
+        self.regid = regid
+        self.settings_loaded = False
 
     def GetAttrs(self):
-        return {"TOOLS_Name": self.name}
+        return {"TOOLS_Name": self.name, "TOOLS_RegID": self.regid}
 
     def SetAttrs(self, d):
         if "TOOLS_Name" in d:
             self.comp._rename(self.name, d["TOOLS_Name"])
             self.name = d["TOOLS_Name"]
 
-    def SaveSettings(self):
-        return {"Tools": {self.name: "settings"}}
+    def SaveSettings(self, path):
+        # Real Fusion writes the tool's settings to the file at `path`; the test
+        # only needs to confirm the call path, so report success.
+        return True
+
+    def LoadSettings(self, path):
+        self.settings_loaded = True
+        return True
 
 
 class FakeComp:
@@ -50,10 +58,10 @@ class FakeComp:
         self.tools = {}
         self.flow = FakeFlow()
         self.locks = 0
-        self._paste = 0
+        self._added = 0
 
-    def add(self, name):
-        t = FakeTool(name, self)
+    def add(self, name, regid="Background"):
+        t = FakeTool(name, self, regid=regid)
         self.tools[name] = t
         return t
 
@@ -73,14 +81,13 @@ class FakeComp:
     def Unlock(self):
         self.locks -= 1
 
-    def Paste(self, settings):
-        base = next(iter(settings.get("Tools", {})), "Tool")
-        self._paste += 1
-        name = f"{base}_{self._paste}"
+    def AddTool(self, regid, x=-32768, y=-32768):
+        self._added += 1
+        name = f"{regid}_{self._added}"
         while name in self.tools:
-            self._paste += 1
-            name = f"{base}_{self._paste}"
-        self.add(name)
+            self._added += 1
+            name = f"{regid}_{self._added}"
+        return self.add(name, regid=regid)
 
     def _rename(self, old, new):
         self.tools[new] = self.tools.pop(old)
@@ -136,11 +143,15 @@ class SetPositionTest(unittest.TestCase):
 class CopyToolTest(unittest.TestCase):
     def test_copies_and_identifies_new_tool(self):
         comp = FakeComp()
-        comp.add("T1")
+        comp.add("T1", regid="Transform")
         out = _dispatch(comp, "copy_tool", {"tool_name": "T1"})
         self.assertTrue(out["success"])
-        self.assertEqual(out["new_tool"], "T1_1")
-        self.assertIn("T1_1", comp.tools)
+        self.assertTrue(out["new_tool"])
+        self.assertNotEqual(out["new_tool"], "T1")
+        self.assertIn(out["new_tool"], comp.tools)
+        # New node carries the source's settings (LoadSettings was called).
+        self.assertTrue(comp.tools[out["new_tool"]].settings_loaded)
+        self.assertEqual(comp.locks, 0)  # balanced Lock/Unlock
 
     def test_copy_with_rename_and_position(self):
         comp = FakeComp()
