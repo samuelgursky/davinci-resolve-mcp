@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.36.1
+
+Bug fix — restore the `fusion_comp` MCP tool.
+
+- **Fixed** a regression from `32be0ec` (v2.33.0) that left `fusion_comp`
+  unregistered: a new `_parse_pos` helper was inserted between the `@mcp.tool()`
+  decorator and `def fusion_comp`, so the decorator landed on the private helper
+  instead. As a result `_parse_pos` was exposed as a tool while **all**
+  `fusion_comp` node-graph operations (`add_tool`, `connect`, `add_keyframe`,
+  `get_keyframes`, `copy_tool`, `set_position`, …) were missing from the tool
+  list. The decorator is restored to `fusion_comp` and `_parse_pos` is once
+  again a plain internal helper. Live-validated on DaVinci Resolve Studio 21.
+
 ## What's New in v2.36.0
 
 Optional networked transport — run the MCP server over the network, safely, with
