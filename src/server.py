@@ -18768,7 +18768,6 @@ def _fusion_boundary_report(comp, p: Dict[str, Any]):
     }
 
 
-@mcp.tool()
 def _parse_pos(raw):
     """Normalize a FlowView position return into (x, y) floats, or None.
 
@@ -18834,6 +18833,7 @@ def _fusion_tool_names(comp):
     return [name for name, _ in _iter_fusion_tools(comp)]
 
 
+@mcp.tool()
 def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fusion composition node graph operations.
 
