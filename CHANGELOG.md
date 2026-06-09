@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.37.0
+
+Render format-id fix, offline-media diagnosis, and a setup doctor.
+
+- **Fixed** render helpers passing the display name from `GetRenderFormats()`
+  (e.g. `QuickTime`) into `GetRenderCodecs`, `GetRenderResolutions`, and
+  `SetCurrentRenderFormatAndCodec`, which expect the format id (e.g. `mov`).
+  `GetRenderCodecs("QuickTime")` returned empty, so `probe_render_matrix`
+  reported no QuickTime codecs and `prepare_render_job` could not target
+  ProRes (e.g. `ProRes422LT` proxy renders). Display names and format ids are
+  now both accepted as input and normalized to the id for Resolve API calls;
+  `probe_render_matrix` rows include `format_id`. Closes #59.
+- **Fixed** the destructive confirm-token gate referencing a stale function
+  name, which made it silently ignore the `destructive.require_confirm_token`
+  preference and always fall back to the default.
+- **Added** a `diagnosis` block to `timeline.detect_missing_media`:
+  deduplicated missing Media Pool items, volume/folder mounted checks, a
+  primary cause (`volume_not_mounted` / `folder_not_found` /
+  `files_missing_or_renamed`), and a recommended next step. Optional
+  `sanitized`/`sanitize_paths` redacts raw media paths.
+- **Added** bounds to `timeline.build_relink_plan`: skips the broad scan by
+  default when a source volume (e.g. a camera card) is not mounted, dedupes
+  missing basenames, and caps the search with `max_depth`, `max_seconds`
+  (default 20s), and `max_files_scanned` (default 50k), reporting per-candidate
+  scan stats.
+- **Fixed** `media_analysis` accepting `vision: true/false` boolean shorthand
+  (now normalized to the full options dict) and `timeline_markers.get_thumbnail`
+  returning a structured error instead of raw `None` when no thumbnail is
+  available.
+- **Added** `scripts/doctor.py`, a read-only setup diagnostic that checks the
+  checkout, Python, Resolve app/scripting paths, and MCP client configs, and
+  probes the scripting bridge end to end with OK/WARN/FAIL output (`--json`
+  supported).
+
 ## What's New in v2.36.1
 
 Bug fix — restore the `fusion_comp` MCP tool.
