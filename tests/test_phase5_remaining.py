@@ -13,9 +13,14 @@ import sys, os, json, time
 
 
 def _skip_or_exit(message):
+    # Live harness preflight: skip cleanly under a test runner (pytest
+    # collection or unittest discovery), hard-exit when run as a script.
     if "pytest" in sys.modules:
         import pytest
         pytest.skip(message, allow_module_level=True)
+    if __name__ != "__main__":
+        import unittest
+        raise unittest.SkipTest(message)
     print(f"ERROR: {message}")
     sys.exit(1)
 
