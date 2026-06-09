@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import traceback
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple

@@ -6,6 +6,7 @@ No Resolve required.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from src.utils import destructive_hook
 
@@ -192,6 +193,47 @@ class PendingConfirmCheckBypassesArchive(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertTrue(called["provider"],
                         "archive provider must run on the consume call")
+
+
+class AutoRunIdleTimeoutPreferenceTest(unittest.TestCase):
+    def setUp(self):
+        self._orig_pref_provider = destructive_hook._PREFERENCE_PROVIDER
+
+    def tearDown(self):
+        destructive_hook._PREFERENCE_PROVIDER = self._orig_pref_provider
+
+    def test_auto_run_honors_idle_timeout_preference(self):
+        destructive_hook.register_preference_provider(
+            lambda key: 45 if key == "versioning_auto_run_idle_timeout_seconds" else None
+        )
+        seen = {}
+
+        def fake_ensure(project_root, idle_timeout_seconds):
+            seen["timeout"] = idle_timeout_seconds
+            return "run-1"
+
+        with mock.patch.object(
+            destructive_hook.analysis_runs, "ensure_auto_run_for_destructive", fake_ensure
+        ):
+            run_id = destructive_hook._extract_analysis_run_id({}, project_root="/tmp/fake-root")
+
+        self.assertEqual(run_id, "run-1")
+        self.assertEqual(seen["timeout"], 45.0)
+
+    def test_auto_run_defaults_to_90s_without_preference(self):
+        destructive_hook._PREFERENCE_PROVIDER = None
+        seen = {}
+
+        def fake_ensure(project_root, idle_timeout_seconds):
+            seen["timeout"] = idle_timeout_seconds
+            return "run-2"
+
+        with mock.patch.object(
+            destructive_hook.analysis_runs, "ensure_auto_run_for_destructive", fake_ensure
+        ):
+            destructive_hook._extract_analysis_run_id({}, project_root="/tmp/fake-root")
+
+        self.assertEqual(seen["timeout"], 90.0)
 
 
 if __name__ == "__main__":

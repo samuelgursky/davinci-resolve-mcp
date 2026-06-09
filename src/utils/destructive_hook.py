@@ -369,7 +369,7 @@ def _extract_analysis_run_id(params: Optional[Dict[str, Any]], project_root: Opt
             return str(rid)
     if project_root:
         try:
-            timeout = float(_preference("versioning_auto_run_idle_timeout_seconds", default=90))
+            timeout = float(_read_preference("versioning_auto_run_idle_timeout_seconds", default=90))
         except Exception:
             timeout = 90.0
         try:

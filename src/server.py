@@ -53,6 +53,7 @@ from src.utils.update_check import (
     check_for_updates,
     clear_update_prompt_preferences,
     get_cached_update_status,
+    get_update_channel,
     get_update_mode,
     ignore_update_version,
     set_update_mode,
@@ -78,6 +79,7 @@ from src.utils.media_analysis import (
     load_report as load_media_analysis_report,
     query_analysis_index,
     resolve_output_root as resolve_media_analysis_output_root,
+    short_hash,
     slugify,
     summarize_reports as summarize_media_analysis_reports,
 )
@@ -11671,7 +11673,7 @@ def _resolve_save_state() -> Dict[str, Any]:
                     state["current_folder_name"] = current_folder.GetName()
         except Exception:
             pass
-    token = short_hash(json.dumps(state, sort_keys=True, default=str), length=12) if "short_hash" in globals() else str(int(time.time() * 1000))
+    token = short_hash(json.dumps(state, sort_keys=True, default=str), length=12)
     _RESOLVE_STATE_SNAPSHOTS[token] = state
     # Prune old snapshots (keep last 20)
     if len(_RESOLVE_STATE_SNAPSHOTS) > 20:
@@ -21155,7 +21157,7 @@ def _resource_mcp_version() -> Dict[str, Any]:
     """Server version, build, and update channel. Pure read — no Resolve required."""
     return {
         "version": VERSION,
-        "channel": _update_channel_current() if "_update_channel_current" in globals() else "stable",
+        "channel": get_update_channel(),
     }
 
 
