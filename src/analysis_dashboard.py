@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 from src.utils.media_analysis import (
+    _write_json as _atomic_write_json,
     analysis_index_status,
     analysis_root_coverage,
     build_analysis_index,
@@ -12605,9 +12606,7 @@ def regenerate_clip_transcript(
     if payload.get("words"):
         updated_report["transcription"]["words"] = payload["words"]
     try:
-        with open(artifacts["analysis_json"], "w", encoding="utf-8") as handle:
-            json.dump(updated_report, handle, indent=2)
-            handle.write("\n")
+        _atomic_write_json(artifacts["analysis_json"], updated_report)
     except Exception as exc:
         return {"success": False, "error": f"transcript written but analysis.json patch failed: {exc}"}
     word_segment_count = sum(1 for seg in (payload.get("segments") or []) if isinstance(seg, dict) and seg.get("words"))
@@ -12779,9 +12778,7 @@ def save_clip_transcript_corrections(project_root: str, clip_id: str, body: Dict
         },
     }
     try:
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-            handle.write("\n")
+        _atomic_write_json(path, payload)
     except Exception as exc:
         return {"success": False, "error": str(exc)}
     return {

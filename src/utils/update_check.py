@@ -631,13 +631,22 @@ def _read_state(path: Path) -> Dict[str, Any]:
 
 
 def _write_state(path: Path, result: Mapping[str, Any]) -> None:
+    # Atomic replace: _read_state resets to {} on a corrupt file, so a crash
+    # mid-write would silently drop snooze/ignore preferences.
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
+        with tmp_path.open("w", encoding="utf-8") as handle:
             json.dump(result, handle, indent=2, sort_keys=True)
             handle.write("\n")
+        os.replace(tmp_path, path)
     except OSError:
         return
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 def _set_cached_status(result: Mapping[str, Any]) -> None:

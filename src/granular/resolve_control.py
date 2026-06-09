@@ -534,5 +534,5 @@ def quit_resolve() -> Dict[str, Any]:
     resolve = get_resolve()
     if resolve is None:
         return {"error": "Not connected to DaVinci Resolve"}
-    result = resolve.Quit()
+    resolve.Quit()
     return {"success": True, "message": "DaVinci Resolve is quitting"}

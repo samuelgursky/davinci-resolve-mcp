@@ -6944,11 +6944,22 @@ def _read_media_analysis_preferences() -> Dict[str, Any]:
 
 
 def _write_media_analysis_preferences(preferences: Dict[str, Any]) -> None:
+    # Atomic replace: a crash mid-write must not truncate the file, because the
+    # reader resets to {} on corruption and the next save would then wipe every
+    # remaining user preference.
     path = _media_analysis_preferences_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(preferences, handle, indent=2, sort_keys=True)
-        handle.write("\n")
+    tmp_path = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}-{time.time_ns()}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(preferences, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 def _setup_text_key(value: Any) -> str:
@@ -12270,11 +12281,14 @@ def _safe_project_delete(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     if current_name == name:
         if not p.get("close_current", False):
             return _err("Refusing to delete the currently open project; pass close_current=True")
-        if p.get("save_current", True):
-            pm.SaveProject()
+        saved = bool(pm.SaveProject()) if p.get("save_current", True) else None
         closed = bool(pm.CloseProject(current))
         if not closed:
             return _err(f"Failed to close current project '{name}' before delete")
+        result = {"success": bool(pm.DeleteProject(name))}
+        if saved is False:
+            result["warning"] = "SaveProject returned False before close; unsaved changes may have been discarded"
+        return result
     return {"success": bool(pm.DeleteProject(name))}
 
 
@@ -14759,10 +14773,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         prefs["resolve_ai_governance_preset"] = preset
         if isinstance(p.get("overrides"), dict):
             prefs["resolve_ai_governance_overrides"] = p["overrides"]
-        path = _media_analysis_preferences_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(prefs, fh, indent=2)
+        _write_media_analysis_preferences(prefs)
         return {"success": True, "tier": preset, "overrides": prefs.get("resolve_ai_governance_overrides") or {}}
     if action == "set_caps_preset":
         preset = (p.get("preset") or "").strip().lower()
@@ -14774,10 +14785,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         prefs["analysis_caps_preset"] = preset
         if isinstance(p.get("overrides"), dict):
             prefs["analysis_caps_overrides"] = p["overrides"]
-        path = _media_analysis_preferences_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(prefs, fh, indent=2)
+        _write_media_analysis_preferences(prefs)
         return {"success": True, "preset": preset, "overrides": prefs.get("analysis_caps_overrides") or {}}
     if action == "get_usage":
         from src.utils import analysis_caps as _ac
