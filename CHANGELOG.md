@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.37.1
+
+Test-suite hygiene — no server behavior changed.
+
+- **Fixed** the legacy live-harness scripts (`test_all_tools`, `test_phase2`–`5`)
+  exiting at import when Resolve is unavailable, which crashed pytest
+  collection and surfaced as five loader errors under unittest discovery.
+  They now skip cleanly under both runners and keep the hard-exit behavior
+  when run as standalone scripts. (Adapted from a contribution by @diesdaas.)
+- **Fixed** pytest mis-collecting `test_resolve20_api.py`'s internal `test()`
+  helper (renamed to `run_live_check()`), and made the batch-CLI synthetic-job
+  test independent of which transcription backends the host has installed.
+- **CI**: the npm publish workflow no longer reports failure when the registry
+  accepted the publish but npm's retried request hit a consumed OIDC token;
+  it now verifies the published tarball shasum before failing. Runner actions
+  bumped to their Node 24 majors.
+
 ## What's New in v2.37.0
 
 Render format-id fix, offline-media diagnosis, and a setup doctor.
