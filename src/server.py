@@ -8587,6 +8587,13 @@ def _has_any_param(p: Dict[str, Any], *keys: str) -> bool:
     return any(key in p and p[key] is not None for key in keys)
 
 
+def _media_analysis_vision_options(enabled: bool) -> Dict[str, Any]:
+    options = {"enabled": bool(enabled)}
+    if enabled:
+        options["provider"] = HOST_CHAT_PATHS_PROVIDER
+    return options
+
+
 def _media_analysis_transcription_options(enabled: bool) -> Dict[str, Any]:
     options = {"enabled": bool(enabled)}
     if enabled:
@@ -8810,20 +8817,21 @@ def _media_analysis_apply_setup_defaults(action: str, p: Dict[str, Any]) -> Dict
 
     if action in {"plan", "analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence", "start_batch_job", "review_timeline_markers", "publish_clip_metadata"}:
         include_visuals = _first_param(out, "include_visuals", "includeVisuals")
-        if not _has_any_param(out, "vision"):
+        if isinstance(out.get("vision"), bool):
+            out["vision"] = _media_analysis_vision_options(out["vision"])
+            applied["vision_shorthand"] = out["vision"]["enabled"]
+        elif not _has_any_param(out, "vision"):
             if include_visuals is not None:
                 visuals_enabled = _media_analysis_bool(include_visuals, True)
-                out["vision"] = {"enabled": visuals_enabled}
-                if visuals_enabled:
-                    out["vision"]["provider"] = HOST_CHAT_PATHS_PROVIDER
+                out["vision"] = _media_analysis_vision_options(visuals_enabled)
                 applied["include_visuals"] = visuals_enabled
             else:
                 vision_default = prefs.get("vision_default")
                 if vision_default == "on":
-                    out["vision"] = {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER}
+                    out["vision"] = _media_analysis_vision_options(True)
                     applied["vision_default"] = vision_default
                 elif vision_default in {"off", "technical_only"}:
-                    out["vision"] = {"enabled": False}
+                    out["vision"] = _media_analysis_vision_options(False)
                     applied["vision_default"] = vision_default
         include_transcription = _first_param(out, "include_transcription", "includeTranscription")
         if not _has_any_param(out, "transcription"):
