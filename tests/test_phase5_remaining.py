@@ -11,24 +11,30 @@ Tests:
 """
 import sys, os, json, time
 
+
+def _skip_or_exit(message):
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(message, allow_module_level=True)
+    print(f"ERROR: {message}")
+    sys.exit(1)
+
+
 sys.path.append("/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules")
 import DaVinciResolveScript as dvr
 
 resolve = dvr.scriptapp("Resolve")
 if not resolve:
-    print("ERROR: Cannot connect to Resolve")
-    sys.exit(1)
+    _skip_or_exit("Cannot connect to Resolve")
 
 pm = resolve.GetProjectManager()
 proj = pm.GetCurrentProject()
 if not proj:
-    print("ERROR: No project open")
-    sys.exit(1)
+    _skip_or_exit("No project open")
 
 tl = proj.GetCurrentTimeline()
 if not tl:
-    print("ERROR: No current timeline")
-    sys.exit(1)
+    _skip_or_exit("No current timeline")
 
 print(f"Project: {proj.GetName()}")
 print(f"Timeline: {tl.GetName()}")

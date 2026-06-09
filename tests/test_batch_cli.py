@@ -18,6 +18,7 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from src import batch_cli
+from src.utils import media_analysis_jobs
 
 
 class BatchCliParserTests(unittest.TestCase):
@@ -162,9 +163,11 @@ class BatchCliRunIntegrationTests(unittest.TestCase):
             os.makedirs(source_dir)
             source = os.path.join(source_dir, "cli_smoke.mp4")
             self._write_synthetic_media(source)
+            caps = media_analysis_jobs.detect_capabilities()
+            caps["transcription"] = {"available": True, "backends": ["local_mock"]}
 
             buf = io.StringIO()
-            with redirect_stdout(buf):
+            with patch("src.utils.media_analysis_jobs.detect_capabilities", return_value=caps), redirect_stdout(buf):
                 rc = batch_cli.main(
                     [
                         "--json",

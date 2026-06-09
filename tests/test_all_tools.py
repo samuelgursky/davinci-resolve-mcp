@@ -14,25 +14,39 @@ import json
 import traceback
 import tempfile
 
+
+def _skip_or_exit(message):
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(message, allow_module_level=True)
+    print(f"FATAL: {message}")
+    sys.exit(1)
+
+
 sys.path.insert(0, '/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules')
 import DaVinciResolveScript as dvr
 
 resolve = dvr.scriptapp('Resolve')
 if not resolve:
-    print("FATAL: Cannot connect to DaVinci Resolve")
-    sys.exit(1)
+    _skip_or_exit("Cannot connect to DaVinci Resolve")
 
 print(f"Connected to {resolve.GetProductName()} {resolve.GetVersionString()}")
 
 pm = resolve.GetProjectManager()
 project = pm.GetCurrentProject()
+if not project:
+    _skip_or_exit("No current DaVinci Resolve project")
 mp = project.GetMediaPool()
 root = mp.GetRootFolder()
 ms = resolve.GetMediaStorage()
 gallery = project.GetGallery()
 tl = project.GetCurrentTimeline()
+if not tl:
+    _skip_or_exit("No current DaVinci Resolve timeline")
 clips = root.GetClipList() or []
 tl_items = tl.GetItemListInTrack("video", 1) if tl else []
+if not clips or not tl_items:
+    _skip_or_exit("Live API harness requires at least one Media Pool clip and one video timeline item")
 
 print(f"Project: {project.GetName()}")
 print(f"Clips in root: {len(clips)}")

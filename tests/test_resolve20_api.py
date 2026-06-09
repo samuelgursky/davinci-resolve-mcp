@@ -53,7 +53,7 @@ def record(kind, name, value=""):
     print(f"  {kind.upper():5} {name}: {str(value)[:120]}")
 
 
-def test(name, fn=None, skip_reason=None, allow_false=True):
+def run_live_check(name, fn=None, skip_reason=None, allow_false=True):
     if skip_reason or fn is None:
         record("skip", name, skip_reason or "no test function")
         return None
@@ -157,7 +157,7 @@ def main():
 
     project = None
     try:
-        project = test(
+        project = run_live_check(
             "PM.CreateProject(mediaLocationPath)",
             lambda: pm.CreateProject(TEST_PROJECT, media_location),
             allow_false=False,
@@ -166,7 +166,7 @@ def main():
             return 1
 
         mp = project.GetMediaPool()
-        clips = test(
+        clips = run_live_check(
             "MediaPool.ImportMedia(resolve20 fixtures)",
             lambda: mp.ImportMedia([image_path, wav_a, wav_b]),
             allow_false=False,
@@ -178,7 +178,7 @@ def main():
         audio_clip = find_clip_by_path(clips, wav_a)
         replacement_audio = wav_b
 
-        timeline = test(
+        timeline = run_live_check(
             "MP.CreateTimelineFromClips(resolve20 fixtures)",
             lambda: mp.CreateTimelineFromClips("_resolve20_api_timeline", clips),
             allow_false=False,
@@ -190,15 +190,15 @@ def main():
         audio_track, audio_item = first_item(timeline, "audio")
         video_track, video_item = first_item(timeline, "video")
 
-        test("Resolve.GetFairlightPresets", lambda: resolve.GetFairlightPresets())
+        run_live_check("Resolve.GetFairlightPresets", lambda: resolve.GetFairlightPresets())
         presets = resolve.GetFairlightPresets() or []
         preset_name = presets[0] if presets else "__missing_resolve20_test_preset__"
-        test(
+        run_live_check(
             "Project.ApplyFairlightPresetToCurrentTimeline",
             lambda: project.ApplyFairlightPresetToCurrentTimeline(preset_name),
         )
 
-        test(
+        run_live_check(
             "Project.SetRenderSettings subtitle keys",
             lambda: project.SetRenderSettings(
                 {"ExportSubtitle": False, "SubtitleFormat": "BurnIn"}
@@ -207,17 +207,17 @@ def main():
 
         if audio_clip:
             original_name = audio_clip.GetName()
-            test("MPI.SetName", lambda: audio_clip.SetName(f"{original_name}_renamed"))
+            run_live_check("MPI.SetName", lambda: audio_clip.SetName(f"{original_name}_renamed"))
             audio_clip.SetName(original_name)
-            test(
+            run_live_check(
                 "MPI.LinkFullResolutionMedia",
                 lambda: audio_clip.LinkFullResolutionMedia(replacement_audio),
             )
-            test(
+            run_live_check(
                 "MPI.ReplaceClipPreserveSubClip",
                 lambda: audio_clip.ReplaceClipPreserveSubClip(replacement_audio),
             )
-            test("MPI.MonitorGrowingFile", lambda: audio_clip.MonitorGrowingFile())
+            run_live_check("MPI.MonitorGrowingFile", lambda: audio_clip.MonitorGrowingFile())
         else:
             for name in (
                 "MPI.SetName",
@@ -225,42 +225,42 @@ def main():
                 "MPI.ReplaceClipPreserveSubClip",
                 "MPI.MonitorGrowingFile",
             ):
-                test(name, skip_reason="No imported audio clip")
+                run_live_check(name, skip_reason="No imported audio clip")
 
         if audio_track:
-            state = test(
+            state = run_live_check(
                 "TL.GetVoiceIsolationState",
                 lambda: timeline.GetVoiceIsolationState(audio_track),
             )
             safe_state = state if isinstance(state, dict) else {"isEnabled": False, "amount": 0}
-            test(
+            run_live_check(
                 "TL.SetVoiceIsolationState",
                 lambda: timeline.SetVoiceIsolationState(audio_track, safe_state),
             )
         else:
-            test("TL.GetVoiceIsolationState", skip_reason="No audio track")
-            test("TL.SetVoiceIsolationState", skip_reason="No audio track")
+            run_live_check("TL.GetVoiceIsolationState", skip_reason="No audio track")
+            run_live_check("TL.SetVoiceIsolationState", skip_reason="No audio track")
 
         item_for_name = video_item or audio_item
         if item_for_name:
             original_item_name = item_for_name.GetName()
-            test("TI.SetName", lambda: item_for_name.SetName(f"{original_item_name}_renamed"))
+            run_live_check("TI.SetName", lambda: item_for_name.SetName(f"{original_item_name}_renamed"))
             item_for_name.SetName(original_item_name)
         else:
-            test("TI.SetName", skip_reason="No timeline item")
+            run_live_check("TI.SetName", skip_reason="No timeline item")
 
         if audio_item:
-            state = test("TI.GetVoiceIsolationState", lambda: audio_item.GetVoiceIsolationState())
+            state = run_live_check("TI.GetVoiceIsolationState", lambda: audio_item.GetVoiceIsolationState())
             safe_state = state if isinstance(state, dict) else {"isEnabled": False, "amount": 0}
-            test("TI.SetVoiceIsolationState", lambda: audio_item.SetVoiceIsolationState(safe_state))
+            run_live_check("TI.SetVoiceIsolationState", lambda: audio_item.SetVoiceIsolationState(safe_state))
         else:
-            test("TI.GetVoiceIsolationState", skip_reason="No audio timeline item")
-            test("TI.SetVoiceIsolationState", skip_reason="No audio timeline item")
+            run_live_check("TI.GetVoiceIsolationState", skip_reason="No audio timeline item")
+            run_live_check("TI.SetVoiceIsolationState", skip_reason="No audio timeline item")
 
         if video_item:
-            test("TI.ResetAllNodeColors", lambda: video_item.ResetAllNodeColors())
+            run_live_check("TI.ResetAllNodeColors", lambda: video_item.ResetAllNodeColors())
         else:
-            test("TI.ResetAllNodeColors", skip_reason="No video timeline item")
+            run_live_check("TI.ResetAllNodeColors", skip_reason="No video timeline item")
 
     finally:
         cleanup(pm, original_project_name)
