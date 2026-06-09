@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.37.3
+
+Deep-audit fixes, rounds two and three: agent-facing action discovery,
+crash-safe user-state persistence, and resource hygiene.
+
+- **Fixed** three tools' unknown-action error lists drifting from their real
+  dispatch: `timeline` omitted `clip_where` and `action_help`;
+  `timeline_item_color` and `graph` omitted `action_help`. Agents recovering
+  from a typo now see the full action set. A static AST test keeps every
+  tool's advertised list in both-way sync with its dispatch (and verifies
+  docstring-advertised actions are real).
+- **Fixed** user-state files being vulnerable to truncation by a crash
+  mid-write. Affected files all reset to `{}` on corruption, so the next
+  save would silently wipe remaining user data. Writers now use atomic
+  temp-file + `os.replace`: `media-analysis-preferences.json` (all
+  analysis/caps/governance/update defaults — including the
+  `set_resolution_tier` and `set_caps_preset` paths, now routed through the
+  shared writer), `update-check.json`, the dashboard's `analysis.json`
+  transcription patch, and `transcript-corrections.json`.
+- **Fixed** `_safe_project_delete` discarding `SaveProject()`'s result when
+  closing the current project before deletion; a failed save now surfaces
+  as a warning in the response.
+- **Fixed** a file-descriptor leak: the parent kept its copy of the control
+  panel's log handle open after spawning the detached child.
+- Audit classes verified clean: bare excepts, mutable default arguments,
+  `asyncio.run` inside running loops, subprocess timeouts, docstring phantom
+  actions, silent-success swallows in metadata/marker/archive write paths.
+
 ## What's New in v2.37.2
 
 Static-audit fixes — four undefined-name references that silently fell back
