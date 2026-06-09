@@ -13576,6 +13576,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       media_pool_boundary_report(depth?, clip_ids?, selected?) -> {capabilities, media_pool, items?}
     """
     p = params or {}
+    if action == "generate_proxy_media_ui_capabilities":
+        return _generate_proxy_media_ui_capabilities()
     resolve_obj, proj, mp, err = _get_mp()
     if err:
         return err
@@ -13834,8 +13836,6 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         return _link_proxy_checked(root, p)
     elif action == "link_full_resolution_checked":
         return _link_full_resolution_checked(root, p)
-    elif action == "generate_proxy_media_ui_capabilities":
-        return _generate_proxy_media_ui_capabilities()
     elif action == "generate_proxy_media_ui":
         return _generate_proxy_media_ui(resolve_obj, mp, root, p)
     elif action == "set_clip_marks":

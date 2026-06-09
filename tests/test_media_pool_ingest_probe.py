@@ -9,6 +9,7 @@ from src.server import (
     _copy_metadata,
     _generate_proxy_media_ui,
     _generate_proxy_media_ui_capabilities,
+    media_pool,
     _media_pool_ingest_capabilities,
     _media_pool_item_probe,
     _media_pool_probe,
@@ -341,6 +342,13 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
         self.assertIn("generate_proxy_media_ui", capabilities["actions"])
         self.assertFalse(capabilities["official_resolve_api"]["generate_proxy_media"])
         self.assertTrue(capabilities["official_resolve_api"]["link_proxy_media"])
+
+    def test_generate_proxy_media_ui_capabilities_action_does_not_connect_to_resolve(self):
+        with patch.object(compound, "_get_mp") as get_mp:
+            result = media_pool("generate_proxy_media_ui_capabilities", {})
+
+        self.assertIn("generate_proxy_media_ui", result["actions"])
+        get_mp.assert_not_called()
 
     def test_generate_proxy_media_ui_dry_run_does_not_call_osascript(self):
         mp = MediaPoolStub()

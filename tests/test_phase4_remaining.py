@@ -11,14 +11,24 @@ Tests:
 """
 import sys, os, json, time, tempfile
 
+def _skip_or_exit(message):
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(message, allow_module_level=True)
+    print(f"FATAL: {message}")
+    sys.exit(1)
+
 sys.path.insert(0, "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules")
 import DaVinciResolveScript as dvr
 
 resolve = dvr.scriptapp("Resolve")
-assert resolve, "Cannot connect to DaVinci Resolve"
+if not resolve:
+    _skip_or_exit("Cannot connect to DaVinci Resolve")
 
 pm = resolve.GetProjectManager()
 proj = pm.GetCurrentProject()
+if not proj:
+    _skip_or_exit("No current DaVinci Resolve project")
 print(f"Project: {proj.GetName()}")
 
 results = {"pass": [], "fail": [], "skip": []}
@@ -38,11 +48,13 @@ def test(name, fn=None, skip_reason=None):
 
 # Get the main timeline and a real item
 tl = proj.GetTimelineByIndex(1)
-assert tl, "No timeline found"
+if not tl:
+    _skip_or_exit("No timeline found")
 proj.SetCurrentTimeline(tl)
 
 items = tl.GetItemListInTrack("video", 1)
-assert items and len(items) > 0, "No video items on track 1"
+if not items:
+    _skip_or_exit("No video items on track 1")
 item = items[0]
 print(f"Using timeline: {tl.GetName()}, item: {item.GetName()}")
 
