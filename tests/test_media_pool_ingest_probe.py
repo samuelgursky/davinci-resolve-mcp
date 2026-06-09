@@ -1,10 +1,14 @@
 import unittest
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock, patch
 
+import src.server as compound
 from src.server import (
     _copy_clip_annotations,
     _copy_metadata,
+    _generate_proxy_media_ui,
+    _generate_proxy_media_ui_capabilities,
     _media_pool_ingest_capabilities,
     _media_pool_item_probe,
     _media_pool_probe,
@@ -38,6 +42,8 @@ class MediaPoolItemStub:
             "Camera #": "A",
             "Audio Notes": "",
             "Track 1": "",
+            "Proxy": "None",
+            "Proxy Media Path": "",
         }
         self.markers = {12: {"color": "Blue", "name": "Review", "note": "Check", "duration": 1}}
         self.flags = ["Blue"]
@@ -145,6 +151,7 @@ class MediaPoolStub:
     def __init__(self):
         self.clip = MediaPoolItemStub()
         self.root = FolderStub(clips=[self.clip], subfolders=[FolderStub(name="Ingest")])
+        self.selected_clip = self.clip
 
     def GetUniqueId(self):
         return "media-pool-1"
@@ -156,7 +163,11 @@ class MediaPoolStub:
         return self.root
 
     def GetSelectedClips(self):
-        return [self.clip]
+        return [self.selected_clip] if self.selected_clip else []
+
+    def SetSelectedClip(self, clip):
+        self.selected_clip = clip
+        return True
 
     def ImportMedia(self, paths):
         return []
@@ -323,6 +334,86 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["results"][0]["markers"], 1)
         self.assertEqual(result["results"][0]["flags"], 1)
+
+    def test_generate_proxy_media_ui_capabilities_document_api_gap(self):
+        capabilities = _generate_proxy_media_ui_capabilities()
+
+        self.assertIn("generate_proxy_media_ui", capabilities["actions"])
+        self.assertFalse(capabilities["official_resolve_api"]["generate_proxy_media"])
+        self.assertTrue(capabilities["official_resolve_api"]["link_proxy_media"])
+
+    def test_generate_proxy_media_ui_dry_run_does_not_call_osascript(self):
+        mp = MediaPoolStub()
+        with patch.object(compound.sys, "platform", "darwin"), patch.object(compound.subprocess, "run") as run:
+            result = _generate_proxy_media_ui(None, mp, mp.root, {"selected": True, "dry_run": True})
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["dry_run"])
+        self.assertTrue(result["would_generate"])
+        self.assertEqual(result["before"][0]["proxy"], "None")
+        run.assert_not_called()
+
+    def test_generate_proxy_media_ui_requires_allow_generate_for_actual_click(self):
+        mp = MediaPoolStub()
+        with patch.object(compound.sys, "platform", "darwin"), patch.object(compound.subprocess, "run") as run:
+            result = _generate_proxy_media_ui(None, mp, mp.root, {"selected": True})
+
+        self.assertIn("error", result)
+        self.assertTrue(result["allow_generate_required"])
+        self.assertTrue(result["would_generate"])
+        run.assert_not_called()
+
+    def test_generate_proxy_media_ui_reports_accessibility_error(self):
+        mp = MediaPoolStub()
+        proc = Mock(returncode=1, stdout="", stderr="System Events got an error: assistive access is not allowed. (-1719)")
+        with patch.object(compound.sys, "platform", "darwin"), patch.object(compound.subprocess, "run", return_value=proc):
+            result = _generate_proxy_media_ui(
+                None,
+                mp,
+                mp.root,
+                {"selected": True, "allow_generate": True, "readback_wait_seconds": 0},
+            )
+
+        self.assertFalse(result["success"])
+        self.assertIn("accessibility_note", result)
+        self.assertIn("Accessibility", result["accessibility_note"])
+
+    def test_generate_proxy_media_ui_selects_explicit_single_clip_before_click(self):
+        mp = MediaPoolStub()
+        other = MediaPoolItemStub(unique_id="clip-2", name="other.mov")
+        mp.root.clips.append(other)
+        mp.selected_clip = other
+        resolve_obj = Mock()
+        resolve_obj.OpenPage.return_value = True
+        proc = Mock(returncode=0, stdout="Generate Proxy Media\n", stderr="")
+
+        with patch.object(compound.sys, "platform", "darwin"), patch.object(compound.subprocess, "run", return_value=proc):
+            result = _generate_proxy_media_ui(
+                resolve_obj,
+                mp,
+                mp.root,
+                {"clip_ids": ["clip-1"], "allow_generate": True, "readback_wait_seconds": 0},
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(mp.selected_clip.GetUniqueId(), "clip-1")
+        resolve_obj.OpenPage.assert_called_once_with("media")
+        self.assertEqual(result["clicked_label"], "Generate Proxy Media")
+
+    def test_generate_proxy_media_ui_rejects_multiple_explicit_clip_ids(self):
+        mp = MediaPoolStub()
+        mp.root.clips.append(MediaPoolItemStub(unique_id="clip-2", name="other.mov"))
+
+        with patch.object(compound.sys, "platform", "darwin"):
+            result = _generate_proxy_media_ui(
+                None,
+                mp,
+                mp.root,
+                {"clip_ids": ["clip-1", "clip-2"], "allow_generate": True},
+            )
+
+        self.assertIn("error", result)
+        self.assertIn("selected=True", result["error"]["message"])
 
 
 if __name__ == "__main__":

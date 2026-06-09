@@ -5767,6 +5767,8 @@ _MEDIA_POOL_KERNEL_ACTIONS = [
     "safe_unlink",
     "link_proxy_checked",
     "link_full_resolution_checked",
+    "generate_proxy_media_ui_capabilities",
+    "generate_proxy_media_ui",
     "set_clip_marks",
     "clear_clip_marks",
     "copy_clip_annotations",
@@ -9085,6 +9087,7 @@ def _media_pool_ingest_capabilities():
                 "media_pool.safe_relink and safe_unlink with path/clip validation",
                 "proxy link/unlink through MediaPoolItem APIs",
                 "media_pool.link_proxy_checked with file validation",
+                "media_pool.generate_proxy_media_ui for Resolve's native proxy generator via guarded macOS UI automation",
                 "full-resolution media link where Resolve 20 exposes it",
                 "media_pool.link_full_resolution_checked with version/path validation",
             ],
@@ -9107,6 +9110,7 @@ def _media_pool_ingest_capabilities():
         "partially_supported": {
             "clip_properties": "Resolve accepts only some GetClipProperty/SetClipProperty keys by media type and build.",
             "proxy_and_full_resolution_links": "Resolve may accept paths without deep compatibility validation; probes must use synthetic media.",
+            "native_proxy_generation": "Resolve exposes no documented Generate Proxy Media scripting API; media_pool.generate_proxy_media_ui uses macOS UI automation with dry_run and allow_generate guards.",
             "audio_transcription": "Transcription availability depends on Resolve Studio features, installed components, media type, and page/build state.",
             "image_sequences": "Sequence import behavior depends on FilePath pattern, frame range, and Resolve's still/sequence interpretation.",
             "audio_mapping": "Readback is available on supported media, but mapping shape varies by clip type.",
@@ -9596,6 +9600,277 @@ def _link_full_resolution_checked(root, p: Dict[str, Any]):
     if p.get("dry_run"):
         return _ok(clip=_media_pool_item_summary(clip), path=path)
     return {"success": bool(clip.LinkFullResolutionMedia(path))}
+
+
+_GENERATE_PROXY_MEDIA_UI_LABELS = [
+    "Generate Proxy Media",
+    "Proxy Media generieren",
+    "Proxy-Medien generieren",
+    "Proxy-Medien erzeugen",
+]
+
+
+def _proxy_media_readback(clip):
+    summary = _media_pool_item_summary(clip)
+    out = {
+        "clip": summary,
+        "proxy": None,
+        "proxy_media_path": None,
+        "properties_available": False,
+    }
+    properties, prop_err = _safe_clip_call(clip, "GetClipProperty", "")
+    if not isinstance(properties, dict):
+        if prop_err:
+            out["error"] = prop_err
+        return out
+    out["properties_available"] = True
+    out["proxy"] = properties.get("Proxy") or properties.get("Proxy Media")
+    out["proxy_media_path"] = (
+        properties.get("Proxy Media Path")
+        or properties.get("Proxy Media File Path")
+        or properties.get("Proxy Path")
+        or ""
+    )
+    return out
+
+
+def _generate_proxy_media_ui_capabilities():
+    return {
+        "available": sys.platform == "darwin",
+        "platform": sys.platform,
+        "mode": "macos_system_events_ui_automation",
+        "official_resolve_api": {
+            "generate_proxy_media": False,
+            "link_proxy_media": True,
+        },
+        "actions": ["generate_proxy_media_ui"],
+        "ui_path": "Media page > selected Media Pool clip(s) > context menu > Generate Proxy Media",
+        "guards": {
+            "dry_run_supported": True,
+            "allow_generate_required": True,
+            "selected_clips_supported": True,
+            "explicit_clip_id_supported": True,
+            "explicit_multi_clip_selection": "preselect clips in Resolve and call selected=True",
+            "proxy_path_readback": "best-effort via GetClipProperty('') keys such as Proxy Media Path",
+        },
+        "notes": [
+            "DaVinci Resolve's public scripting API exposes LinkProxyMedia but not a documented Generate Proxy Media call.",
+            "This fallback clicks Resolve's native UI command and therefore requires macOS Accessibility permission.",
+            "Resolve may generate proxies asynchronously; proxy path readback can remain empty until the background job finishes.",
+        ],
+    }
+
+
+def _generate_proxy_media_ui_script(labels: List[str], delay_seconds: float) -> str:
+    delay_seconds = max(0.0, min(float(delay_seconds), 5.0))
+    app_menu_labels = [
+        "Clip",
+        "Clips",
+        "Media Pool",
+        "Media",
+        "Medienpool",
+        "Medien",
+    ]
+    return f"""
+on tryMenuBarClick(menuLabels, targetLabels)
+  tell application "System Events"
+    tell process "DaVinci Resolve"
+      repeat with menuCandidate in menuLabels
+        try
+          set menuCandidateText to menuCandidate as text
+          set candidateMenu to menu 1 of menu bar item menuCandidateText of menu bar 1
+          repeat with targetCandidate in targetLabels
+            try
+              set targetText to targetCandidate as text
+              click menu item targetText of candidateMenu
+              return targetText
+            on error errMsg number errNum
+              if errNum is -1719 then error errMsg number errNum
+            end try
+          end repeat
+        on error errMsg number errNum
+          if errNum is -1719 then error errMsg number errNum
+        end try
+      end repeat
+    end tell
+  end tell
+  return ""
+end tryMenuBarClick
+
+on tryFocusedContextMenuClick(targetLabels)
+  tell application "System Events"
+    tell process "DaVinci Resolve"
+      try
+        set focusedElement to value of attribute "AXFocusedUIElement"
+        perform action "AXShowMenu" of focusedElement
+        delay {delay_seconds}
+        repeat with targetCandidate in targetLabels
+          try
+            set targetText to targetCandidate as text
+            click menu item targetText of menu 1 of focusedElement
+            return targetText
+          on error errMsg number errNum
+            if errNum is -1719 then error errMsg number errNum
+          end try
+        end repeat
+      on error errMsg number errNum
+        if errNum is -1719 then error errMsg number errNum
+      end try
+    end tell
+  end tell
+  return ""
+end tryFocusedContextMenuClick
+
+tell application "DaVinci Resolve" to activate
+delay 0.4
+tell application "System Events"
+  tell process "DaVinci Resolve"
+    set frontmost to true
+  end tell
+end tell
+
+set targetLabels to {_applescript_list(labels)}
+set menuLabels to {_applescript_list(app_menu_labels)}
+set clickedLabel to tryMenuBarClick(menuLabels, targetLabels)
+if clickedLabel is "" then set clickedLabel to tryFocusedContextMenuClick(targetLabels)
+if clickedLabel is "" then
+  error "Generate Proxy Media menu item not found. Open the Media page, select clip(s) in the Media Pool, focus the Media Pool, then retry."
+end if
+return clickedLabel
+"""
+
+
+def _generate_proxy_media_ui(resolve_obj, mp, root, p: Dict[str, Any]):
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    ids = p.get("clip_ids") or p.get("ids")
+    selected = bool(p.get("selected", False))
+    explicit_ids = list(ids) if isinstance(ids, list) else []
+    labels = p.get("candidate_labels") or p.get("labels") or _GENERATE_PROXY_MEDIA_UI_LABELS
+    if not isinstance(labels, list) or not labels or not all(isinstance(label, str) and label for label in labels):
+        return _err("candidate_labels must be a non-empty list of strings")
+    before = [_proxy_media_readback(clip) for clip in clips]
+
+    if sys.platform != "darwin":
+        if p.get("dry_run"):
+            return _ok(
+                available=False,
+                dry_run=True,
+                would_generate=True,
+                clips=_clip_summaries(clips),
+                missing=missing,
+                before=before,
+                candidate_labels=labels,
+                accessibility_required=True,
+                note="generate_proxy_media_ui is macOS-only because it uses System Events UI automation.",
+            )
+        return _err("generate_proxy_media_ui is macOS-only because it uses System Events UI automation")
+
+    if explicit_ids and len(explicit_ids) > 1 and not selected:
+        return _err(
+            "For multiple clips, preselect them in Resolve's Media Pool and call generate_proxy_media_ui with selected=True. "
+            "The Resolve API exposes SetSelectedClip for one clip, not a documented multi-select API."
+        )
+
+    if p.get("dry_run"):
+        return _ok(
+            dry_run=True,
+            would_generate=True,
+            clips=_clip_summaries(clips),
+            missing=missing,
+            before=before,
+            candidate_labels=labels,
+            ui_path="Media page > selected Media Pool clip(s) > context menu > Generate Proxy Media",
+            accessibility_required=True,
+            allow_generate_required=True,
+        )
+
+    if not p.get("allow_generate", False):
+        result = _err(
+            "Set allow_generate=True to click Resolve's native Generate Proxy Media command. "
+            "Use dry_run=True first to verify the target clip selection."
+        )
+        result.update(
+            {
+                "allow_generate_required": True,
+                "would_generate": True,
+                "clips": _clip_summaries(clips),
+                "missing": missing,
+                "before": before,
+                "candidate_labels": labels,
+            }
+        )
+        return result
+
+    if resolve_obj and _has_method(resolve_obj, "OpenPage"):
+        try:
+            if not resolve_obj.OpenPage("media"):
+                return _err("Failed to switch Resolve to the Media page before UI automation")
+        except Exception as exc:
+            return _err(f"Failed to switch Resolve to the Media page before UI automation: {exc}")
+
+    if explicit_ids and len(explicit_ids) == 1 and not selected:
+        if not _has_method(mp, "SetSelectedClip"):
+            return _err("SetSelectedClip unavailable; preselect the clip in Resolve and call selected=True")
+        try:
+            if not mp.SetSelectedClip(clips[0]):
+                return _err(f"Failed to select clip before proxy generation: {explicit_ids[0]}")
+        except Exception as exc:
+            return _err(f"Failed to select clip before proxy generation: {exc}")
+
+    timeout = int(p.get("timeout", 20))
+    delay_seconds = float(p.get("ui_delay_seconds", p.get("uiDelaySeconds", 0.35)))
+    script = _generate_proxy_media_ui_script(labels, delay_seconds)
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return _err(f"Timed out while clicking Generate Proxy Media after {timeout}s")
+    except Exception as exc:
+        return _err(f"Failed to run osascript: {exc}")
+
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        accessibility_note = None
+        if "-1719" in stderr or "Hilfszugriff" in stderr or "assistive" in stderr.lower():
+            accessibility_note = (
+                "Grant Accessibility permission in System Settings > Privacy & Security > Accessibility "
+                "for the app/process running the MCP client or for osascript/Terminal, then retry."
+            )
+        return {
+            "success": False,
+            "error": stderr or stdout or f"osascript exited {proc.returncode}",
+            "returncode": proc.returncode,
+            "clips": _clip_summaries(clips),
+            "missing": missing,
+            "before": before,
+            "candidate_labels": labels,
+            "ui_path": "Media page > selected Media Pool clip(s) > context menu > Generate Proxy Media",
+            "accessibility_note": accessibility_note,
+        }
+
+    wait_seconds = max(0.0, min(float(p.get("readback_wait_seconds", p.get("readbackWaitSeconds", 1.0))), 10.0))
+    if wait_seconds:
+        time.sleep(wait_seconds)
+    after = [_proxy_media_readback(clip) for clip in clips]
+    return _ok(
+        clicked_label=stdout,
+        clips=_clip_summaries(clips),
+        missing=missing,
+        before=before,
+        after=after,
+        candidate_labels=labels,
+        ui_path="Media page > selected Media Pool clip(s) > context menu > Generate Proxy Media",
+        note="Clicked Resolve's native Generate Proxy Media command via macOS UI automation.",
+        readback_note="Proxy generation can be asynchronous; Proxy Media Path may remain empty until Resolve finishes the background job.",
+    )
 
 
 def _set_clip_marks(root, mp, p: Dict[str, Any]):
@@ -13287,13 +13562,21 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       safe_unlink(clip_ids|selected, dry_run?) -> {success}
       link_proxy_checked(clip_id, proxy_path|path, dry_run?) -> {success}
       link_full_resolution_checked(clip_id, path|full_res_media_path, dry_run?) -> {success}
+      generate_proxy_media_ui_capabilities() -> {available, official_resolve_api, guards}
+      generate_proxy_media_ui(clip_ids|selected, dry_run?, allow_generate?) -> {success}
+        — macOS UI automation fallback for Resolve's native Generate Proxy Media
+          command. Public Resolve scripting has LinkProxyMedia, but no documented
+          Generate Proxy Media call. Use dry_run=True first; actual clicks require
+          allow_generate=True. For multiple clips, preselect them in Resolve and
+          call selected=True because Resolve exposes SetSelectedClip but no
+          documented multi-select API.
       set_clip_marks(clip_ids|selected, mark_in, mark_out, type?, dry_run?) -> {success, results}
       clear_clip_marks(clip_ids|selected, type?, dry_run?) -> {success, results}
       copy_clip_annotations(source_clip_id, target_clip_ids, include_markers?, include_flags?, include_clip_color?, dry_run?) -> {success, results}
       media_pool_boundary_report(depth?, clip_ids?, selected?) -> {capabilities, media_pool, items?}
     """
     p = params or {}
-    _, proj, mp, err = _get_mp()
+    resolve_obj, proj, mp, err = _get_mp()
     if err:
         return err
     root = mp.GetRootFolder()
@@ -13551,6 +13834,10 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         return _link_proxy_checked(root, p)
     elif action == "link_full_resolution_checked":
         return _link_full_resolution_checked(root, p)
+    elif action == "generate_proxy_media_ui_capabilities":
+        return _generate_proxy_media_ui_capabilities()
+    elif action == "generate_proxy_media_ui":
+        return _generate_proxy_media_ui(resolve_obj, mp, root, p)
     elif action == "set_clip_marks":
         return _set_clip_marks(root, mp, p)
     elif action == "clear_clip_marks":
