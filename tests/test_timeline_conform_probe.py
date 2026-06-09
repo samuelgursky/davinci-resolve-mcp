@@ -202,8 +202,27 @@ class TimelineConformProbeTest(unittest.TestCase):
             plan = _build_relink_plan(timeline, {"search_roots": [tmp]})
 
         self.assertEqual(missing["missing_count"], 1)
+        self.assertEqual(missing["diagnosis"]["unique_media_pool_item_count"], 1)
+        self.assertEqual(missing["diagnosis"]["primary_cause"], "folder_not_found")
         self.assertTrue(plan["success"])
         self.assertEqual(plan["candidate_count"], 1)
+        self.assertEqual(plan["unique_missing_basename_count"], 1)
+
+    def test_relink_plan_skips_search_when_source_volume_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            replacement = Path(tmp) / "P1047043.MOV"
+            replacement.write_text("replacement", encoding="utf-8")
+            missing_path = "/Volumes/EOS_DIGITAL/DCIM/104_PANA/P1047043.MOV"
+            timeline = self._timeline(missing_path=missing_path)
+            plan = _build_relink_plan(timeline, {"search_roots": [tmp], "sanitized": True})
+
+        self.assertTrue(plan["success"])
+        self.assertTrue(plan["search_skipped"])
+        self.assertEqual(plan["skip_reason"], "missing_source_volume_not_mounted")
+        self.assertEqual(plan["candidate_count"], 0)
+        self.assertEqual(plan["diagnosis"]["primary_cause"], "volume_not_mounted")
+        self.assertEqual(plan["diagnosis"]["missing_volumes"][0]["volume_root_sanitized"], "/Volumes/EOS_DIGITAL/...")
+        self.assertNotIn(tmp, str(plan))
 
 
 if __name__ == "__main__":

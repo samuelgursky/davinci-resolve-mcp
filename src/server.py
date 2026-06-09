@@ -5185,6 +5185,123 @@ def _probe_interchange_roundtrip(proj, mp, tl, p: Dict[str, Any]):
     }
 
 
+def _sanitize_media_path(path: Any, *, keep_filename: bool = True) -> Optional[str]:
+    if not path:
+        return None
+    text = str(path)
+    filename = os.path.basename(text.rstrip(os.sep))
+    parts = [part for part in text.split(os.sep) if part]
+    if text.startswith("/Volumes/") and len(parts) >= 2:
+        root = f"/Volumes/{parts[1]}"
+        return f"{root}/.../{filename}" if keep_filename and filename else f"{root}/..."
+    if text.startswith(os.sep):
+        return f"/.../{filename}" if keep_filename and filename else "/..."
+    return f".../{filename}" if keep_filename and filename else "..."
+
+
+def _media_path_volume_root(path: Any) -> Optional[str]:
+    if not path:
+        return None
+    text = str(path)
+    parts = [part for part in text.split(os.sep) if part]
+    if text.startswith("/Volumes/") and len(parts) >= 2:
+        return f"/Volumes/{parts[1]}"
+    if text.startswith(os.sep) and parts:
+        return os.sep + parts[0]
+    return None
+
+
+def _missing_media_diagnosis(missing_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    by_media_pool_item: Dict[str, Dict[str, Any]] = {}
+    missing_volumes: Dict[str, Dict[str, Any]] = {}
+    missing_folders: Dict[str, Dict[str, Any]] = {}
+
+    for row in missing_rows:
+        file_path = row.get("file_path")
+        media_pool_item_id = row.get("media_pool_item_id") or file_path or row.get("name")
+        basename = os.path.basename(str(file_path or row.get("media_pool_item_name") or row.get("name") or ""))
+        item = by_media_pool_item.setdefault(
+            str(media_pool_item_id),
+            {
+                "media_pool_item_id": row.get("media_pool_item_id"),
+                "media_pool_item_name": row.get("media_pool_item_name") or row.get("name"),
+                "wanted_basename": basename,
+                "file_path_sanitized": _sanitize_media_path(file_path),
+                "volume_root_sanitized": _sanitize_media_path(_media_path_volume_root(file_path), keep_filename=False),
+                "timeline_occurrence_count": 0,
+                "track_refs": [],
+            },
+        )
+        item["timeline_occurrence_count"] += 1
+        item["track_refs"].append(
+            {
+                "track_type": row.get("track_type"),
+                "track_index": row.get("track_index"),
+                "timeline_item_id": row.get("timeline_item_id"),
+            }
+        )
+
+        volume_root = _media_path_volume_root(file_path)
+        if volume_root:
+            volume_row = missing_volumes.setdefault(
+                volume_root,
+                {
+                    "volume_root_sanitized": _sanitize_media_path(volume_root, keep_filename=False),
+                    "mounted": os.path.isdir(volume_root),
+                    "clip_count": 0,
+                    "sample_basenames": [],
+                },
+            )
+            volume_row["clip_count"] += 1
+            if basename and basename not in volume_row["sample_basenames"] and len(volume_row["sample_basenames"]) < 8:
+                volume_row["sample_basenames"].append(basename)
+
+        folder = os.path.dirname(str(file_path)) if file_path else ""
+        if folder:
+            folder_row = missing_folders.setdefault(
+                folder,
+                {
+                    "folder_sanitized": _sanitize_media_path(folder, keep_filename=False),
+                    "exists": os.path.isdir(folder),
+                    "clip_count": 0,
+                    "sample_basenames": [],
+                },
+            )
+            folder_row["clip_count"] += 1
+            if basename and basename not in folder_row["sample_basenames"] and len(folder_row["sample_basenames"]) < 8:
+                folder_row["sample_basenames"].append(basename)
+
+    unique_items = list(by_media_pool_item.values())
+    missing_volume_rows = list(missing_volumes.values())
+    missing_folder_rows = list(missing_folders.values())
+    absent_volumes = [row for row in missing_volume_rows if not row.get("mounted")]
+    absent_folders = [row for row in missing_folder_rows if not row.get("exists")]
+    primary_cause = "none"
+    recommended_next_step = "No offline media detected."
+    if absent_volumes:
+        primary_cause = "volume_not_mounted"
+        labels = ", ".join(row["volume_root_sanitized"] for row in absent_volumes[:3])
+        recommended_next_step = f"Mount the missing volume(s): {labels}."
+    elif absent_folders:
+        primary_cause = "folder_not_found"
+        labels = ", ".join(row["folder_sanitized"] for row in absent_folders[:3])
+        recommended_next_step = f"Attach or locate the missing media folder(s): {labels}."
+    elif unique_items:
+        primary_cause = "files_missing_or_renamed"
+        recommended_next_step = "Search approved media roots for the wanted basenames, then relink with media_pool.safe_relink."
+
+    return {
+        "unique_media_pool_item_count": len(unique_items),
+        "timeline_occurrence_count": len(missing_rows),
+        "primary_cause": primary_cause,
+        "recommended_next_step": recommended_next_step,
+        "missing_volumes": missing_volume_rows,
+        "missing_folders": missing_folder_rows,
+        "unique_media_pool_items": unique_items,
+        "sanitized": True,
+    }
+
+
 def _detect_missing_media_from_snapshot(snapshot: Dict[str, Any]):
     missing = []
     present = []
@@ -5210,12 +5327,80 @@ def _detect_missing_media_from_snapshot(snapshot: Dict[str, Any]):
                     missing.append(row)
                 else:
                     present.append(row)
-    return {"missing": missing, "present_count": len(present), "missing_count": len(missing)}
+    diagnosis = _missing_media_diagnosis(missing)
+    return {
+        "missing": missing,
+        "present_count": len(present),
+        "missing_count": len(missing),
+        "diagnosis": diagnosis,
+    }
 
 
 def _detect_missing_media(tl, p: Dict[str, Any]):
     snapshot = _timeline_conform_snapshot(tl, {**p, "include_clip_properties": True})
-    return _detect_missing_media_from_snapshot(snapshot)
+    report = _detect_missing_media_from_snapshot(snapshot)
+    if p.get("sanitize_paths") or p.get("sanitized"):
+        report = dict(report)
+        report["missing"] = [
+            {
+                **row,
+                "file_path_sanitized": _sanitize_media_path(row.get("file_path")),
+                "file_path": None if p.get("omit_raw_paths", True) else row.get("file_path"),
+            }
+            for row in report.get("missing", [])
+        ]
+    return report
+
+
+def _bounded_basename_matches(
+    wanted: str,
+    search_roots: List[str],
+    p: Dict[str, Any],
+) -> Tuple[List[str], Dict[str, Any]]:
+    started = time.monotonic()
+    max_seconds = float(p.get("max_seconds", p.get("timeout_seconds", 20)) or 20)
+    max_files = int(p.get("max_files_scanned", p.get("maxFilesScanned", 50000)) or 50000)
+    max_depth_raw = p.get("max_depth", p.get("maxDepth"))
+    max_depth = int(max_depth_raw) if max_depth_raw is not None else None
+    all_matches = bool(p.get("all_matches", False))
+    matches: List[str] = []
+    files_scanned = 0
+    dirs_scanned = 0
+    stopped_reason = None
+
+    for root in search_roots:
+        root_depth = len(os.path.abspath(root).rstrip(os.sep).split(os.sep))
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirs_scanned += 1
+            if max_depth is not None:
+                current_depth = len(os.path.abspath(dirpath).rstrip(os.sep).split(os.sep)) - root_depth
+                if current_depth >= max_depth:
+                    dirnames[:] = []
+            files_scanned += len(filenames)
+            if wanted in filenames:
+                matches.append(os.path.join(dirpath, wanted))
+                if not all_matches:
+                    return matches, {
+                        "files_scanned": files_scanned,
+                        "dirs_scanned": dirs_scanned,
+                        "stopped_reason": "first_match",
+                    }
+            if files_scanned >= max_files:
+                stopped_reason = "max_files_scanned"
+                break
+            if time.monotonic() - started >= max_seconds:
+                stopped_reason = "max_seconds"
+                break
+        if matches and not all_matches:
+            break
+        if stopped_reason:
+            break
+
+    return matches, {
+        "files_scanned": files_scanned,
+        "dirs_scanned": dirs_scanned,
+        "stopped_reason": stopped_reason,
+    }
 
 
 def _build_relink_plan(tl, p: Dict[str, Any]):
@@ -5226,26 +5411,55 @@ def _build_relink_plan(tl, p: Dict[str, Any]):
     if invalid:
         return _err(f"search_roots must be existing directories: {invalid}")
     missing_report = _detect_missing_media(tl, p)
+    diagnosis = missing_report.get("diagnosis") or _missing_media_diagnosis(missing_report.get("missing", []))
+    if p.get("skip_search_when_volume_missing", True) and any(
+        not row.get("mounted") for row in diagnosis.get("missing_volumes", [])
+    ):
+        return {
+            "success": True,
+            "dry_run": True,
+            "search_skipped": True,
+            "skip_reason": "missing_source_volume_not_mounted",
+            "search_roots": [_sanitize_media_path(root, keep_filename=False) for root in search_roots],
+            "candidate_count": 0,
+            "missing_count": missing_report.get("missing_count", 0),
+            "diagnosis": diagnosis,
+            "candidates": [],
+            "execution_note": "Mount the missing source volume or pass skip_search_when_volume_missing=false to scan approved roots.",
+        }
     candidates = []
+    rows_by_basename: Dict[str, List[Dict[str, Any]]] = {}
     for row in missing_report.get("missing", []):
         wanted = os.path.basename(str(row.get("file_path") or row.get("media_pool_item_name") or row.get("name") or ""))
-        matches = []
         if wanted:
-            for root in search_roots:
-                for dirpath, _, filenames in os.walk(root):
-                    if wanted in filenames:
-                        matches.append(os.path.join(dirpath, wanted))
-                        if not p.get("all_matches", False):
-                            break
-                if matches and not p.get("all_matches", False):
-                    break
-        candidates.append({**row, "wanted_basename": wanted, "candidate_paths": matches, "candidate_count": len(matches)})
+            rows_by_basename.setdefault(wanted, []).append(row)
+    for wanted, rows in rows_by_basename.items():
+        row = rows[0]
+        matches = []
+        scan = {"files_scanned": 0, "dirs_scanned": 0, "stopped_reason": None}
+        if wanted:
+            matches, scan = _bounded_basename_matches(wanted, search_roots, p)
+        sanitized_matches = [_sanitize_media_path(path) for path in matches]
+        candidates.append(
+            {
+                **row,
+                "wanted_basename": wanted,
+                "timeline_occurrence_count": len(rows),
+                "candidate_paths": [] if p.get("sanitize_paths") or p.get("sanitized") else matches,
+                "candidate_paths_sanitized": sanitized_matches,
+                "candidate_count": len(matches),
+                "scan": scan,
+            }
+        )
     return {
         "success": True,
         "dry_run": True,
-        "search_roots": search_roots,
+        "search_roots": [] if p.get("sanitize_paths") or p.get("sanitized") else search_roots,
+        "search_roots_sanitized": [_sanitize_media_path(root, keep_filename=False) for root in search_roots],
         "candidate_count": sum(1 for row in candidates if row["candidate_count"]),
         "missing_count": missing_report.get("missing_count", 0),
+        "unique_missing_basename_count": len(candidates),
+        "diagnosis": diagnosis,
         "candidates": candidates,
         "execution_note": "Review this plan, then use media_pool.safe_relink with explicit synthetic or approved paths if desired.",
     }
@@ -15337,8 +15551,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       import_timeline_checked(path, options?, timeline_name?, import_source_clips?, require_temp_path?, dry_run?) -> {success, name, id}
       compare_timelines(right_timeline_id?|right_timeline_index?|left_snapshot?, right_snapshot?) -> {match, differences}
       probe_interchange_roundtrip(format?, output_dir?, cleanup_imported?) -> {success, export, import, comparison}
-      detect_missing_media() -> {missing, missing_count}
-      build_relink_plan(search_roots) -> {candidates}
+      detect_missing_media(sanitized?|sanitize_paths?, omit_raw_paths?) -> {missing, missing_count, diagnosis}
+      build_relink_plan(search_roots, max_depth?, max_seconds?, max_files_scanned?, skip_search_when_volume_missing?, sanitized?) -> {candidates, diagnosis}
       conform_boundary_report(...) -> {capabilities, timeline, gaps_overlaps, source_ranges, missing_media}
       audio_capabilities() -> {supported, partially_supported, unsupported}
       probe_audio_item(track_type?, track_index?, item_index?) -> {summary, audio_properties, source_audio_mapping}
