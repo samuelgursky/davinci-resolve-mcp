@@ -26,6 +26,8 @@ class RenderProjectStub:
         self.jobs = {}
         self.deleted = []
         self.quick_export_calls = []
+        self.codec_queries = []
+        self.resolution_queries = []
 
     def AddRenderJob(self):
         job_id = f"job-{len(self.jobs) + 1}"
@@ -59,11 +61,18 @@ class RenderProjectStub:
         return {"mp4": "mp4", "QuickTime": "mov"}
 
     def GetRenderCodecs(self, render_format):
+        self.codec_queries.append(render_format)
         if render_format == "mp4":
             return {"H.264": "H.264", "H.265": "H.265"}
-        return {"ProRes 422 HQ": "ProRes422HQ"}
+        if render_format == "mov":
+            return {
+                "Apple ProRes 422 LT": "ProRes422LT",
+                "Apple ProRes 422 HQ": "ProRes422HQ",
+            }
+        return {}
 
     def GetRenderResolutions(self, render_format, codec):
+        self.resolution_queries.append((render_format, codec))
         return [{"Width": 1920, "Height": 1080}]
 
     def GetCurrentRenderFormatAndCodec(self):
@@ -123,6 +132,18 @@ class RenderDeliverProbeTest(unittest.TestCase):
         self.assertEqual(matrix["pairs_probed"], 2)
         self.assertEqual(matrix["matrix"][0]["codecs"][0]["resolution_count"], 1)
 
+    def test_probe_render_matrix_uses_render_format_id_for_display_name(self):
+        project = RenderProjectStub()
+
+        matrix = _probe_render_matrix(project, {"formats": ["QuickTime"]})
+
+        self.assertEqual(matrix["pairs_probed"], 2)
+        self.assertEqual(matrix["matrix"][0]["format"], "QuickTime")
+        self.assertEqual(matrix["matrix"][0]["extension"], "mov")
+        self.assertEqual(matrix["matrix"][0]["codecs"][0]["codec"], "ProRes422LT")
+        self.assertEqual(project.codec_queries, ["mov"])
+        self.assertEqual(project.resolution_queries[0], ("mov", "ProRes422LT"))
+
     def test_validate_render_settings_requires_temp_target_when_requested(self):
         result = _validate_render_settings_action(
             {"settings": {"TargetDir": os.getcwd(), "SelectAllFrames": True}, "require_temp_target": True}
@@ -161,6 +182,23 @@ class RenderDeliverProbeTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["job_id"], "job-1")
         self.assertEqual(project.format_codec["format"], "mp4")
+
+    def test_prepare_render_job_normalizes_display_format_name(self):
+        project = RenderProjectStub()
+
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "custom_name": "prores_lt_proxy",
+                "format": "QuickTime",
+                "codec": "ProRes422LT",
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["format_success"])
+        self.assertEqual(project.format_codec, {"format": "mov", "codec": "ProRes422LT"})
 
     def test_render_job_lifecycle_probe_deletes_probe_job(self):
         project = RenderProjectStub()
