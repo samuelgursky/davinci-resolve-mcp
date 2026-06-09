@@ -12696,9 +12696,47 @@ def _render_formats(proj):
     return _ser(formats)
 
 
-def _render_codecs(proj, fmt: str):
+def _render_format_id_from_formats(formats: Any, fmt: str) -> str:
+    if not isinstance(fmt, str) or not fmt or not isinstance(formats, dict):
+        return fmt
+    if fmt in formats:
+        return formats.get(fmt) or fmt
+    if fmt in formats.values():
+        return fmt
+    needle = fmt.lower()
+    for label, format_id in formats.items():
+        label_text = str(label)
+        id_text = str(format_id)
+        if label_text.lower() == needle:
+            return id_text or fmt
+        if id_text.lower() == needle:
+            return id_text
+    return fmt
+
+
+def _render_format_id(proj, fmt: str, formats: Optional[Dict[str, Any]] = None) -> str:
+    if formats is None:
+        formats = _render_formats(proj)
+    return _render_format_id_from_formats(formats, fmt)
+
+
+def _render_format_requested(requested: Optional[List[Any]], label: str, extension: Any, format_id: str, formats: Dict[str, Any]) -> bool:
+    if not requested:
+        return True
+    extension_text = str(extension)
+    for item in requested:
+        if item == label or item == extension or item == format_id:
+            return True
+        if isinstance(item, str) and _render_format_id_from_formats(formats, item) == format_id:
+            return True
+        if isinstance(item, str) and item.lower() in {label.lower(), extension_text.lower(), format_id.lower()}:
+            return True
+    return False
+
+
+def _render_codecs(proj, fmt: str, formats: Optional[Dict[str, Any]] = None):
     try:
-        return _ser(proj.GetRenderCodecs(fmt) or {})
+        return _ser(proj.GetRenderCodecs(_render_format_id(proj, fmt, formats)) or {})
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -12743,10 +12781,11 @@ def _probe_render_matrix(proj, p: Dict[str, Any]):
     pair_count = 0
     errors = []
     for fmt, extension in formats.items():
-        if requested and fmt not in requested:
+        format_id = _render_format_id_from_formats(formats, fmt)
+        if not _render_format_requested(requested, fmt, extension, format_id, formats):
             continue
-        codecs = _render_codecs(proj, fmt)
-        format_row = {"format": fmt, "extension": extension, "codecs": [], "codec_count": 0}
+        codecs = _render_codecs(proj, format_id, formats)
+        format_row = {"format": fmt, "extension": extension, "format_id": format_id, "codecs": [], "codec_count": 0}
         if isinstance(codecs, dict) and codecs.get("error"):
             format_row["error"] = codecs["error"]
             errors.append({"format": fmt, "error": codecs["error"]})
@@ -12759,11 +12798,11 @@ def _probe_render_matrix(proj, p: Dict[str, Any]):
                     break
                 row = {"label": label, "codec": codec}
                 try:
-                    row["resolutions"] = _ser(proj.GetRenderResolutions(fmt, codec) or [])
+                    row["resolutions"] = _ser(proj.GetRenderResolutions(format_id, codec) or [])
                     row["resolution_count"] = len(row["resolutions"])
                 except Exception as exc:
                     row["error"] = str(exc)
-                    errors.append({"format": fmt, "codec": codec, "error": str(exc)})
+                    errors.append({"format": fmt, "format_id": format_id, "codec": codec, "error": str(exc)})
                 format_row["codecs"].append(row)
                 pair_count += 1
         matrix.append(format_row)
@@ -12891,7 +12930,7 @@ def _prepare_render_job(proj, p: Dict[str, Any]):
     before = _render_settings_snapshot(proj)
     format_success = None
     if p.get("format") and p.get("codec"):
-        format_success = bool(proj.SetCurrentRenderFormatAndCodec(p["format"], p["codec"]))
+        format_success = bool(proj.SetCurrentRenderFormatAndCodec(_render_format_id(proj, p["format"]), p["codec"]))
     settings_success = bool(proj.SetRenderSettings(settings))
     job_id = proj.AddRenderJob() if settings_success else None
     return {
@@ -13042,17 +13081,17 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     elif action == "get_formats":
         return {"formats": _ser(proj.GetRenderFormats())}
     elif action == "get_codecs":
-        return {"codecs": _ser(proj.GetRenderCodecs(p["format"]))}
+        return {"codecs": _render_codecs(proj, p["format"])}
     elif action == "get_format_and_codec":
         return _ser(proj.GetCurrentRenderFormatAndCodec())
     elif action == "set_format_and_codec":
-        return {"success": bool(proj.SetCurrentRenderFormatAndCodec(p["format"], p["codec"]))}
+        return {"success": bool(proj.SetCurrentRenderFormatAndCodec(_render_format_id(proj, p["format"]), p["codec"]))}
     elif action == "get_mode":
         return {"mode": proj.GetCurrentRenderMode()}
     elif action == "set_mode":
         return {"success": bool(proj.SetCurrentRenderMode(p["mode"]))}
     elif action == "get_resolutions":
-        return {"resolutions": _ser(proj.GetRenderResolutions(p["format"], p["codec"]))}
+        return {"resolutions": _ser(proj.GetRenderResolutions(_render_format_id(proj, p["format"]), p["codec"]))}
     elif action == "get_settings":
         missing = _requires_method(proj, "GetRenderSettings", "unknown")
         if missing:
