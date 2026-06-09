@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.37.2
+
+Static-audit fixes — four undefined-name references that silently fell back
+to defaults instead of erroring (the same bug class as the v2.37.0
+confirm-token fix), plus a regression guard.
+
+- **Fixed** the `status://mcp_version` resource reporting update channel
+  `"stable"` unconditionally; it now calls the real `get_update_channel()`,
+  so beta/dev channel installs report correctly.
+- **Fixed** the `versioning_auto_run_idle_timeout_seconds` preference being
+  silently ignored (auto-run idle timeout was always 90s) due to a
+  misspelled preference-reader name in the destructive hook.
+- **Fixed** resolve-state snapshot tokens always falling back to a timestamp
+  because `short_hash` was never imported; tokens are now content-stable.
+- **Fixed** the timeline-kernel live probe's MCP-stub fallback crashing with
+  a `NameError` (missing `types` import) exactly when the mcp library is
+  absent — the only case the fallback exists for.
+- **Added** a static test that runs pyflakes over `src/` and fails on any
+  undefined name, so this bug class cannot reappear unnoticed.
+
 ## What's New in v2.37.1
 
 Test-suite hygiene — no server behavior changed.
