@@ -973,7 +973,7 @@ def _confirm_token_gc():
 def _confirm_token_required() -> bool:
     """Honor setup default destructive.require_confirm_token (default True)."""
     try:
-        prefs = _media_analysis_preferences_read() if "_media_analysis_preferences_read" in globals() else {}
+        prefs = _read_media_analysis_preferences() if "_read_media_analysis_preferences" in globals() else {}
     except Exception:
         prefs = {}
     destructive = prefs.get("destructive") if isinstance(prefs.get("destructive"), dict) else {}
