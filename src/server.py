@@ -11564,6 +11564,11 @@ def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
         )
     except (OSError, FileNotFoundError) as exc:
         return _err(f"Failed to launch control panel: {type(exc).__name__}: {exc}")
+    finally:
+        # The child holds its own copy of the fd; keeping ours open would leak
+        # one descriptor per panel launch.
+        if log_handle is not subprocess.DEVNULL:
+            log_handle.close()
 
     # Verify the child actually came up. Bind errors (port in use), import
     # failures, etc. would otherwise leave us reporting "launched" while the
