@@ -37,6 +37,9 @@ class TimelineStub:
         self.deleted_frames.append(frame)
         return True
 
+    def GetCurrentClipThumbnailImage(self):
+        return None
+
 
 class FiveArgMarkerStub:
     def __init__(self):
@@ -108,6 +111,13 @@ class TimelineMarkerParamTest(unittest.TestCase):
         out = compound.timeline_markers("add", {"timecode": "01:00:00"})
 
         self.assertEqual(err_message(out), "timecode must use HH:MM:SS:FF format")
+
+    def test_get_thumbnail_returns_error_dict_when_resolve_returns_nil(self):
+        out = compound.timeline_markers("get_thumbnail")
+
+        self.assertEqual(out["success"], False)
+        self.assertIsNone(out["thumbnail"])
+        self.assertIn("did not return a thumbnail", out["error"])
 
     def test_add_marker_falls_back_to_five_arg_overload_when_custom_data_empty(self):
         target = FiveArgMarkerStub()

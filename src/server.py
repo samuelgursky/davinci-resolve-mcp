@@ -16175,7 +16175,14 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
         it = tl.GetCurrentVideoItem()
         return {"name": it.GetName(), "id": it.GetUniqueId()} if it else {"name": None, "id": None}
     elif action == "get_thumbnail":
-        return _ser(tl.GetCurrentClipThumbnailImage())
+        thumbnail = tl.GetCurrentClipThumbnailImage()
+        if thumbnail is None:
+            return {
+                "success": False,
+                "thumbnail": None,
+                "error": "Resolve did not return a thumbnail for the current playhead. Open the Color page and ensure a video item is under the playhead.",
+            }
+        return _ser(thumbnail)
     elif action == "get_thumbnail_image":
         thumbnail = tl.GetCurrentClipThumbnailImage()
         if not thumbnail:
