@@ -84,6 +84,8 @@ from src.utils.media_analysis import (
     summarize_reports as summarize_media_analysis_reports,
 )
 from src.utils.sync_detection import detect_sync_events_for_records as detect_media_sync_events
+from src.utils import resolve_busy
+from src.utils.resolve_busy import long_resolve_op
 from src.utils.media_analysis_jobs import (
     MEDIA_EXTENSIONS,
     batch_job_status as media_analysis_batch_job_status,
@@ -830,6 +832,7 @@ ERROR_CATEGORIES = (
     "wrong_page",            # action requires a specific page (Color, Edit, Fairlight…)
     "invalid_input",         # caller-side fixable (bad param shape, unknown enum)
     "resolve_api_failed",    # Resolve returned None/False for unclear reasons
+    "busy",                  # another long Resolve op holds the bridge; retry later
     "destructive_blocked",   # strict-mode/confirm-token refusal
     "pending_user_decision", # confirm_token required
     "unsupported",           # feature/version/method not available
@@ -846,6 +849,7 @@ _CATEGORY_RETRYABLE_DEFAULT: Dict[str, bool] = {
     "wrong_page":            True,   # trivial caller fix; retry after page switch
     "invalid_input":         False,  # caller fix required
     "resolve_api_failed":    True,   # often transient; retry once
+    "busy":                  True,   # another long Resolve op holds the bridge
     "destructive_blocked":   False,  # user decision required
     "pending_user_decision": False,  # confirm_token required
     "unsupported":           False,  # API/version mismatch
@@ -1671,6 +1675,19 @@ def _annotation_boundary_report(tl, p: Dict[str, Any]):
     }
 
 def _check():
+    busy = resolve_busy.wait_until_free()
+    if busy:
+        return None, None, _err(
+            f"Resolve is busy with a long operation: {busy['label']} "
+            f"(running for {busy['age_seconds']}s). Retry after it completes.",
+            code="RESOLVE_BUSY", category="busy",
+            remediation="Wait for the named operation to finish, then retry this call.",
+            state={
+                "busy_with": busy["label"],
+                "age_seconds": busy["age_seconds"],
+                "same_process": busy["same_process"],
+            },
+        )
     resolve = get_resolve()
     if resolve is None:
         return None, None, _err(
@@ -4916,7 +4933,8 @@ def _export_timeline_checked(tl, p: Dict[str, Any]):
     spec = _timeline_export_spec(p, resolve)
     if p.get("dry_run"):
         return _ok(path=path, would_export=True, spec={k: v for k, v in spec.items() if k != "export_type"})
-    success = bool(tl.Export(path, spec["export_type"], spec["export_subtype"]))
+    with long_resolve_op("timeline.export_timeline_checked"):
+        success = bool(tl.Export(path, spec["export_type"], spec["export_subtype"]))
     files = []
     primary_file = path
     if success and os.path.isdir(path):
@@ -4969,7 +4987,8 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
         tl_existing = proj.GetTimelineByIndex(index)
         if tl_existing:
             before_ids.add(str(tl_existing.GetUniqueId()))
-    imported = mp.ImportTimelineFromFile(path, options)
+    with long_resolve_op("timeline.import_timeline_checked"):
+        imported = mp.ImportTimelineFromFile(path, options)
     if not imported:
         return _err("Failed to import timeline")
     imported_id = str(imported.GetUniqueId())
@@ -5937,7 +5956,8 @@ def _subtitle_generation_probe(tl, p: Dict[str, Any]):
         return _ok(would_generate=True, settings=settings, note="Pass allow_generate=True to call CreateSubtitlesFromAudio.")
     if not _has_method(tl, "CreateSubtitlesFromAudio"):
         return _err("CreateSubtitlesFromAudio unavailable")
-    return {"success": bool(tl.CreateSubtitlesFromAudio(settings)), "settings": settings}
+    with long_resolve_op("timeline.create_subtitles_from_audio"):
+        return {"success": bool(tl.CreateSubtitlesFromAudio(settings)), "settings": settings}
 
 
 def _fairlight_boundary_report(proj, mp, tl, p: Dict[str, Any]):
@@ -13811,7 +13831,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
     elif action == "setup_multicam_timeline":
         return _setup_multicam_timeline(proj, mp, p)
     elif action == "import_timeline":
-        tl = mp.ImportTimelineFromFile(p["path"], p.get("options", {}))
+        with long_resolve_op("media_pool.import_timeline"):
+            tl = mp.ImportTimelineFromFile(p["path"], p.get("options", {}))
         return _ok(name=tl.GetName()) if tl else _err("Failed to import timeline")
     elif action == "delete_timelines":
         count = proj.GetTimelineCount()
@@ -14021,8 +14042,10 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     elif action == "transcribe_audio":
         usd = _first_param(p, "use_speaker_detection", "useSpeakerDetection")
         if usd is None:
-            return {"success": bool(f.TranscribeAudio())}
-        return {"success": bool(f.TranscribeAudio(bool(usd)))}
+            with long_resolve_op("folder.transcribe_audio"):
+                return {"success": bool(f.TranscribeAudio())}
+        with long_resolve_op("folder.transcribe_audio"):
+            return {"success": bool(f.TranscribeAudio(bool(usd)))}
     elif action == "clear_transcription":
         return {"success": bool(f.ClearTranscription())}
     elif action == "perform_audio_classification":
@@ -14338,8 +14361,10 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "transcribe_audio":
         usd = _first_param(p, "use_speaker_detection", "useSpeakerDetection")
         if usd is None:
-            return {"success": bool(clip.TranscribeAudio())}
-        return {"success": bool(clip.TranscribeAudio(bool(usd)))}
+            with long_resolve_op("media_pool_item.transcribe_audio"):
+                return {"success": bool(clip.TranscribeAudio())}
+        with long_resolve_op("media_pool_item.transcribe_audio"):
+            return {"success": bool(clip.TranscribeAudio(bool(usd)))}
     elif action == "clear_transcription":
         return {"success": bool(clip.ClearTranscription())}
     elif action == "get_transcription":
@@ -15808,7 +15833,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "import_into_timeline":
         return {"success": bool(tl.ImportIntoTimeline(p["path"], p.get("options", {})))}
     elif action == "export":
-        return {"success": bool(tl.Export(p["path"], p["type"], p.get("subtype", "")))}
+        with long_resolve_op("timeline.export"):
+            return {"success": bool(tl.Export(p["path"], p["type"], p.get("subtype", "")))}
     elif action == "get_setting":
         return {"settings": _ser(tl.GetSetting(p.get("name", "")))}
     elif action == "set_setting":
@@ -16249,9 +16275,11 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         return err
 
     if action == "create_subtitles":
-        return {"success": bool(tl.CreateSubtitlesFromAudio(p.get("settings", {})))}
+        with long_resolve_op("timeline_ai.create_subtitles"):
+            return {"success": bool(tl.CreateSubtitlesFromAudio(p.get("settings", {})))}
     elif action == "detect_scene_cuts":
-        return {"success": bool(tl.DetectSceneCuts())}
+        with long_resolve_op("timeline_ai.detect_scene_cuts"):
+            return {"success": bool(tl.DetectSceneCuts())}
     elif action == "analyze_dolby_vision":
         clip_ids = p.get("clip_ids", [])
         items = []
@@ -16262,7 +16290,8 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                         if it.GetUniqueId() in clip_ids:
                             items.append(it)
         analysis_type = p.get("analysis_type")
-        return {"success": bool(tl.AnalyzeDolbyVision(items, analysis_type))}
+        with long_resolve_op("timeline_ai.analyze_dolby_vision"):
+            return {"success": bool(tl.AnalyzeDolbyVision(items, analysis_type))}
     elif action == "grab_still":
         still = tl.GrabStill()
         return _ok() if still else _err("Failed to grab still")
