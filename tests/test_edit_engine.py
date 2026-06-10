@@ -1,0 +1,275 @@
+"""Unit tests for src/utils/edit_engine.py (Phase E — planning layer).
+
+No Resolve required: the planning layer is DB-only by design. Execution
+paths (timeline creation, lifts, swaps) are validated live on a disposable
+synthetic-media project per the release process.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import tempfile
+import unittest
+
+from src.utils import analysis_store, edit_engine, embeddings, timeline_brain_db
+
+from tests.test_analysis_store import make_report
+
+
+def deep_shot(index: int, start: float, end: float, select: str, description: str) -> dict:
+    return {
+        "shot_index": index,
+        "time_seconds_start": start,
+        "time_seconds_end": end,
+        "frame_indices_used": [index],
+        "description": description,
+        "qc_flags": [],
+        "editorial": {
+            "select_potential": select,
+            "editorial_role": "coverage",
+            "best_moment": {"time_seconds": (start + end) / 2, "why": "clear action beat"} if select == "high" else None,
+            "best_moment_present": select == "high",
+            "pacing": "moderate",
+        },
+    }
+
+
+class EditEngineBase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = tempfile.mkdtemp(prefix="edit-engine-test-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.addCleanup(timeline_brain_db.close_all)
+
+    def _ingest_deep_clip(self, *, clip_id: str, name: str, path: str, clip_dir: str, shots: list) -> str:
+        report = make_report()
+        report["clip"] = dict(report["clip"], clip_id=clip_id, clip_name=name, file_path=path,
+                              media_id=clip_id + "-m")
+        report["visual"]["shot_descriptions"] = shots
+        result = analysis_store.ingest_report(self.root, report, clip_dir=clip_dir)
+        self.assertTrue(result["success"], result)
+        return result["clip_uuid"]
+
+
+class PlanSelectsTests(EditEngineBase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.clip1 = self._ingest_deep_clip(
+            clip_id="resolve-clip-1", name="A Clip.mp4", path="/media/a.mp4", clip_dir="a-aaaaaaaaaaaa",
+            shots=[
+                deep_shot(1, 0.0, 5.0, "high", "Opening action."),
+                deep_shot(2, 5.0, 10.0, "low", "Dead beat."),
+                deep_shot(3, 10.0, 16.0, "high", "Payoff."),
+            ],
+        )
+        self.clip2 = self._ingest_deep_clip(
+            clip_id="resolve-clip-2", name="B Clip.mp4", path="/media/b.mp4", clip_dir="b-bbbbbbbbbbbb",
+            shots=[deep_shot(1, 0.0, 8.0, "medium", "Establishing coverage.")],
+        )
+
+    def test_plan_ranks_and_orders_story_spine(self) -> None:
+        plan = edit_engine.plan_selects(self.root, min_select_potential="high")
+        self.assertTrue(plan["success"], plan)
+        self.assertEqual(plan["decision_count"], 2)
+        # Story-spine order: clip A shot 1 then shot 3.
+        self.assertEqual([d["shot_index"] for d in plan["decisions"]], [1, 3])
+        first = plan["decisions"][0]
+        self.assertIn("select_potential=high", first["rationale"])
+        self.assertIn("best_moment", first["rationale"])
+        self.assertEqual(first["source_frame_range"][0], 0)
+
+    def test_medium_threshold_includes_second_clip(self) -> None:
+        plan = edit_engine.plan_selects(self.root, min_select_potential="medium")
+        self.assertEqual(plan["decision_count"], 3)
+        names = [d["clip_name"] for d in plan["decisions"]]
+        self.assertIn("B Clip.mp4", names)
+
+    def test_duration_budget_prefers_high_rank(self) -> None:
+        plan = edit_engine.plan_selects(self.root, min_select_potential="medium", max_duration_seconds=12.0)
+        self.assertTrue(plan["success"])
+        self.assertLessEqual(plan["estimated_duration_seconds"], 12.5)
+        for decision in plan["decisions"]:
+            self.assertEqual(decision["rank"], 3)
+
+    def test_clip_level_fallback_when_no_deep_fields(self) -> None:
+        root2 = tempfile.mkdtemp(prefix="edit-engine-fallback-")
+        self.addCleanup(shutil.rmtree, root2, True)
+        report = make_report()  # standard shots, no editorial groups
+        analysis_store.ingest_report(root2, report, clip_dir="std-cccccccccccc")
+        plan = edit_engine.plan_selects(root2, min_select_potential="medium")
+        self.assertTrue(plan["success"], plan)
+        self.assertTrue(all("clip-level select_potential" in d["rationale"] for d in plan["decisions"]))
+
+    def test_plan_persisted_and_fingerprinted(self) -> None:
+        plan = edit_engine.plan_selects(self.root, min_select_potential="high")
+        loaded = edit_engine.load_plan(self.root, plan["plan_id"])
+        self.assertEqual(loaded["kind"], "selects")
+        self.assertEqual(len(loaded["clip_infos"]), 2)
+        # Tamper → fingerprint check fails.
+        path = os.path.join(edit_engine._plan_dir(self.root), f"{plan['plan_id']}.json")
+        with open(path, "r+", encoding="utf-8") as handle:
+            data = json.load(handle)
+            data["clip_infos"][0]["start_frame"] = 9999
+            handle.seek(0)
+            json.dump(data, handle)
+            handle.truncate()
+        tampered = edit_engine.load_plan(self.root, plan["plan_id"])
+        self.assertTrue(tampered["_corrupt"])
+
+    def test_mark_plan_executed(self) -> None:
+        plan = edit_engine.plan_selects(self.root, min_select_potential="high")
+        edit_engine.mark_plan_executed(self.root, plan["plan_id"], {"timeline_name": "Selects X"})
+        loaded = edit_engine.load_plan(self.root, plan["plan_id"])
+        self.assertIsNotNone(loaded.get("executed_at"))
+        rows = edit_engine.list_plans(self.root)
+        self.assertEqual(rows["plans"][0]["plan_id"], plan["plan_id"])
+
+
+class PlanTightenTests(EditEngineBase):
+    def setUp(self) -> None:
+        super().setUp()
+        # make_report transcript: speech 0-4s and 4-9.5s; clip is 20s, so
+        # 9.5-20s is dead air.
+        self.clip = self._ingest_deep_clip(
+            clip_id="resolve-clip-t", name="Talk.mp4", path="/media/talk.mp4", clip_dir="t-tttttttttttt",
+            shots=[deep_shot(1, 0.0, 20.0, "medium", "Single take.")],
+        )
+
+    def _item(self, **overrides) -> dict:
+        item = {
+            "timeline_start_frame": 0,
+            "timeline_end_frame": 480,   # 20s at 24fps
+            "source_start_frame": 0,
+            "media_ref": "resolve-clip-t",
+            "item_name": "Talk.mp4",
+            "track_index": 1,
+        }
+        item.update(overrides)
+        return item
+
+    def test_dead_air_lift_proposed(self) -> None:
+        plan = edit_engine.plan_tighten(
+            self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0
+        )
+        self.assertTrue(plan["success"], plan)
+        self.assertEqual(plan["lift_count"], 1)
+        lift = plan["lifts"][0]
+        # Gap 9.5→20s with 0.25s handles → 9.75→19.75 → frames 234→474.
+        self.assertEqual(lift["timeline_start_frame"], 234)
+        self.assertEqual(lift["timeline_end_frame"], 474)
+        self.assertIn("No speech", lift["rationale"])
+        self.assertEqual(lift["evidence"]["basis"], "transcript_segments")
+
+    def test_item_offset_maps_to_timeline_frames(self) -> None:
+        # Item shows source 8s..20s at timeline 1000..1288 (24fps).
+        plan = edit_engine.plan_tighten(
+            self.root,
+            items=[self._item(timeline_start_frame=1000, timeline_end_frame=1288,
+                              source_start_frame=192)],
+            timeline_name="TL", timeline_fps=24.0,
+        )
+        lift = plan["lifts"][0]
+        # Source gap 9.5→20 clipped to item range 8..20, handles → 9.75..19.75
+        # → timeline 1000 + (9.75-8)*24 = 1042 ; end 1000 + (19.75-8)*24 = 1282.
+        self.assertEqual(lift["timeline_start_frame"], 1042)
+        self.assertEqual(lift["timeline_end_frame"], 1282)
+
+    def test_target_ratio_limits_lifts(self) -> None:
+        plan = edit_engine.plan_tighten(
+            self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0,
+            target_ratio=0.1,
+        )
+        # One big lift is more than 10% — still chosen (first lift crosses target).
+        self.assertEqual(plan["lift_count"], 1)
+
+    def test_unanalyzed_media_skipped_with_reason(self) -> None:
+        plan = edit_engine.plan_tighten(
+            self.root,
+            items=[self._item(), self._item(media_ref="unknown-clip", item_name="Mystery.mp4")],
+            timeline_name="TL", timeline_fps=24.0,
+        )
+        self.assertTrue(plan["success"])
+        self.assertEqual(len(plan["skipped"]), 1)
+        self.assertIn("no analysis", plan["skipped"][0]["reason"])
+
+    def test_lifts_ordered_latest_first(self) -> None:
+        # Two items, each with a dead-air tail.
+        items = [
+            self._item(),
+            self._item(timeline_start_frame=480, timeline_end_frame=960),
+        ]
+        plan = edit_engine.plan_tighten(self.root, items=items, timeline_name="TL", timeline_fps=24.0)
+        starts = [l["timeline_start_frame"] for l in plan["lifts"]]
+        self.assertEqual(starts, sorted(starts, reverse=True))
+
+
+class PlanSwapTests(EditEngineBase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.clip1 = self._ingest_deep_clip(
+            clip_id="resolve-swap-1", name="Main.mp4", path="/media/main.mp4", clip_dir="m-mmmmmmmmmmmm",
+            shots=[deep_shot(1, 0.0, 10.0, "medium", "Current shot."),
+                   deep_shot(2, 10.0, 20.0, "medium", "Tail shot.")],
+        )
+        self.clip2 = self._ingest_deep_clip(
+            clip_id="resolve-swap-2", name="Alt.mp4", path="/media/alt.mp4", clip_dir="x-xxxxxxxxxxxx",
+            shots=[deep_shot(1, 0.0, 12.0, "high", "Long alternate."),
+                   deep_shot(2, 12.0, 13.0, "high", "Too-short alternate.")],
+        )
+        conn = timeline_brain_db.connect(self.root)
+        shot_rows = conn.execute("SELECT shot_uuid, clip_uuid, shot_index FROM shots").fetchall()
+        vectors = {
+            (self.clip1, 1): [1.0, 0.0, 0.0],
+            (self.clip1, 2): [0.0, 1.0, 0.0],
+            (self.clip2, 1): [0.95, 0.05, 0.0],   # similar to clip1 shot1
+            (self.clip2, 2): [0.9, 0.1, 0.0],     # similar but too short
+        }
+        with timeline_brain_db.transaction(self.root) as txn:
+            for row in shot_rows:
+                vec = vectors.get((str(row["clip_uuid"]), int(row["shot_index"])))
+                if not vec:
+                    continue
+                txn.execute(
+                    """
+                    INSERT OR REPLACE INTO embeddings
+                        (entity_type, entity_uuid, embedding_kind, model_name, dimension,
+                         vector, content_hash, computed_at)
+                    VALUES ('shot', ?, 'visual', 'fake:clip', ?, ?, 'h', '2026-06-10T00:00:00Z')
+                    """,
+                    (str(row["shot_uuid"]), len(vec), embeddings.pack_vector(vec)),
+                )
+
+    def test_swap_plan_ranks_viable_alternates(self) -> None:
+        item = {
+            "timeline_start_frame": 0,
+            "timeline_end_frame": 240,   # 10s slot at 24fps
+            "source_start_frame": 0,
+            "media_ref": "resolve-swap-1",
+            "item_name": "Main.mp4",
+            "track_index": 1,
+        }
+        plan = edit_engine.plan_swap(self.root, item=item, timeline_name="TL", timeline_fps=24.0)
+        self.assertTrue(plan["success"], plan)
+        self.assertEqual(plan["current_shot"]["shot_index"], 1)
+        alts = plan["alternates"]
+        self.assertTrue(alts)
+        # Too-short alternate (1s shot can't fill a 10s slot) is excluded.
+        self.assertTrue(all(a["clip_name"] != "Alt.mp4" or a["shot_index"] != 2 for a in alts))
+        best = alts[0]
+        self.assertEqual(best["clip_name"], "Alt.mp4")
+        # Replacement fills the slot exactly: 10s at 24fps = 240 frames.
+        frame_range = best["source_frame_range"]
+        self.assertEqual(frame_range[1] - frame_range[0] + 1, 240)
+
+    def test_swap_requires_analysis(self) -> None:
+        item = {
+            "timeline_start_frame": 0, "timeline_end_frame": 240,
+            "source_start_frame": 0, "media_ref": "nope",
+        }
+        plan = edit_engine.plan_swap(self.root, item=item, timeline_name="TL", timeline_fps=24.0)
+        self.assertFalse(plan["success"])
+
+
+if __name__ == "__main__":
+    unittest.main()
