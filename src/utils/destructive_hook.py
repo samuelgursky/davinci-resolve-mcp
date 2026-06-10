@@ -56,6 +56,11 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "delete_clip_mattes",
         "delete_timelines",
     }),
+    "edit_engine": frozenset({
+        "execute_selects",
+        "execute_tighten",
+        "execute_swap",
+    }),
     "timeline": frozenset({
         "create_timeline",
         "create_timeline_from_clips",

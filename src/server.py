@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.44.0"
+VERSION = "2.45.0"
 
 import base64
 import os
@@ -112,6 +112,7 @@ from src.utils.fusion_group_settings import (
 )
 from src.utils import analysis_runs as _analysis_runs
 from src.utils import brain_edits as _brain_edits
+from src.utils import edit_engine as _edit_engine_mod
 from src.utils import media_pool_changes as _media_pool_changes
 from src.utils import timeline_versioning as _timeline_versioning
 from src.utils import project_spec as _project_spec
@@ -782,6 +783,10 @@ _destructive_hook.register_preference_provider(_destructive_preference_provider)
 _TOKEN_GATED_DESTRUCTIVE_ACTIONS = frozenset({
     ("timeline", "delete_track"),
     ("timeline", "apply_cuts"),
+    # Phase E edit-engine loops: plan → confirm → execute.
+    ("edit_engine", "execute_selects"),
+    ("edit_engine", "execute_tighten"),
+    ("edit_engine", "execute_swap"),
     ("graph", "apply_grade_from_drx"),
     ("graph", "reset_all_grades"),
     # 21.0 AI ops that render/generate NEW media files (additive, but expensive
@@ -15756,6 +15761,506 @@ def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) ->
             ),
         }
     return _err(f"Unknown action: {action}")
+
+
+def _edit_engine_collect_items(tl, *, track_index: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Serialize video timeline items with the source mapping the planner needs."""
+    rows: List[Dict[str, Any]] = []
+    track_count = int(tl.GetTrackCount("video") or 0)
+    indices = [int(track_index)] if track_index else range(1, track_count + 1)
+    for index in indices:
+        try:
+            items = tl.GetItemListInTrack("video", index) or []
+        except Exception:
+            continue
+        for item in items:
+            try:
+                row: Dict[str, Any] = {
+                    "track_index": index,
+                    "item_name": item.GetName(),
+                    "timeline_start_frame": _frame_int(item.GetStart()),
+                    "timeline_end_frame": _frame_int(item.GetEnd()),
+                }
+            except Exception:
+                continue
+            source_start = None
+            if _has_method(item, "GetSourceStartFrame"):
+                try:
+                    source_start = _frame_int(item.GetSourceStartFrame())
+                except Exception:
+                    source_start = None
+            if source_start is None and _has_method(item, "GetLeftOffset"):
+                try:
+                    source_start = _frame_int(item.GetLeftOffset())
+                except Exception:
+                    source_start = None
+            row["source_start_frame"] = source_start or 0
+            try:
+                mpi = item.GetMediaPoolItem()
+                if mpi is not None:
+                    row["media_ref"] = mpi.GetUniqueId()
+                    try:
+                        row["media_path"] = mpi.GetClipProperty("File Path")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            rows.append(row)
+    return rows
+
+
+def _edit_engine_timeline_fps(tl) -> float:
+    try:
+        fps = float(tl.GetSetting("timelineFrameRate") or 0)
+        return fps if fps > 0 else 24.0
+    except Exception:
+        return 24.0
+
+
+def _edit_engine_capture(tl) -> Dict[str, Any]:
+    """Duration/clip-count readback for execute results."""
+    out: Dict[str, Any] = {}
+    try:
+        out["duration_seconds"] = _brain_edits.capture_metric(_brain_edits.METRIC_DURATION_SECONDS, tl)
+        out["clip_count"] = _brain_edits.capture_metric(_brain_edits.METRIC_CLIP_COUNT, tl)
+    except Exception:
+        pass
+    return out
+
+
+@mcp.tool()
+@_destructive_op("edit_engine")
+def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Evidence-driven edit loops (Phase E): selects assembly, tighten, swap.
+
+    Every loop is plan → confirm → execute. plan_* actions are dry-run by
+    construction: they query the DB-canonical analysis store and return a
+    per-decision rationale plus a stored plan_id. execute_* actions require a
+    confirm_token, run under the version-on-mutate hook (the timeline is
+    archived first), and return before/after metrics as readback.
+
+    Actions:
+    - plan_selects(min_select_potential?, max_duration_seconds?, timeline_name?,
+      max_shots?, handle_seconds?, analysis_root?) — rank shots by deep-tier
+      select potential (clip-level fallback), story-spine order. Additive.
+    - execute_selects(plan_id, confirm_token?) — creates a NEW selects timeline
+      from the plan's clip in/out ranges. Nothing existing is touched.
+    - plan_tighten(timeline_name?, target_ratio?, min_pause_seconds?,
+      handle_seconds?) — dead-air lifts from transcript-gap evidence for the
+      current (or named) timeline.
+    - execute_tighten(plan_id, confirm_token?) — duplicates the timeline and
+      applies the lifts (ripple) to the DUPLICATE, never the original.
+    - plan_swap(track_index?, timeline_start_frame | item_name, kind?, limit?)
+      — alternates for one timeline item via the similarity index.
+    - execute_swap(plan_id, alternate_index, confirm_token?) — replaces the
+      item in place (lift + positioned append, same slot) on the current
+      timeline (version-archived first).
+    - list_plans(limit?) / get_plan(plan_id)
+    """
+    p = params or {}
+
+    def _project_context(*, need_resolve: bool) -> Tuple[Optional[Any], Optional[Any], Optional[str], Optional[Dict[str, Any]]]:
+        # An explicit analysis_root always wins — the evidence DB the caller
+        # analyzed into may differ from the provider's derived root (e.g. a
+        # headless analysis keyed by project name only).
+        analysis_root = p.get("analysis_root") or p.get("analysisRoot")
+        explicit_root = str(analysis_root) if analysis_root and os.path.isdir(str(analysis_root)) else None
+        vctx = _destructive_versioning_provider()
+        if vctx is not None:
+            r, proj, project_root, _name = vctx
+            return r, proj, explicit_root or project_root, None
+        if not need_resolve and explicit_root:
+            return None, None, explicit_root, None
+        return None, None, None, _err(
+            "No project context — open a Resolve project (or pass analysis_root for plan_selects)."
+        )
+
+    if action == "list_plans":
+        _r, _proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        return _edit_engine_mod.list_plans(project_root, limit=int(p.get("limit") or 20))
+
+    if action == "get_plan":
+        _r, _proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        plan = _edit_engine_mod.load_plan(project_root, str(p.get("plan_id") or p.get("planId") or ""))
+        if not plan:
+            return _err("plan not found")
+        if plan.get("_corrupt"):
+            return _err("plan file failed its fingerprint check — re-plan")
+        return {"success": True, "plan": plan}
+
+    if action == "plan_selects":
+        _r, _proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        return _edit_engine_mod.plan_selects(
+            project_root,
+            timeline_name=p.get("timeline_name") or p.get("timelineName"),
+            max_duration_seconds=p.get("max_duration_seconds") or p.get("maxDurationSeconds"),
+            min_select_potential=str(p.get("min_select_potential") or p.get("minSelectPotential") or "medium"),
+            handle_seconds=float(p.get("handle_seconds") or p.get("handleSeconds") or _edit_engine_mod.DEFAULT_HANDLE_SECONDS),
+            max_shots=int(p.get("max_shots") or p.get("maxShots") or 60),
+        )
+
+    if action == "plan_tighten":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        tl = (_find_timeline_by_name(proj, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj.GetCurrentTimeline())
+        if not tl:
+            return _err("Timeline not found")
+        items = _edit_engine_collect_items(tl, track_index=p.get("track_index") or p.get("trackIndex"))
+        return _edit_engine_mod.plan_tighten(
+            project_root,
+            items=items,
+            timeline_name=tl.GetName(),
+            timeline_fps=_edit_engine_timeline_fps(tl),
+            target_ratio=p.get("target_ratio") or p.get("targetRatio"),
+            min_pause_seconds=float(p.get("min_pause_seconds") or p.get("minPauseSeconds") or _edit_engine_mod.DEFAULT_MIN_PAUSE_SECONDS),
+            handle_seconds=float(p.get("handle_seconds") or p.get("handleSeconds") or _edit_engine_mod.DEFAULT_HANDLE_SECONDS),
+        )
+
+    if action == "plan_swap":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        tl = (_find_timeline_by_name(proj, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj.GetCurrentTimeline())
+        if not tl:
+            return _err("Timeline not found")
+        items = _edit_engine_collect_items(tl, track_index=p.get("track_index") or p.get("trackIndex"))
+        target = None
+        wanted_start = p.get("timeline_start_frame") if p.get("timeline_start_frame") is not None else p.get("timelineStartFrame")
+        wanted_name = p.get("item_name") or p.get("itemName")
+        for row in items:
+            if wanted_start is not None and int(row["timeline_start_frame"]) == int(wanted_start):
+                target = row
+                break
+            if wanted_name and row.get("item_name") == wanted_name:
+                target = row
+                break
+        if target is None:
+            return _err(
+                "Target item not found — pass timeline_start_frame or item_name "
+                f"(items: {[{'name': r.get('item_name'), 'start': r['timeline_start_frame']} for r in items[:20]]})"
+            )
+        return _edit_engine_mod.plan_swap(
+            project_root,
+            item=target,
+            timeline_name=tl.GetName(),
+            timeline_fps=_edit_engine_timeline_fps(tl),
+            kind=str(p.get("kind") or "visual"),
+            limit=int(p.get("limit") or 5),
+        )
+
+    if action == "execute_selects":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        plan = _edit_engine_mod.load_plan(project_root, str(p.get("plan_id") or p.get("planId") or ""))
+        if not plan or plan.get("_corrupt"):
+            return _err("plan not found (or failed its fingerprint check) — re-plan")
+        if plan.get("kind") != "selects":
+            return _err(f"plan {plan.get('plan_id')} is a {plan.get('kind')} plan")
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="edit_engine.execute_selects", params=p,
+                preview={
+                    "operation": "edit_engine.execute_selects",
+                    "warning": "Creates a NEW selects timeline; no existing timeline is modified.",
+                    "timeline_name": plan.get("timeline_name"),
+                    "decision_count": len(plan.get("decisions") or []),
+                    "estimated_duration_seconds": plan.get("estimated_duration_seconds"),
+                },
+            )
+        blocked = _consume_confirm_token(action="edit_engine.execute_selects", params=p)
+        if blocked:
+            return blocked
+        mp = proj.GetMediaPool()
+        if not mp:
+            return _err("No media pool")
+        root_folder = mp.GetRootFolder()
+        name = str(plan.get("timeline_name") or "Selects")
+        if _find_timeline_by_name(proj, name)[0]:
+            name = f"{name} {time.strftime('%H%M%S')}"
+        tl = mp.CreateEmptyTimeline(name)
+        if not tl:
+            return _err("Failed to create selects timeline")
+        try:
+            proj.SetCurrentTimeline(tl)
+        except Exception:
+            pass
+        timeline_start = _timeline_start_frame(tl)
+        built = []
+        build_errors = []
+        record_cursor = 0
+        for i, ci in enumerate(plan.get("clip_infos") or []):
+            append_ci = dict(ci)
+            # Sequential assembly: each select lands after the previous one.
+            append_ci.setdefault("record_frame", record_cursor)
+            append_ci.setdefault("track_index", 1)
+            row, row_err = _build_append_clip_info_dict(root_folder, append_ci, i, timeline_start)
+            if row_err:
+                build_errors.append({"index": i, "error": row_err.get("error")})
+                continue
+            built.append(row)
+            record_cursor += int(append_ci.get("end_frame", 0)) - int(append_ci.get("start_frame", 0)) + 1
+        appended = mp.AppendToTimeline(built) if built else None
+        readback = _edit_engine_capture(tl)
+        run_id = _analysis_runs.current_run_id()
+        try:
+            _brain_edits.log_brain_edit(
+                project_root=project_root,
+                analysis_run_id=run_id or "edit-engine",
+                edit_type="edit_engine.selects_result",
+                tool_name="edit_engine",
+                action_name="execute_selects",
+                timeline_after=tl.GetName(),
+                target_metric=_brain_edits.METRIC_CLIP_COUNT,
+                metric_direction="target_value",
+                after_value=readback.get("clip_count"),
+                rationale=plan.get("summary"),
+                params={"plan_id": plan.get("plan_id")},
+                result_summary={"appended": len(built), "build_errors": build_errors},
+            )
+        except Exception:
+            pass
+        _edit_engine_mod.mark_plan_executed(project_root, plan["plan_id"], {
+            "timeline_name": tl.GetName(),
+            "appended": len(built),
+            "build_errors": build_errors,
+            **readback,
+        })
+        return {
+            "success": bool(appended),
+            "timeline_name": tl.GetName(),
+            "appended": len(built),
+            "build_errors": build_errors,
+            "readback": readback,
+            "plan_id": plan.get("plan_id"),
+        }
+
+    if action == "execute_tighten":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        plan = _edit_engine_mod.load_plan(project_root, str(p.get("plan_id") or p.get("planId") or ""))
+        if not plan or plan.get("_corrupt"):
+            return _err("plan not found (or failed its fingerprint check) — re-plan")
+        if plan.get("kind") != "tighten":
+            return _err(f"plan {plan.get('plan_id')} is a {plan.get('kind')} plan")
+        lifts = plan.get("lifts") or []
+        keep_ranges = plan.get("keep_ranges") or []
+        if not keep_ranges:
+            return _err("plan has no keep_ranges — re-plan with this version")
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="edit_engine.execute_tighten", params=p,
+                preview={
+                    "operation": "edit_engine.execute_tighten",
+                    "warning": (
+                        "Assembles a tightened VARIANT timeline from the plan's keep "
+                        "ranges; the original timeline is not modified."
+                    ),
+                    "timeline_name": plan.get("timeline_name"),
+                    "lift_count": len(lifts),
+                    "keep_range_count": len(keep_ranges),
+                    "estimated_removed_seconds": sum(l.get("duration_seconds") or 0 for l in lifts),
+                },
+            )
+        blocked = _consume_confirm_token(action="edit_engine.execute_tighten", params=p)
+        if blocked:
+            return blocked
+        source_tl, _src_index = _find_timeline_by_name(proj, plan.get("timeline_name"))
+        if not source_tl:
+            return _err(f"Timeline '{plan.get('timeline_name')}' not found")
+        before = _edit_engine_capture(source_tl)
+        variant_name = f"{plan.get('timeline_name')} — tightened {time.strftime('%H%M%S')}"
+        variant = _timeline_create_variant_from_ranges(proj, source_tl, {
+            "ranges": keep_ranges,
+            "name": variant_name,
+        })
+        if not variant.get("success"):
+            return {"success": False, "error": f"variant assembly failed: {variant.get('error')}", "variant": variant}
+        new_tl, _new_index = _find_timeline_by_name(proj, variant.get("name") or variant_name)
+        after = _edit_engine_capture(new_tl) if new_tl else {}
+        run_id = _analysis_runs.current_run_id()
+        try:
+            _brain_edits.log_brain_edit(
+                project_root=project_root,
+                analysis_run_id=run_id or "edit-engine",
+                edit_type="edit_engine.tighten_result",
+                tool_name="edit_engine",
+                action_name="execute_tighten",
+                timeline_before=plan.get("timeline_name"),
+                timeline_after=variant.get("name") or variant_name,
+                target_metric=_brain_edits.METRIC_DURATION_SECONDS,
+                metric_direction="decrease",
+                before_value=before.get("duration_seconds"),
+                after_value=after.get("duration_seconds"),
+                rationale=plan.get("summary"),
+                params={"plan_id": plan.get("plan_id")},
+                result_summary={"keep_ranges": len(keep_ranges), "lifts": len(lifts)},
+            )
+        except Exception:
+            pass
+        _edit_engine_mod.mark_plan_executed(project_root, plan["plan_id"], {
+            "variant_timeline": variant.get("name") or variant_name,
+            "keep_ranges": len(keep_ranges),
+            "lifts": len(lifts),
+            "before": before,
+            "after": after,
+        })
+        return {
+            "success": True,
+            "original_timeline": plan.get("timeline_name"),
+            "variant_timeline": variant.get("name") or variant_name,
+            "lifts_applied": len(lifts),
+            "keep_ranges": len(keep_ranges),
+            "lift_rationales": [
+                {"lift": [l["timeline_start_frame"], l["timeline_end_frame"]], "rationale": l.get("rationale")}
+                for l in lifts
+            ],
+            "readback": {
+                "before": before,
+                "after": after,
+                "removed_seconds": (
+                    round(before["duration_seconds"] - after["duration_seconds"], 2)
+                    if before.get("duration_seconds") is not None and after.get("duration_seconds") is not None
+                    else None
+                ),
+            },
+            "plan_id": plan.get("plan_id"),
+        }
+
+    if action == "execute_swap":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        plan = _edit_engine_mod.load_plan(project_root, str(p.get("plan_id") or p.get("planId") or ""))
+        if not plan or plan.get("_corrupt"):
+            return _err("plan not found (or failed its fingerprint check) — re-plan")
+        if plan.get("kind") != "swap":
+            return _err(f"plan {plan.get('plan_id')} is a {plan.get('kind')} plan")
+        alternates = plan.get("alternates") or []
+        try:
+            alt_index = int(p.get("alternate_index") if p.get("alternate_index") is not None else p.get("alternateIndex"))
+        except (TypeError, ValueError):
+            return _err(f"execute_swap requires alternate_index (0-{len(alternates) - 1})")
+        if not (0 <= alt_index < len(alternates)):
+            return _err(f"alternate_index out of range (0-{len(alternates) - 1})")
+        alternate = alternates[alt_index]
+        item_block = plan.get("item") or {}
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="edit_engine.execute_swap", params=p,
+                preview={
+                    "operation": "edit_engine.execute_swap",
+                    "warning": (
+                        "Replaces one timeline item in place (lift + positioned append). "
+                        "A timeline version is archived first."
+                    ),
+                    "timeline_name": plan.get("timeline_name"),
+                    "slot": [item_block.get("timeline_start_frame"), item_block.get("timeline_end_frame")],
+                    "replacement": {
+                        "clip_name": alternate.get("clip_name"),
+                        "shot_index": alternate.get("shot_index"),
+                        "score": alternate.get("score"),
+                    },
+                },
+            )
+        blocked = _consume_confirm_token(action="edit_engine.execute_swap", params=p)
+        if blocked:
+            return blocked
+        tl, _tl_index = _find_timeline_by_name(proj, plan.get("timeline_name"))
+        if not tl:
+            return _err(f"Timeline '{plan.get('timeline_name')}' not found")
+        try:
+            proj.SetCurrentTimeline(tl)
+        except Exception:
+            pass
+        before = _edit_engine_capture(tl)
+        lift = _timeline_lift_range_impl(tl, {
+            "start_frame": item_block.get("timeline_start_frame"),
+            "end_frame": item_block.get("timeline_end_frame"),
+            "allow_partial_item_delete": True,
+            "ripple": False,
+        })
+        if not lift.get("success"):
+            return {"success": False, "error": f"lift failed: {lift.get('error')}", "lift": lift}
+        mp = proj.GetMediaPool()
+        root_folder = mp.GetRootFolder()
+        timeline_start = _timeline_start_frame(tl)
+        frame_range = alternate.get("source_frame_range") or [0, 0]
+        ci = {
+            "clip_id": alternate.get("resolve_clip_id"),
+            "start_frame": int(frame_range[0]),
+            "end_frame": int(frame_range[1]),
+            # Item starts come from item.GetStart() — absolute timeline frames.
+            "record_frame": int(item_block.get("timeline_start_frame")),
+            "record_frame_mode": "absolute",
+            "track_index": int(item_block.get("track_index") or 1),
+        }
+        row, row_err = _build_append_clip_info_dict(root_folder, ci, 0, timeline_start)
+        if row_err:
+            return {"success": False, "error": f"swap append failed: {row_err.get('error')}", "lifted": lift}
+        appended = mp.AppendToTimeline([row])
+        after = _edit_engine_capture(tl)
+        run_id = _analysis_runs.current_run_id()
+        try:
+            _brain_edits.log_brain_edit(
+                project_root=project_root,
+                analysis_run_id=run_id or "edit-engine",
+                edit_type="edit_engine.swap_result",
+                tool_name="edit_engine",
+                action_name="execute_swap",
+                timeline_after=tl.GetName(),
+                target_metric=_brain_edits.METRIC_CLIP_COUNT,
+                metric_direction="target_value",
+                before_value=before.get("clip_count"),
+                after_value=after.get("clip_count"),
+                rationale=(
+                    f"Swapped slot {item_block.get('timeline_start_frame')}-"
+                    f"{item_block.get('timeline_end_frame')} with "
+                    f"{alternate.get('clip_name')} shot {alternate.get('shot_index')}: "
+                    f"{alternate.get('rationale')}"
+                ),
+                params={"plan_id": plan.get("plan_id"), "alternate_index": alt_index},
+                result_summary={"appended": bool(appended)},
+            )
+        except Exception:
+            pass
+        _edit_engine_mod.mark_plan_executed(project_root, plan["plan_id"], {
+            "alternate_index": alt_index,
+            "replacement": alternate.get("clip_name"),
+            "before": before,
+            "after": after,
+        })
+        return {
+            "success": bool(appended),
+            "timeline_name": tl.GetName(),
+            "replaced_slot": [item_block.get("timeline_start_frame"), item_block.get("timeline_end_frame")],
+            "replacement": {
+                "clip_name": alternate.get("clip_name"),
+                "shot_index": alternate.get("shot_index"),
+                "score": alternate.get("score"),
+            },
+            "readback": {"before": before, "after": after},
+            "plan_id": plan.get("plan_id"),
+        }
+
+    return _unknown(action, [
+        "plan_selects",
+        "execute_selects",
+        "plan_tighten",
+        "execute_tighten",
+        "plan_swap",
+        "execute_swap",
+        "list_plans",
+        "get_plan",
+    ])
 
 
 @mcp.tool()
