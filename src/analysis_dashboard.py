@@ -8390,7 +8390,7 @@ HTML = r"""<!doctype html>
         <span class="meta">${formatDuration(card.duration_seconds)} · ${shots.length} shots</span>
         ${cls.primary_use ? `<span class="review-chip">${escapeHtml(cls.primary_use)}</span>` : ''}
         ${cls.select_potential ? `<span class="review-chip ${selectChipClass(cls.select_potential)}">${escapeHtml(cls.select_potential)}</span>` : ''}
-        <div class="actions"><button class="secondary" id="reviewClipTranscriptBtn">Transcript</button><button class="secondary" id="reviewClipOpenInResolveBtn">Open in Resolve</button></div>
+        <div class="actions"><button class="secondary" id="reviewClipTranscriptBtn">Transcript</button><button class="secondary" id="reviewClipOpenInResolveBtn">Open in Resolve</button><button class="secondary" data-copy-chat-prompt="${escapeHtml(`Deepen the analysis of clip “${card.clip_name || state.review.currentClipId}”: call media_analysis(action="deepen", params={"clip_id": "${card.clip_id || state.review.currentClipId}"}), show me the cost estimate, and after I confirm, read the frames and commit the per-shot fields via commit_shot_vision.`)}">Deepen analysis</button></div>
       `;
       $('reviewClipSummary').textContent = data.clip_summary || data.clip_summary_oneliner || '';
       $('reviewClipTags').innerHTML = tags.map(t => `<span class="review-chip">${escapeHtml(t)}</span>`).join('');
@@ -9440,6 +9440,7 @@ HTML = r"""<!doctype html>
         <span class="meta">${escapeHtml(shot.description || '')}</span>
         <div class="actions">
           <button class="secondary" id="reviewShotOpenInResolveBtn">Open in Resolve</button>
+          <button class="secondary" data-copy-chat-prompt="${escapeHtml(`Deepen shot ${shotIndex} of clip “${(state.review.currentClipData && state.review.currentClipData.card && state.review.currentClipData.card.clip_name) || clipId}”: call media_analysis(action="deepen", params={"clip_id": "${clipId}", "shot_index": ${shotIndex}}), show me the cost estimate, and after I confirm, read the frames and commit the per-shot fields via commit_shot_vision.`)}">Deepen this shot</button>
           <button id="reviewShotEditToggleBtn" ${editing ? '' : 'class="secondary"'}>${editToggleLabel}</button>
         </div>
       `;

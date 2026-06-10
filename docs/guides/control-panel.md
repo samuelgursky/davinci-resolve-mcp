@@ -86,7 +86,10 @@ transcripts once the search index is built.
 
 The clip view shows the full summary, tags, star rating, editorial notes, and
 a contact sheet of every detected shot. From here you can open the clip in
-Resolve, jump to the transcript, or click into any shot.
+Resolve, jump to the transcript, or click into any shot. `Deepen analysis`
+copies a ready-made chat prompt that asks your MCP session to run the opt-in
+deep shot pass (cost estimate first, then per-shot Visual / Content /
+Editorial / Cuttability fields).
 
 ### Transcript
 
@@ -107,7 +110,9 @@ start", "After cut", "Flash frame", "Motion peak"). Subjective fields are
 editable inline; edits are kept with the clip's analysis and merged on top of
 future re-analysis so human notes survive fresh vision runs. `Open in Resolve`
 jumps straight to the clip in the source viewer with the shot's mark in/out
-set.
+set. The field groups (Visual, Content, Production, Editorial, Cuttability)
+are filled by the opt-in deep vision pass — `Deepen this shot` copies a chat
+prompt that runs it for just this shot, estimate first.
 
 ### Media → History
 
