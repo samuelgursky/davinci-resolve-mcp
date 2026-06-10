@@ -134,3 +134,4 @@ davinci-resolve-mcp-analysis/
 # Holds things like the screenshot capture script, release-notes drafts,
 # and one-off repro scripts. Never shipped. See local/README.md.
 /local/
+.claude/launch.json

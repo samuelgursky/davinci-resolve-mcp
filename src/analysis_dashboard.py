@@ -3753,6 +3753,7 @@ HTML = r"""<!doctype html>
         justify-content: flex-start;
         padding-bottom: 2px;
       }
+      .control-tabs select { max-width: 150px; min-width: 110px; }
       .lab-navbar {
         height: 88px;
         flex-wrap: wrap;
@@ -3817,9 +3818,9 @@ HTML = r"""<!doctype html>
     <nav class="control-tabs" aria-label="Control panel sections">
       <button class="control-tab active" data-panel-target="overview">Overview</button>
       <div class="control-nav-item">
-        <button class="control-tab has-menu" data-panel-target="analysis">Analysis <span class="tab-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+        <button class="control-tab has-menu" data-panel-target="analysis">Media <span class="tab-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></button>
         <div class="nav-dropdown" role="menu" aria-label="Analysis pages">
-          <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="media" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m7 15 3-3 2 2 4-5 1 2"></path></svg></span>Analyze</button>
+          <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="media" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m7 15 3-3 2 2 4-5 1 2"></path></svg></span>Inventory</button>
           <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="review" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="m21 17-5-5-9 9"></path></svg></span>Review</button>
         </div>
       </div>
@@ -3969,7 +3970,7 @@ HTML = r"""<!doctype html>
     <section class="span-12 subpage active" data-subpage-scope="analysis" data-subpage="media">
         <div class="section-top">
           <div>
-            <h2>Analyze</h2>
+            <h2>Inventory</h2>
             <p class="section-copy">Resolve media is inventoried read-only and filtered to source clips so timelines, compounds, titles, and generated items stay out of analysis queues.</p>
             <div class="section-meta" id="resolveProject">Resolve connection pending</div>
             <div class="copy-status" id="copyPromptStatus"></div>
@@ -4048,7 +4049,7 @@ HTML = r"""<!doctype html>
         </div>
         <div class="controls" id="reviewControls">
           <button class="secondary" id="reviewRefreshBtn">Refresh</button>
-          <button class="secondary" id="reviewHistoryBtn" title="Timeline edit history (C6)">History</button>
+          <button class="secondary" id="reviewHistoryBtn" title="Timeline edit history">History</button>
           <button class="secondary" id="reviewBackBtn" style="display:none">← Back</button>
         </div>
       </div>
@@ -4057,7 +4058,6 @@ HTML = r"""<!doctype html>
           <div class="readiness-card-header">
             <span class="readiness-title">Project readiness</span>
             <span id="readinessEvidenceBase" class="readiness-evidence"></span>
-            <button id="readinessRefreshBtn" class="secondary" type="button" title="Refresh readiness summary">Refresh</button>
           </div>
           <div id="readinessSummaryRow" class="readiness-summary-row"></div>
           <div id="readinessDetails" class="readiness-details"></div>
@@ -4181,8 +4181,12 @@ HTML = r"""<!doctype html>
 
       <div class="caps-section" style="margin-top:12px;">
         <div class="caps-section-head"><div class="caps-section-title">Governance</div>
-          <div class="caps-section-hint">Soft per-session limits for the two media-creating ops (deblur, speech). Advisory only — you'll be warned in the confirm dialog, but never blocked (the ops are confirm-gated). Pick the tier that matches the job.</div></div>
+          <div class="caps-section-hint">Per-session limits for the two media-creating ops (deblur, speech). In <strong>Advisory</strong> mode you're warned in the confirm dialog but never blocked; in <strong>Enforce</strong> mode an over-tier run is refused until you raise the tier, relax the mode, or consciously override. Pick the tier that matches the job.</div></div>
         <div id="aiGovTiers" class="caps-preset-cards" role="radiogroup" aria-label="AI governance tier"></div>
+        <div class="review-view-toggle" id="aiGovMode" role="radiogroup" aria-label="Governance mode" style="margin-top:10px;">
+          <button type="button" data-gov-mode="advisory">Advisory</button>
+          <button type="button" data-gov-mode="enforce">Enforce</button>
+        </div>
         <div id="aiGovUsage" class="caps-usage-gauges" style="margin-top:10px;"></div>
       </div>
 
@@ -4527,6 +4531,7 @@ HTML = r"""<!doctype html>
               </tr></thead>
               <tbody id="resolveAiOpsRows"></tbody>
             </table>
+            <div id="resolveAiOpsRecent"></div>
           </div>
         </div>
 
@@ -4853,7 +4858,7 @@ HTML = r"""<!doctype html>
     const VIEW_ALL_PROJECTS_VALUE = '__view_all_projects__';
     const PANEL_LABELS = {
       overview: 'Overview',
-      analysis: 'Analysis',
+      analysis: 'Media',
       aiconsole: 'AI Console',
       diagnostics: 'Setup',
       projects: 'Projects',
@@ -4877,7 +4882,7 @@ HTML = r"""<!doctype html>
     };
     const SUBPAGE_LABELS = {
       analysis: {
-        media: 'Analyze',
+        media: 'Inventory',
         review: 'Review',
       },
       diagnostics: {
@@ -5268,12 +5273,19 @@ HTML = r"""<!doctype html>
         renderInfoRows('overviewStatusList', [
           { label: 'Resolve project', value: resolveProject, icon: ICONS.project, pill: { tone: 'pill-ok', label: 'Read-only' } },
           { label: 'Source clips', value: `${clipLabel(clips.length)} · ${readyClips} ready`, icon: ICONS.clips, pill: { tone: clipsTone, label: `${readyClips} ready` } },
-          { label: 'Sequences', value: `${sequences} read-only context ${sequences === 1 ? 'item' : 'items'}`, icon: ICONS.sequences },
+          { label: 'Sequences', value: sequences ? `${sequences} timeline${sequences === 1 ? '' : 's'} detected (read-only)` : 'No timelines detected', icon: ICONS.sequences },
           { label: 'Clip media status', value: `${onlineClips} online · ${missingClips} missing/offline`, icon: ICONS.status, pill: { tone: mediaTone, label: missingClips ? `${missingClips} missing` : 'All online' } },
           { label: 'Analysis progress', value: `${analyzedClips} of ${clips.length} analyzed (${analyzedPct}%)`, icon: ICONS.analysis, pill: { tone: analysisTone, label: `${analyzedPct}%` }, meter: { percent: analyzedPct } },
           { label: 'Search index', value: index.detail, icon: ICONS.search, pill: { tone: index.tone, label: index.label } },
           { label: 'Safety', value: 'Source media is read-only; outputs stay in the active project analysis root.', icon: ICONS.safety, pill: { tone: 'pill-ok', label: 'Read-only' } },
         ]);
+        if (!clips.length) {
+          const list = $('overviewStatusList');
+          if (list) list.insertAdjacentHTML('afterbegin', chatPromptCard(
+            'This project has no source clips yet. Import media in Resolve, then ask your assistant to take it from there:',
+            'Look at my current Resolve project, inventory the media, and analyze the source clips.'
+          ));
+        }
       }
     }
 
@@ -6467,6 +6479,21 @@ HTML = r"""<!doctype html>
       }
     }
 
+    function chatPromptCard(message, prompt) {
+      return `<div class="empty" style="padding:var(--space-3);border:1px dashed var(--border-default);border-radius:var(--radius-md);display:grid;gap:8px;justify-items:start;text-align:left;">
+        <span>${escapeHtml(message)}</span>
+        <code style="font-size:12px;color:var(--text-secondary);white-space:normal;">\u201c${escapeHtml(prompt)}\u201d</code>
+        <button class="secondary" type="button" data-copy-chat-prompt="${escapeHtml(prompt)}">Copy prompt</button>
+      </div>`;
+    }
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-copy-chat-prompt]');
+      if (!btn) return;
+      const ok = await writePromptToClipboard(btn.dataset.copyChatPrompt);
+      btn.textContent = ok ? 'Copied \u2014 paste in your chat session' : 'Copy prompt';
+      setTimeout(() => { btn.textContent = 'Copy prompt'; }, 2600);
+    });
+
     async function copyMcpPrompt() {
       const prompt = buildMcpPrompt();
       await writePromptToClipboard(prompt);
@@ -6829,6 +6856,7 @@ HTML = r"""<!doctype html>
       const interval = Number($('mediaPollInterval').value || 0);
       if (enabled && interval > 0) {
         state.mediaPollTimer = setInterval(() => {
+          if (document.hidden) return;
           refreshResolveMedia({ silent: true }).catch(error => {
             console.warn('Resolve media poll failed', error);
             updateMediaPollStatus(error.message || String(error));
@@ -7306,6 +7334,17 @@ HTML = r"""<!doctype html>
           <td style="padding:4px 6px;">${b.bytes_created ? fmtBytes(b.bytes_created) : '—'}</td>
         </tr>`;
       }).join('');
+      const recent = Array.isArray(data.recent) ? data.recent.slice(0, 8) : [];
+      const recentEl = $('resolveAiOpsRecent');
+      if (recentEl) {
+        recentEl.innerHTML = recent.length ? '<div class="caps-section-hint" style="margin-top:8px;">Recent runs</div>'
+          + recent.map(r => {
+            const when = (r.occurred_at || '').replace('T', ' ');
+            const who = r.actor ? ` · <span title="instance:pid that performed the op">${escapeHtml(r.actor)}</span>` : '';
+            const ok = r.success ? 'ok' : 'failed';
+            return `<div style="font-size:12px; color:var(--text-secondary); padding:2px 0;">${escapeHtml(when)} · ${escapeHtml(r.op)} · ${ok}${who}</div>`;
+          }).join('') : '';
+      }
       tableEl.style.display = '';
     }
 
@@ -7471,7 +7510,7 @@ HTML = r"""<!doctype html>
       standard: 'Sensible default',
       strict: 'Tight leash',
     };
-    state.aiGov = state.aiGov || { tier: 'standard', thresholds: {}, usage: {} };
+    state.aiGov = state.aiGov || { tier: 'standard', mode: 'advisory', thresholds: {}, usage: {} };
 
     function aiGovFmt(dim, v) {
       if (v == null) return '∞';
@@ -7515,14 +7554,26 @@ HTML = r"""<!doctype html>
         </div>`;
       }).join('');
     }
+    function renderGovMode() {
+      const el = $('aiGovMode');
+      if (!el) return;
+      const mode = state.aiGov.mode || 'advisory';
+      el.querySelectorAll('[data-gov-mode]').forEach(btn => {
+        const active = btn.dataset.govMode === mode;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-checked', active ? 'true' : 'false');
+      });
+    }
     async function refreshGovernance() {
       const data = await api('/api/resolve_ai/governance').catch(() => ({ success: false }));
       if (!data || !data.success) return;
       state.aiGov.tier = data.tier;
+      state.aiGov.mode = data.mode || 'advisory';
       state.aiGov.thresholds = data.thresholds || {};
       state.aiGov.usage = data.usage || {};
       state.aiGov.tiersAvailable = data.tiers_available || {};
       renderGovTiers();
+      renderGovMode();
       renderGovUsage();
     }
     async function setGovernanceTier(tier) {
@@ -7532,6 +7583,15 @@ HTML = r"""<!doctype html>
         method: 'POST', body: JSON.stringify({ preset: tier }),
       }).catch(err => ({ success: false, error: String(err) }));
       if (!res || !res.success) console.warn('governance save failed:', res && res.error);
+      await refreshGovernance();
+    }
+    async function setGovernanceMode(mode) {
+      state.aiGov.mode = mode;
+      renderGovMode();
+      const res = await api('/api/resolve_ai/governance', {
+        method: 'POST', body: JSON.stringify({ mode }),
+      }).catch(err => ({ success: false, error: String(err) }));
+      if (!res || !res.success) console.warn('governance mode save failed:', res && res.error);
       await refreshGovernance();
     }
 
@@ -7547,6 +7607,13 @@ HTML = r"""<!doctype html>
         govEl.addEventListener('click', (ev) => {
           const card = ev.target.closest('[data-gov-tier]');
           if (card && card.dataset.govTier) setGovernanceTier(card.dataset.govTier);
+        });
+      }
+      const govModeEl = $('aiGovMode');
+      if (govModeEl) {
+        govModeEl.addEventListener('click', (ev) => {
+          const btn = ev.target.closest('[data-gov-mode]');
+          if (btn && btn.dataset.govMode) setGovernanceMode(btn.dataset.govMode);
         });
       }
       refreshGovernance().catch(() => {});
@@ -7979,7 +8046,7 @@ HTML = r"""<!doctype html>
         else if (view === 'shot') meta.textContent = `Shot ${state.review.currentShotIndex} of ${state.review.currentClipData?.card?.clip_name || 'clip'}`;
         else if (view === 'transcript') meta.textContent = `Transcript · ${state.review.currentClipData?.card?.clip_name || 'clip'}`;
         else if (view === 'combined') meta.textContent = `Combined review · ${state.review.combinedData?.clip_count || '?'} clips`;
-        else if (view === 'history') meta.textContent = 'Timeline history · versions and brain edits per timeline (C6)';
+        else if (view === 'history') meta.textContent = 'Timeline history · archived versions and brain edits per timeline';
       }
       if (opts.writePanelState !== false) {
         writePanelStateAsync({
@@ -8037,23 +8104,22 @@ HTML = r"""<!doctype html>
         ].map(stat => `<div class="readiness-stat ${stat.kind}"><span class="stat-value">${stat.value}</span><span class="stat-label">${escapeHtml(stat.label)}</span></div>`).join('');
       }
       if (details) {
+        const TRUST_LABELS = { trusted: 'Trusted source', unknown: 'Unverified source', untrusted: 'Untrusted source' };
+        const LAYER_LABELS = {
+          technical: 'Technical', motion: 'Motion', transcription: 'Transcript',
+          vision: 'Vision', cut_analysis: 'Cut analysis', readthrough: 'Readthrough',
+        };
         const trustChips = Object.entries(trustDist)
           .sort((a, b) => b[1] - a[1])
-          .map(([k, v]) => `<span class="chip" title="source_trust">${escapeHtml(k)}: ${v}</span>`)
+          .map(([k, v]) => `<span class="chip" title="clips by source trust">${escapeHtml(TRUST_LABELS[k] || k)} · ${v}</span>`)
           .join('');
-        const layerChips = ['technical', 'motion', 'transcription', 'vision', 'cut_analysis', 'readthrough']
-          .map(layer => `<span class="chip" title="layer present count">${escapeHtml(layer)}: ${layers[layer] || 0}</span>`)
+        const layerChips = Object.entries(LAYER_LABELS)
+          .filter(([layer]) => layers[layer])
+          .map(([layer, label]) => `<span class="chip" title="clips with this analysis layer">${escapeHtml(label)} · ${layers[layer]}</span>`)
           .join('');
-        details.innerHTML = `<span class="chip" style="background:none">source_trust:</span>${trustChips}<span class="chip" style="background:none">layers:</span>${layerChips}`;
+        details.innerHTML = trustChips + layerChips;
       }
     }
-
-    document.addEventListener('click', (e) => {
-      const target = e.target;
-      if (target && target.id === 'readinessRefreshBtn') {
-        refreshReadinessCard().catch(() => {});
-      }
-    });
 
     function populateBinFilter() {
       const data = state.review.clipList;
@@ -8097,10 +8163,16 @@ HTML = r"""<!doctype html>
       }
       const clips = filteredClips();
       if (!clips.length) {
-        if (summary) summary.textContent = state.review.binFilter
-          ? `No analyzed clips in bin "${state.review.binFilter}".`
-          : 'No analyzed clips yet — run analyze_clip first.';
-        if (grid) grid.innerHTML = '';
+        if (state.review.binFilter) {
+          if (summary) summary.textContent = `No analyzed clips in bin "${state.review.binFilter}".`;
+          if (grid) grid.innerHTML = '';
+        } else {
+          if (summary) summary.textContent = 'Nothing analyzed yet.';
+          if (grid) grid.innerHTML = chatPromptCard(
+            'Review fills in as clips are analyzed. Ask your assistant to analyze this project\u2019s media:',
+            'Analyze the source clips in my current Resolve project and build the search index.'
+          );
+        }
         return;
       }
       const selected = state.review.selectedBinClipIds;
@@ -8111,7 +8183,7 @@ HTML = r"""<!doctype html>
         const total = data.clips.length;
         const base = state.review.binFilter
           ? `${clips.length} of ${total} analyzed clip${total === 1 ? '' : 's'} · bin: ${state.review.binFilter}`
-          : `${total} analyzed clip${total === 1 ? '' : 's'} in ${data.project_root || 'this project'}.`;
+          : `${total} analyzed clip${total === 1 ? '' : 's'} in this project\u2019s analysis root.`;
         if (selected.size > 0) {
           summary.innerHTML = `<span>${escapeHtml(base)}</span>
             <span class="bin-selection-toolbar">
@@ -9215,7 +9287,7 @@ HTML = r"""<!doctype html>
       const safe = value == null ? '' : String(value);
       return `<div class="review-notes-row" data-notes-scope="${scope}">
         <div class="label">Notes</div>
-        <textarea data-notes-input="${scope}" placeholder="Editorial notes — saved to corrections.json…">${escapeHtml(safe)}</textarea>
+        <textarea data-notes-input="${scope}" placeholder="Editorial notes — saved with this clip\u2019s analysis and preserved on re-analysis\u2026">${escapeHtml(safe)}</textarea>
         <div class="controls">
           <button class="secondary" data-notes-save="${scope}" type="button">Save notes</button>
           <span class="saved" data-notes-saved="${scope}" style="opacity:0">Saved</span>
@@ -9402,13 +9474,21 @@ HTML = r"""<!doctype html>
         extrasHtml += `<div class="group"><div class="group-title">QC flags</div><div class="chip-row" style="display:flex;flex-wrap:wrap;gap:4px">${qcFlags.map(f => `<span class="review-chip">${escapeHtml(String(f))}</span>`).join('')}</div></div>`;
       }
       if (Array.isArray(shot.frame_indices_used) && shot.frame_indices_used.length) {
-        extrasHtml += `<div class="group"><div class="group-title">Frame indices</div><div class="value" style="font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)">${escapeHtml(shot.frame_indices_used.join(', '))}</div></div>`;
+        const n = shot.frame_indices_used.length;
+        extrasHtml += `<div class="group"><div class="group-title">Sampled frames</div><div class="value" style="font-size:12px;color:var(--text-secondary)" title="frame indices ${escapeHtml(shot.frame_indices_used.join(', '))}">${n} frame${n === 1 ? '' : 's'} sampled from this shot (shown below)</div></div>`;
       }
       const emptyHint = !hasAnyGroup && !editing
         ? `<div class="empty" style="padding:var(--space-3);border:1px dashed var(--border-default);border-radius:var(--radius-md);color:var(--text-tertiary);font-size:12px">Shot-level analysis fields aren't populated in the report. The clip-level analysis blocks (above on the clip detail page) cover this clip. Re-run analysis with a fuller vision pass to fill in per-shot Visual / Content / Editorial fields.</div>`
         : '';
       $('reviewShotFields').innerHTML = groupsHtml + extrasHtml + emptyHint;
       const frames = data.frames || [];
+      const FRAME_REASON_LABELS = {
+        shot_start: 'Shot start', shot_end: 'Shot end', shot_progress: 'Mid-shot',
+        shot_representative: 'Key frame', cut_after: 'After cut', cut_before: 'Before cut',
+        flash_candidate: 'Flash frame', motion_peak: 'Motion peak', interval: 'Interval sample',
+        scene_change: 'Scene change', first_usable: 'First usable', last_usable: 'Last usable',
+        midpoint: 'Midpoint',
+      };
       $('reviewShotFrames').innerHTML = frames.map(f => {
         const peak = f.motion_peak ? 'peak' : '';
         const src = clipId ? `/api/clips/${encodeURIComponent(clipId)}/frames/${f.frame_index}` : '';
@@ -9416,7 +9496,7 @@ HTML = r"""<!doctype html>
           ${src ? `<img class="review-thumb" loading="lazy" src="${src}" alt="frame ${f.frame_index}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'review-thumb placeholder',textContent:'frame missing'}))">` : ''}
           <div class="label">
             <span>${f.time_seconds != null ? `${Number(f.time_seconds).toFixed(2)}s` : `#${f.frame_index}`}</span>
-            <span>${escapeHtml(f.selection_reason || '')}</span>
+            <span title="${escapeHtml(f.selection_reason || '')}">${escapeHtml(FRAME_REASON_LABELS[f.selection_reason] || f.selection_reason || '')}</span>
           </div>
         </div>`;
       }).join('');
@@ -9563,6 +9643,7 @@ HTML = r"""<!doctype html>
     function ensureReviewPanelStateTimer() {
       if (state.review.panelStateTimer) return;
       state.review.panelStateTimer = window.setInterval(() => {
+        if (document.hidden) return;
         if (state.activePanel === 'analysis' && state.activeSubpages.analysis === 'review') {
           pollPanelStateOnce().catch(() => {});
         }
@@ -10456,7 +10537,7 @@ HTML = r"""<!doctype html>
     refreshRestartBanner().catch(() => {});
     // Poll for restart marker every 30s
     if (state.updates.restartTimer) clearInterval(state.updates.restartTimer);
-    state.updates.restartTimer = setInterval(() => refreshRestartBanner().catch(() => {}), 30000);
+    state.updates.restartTimer = setInterval(() => { if (!document.hidden) refreshRestartBanner().catch(() => {}); }, 30000);
 
     // Auto-save preference (server-side preference; reads via /api/setup/defaults)
     $('prefAutoSaveAfterArchive')?.addEventListener('change', async e => {
