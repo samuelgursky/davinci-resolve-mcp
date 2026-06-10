@@ -78,7 +78,11 @@ evidence base (analyzed / superseded / vision-pending / warnings) with
 humanized source-trust and analysis-layer chips. Cards show a representative
 thumbnail, duration, shot count, status, and summary one-liner; grid and list
 layouts are available, and full-text search covers clips, summaries, tags, and
-transcripts once the search index is built.
+transcripts once the search index is built. When a local text-embedding
+backend is detected (ollama with `nomic-embed-text`, or
+sentence-transformers), a `Semantic` toggle appears next to the search box —
+it searches by meaning instead of exact words, ranking clips, shots, and
+transcript lines by similarity to your query.
 
 ### Clip detail
 

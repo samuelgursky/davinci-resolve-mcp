@@ -4065,6 +4065,9 @@ HTML = r"""<!doctype html>
         </div>
         <div class="review-bin-filters">
           <input id="reviewSearchInput" type="search" placeholder="Search clips, summaries, tags, transcripts…" autocomplete="off">
+          <label id="reviewSemanticToggle" class="review-semantic-toggle" style="display:none" title="Search by meaning using local text embeddings instead of exact words.">
+            <input id="reviewSemanticCheckbox" type="checkbox"> Semantic
+          </label>
           <select id="reviewBinFilter" aria-label="Filter by bin">
             <option value="">All bins</option>
           </select>
@@ -6201,6 +6204,13 @@ HTML = r"""<!doctype html>
       syncPreferencesPanel();
       applyPreferencesToControls(prefs);
       renderVersionBadge();
+      // Semantic search rides on a local text-embedding backend; only show
+      // the toggle when one is detected (ollama nomic-embed-text or
+      // sentence-transformers).
+      if (state.boot?.capabilities?.embeddings?.text?.available) {
+        const toggle = $('reviewSemanticToggle');
+        if (toggle) toggle.style.display = '';
+      }
       // Paint the previous inventory immediately (stale) so a slow first
       // /api/resolve/media — common with network source media — doesn't leave the
       // panel blank. The live fetch below replaces it and clears the stale flag.
@@ -8258,7 +8268,11 @@ HTML = r"""<!doctype html>
         renderReviewBin();
         return;
       }
-      const payload = await api(`/api/index/query?q=${encodeURIComponent(query)}&limit=40`)
+      const semantic = !!$('reviewSemanticCheckbox')?.checked;
+      const endpoint = semantic
+        ? `/api/search/semantic?q=${encodeURIComponent(query)}&limit=40`
+        : `/api/index/query?q=${encodeURIComponent(query)}&limit=40`;
+      const payload = await api(endpoint)
         .catch(err => ({ success: false, error: String(err) }));
       state.review.searchResults = payload;
       renderReviewBin();
@@ -11083,6 +11097,11 @@ HTML = r"""<!doctype html>
         runReviewSearch(q).catch(alertError);
       }, 250);
     });
+    // Semantic toggle re-runs the current query through the embeddings index.
+    $('reviewSemanticCheckbox')?.addEventListener('change', () => {
+      const q = $('reviewSearchInput').value.trim();
+      if (q) runReviewSearch(q).catch(alertError);
+    });
     // Bin dropdown.
     $('reviewBinFilter').addEventListener('change', event => {
       state.review.binFilter = event.target.value || '';
@@ -12468,6 +12487,57 @@ def _v2_load_analysis_db_first(project_root: str, clip_dir: str) -> Optional[Dic
     except Exception:
         pass
     return _v2_load_analysis(clip_dir)
+
+
+def _v2_semantic_search(project_root: str, q: str, *, limit: int = 20) -> Dict[str, Any]:
+    """Semantic search over the embeddings index, shaped like /api/index/query
+    rows so the existing search-card renderer works unchanged."""
+    text = (q or "").strip()
+    if not text:
+        return {"success": True, "results": []}
+    try:
+        from src.utils import embeddings, timeline_brain_db as tbd
+
+        found = embeddings.find_similar(project_root, text=text, kind="text", limit=limit)
+        if not found.get("success"):
+            return found
+        conn = tbd.connect(project_root)
+        resolve_ids: Dict[str, Optional[str]] = {}
+
+        def resolve_clip_id(clip_uuid: Optional[str]) -> Optional[str]:
+            if not clip_uuid:
+                return None
+            if clip_uuid not in resolve_ids:
+                row = conn.execute(
+                    "SELECT resolve_clip_id, clip_dir FROM clips WHERE clip_uuid = ?",
+                    (clip_uuid,),
+                ).fetchone()
+                resolve_ids[clip_uuid] = (row["resolve_clip_id"] or row["clip_dir"]) if row else None
+            return resolve_ids[clip_uuid]
+
+        rows: List[Dict[str, Any]] = []
+        for hit in found.get("results") or []:
+            entity_type = hit.get("entity_type")
+            clip_uuid = hit.get("clip_uuid") or (hit.get("entity_uuid") if entity_type == "clip" else None)
+            row: Dict[str, Any] = {
+                "result_type": "transcript" if entity_type == "segment" else "semantic",
+                "score": hit.get("score"),
+                "clip_id": resolve_clip_id(clip_uuid),
+                "clip_name": hit.get("clip_name"),
+            }
+            if entity_type == "shot":
+                row["start_seconds"] = hit.get("time_seconds_start")
+                row["summary"] = hit.get("description")
+            elif entity_type == "segment":
+                row["start_seconds"] = hit.get("start_seconds")
+                row["summary"] = hit.get("text")
+            else:
+                row["summary"] = hit.get("summary")
+            rows.append(row)
+        rows = _v2_enrich_search_results(project_root, rows)
+        return {"success": True, "query": text, "model": found.get("model"), "results": rows}
+    except Exception as exc:  # noqa: BLE001 — search must fail soft in the panel
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _v2_clip_duration(report: Dict[str, Any]) -> Optional[float]:
@@ -14315,6 +14385,14 @@ class Handler(BaseHTTPRequestHandler):
             if payload.get("success") and payload.get("results"):
                 payload["results"] = _v2_enrich_search_results(self.state.project_root, payload["results"])
             self._json(payload)
+            return
+        if path == "/api/search/semantic":
+            q = (query.get("q") or [""])[0]
+            try:
+                limit = int((query.get("limit") or ["20"])[0])
+            except (TypeError, ValueError):
+                limit = 20
+            self._json(_v2_semantic_search(self.state.project_root, q, limit=limit))
             return
         # ─── C6 timeline-history surface ───────────────────────────────
         if path == "/api/timeline_versions":
