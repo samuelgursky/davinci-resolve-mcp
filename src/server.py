@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.42.0"
+VERSION = "2.43.0"
 
 import base64
 import os
@@ -15024,6 +15024,9 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "deepen",
         "commit_shot_vision",
         "vision_pending_sweep",
+        # Phase C — embeddings + similarity.
+        "build_embeddings",
+        "find_similar",
     }:
         root = resolve_media_analysis_output_root(
             project_name=project_name,
@@ -15118,6 +15121,34 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 expire=_media_analysis_bool(p.get("expire"), False),
                 max_age_days=p.get("max_age_days") or p.get("maxAgeDays"),
                 reoffer=_media_analysis_bool(p.get("reoffer"), False),
+            )
+        # Phase C — embeddings + similarity (local compute; no token caps).
+        if action == "build_embeddings":
+            from src.utils import embeddings
+            kinds = p.get("kinds") or p.get("kind") or ["text"]
+            if isinstance(kinds, str):
+                kinds = [kinds]
+            return embeddings.build_embeddings(
+                project_root,
+                kinds=[str(k).strip().lower() for k in kinds],
+                clip_ref=p.get("clip_id") or p.get("clipId") or p.get("clip_dir") or p.get("clipDir"),
+                include_segments=_media_analysis_bool(p.get("include_segments", p.get("includeSegments")), True),
+                max_frames_per_clip=int(p.get("max_frames_per_clip") or p.get("maxFramesPerClip") or 16),
+            )
+        if action == "find_similar":
+            from src.utils import embeddings
+            entity_types = p.get("entity_types") or p.get("entityTypes")
+            if isinstance(entity_types, str):
+                entity_types = [entity_types]
+            return embeddings.find_similar(
+                project_root,
+                text=p.get("text") or p.get("query"),
+                clip_ref=p.get("clip_id") or p.get("clipId") or p.get("clip_dir") or p.get("clipDir"),
+                shot_index=p.get("shot_index") if p.get("shot_index") is not None else p.get("shotIndex"),
+                shot_uuid=p.get("shot_uuid") or p.get("shotUuid"),
+                kind=p.get("kind") or "text",
+                entity_types=entity_types,
+                limit=int(p.get("limit") or 10),
             )
         if action in {"build_index", "rebuild_index"}:
             return build_analysis_index(project_root, index_path=p.get("index_path") or p.get("indexPath"))
@@ -15533,6 +15564,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "deepen",
         "commit_shot_vision",
         "vision_pending_sweep",
+        "build_embeddings",
+        "find_similar",
         "get_caps",
         "set_caps_preset",
         "get_usage",

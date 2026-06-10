@@ -1436,6 +1436,28 @@ TOOL_INSTALL: Dict[str, Dict[str, Any]] = {
         "verify": "whisper --help",
         "notes": "Pure-Python reference implementation. Choose this OR whisper_cpp OR mlx_whisper.",
     },
+    "ollama_embeddings": {
+        "label": "ollama + nomic-embed-text",
+        "bundle": "embeddings",
+        "required_for": ["semantic search (text embeddings)", "find_similar"],
+        "commands": {
+            "macos": "brew install ollama && ollama pull nomic-embed-text",
+            "linux": "curl -fsSL https://ollama.com/install.sh | sh && ollama pull nomic-embed-text",
+            "windows": "winget install Ollama.Ollama, then: ollama pull nomic-embed-text",
+        },
+        "verify": "ollama list",
+        "notes": "Local embedding model (~270 MB). sentence-transformers is an alternative text backend.",
+    },
+    "open_clip": {
+        "label": "open_clip (CLIP visual embeddings)",
+        "bundle": "embeddings",
+        "required_for": ["visual similarity (find_similar kind=visual)", "cross-clip entity clustering"],
+        "commands": {
+            "all": "pip install open_clip_torch",
+        },
+        "verify": "python -c \"import open_clip\"",
+        "notes": "Needs torch. Model weights (~350 MB) download on first use.",
+    },
     "whisper_cpp": {
         "label": "whisper.cpp",
         "bundle": "transcription",
@@ -1585,6 +1607,17 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
 
     sync_events = detect_sync_event_capabilities()
 
+    # Phase C — embedding backends (detected like the whisper backends; the
+    # ollama probe is a short local HTTP call and fails fast when not serving).
+    try:
+        from src.utils import embeddings as _embeddings
+
+        embedding_caps = _embeddings.detect_embedding_capabilities()
+    except Exception:  # noqa: BLE001 — detection must never break capabilities
+        embedding_caps = {"text": {"available": False, "backends": []},
+                          "visual": {"available": False, "backends": []},
+                          "install_guidance": {}}
+
     platform_id, machine = _runtime_platform_id()
 
     def _tool_entry(name: str, available: bool, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1607,7 +1640,18 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
             "whisper_cpp": _tool_entry("whisper_cpp", bool(whisper_cpp), {"path": whisper_cpp}),
             "mlx_whisper": _tool_entry("mlx_whisper", bool(mlx_whisper), {"python_module": "mlx_whisper"}),
             "opencv": _tool_entry("opencv", bool(cv2), {"python_module": "cv2"}),
+            "ollama_embeddings": _tool_entry(
+                "ollama_embeddings",
+                bool(embedding_caps.get("text", {}).get("available")),
+                {"backends": embedding_caps.get("text", {}).get("backends", [])},
+            ),
+            "open_clip": _tool_entry(
+                "open_clip",
+                bool(embedding_caps.get("visual", {}).get("available")),
+                {"python_module": "open_clip"},
+            ),
         },
+        "embeddings": embedding_caps,
         "transcription": {
             "available": bool(whisper_cli or whisper_cpp or mlx_whisper),
             "backends": [
