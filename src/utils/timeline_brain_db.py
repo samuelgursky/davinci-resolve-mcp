@@ -29,7 +29,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 
 logger = logging.getLogger("resolve-mcp.timeline-brain-db")
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 DB_FILENAME = "timeline_brain.sqlite"
 SOUL_DIRNAME = "_soul"
 
@@ -505,6 +505,184 @@ def _migrate_v5_analysis_token_usage(conn: sqlite3.Connection) -> None:
             ON analysis_token_usage(scope, scope_key);
         CREATE INDEX IF NOT EXISTS ix_analysis_token_usage_day
             ON analysis_token_usage(day_bucket);
+        """
+    )
+
+
+@register_migration(9)
+def _migrate_v9_analysis_core(conn: sqlite3.Connection) -> None:
+    """C1 — DB-canonical clip analysis (Phase A of the analysis/edit-engine program).
+
+    The DB becomes the source of truth for clip analysis; analysis.json becomes
+    a derived export written in lockstep. Shape is hybrid: a canonical
+    full-report blob per clip (`analysis_reports`) plus normalized tables for
+    what downstream phases query (shots, subjective fields with per-field
+    provenance, transcript segments, sampled frames, QC observations).
+    Computed layers (technical/motion/cuts/audio) stay inside the blob — they
+    re-derive cleanly from source media and nothing queries them row-wise.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS clips (
+            clip_uuid TEXT PRIMARY KEY,          -- rename-stable canonical hash (12-hex)
+            clip_dir TEXT,                       -- report folder name under clips/
+            resolve_clip_id TEXT,
+            media_id TEXT,
+            clip_name TEXT,
+            file_path TEXT,
+            bin_path TEXT,
+            duration_seconds REAL,
+            fps REAL,
+            resolution TEXT,
+            media_type TEXT,
+            summary TEXT,
+            overall_motion_level TEXT,
+            cut_count INTEGER,
+            shot_count INTEGER,
+            analysis_version TEXT,
+            depth TEXT,
+            signature_hash TEXT,
+            analyzed_at TEXT,
+            vision_status TEXT,
+            vision_committed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_clips_clip_name ON clips(clip_name);
+        CREATE INDEX IF NOT EXISTS ix_clips_file_path ON clips(file_path);
+
+        -- Every stable id a clip is known by (legacy hashes, clip_id, media_id,
+        -- folder hash, normalized file path) → clip_uuid. Lookup table only.
+        CREATE TABLE IF NOT EXISTS clip_aliases (
+            alias TEXT NOT NULL,
+            clip_uuid TEXT NOT NULL,
+            kind TEXT,
+            PRIMARY KEY (alias, clip_uuid)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_clip_aliases_clip ON clip_aliases(clip_uuid);
+
+        -- Canonical full analysis payload. analysis.json is exported FROM this.
+        CREATE TABLE IF NOT EXISTS analysis_reports (
+            clip_uuid TEXT PRIMARY KEY,
+            report_json TEXT NOT NULL,
+            signature_hash TEXT,
+            analyzed_at TEXT,
+            written_at TEXT NOT NULL,
+            FOREIGN KEY (clip_uuid) REFERENCES clips(clip_uuid) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS shots (
+            shot_uuid TEXT PRIMARY KEY,          -- short_hash(clip_uuid + rounded time region)
+            clip_uuid TEXT NOT NULL,
+            shot_index INTEGER NOT NULL,
+            time_seconds_start REAL,
+            time_seconds_end REAL,
+            description TEXT,
+            qc_flags_json TEXT,
+            frame_indices_json TEXT,
+            extra_json TEXT,                     -- forward-compat: any other shot keys
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(clip_uuid, shot_index),
+            FOREIGN KEY (clip_uuid) REFERENCES clips(clip_uuid) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_shots_clip ON shots(clip_uuid, shot_index);
+
+        -- Per-field provenance for subjective (vision/human) values.
+        -- Current value = the row with superseded_at IS NULL.
+        CREATE TABLE IF NOT EXISTS subjective_fields (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type TEXT NOT NULL CHECK(entity_type IN ('clip', 'shot')),
+            entity_uuid TEXT NOT NULL,
+            field_path TEXT NOT NULL,
+            value_json TEXT NOT NULL,
+            confidence TEXT,
+            source TEXT NOT NULL,                -- 'vision_v0.2' | 'human' | ...
+            source_model TEXT,
+            author TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            superseded_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_sf_entity
+            ON subjective_fields(entity_type, entity_uuid, field_path);
+        CREATE INDEX IF NOT EXISTS ix_sf_current
+            ON subjective_fields(entity_type, entity_uuid, field_path)
+            WHERE superseded_at IS NULL;
+
+        CREATE TABLE IF NOT EXISTS field_changelog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type TEXT NOT NULL,
+            entity_uuid TEXT NOT NULL,
+            field_path TEXT NOT NULL,
+            previous_value_json TEXT,
+            new_value_json TEXT NOT NULL,
+            previous_source TEXT,
+            new_source TEXT NOT NULL,
+            previous_author TEXT,
+            new_author TEXT NOT NULL,
+            change_reason TEXT,
+            timestamp TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_changelog_entity
+            ON field_changelog(entity_type, entity_uuid, timestamp);
+
+        CREATE TABLE IF NOT EXISTS transcript_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_uuid TEXT NOT NULL,
+            segment_index INTEGER NOT NULL,
+            start_seconds REAL,
+            end_seconds REAL,
+            text TEXT,
+            speaker_id TEXT,
+            UNIQUE(clip_uuid, segment_index),
+            FOREIGN KEY (clip_uuid) REFERENCES clips(clip_uuid) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_transcript_segments_clip
+            ON transcript_segments(clip_uuid, start_seconds);
+
+        CREATE TABLE IF NOT EXISTS frames (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_uuid TEXT NOT NULL,
+            shot_uuid TEXT,
+            frame_index INTEGER NOT NULL,
+            time_seconds REAL,
+            frame_path TEXT,
+            selection_reason TEXT,
+            motion_peak INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(clip_uuid, frame_index),
+            FOREIGN KEY (clip_uuid) REFERENCES clips(clip_uuid) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_frames_clip ON frames(clip_uuid, frame_index);
+        CREATE INDEX IF NOT EXISTS ix_frames_shot ON frames(shot_uuid);
+
+        CREATE TABLE IF NOT EXISTS qc_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_uuid TEXT NOT NULL,
+            shot_uuid TEXT,
+            observation_type TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'info',
+            message TEXT NOT NULL,
+            related_shot_indices_json TEXT,
+            confidence TEXT,
+            source TEXT NOT NULL,
+            resolved INTEGER NOT NULL DEFAULT 0,
+            resolved_by TEXT,
+            resolved_at TEXT,
+            resolution_note TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (clip_uuid) REFERENCES clips(clip_uuid) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_qc_clip ON qc_observations(clip_uuid);
+        CREATE INDEX IF NOT EXISTS ix_qc_unresolved
+            ON qc_observations(clip_uuid, resolved) WHERE resolved = 0;
         """
     )
 
