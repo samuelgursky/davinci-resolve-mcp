@@ -12450,6 +12450,25 @@ def _v2_load_analysis(clip_dir: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _v2_load_analysis_db_first(project_root: str, clip_dir: str) -> Optional[Dict[str, Any]]:
+    """C1 — DB-canonical reader with JSON fallback.
+
+    Falls back to analysis.json for reports that predate schema v9 and for
+    job-linked report dirs whose rows live under another project's DB.
+    """
+    try:
+        from src.utils import analysis_store
+
+        report = analysis_store.load_db_report(
+            project_root, clip_dir=os.path.basename(clip_dir.rstrip("/\\"))
+        )
+        if report is not None:
+            return report
+    except Exception:
+        pass
+    return _v2_load_analysis(clip_dir)
+
+
 def _v2_clip_duration(report: Dict[str, Any]) -> Optional[float]:
     marker_plan = report.get("clip_analysis_markers") if isinstance(report.get("clip_analysis_markers"), dict) else {}
     duration = marker_plan.get("duration_seconds")
@@ -12530,7 +12549,7 @@ def list_analyzed_clips(project_root: str) -> Dict[str, Any]:
     """List analyzed clips for the bin grid. One row per analysis.json found."""
     rows: List[Dict[str, Any]] = []
     for slug, clip_dir in _v2_iter_analysis_dirs(project_root):
-        report = _v2_load_analysis(clip_dir)
+        report = _v2_load_analysis_db_first(project_root, clip_dir)
         if report is None:
             continue
         rows.append(_v2_clip_summary_card(slug, clip_dir, report))
@@ -12561,7 +12580,7 @@ def get_analyzed_clip(project_root: str, clip_id: str) -> Dict[str, Any]:
     clip_dir = _v2_find_clip_dir(project_root, clip_id)
     if not clip_dir:
         return {"success": False, "error": f"No analyzed clip found for id={clip_id}"}
-    report = _v2_load_analysis(clip_dir)
+    report = _v2_load_analysis_db_first(project_root, clip_dir)
     if report is None:
         return {"success": False, "error": "analysis.json unreadable"}
     visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
@@ -12598,7 +12617,7 @@ def get_analyzed_clip_shots(project_root: str, clip_id: str) -> Dict[str, Any]:
     clip_dir = _v2_find_clip_dir(project_root, clip_id)
     if not clip_dir:
         return {"success": False, "error": f"No analyzed clip found for id={clip_id}"}
-    report = _v2_load_analysis(clip_dir)
+    report = _v2_load_analysis_db_first(project_root, clip_dir)
     if report is None:
         return {"success": False, "error": "analysis.json unreadable"}
     visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}
@@ -12615,7 +12634,7 @@ def get_analyzed_clip_shot(project_root: str, clip_id: str, shot_index: int) -> 
     clip_dir = _v2_find_clip_dir(project_root, clip_id)
     if not clip_dir:
         return {"success": False, "error": f"No analyzed clip found for id={clip_id}"}
-    report = _v2_load_analysis(clip_dir)
+    report = _v2_load_analysis_db_first(project_root, clip_dir)
     if report is None:
         return {"success": False, "error": "analysis.json unreadable"}
     visual = report.get("visual") if isinstance(report.get("visual"), dict) else {}

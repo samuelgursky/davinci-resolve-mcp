@@ -2230,6 +2230,21 @@ def _read_json(path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _ingest_report_into_db(project_root: str, report: Dict[str, Any], clip_dir: Optional[str]) -> Dict[str, Any]:
+    """C1 — write a report into the DB-canonical store (rows in a transaction).
+
+    Best-effort by design: a DB failure must never break the analysis run,
+    because the JSON export still lands on disk and every reader falls back
+    to it. The failure is surfaced in the result for the caller to report.
+    """
+    try:
+        from src.utils import analysis_store
+
+        return analysis_store.ingest_report(project_root, report, clip_dir=clip_dir)
+    except Exception as exc:  # noqa: BLE001 — DB trouble must not kill analysis
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def _fraction_to_float(value: Any) -> Optional[float]:
     if value in (None, "", "0/0"):
         return None
@@ -5199,6 +5214,15 @@ async def execute_plan_async(
         if vision_pending:
             analysis["vision_status"] = "pending_host_analysis"
             analysis["vision_token"] = vision.get("vision_token")
+        # C1 — DB rows first (canonical), then the derived JSON export. The DB
+        # lives under output_root (same root as clips/), not the caps root.
+        db_ingest = _ingest_report_into_db(
+            output_root,
+            analysis,
+            os.path.dirname(artifacts["analysis_json"]),
+        )
+        if not db_ingest.get("success"):
+            clip_result["db_ingest_error"] = db_ingest.get("error")
         _write_json(artifacts["analysis_json"], analysis)
         cleanup_frames_requested = _coerce_bool(params.get("cleanup_frames"), default=False)
         if cleanup_frames_requested and not vision_pending and artifacts.get("frames_dir"):
@@ -5773,6 +5797,8 @@ def commit_visual_analysis(
     report.pop("vision_status", None)
     report.pop("vision_token", None)
     report["vision_committed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # C1 — DB rows first (canonical), then the derived JSON export.
+    db_ingest = _ingest_report_into_db(root, report, clip_dir_path)
     _write_json(analysis_json_path, report)
 
     index_status_info: Dict[str, Any] = {}
@@ -5813,6 +5839,7 @@ def commit_visual_analysis(
         "index": index_status_info,
         "analysis_registry": registry_status,
         "corrections": corrections_metrics,
+        "db_ingest": db_ingest,
     })
 
 
