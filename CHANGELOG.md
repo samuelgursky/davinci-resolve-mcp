@@ -2,6 +2,36 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.40.0
+
+Control panel UX overhaul + docs refresh, from a full live audit of every
+panel view, with drift guards so neither can silently go stale again.
+
+- **Added** a governance mode toggle (Advisory / Enforce) to the AI Console,
+  with corrected copy (the old text predated v2.39.0 enforce mode), and a
+  Recent-runs list on the AI-ops ledger showing each run's actor.
+- **Added** chat-first onboarding: empty Overview, Review, and Inventory
+  states show plain-language guidance with a copyable suggested prompt
+  instead of zero-walls and MCP action names.
+- **Added** History as a first-class Media menu item, deep-linkable at
+  `#analysis/review/history`; documented the full hash deep-link scheme.
+- **Changed** the top-level "Analysis" menu to "Media" (it collided with the
+  Preferences page of the same name); "Analyze" is now "Inventory". Full
+  vocabulary pass: humanized readiness chips and frame-sampling labels, no
+  internal codenames, file names, or absolute paths in UI copy.
+- **Fixed** the README's linked screenshot rendering broken in the Docs
+  reader: badge parsing no longer claims local linked images, and a new
+  `/api/doc_asset/` route serves repo doc images (path-constrained).
+- **Fixed** poll hygiene: timers pause while the tab is hidden, panel-state
+  polling backs off when unfocused, and unchanged inventory polls return a
+  tiny 200 instead of a 304 that Chrome logged as an aborted request.
+- **Docs**: `docs/guides/control-panel.md` fully rewritten for the current
+  IA with all screenshots regenerated from the live panel
+  (`scripts/regen_panel_screenshots.py`). A new drift-guard test fails the
+  suite — and the publish workflow, which now runs all three static guards
+  on every tag — when the guide drifts from the panel's navigation or
+  screenshots.
+
 ## What's New in v2.39.0
 
 Governance enforce mode and actor identity — the staged Phase 3 of the
