@@ -10066,14 +10066,14 @@ HTML = r"""<!doctype html>
       if (options.updateHash !== false) {
         updateRouteHash('docs', state.activeDoc);
       }
-      const rendered = renderMarkdown(payload.content || '');
+      const rendered = renderMarkdown(payload.content || '', payload.path || '');
       setHtml('docReader', rendered.html);
       renderDocSectionNav(rendered.sections);
       setText('docSource', payload.path || '');
       applyDocFilters();
     }
 
-    function renderMarkdown(markdown) {
+    function renderMarkdown(markdown, docPath) {
       const lines = String(markdown || '').split(/\r?\n/);
       const parts = [];
       const sections = [];
@@ -10102,7 +10102,9 @@ HTML = r"""<!doctype html>
         const line = rawLine.trimEnd();
         if (!line.trim()) continue;
         const badgeMatches = parseBadgeTokens(line.trim());
-        if (badgeMatches.length) {
+        // Badge rows are external status shields; a linked LOCAL image (e.g.
+        // the README's control-panel screenshot) must reach the image handlers.
+        if (badgeMatches.length && badgeMatches.every(token => /^https?:/i.test(token.src))) {
           while (index + 1 < lines.length) {
             const nextMatches = parseBadgeTokens(lines[index + 1].trim());
             if (!nextMatches.length) break;
@@ -10131,9 +10133,14 @@ HTML = r"""<!doctype html>
           parts.push(`<h${level} id="${id}" class="doc-block" data-md-type="heading">${inlineMarkdown(heading[2])}</h${level}>`);
           continue;
         }
+        const linkedImage = line.match(/^\[!\[([^\]]*)\]\(([^)]+)\)\]\(([^)]+)\)$/);
+        if (linkedImage) {
+          parts.push(renderImageBlock(linkedImage[1], linkedImage[2], docPath));
+          continue;
+        }
         const image = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
         if (image) {
-          parts.push(renderImageBlock(image[1], image[2]));
+          parts.push(renderImageBlock(image[1], image[2], docPath));
           continue;
         }
         const bullet = line.match(/^[-*]\s+(.+)$/) || line.match(/^\d+\.\s+(.+)$/);
@@ -10201,8 +10208,27 @@ HTML = r"""<!doctype html>
       return tokens;
     }
 
-    function renderImageBlock(alt, src) {
-      return `<figure class="doc-image doc-block" data-md-type="image"><img src="${escapeAttribute(src)}" alt="${escapeAttribute(alt || src)}" loading="lazy"></figure>`;
+    function resolveDocAsset(src, docPath) {
+      const clean = String(src || '').trim();
+      if (/^(https?:|data:|\/)/i.test(clean)) return clean;
+      const stack = [];
+      const parts = String(docPath || '').split('/').slice(0, -1).concat(clean.split('/'));
+      for (const part of parts) {
+        if (!part || part === '.') continue;
+        if (part === '..') { stack.pop(); continue; }
+        stack.push(part);
+      }
+      const rel = stack.join('/');
+      const marker = 'docs/images/';
+      if (rel.startsWith(marker)) {
+        return '/api/doc_asset/' + rel.slice(marker.length).split('/').map(encodeURIComponent).join('/');
+      }
+      return clean;
+    }
+
+    function renderImageBlock(alt, src, docPath) {
+      const resolved = resolveDocAsset(src, docPath);
+      return `<figure class="doc-image doc-block" data-md-type="image"><img src="${escapeAttribute(resolved)}" alt="${escapeAttribute(alt || src)}" loading="lazy"></figure>`;
     }
 
     function renderMarkdownTable(lines) {
@@ -14217,6 +14243,21 @@ class Handler(BaseHTTPRequestHandler):
             doc = (query.get("doc") or ["readme"])[0]
             payload = _dashboard_doc(doc)
             self._json(payload, 200 if payload.get("success") else 404)
+            return
+        if path.startswith("/api/doc_asset/"):
+            rel = unquote(path[len("/api/doc_asset/"):])
+            base = os.path.realpath(os.path.join(_repo_root(), "docs", "images"))
+            full = os.path.realpath(os.path.join(base, rel))
+            if not (full.startswith(base + os.sep) or full == base):
+                self._json({"success": False, "error": "path escape"}, HTTPStatus.FORBIDDEN)
+                return
+            content_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                             ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp"}
+            ext = os.path.splitext(full)[1].lower()
+            if ext not in content_types or not os.path.isfile(full):
+                self._json({"success": False, "error": "not found"}, HTTPStatus.NOT_FOUND)
+                return
+            self._serve_file(full, content_types[ext])
             return
         if path == "/api/setup/schema":
             self._json(_setup_defaults("schema"))
