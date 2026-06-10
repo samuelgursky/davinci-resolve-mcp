@@ -11215,6 +11215,25 @@ def _v2_update_field(project_root: str, p: Dict[str, Any], *, entity_type: str) 
     write_result = _v2_write_corrections(path, data)
     if not write_result.get("success"):
         return write_result
+    # C1 — mirror the correction into the DB-canonical store (row-level
+    # provenance). Best-effort: the sidecar remains authoritative for projects
+    # whose DB predates v9 or lacks ingested rows.
+    db_result: Dict[str, Any]
+    try:
+        from src.utils import analysis_store
+        db_result = analysis_store.record_human_correction(
+            project_root,
+            clip_ref=clip_id or os.path.basename(os.path.dirname(path)),
+            entity_type=entity_type,
+            entity_uuid=entity_uuid,
+            field_path=field_path,
+            value=new_value,
+            author=author,
+            reason=reason,
+            confidence=str(confidence) if confidence else None,
+        )
+    except Exception as exc:  # noqa: BLE001 — DB mirror must not break corrections
+        db_result = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
     return {
         "success": True,
         "entity_type": entity_type,
@@ -11225,6 +11244,7 @@ def _v2_update_field(project_root: str, p: Dict[str, Any], *, entity_type: str) 
         "author": author,
         "timestamp": now,
         "corrections_path": path,
+        "db": db_result,
     }
 
 
@@ -11307,6 +11327,35 @@ def _v2_revert_field(project_root: str, p: Dict[str, Any]) -> Dict[str, Any]:
     write_result = _v2_write_corrections(path, data)
     if not write_result.get("success"):
         return write_result
+    # C1 — mirror the revert into the DB-canonical store. A revert back to a
+    # human value re-records it; a revert to machine-derived clears the human
+    # row so the export overlay falls back to the blob value.
+    db_result: Dict[str, Any]
+    try:
+        from src.utils import analysis_store
+        clip_ref = clip_id or os.path.basename(os.path.dirname(path))
+        if action_taken == "removed (back to machine-derived)" or revert_source != "human":
+            db_result = analysis_store.clear_human_field(
+                project_root,
+                clip_ref=clip_ref,
+                entity_type=entity_type,
+                entity_uuid=entity_uuid,
+                field_path=field_path,
+                author=author,
+            )
+        else:
+            db_result = analysis_store.record_human_correction(
+                project_root,
+                clip_ref=clip_ref,
+                entity_type=entity_type,
+                entity_uuid=entity_uuid,
+                field_path=field_path,
+                value=revert_to,
+                author=author,
+                reason=f"revert by {author}",
+            )
+    except Exception as exc:  # noqa: BLE001 — DB mirror must not break corrections
+        db_result = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
     return {
         "success": True,
         "action": action_taken,
@@ -11314,6 +11363,7 @@ def _v2_revert_field(project_root: str, p: Dict[str, Any]) -> Dict[str, Any]:
         "reverted_value": revert_to,
         "timestamp": now,
         "corrections_path": path,
+        "db": db_result,
     }
 
 
@@ -14955,6 +15005,21 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "cancel_batch_job",
         "resume_batch_job",
         "cleanup_artifacts",
+        # V2 session/panel state + C4 corrections. These checks lived inside
+        # this block since v2.24.0 but were missing from the membership set,
+        # making them unreachable from MCP dispatch (the panel proxied to the
+        # helpers directly, which masked it). Fixed as part of C1 (Phase A).
+        "get_panel_state",
+        "set_panel_state",
+        "session_start_context",
+        "update_shot_field",
+        "update_clip_field",
+        "get_field_history",
+        "revert_field",
+        "list_corrections",
+        # C1 — DB-canonical analysis store.
+        "db_status",
+        "db_ingest",
     }:
         root = resolve_media_analysis_output_root(
             project_name=project_name,
@@ -15007,6 +15072,13 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             return _v2_revert_field(project_root, p)
         if action == "list_corrections":
             return _v2_list_corrections(project_root, p)
+        # C1 — DB-canonical analysis store (Phase A).
+        if action == "db_status":
+            from src.utils import analysis_store
+            return analysis_store.db_status(project_root)
+        if action == "db_ingest":
+            from src.utils import analysis_store
+            return analysis_store.ingest_project(project_root)
         if action in {"build_index", "rebuild_index"}:
             return build_analysis_index(project_root, index_path=p.get("index_path") or p.get("indexPath"))
         if action == "index_status":
@@ -15408,6 +15480,23 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "cancel_batch_job",
         "resume_batch_job",
         "cleanup_artifacts",
+        "get_panel_state",
+        "set_panel_state",
+        "session_start_context",
+        "update_shot_field",
+        "update_clip_field",
+        "get_field_history",
+        "revert_field",
+        "list_corrections",
+        "db_status",
+        "db_ingest",
+        "get_caps",
+        "set_caps_preset",
+        "get_usage",
+        "coverage_report",
+        "get_resolve_ai_usage",
+        "get_ai_governance",
+        "set_ai_governance",
     ])
 
 
