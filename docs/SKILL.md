@@ -494,8 +494,29 @@ Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
 `cancel_batch_job`, `resume_batch_job`, `review_timeline_markers`,
 `cleanup_artifacts`, `db_status`, `db_ingest`, `get_panel_state`,
 `set_panel_state`, `session_start_context`, `update_clip_field`,
-`update_shot_field`, `get_field_history`, `revert_field`, and
-`list_corrections`.
+`update_shot_field`, `get_field_history`, `revert_field`,
+`list_corrections`, `deepen`, `commit_shot_vision`, and
+`vision_pending_sweep`.
+
+**Deep shot-level vision tier (v2.42.0+).** Opt-in, estimate-first. Two
+entry points share one per-shot schema (Visual / Content / Production /
+Editorial / Cuttability / description / confidence):
+- `depth="deep"` on any analyze action extends the deferred host-vision
+  payload with `deep_shot_schema`; each `shot_descriptions` entry must carry
+  the field groups. The first deep run returns `confirmation_required` with
+  a token-cost estimate — re-call with `confirm_deep=true`. Caps still apply.
+- `deepen(clip_id|clip_dir, shot_index?|shot_indices?)` runs the pass
+  post-hoc on an already-analyzed clip. First call returns the estimate +
+  `confirm_token`; re-call with the token to get the deferred payload, read
+  its `frame_paths`, and commit via
+  `commit_shot_vision(clip_id, shots=[{shot_index, ...groups...}],
+  vision_token)`. Deep fields land as `vision_deep_v1` provenance rows;
+  human corrections always survive. Shots with no sampled frames on disk get
+  1–2 frames re-extracted via ffmpeg (read-only on source media).
+`vision_pending_sweep(expire?, max_age_days?, reoffer?)` lists clips stuck
+in `pending_host_analysis`; `reoffer=true` returns each clip's stored
+deferred payload to finish the run, `expire=true` stamps them
+`expired_host_analysis` so pendings never linger silently.
 
 **DB-canonical analysis store (v2.41.0+).** The per-project SQLite DB
 (`_soul/timeline_brain.sqlite`, schema v9+) is the source of truth for clip

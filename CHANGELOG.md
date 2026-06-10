@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.42.0
+
+Deep shot-level vision tier — Phase B of the analysis + edit-engine program.
+Opt-in, estimate-first per-shot field filling for the Visual / Content /
+Production / Editorial / Cuttability groups the shot pages already render.
+
+- **Added** `src/utils/deep_vision.py` and three `media_analysis` actions:
+  `deepen` (estimate → confirm_token → deferred host-vision payload per
+  clip/shot), `commit_shot_vision` (writes `vision_deep_v1` provenance rows,
+  updates the canonical blob, re-exports analysis.json in lockstep), and
+  `vision_pending_sweep` (lists clips stuck in `pending_host_analysis`;
+  `reoffer=true` returns the stored payload, `expire=true` stamps them).
+- **Added** deep depth to the analyze flow: `depth="deep"` extends the
+  deferred payload with the per-shot schema and requires `confirm_deep=true`
+  after a token-cost estimate. Caps pre-call refusal applies on both paths.
+- **Added** panel affordances: `Deepen analysis` (clip view) and `Deepen this
+  shot` (shot view) copy ready-made chat prompts, per the chat-first UX.
+  Shots with no sampled frames on disk get 1–2 frames re-extracted via
+  ffmpeg, downscaled per caps (source media stays read-only).
+- **Fixed** a provenance bug in the analysis store: a source re-deriving an
+  unchanged value no longer re-attributes the row (a deep pass would
+  otherwise claim every untouched field as `vision_deep_v1`).
+- **Validation**: full offline suite (1081 tests; 15 new), and a real
+  end-to-end deep pass on the 2026-05-17 sample clip — estimate → confirm →
+  frames read by the host chat → commit → rows/blob/export parity → fields
+  visible in the panel shot view. Control-panel guide screenshots
+  regenerated from the live panel.
+
 ## What's New in v2.41.0
 
 DB-canonical clip analysis (C1) — Phase A of the analysis + edit-engine
