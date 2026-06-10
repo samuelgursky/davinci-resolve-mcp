@@ -3822,6 +3822,7 @@ HTML = r"""<!doctype html>
         <div class="nav-dropdown" role="menu" aria-label="Analysis pages">
           <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="media" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m7 15 3-3 2 2 4-5 1 2"></path></svg></span>Inventory</button>
           <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="review" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="m21 17-5-5-9 9"></path></svg></span>Review</button>
+          <button class="nav-dropdown-item" id="navHistoryItem" data-panel-target="analysis" data-subpage-target="review" data-review-view="history" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></span>History</button>
         </div>
       </div>
       <button class="control-tab" data-panel-target="aiconsole">AI Console</button>
@@ -5158,6 +5159,10 @@ HTML = r"""<!doctype html>
           openClipDetail(clipId, { writePanelState: false, pushHash: false }).catch(alertError);
         }
       }
+      if (panelName === 'analysis' && subpage === 'review' && route[2] === 'history') {
+        reviewSetView('history');
+        refreshHistoryTimelines().catch(alertError);
+      }
       // Deep links: #analysis/review/combined/<id1,id2,...>
       if (panelName === 'analysis' && subpage === 'review' && route[2] === 'combined' && route[3]) {
         const ids = decodeURIComponent(route[3]).split(',').filter(Boolean);
@@ -5712,6 +5717,16 @@ HTML = r"""<!doctype html>
       analyzeBtn.disabled = !hasAnalyzableClips;
       copyBtn.disabled = !hasAnalyzableClips;
       setAnalyzeClientButtonsEnabled(hasAnalyzableClips);
+      if (!allClips.length) {
+        body.className = 'empty';
+        body.innerHTML = chatPromptCard(
+          'The Media Pool has no source clips yet. Import media in Resolve, then ask your assistant to inventory and analyze it:',
+          'Look at my current Resolve project, inventory the media, and analyze the source clips.'
+        );
+        updateMediaPollStatus();
+        renderControlPanels();
+        return;
+      }
       body.className = '';
       const rows = clips.map((clip, index) => {
         // The server normalizes 'succeeded'/'skipped' → 'analyzed' whenever the
@@ -6337,6 +6352,7 @@ HTML = r"""<!doctype html>
         state.resolveMediaStale = false;
         if (res.status === 304) return;
         const payload = await res.json();
+        if (payload && payload.unchanged) return;
         if (!res.ok || payload.success === false) {
           throw new Error(payload.error || res.statusText);
         }
@@ -9642,8 +9658,11 @@ HTML = r"""<!doctype html>
 
     function ensureReviewPanelStateTimer() {
       if (state.review.panelStateTimer) return;
+      state.review.panelStateTick = 0;
       state.review.panelStateTimer = window.setInterval(() => {
         if (document.hidden) return;
+        state.review.panelStateTick = (state.review.panelStateTick + 1) % 5;
+        if (!document.hasFocus() && state.review.panelStateTick !== 0) return;
         if (state.activePanel === 'analysis' && state.activeSubpages.analysis === 'review') {
           pollPanelStateOnce().catch(() => {});
         }
@@ -9739,9 +9758,11 @@ HTML = r"""<!doctype html>
       const active = new Set((activeValues || []).map(value => String(value || '').trim()).filter(Boolean));
       const values = uniqueValues(candidates || [], Array.from(active));
       hidden.value = Array.from(active).join(', ');
-      container.innerHTML = values.map(value => `
-        <button type="button" class="token-pill${active.has(value) ? ' active' : ''}" data-token-value="${escapeHtml(value)}" aria-pressed="${active.has(value) ? 'true' : 'false'}">${escapeHtml(value)}</button>
-      `).join('');
+      container.innerHTML = values.map(value => {
+        const label = String(value).replace(/_/g, ' ');
+        return `
+        <button type="button" class="token-pill${active.has(value) ? ' active' : ''}" data-token-value="${escapeHtml(value)}" aria-pressed="${active.has(value) ? 'true' : 'false'}" title="${escapeHtml(value)}">${escapeHtml(label)}</button>
+      `; }).join('');
       container.querySelectorAll('[data-token-value]').forEach(button => {
         button.addEventListener('click', () => {
           button.classList.toggle('active');
@@ -10361,6 +10382,13 @@ HTML = r"""<!doctype html>
         closeNavDropdowns();
         closeActionMenus();
         setPanel(control.dataset.panelTarget, { subpage: control.dataset.subpageTarget });
+        if (control.dataset.reviewView === 'history') {
+          reviewSetView('history');
+          refreshHistoryTimelines().catch(alertError);
+          if (window.location.hash !== '#analysis/review/history') {
+            window.history.replaceState(null, '', '#analysis/review/history');
+          }
+        }
       });
     });
     document.querySelectorAll('[data-doc]').forEach(control => {
@@ -14053,9 +14081,13 @@ class Handler(BaseHTTPRequestHandler):
         raw = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         etag = '"' + hashlib.md5(raw).hexdigest() + '"'
         if self.headers.get("If-None-Match") == etag:
-            self.send_response(HTTPStatus.NOT_MODIFIED)
+            tiny = json.dumps({"success": True, "unchanged": True, "etag": etag}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(tiny)))
             self.send_header("ETag", etag)
             self.end_headers()
+            self.wfile.write(tiny)
             return
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
