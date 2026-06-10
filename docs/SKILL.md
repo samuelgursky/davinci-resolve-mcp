@@ -671,6 +671,41 @@ only when that mutation is intentional.
 
 ### Timelines
 
+**`edit_engine`** — Evidence-driven edit loops (v2.45.0+): selects assembly,
+tighten, swap.
+
+Every loop is plan → confirm → execute. plan_* actions are dry-run by
+construction: they query the DB-canonical analysis store and return a
+per-decision rationale plus a stored `plan_id` (plans persist under
+`memory/edit_plans/` with a content fingerprint, so a stale plan cannot run
+against a changed project). execute_* actions require a `confirm_token`, run
+under the version-on-mutate hook, and return before/after duration and
+clip-count readback plus `brain_edits` rationale rows.
+
+- `plan_selects(min_select_potential?, max_duration_seconds?, max_shots?,
+  timeline_name?, analysis_root?)` — ranks shots by deep-tier
+  `editorial.select_potential` / best moments (clip-level fallback for
+  standard-analyzed clips), story-spine order.
+  `execute_selects(plan_id)` creates a NEW selects timeline from the plan's
+  per-shot source ranges — additive; nothing existing is touched.
+- `plan_tighten(timeline_name?, target_ratio?, min_pause_seconds?,
+  handle_seconds?)` — dead-air lifts from transcript-gap evidence for each
+  timeline item (items without transcripts are reported in `skipped`, never
+  silently trimmed). `execute_tighten(plan_id)` assembles a tightened
+  VARIANT timeline from the plan's keep ranges — true partial trims; the
+  original timeline is never mutated.
+- `plan_swap(timeline_start_frame | item_name, kind="visual"|"text",
+  limit?)` — alternates for one timeline item via the similarity index,
+  filtered to shots long enough to fill the slot exactly.
+  `execute_swap(plan_id, alternate_index)` replaces the item in place
+  (lift + positioned append at the same record frame) on the
+  version-archived timeline.
+- `list_plans(limit?)` / `get_plan(plan_id)`.
+
+The engine needs the analysis substrate: analyzed clips in the DB (run
+`db_ingest` on older roots), transcripts for tighten, and visual embeddings
+(`build_embeddings(kinds=['visual'])`) for swap.
+
 **`timeline_versioning`** — Version-on-mutate, archive, rollback, brain-edit history (C6).
 
 Every destructive timeline op (compound, captions, ripple delete, gap close,

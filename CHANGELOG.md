@@ -2,6 +2,46 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.45.0
+
+The edit engine — Phase E, the final phase of the analysis + edit-engine
+program. Three evidence-driven loops on one shared skeleton: evidence query
+→ dry-run plan with per-decision rationale → confirm token → versioned
+timeline ops → metric readback → brain_edits rows.
+
+- **Added** a new `edit_engine` MCP tool (compound tool count: 34):
+  - `plan_selects` / `execute_selects` — ranks shots by deep-tier
+    `editorial.select_potential` and best moments (clip-level fallback for
+    standard-analyzed clips), story-spine order, duration budget; execution
+    builds a NEW selects timeline from per-shot source ranges. Additive.
+  - `plan_tighten` / `execute_tighten` — dead-air lifts from transcript-gap
+    evidence per timeline item (no transcript → reported in `skipped`,
+    never silently trimmed); execution assembles a tightened VARIANT
+    timeline from keep ranges (true partial trims via the range-copy
+    kernel) — the original timeline is never mutated.
+  - `plan_swap` / `execute_swap` — alternates for a timeline item via the
+    visual-similarity index, filtered to shots that can fill the slot
+    exactly; execution replaces the item in place (lift + positioned
+    append) on the version-archived timeline.
+  - `list_plans` / `get_plan` — plans persist under `memory/edit_plans/`
+    with content fingerprints; a stale or tampered plan refuses to execute.
+- **Added** `src/utils/edit_engine.py` (DB-only planning/evidence layer) and
+  `tests/live_edit_engine_validation.py` (disposable-project live harness).
+  execute_* actions are confirm-token gated and registered with the
+  version-on-mutate hook (archive + brain_edits come from the same
+  machinery as every other destructive op).
+- **Fixed** frame→shot mapping in the analysis store: frames now fall back
+  to time-containment when a report's shots don't record
+  `frame_indices_used` (commit paths that omit it previously produced no
+  shot-level visual vectors).
+- **Validation**: full offline suite (1118 tests; 13 new). Live pilot on a
+  disposable synthetic-media Resolve project (ffmpeg + spoken audio):
+  20/20 checks — selects timeline assembled (2 decisions), tighten variant
+  removed exactly the 15.2s of transcript dead air while keeping the
+  spoken 4.8s (original untouched), swap replaced the item with a 0.92
+  cosine alternate, brain_edits rationale rows present for all three
+  loops, timeline versions archived.
+
 ## What's New in v2.44.0
 
 Cross-clip entities + bin briefing v2 — Phase D of the analysis +
