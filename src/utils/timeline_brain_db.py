@@ -29,7 +29,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 
 logger = logging.getLogger("resolve-mcp.timeline-brain-db")
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 DB_FILENAME = "timeline_brain.sqlite"
 SOUL_DIRNAME = "_soul"
 
@@ -683,6 +683,38 @@ def _migrate_v9_analysis_core(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS ix_qc_clip ON qc_observations(clip_uuid);
         CREATE INDEX IF NOT EXISTS ix_qc_unresolved
             ON qc_observations(clip_uuid, resolved) WHERE resolved = 0;
+        """
+    )
+
+
+@register_migration(10)
+def _migrate_v10_embeddings(conn: sqlite3.Connection) -> None:
+    """C3 — embeddings for similarity search (Phase C of the analysis program).
+
+    One row per (entity, kind, model). Vectors are float32 BLOBs; similarity
+    is brute-force cosine in the app layer (thousands of rows, not millions).
+    `content_hash` fingerprints the embedded content so re-runs only re-embed
+    entities whose text/frames changed.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS embeddings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type TEXT NOT NULL CHECK(entity_type IN ('clip', 'shot', 'frame', 'segment')),
+            entity_uuid TEXT NOT NULL,
+            embedding_kind TEXT NOT NULL,        -- 'text' | 'visual'
+            model_name TEXT NOT NULL,
+            dimension INTEGER NOT NULL,
+            vector BLOB NOT NULL,
+            content_hash TEXT,
+            computed_at TEXT NOT NULL,
+            UNIQUE(entity_type, entity_uuid, embedding_kind, model_name)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_embeddings_kind
+            ON embeddings(embedding_kind, model_name);
+        CREATE INDEX IF NOT EXISTS ix_embeddings_entity
+            ON embeddings(entity_type, entity_uuid);
         """
     )
 
