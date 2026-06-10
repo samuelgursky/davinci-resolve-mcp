@@ -253,7 +253,10 @@ def _write_subjective(
         value_json = _dumps(value)
         existing = current.get(field_path)
         if existing is not None:
-            if str(existing["value_json"]) == value_json and str(existing["source"]) == source:
+            # Identical value → keep the existing row and its provenance. A
+            # different source re-deriving the same value must not re-attribute
+            # it (a deep pass would otherwise claim every unchanged field).
+            if str(existing["value_json"]) == value_json:
                 continue
             if (
                 str(existing["source"]) == HUMAN_SOURCE
