@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.39.0
+
+Governance enforce mode and actor identity — the staged Phase 3 of the
+Resolve 21 AI-ops work.
+
+- **Added** governance `mode` for the media-creating AI ops (motion deblur,
+  speech generation): `advisory` (default, unchanged — confirm-preview
+  warnings only) or `enforce`, where an over-tier run is blocked with
+  `GOVERNANCE_BLOCKED` before token issuance, naming the exceeded dimensions.
+  Escape hatches: raise the tier, relax the mode, or pass
+  `override_governance=true` to consciously exceed the tier once.
+  `set_ai_governance` accepts `mode` (preset now optional);
+  `get_ai_governance` reports it.
+- **Added** instance-level actor identity (per the recorded concurrency
+  design): each entry point declares itself — `stdio`, `network-sse`,
+  `network-http`, `control-panel`, `batch-cli` — and AI-ops ledger rows,
+  brain edits, and timeline versions now carry `actor` (`<instance>:<pid>`)
+  alongside `initiator`. Schema v8 (additive columns); migration verified
+  against a copy of a real project DB with all rows preserved.
+
 ## What's New in v2.38.0
 
 Busy gate for long DaVinci Resolve operations — the first piece of the
