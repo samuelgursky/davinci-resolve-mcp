@@ -4265,7 +4265,7 @@ def build_host_chat_paths_payload(
     if refusal is not None:
         return refusal
 
-    return {
+    payload: Dict[str, Any] = {
         "success": True,
         "status": "pending_host_analysis",
         "provider": HOST_CHAT_PATHS_PROVIDER,
@@ -4327,6 +4327,21 @@ def build_host_chat_paths_payload(
             "the clip's analysis directory; commit_vision finishes the run."
         ),
     }
+    # Phase B — deep depth: each shot_descriptions entry must additionally
+    # carry the per-shot field groups. The extra keys flow through
+    # commit_vision → canonical blob → subjective_fields rows unchanged.
+    if str(options.get("depth") or "").lower() == "deep":
+        from src.utils import deep_vision as _deep_vision
+
+        payload["deep_shot_schema"] = _deep_vision.deep_shot_schema()
+        payload["deep_schema_reference"] = _deep_vision.DEEP_SHOT_SCHEMA_REFERENCE
+        payload["instructions"] += (
+            " DEEP PASS: in addition to `description`, every shot_descriptions "
+            "entry MUST include the field groups in `deep_shot_schema` (visual, "
+            "content, production, editorial, cuttability, confidence), using the "
+            "enum values verbatim and 'unknown'/null when frame evidence is thin."
+        )
+    return payload
 
 
 def _vision_analysis(record: Dict[str, Any], motion: Dict[str, Any], options: Dict[str, Any], artifacts: Dict[str, Any], capabilities: Dict[str, Any]) -> Dict[str, Any]:
@@ -5096,6 +5111,9 @@ async def execute_plan_async(
         # Same for project_root — caps recording needs it to address the per-
         # project usage DB; falling back to the plan's output_root is fine.
         "project_root": params.get("project_root") or output_root,
+        # Phase B — depth threads into the vision payload builder so deep runs
+        # carry the per-shot field-group schema.
+        "depth": plan.get("depth", DEFAULT_DEPTH),
     }
     keep_frame_artifacts_for_vision = vision_uses_chat_context(options, caps)
     depth = plan.get("depth", DEFAULT_DEPTH)
@@ -5113,6 +5131,37 @@ async def execute_plan_async(
         "clips": [],
     }
     _write_json(os.path.join(output_root, "capabilities.json"), caps)
+
+    # Phase B — deep depth is opt-in with an explicit cost estimate first.
+    # The per-shot field-group pass multiplies vision spend, so the first call
+    # returns the estimate; re-call with confirm_deep=true to run. Caps still
+    # apply downstream — confirmation does not bypass budgets.
+    if (
+        depth == "deep"
+        and vision_uses_chat_context(options, caps)
+        and not _coerce_bool(params.get("confirm_deep") or params.get("confirmDeep"), default=False)
+    ):
+        executing = [
+            clip for clip in plan.get("clips", [])
+            if not (clip.get("skip_execution") and (clip.get("existing_report") or {}).get("path"))
+        ]
+        estimated_frames = sum(int(c.get("analysis_keyframe_budget") or 0) for c in executing)
+        return {
+            "success": True,
+            "status": "confirmation_required",
+            "reason": "deep_depth_cost_estimate",
+            "estimate": {
+                "clip_count": len(executing),
+                "estimated_frames": estimated_frames,
+                "estimated_vision_tokens": estimated_frames * AVG_VISION_TOKENS_PER_FRAME,
+                "tokens_per_frame_assumption": AVG_VISION_TOKENS_PER_FRAME,
+            },
+            "note": (
+                "Deep analysis fills per-shot Visual/Content/Editorial field groups "
+                "and costs vision tokens accordingly. Re-call the same analyze action "
+                "with confirm_deep=true to proceed, or drop depth to 'standard'."
+            ),
+        }
 
     for clip_plan in plan.get("clips", []):
         record = clip_plan["record"]

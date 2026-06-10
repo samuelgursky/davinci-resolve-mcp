@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.41.0"
+VERSION = "2.42.0"
 
 import base64
 import os
@@ -15020,6 +15020,10 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         # C1 — DB-canonical analysis store.
         "db_status",
         "db_ingest",
+        # Phase B — deep shot-level vision tier.
+        "deepen",
+        "commit_shot_vision",
+        "vision_pending_sweep",
     }:
         root = resolve_media_analysis_output_root(
             project_name=project_name,
@@ -15079,6 +15083,42 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         if action == "db_ingest":
             from src.utils import analysis_store
             return analysis_store.ingest_project(project_root)
+        # Phase B — deep shot-level vision tier.
+        if action == "deepen":
+            from src.utils import deep_vision
+            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            if not clip_ref:
+                return _err("deepen requires clip_id, clip_dir, or file_path")
+            raw_indices = p.get("shot_indices") or p.get("shotIndices")
+            if raw_indices is None and p.get("shot_index") is not None:
+                raw_indices = [p.get("shot_index")]
+            return deep_vision.deepen_clip(
+                project_root,
+                clip_ref=clip_ref,
+                shot_indices=[int(i) for i in raw_indices] if raw_indices else None,
+                confirm_token=p.get("confirm_token") or p.get("confirmToken"),
+                job_id=p.get("job_id") or p.get("jobId"),
+            )
+        if action == "commit_shot_vision":
+            from src.utils import deep_vision
+            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            if not clip_ref:
+                return _err("commit_shot_vision requires clip_id, clip_dir, or file_path")
+            return deep_vision.commit_shot_vision(
+                project_root,
+                shots=p.get("shots"),
+                vision_token=p.get("vision_token") or p.get("visionToken"),
+                clip_ref=clip_ref,
+                author=p.get("author") or "host_chat",
+            )
+        if action == "vision_pending_sweep":
+            from src.utils import deep_vision
+            return deep_vision.vision_pending_sweep(
+                project_root,
+                expire=_media_analysis_bool(p.get("expire"), False),
+                max_age_days=p.get("max_age_days") or p.get("maxAgeDays"),
+                reoffer=_media_analysis_bool(p.get("reoffer"), False),
+            )
         if action in {"build_index", "rebuild_index"}:
             return build_analysis_index(project_root, index_path=p.get("index_path") or p.get("indexPath"))
         if action == "index_status":
@@ -15490,6 +15530,9 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "list_corrections",
         "db_status",
         "db_ingest",
+        "deepen",
+        "commit_shot_vision",
+        "vision_pending_sweep",
         "get_caps",
         "set_caps_preset",
         "get_usage",
