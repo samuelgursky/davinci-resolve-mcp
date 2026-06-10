@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.43.0"
+VERSION = "2.44.0"
 
 import base64
 import os
@@ -15027,6 +15027,12 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         # Phase C — embeddings + similarity.
         "build_embeddings",
         "find_similar",
+        # Phase D — cross-clip entities + bin briefing v2.
+        "detect_entities",
+        "commit_entities",
+        "list_entities",
+        "prepare_bin_briefing",
+        "commit_bin_summary",
     }:
         root = resolve_media_analysis_output_root(
             project_name=project_name,
@@ -15149,6 +15155,38 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 kind=p.get("kind") or "text",
                 entity_types=entity_types,
                 limit=int(p.get("limit") or 10),
+            )
+        # Phase D — cross-clip entities + bin briefing v2.
+        if action == "detect_entities":
+            from src.utils import entities
+            return entities.detect_entities(
+                project_root,
+                threshold=float(p.get("threshold") or entities.DEFAULT_CLUSTER_THRESHOLD),
+                min_cluster_size=int(p.get("min_cluster_size") or p.get("minClusterSize") or entities.DEFAULT_MIN_CLUSTER_SIZE),
+                max_clusters=int(p.get("max_clusters") or p.get("maxClusters") or 24),
+                job_id=p.get("job_id") or p.get("jobId"),
+            )
+        if action == "commit_entities":
+            from src.utils import entities
+            return entities.commit_entities(
+                project_root,
+                entities_payload=p.get("entities"),
+                vision_token=p.get("vision_token") or p.get("visionToken"),
+                author=p.get("author") or "host_chat",
+            )
+        if action == "list_entities":
+            from src.utils import entities
+            return entities.list_entities(project_root, kind=p.get("kind"))
+        if action == "prepare_bin_briefing":
+            from src.utils import entities
+            return entities.prepare_bin_briefing(project_root)
+        if action == "commit_bin_summary":
+            from src.utils import entities
+            return entities.commit_bin_summary(
+                project_root,
+                briefing=p.get("briefing") or p.get("summary"),
+                briefing_token=p.get("briefing_token") or p.get("briefingToken"),
+                author=p.get("author") or "host_chat",
             )
         if action in {"build_index", "rebuild_index"}:
             return build_analysis_index(project_root, index_path=p.get("index_path") or p.get("indexPath"))
@@ -15566,6 +15604,11 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "vision_pending_sweep",
         "build_embeddings",
         "find_similar",
+        "detect_entities",
+        "commit_entities",
+        "list_entities",
+        "prepare_bin_briefing",
+        "commit_bin_summary",
         "get_caps",
         "set_caps_preset",
         "get_usage",
