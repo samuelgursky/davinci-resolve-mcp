@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.43.0
+
+Embeddings + similarity search — Phase C of the analysis + edit-engine
+program. "Find clips/shots like this," locally, with no vendor token cost.
+
+- **Added** `src/utils/embeddings.py` and schema v10 (`embeddings` table:
+  one float32 vector per entity/kind/model, with content hashes so re-runs
+  only re-embed what changed). Brute-force cosine — numpy when present.
+- **Added** `media_analysis` actions `build_embeddings` (idempotent; clip
+  summaries, shot descriptions + deep field groups, transcript segments,
+  sampled frames with per-shot mean vectors) and `find_similar` (query by
+  free text, clip, or shot; `kind="text"|"visual"`; free-text visual queries
+  go through the CLIP text encoder).
+- **Added** backend detection, never installation (the whisper pattern):
+  text = ollama `nomic-embed-text` (serving probe) or sentence-transformers;
+  visual = open_clip ViT-B-32. Capabilities and the Diagnostics → Tools page
+  list availability with install guidance.
+- **Added** a `Semantic` toggle on the panel's Review search (shown only
+  when a text backend is detected) backed by `/api/search/semantic`, which
+  returns rows in the existing search-card shape.
+- **Validation**: full offline suite (1095 tests; 14 new, backends mocked).
+  Live on the 2026-05-17 sample root: 54 text vectors in 1.2s via ollama
+  with correct top hits for three editorial queries; 27 CLIP vectors with
+  "cracked broken windshield glass" ranking the shattered-windshield frame
+  first; panel endpoint verified and screenshots regenerated.
+
 ## What's New in v2.42.0
 
 Deep shot-level vision tier — Phase B of the analysis + edit-engine program.

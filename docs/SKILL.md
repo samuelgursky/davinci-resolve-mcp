@@ -495,8 +495,24 @@ Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
 `cleanup_artifacts`, `db_status`, `db_ingest`, `get_panel_state`,
 `set_panel_state`, `session_start_context`, `update_clip_field`,
 `update_shot_field`, `get_field_history`, `revert_field`,
-`list_corrections`, `deepen`, `commit_shot_vision`, and
-`vision_pending_sweep`.
+`list_corrections`, `deepen`, `commit_shot_vision`, `vision_pending_sweep`,
+`build_embeddings`, and `find_similar`.
+
+**Embeddings + similarity (v2.43.0+).** Local-compute semantic search; no
+vendor tokens, so nothing here touches the caps ledger. Backends are
+detected, never installed (capabilities lists them with install guidance):
+text = ollama serving `nomic-embed-text` or sentence-transformers; visual =
+open_clip (ViT-B-32, needs torch).
+- `build_embeddings(kinds=["text","visual"]?, clip_id?)` — idempotent;
+  embeds clip summaries, shot descriptions (+ deep field groups), transcript
+  segments, and sampled frames (per-shot visual vector = mean of its
+  frames'). Only re-embeds entities whose content changed.
+- `find_similar(text=… | clip_id=… | clip_id+shot_index, kind="text"|"visual",
+  entity_types?, limit?)` — brute-force cosine over the project's vectors.
+  Free-text visual queries use the CLIP text encoder ("cracked windshield"
+  finds the frame). Results carry scores plus clip/shot/segment context.
+The panel search box gains a `Semantic` toggle when a text backend is
+detected. Vectors live in the per-project DB (schema v10).
 
 **Deep shot-level vision tier (v2.42.0+).** Opt-in, estimate-first. Two
 entry points share one per-shot schema (Visual / Content / Production /
