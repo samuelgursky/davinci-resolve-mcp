@@ -1032,11 +1032,14 @@ def _consume_confirm_token(*, action: str, params: Optional[Dict[str, Any]]) -> 
     rec = _CONFIRM_TOKENS.pop(token, None)  # one-time use
     if rec is None:
         return _err(
-            "confirm_token is invalid or expired",
+            "confirm_token is invalid, expired, or was issued by a different "
+            "server instance (tokens are valid only on the instance that "
+            "issued them — e.g. a stdio-server token is not honored by the "
+            "networked server).",
             code="CONFIRM_TOKEN_INVALID",
             category="destructive_blocked",
             retryable=False,
-            remediation=f"Re-call {action} without confirm_token to receive a fresh token.",
+            remediation=f"Re-call {action} without confirm_token on this instance to receive a fresh token.",
         )
     if rec.get("action") != action:
         return _err(
