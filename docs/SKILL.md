@@ -491,8 +491,24 @@ Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
 `publish_clip_metadata`, `commit_vision`, `summarize`, `get_report`,
 `build_index`, `index_status`, `query_index`, `start_batch_job`,
 `run_batch_job_slice`, `batch_job_status`, `list_batch_jobs`,
-`cancel_batch_job`, `resume_batch_job`, `review_timeline_markers`, and
-`cleanup_artifacts`.
+`cancel_batch_job`, `resume_batch_job`, `review_timeline_markers`,
+`cleanup_artifacts`, `db_status`, `db_ingest`, `get_panel_state`,
+`set_panel_state`, `session_start_context`, `update_clip_field`,
+`update_shot_field`, `get_field_history`, `revert_field`, and
+`list_corrections`.
+
+**DB-canonical analysis store (v2.41.0+).** The per-project SQLite DB
+(`_soul/timeline_brain.sqlite`, schema v9+) is the source of truth for clip
+analysis; `analysis.json` is a derived export written in lockstep. Analysis
+runs write rows first (clips, shots, per-field subjective provenance,
+transcript segments, sampled frames, QC observations) and then export the
+JSON. Human corrections recorded via `update_clip_field` / `update_shot_field`
+live as row-level provenance and always survive re-analysis. Readers
+(panel API, exports) load DB-first and fall back to `analysis.json` for
+reports that predate v9. `db_status` reports schema version + row counts;
+`db_ingest` migrates an existing project's JSON reports (and
+`corrections.json` sidecars) into the DB — run it once on older analysis
+roots.
 The tool never installs
 dependencies and validates that outputs stay under
 `davinci-resolve-mcp-analysis` project roots rather than beside source media.

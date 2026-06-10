@@ -2,6 +2,46 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.41.0
+
+DB-canonical clip analysis (C1) — Phase A of the analysis + edit-engine
+program. The per-project SQLite DB is now the source of truth for clip
+analysis; `analysis.json` becomes a derived export written in lockstep.
+
+- **Added** schema v9 to the per-project timeline-brain DB: `clips`,
+  `clip_aliases`, `analysis_reports` (canonical full payload), `shots`,
+  `subjective_fields` + `field_changelog` (per-field provenance),
+  `transcript_segments`, `frames`, and `qc_observations`.
+- **Added** `src/utils/analysis_store.py`: transactional ingest, export with
+  human-correction overlay (human rows always win and survive re-analysis),
+  alias-based clip lookup, shot ids stable under one-second boundary jitter,
+  and a round-trip guard verified against a real sample analysis root.
+- **Added** `media_analysis` actions `db_status` (schema version + row
+  counts) and `db_ingest` (one-shot migration of existing JSON reports and
+  `corrections.json` sidecars into the DB).
+- **Changed** the analysis write path: `execute_plan` and `commit_vision`
+  write DB rows first, then export the JSON. Panel clip/shot endpoints read
+  DB-first with JSON fallback for pre-v9 reports and job-linked report dirs.
+- **Changed** `update_clip_field` / `update_shot_field` / `revert_field` to
+  mirror corrections into the DB as row-level provenance (the
+  `corrections.json` sidecar remains for compatibility).
+- **Fixed** eight V2 actions that were unreachable from MCP dispatch since
+  v2.24.0 (`get_panel_state`, `set_panel_state`, `session_start_context`,
+  `update_shot_field`, `update_clip_field`, `get_field_history`,
+  `revert_field`, `list_corrections`): they were checked inside the
+  project-root dispatch block but missing from its membership set. The
+  control panel proxied to the helpers directly, which masked it.
+- **Fixed** the action-list drift guard to inspect async tool functions
+  (media_analysis had drifted unchecked) and to fail on actions that are
+  unreachable inside membership blocks — the exact class above. Four
+  reachable-but-unadvertised actions (`coverage_report`,
+  `get_resolve_ai_usage`, `get_ai_governance`, `set_ai_governance`) are now
+  listed in the unknown-action error.
+- **Validation**: full offline suite (1066 tests; 12 new), round-trip guard
+  on the real 2026-05-17 sample root, and a live headless pipeline run on
+  synthetic media verifying rows-then-export parity, row-level corrections,
+  and DB-first panel reads.
+
 ## What's New in v2.40.0
 
 Control panel UX overhaul + docs refresh, from a full live audit of every
