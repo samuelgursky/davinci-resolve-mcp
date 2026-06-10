@@ -29,7 +29,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 
 logger = logging.getLogger("resolve-mcp.timeline-brain-db")
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 DB_FILENAME = "timeline_brain.sqlite"
 SOUL_DIRNAME = "_soul"
 
@@ -462,6 +462,20 @@ def _migrate_v7_resolve_ai_op_usage(conn: sqlite3.Connection) -> None:
             ON resolve_ai_op_usage(day_bucket);
         """
     )
+
+
+@register_migration(8)
+def _migrate_v8_actor_identity(conn: sqlite3.Connection) -> None:
+    """Instance-level actor provenance (design decision 2026-06-09).
+
+    Stamps which process kind performed an op — "<instance>:<pid>" where
+    instance is stdio / network-sse / network-http / control-panel /
+    batch-cli. Complements `initiator` (auto vs manual) on the versioning
+    tables: initiator says WHY a row exists, actor says WHO wrote it.
+    """
+    for table in ("resolve_ai_op_usage", "brain_edits", "timeline_versions"):
+        if not _column_exists(conn, table, "actor"):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN actor TEXT")
 
 
 @register_migration(5)

@@ -694,7 +694,13 @@ The two media-creating ops also have **soft governance tiers**
 deblur/speech runs, bytes, and render time. It is advisory — the confirm dialog
 warns when near/over the tier but never blocks (the ops are confirm-gated).
 Inspect/set with `media_analysis(action="get_ai_governance")` and
-`media_analysis(action="set_ai_governance", preset=…, overrides={...})`; the AI
+`media_analysis(action="set_ai_governance", preset=…, mode=…, overrides={...})`.
+Governance `mode` is `advisory` by default (preview warnings only); `enforce`
+blocks an over-tier run with `GOVERNANCE_BLOCKED` until the tier is raised, the
+mode is relaxed, or the op is re-called with `override_governance=true`. Ledger
+rows, brain edits, and timeline versions record the acting instance
+(`stdio` / `network-sse` / `network-http` / `control-panel` / `batch-cli` + pid)
+in an `actor` field; the AI
 Console's Governance section offers a tier picker + consumption gauges.
 
 The caps layer:

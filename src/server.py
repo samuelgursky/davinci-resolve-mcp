@@ -84,7 +84,7 @@ from src.utils.media_analysis import (
     summarize_reports as summarize_media_analysis_reports,
 )
 from src.utils.sync_detection import detect_sync_events_for_records as detect_media_sync_events
-from src.utils import resolve_busy
+from src.utils import actor_identity, resolve_busy
 from src.utils.resolve_busy import long_resolve_op
 from src.utils.media_analysis_jobs import (
     MEDIA_EXTENSIONS,
@@ -714,6 +714,54 @@ def _ai_governance_check(op: str) -> Dict[str, Any]:
         )
     except Exception:
         return {"applies": False}
+
+
+_AI_GOVERNANCE_MODES = ("advisory", "enforce")
+
+
+def _ai_governance_mode() -> str:
+    try:
+        raw = str(_read_media_analysis_preferences().get("resolve_ai_governance_mode") or "").strip().lower()
+        return raw if raw in _AI_GOVERNANCE_MODES else "advisory"
+    except Exception:
+        return "advisory"
+
+
+def _ai_governance_gate(op: str, p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Hard gate for a governed AI render op when governance mode is 'enforce'.
+
+    Returns None to proceed (advisory mode, within tier, or explicit
+    override_governance=True), otherwise a destructive_blocked error naming
+    the exceeded dimensions. Checked before token issuance so the agent
+    learns about the block without burning a confirm round-trip.
+    """
+    if _ai_governance_mode() != "enforce":
+        return None
+    if p.get("override_governance") or p.get("overrideGovernance"):
+        return None
+    check = _ai_governance_check(op)
+    if not check.get("applies") or not check.get("exceeded"):
+        return None
+    return _err(
+        f"Governance tier '{check.get('tier')}' blocks this {op} run: "
+        + " ".join(check.get("warnings") or ["over threshold."]),
+        code="GOVERNANCE_BLOCKED",
+        category="destructive_blocked",
+        retryable=False,
+        remediation=(
+            "Raise the tier or thresholds via media_analysis(action='set_ai_governance'), "
+            "switch governance mode back to 'advisory', or re-call with override_governance=true "
+            "to consciously exceed the tier this once."
+        ),
+        state={
+            "op": op,
+            "mode": "enforce",
+            "tier": check.get("tier"),
+            "usage": check.get("usage"),
+            "projected": check.get("projected"),
+            "thresholds": check.get("thresholds"),
+        },
+    )
 
 
 def _destructive_preference_provider(key: str) -> Any:
@@ -13001,6 +13049,9 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
             return _err("generate_speech requires speech_generation_settings with a 'TextInput' string. "
                         "Optional keys: VoiceModel, CustomVoiceFile, Speed, Variation, Pitch, GenerationID, Filename, AddToTimeline, AudioTrack.")
         timecode = _first_param(p, "timecode", default="") or ""
+        gate = _ai_governance_gate("generate_speech", p)
+        if gate:
+            return gate
         if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
             return _issue_confirm_token(
                 action="project_settings.generate_speech",
@@ -14093,6 +14144,9 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         if missing:
             return missing
         deblur = _first_param(p, "deblur_option", "deblurOption", default=None) or {}
+        gate = _ai_governance_gate("remove_motion_blur", p)
+        if gate:
+            return gate
         if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
             return _issue_confirm_token(
                 action="folder.remove_motion_blur",
@@ -14428,6 +14482,9 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if missing:
             return missing
         deblur = _first_param(p, "deblur_option", "deblurOption", default=None) or {}
+        gate = _ai_governance_gate("remove_motion_blur", p)
+        if gate:
+            return gate
         if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
             return _issue_confirm_token(
                 action="media_pool_item.remove_motion_blur",
@@ -14611,8 +14668,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       set_caps_preset(preset, overrides?) -> {success, preset, overrides} — preset is minimal | standard | generous | unlimited. Overrides is a dict of {field: int|"unlimited"} that wins over the preset.
       get_usage(scope?, scope_key?, clip_id?, job_id?) -> {scope, usage} — raw usage rollup for one scope (clip | job | day).
       get_resolve_ai_usage(session_only?, op?, limit?) -> {summary, recent} — ledger of Resolve 21 local AI ops (audio classification, IntelliSearch, slate, motion-deblur, speech). Tracks invocations, wall-clock, and files/bytes created by the two media-creating ops. Separate from get_caps/get_usage (those meter Claude-side tokens; these ops don't spend them).
-      get_ai_governance() -> {tier, thresholds, usage, tiers_available} — soft governance tier (off|lenient|standard|strict) for the media-creating AI ops vs this session's render usage. Advisory; surfaced in the confirm preview + panel, never blocks.
-      set_ai_governance(preset, overrides?) -> {success, tier, overrides} — set the governance tier. Overrides keys: deblur_runs, speech_runs, render_bytes, render_wall_clock_ms (int or "unlimited").
+      get_ai_governance() -> {tier, mode, thresholds, usage, tiers_available} — governance tier (off|lenient|standard|strict) for the media-creating AI ops vs this session's render usage. mode is advisory (default; preview warnings only) or enforce (over-tier runs are blocked).
+      set_ai_governance(preset?, mode?, overrides?) -> {success, tier, mode, overrides} — set the tier, the mode (advisory|enforce), and/or overrides (deblur_runs, speech_runs, render_bytes, render_wall_clock_ms; int or "unlimited"). In enforce mode a blocked run returns GOVERNANCE_BLOCKED; pass override_governance=true on the op to consciously exceed the tier once.
       resolve_output_root(analysis_root?, source_paths?) -> {project_root}
       plan(target, depth?, analysis_root?, transcription?, vision?, dry_run?) -> {clips, artifacts}
       analyze_file(path|file_path, dry_run?, session_only?, persist?) -> {clips, manifest}
@@ -14795,19 +14852,32 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 project_root=project_root, session_id=_AI_LEDGER_SESSION_ID,
                 preset=_ai_governance_preset(), overrides=_ai_governance_overrides(),
             )
-            return {"success": True, "session_id": _AI_LEDGER_SESSION_ID, **st}
+            return {"success": True, "session_id": _AI_LEDGER_SESSION_ID, "mode": _ai_governance_mode(), **st}
         except Exception as exc:
             return _err(f"{type(exc).__name__}: {exc}")
     if action == "set_ai_governance":
         preset = (p.get("preset") or "").strip().lower()
-        if preset not in _resolve_ai_governance.VALID_TIERS:
+        mode = (p.get("mode") or "").strip().lower()
+        if not preset and not mode and not isinstance(p.get("overrides"), dict):
+            return _err("set_ai_governance requires at least one of: preset, mode, overrides")
+        if preset and preset not in _resolve_ai_governance.VALID_TIERS:
             return _err(f"unknown tier '{preset}'. Valid: {sorted(_resolve_ai_governance.VALID_TIERS)}")
+        if mode and mode not in _AI_GOVERNANCE_MODES:
+            return _err(f"unknown mode '{mode}'. Valid: {list(_AI_GOVERNANCE_MODES)}")
         prefs = _read_media_analysis_preferences()
-        prefs["resolve_ai_governance_preset"] = preset
+        if preset:
+            prefs["resolve_ai_governance_preset"] = preset
+        if mode:
+            prefs["resolve_ai_governance_mode"] = mode
         if isinstance(p.get("overrides"), dict):
             prefs["resolve_ai_governance_overrides"] = p["overrides"]
         _write_media_analysis_preferences(prefs)
-        return {"success": True, "tier": preset, "overrides": prefs.get("resolve_ai_governance_overrides") or {}}
+        return {
+            "success": True,
+            "tier": prefs.get("resolve_ai_governance_preset") or _resolve_ai_governance.DEFAULT_TIER,
+            "mode": prefs.get("resolve_ai_governance_mode") or "advisory",
+            "overrides": prefs.get("resolve_ai_governance_overrides") or {},
+        }
     if action == "set_caps_preset":
         preset = (p.get("preset") or "").strip().lower()
         from src.utils import analysis_caps as _ac
@@ -21366,6 +21436,7 @@ if __name__ == "__main__":
             del sys.argv[_i:_i + 2]
     if transport in ("sse", "streamable-http"):
         from src.utils.mcp_transport import run_networked
+        actor_identity.set_instance("network-sse" if transport == "sse" else "network-http")
         logger.info(f"Starting DaVinci Resolve MCP Server ({transport} transport)")
         run_networked(mcp, transport)
         sys.exit(0)

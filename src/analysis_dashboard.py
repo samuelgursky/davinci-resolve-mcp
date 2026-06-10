@@ -14678,6 +14678,8 @@ def _warm_inventory_cache(project_root: str) -> None:
 
 
 def main() -> None:
+    from src.utils import actor_identity
+    actor_identity.set_instance("control-panel")
     args = parse_args()
     state = DashboardState(args.project_name, args.project_id, args.analysis_root)
     Handler.state = state

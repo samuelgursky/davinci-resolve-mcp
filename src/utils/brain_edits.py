@@ -24,7 +24,7 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from src.utils import timeline_brain_db
+from src.utils import actor_identity, timeline_brain_db
 
 logger = logging.getLogger("resolve-mcp.brain-edits")
 
@@ -220,14 +220,15 @@ def log_brain_edit(
                 analysis_run_id, timeline_before, timeline_after, edit_type,
                 tool_name, action_name, target_metric, metric_direction,
                 before_value, after_value, rationale, params_json,
-                result_summary_json, created_at, initiator
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                result_summary_json, created_at, initiator, actor
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 analysis_run_id, timeline_before, timeline_after, edit_type,
                 tool_name, action_name, target_metric, metric_direction,
                 before_value, after_value, rationale, params_json,
                 result_json, created_at, initiator,
+                actor_identity.actor_string(),
             ),
         )
         row_id = cursor.lastrowid

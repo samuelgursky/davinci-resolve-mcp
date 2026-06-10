@@ -22,7 +22,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from src.utils import timeline_brain_db
+from src.utils import actor_identity, timeline_brain_db
 
 logger = logging.getLogger("resolve-mcp.resolve-ai-ledger")
 
@@ -64,6 +64,7 @@ def record_op(
     output_path: Optional[str] = None,
     output_bytes: Optional[int] = None,
     error: Optional[str] = None,
+    actor: Optional[str] = None,
 ) -> Optional[int]:
     """Persist one ledger row. Returns the row id, or None on any failure.
 
@@ -81,8 +82,8 @@ def record_op(
                 INSERT INTO resolve_ai_op_usage(
                     op, op_class, clip_id, session_id, success, wall_clock_ms,
                     output_path, output_bytes, extra_required, error,
-                    occurred_at, day_bucket
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    occurred_at, day_bucket, actor
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     op, meta["op_class"], clip_id, session_id, 1 if success else 0,
@@ -90,6 +91,7 @@ def record_op(
                     int(output_bytes) if output_bytes is not None else None,
                     meta["extra_required"], error,
                     _iso(now), _day_bucket(now),
+                    actor or actor_identity.actor_string(),
                 ),
             )
             return cursor.lastrowid
@@ -177,7 +179,7 @@ def get_usage(
         rows = conn.execute(
             f"""
             SELECT op, op_class, clip_id, session_id, success, wall_clock_ms,
-                   output_path, output_bytes, extra_required, error, occurred_at
+                   output_path, output_bytes, extra_required, error, occurred_at, actor
             FROM resolve_ai_op_usage{where}
             ORDER BY id DESC LIMIT ?
             """,

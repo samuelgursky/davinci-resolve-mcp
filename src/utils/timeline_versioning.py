@@ -32,7 +32,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.utils import timeline_brain_db
+from src.utils import actor_identity, timeline_brain_db
 
 logger = logging.getLogger("resolve-mcp.timeline-versioning")
 
@@ -159,8 +159,8 @@ def archive_current_timeline(
             """
             INSERT INTO timeline_versions(
                 timeline_name, version, created_at, analysis_run_id,
-                archived_timeline_name, archived_bin_path, reason, initiator
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                archived_timeline_name, archived_bin_path, reason, initiator, actor
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 working_name,
@@ -171,6 +171,7 @@ def archive_current_timeline(
                 _archive_bin_path(media_pool),
                 reason,
                 initiator,
+                actor_identity.actor_string(),
             ),
         )
         row_id = cursor.lastrowid
