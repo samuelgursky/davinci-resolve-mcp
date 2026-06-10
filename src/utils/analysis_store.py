@@ -473,7 +473,25 @@ def ingest_report(
                 ),
             )
 
-        # Sampled frames.
+        # Sampled frames. Shot mapping uses frame_indices_used when present,
+        # with a time-containment fallback (some commit paths don't record
+        # which frame indices fed which shot).
+        shot_intervals: List[Tuple[float, float, str]] = []
+        for entry in shot_entries:
+            if not isinstance(entry, dict):
+                continue
+            s, e = entry.get("time_seconds_start"), entry.get("time_seconds_end")
+            if isinstance(s, (int, float)) and isinstance(e, (int, float)):
+                shot_intervals.append((float(s), float(e), shot_uuid_for(clip_uuid, s, e)))
+
+        def _shot_for_time(t: Any) -> Optional[str]:
+            if not isinstance(t, (int, float)):
+                return None
+            for s, e, uuid_ in shot_intervals:
+                if s <= float(t) < e:
+                    return uuid_
+            return None
+
         conn.execute("DELETE FROM frames WHERE clip_uuid = ?", (clip_uuid,))
         keyframes = motion.get("analysis_keyframes") if isinstance(motion.get("analysis_keyframes"), list) else []
         for kf in keyframes:
@@ -492,7 +510,7 @@ def ingest_report(
                 """,
                 (
                     clip_uuid,
-                    frame_to_shot.get(frame_index),
+                    frame_to_shot.get(frame_index) or _shot_for_time(kf.get("time_seconds")),
                     frame_index,
                     kf.get("time_seconds") if isinstance(kf.get("time_seconds"), (int, float)) else None,
                     kf.get("frame_path") or kf.get("path"),
