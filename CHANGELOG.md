@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.38.0
+
+Busy gate for long DaVinci Resolve operations — the first piece of the
+concurrency design for the stdio + networked two-instance setup.
+
+- **Added** cross-process registration for long synchronous Resolve calls
+  (timeline export/import, scene-cut detection, subtitle generation,
+  Dolby Vision analysis, folder/clip audio transcription). A tool call that
+  arrives while one is running now waits up to 5 seconds and then returns a
+  structured `RESOLVE_BUSY` error (new `busy` category, retryable, with
+  `state.busy_with` and `state.age_seconds`) instead of hanging silently
+  inside the scripting bridge. Stale registrations from crashed operations
+  are ignored automatically; an operation never gates its own thread.
+- Design decisions recorded: single-editor/multi-client is the supported
+  concurrency target; confirm tokens stay per-instance; actor identity is
+  deferred to the governance phase.
+
 ## What's New in v2.37.3
 
 Deep-audit fixes, rounds two and three: agent-facing action discovery,
