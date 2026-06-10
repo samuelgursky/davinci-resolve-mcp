@@ -30,6 +30,11 @@ Every release bump must update all version surfaces:
 - README current stats or latest-release summary when they changed
 - `CHANGELOG.md` latest release entry
 - `docs/SKILL.md` when tool discovery, examples, or behavior changed
+- `docs/guides/control-panel.md` when the control panel UI changed, plus
+  regenerated screenshots: start the panel against a project with analysis
+  data, then run `venv/bin/python scripts/regen_panel_screenshots.py`.
+  The `tests.test_panel_docs_drift` guard fails the suite (and the publish
+  workflow) when the guide drifts from the panel's navigation or screenshots.
 - Git tag, e.g. `v2.4.1`
 - GitHub Release notes
 
@@ -43,11 +48,17 @@ Always run static checks before release:
 ```bash
 venv/bin/python tests/test_import.py
 venv/bin/python scripts/audit_api_parity.py
+venv/bin/python -m unittest tests.test_static_undefined_names tests.test_action_list_drift tests.test_panel_docs_drift
 node bin/davinci-resolve-mcp.mjs --help
 node bin/davinci-resolve-mcp.mjs --version
 npm pack --dry-run
 git diff --check
 ```
+
+The three drift guards (undefined names in `src/`, tool action lists vs
+dispatch, control-panel guide vs panel navigation/screenshots) also run in the
+`Publish npm package` workflow on every `v*` tag, so a stale doc or drifted
+action list fails the publish — fix the drift rather than bypassing the gate.
 
 Run focused unit tests for the changed surface. For recent timeline/marker
 helpers, this usually includes:
