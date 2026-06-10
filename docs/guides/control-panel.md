@@ -82,7 +82,10 @@ transcripts once the search index is built. When a local text-embedding
 backend is detected (ollama with `nomic-embed-text`, or
 sentence-transformers), a `Semantic` toggle appears next to the search box —
 it searches by meaning instead of exact words, ranking clips, shots, and
-transcript lines by similarity to your query.
+transcript lines by similarity to your query. Once cross-clip entity
+detection has run (`detect_entities` + a one-frame-per-cluster confirmation
+in chat), a `Recurring across this bin` card lists the labeled people,
+places, and objects with their shot counts.
 
 ### Clip detail
 

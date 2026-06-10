@@ -2114,6 +2114,30 @@ HTML = r"""<!doctype html>
       margin-bottom: var(--space-3);
       flex-wrap: wrap;
     }
+    .review-semantic-toggle {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+      white-space: nowrap;
+    }
+    .review-entities {
+      margin-bottom: var(--space-3);
+      padding: var(--space-2) var(--space-3);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+    }
+    .review-entities-title {
+      color: var(--text-secondary);
+      font-size: var(--ops-text-label);
+      margin-bottom: 6px;
+    }
+    .review-entities-chips {
+      display: flex;
+      gap: var(--space-2);
+      flex-wrap: wrap;
+    }
     .review-bin-filters input[type="search"] {
       flex: 1 1 280px;
       min-width: 200px;
@@ -4077,6 +4101,7 @@ HTML = r"""<!doctype html>
           </div>
         </div>
         <div id="reviewBinSummary" class="review-bin-summary">Loading analyzed clips…</div>
+        <div id="reviewEntitiesCard" class="review-entities" style="display:none"></div>
         <div id="reviewBinGrid" class="review-grid"></div>
         <div id="reviewSearchResults" class="review-search-results" style="display:none"></div>
       </div>
@@ -8093,6 +8118,22 @@ HTML = r"""<!doctype html>
       renderReviewBin();
       // Coverage runs in parallel — failures here must not block the clip grid.
       refreshReadinessCard().catch(() => {});
+      refreshEntitiesCard().catch(() => {});
+    }
+
+    // Recurring people/places/props detected across the bin (Phase D).
+    // Hidden until at least one labeled entity exists.
+    async function refreshEntitiesCard() {
+      const card = $('reviewEntitiesCard');
+      if (!card) return;
+      const data = await api('/api/entities').catch(() => null);
+      const labeled = (data?.entities || []).filter(e => e.label);
+      if (!labeled.length) { card.style.display = 'none'; return; }
+      card.style.display = '';
+      card.innerHTML = `<div class="review-entities-title">Recurring across this bin</div>
+        <div class="review-entities-chips">${labeled.map(e =>
+          `<span class="review-chip" title="${escapeHtml(e.description || '')}">${escapeHtml(e.label)} · ${e.kind || 'unknown'} · ${e.shot_count || e.cluster_size || 0} shots</span>`
+        ).join('')}</div>`;
     }
 
     async function refreshReadinessCard() {
@@ -14385,6 +14426,14 @@ class Handler(BaseHTTPRequestHandler):
             if payload.get("success") and payload.get("results"):
                 payload["results"] = _v2_enrich_search_results(self.state.project_root, payload["results"])
             self._json(payload)
+            return
+        if path == "/api/entities":
+            try:
+                from src.utils import entities as _entities
+
+                self._json(_entities.list_entities(self.state.project_root))
+            except Exception as exc:  # noqa: BLE001 — panel reads fail soft
+                self._json({"success": False, "error": f"{type(exc).__name__}: {exc}"})
             return
         if path == "/api/search/semantic":
             q = (query.get("q") or [""])[0]
