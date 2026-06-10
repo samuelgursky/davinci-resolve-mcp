@@ -2,6 +2,33 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.44.0
+
+Cross-clip entities + bin briefing v2 — Phase D of the analysis +
+edit-engine program. Recurring people/places/props found by clustering the
+visual embeddings, confirmed with one vision call per cluster.
+
+- **Added** schema v11 (`entities` + `entity_appearances`) and
+  `src/utils/entities.py`: union-find clustering over the v10 CLIP frame
+  vectors (cosine threshold, no new deps), representative-frame selection,
+  ghost pruning across re-runs (labeled entities persist), and a
+  detection-state stash so `entity_index` always resolves against the exact
+  ordering the payload was issued with.
+- **Added** `media_analysis` actions: `detect_entities` (clusters + deferred
+  one-frame-per-cluster confirmation payload, caps pre-checked),
+  `commit_entities` (kind/label/description with conservative-label rules;
+  `merge_with` collapses duplicate clusters), `list_entities`,
+  `prepare_bin_briefing` (entities + per-clip summaries, text-only), and
+  `commit_bin_summary` (host-synthesized briefing written above the v2.0
+  aggregate in `memory/bin_summary.md`).
+- **Added** a "Recurring across this bin" card on the panel's Review page
+  (`/api/entities`), shown once labeled entities exist.
+- **Validation**: full offline suite (1105 tests; 10 new). Live on the real
+  sample root: 3 clusters detected from 16 CLIP vectors; host-chat
+  confirmation labeled the shattered-windshield POV and the white rental
+  sedan and merged the sedan's two clusters; bin briefing synthesized and
+  committed; panel card verified and screenshots regenerated.
+
 ## What's New in v2.43.0
 
 Embeddings + similarity search — Phase C of the analysis + edit-engine

@@ -496,7 +496,27 @@ Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
 `set_panel_state`, `session_start_context`, `update_clip_field`,
 `update_shot_field`, `get_field_history`, `revert_field`,
 `list_corrections`, `deepen`, `commit_shot_vision`, `vision_pending_sweep`,
-`build_embeddings`, and `find_similar`.
+`build_embeddings`, `find_similar`, `detect_entities`, `commit_entities`,
+`list_entities`, `prepare_bin_briefing`, and `commit_bin_summary`.
+
+**Cross-clip entities + bin briefing v2 (v2.44.0+).** Recurring
+people/places/props across a project's media, found cheaply and confirmed
+with ONE vision call per cluster:
+- `detect_entities(threshold?, min_cluster_size?)` clusters the v10 CLIP
+  frame vectors (build visual embeddings first), writes provisional entity
+  rows + appearances, and returns a deferred payload with one
+  representative frame per cluster (caps pre-checked, estimate inlined).
+  The host chat reads those frames and calls
+  `commit_entities(entities=[{entity_index, kind, label, description,
+  confidence, merge_with?}], vision_token)` — conservative labels only
+  (describe what's visible; never guess names). `merge_with` collapses
+  clusters that show the same entity.
+- `list_entities` returns labeled entities with per-clip/shot appearances;
+  the panel's Review page shows a "Recurring across this bin" card.
+- `prepare_bin_briefing` returns entities + per-clip summaries (text-only,
+  no vision cost); the host writes a colleague-style markdown briefing and
+  calls `commit_bin_summary(briefing, briefing_token)`, which lands in
+  `memory/bin_summary.md` above the v2.0 aggregate.
 
 **Embeddings + similarity (v2.43.0+).** Local-compute semantic search; no
 vendor tokens, so nothing here touches the caps ledger. Backends are
