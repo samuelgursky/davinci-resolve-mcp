@@ -29,7 +29,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 
 logger = logging.getLogger("resolve-mcp.timeline-brain-db")
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 DB_FILENAME = "timeline_brain.sqlite"
 SOUL_DIRNAME = "_soul"
 
@@ -715,6 +715,53 @@ def _migrate_v10_embeddings(conn: sqlite3.Connection) -> None:
             ON embeddings(embedding_kind, model_name);
         CREATE INDEX IF NOT EXISTS ix_embeddings_entity
             ON embeddings(entity_type, entity_uuid);
+        """
+    )
+
+
+@register_migration(11)
+def _migrate_v11_entities(conn: sqlite3.Connection) -> None:
+    """C5 — cross-clip entities (Phase D of the analysis program).
+
+    `entities` rows start as provisional clusters over the v10 visual
+    embeddings (source='clustering', label NULL) and are enriched by one
+    host-vision call per cluster representative (source='vision_entity_v1')
+    or by humans. `entity_appearances` records every frame an entity was
+    seen in, with the clip/shot derivation and the match similarity.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS entities (
+            entity_uuid TEXT PRIMARY KEY,
+            kind TEXT,                            -- person|place|object|unknown
+            label TEXT,
+            description TEXT,
+            confidence TEXT,
+            source TEXT NOT NULL,
+            representative_frame_ref TEXT,        -- 'clip_uuid:frame_index'
+            representative_frame_path TEXT,
+            cluster_size INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_entities_kind ON entities(kind);
+
+        CREATE TABLE IF NOT EXISTS entity_appearances (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_uuid TEXT NOT NULL,
+            clip_uuid TEXT NOT NULL,
+            shot_uuid TEXT,
+            frame_ref TEXT NOT NULL,              -- 'clip_uuid:frame_index'
+            similarity REAL,
+            UNIQUE(entity_uuid, frame_ref),
+            FOREIGN KEY (entity_uuid) REFERENCES entities(entity_uuid) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_entity_appearances_entity
+            ON entity_appearances(entity_uuid);
+        CREATE INDEX IF NOT EXISTS ix_entity_appearances_clip
+            ON entity_appearances(clip_uuid);
         """
     )
 
