@@ -87,14 +87,35 @@ class FakeTimeline:
         return "01:00:00:00"
 
 
+class FakeFolder:
+    def __init__(self, name):
+        self.name = name
+        self.subfolders = []
+
+    def GetName(self):
+        return self.name
+
+    def GetSubFolderList(self):
+        return list(self.subfolders)
+
+
 class FakeMediaPool:
     def __init__(self, project):
         self._project = project
+        self._root = FakeFolder("Master")
 
     def CreateEmptyTimeline(self, name):
         tl = FakeTimeline(name)
         self._project._timelines.append(tl)
         return tl
+
+    def GetRootFolder(self):
+        return self._root
+
+    def AddSubFolder(self, parent, name):
+        folder = FakeFolder(name)
+        parent.subfolders.append(folder)
+        return folder
 
 
 class FakeProject:
@@ -241,6 +262,17 @@ class SpecActionWiringTest(unittest.TestCase):
         self.assertIn("Edit_v2", names)
         new_tl = next(tl for tl in proj._timelines if tl.GetName() == "Edit_v2")
         self.assertIn(0, new_tl.GetMarkers())
+
+    def test_apply_spec_creates_media_pool_bins(self):
+        proj = FakeProject("Show", timelines=[], settings={})
+        pm = FakePM(proj)
+        spec = {"project": "Show", "bins": ["Master/Media/Scene_01"]}
+
+        out = server._spec_action(FakeResolve(pm), pm, "apply_spec", {"spec": spec})
+
+        self.assertTrue(out["success"], out)
+        plan = server._spec_action(FakeResolve(pm), pm, "diff_to_spec", {"spec": spec})
+        self.assertEqual(plan["change_count"], 0, plan["actions"])
 
     def test_apply_spec_idempotent_second_run(self):
         proj = FakeProject("Show", timelines=[], settings={})

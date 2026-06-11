@@ -12553,6 +12553,35 @@ class _SpecLiveExecutor:
         self._spec = spec
         self._proj = pm.GetCurrentProject()
 
+    def _media_pool_bin_paths(self) -> List[str]:
+        if not self._proj or not getattr(self._spec, "bins", None):
+            return []
+        try:
+            mp = self._proj.GetMediaPool()
+            root = mp.GetRootFolder() if mp else None
+        except Exception:
+            return []
+        if root is None:
+            return []
+        paths: List[str] = []
+
+        def walk(folder, prefix: str) -> None:
+            paths.append(prefix)
+            try:
+                subfolders = folder.GetSubFolderList() or []
+            except Exception:
+                subfolders = []
+            for subfolder in subfolders:
+                try:
+                    name = subfolder.GetName()
+                except Exception:
+                    name = ""
+                if name:
+                    walk(subfolder, f"{prefix}/{name}")
+
+        walk(root, "Master")
+        return paths
+
     def live_state(self) -> Dict[str, Any]:
         proj = self._proj
         projects = list(self._pm.GetProjectListInCurrentFolder() or [])
@@ -12602,6 +12631,7 @@ class _SpecLiveExecutor:
             "project": proj.GetName() if proj else None,
             "projects": projects,
             "settings": settings,
+            "bins": self._media_pool_bin_paths(),
             "timelines": timelines,
         }
 
@@ -12622,6 +12652,18 @@ class _SpecLiveExecutor:
             return bool(self._proj.SetSetting(key, str(value)))
         except Exception:
             return False
+
+    def ensure_bin(self, path: str) -> bool:
+        if not self._proj:
+            return False
+        try:
+            mp = self._proj.GetMediaPool()
+        except Exception:
+            return False
+        if mp is None:
+            return False
+        _, err = _ensure_folder_path(mp, path)
+        return err is None
 
     def ensure_timeline(self, name: str, fps: Optional[float]) -> bool:
         if not self._proj:

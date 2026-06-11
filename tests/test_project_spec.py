@@ -37,11 +37,15 @@ class FakeExecutor:
     def add_marker(self, tl, marker):
         return self._ok("add_marker", f"timeline:{tl}/marker:{marker.get('frame')}")
 
+    def ensure_bin(self, path):
+        return self._ok("ensure_bin", f"bin:{path}")
+
 
 SPEC_DICT = {
     "project": "MyShow",
     "color_preset": "rec709_gamma24",
     "settings": {"timelineFrameRate": "24"},
+    "bins": ["Master/Admin", "Master/Media/Scene_01"],
     "timelines": [
         {"name": "Edit_v2", "fps": 24,
          "markers": [{"frame": 0, "color": "Blue", "name": "HEAD"}]},
@@ -55,6 +59,7 @@ class SpecLoadTest(unittest.TestCase):
         spec = ps.spec_from_dict(SPEC_DICT)
         self.assertEqual(spec.project, "MyShow")
         self.assertEqual(spec.color_preset, "rec709_gamma24")
+        self.assertEqual(spec.bins, ["Master/Admin", "Master/Media/Scene_01"])
         self.assertEqual(len(spec.timelines), 1)
         self.assertEqual(spec.timelines[0].fps, 24)
         self.assertEqual(len(spec.hooks), 2)
@@ -159,6 +164,15 @@ class PlanTest(unittest.TestCase):
         marker_actions = [a for a in plan["actions"] if "marker" in a["target"]]
         self.assertTrue(all(a["op"] == "noop" for a in marker_actions))
 
+    def test_missing_bins_are_ensured(self):
+        spec = ps.spec_from_dict({"project": "S", "bins": ["Master/Media/Scene_01"]})
+        plan = ps.plan_spec(spec, {"project": "S", "projects": ["S"], "settings": {}, "bins": ["Master"]})
+
+        bin_actions = [a for a in plan["actions"] if a["target"].startswith("bin:")]
+
+        self.assertEqual(bin_actions[0]["op"], "ensure")
+        self.assertEqual(bin_actions[0]["target"], "bin:Master/Media/Scene_01")
+
 
 class ApplyTest(unittest.TestCase):
     def test_dry_run_does_not_execute(self):
@@ -175,6 +189,7 @@ class ApplyTest(unittest.TestCase):
         self.assertTrue(out["success"])
         tags = {t for t, _ in ex.calls}
         self.assertIn("ensure_project", tags)
+        self.assertIn("ensure_bin", tags)
         self.assertIn("ensure_timeline", tags)
         self.assertIn("add_marker", tags)
 

@@ -83,6 +83,7 @@ class Spec:
     project: str
     color_preset: Optional[str] = None
     settings: Dict[str, str] = field(default_factory=dict)
+    bins: List[str] = field(default_factory=list)
     timelines: List[TimelineSpec] = field(default_factory=list)
     hooks: List[Hook] = field(default_factory=list)
 
@@ -145,6 +146,15 @@ def spec_from_dict(data: Dict[str, Any]) -> Spec:
     if not isinstance(settings, dict):
         raise SpecError("`settings` must be a mapping.")
 
+    bins: List[str] = []
+    for raw_bin in data.get("bins") or []:
+        if isinstance(raw_bin, str) and raw_bin.strip():
+            bins.append(raw_bin.strip().strip("/"))
+        elif isinstance(raw_bin, dict) and raw_bin.get("path"):
+            bins.append(str(raw_bin["path"]).strip().strip("/"))
+        else:
+            raise SpecError(f"Each bin needs a non-empty path: {raw_bin!r}")
+
     timelines: List[TimelineSpec] = []
     for raw_tl in (data.get("timelines") or []):
         if not isinstance(raw_tl, dict) or not raw_tl.get("name"):
@@ -160,6 +170,7 @@ def spec_from_dict(data: Dict[str, Any]) -> Spec:
         project=str(project),
         color_preset=preset,
         settings={str(k): str(v) for k, v in settings.items()},
+        bins=bins,
         timelines=timelines,
         hooks=_parse_hooks(data.get("hooks")),
     )
@@ -252,6 +263,15 @@ def plan_spec(spec: Spec, live: Dict[str, Any]) -> Dict[str, Any]:
                 f"{live_settings.get(key)!r} -> {want!r}", {"key": key, "value": want},
             ))
 
+    # Media Pool bins. Paths are slash-delimited from Master, e.g.
+    # "Master/Media/Scene_01"; creation is idempotent in the executor.
+    live_bins = set(live.get("bins") or [])
+    for bin_path in spec.bins:
+        if bin_path in live_bins:
+            actions.append(Action("noop", f"bin:{bin_path}", "exists"))
+        else:
+            actions.append(Action("ensure", f"bin:{bin_path}", "ensure media-pool bin", {"path": bin_path}))
+
     # Timelines + their settings + markers. NOTE: `fps` is a *creation-time*
     # property handled by ensure_timeline — Resolve refuses SetSetting on
     # timelineFrameRate after a timeline exists — so it is never emitted as a
@@ -300,6 +320,7 @@ def _spec_desired_state(spec: Spec) -> Dict[str, Any]:
     return {
         "project": spec.project,
         "settings": {k: _norm_setting_value(v) for k, v in effective_settings(spec).items()},
+        "bins": list(spec.bins),
         "timelines": [
             {
                 "name": tl.name,
@@ -324,6 +345,7 @@ def _spec_normalized_state(live: Dict[str, Any], spec: Spec) -> Dict[str, Any]:
     return {
         "project": live.get("project"),
         "settings": {k: _norm_setting_value(live_settings.get(k)) for k in desired if k in live_settings},
+        "bins": [path for path in (live.get("bins") or []) if path in set(spec.bins)],
         "timelines": [
             {
                 "name": name,
@@ -356,6 +378,7 @@ def apply_spec(
         ensure_timeline(name, fps) -> bool
         set_timeline_setting(timeline_name, key, value) -> bool
         add_marker(timeline_name, marker: dict) -> bool
+        ensure_bin(path) -> bool
 
     Hooks execute only when `run_hooks=True` AND a `run_hook` callable is given —
     arbitrary shell from a spec stays opt-in. Failures accumulate when
@@ -396,6 +419,9 @@ def apply_spec(
             continue
         _record(bool(executor.set_project_setting(key, desired[key])),
                 f"project:{spec.project}/setting:{key}", str(desired[key]))
+
+    for bin_path in spec.bins:
+        _record(bool(executor.ensure_bin(bin_path)), f"bin:{bin_path}")
 
     # Timelines. `fps` is creation-time only (ensure_timeline); never set as a
     # post-creation timelineFrameRate setting — Resolve refuses that.
