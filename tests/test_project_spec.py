@@ -173,6 +173,17 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(bin_actions[0]["op"], "ensure")
         self.assertEqual(bin_actions[0]["target"], "bin:Master/Media/Scene_01")
 
+    def test_unprefixed_bins_normalize_to_master(self):
+        # Live bin paths are always Master-prefixed; an unprefixed spec bin
+        # must still match them or the plan never converges to noop.
+        spec = ps.spec_from_dict({"project": "S", "bins": ["Media/Scene_01", "/Master/Admin/"]})
+        self.assertEqual(spec.bins, ["Master/Media/Scene_01", "Master/Admin"])
+
+        plan = ps.plan_spec(spec, {"project": "S", "projects": ["S"], "settings": {},
+                                   "bins": ["Master", "Master/Media/Scene_01", "Master/Admin"]})
+        bin_actions = [a for a in plan["actions"] if a["target"].startswith("bin:")]
+        self.assertTrue(all(a["op"] == "noop" for a in bin_actions), bin_actions)
+
 
 class ApplyTest(unittest.TestCase):
     def test_dry_run_does_not_execute(self):

@@ -149,11 +149,16 @@ def spec_from_dict(data: Dict[str, Any]) -> Spec:
     bins: List[str] = []
     for raw_bin in data.get("bins") or []:
         if isinstance(raw_bin, str) and raw_bin.strip():
-            bins.append(raw_bin.strip().strip("/"))
+            bin_path = raw_bin.strip().strip("/")
         elif isinstance(raw_bin, dict) and raw_bin.get("path"):
-            bins.append(str(raw_bin["path"]).strip().strip("/"))
+            bin_path = str(raw_bin["path"]).strip().strip("/")
         else:
             raise SpecError(f"Each bin needs a non-empty path: {raw_bin!r}")
+        # Live bin paths are always reported Master-prefixed; normalize here so
+        # an unprefixed spec bin doesn't read as a perpetually-pending change.
+        if bin_path != "Master" and not bin_path.startswith("Master/"):
+            bin_path = f"Master/{bin_path}"
+        bins.append(bin_path)
 
     timelines: List[TimelineSpec] = []
     for raw_tl in (data.get("timelines") or []):
