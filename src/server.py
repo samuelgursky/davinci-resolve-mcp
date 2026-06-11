@@ -10335,6 +10335,121 @@ def _check_proxy_media_compatibility_checked(root, p: Dict[str, Any]):
     )
 
 
+def _timeline_append_readback_snapshot(proj):
+    try:
+        tl = proj.GetCurrentTimeline() if proj else None
+    except Exception as exc:
+        return {"available": False, "error": f"GetCurrentTimeline failed: {exc}"}
+    if not tl:
+        return {"available": False, "error": "No current timeline"}
+
+    timeline = {}
+    try:
+        timeline["name"] = tl.GetName()
+    except Exception:
+        timeline["name"] = None
+    try:
+        timeline["id"] = tl.GetUniqueId()
+    except Exception:
+        timeline["id"] = None
+
+    tracks = {}
+    item_count = 0
+    warnings = []
+    for track_type in ("video", "audio", "subtitle"):
+        track_count = _timeline_track_count(tl, track_type)
+        rows = []
+        for track_index in range(1, track_count + 1):
+            try:
+                items = tl.GetItemListInTrack(track_type, track_index) or []
+            except Exception as exc:
+                warnings.append(f"GetItemListInTrack({track_type}, {track_index}) failed: {exc}")
+                items = []
+            item_count += len(items)
+            rows.append({
+                "track_index": track_index,
+                "item_count": len(items),
+                "item_ids": _timeline_item_ids(items),
+            })
+        tracks[track_type] = {"track_count": track_count, "tracks": rows}
+    return {
+        "available": True,
+        "timeline": timeline,
+        "item_count": item_count,
+        "tracks": tracks,
+        "warnings": warnings,
+    }
+
+
+def _compare_timeline_append_readback(before, observed, expected_count: int):
+    before_count = before.get("item_count") if isinstance(before, dict) and before.get("available") else None
+    after_count = observed.get("item_count") if isinstance(observed, dict) and observed.get("available") else None
+    delta = after_count - before_count if before_count is not None and after_count is not None else None
+    return {
+        "verified": delta is not None and delta >= expected_count and expected_count > 0,
+        "before_item_count": before_count,
+        "after_item_count": after_count,
+        "item_count_delta": delta,
+        "expected_item_count_delta": expected_count,
+    }
+
+
+def _append_to_timeline_with_verification(proj, mp, append_payload, requested: Dict[str, Any], expected_count: int):
+    raw_result = {"value": None}
+    before = _timeline_append_readback_snapshot(proj)
+
+    def mutate():
+        raw_result["value"] = mp.AppendToTimeline(append_payload)
+        return bool(raw_result["value"])
+
+    verification = verify_by_readback(
+        mutate=mutate,
+        observe=lambda: _timeline_append_readback_snapshot(proj),
+        snapshot=lambda: before,
+        compare=lambda before_snapshot, observed: _compare_timeline_append_readback(
+            before_snapshot,
+            observed,
+            expected_count,
+        ),
+        intent=requested,
+        label="media_pool.append_to_timeline",
+    )
+    return raw_result["value"], verification, before
+
+
+def _append_to_timeline_verified_operation(requested: Dict[str, Any], verification: Dict[str, Any], before):
+    success = bool(verification.get("success_raw"))
+    verified = bool(verification.get("verified"))
+    verification_status = "readback_verified" if verified else ("api_failed" if not success else "api_success_unverified")
+    readback = {
+        "before": before,
+        "after": verification.get("observed"),
+        "before_item_count": verification.get("before_item_count"),
+        "after_item_count": verification.get("after_item_count"),
+        "item_count_delta": verification.get("item_count_delta"),
+        "expected_item_count_delta": verification.get("expected_item_count_delta"),
+    }
+    return _verified_operation(
+        "media_pool.append_to_timeline",
+        requested=requested,
+        preflight={
+            "ok": True,
+            "current_timeline_available": bool(isinstance(before, dict) and before.get("available")),
+            "expected_item_count_delta": requested.get("expected_count"),
+        },
+        execution={"api": "MediaPool.AppendToTimeline", "attempted": True, "success": success},
+        readback=readback,
+        verification_status=verification_status,
+        journal_event={
+            "type": "timeline.appended" if verified else ("timeline.append.failed" if not success else "timeline.append.unverified"),
+            "success": success,
+            "verified": verified,
+            "expected_count": requested.get("expected_count"),
+            "item_count_delta": verification.get("item_count_delta"),
+        },
+    )
+
+
 def _link_proxy_checked(root, p: Dict[str, Any]):
     clip = _find_clip(root, p.get("clip_id", ""))
     if not clip:
@@ -14479,7 +14594,18 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 if row_err:
                     return row_err
                 built.append(row)
-            result = mp.AppendToTimeline(built)
+            requested = {
+                "mode": "clip_infos",
+                "clip_info_count": len(raw),
+                "expected_count": len(built),
+            }
+            result, verification, before = _append_to_timeline_with_verification(
+                proj,
+                mp,
+                built,
+                requested,
+                len(built),
+            )
             if not result:
                 return _err("Failed to append clip_infos to timeline")
             items_out = []
@@ -14488,14 +14614,38 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 if item_err:
                     return item_err
                 items_out.append(item_out)
-            return _ok(count=len(result), items=items_out)
+            out = _ok(count=len(result), items=items_out)
+            out["verified_operation"] = _append_to_timeline_verified_operation(
+                requested,
+                verification,
+                before,
+            )
+            return out
         clip_ids = p.get("clip_ids")
         if not clip_ids:
             return _err("Provide clip_ids (simple append) or clip_infos (positioned append)")
         clips = [_find_clip(root, cid) for cid in clip_ids]
         clips = [c for c in clips if c]
-        result = mp.AppendToTimeline(clips)
-        return _ok(count=len(result) if result else 0)
+        requested = {
+            "mode": "clip_ids",
+            "clip_ids": list(clip_ids),
+            "resolved_clip_count": len(clips),
+            "expected_count": len(clips),
+        }
+        result, verification, before = _append_to_timeline_with_verification(
+            proj,
+            mp,
+            clips,
+            requested,
+            len(clips),
+        )
+        out = _ok(count=len(result) if result else 0)
+        out["verified_operation"] = _append_to_timeline_verified_operation(
+            requested,
+            verification,
+            before,
+        )
+        return out
     elif action == "import_media":
         if p.get("clip_infos") is not None:
             raw = p["clip_infos"]
