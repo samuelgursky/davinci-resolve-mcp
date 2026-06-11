@@ -2,6 +2,33 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.46.0
+
+Community PR bundle: five contributed fixes and features (#62–#66), live-validated
+on Resolve Studio 21.
+
+- **Fixed** timeline marker frames are now correctly relative to the timeline
+  start (#66): timecode params and the playhead default rebase by
+  `GetStartFrame()`, so markers on hour-start timelines land where the UI
+  shows them instead of an hour past the end. Raw `frame` params pass through
+  unchanged (documented as relative). Contact sheets and marker thumbnail
+  review rebase the other way with a legacy-absolute guard.
+- **Fixed** project lint no longer flags audio-only timelines as empty (#62);
+  live lint state now reports per-type `video/audio/subtitle_item_count`.
+- **Added** `media_pool.check_proxy_media_compatibility` (#63): ffprobe-vs-source
+  signature diagnostics (resolution/fps/frames/sample rate, expected
+  codec/profile). Same-aspect downscales count as compatible — half-res
+  proxies are the normal workflow.
+- **Added** readback verification envelopes (`verified_operation`) around
+  `media_pool.link_proxy_checked` (#63) and `media_pool.append_to_timeline`
+  (#64): preflight, execution, post-state readback, verification status, and a
+  journal event. `link_proxy_checked` gains `check_compatibility` /
+  `require_compatible` guards that refuse incompatible proxies before linking.
+- **Added** `bins` to declarative project specs (#65): missing media-pool bin
+  paths plan as `ensure` actions and are created idempotently; existing bins
+  are noops. Bin paths normalize to the `Master/` prefix so unprefixed spec
+  bins converge instead of reporting perpetual drift.
+
 ## What's New in v2.45.0
 
 The edit engine — Phase E, the final phase of the analysis + edit-engine
