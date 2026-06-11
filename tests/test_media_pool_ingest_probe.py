@@ -1,10 +1,13 @@
 import unittest
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from src.server import (
+    _check_proxy_media_compatibility,
     _copy_clip_annotations,
     _copy_metadata,
+    _link_proxy_checked,
     _media_pool_ingest_capabilities,
     _media_pool_item_probe,
     _media_pool_probe,
@@ -17,6 +20,7 @@ from src.server import (
     _safe_import_sequence,
     _set_clip_marks,
 )
+from src.utils.readback import reset_verification_stats, verification_stats
 
 
 class MediaPoolItemStub:
@@ -30,6 +34,9 @@ class MediaPoolItemStub:
             "Type": "Video + Audio",
             "Duration": "00:00:05:00",
             "FPS": "24",
+            "Frames": "120",
+            "Resolution": "1920x1080",
+            "Sample Rate": "48000",
             "Description": "",
             "Comments": "",
             "Keyword": "",
@@ -41,6 +48,8 @@ class MediaPoolItemStub:
         }
         self.markers = {12: {"color": "Blue", "name": "Review", "note": "Check", "duration": 1}}
         self.flags = ["Blue"]
+        self.linked_proxy_path = None
+        self.link_proxy_result = True
 
     def GetName(self):
         return self.name
@@ -116,6 +125,12 @@ class MediaPoolItemStub:
     def SetMarkInOut(self, mark_in, mark_out, mark_type="all"):
         self.mark = {"in": mark_in, "out": mark_out, "type": mark_type}
         return True
+
+    def LinkProxyMedia(self, proxy_path):
+        self.linked_proxy_path = proxy_path
+        if self.link_proxy_result:
+            self.properties["Proxy Media Path"] = proxy_path
+        return self.link_proxy_result
 
 
 class FolderStub:
@@ -323,6 +338,183 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["results"][0]["markers"], 1)
         self.assertEqual(result["results"][0]["flags"], 1)
+
+    def test_check_proxy_media_compatibility_accepts_matching_prores_lt_proxy(self):
+        proxy_probe = {
+            "success": True,
+            "video": {
+                "codec_name": "prores",
+                "codec_long_name": "Apple ProRes",
+                "profile": "LT",
+                "width": 1920,
+                "height": 1080,
+                "avg_frame_rate": "24/1",
+                "nb_frames": "120",
+            },
+            "audio": {"sample_rate": "48000", "channels": 2},
+        }
+
+        with patch("src.server._probe_media_file", return_value=proxy_probe):
+            result = _check_proxy_media_compatibility(
+                MediaPoolItemStub(),
+                "/tmp/proxy.mov",
+                expected_codec="prores",
+                expected_profile="LT",
+            )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["compatible"])
+        self.assertEqual(result["mismatches"], [])
+        self.assertEqual(result["proxy"]["codec"], "prores")
+        self.assertEqual(result["proxy"]["profile"], "LT")
+
+    def test_check_proxy_media_compatibility_reports_signature_mismatches(self):
+        proxy_probe = {
+            "success": True,
+            "video": {
+                "codec_name": "h264",
+                "profile": "High",
+                "width": 1280,
+                "height": 720,
+                "avg_frame_rate": "30000/1001",
+                "nb_frames": "118",
+            },
+            "audio": {"sample_rate": "44100"},
+        }
+
+        with patch("src.server._probe_media_file", return_value=proxy_probe):
+            result = _check_proxy_media_compatibility(
+                MediaPoolItemStub(),
+                "/tmp/proxy.mp4",
+                expected_codec="prores",
+                expected_profile="LT",
+            )
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result["compatible"])
+        self.assertEqual(
+            {mismatch["field"] for mismatch in result["mismatches"]},
+            {"resolution", "fps", "frames", "sample_rate", "expected_codec", "expected_profile"},
+        )
+
+    def test_link_proxy_checked_dry_run_includes_compatibility_report(self):
+        mp = MediaPoolStub()
+        proxy_probe = {
+            "success": True,
+            "video": {
+                "codec_name": "prores",
+                "profile": "LT",
+                "width": 1920,
+                "height": 1080,
+                "avg_frame_rate": "24/1",
+                "nb_frames": "120",
+            },
+            "audio": {"sample_rate": "48000"},
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".mov") as proxy_file, patch(
+            "src.server._probe_media_file", return_value=proxy_probe
+        ):
+            result = _link_proxy_checked(
+                mp.root,
+                {
+                    "clip_id": "clip-1",
+                    "proxy_path": proxy_file.name,
+                    "dry_run": True,
+                    "check_compatibility": True,
+                    "expected_codec": "prores",
+                    "expected_profile": "LT",
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["compatibility"]["compatible"])
+        self.assertEqual(result["verified_operation"]["name"], "media_pool.link_proxy_checked")
+        self.assertFalse(result["verified_operation"]["execution"]["attempted"])
+        self.assertEqual(result["verified_operation"]["verification_status"], "dry_run")
+        self.assertEqual(result["verified_operation"]["journal_event"]["type"], "proxy.link.preview")
+        self.assertIsNone(mp.clip.linked_proxy_path)
+
+    def test_link_proxy_checked_refuses_incompatible_proxy_when_required(self):
+        mp = MediaPoolStub()
+        proxy_probe = {
+            "success": True,
+            "video": {
+                "codec_name": "h264",
+                "profile": "High",
+                "width": 1280,
+                "height": 720,
+                "avg_frame_rate": "24/1",
+                "nb_frames": "120",
+            },
+            "audio": {"sample_rate": "48000"},
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as proxy_file, patch(
+            "src.server._probe_media_file", return_value=proxy_probe
+        ):
+            result = _link_proxy_checked(
+                mp.root,
+                {
+                    "clip_id": "clip-1",
+                    "proxy_path": proxy_file.name,
+                    "require_compatible": True,
+                    "expected_codec": "prores",
+                    "expected_profile": "LT",
+                },
+            )
+
+        self.assertIn("error", result)
+        self.assertFalse(result["compatibility"]["compatible"])
+        self.assertEqual(result["verified_operation"]["verification_status"], "blocked")
+        self.assertFalse(result["verified_operation"]["execution"]["attempted"])
+        self.assertEqual(result["verified_operation"]["journal_event"]["type"], "proxy.link.blocked")
+        self.assertIsNone(mp.clip.linked_proxy_path)
+
+    def test_link_proxy_checked_success_returns_verified_operation_journal(self):
+        mp = MediaPoolStub()
+
+        with tempfile.NamedTemporaryFile(suffix=".mov") as proxy_file:
+            result = _link_proxy_checked(mp.root, {"clip_id": "clip-1", "proxy_path": proxy_file.name})
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["readback"]["proxy_fields"]["Proxy Media Path"], proxy_file.name)
+        operation = result["verified_operation"]
+        self.assertEqual(operation["name"], "media_pool.link_proxy_checked")
+        self.assertTrue(operation["preflight"]["ok"])
+        self.assertTrue(operation["execution"]["attempted"])
+        self.assertTrue(operation["execution"]["success"])
+        self.assertTrue(operation["verified"])
+        self.assertEqual(operation["verification_status"], "readback_verified")
+        self.assertEqual(operation["journal_event"]["type"], "proxy.linked")
+        self.assertEqual(operation["journal_event"]["clip_id"], "clip-1")
+        self.assertEqual(operation["journal_event"]["proxy_path"], proxy_file.name)
+
+    def test_link_proxy_checked_success_updates_verification_stats(self):
+        reset_verification_stats()
+        mp = MediaPoolStub()
+
+        with tempfile.NamedTemporaryFile(suffix=".mov") as proxy_file:
+            _link_proxy_checked(mp.root, {"clip_id": "clip-1", "proxy_path": proxy_file.name})
+
+        stats = verification_stats()
+        self.assertEqual(stats["total"], 1)
+        self.assertEqual(stats["verified"], 1)
+        self.assertEqual(stats["contradicted"], 0)
+        self.assertEqual(stats["unverified"], 0)
+
+    def test_link_proxy_checked_failed_link_includes_readback(self):
+        mp = MediaPoolStub()
+        mp.clip.link_proxy_result = False
+
+        with tempfile.NamedTemporaryFile(suffix=".mov") as proxy_file:
+            result = _link_proxy_checked(mp.root, {"clip_id": "clip-1", "proxy_path": proxy_file.name})
+
+        self.assertFalse(result["success"])
+        self.assertIn("readback", result)
+        self.assertEqual(result["readback"]["clip_properties"]["FPS"], "24")
+        self.assertEqual(result["verified_operation"]["verification_status"], "api_failed")
+        self.assertEqual(result["verified_operation"]["journal_event"]["type"], "proxy.link.failed")
 
 
 if __name__ == "__main__":
