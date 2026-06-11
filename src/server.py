@@ -10178,6 +10178,32 @@ def _proxy_media_signature(probe: Dict[str, Any]):
     }
 
 
+def _add_proxy_resolution_mismatch(result: Dict[str, Any], source, proxy):
+    """Flag resolution only when the aspect ratio differs.
+
+    Proxies are routinely lower resolution than the source — Resolve links a
+    half/quarter-res proxy happily (that is the point of proxies; verified live
+    on Resolve Studio 21). Only a different aspect ratio means the file cannot
+    be a proxy of this source.
+    """
+    if not source or not proxy:
+        return
+    src_w, src_h = source.get("width"), source.get("height")
+    pxy_w, pxy_h = proxy.get("width"), proxy.get("height")
+    if not (src_w and src_h and pxy_w and pxy_h):
+        return
+    if (src_w, src_h) == (pxy_w, pxy_h):
+        return
+    src_aspect = src_w / src_h
+    pxy_aspect = pxy_w / pxy_h
+    if abs(src_aspect - pxy_aspect) / src_aspect <= 0.02:
+        result["warnings"].append(
+            f"Proxy is a same-aspect downscale ({src_w}x{src_h} -> {pxy_w}x{pxy_h})"
+        )
+        return
+    result["mismatches"].append({"field": "resolution", "source": source, "proxy": proxy})
+
+
 def _add_proxy_mismatch(mismatches: List[Dict[str, Any]], field: str, source, proxy, *, tolerance: float = 0.0):
     if source is None or proxy is None:
         return
@@ -10212,7 +10238,7 @@ def _check_proxy_media_compatibility(
         result["code"] = probe.get("code", "FFPROBE_FAILED")
         return result
 
-    _add_proxy_mismatch(result["mismatches"], "resolution", source.get("resolution"), proxy.get("resolution"))
+    _add_proxy_resolution_mismatch(result, source.get("resolution"), proxy.get("resolution"))
     _add_proxy_mismatch(result["mismatches"], "fps", source.get("fps"), proxy.get("fps"), tolerance=0.01)
     _add_proxy_mismatch(result["mismatches"], "frames", source.get("frames"), proxy.get("frames"), tolerance=1)
     _add_proxy_mismatch(result["mismatches"], "sample_rate", source.get("sample_rate"), proxy.get("sample_rate"))

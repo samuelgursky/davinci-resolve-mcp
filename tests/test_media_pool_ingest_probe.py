@@ -374,7 +374,7 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
             "video": {
                 "codec_name": "h264",
                 "profile": "High",
-                "width": 1280,
+                "width": 1440,
                 "height": 720,
                 "avg_frame_rate": "30000/1001",
                 "nb_frames": "118",
@@ -396,6 +396,31 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
             {mismatch["field"] for mismatch in result["mismatches"]},
             {"resolution", "fps", "frames", "sample_rate", "expected_codec", "expected_profile"},
         )
+
+    def test_check_proxy_media_compatibility_allows_same_aspect_downscale(self):
+        # A half-res proxy is the normal proxy workflow — Resolve links it
+        # happily (verified live on Resolve Studio 21), so a same-aspect
+        # downscale must not be reported as a resolution mismatch.
+        proxy_probe = {
+            "success": True,
+            "video": {
+                "codec_name": "prores",
+                "profile": "Proxy",
+                "width": 960,
+                "height": 540,
+                "avg_frame_rate": "24/1",
+                "nb_frames": "120",
+            },
+            "audio": {"sample_rate": "48000"},
+        }
+
+        with patch("src.server._probe_media_file", return_value=proxy_probe):
+            result = _check_proxy_media_compatibility(MediaPoolItemStub(), "/tmp/proxy.mov")
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["compatible"])
+        self.assertEqual(result["mismatches"], [])
+        self.assertTrue(any("downscale" in w for w in result["warnings"]), result["warnings"])
 
     def test_link_proxy_checked_dry_run_includes_compatibility_report(self):
         mp = MediaPoolStub()
