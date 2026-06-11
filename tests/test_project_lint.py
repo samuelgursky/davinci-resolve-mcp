@@ -42,6 +42,12 @@ class ProjectLintTest(unittest.TestCase):
                  "timelines": [{"name": "A", "fps": 24, "item_count": 0}]}
         self.assertIn("empty_timeline", _codes(state))
 
+    def test_audio_only_timeline_is_not_empty(self):
+        state = {"project": "S", "current_timeline": "Music",
+                 "timelines": [{"name": "Music", "fps": 24, "item_count": 0,
+                                "video_item_count": 0, "audio_item_count": 1}]}
+        self.assertNotIn("empty_timeline", _codes(state))
+
     def test_color_science_unset_info(self):
         state = {"project": "S", "current_timeline": "A",
                  "timelines": [{"name": "A", "fps": 24, "item_count": 1}],

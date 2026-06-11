@@ -12746,13 +12746,36 @@ def _project_lint_live(r, pm) -> Dict[str, Any]:
         except Exception:
             pass
         item_count = 0
+        video_item_count = 0
+        audio_item_count = 0
+        subtitle_item_count = 0
         try:
-            vc = int(tl.GetTrackCount("video") or 0)
-            for ti in range(1, vc + 1):
-                item_count += len(tl.GetItemListInTrack("video", ti) or [])
+            for track_type, key in (
+                ("video", "video_item_count"),
+                ("audio", "audio_item_count"),
+                ("subtitle", "subtitle_item_count"),
+            ):
+                track_total = 0
+                track_count = int(tl.GetTrackCount(track_type) or 0)
+                for ti in range(1, track_count + 1):
+                    track_total += len(tl.GetItemListInTrack(track_type, ti) or [])
+                if key == "video_item_count":
+                    video_item_count = track_total
+                elif key == "audio_item_count":
+                    audio_item_count = track_total
+                elif key == "subtitle_item_count":
+                    subtitle_item_count = track_total
+                item_count += track_total
         except Exception:
             pass
-        timelines.append({"name": tl.GetName(), "fps": fps, "item_count": item_count})
+        timelines.append({
+            "name": tl.GetName(),
+            "fps": fps,
+            "item_count": item_count,
+            "video_item_count": video_item_count,
+            "audio_item_count": audio_item_count,
+            "subtitle_item_count": subtitle_item_count,
+        })
     state["timelines"] = timelines
     settings: Dict[str, Any] = {}
     try:

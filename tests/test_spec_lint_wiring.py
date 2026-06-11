@@ -214,6 +214,15 @@ class LintWiringTest(unittest.TestCase):
         out = server._project_lint_live(FakeResolve(pm), pm)
         self.assertIn("empty_timeline", {i["code"] for i in out["issues"]})
 
+    def test_lint_audio_only_timeline_is_not_empty(self):
+        tl = FakeTimeline("Music", tracks={
+            ("audio", 1): [FakeItem(0, 240, "music_master", "m1")],
+        }, settings={"timelineFrameRate": "24"})
+        proj = FakeProject("Show", timelines=[tl])
+        pm = FakePM(proj)
+        out = server._project_lint_live(FakeResolve(pm), pm)
+        self.assertNotIn("empty_timeline", {i["code"] for i in out["issues"]})
+
 
 class SpecActionWiringTest(unittest.TestCase):
     def test_diff_to_spec_inline(self):
