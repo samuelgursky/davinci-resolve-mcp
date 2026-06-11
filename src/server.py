@@ -6139,6 +6139,7 @@ _MEDIA_POOL_KERNEL_ACTIONS = [
     "metadata_field_inventory",
     "safe_relink",
     "safe_unlink",
+    "check_proxy_media_compatibility",
     "link_proxy_checked",
     "link_full_resolution_checked",
     "set_clip_marks",
@@ -9474,7 +9475,8 @@ def _media_pool_ingest_capabilities():
                 "relink/unlink through Resolve MediaPool APIs",
                 "media_pool.safe_relink and safe_unlink with path/clip validation",
                 "proxy link/unlink through MediaPoolItem APIs",
-                "media_pool.link_proxy_checked with file validation",
+                "media_pool.check_proxy_media_compatibility with ffprobe/source signature diagnostics",
+                "media_pool.link_proxy_checked with file validation and optional compatibility guard",
                 "full-resolution media link where Resolve 20 exposes it",
                 "media_pool.link_full_resolution_checked with version/path validation",
             ],
@@ -9959,6 +9961,325 @@ def _safe_unlink(mp, root, p: Dict[str, Any]):
     return {"success": bool(mp.UnlinkClips(clips)), "count": len(clips), "missing": missing}
 
 
+def _parse_rate(value):
+    if value in (None, "", "0/0", "N/A"):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    if "/" in text:
+        left, right = text.split("/", 1)
+        try:
+            numerator = float(left.strip())
+            denominator = float(right.strip())
+            return numerator / denominator if denominator else None
+        except (TypeError, ValueError):
+            return None
+    match = re.search(r"\d+(?:\.\d+)?", text.replace(",", "."))
+    return float(match.group(0)) if match else None
+
+
+def _parse_int_text(value):
+    if value in (None, "", "N/A"):
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    match = re.search(r"\d+", str(value).replace(",", ""))
+    return int(match.group(0)) if match else None
+
+
+def _parse_resolution(value):
+    if value in (None, "", "N/A"):
+        return None
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        width = _parse_int_text(value[0])
+        height = _parse_int_text(value[1])
+        return (width, height) if width and height else None
+    match = re.search(r"(\d+)\s*[xX]\s*(\d+)", str(value))
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _normalize_media_token(value):
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _media_token_matches(actual, expected):
+    expected_token = _normalize_media_token(expected)
+    if not expected_token:
+        return True
+    actual_token = _normalize_media_token(actual)
+    return bool(actual_token) and (
+        actual_token == expected_token
+        or expected_token in actual_token
+        or actual_token in expected_token
+    )
+
+
+def _clip_media_signature(clip):
+    properties, properties_error = _safe_clip_call(clip, "GetClipProperty", "")
+    properties = properties if isinstance(properties, dict) else {}
+    resolution = _parse_resolution(
+        properties.get("Resolution")
+        or properties.get("Video Resolution")
+        or properties.get("Image Size")
+    )
+    signature = {
+        "name": _safe_media_pool_item_name(clip),
+        "id": _safe_media_pool_item_id(clip),
+        "file_path": properties.get("File Path") or properties.get("FilePath"),
+        "resolution": {"width": resolution[0], "height": resolution[1]} if resolution else None,
+        "fps": _parse_rate(
+            properties.get("FPS")
+            or properties.get("Frame Rate")
+            or properties.get("Video Frame Rate")
+        ),
+        "frames": _parse_int_text(
+            properties.get("Frames")
+            or properties.get("Frame Count")
+            or properties.get("Duration Frames")
+        ),
+        "sample_rate": _parse_int_text(
+            properties.get("Sample Rate")
+            or properties.get("Audio Sample Rate")
+        ),
+    }
+    if properties_error:
+        signature["properties_error"] = properties_error
+    return signature
+
+
+def _probe_media_file(path: str):
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return {
+            "success": False,
+            "code": "FFPROBE_MISSING",
+            "error": "ffprobe is not installed or not on PATH",
+            "path": path,
+        }
+    try:
+        proc = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_streams",
+                "-of",
+                "json",
+                path,
+            ],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        return {"success": False, "code": "FFPROBE_TIMEOUT", "error": "ffprobe timed out", "path": path}
+    except Exception as exc:
+        return {"success": False, "code": "FFPROBE_FAILED", "error": str(exc), "path": path}
+    if proc.returncode != 0:
+        return {
+            "success": False,
+            "code": "FFPROBE_FAILED",
+            "returncode": proc.returncode,
+            "error": (proc.stderr or proc.stdout or "").strip(),
+            "path": path,
+        }
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        return {"success": False, "code": "FFPROBE_JSON_ERROR", "error": str(exc), "path": path}
+    streams = payload.get("streams") if isinstance(payload, dict) else []
+    streams = streams if isinstance(streams, list) else []
+    video = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
+    audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
+    return {"success": True, "path": path, "video": video, "audio": audio, "stream_count": len(streams)}
+
+
+def _proxy_media_signature(probe: Dict[str, Any]):
+    video = probe.get("video") if isinstance(probe.get("video"), dict) else {}
+    audio = probe.get("audio") if isinstance(probe.get("audio"), dict) else {}
+    width = _parse_int_text(video.get("width"))
+    height = _parse_int_text(video.get("height"))
+    return {
+        "path": probe.get("path"),
+        "codec": video.get("codec_name"),
+        "codec_long_name": video.get("codec_long_name"),
+        "profile": video.get("profile"),
+        "resolution": {"width": width, "height": height} if width and height else None,
+        "fps": _parse_rate(video.get("avg_frame_rate") or video.get("r_frame_rate")),
+        "frames": _parse_int_text(video.get("nb_frames") or (video.get("tags") or {}).get("NUMBER_OF_FRAMES")),
+        "sample_rate": _parse_int_text(audio.get("sample_rate")),
+        "channels": _parse_int_text(audio.get("channels")),
+    }
+
+
+def _add_proxy_mismatch(mismatches: List[Dict[str, Any]], field: str, source, proxy, *, tolerance: float = 0.0):
+    if source is None or proxy is None:
+        return
+    if isinstance(source, (int, float)) and isinstance(proxy, (int, float)):
+        if abs(float(source) - float(proxy)) <= tolerance:
+            return
+    elif source == proxy:
+        return
+    mismatches.append({"field": field, "source": source, "proxy": proxy})
+
+
+def _check_proxy_media_compatibility(
+    clip,
+    proxy_path: str,
+    *,
+    expected_codec: Optional[str] = None,
+    expected_profile: Optional[str] = None,
+):
+    source = _clip_media_signature(clip)
+    probe = _probe_media_file(proxy_path)
+    proxy = _proxy_media_signature(probe) if probe.get("success") else {"path": proxy_path}
+    result = {
+        "success": bool(probe.get("success")),
+        "compatible": False,
+        "source": source,
+        "proxy": proxy,
+        "mismatches": [],
+        "warnings": [],
+    }
+    if not probe.get("success"):
+        result["error"] = probe.get("error", "Unable to probe proxy media")
+        result["code"] = probe.get("code", "FFPROBE_FAILED")
+        return result
+
+    _add_proxy_mismatch(result["mismatches"], "resolution", source.get("resolution"), proxy.get("resolution"))
+    _add_proxy_mismatch(result["mismatches"], "fps", source.get("fps"), proxy.get("fps"), tolerance=0.01)
+    _add_proxy_mismatch(result["mismatches"], "frames", source.get("frames"), proxy.get("frames"), tolerance=1)
+    _add_proxy_mismatch(result["mismatches"], "sample_rate", source.get("sample_rate"), proxy.get("sample_rate"))
+
+    if expected_codec and not (
+        _media_token_matches(proxy.get("codec"), expected_codec)
+        or _media_token_matches(proxy.get("codec_long_name"), expected_codec)
+    ):
+        result["mismatches"].append({
+            "field": "expected_codec",
+            "expected": expected_codec,
+            "proxy": proxy.get("codec") or proxy.get("codec_long_name"),
+        })
+    if expected_profile and not _media_token_matches(proxy.get("profile"), expected_profile):
+        result["mismatches"].append({
+            "field": "expected_profile",
+            "expected": expected_profile,
+            "proxy": proxy.get("profile"),
+        })
+
+    result["compatible"] = not result["mismatches"]
+    if source.get("resolution") is None:
+        result["warnings"].append("Source clip resolution was not available from GetClipProperty")
+    if source.get("fps") is None:
+        result["warnings"].append("Source clip FPS was not available from GetClipProperty")
+    if proxy.get("frames") is None:
+        result["warnings"].append("Proxy frame count was not available from ffprobe")
+    return result
+
+
+def _proxy_link_readback(clip):
+    properties, properties_error = _safe_clip_call(clip, "GetClipProperty", "")
+    properties = properties if isinstance(properties, dict) else {}
+    readback = {"clip_properties": properties}
+    if properties_error:
+        readback["properties_error"] = properties_error
+    proxy_keys = [
+        "Proxy",
+        "Proxy Media",
+        "Proxy Media Path",
+        "Proxy Path",
+        "Proxy Status",
+        "ProxyMediaPath",
+    ]
+    observed = {key: properties.get(key) for key in proxy_keys if key in properties}
+    if observed:
+        readback["proxy_fields"] = observed
+    return readback
+
+
+def _normalized_path_for_compare(path):
+    if not path or not isinstance(path, str):
+        return None
+    return os.path.normcase(os.path.abspath(os.path.expanduser(path)))
+
+
+def _proxy_readback_matches_path(readback: Dict[str, Any], proxy_path: str):
+    expected = _normalized_path_for_compare(proxy_path)
+    if not expected:
+        return False
+    proxy_fields = readback.get("proxy_fields") if isinstance(readback, dict) else {}
+    proxy_fields = proxy_fields if isinstance(proxy_fields, dict) else {}
+    for value in proxy_fields.values():
+        if _normalized_path_for_compare(value) == expected:
+            return True
+    return False
+
+
+def _proxy_link_journal_event(event_type: str, clip, proxy_path: str, *, success=None, verified=False, compatibility=None):
+    event = {
+        "type": event_type,
+        "clip_id": _safe_media_pool_item_id(clip),
+        "clip_name": _safe_media_pool_item_name(clip),
+        "proxy_path": proxy_path,
+        "success": success,
+        "verified": bool(verified),
+    }
+    if compatibility is not None:
+        event["compatible"] = bool(compatibility.get("compatible"))
+        if compatibility.get("mismatches"):
+            event["mismatch_fields"] = [row.get("field") for row in compatibility.get("mismatches", [])]
+    return event
+
+
+def _verified_operation(
+    name: str,
+    *,
+    requested: Dict[str, Any],
+    preflight: Dict[str, Any],
+    execution: Dict[str, Any],
+    verification_status: str,
+    readback=None,
+    journal_event=None,
+):
+    return {
+        "name": name,
+        "preflight": preflight,
+        "requested": requested,
+        "execution": execution,
+        "readback": readback,
+        "verified": verification_status == "readback_verified",
+        "verification_status": verification_status,
+        "journal_event": journal_event,
+    }
+
+
+def _check_proxy_media_compatibility_checked(root, p: Dict[str, Any]):
+    clip = _find_clip(root, p.get("clip_id", ""))
+    if not clip:
+        return _err(f"Clip not found: {p.get('clip_id')}")
+    proxy_path = p.get("proxy_path") or p.get("path")
+    path_err = _path_error(proxy_path, must_be_file=True)
+    if path_err:
+        return _err(path_err)
+    return _check_proxy_media_compatibility(
+        clip,
+        proxy_path,
+        expected_codec=p.get("expected_codec") or p.get("codec"),
+        expected_profile=p.get("expected_profile") or p.get("profile"),
+    )
+
+
 def _link_proxy_checked(root, p: Dict[str, Any]):
     clip = _find_clip(root, p.get("clip_id", ""))
     if not clip:
@@ -9967,9 +10288,123 @@ def _link_proxy_checked(root, p: Dict[str, Any]):
     path_err = _path_error(proxy_path, must_be_file=True)
     if path_err:
         return _err(path_err)
+    missing = _requires_method(clip, "LinkProxyMedia", "17.0")
+    if missing:
+        return missing
+    check_compatibility = bool(
+        p.get("check_compatibility")
+        or p.get("require_compatible")
+        or p.get("expected_codec")
+        or p.get("expected_profile")
+        or p.get("codec")
+        or p.get("profile")
+    )
+    compatibility = None
+    if check_compatibility:
+        compatibility = _check_proxy_media_compatibility(
+            clip,
+            proxy_path,
+            expected_codec=p.get("expected_codec") or p.get("codec"),
+            expected_profile=p.get("expected_profile") or p.get("profile"),
+        )
+    requested = {
+        "clip_id": p.get("clip_id"),
+        "proxy_path": proxy_path,
+        "dry_run": bool(p.get("dry_run")),
+        "check_compatibility": check_compatibility,
+        "require_compatible": bool(p.get("require_compatible")),
+        "expected_codec": p.get("expected_codec") or p.get("codec"),
+        "expected_profile": p.get("expected_profile") or p.get("profile"),
+    }
+    preflight = {
+        "ok": True,
+        "clip_found": True,
+        "proxy_path_valid": True,
+        "method_available": True,
+        "compatibility_checked": compatibility is not None,
+    }
+    if compatibility is not None:
+        preflight["compatible"] = bool(compatibility.get("compatible"))
     if p.get("dry_run"):
-        return _ok(clip=_media_pool_item_summary(clip), proxy_path=proxy_path)
-    return {"success": bool(clip.LinkProxyMedia(proxy_path))}
+        out = _ok(clip=_media_pool_item_summary(clip), proxy_path=proxy_path)
+        if compatibility is not None:
+            out["compatibility"] = compatibility
+        out["verified_operation"] = _verified_operation(
+            "media_pool.link_proxy_checked",
+            requested=requested,
+            preflight=preflight,
+            execution={"api": "MediaPoolItem.LinkProxyMedia", "attempted": False, "success": None},
+            readback=None,
+            verification_status="dry_run",
+            journal_event=_proxy_link_journal_event(
+                "proxy.link.preview",
+                clip,
+                proxy_path,
+                success=None,
+                verified=False,
+                compatibility=compatibility,
+            ),
+        )
+        return out
+    if p.get("require_compatible") and compatibility is not None and not compatibility.get("compatible"):
+        out = _err(
+            "Proxy media is not compatible with the source clip; refusing LinkProxyMedia",
+            code="PROXY_INCOMPATIBLE",
+            category="invalid_input",
+            remediation="Use a proxy with matching resolution, FPS, frame count, sample rate, and requested codec/profile.",
+        )
+        out["compatibility"] = compatibility
+        out["verified_operation"] = _verified_operation(
+            "media_pool.link_proxy_checked",
+            requested=requested,
+            preflight={**preflight, "ok": False},
+            execution={"api": "MediaPoolItem.LinkProxyMedia", "attempted": False, "success": None},
+            readback=None,
+            verification_status="blocked",
+            journal_event=_proxy_link_journal_event(
+                "proxy.link.blocked",
+                clip,
+                proxy_path,
+                success=False,
+                verified=False,
+                compatibility=compatibility,
+            ),
+        )
+        return out
+    verification = verify_by_readback(
+        mutate=lambda: clip.LinkProxyMedia(proxy_path),
+        observe=lambda: _proxy_link_readback(clip),
+        compare=lambda _before, observed: {
+            "verified": _proxy_readback_matches_path(observed, proxy_path),
+        },
+        intent={"clip_id": p.get("clip_id"), "proxy_path": proxy_path},
+        label="media_pool.link_proxy_checked",
+    )
+    success = bool(verification.get("success_raw"))
+    readback = verification.get("observed")
+    verified = bool(verification.get("verified"))
+    verification_status = "readback_verified" if verified else ("api_failed" if not success else "api_success_unverified")
+    event_type = "proxy.linked" if success else "proxy.link.failed"
+    out = {"success": success, "readback": readback}
+    if compatibility is not None:
+        out["compatibility"] = compatibility
+    out["verified_operation"] = _verified_operation(
+        "media_pool.link_proxy_checked",
+        requested=requested,
+        preflight=preflight,
+        execution={"api": "MediaPoolItem.LinkProxyMedia", "attempted": True, "success": success},
+        readback=readback,
+        verification_status=verification_status,
+        journal_event=_proxy_link_journal_event(
+            event_type,
+            clip,
+            proxy_path,
+            success=success,
+            verified=verified,
+            compatibility=compatibility,
+        ),
+    )
+    return out
 
 
 def _link_full_resolution_checked(root, p: Dict[str, Any]):
@@ -13846,7 +14281,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       metadata_field_inventory(clip_ids|selected, include_values?) -> {items, ui_group_names}
       safe_relink(clip_ids|selected, folder_path, dry_run?) -> {success}
       safe_unlink(clip_ids|selected, dry_run?) -> {success}
-      link_proxy_checked(clip_id, proxy_path|path, dry_run?) -> {success}
+      check_proxy_media_compatibility(clip_id, proxy_path|path, expected_codec?, expected_profile?) -> {compatible, mismatches}
+      link_proxy_checked(clip_id, proxy_path|path, dry_run?, check_compatibility?, require_compatible?, expected_codec?, expected_profile?) -> {success}
       link_full_resolution_checked(clip_id, path|full_res_media_path, dry_run?) -> {success}
       set_clip_marks(clip_ids|selected, mark_in, mark_out, type?, dry_run?) -> {success, results}
       clear_clip_marks(clip_ids|selected, type?, dry_run?) -> {success, results}
@@ -14109,6 +14545,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         return _safe_relink(mp, root, p)
     elif action == "safe_unlink":
         return _safe_unlink(mp, root, p)
+    elif action == "check_proxy_media_compatibility":
+        return _check_proxy_media_compatibility_checked(root, p)
     elif action == "link_proxy_checked":
         return _link_proxy_checked(root, p)
     elif action == "link_full_resolution_checked":
