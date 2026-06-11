@@ -1347,6 +1347,46 @@ def _timeline_timecode_to_frame_id(tl, timecode):
     return _timecode_to_frame_id(timecode, fps)
 
 
+def _marker_rebase_to_timeline_start(tl, frame):
+    """Rebase an absolute frame to a Timeline marker frameId.
+
+    Timeline.AddMarker frameIds are relative to the timeline start (frame 0 ==
+    first frame of the timeline), while GetCurrentTimecode and the timecodes
+    shown in the Resolve UI are absolute. GetMarkers() echoes back whatever
+    frameId was passed without validating, so a marker stored at an absolute
+    frame displays past the end of the timeline (invisible in the UI).
+    Frames below the timeline start are treated as already relative (elapsed
+    time), and the frame passes through unchanged when the start frame is
+    unavailable.
+    """
+    start = _timeline_start_frame(tl)
+    if start and frame >= start:
+        return frame - start
+    return frame
+
+
+def _marker_timecode_to_frame_id(tl, timecode):
+    frame, err = _timeline_timecode_to_frame_id(tl, timecode)
+    if err:
+        return None, err
+    return _marker_rebase_to_timeline_start(tl, frame), None
+
+
+def _marker_display_frame(tl, frame):
+    """Absolute frame for driving the playhead at a stored marker frameId.
+
+    Inverse of _marker_rebase_to_timeline_start: stored timeline marker keys
+    are relative to the timeline start, while SetCurrentTimecode is absolute.
+    Frames at or past the start frame are assumed to be legacy absolute keys
+    and pass through unchanged so they still sample the intended frame.
+    """
+    frame = int(frame)
+    start = _timeline_start_frame(tl)
+    if start and frame < start:
+        return frame + start
+    return frame
+
+
 def _frame_id_to_timecode(frame: int, fps: float, separator: str = ":") -> str:
     nominal_fps = max(1, int(round(float(fps))))
     frame = max(0, int(frame))
@@ -1364,6 +1404,7 @@ def _timeline_frame_id_to_timecode(tl, frame: int) -> Tuple[Optional[str], Optio
 
 
 def _current_timeline_frame_id(tl):
+    """Absolute frame at the playhead, matching TimelineItem.GetStart()."""
     if tl is None:
         return None, _err("current playhead marker requires a timeline")
     try:
@@ -1375,23 +1416,37 @@ def _current_timeline_frame_id(tl):
     return _timeline_timecode_to_frame_id(tl, timecode)
 
 
+def _current_timeline_marker_frame_id(tl):
+    frame, err = _current_timeline_frame_id(tl)
+    if err:
+        return None, err
+    return _marker_rebase_to_timeline_start(tl, frame), None
+
+
 def _marker_frame_from_params(p: Dict[str, Any], tl=None, default_to_current=False):
+    """Resolve marker frame params to a marker frameId.
+
+    With a timeline, timecodes (and the playhead default) are rebased so the
+    returned frameId is relative to the timeline start. Raw frame numbers are
+    passed through unchanged: timeline marker frames are relative to the
+    timeline start, clip marker frames are relative to the clip start.
+    """
     raw_timecode = _first_param(p, "timecode", "time_code", "tc")
     if raw_timecode is not None:
-        return _timeline_timecode_to_frame_id(tl, raw_timecode)
+        return _marker_timecode_to_frame_id(tl, raw_timecode)
 
     raw_frame = _first_param(p, "frame", "frame_id", "frameId", "frame_num", "frameNum")
     if raw_frame is not None:
         if isinstance(raw_frame, str):
             lowered = raw_frame.strip().lower()
             if lowered in {"current", "playhead", "current_playhead", "now"}:
-                return _current_timeline_frame_id(tl)
+                return _current_timeline_marker_frame_id(tl)
             if ":" in raw_frame or ";" in raw_frame:
-                return _timeline_timecode_to_frame_id(tl, raw_frame)
+                return _marker_timecode_to_frame_id(tl, raw_frame)
         return _coerce_marker_number(raw_frame, "frame")
 
     if default_to_current:
-        return _current_timeline_frame_id(tl)
+        return _current_timeline_marker_frame_id(tl)
     return None, _err("Missing marker frame. Provide frame, frame_id/frameId, or timecode.")
 
 
@@ -4821,7 +4876,7 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
     sampled = []
     try:
         for sample in samples:
-            timecode, tc_err = _timeline_frame_id_to_timecode(tl, int(sample["frame"]))
+            timecode, tc_err = _timeline_frame_id_to_timecode(tl, _marker_display_frame(tl, sample["frame"]))
             if tc_err:
                 sample["error"] = tc_err.get("error")
                 sampled.append(sample)
@@ -16330,6 +16385,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?) -> {success}
         # example: action_help(name='<action_name>')
       thumbnail_contact_sheet(frames?|max_samples?, analysis_root?) -> {path, samples}
+        frames are relative to the timeline start (frame 0 = first frame), like marker frameIds.
       marker_thumbnail_review(max_samples?, analysis_root?) -> {path, samples, review_guidance}
       edit_kernel_capabilities() -> {supported, partially_supported, unsupported}
       probe_edit_kernel_item(clip_ids? selected? timeline_item?) -> {items, count}
@@ -16935,6 +16991,12 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
 @_destructive_op("timeline_markers")
 def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
     """Markers and playhead operations on the current timeline.
+
+    Marker frames are RELATIVE to the timeline start: frame 0 is the first
+    frame of the timeline, even when the timeline starts at 01:00:00:00.
+    Timecode params are absolute timeline timecode as shown in the Resolve UI
+    (timecodes before the start timecode are treated as elapsed time) and are
+    converted to relative frames automatically.
 
     Actions:
       add(frame|frame_id|frameId|timecode?, color?, name?, note?, duration?, custom_data?) -> {success, frame}

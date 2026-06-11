@@ -461,7 +461,8 @@ def timeline_add_marker(frame_id: int, color: str, name: str, note: str = "", du
     """Add a marker to the current timeline.
 
     Args:
-        frame_id: Frame number for the marker.
+        frame_id: Frame number for the marker, relative to the timeline start
+            (frame 0 = first frame, even when the timeline starts at 01:00:00:00).
         color: Marker color (Blue, Cyan, Green, Yellow, Red, Pink, Purple, Fuchsia, Rose, Lavender, Sky, Mint, Lemon, Sand, Cocoa, Cream).
         name: Marker name.
         note: Marker note. Default: empty.
