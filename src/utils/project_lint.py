@@ -50,6 +50,15 @@ def _color_science_unset(settings: Dict[str, Any]) -> bool:
     return mode in ("", "davinciYRGB")
 
 
+def _timeline_has_items(timeline: Dict[str, Any]) -> bool:
+    if int(timeline.get("item_count") or 0) > 0:
+        return True
+    for key in ("video_item_count", "audio_item_count", "subtitle_item_count"):
+        if int(timeline.get(key) or 0) > 0:
+            return True
+    return False
+
+
 def lint_state(state: Dict[str, Any]) -> List[Issue]:
     """Return graded issues for a project state dict, most-severe first."""
     issues: List[Issue] = []
@@ -73,7 +82,7 @@ def lint_state(state: Dict[str, Any]) -> List[Issue]:
         ))
 
     for tl in timelines:
-        if (tl.get("item_count") or 0) == 0:
+        if not _timeline_has_items(tl):
             issues.append(Issue(
                 "warning", "empty_timeline",
                 f"Timeline '{tl.get('name')}' has no clips.",
