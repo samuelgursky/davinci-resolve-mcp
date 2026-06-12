@@ -3362,6 +3362,74 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertFalse(os.path.exists(plan["output_root"]["project_root"]))
             self.assertEqual(sorted(os.listdir(source_dir)), ["synthetic_custom_runner.mp4"])
 
+    def test_reused_report_is_ingested_into_current_root_db(self):
+        """Cross-root report reuse must land DB rows + a lockstep export in
+        the CURRENT root, keyed to the CURRENT project's clip identity —
+        otherwise media_ref lookups (edit_engine planners, panel readers)
+        find nothing while the manifest claims success (Phase 3 pilot bug)."""
+        from tests.test_analysis_store import make_report
+        from src.utils import analysis_store, timeline_brain_db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "source")
+            os.makedirs(source_dir)
+            source = os.path.join(source_dir, "sample clip.mp4")
+            with open(source, "wb") as handle:
+                handle.write(b"placeholder")
+            # A prior report in ANOTHER project's root, under the OLD clip id.
+            other_root = os.path.join(tmp, "other-root")
+            other_clip_dir = os.path.join(other_root, "clips", "old-dir")
+            os.makedirs(other_clip_dir)
+            prior = make_report()
+            prior["clip"] = dict(prior["clip"], clip_id="old-resolve-id", file_path=source)
+            prior_path = os.path.join(other_clip_dir, "analysis.json")
+            with open(prior_path, "w", encoding="utf-8") as handle:
+                json.dump(prior, handle)
+
+            analysis_dir = os.path.join(tmp, "analysis-root")
+            record = {
+                "clip_id": "new-resolve-id",
+                "clip_name": "Sample Clip.mp4",
+                "file_path": source,
+                "media_id": "new-media-id",
+            }
+            plan = build_plan(
+                project_name="Reuse Project",
+                project_id="project-reuse-db",
+                records=[record],
+                target={"type": "file", "path": source},
+                params={"analysis_root": analysis_dir, "depth": "standard",
+                        "session_only": True},
+                capabilities=detect_capabilities(env={}),
+            )
+            # Force the reuse path the way the registry matcher would.
+            clip_plan = plan["clips"][0]
+            clip_plan["skip_execution"] = True
+            clip_plan["cache_status"] = "reusable"
+            clip_plan["existing_report"] = {"path": prior_path}
+
+            manifest = asyncio.run(execute_plan_async(plan, params={"depth": "standard"}))
+            self.assertTrue(manifest["success"], manifest)
+            row = manifest["clips"][0]
+            self.assertTrue(row["reused"])
+            project_root = plan["output_root"]["project_root"]
+            # The export now lives in THIS root (provenance kept in reused_from).
+            self.assertTrue(row["analysis_json"].startswith(project_root))
+            self.assertTrue(os.path.isfile(row["analysis_json"]))
+            self.assertEqual(row["reused_from"], prior_path)
+            # DB rows landed under the CURRENT clip identity.
+            self.addCleanup(timeline_brain_db.close_all)
+            conn = timeline_brain_db.connect(project_root)
+            clip_row = conn.execute(
+                "SELECT resolve_clip_id, file_path FROM clips"
+            ).fetchone()
+            self.assertIsNotNone(clip_row)
+            self.assertEqual(clip_row["resolve_clip_id"], "new-resolve-id")
+            self.assertGreater(
+                conn.execute("SELECT COUNT(*) FROM transcript_segments").fetchone()[0], 0)
+            # The media_ref lookup the edit-engine planners depend on.
+            self.assertIsNotNone(analysis_store.resolve_clip_uuid(conn, "new-resolve-id"))
+
     def test_build_analysis_index_queries_reports_without_image_columns(self):
         with tempfile.TemporaryDirectory() as tmp:
             source_dir = os.path.join(tmp, "source")

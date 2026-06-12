@@ -5218,15 +5218,46 @@ async def execute_plan_async(
             "success": False,
         }
         if clip_plan.get("skip_execution") and existing_report.get("path"):
+            # DB-canonical (C1): a reused report — especially one matched from
+            # ANOTHER project's root via the registry — must still land rows
+            # and a lockstep export in THIS root, keyed to THIS project's clip
+            # identity. Without this, media_ref lookups against the current
+            # media pool (edit_engine planners, panel readers) find nothing
+            # even though the manifest reports success.
+            local_analysis_json = existing_report["path"]
+            try:
+                with open(existing_report["path"], "r", encoding="utf-8") as handle:
+                    reused_report = json.load(handle)
+            except (OSError, json.JSONDecodeError):
+                reused_report = None
+            if isinstance(reused_report, dict):
+                reused_report = dict(reused_report)
+                clip_block = dict(reused_report.get("clip") or {})
+                for key in ("clip_id", "clip_name", "media_id", "bin_path"):
+                    if record.get(key):
+                        clip_block[key] = record[key]
+                if record.get("file_path"):
+                    clip_block["file_path"] = record["file_path"]
+                reused_report["clip"] = clip_block
+                db_ingest = _ingest_report_into_db(
+                    output_root,
+                    reused_report,
+                    os.path.dirname(artifacts["analysis_json"]),
+                )
+                if not db_ingest.get("success"):
+                    clip_result["db_ingest_error"] = db_ingest.get("error")
+                if os.path.normpath(artifacts["analysis_json"]) != os.path.normpath(existing_report["path"]):
+                    _write_json(artifacts["analysis_json"], reused_report)
+                local_analysis_json = artifacts["analysis_json"]
             clip_result.update({
                 "success": True,
                 "reused": True,
-                "analysis_json": existing_report["path"],
+                "analysis_json": local_analysis_json,
                 "reuse_reason": clip_plan.get("reuse_reason"),
                 "cache_status": clip_plan.get("cache_status"),
                 "cache_warnings": existing_report.get("cache_warnings", []),
                 "reuse_source": clip_plan.get("reuse_source"),
-                "reused_from": clip_plan.get("reused_from"),
+                "reused_from": clip_plan.get("reused_from") or existing_report["path"],
             })
             manifest["clips"].append(clip_result)
             continue
