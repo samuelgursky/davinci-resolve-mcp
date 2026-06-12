@@ -2,6 +2,28 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.50.0
+
+The last JSON-fed readers now source from the DB-canonical analysis store
+(consistency/perf hygiene — the JSON export is lockstep with the DB, so this
+is shape-preserving by construction).
+
+- **Changed** `summarize_reports` aggregates from the DB (blob + human
+  overlay) when every report dir on disk is covered by an ingested clip row;
+  pre-v9 roots and MIXED roots (some clips not ingested) fall back WHOLESALE
+  to the JSON walk — a partial DB view would silently under-report. The
+  summary gains a `"source": "db"|"json"` key for observability; the F1
+  provenance map (source_reports / missing_reports) is unchanged.
+- **Changed** `build_analysis_index` sources local reports from the DB
+  instead of re-parsing every `analysis.json`; job-linked EXTERNAL report
+  paths (their rows live under another project's DB) and pre-v9 dirs keep
+  the JSON read. The FTS schema and the query surface are identical; the
+  result gains `report_sources` counts.
+- **Added** DB-vs-JSON parity tests (semantic equality with normalized
+  ordering) plus wholesale-fallback regressions for mixed and pre-v9 roots;
+  live-validated on the sample analysis root (summary, index counts, and
+  FTS query results identical on both paths).
+
 ## What's New in v2.49.0
 
 Cross-shot relationships (spec §4 — pattern recognition only): the shot
