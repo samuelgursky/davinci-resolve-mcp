@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.47.0
+
+Edit-engine plan browser in the control panel (Media → Edit Plans) — the
+panel UX pass for the v2.45.0 edit engine. Chat-first: the panel surfaces
+plans and evidence; execution stays in chat behind the confirm-token gate.
+
+- **Added** a plan browser at `#analysis/review/plans`: every saved
+  `edit_engine` plan with kind, summary, save time, and an `executed` chip;
+  fingerprint-corrupt plans surface as warning rows instead of being hidden.
+- **Added** plan detail views per kind: selects decisions render with shot
+  thumbnails, rank, duration, rationale, and a deep link to the shot page;
+  tighten plans list each dead-air lift with its transcript-gap evidence and
+  skipped items; swap plans show the current item plus numbered alternates
+  with similarity scores. Executed plans show their execution readback.
+- **Added** a copyable per-kind execute chat prompt on each plan (the panel
+  never executes; swaps include an `alternate_index` placeholder).
+- **Added** `/api/edit_plans` + `/api/edit_plans/<plan_id>` panel endpoints
+  (DB/file only — no Resolve round-trips; decisions are enriched server-side
+  with `resolve_clip_id` and a `thumb_frame_index` for the existing frames
+  route).
+- **Changed** `edit_engine.list_plans` gained `include_corrupt` (default off;
+  the MCP action shape is unchanged).
+
 ## What's New in v2.46.1
 
 Test and hygiene hardening; no public tool surface changes.
