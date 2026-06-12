@@ -547,15 +547,23 @@ no editorial suggestions): `same_setup_as` / `alt_take_of` (symmetric) and
 vendor tokens, so nothing here touches the caps ledger. Backends are
 detected, never installed (capabilities lists them with install guidance):
 text = ollama serving `nomic-embed-text` or sentence-transformers; visual =
-open_clip (ViT-B-32, needs torch).
-- `build_embeddings(kinds=["text","visual"]?, clip_id?)` — idempotent;
-  embeds clip summaries, shot descriptions (+ deep field groups), transcript
-  segments, and sampled frames (per-shot visual vector = mean of its
-  frames'). Only re-embeds entities whose content changed.
-- `find_similar(text=… | clip_id=… | clip_id+shot_index, kind="text"|"visual",
-  entity_types?, limit?)` — brute-force cosine over the project's vectors.
-  Free-text visual queries use the CLIP text encoder ("cracked windshield"
-  finds the frame). Results carry scores plus clip/shot/segment context.
+open_clip (ViT-B-32, needs torch); audio (v2.51.0+) = CLAP via
+`transformers` (laion/clap-htsat-unfused, preferred) or the `laion_clap`
+package — needs torch + ffmpeg.
+- `build_embeddings(kinds=["text","visual","audio"]?, clip_id?)` —
+  idempotent; embeds clip summaries, shot descriptions (+ deep field
+  groups), transcript segments, and sampled frames (per-shot visual vector
+  = mean of its frames'). `kinds=["audio"]` embeds one CLAP window per shot
+  (center-cropped to ~10s, piped from the source media as raw PCM —
+  read-only, no temp files) plus a clip-level mean vector; clips whose
+  media is offline are reported in `skipped_missing_media`. Only re-embeds
+  entities whose content changed.
+- `find_similar(text=… | clip_id=… | clip_id+shot_index,
+  kind="text"|"visual"|"audio", entity_types?, limit?)` — brute-force
+  cosine over the project's vectors. Free-text visual queries use the CLIP
+  text encoder ("cracked windshield" finds the frame); free-text audio
+  queries use the CLAP text encoder ("engine revving" finds the shot).
+  Results carry scores plus clip/shot/segment context.
 The panel search box gains a `Semantic` toggle when a text backend is
 detected. Vectors live in the per-project DB (schema v10).
 

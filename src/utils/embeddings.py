@@ -1,12 +1,15 @@
 """Embeddings + similarity search (Phase C of the analysis program).
 
 Text vectors over clip/shot summaries and transcript segments, CLIP image
-vectors over sampled frames. Backends are detected, never installed (the
-whisper pattern):
+vectors over sampled frames, CLAP audio vectors over per-shot audio windows.
+Backends are detected, never installed (the whisper pattern):
 
 - text: ollama serving ``nomic-embed-text`` (preferred — works on Apple
   Silicon via Metal), or ``sentence_transformers`` when installed.
 - visual: ``open_clip_torch`` (ViT-B-32) when installed alongside torch.
+- audio: ``transformers`` ClapModel (laion/clap-htsat-unfused; preferred) or
+  ``laion_clap`` when installed alongside torch; needs ffmpeg. Audio windows
+  are piped from the source media as raw PCM — read-only, no temp files.
 
 Vectors live in the per-project DB (schema v10 ``embeddings`` table) as
 float32 BLOBs, one row per (entity, kind, model). Similarity is brute-force
@@ -37,12 +40,17 @@ OLLAMA_TEXT_MODEL = os.environ.get("DAVINCI_RESOLVE_MCP_EMBED_MODEL", "nomic-emb
 SENTENCE_TRANSFORMERS_MODEL = "all-MiniLM-L6-v2"
 OPEN_CLIP_MODEL = ("ViT-B-32", "laion2b_s34b_b79k")
 
+CLAP_HF_MODEL = "laion/clap-htsat-unfused"
+CLAP_SAMPLE_RATE = 48000
+AUDIO_WINDOW_SECONDS = 10.0  # CLAP works on ~10s windows; longer shots are center-cropped
+
 _PROBE_TIMEOUT_SECONDS = 2.0
 _EMBED_TIMEOUT_SECONDS = 120.0
 
 # Lazy singletons for heavyweight local models.
 _ST_MODEL = None
 _CLIP_STATE: Optional[Tuple[Any, Any, Any]] = None  # (model, preprocess, torch)
+_CLAP_STATE: Optional[Tuple[str, Any]] = None  # (backend, state)
 
 
 def _now() -> str:
@@ -140,6 +148,26 @@ def detect_embedding_capabilities() -> Dict[str, Any]:
             else "pip install torch open_clip_torch"
         )
 
+    transformers_available = importlib.util.find_spec("transformers") is not None
+    laion_clap_available = importlib.util.find_spec("laion_clap") is not None
+    ffmpeg_available = bool(shutil.which("ffmpeg"))
+    audio_backends: List[str] = []
+    if torch_available and ffmpeg_available:
+        if transformers_available:
+            audio_backends.append("transformers_clap")
+        if laion_clap_available:
+            audio_backends.append("laion_clap")
+    if not audio_backends:
+        if not ffmpeg_available:
+            guidance["audio"] = "Install ffmpeg (audio windows are extracted with it)."
+        else:
+            guidance["audio"] = (
+                "pip install transformers (CLAP via laion/clap-htsat-unfused), "
+                "or pip install laion_clap"
+                if torch_available
+                else "pip install torch transformers"
+            )
+
     return {
         "success": True,
         "no_auto_install": True,
@@ -155,6 +183,12 @@ def detect_embedding_capabilities() -> Dict[str, Any]:
             "available": visual_available,
             "backends": ["open_clip"] if visual_available else [],
             "model": "-".join(OPEN_CLIP_MODEL) if visual_available else None,
+        },
+        "audio": {
+            "available": bool(audio_backends),
+            "backends": audio_backends,
+            "model": CLAP_HF_MODEL if audio_backends else None,
+            "ffmpeg": ffmpeg_available,
         },
         "install_guidance": guidance,
     }
@@ -275,6 +309,148 @@ def embed_text_for_visual_query(text: str) -> Dict[str, Any]:
             "vector": [float(x) for x in features[0].tolist()],
             "model": f"open_clip:{'-'.join(OPEN_CLIP_MODEL)}",
         }
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+# ── audio (CLAP) ─────────────────────────────────────────────────────────────
+
+
+def _clap_state() -> Tuple[str, Any]:
+    """Lazy-load the preferred CLAP backend: transformers (HF-cached, kept
+    current) over the laion_clap package."""
+    global _CLAP_STATE
+    if _CLAP_STATE is None:
+        caps = detect_embedding_capabilities()["audio"]
+        backends = caps["backends"]
+        if "transformers_clap" in backends:
+            from transformers import ClapModel, ClapProcessor
+
+            model = ClapModel.from_pretrained(CLAP_HF_MODEL)
+            model.eval()
+            processor = ClapProcessor.from_pretrained(CLAP_HF_MODEL)
+            _CLAP_STATE = ("transformers_clap", (model, processor))
+        elif "laion_clap" in backends:
+            import laion_clap
+
+            module = laion_clap.CLAP_Module(enable_fusion=False)
+            module.load_ckpt()  # default pretrained checkpoint
+            _CLAP_STATE = ("laion_clap", module)
+        else:
+            raise RuntimeError("No audio-embedding backend available")
+    return _CLAP_STATE
+
+
+def _extract_audio_window(file_path: str, start_seconds: float, duration_seconds: float):
+    """Mono 48 kHz float32 samples piped straight from ffmpeg — read-only on
+    the source media, no temp files. Returns None when the window is empty
+    (e.g. video-only media)."""
+    import subprocess
+
+    import numpy as np
+
+    command = [
+        "ffmpeg", "-v", "error",
+        "-ss", f"{max(0.0, float(start_seconds)):.3f}",
+        "-t", f"{max(0.1, float(duration_seconds)):.3f}",
+        "-i", file_path,
+        "-vn", "-ac", "1", "-ar", str(CLAP_SAMPLE_RATE),
+        "-f", "f32le", "-",
+    ]
+    try:
+        proc = subprocess.run(command, capture_output=True, timeout=120, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    samples = np.frombuffer(proc.stdout, dtype=np.float32)
+    return samples if samples.size else None
+
+
+def _clap_audio_vectors(waveforms: List[Any]) -> Tuple[List[List[float]], str]:
+    backend, state = _clap_state()
+    if backend == "transformers_clap":
+        import torch
+
+        model, processor = state
+        inputs = processor(audios=waveforms, sampling_rate=CLAP_SAMPLE_RATE, return_tensors="pt", padding=True)
+        with torch.no_grad():
+            features = model.get_audio_features(**inputs)
+            features = features / features.norm(dim=-1, keepdim=True)
+        return [[float(x) for x in row.tolist()] for row in features], f"transformers_clap:{CLAP_HF_MODEL}"
+    import numpy as np
+
+    module = state
+    vectors = module.get_audio_embedding_from_data(x=np.stack(waveforms), use_tensor=False)
+    return [[float(x) for x in row] for row in vectors], "laion_clap:default"
+
+
+def embed_audio_windows(file_path: str, windows: List[Tuple[float, float]]) -> Dict[str, Any]:
+    """Embed (start_seconds, end_seconds) windows of one media file with CLAP.
+
+    Windows longer than AUDIO_WINDOW_SECONDS are center-cropped. Vector slots
+    are None for windows with no decodable audio.
+    """
+    caps = detect_embedding_capabilities()
+    if not caps["audio"]["available"]:
+        return {
+            "success": False,
+            "error": "No audio-embedding backend available",
+            "install_guidance": caps["install_guidance"].get("audio"),
+        }
+    if not os.path.isfile(file_path):
+        return {"success": False, "error": f"media not found: {file_path}"}
+    waveforms: List[Any] = []
+    slots: List[Optional[int]] = []
+    for start, end in windows:
+        duration = max(0.1, float(end) - float(start))
+        if duration > AUDIO_WINDOW_SECONDS:
+            start = float(start) + (duration - AUDIO_WINDOW_SECONDS) / 2.0
+            duration = AUDIO_WINDOW_SECONDS
+        samples = _extract_audio_window(file_path, float(start), duration)
+        if samples is None:
+            slots.append(None)
+            continue
+        slots.append(len(waveforms))
+        waveforms.append(samples)
+    if not waveforms:
+        return {"success": True, "vectors": [None] * len(windows), "model": None,
+                "note": "no decodable audio in any window"}
+    try:
+        vectors, model = _clap_audio_vectors(waveforms)
+    except Exception as exc:  # noqa: BLE001 — backend failures surface as data
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "success": True,
+        "vectors": [vectors[slot] if slot is not None else None for slot in slots],
+        "model": model,
+    }
+
+
+def embed_text_for_audio_query(text: str) -> Dict[str, Any]:
+    """CLAP text encoder — lets a free-text query ('engine revving') search
+    audio vectors."""
+    caps = detect_embedding_capabilities()
+    if not caps["audio"]["available"]:
+        return {
+            "success": False,
+            "error": "No audio-embedding backend available",
+            "install_guidance": caps["install_guidance"].get("audio"),
+        }
+    try:
+        backend, state = _clap_state()
+        if backend == "transformers_clap":
+            import torch
+
+            model, processor = state
+            inputs = processor(text=[str(text)], return_tensors="pt", padding=True)
+            with torch.no_grad():
+                features = model.get_text_features(**inputs)
+                features = features / features.norm(dim=-1, keepdim=True)
+            return {"success": True, "vector": [float(x) for x in features[0].tolist()],
+                    "model": f"transformers_clap:{CLAP_HF_MODEL}"}
+        vectors = state.get_text_embedding([str(text), ""], use_tensor=False)
+        return {"success": True, "vector": [float(x) for x in vectors[0]], "model": "laion_clap:default"}
     except Exception as exc:  # noqa: BLE001
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -497,6 +673,78 @@ def build_embeddings(
         else:
             result["visual"] = {"success": True, "embedded": 0, "note": "all up to date"}
 
+    if "audio" in kinds:
+        caps = detect_embedding_capabilities()
+        if not caps["audio"]["available"]:
+            result["audio"] = {
+                "success": False,
+                "skipped": True,
+                "error": "No audio-embedding backend available",
+                "install_guidance": caps["install_guidance"].get("audio"),
+            }
+            result["success"] = False
+            return result
+        existing = _existing_rows(conn, "audio")
+        embedded_count = 0
+        missing_media: List[str] = []
+        audio_model: Optional[str] = None
+        for clip in conn.execute(f"SELECT * FROM clips{where}", args).fetchall():
+            clip = dict(clip)
+            file_path = str(clip.get("file_path") or "")
+            if not file_path or not os.path.isfile(file_path):
+                missing_media.append(str(clip.get("clip_name") or clip["clip_uuid"]))
+                continue
+            shots = [dict(s) for s in conn.execute(
+                "SELECT shot_uuid, time_seconds_start, time_seconds_end FROM shots "
+                "WHERE clip_uuid = ? ORDER BY shot_index",
+                (clip["clip_uuid"],),
+            ).fetchall()]
+            windows: List[Tuple[float, float]] = []
+            window_meta: List[Tuple[str, str, str]] = []
+            for shot in shots:
+                start, end = shot.get("time_seconds_start"), shot.get("time_seconds_end")
+                if start is None or end is None or float(end) - float(start) < 0.2:
+                    continue
+                h = _content_hash(f"{file_path}|{start}|{end}")
+                if existing.get(("shot", str(shot["shot_uuid"]))) == h:
+                    continue
+                windows.append((float(start), float(end)))
+                window_meta.append(("shot", str(shot["shot_uuid"]), h))
+            if not windows:
+                continue
+            embedded = embed_audio_windows(file_path, windows)
+            if not embedded.get("success"):
+                result["audio"] = embedded
+                result["success"] = False
+                return result
+            if not embedded.get("model"):
+                continue  # no decodable audio in this clip (e.g. video-only)
+            audio_model = str(embedded["model"])
+            items: List[Tuple[str, str, str, List[float]]] = []
+            clip_vectors: List[List[float]] = []
+            for m, vector in zip(window_meta, embedded["vectors"]):
+                if vector is None:
+                    continue
+                items.append((m[0], m[1], m[2], vector))
+                clip_vectors.append(vector)
+            # Clip-level audio vector = mean of its shot windows' (the
+            # per-shot-visual pattern).
+            if clip_vectors:
+                dim = len(clip_vectors[0])
+                mean = [sum(v[i] for v in clip_vectors) / len(clip_vectors) for i in range(dim)]
+                items.append((
+                    "clip", str(clip["clip_uuid"]),
+                    _content_hash(f"{file_path}|clip|{len(clip_vectors)}"), mean,
+                ))
+            embedded_count += _store_vectors(project_root, "audio", audio_model, items)
+        result["audio"] = {
+            "success": True,
+            "embedded": embedded_count,
+            "model": audio_model,
+            **({"skipped_missing_media": missing_media} if missing_media else {}),
+            **({"note": "all up to date"} if not embedded_count and not missing_media else {}),
+        }
+
     result["wall_clock_ms"] = int((time.time() - started) * 1000)
     counts = conn.execute(
         "SELECT embedding_kind, COUNT(*) AS n FROM embeddings GROUP BY embedding_kind"
@@ -569,8 +817,8 @@ def find_similar(
 
     conn = timeline_brain_db.connect(project_root)
     kind = (kind or "text").strip().lower()
-    if kind not in ("text", "visual"):
-        return {"success": False, "error": f"kind must be 'text' or 'visual', got {kind!r}"}
+    if kind not in ("text", "visual", "audio"):
+        return {"success": False, "error": f"kind must be 'text', 'visual', or 'audio', got {kind!r}"}
 
     exclude: Optional[Tuple[str, str]] = None
     query_vector: Optional[List[float]] = None
@@ -583,6 +831,12 @@ def find_similar(
                 return embedded
             query_vector = embedded["vectors"][0]
             query_model = str(embedded["model"])
+        elif kind == "audio":
+            encoded = embed_text_for_audio_query(str(text))
+            if not encoded.get("success"):
+                return encoded
+            query_vector = encoded["vector"]
+            query_model = str(encoded["model"])
         else:
             encoded = embed_text_for_visual_query(str(text))
             if not encoded.get("success"):

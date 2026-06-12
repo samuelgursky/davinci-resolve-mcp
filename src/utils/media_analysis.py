@@ -1458,6 +1458,20 @@ TOOL_INSTALL: Dict[str, Dict[str, Any]] = {
         "verify": "python -c \"import open_clip\"",
         "notes": "Needs torch. Model weights (~350 MB) download on first use.",
     },
+    "clap_audio": {
+        "label": "CLAP (audio embeddings)",
+        "bundle": "embeddings",
+        "required_for": ["audio similarity (find_similar kind=audio)"],
+        "commands": {
+            "all": "pip install transformers",
+        },
+        "verify": "python -c \"import transformers\"",
+        "notes": (
+            "Needs torch + ffmpeg. Uses laion/clap-htsat-unfused (~600 MB, "
+            "downloads on first use); the laion_clap package works as an "
+            "alternative backend."
+        ),
+    },
     "whisper_cpp": {
         "label": "whisper.cpp",
         "bundle": "transcription",
@@ -1649,6 +1663,11 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
                 "open_clip",
                 bool(embedding_caps.get("visual", {}).get("available")),
                 {"python_module": "open_clip"},
+            ),
+            "clap_audio": _tool_entry(
+                "clap_audio",
+                bool(embedding_caps.get("audio", {}).get("available")),
+                {"backends": embedding_caps.get("audio", {}).get("backends", [])},
             ),
         },
         "embeddings": embedding_caps,

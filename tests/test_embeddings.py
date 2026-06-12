@@ -191,5 +191,112 @@ class FindSimilarTests(EmbeddingsBase):
         self.assertTrue(all(r["entity_type"] == "shot" for r in result["results"]))
 
 
+def fake_embed_audio_windows(file_path, windows):
+    # One deterministic vector per window, keyed by the window start.
+    return {
+        "success": True,
+        "vectors": [[1.0, float(start), 0.5] for start, _end in windows],
+        "model": "fake:clap",
+    }
+
+
+class AudioEmbeddingsTests(EmbeddingsBase):
+    """CLAP audio embeddings (Phase 6) — backend mocked; covers the build
+    plumbing, graceful skip, missing media, and audio similarity search."""
+
+    def _ingest_with_real_media(self) -> str:
+        media = os.path.join(self.root, "fake-media.mp4")
+        with open(media, "wb") as handle:
+            handle.write(b"not really media")
+        report = make_report()
+        report["clip"] = dict(report["clip"], file_path=media)
+        result = analysis_store.ingest_report(self.root, report, clip_dir="sample-clip-mp4-abcdef123456")
+        return result["clip_uuid"]
+
+    def test_capabilities_include_audio_block(self) -> None:
+        caps = embeddings.detect_embedding_capabilities()
+        self.assertIn("audio", caps)
+        self.assertIn("backends", caps["audio"])
+        if not caps["audio"]["available"]:
+            self.assertIn("audio", caps["install_guidance"])
+
+    def test_build_audio_embeddings_and_idempotency(self) -> None:
+        clip_uuid = self._ingest_with_real_media()
+        available = {"audio": {"available": True, "backends": ["transformers_clap"],
+                               "model": "fake", "ffmpeg": True}, "install_guidance": {}}
+        with mock.patch.object(embeddings, "detect_embedding_capabilities", return_value=available), \
+             mock.patch.object(embeddings, "embed_audio_windows", side_effect=fake_embed_audio_windows):
+            first = embeddings.build_embeddings(self.root, kinds=("audio",))
+            self.assertTrue(first["success"], first)
+            # 3 shot windows + 1 clip-level mean vector.
+            self.assertEqual(first["audio"]["embedded"], 4)
+            second = embeddings.build_embeddings(self.root, kinds=("audio",))
+            self.assertEqual(second["audio"]["embedded"], 0)
+        conn = timeline_brain_db.connect(self.root)
+        counts = {
+            r["entity_type"]: r["n"] for r in conn.execute(
+                "SELECT entity_type, COUNT(*) AS n FROM embeddings "
+                "WHERE embedding_kind='audio' GROUP BY entity_type"
+            )
+        }
+        self.assertEqual(counts, {"shot": 3, "clip": 1})
+        row = conn.execute(
+            "SELECT vector FROM embeddings WHERE embedding_kind='audio' AND entity_type='clip' AND entity_uuid=?",
+            (clip_uuid,),
+        ).fetchone()
+        self.assertIsNotNone(row)
+
+    def test_build_audio_graceful_skip_without_backend(self) -> None:
+        self._ingest_with_real_media()
+        unavailable = {"audio": {"available": False, "backends": [], "model": None, "ffmpeg": True},
+                       "install_guidance": {"audio": "pip install transformers"}}
+        with mock.patch.object(embeddings, "detect_embedding_capabilities", return_value=unavailable):
+            result = embeddings.build_embeddings(self.root, kinds=("audio",))
+        self.assertFalse(result["success"])
+        self.assertTrue(result["audio"]["skipped"])
+        self.assertEqual(result["audio"]["install_guidance"], "pip install transformers")
+
+    def test_missing_media_is_reported_not_fatal(self) -> None:
+        # make_report's file_path (/media/sample clip.mp4) does not exist.
+        available = {"audio": {"available": True, "backends": ["transformers_clap"],
+                               "model": "fake", "ffmpeg": True}, "install_guidance": {}}
+        with mock.patch.object(embeddings, "detect_embedding_capabilities", return_value=available), \
+             mock.patch.object(embeddings, "embed_audio_windows", side_effect=fake_embed_audio_windows):
+            result = embeddings.build_embeddings(self.root, kinds=("audio",))
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["audio"]["embedded"], 0)
+        self.assertEqual(len(result["audio"]["skipped_missing_media"]), 1)
+
+    def test_find_similar_audio_by_shot_and_text(self) -> None:
+        media_clip_uuid = self._ingest_with_real_media()
+        available = {"audio": {"available": True, "backends": ["transformers_clap"],
+                               "model": "fake", "ffmpeg": True}, "install_guidance": {}}
+        with mock.patch.object(embeddings, "detect_embedding_capabilities", return_value=available), \
+             mock.patch.object(embeddings, "embed_audio_windows", side_effect=fake_embed_audio_windows):
+            embeddings.build_embeddings(self.root, kinds=("audio",))
+        result = embeddings.find_similar(
+            self.root, clip_ref=media_clip_uuid, shot_index=1, kind="audio", limit=5)
+        self.assertTrue(result["success"], result)
+        self.assertTrue(result["results"])
+        with mock.patch.object(
+            embeddings, "embed_text_for_audio_query",
+            return_value={"success": True, "vector": [1.0, 0.0, 0.5], "model": "fake:clap"},
+        ):
+            text_result = embeddings.find_similar(self.root, text="engine revving", kind="audio")
+        self.assertTrue(text_result["success"], text_result)
+        self.assertTrue(text_result["results"])
+
+    def test_find_similar_rejects_unknown_kind(self) -> None:
+        result = embeddings.find_similar(self.root, text="x", kind="smell")
+        self.assertFalse(result["success"])
+        self.assertIn("audio", result["error"])
+
+    def test_embed_audio_windows_requires_backend(self) -> None:
+        result = embeddings.embed_audio_windows("/no/such/file.mp4", [(0.0, 5.0)])
+        if not embeddings.detect_embedding_capabilities()["audio"]["available"]:
+            self.assertFalse(result["success"])
+            self.assertIn("install_guidance", result)
+
+
 if __name__ == "__main__":
     unittest.main()
