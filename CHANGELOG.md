@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.51.0
+
+CLAP audio embeddings — the final phase of the post-program improvements.
+Detection-based like every other backend (never auto-installed); local
+compute, so nothing touches the caps ledger.
+
+- **Added** audio embedding backend detection: CLAP via `transformers`
+  (laion/clap-htsat-unfused, preferred) or the `laion_clap` package, plus
+  torch + ffmpeg. `capabilities` gains an `audio` block with install
+  guidance and a `clap_audio` Tools-page entry.
+- **Added** `build_embeddings(kinds=["audio"])`: one CLAP window per shot
+  (center-cropped to ~10 s, piped from the source media as raw PCM —
+  read-only on source media, no temp files) plus a clip-level mean vector,
+  stored as `embedding_kind="audio"` rows. Idempotent via content hashes;
+  offline media is reported in `skipped_missing_media`; a missing backend
+  is a graceful skip with install guidance.
+- **Added** `find_similar(kind="audio")`: shot/clip queries over the audio
+  vectors, and free-text queries ("engine revving") via the CLAP text
+  encoder.
+
 ## What's New in v2.50.0
 
 The last JSON-fed readers now source from the DB-canonical analysis store
