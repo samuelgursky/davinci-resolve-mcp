@@ -3430,6 +3430,110 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             # The media_ref lookup the edit-engine planners depend on.
             self.assertIsNotNone(analysis_store.resolve_clip_uuid(conn, "new-resolve-id"))
 
+    def test_summarize_and_index_db_vs_json_parity(self):
+        """Phase 5 — summarize_reports and build_analysis_index source from
+        the DB-canonical store when the root is fully ingested, falling back
+        WHOLESALE to the JSON walk otherwise. Both paths must be semantically
+        identical: the export is lockstep with the DB by construction."""
+        from tests.test_analysis_store import make_report
+        from src.utils import analysis_store, timeline_brain_db
+        from src.utils.media_analysis import (
+            build_analysis_index, query_analysis_index, summarize_reports,
+        )
+
+        def _normalized(summary):
+            out = json.loads(json.dumps(summary))
+            out.pop("source", None)
+            (out.get("provenance") or {}).pop("generated_at", None)
+            out["technical_warnings"] = sorted(map(str, out.get("technical_warnings") or []))
+            out["search_tags"] = sorted(out.get("search_tags") or [])
+            prov = out.get("provenance") or {}
+            prov["source_reports"] = sorted(
+                prov.get("source_reports") or [], key=lambda r: str(r.get("clip_id")))
+            prov["missing_reports"] = sorted(
+                prov.get("missing_reports") or [], key=lambda r: str(r.get("report_path")))
+            return out
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = os.path.join(tmp, "analysis-root")
+            os.makedirs(root)
+            self.addCleanup(timeline_brain_db.close_all)
+            report = make_report()
+            ingest = analysis_store.ingest_report(root, report, clip_dir="par-aaaaaaaaaaaa")
+            self.assertTrue(ingest["success"], ingest)
+            report_b = make_report()
+            report_b["clip"] = dict(report_b["clip"], clip_id="parity-2", clip_name="B.mp4",
+                                    file_path="/media/b.mp4", media_id="parity-2-m")
+            ingest_b = analysis_store.ingest_report(root, report_b, clip_dir="par-bbbbbbbbbbbb")
+            # The pipeline writes the lockstep export after ingest; mirror it.
+            for clip_uuid, clip_dir in ((ingest["clip_uuid"], "par-aaaaaaaaaaaa"),
+                                        (ingest_b["clip_uuid"], "par-bbbbbbbbbbbb")):
+                target = os.path.join(root, "clips", clip_dir, "analysis.json")
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                self.assertTrue(analysis_store.export_report_file(root, clip_uuid, target))
+
+            db_summary = summarize_reports(root)
+            self.assertEqual(db_summary["source"], "db")
+            self.assertEqual(db_summary["clip_reports"], 2)
+            db_index = build_analysis_index(root)
+            self.assertTrue(db_index["success"], db_index)
+            self.assertEqual(db_index["report_sources"], {"db": 2, "json": 0})
+            db_query = query_analysis_index(root, query="sample")
+
+            # Force the JSON path by making the export unavailable.
+            with unittest.mock.patch.object(analysis_store, "export_report", return_value=None):
+                json_summary = summarize_reports(root)
+                json_index = build_analysis_index(root)
+            self.assertEqual(json_summary["source"], "json")
+            self.assertEqual(json_index["report_sources"], {"db": 0, "json": 2})
+            json_query = query_analysis_index(root, query="sample")
+
+            self.assertEqual(_normalized(db_summary), _normalized(json_summary))
+            self.assertEqual(db_index["counts"], json_index["counts"])
+            self.assertEqual(
+                [r.get("clip_id") for r in db_query.get("results") or []],
+                [r.get("clip_id") for r in json_query.get("results") or []],
+            )
+
+    def test_summarize_mixed_root_falls_back_wholesale(self):
+        from tests.test_analysis_store import make_report
+        from src.utils import analysis_store, timeline_brain_db
+        from src.utils.media_analysis import summarize_reports
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = os.path.join(tmp, "analysis-root")
+            os.makedirs(root)
+            self.addCleanup(timeline_brain_db.close_all)
+            ingest = analysis_store.ingest_report(root, make_report(), clip_dir="mix-aaaaaaaaaaaa")
+            target = os.path.join(root, "clips", "mix-aaaaaaaaaaaa", "analysis.json")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            self.assertTrue(analysis_store.export_report_file(root, ingest["clip_uuid"], target))
+            # A second report on disk that was never ingested (mixed root).
+            stray_dir = os.path.join(root, "clips", "mix-stray")
+            os.makedirs(stray_dir)
+            stray = make_report()
+            stray["clip"] = dict(stray["clip"], clip_id="stray-1", clip_name="Stray.mp4",
+                                 file_path="/media/stray.mp4")
+            with open(os.path.join(stray_dir, "analysis.json"), "w", encoding="utf-8") as fh:
+                json.dump(stray, fh)
+            summary = summarize_reports(root)
+            self.assertEqual(summary["source"], "json")
+            self.assertEqual(summary["clip_reports"], 2)
+
+    def test_summarize_pre_v9_root_uses_json(self):
+        from tests.test_analysis_store import make_report
+        from src.utils.media_analysis import summarize_reports
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = os.path.join(tmp, "analysis-root")
+            clip_dir = os.path.join(root, "clips", "legacy-clip")
+            os.makedirs(clip_dir)
+            with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as fh:
+                json.dump(make_report(), fh)
+            summary = summarize_reports(root)
+            self.assertEqual(summary["source"], "json")
+            self.assertEqual(summary["clip_reports"], 1)
+
     def test_build_analysis_index_queries_reports_without_image_columns(self):
         with tempfile.TemporaryDirectory() as tmp:
             source_dir = os.path.join(tmp, "source")

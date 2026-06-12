@@ -5994,20 +5994,68 @@ def load_report(project_root: str, report_path: Optional[str] = None, clip_dir: 
     return {"success": True, "path": path, "report": payload}
 
 
-def summarize_reports(project_root: str) -> Dict[str, Any]:
-    root = normalize_path(project_root)
+def _collect_reports_for_summary(root: str) -> Tuple[List[Dict[str, Any]], List[str], str]:
+    """(reports, report_paths, source) for summarize_reports.
+
+    DB-first: when every report dir on disk is covered by an ingested clip
+    row, reports come from the DB-canonical store (blob + human overlay —
+    identical content to the lockstep JSON export). Pre-v9 roots and MIXED
+    roots (some clips not ingested) fall back WHOLESALE to the JSON walk —
+    a partial DB view would silently under-report.
+    """
     clips_root = os.path.join(root, "clips")
-    reports: List[Dict[str, Any]] = []
-    report_paths: List[str] = []
+    disk_paths: List[str] = []
     if os.path.isdir(clips_root):
         for dirpath, _, filenames in os.walk(clips_root):
             if "analysis.json" in filenames:
-                report_path = os.path.join(dirpath, "analysis.json")
+                disk_paths.append(os.path.join(dirpath, "analysis.json"))
+    disk_paths.sort()
+
+    try:
+        from src.utils import analysis_store, timeline_brain_db
+
+        conn = timeline_brain_db.connect(root)
+        db_dirs = {
+            str(r["clip_dir"]): str(r["clip_uuid"])
+            for r in conn.execute(
+                "SELECT clip_dir, clip_uuid FROM clips WHERE clip_dir IS NOT NULL"
+            ).fetchall()
+        }
+    except Exception:  # noqa: BLE001 — no DB (pre-v9) → JSON
+        db_dirs = {}
+    if disk_paths and db_dirs:
+        dir_names = [os.path.basename(os.path.dirname(p)) for p in disk_paths]
+        if all(name in db_dirs for name in dir_names):
+            from src.utils import analysis_store
+
+            reports: List[Dict[str, Any]] = []
+            complete = True
+            for path, name in zip(disk_paths, dir_names):
                 try:
-                    reports.append(_read_json(report_path))
-                    report_paths.append(report_path)
-                except (OSError, json.JSONDecodeError):
-                    continue
+                    report = analysis_store.export_report(root, db_dirs[name])
+                except Exception:  # noqa: BLE001
+                    report = None
+                if not isinstance(report, dict):
+                    complete = False
+                    break
+                reports.append(report)
+            if complete:
+                return reports, disk_paths, "db"
+
+    reports = []
+    report_paths: List[str] = []
+    for path in disk_paths:
+        try:
+            reports.append(_read_json(path))
+            report_paths.append(path)
+        except (OSError, json.JSONDecodeError):
+            continue
+    return reports, report_paths, "json"
+
+
+def summarize_reports(project_root: str) -> Dict[str, Any]:
+    root = normalize_path(project_root)
+    reports, report_paths, reports_source = _collect_reports_for_summary(root)
     warnings = []
     motion_counts: Dict[str, int] = {}
     tags: Dict[str, int] = {}
@@ -6047,6 +6095,7 @@ def summarize_reports(project_root: str) -> Dict[str, Any]:
     summary = {
         "success": True,
         "project_root": root,
+        "source": reports_source,  # "db" (canonical store) | "json" (walk fallback)
         "clip_reports": len(reports),
         "motion_distribution": motion_counts,
         "technical_warning_count": len(warnings),
@@ -7202,9 +7251,42 @@ def build_analysis_index(project_root: str, *, index_path: Optional[Any] = None)
         conn.execute("INSERT INTO index_metadata (key, value) VALUES (?, ?)", ("fts_enabled", "1" if fts_enabled else "0"))
         conn.execute("INSERT INTO index_metadata (key, value) VALUES (?, ?)", ("image_blob_policy", "excluded"))
 
+        # DB-first sourcing: local reports whose clip dir is ingested come from
+        # the DB-canonical store (blob + human overlay — identical content to
+        # the lockstep JSON export) instead of re-parsing every analysis.json.
+        # Pre-v9 dirs and job-linked EXTERNAL report paths (their rows live
+        # under another project's DB) keep the JSON read. The index schema and
+        # the query surface are unchanged either way.
+        clips_root_prefix = os.path.realpath(os.path.join(root, "clips")) + os.sep
+        try:
+            from src.utils import timeline_brain_db as _brain_db
+
+            _db_dirs = {
+                str(r["clip_dir"]): str(r["clip_uuid"])
+                for r in _brain_db.connect(root).execute(
+                    "SELECT clip_dir, clip_uuid FROM clips WHERE clip_dir IS NOT NULL"
+                ).fetchall()
+            }
+        except Exception:  # noqa: BLE001 — no DB (pre-v9) → JSON for everything
+            _db_dirs = {}
+        report_sources = {"db": 0, "json": 0}
         for report_path in sorted(_iter_analysis_report_files(root)):
             try:
-                report = _read_json(report_path)
+                report = None
+                if _db_dirs and os.path.realpath(report_path).startswith(clips_root_prefix):
+                    clip_uuid = _db_dirs.get(os.path.basename(os.path.dirname(report_path)))
+                    if clip_uuid:
+                        try:
+                            from src.utils import analysis_store as _analysis_store
+
+                            report = _analysis_store.export_report(root, clip_uuid)
+                        except Exception:  # noqa: BLE001 — fall back per-report
+                            report = None
+                if isinstance(report, dict):
+                    report_sources["db"] += 1
+                else:
+                    report = _read_json(report_path)
+                    report_sources["json"] += 1
                 row_counts = _insert_analysis_report_into_index(conn, report_path, report, fts_enabled=fts_enabled)
                 counts["clips"] += 1
                 for key, value in row_counts.items():
@@ -7244,6 +7326,7 @@ def build_analysis_index(project_root: str, *, index_path: Optional[Any] = None)
         "image_blob_policy": "excluded",
         "fts_enabled": bool(counts["clips"]) and _sqlite_table_exists(db_path, "clips_fts"),
         "counts": counts,
+        "report_sources": report_sources,  # how many reports came from the DB vs JSON
         "failed_report_count": len(failed_reports),
         "failed_reports": failed_reports[:50],
         "size_bytes": os.path.getsize(db_path) if os.path.isfile(db_path) else 0,
