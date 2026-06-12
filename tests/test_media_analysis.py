@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 from typing import Any, Dict, Optional
 
 from src import server as _server_module
@@ -4306,17 +4307,27 @@ class InventoryCacheReuseTests(unittest.TestCase):
                 fh.write("{}")
             self.assertEqual(self.dash._assemble_inventory_payload(tmp, entry)["counts"]["analyzed"], 1)
 
+    def _without_resolve(self):
+        # Make the Resolve probe deterministically absent so these tests pass
+        # whether or not a live Resolve instance happens to be running.
+        return unittest.mock.patch.object(
+            self.dash, "_connect_resolve_read_only",
+            return_value=(None, "Resolve unavailable (stubbed for test)"),
+        )
+
     def test_reuse_cached_serves_from_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.dash._store_cached_inventory(tmp, self._entry())
-            payload = self.dash.resolve_media_inventory(tmp, reuse_cached=True)
+            with self._without_resolve():
+                payload = self.dash.resolve_media_inventory(tmp, reuse_cached=True)
             self.assertTrue(payload["resolve_available"])
             self.assertEqual(payload["counts"]["total"], 2)
 
     def test_reuse_miss_falls_through_to_build(self):
         # No cache entry → full build; without Resolve that surfaces as unavailable
         # rather than silently returning empty cached data.
-        payload = self.dash.resolve_media_inventory("/no/such/cache/root", reuse_cached=True)
+        with self._without_resolve():
+            payload = self.dash.resolve_media_inventory("/no/such/cache/root", reuse_cached=True)
         self.assertFalse(payload["resolve_available"])
 
     def test_resolve_identity_lock_is_reentrant(self):
@@ -4343,7 +4354,8 @@ class InventoryCacheReuseTests(unittest.TestCase):
             original = self.dash._current_resolve_project_id
             self.dash._current_resolve_project_id = lambda: ("2", None)  # different project
             try:
-                payload = self.dash.resolve_media_inventory(tmp, reuse_cached=True)
+                with self._without_resolve():
+                    payload = self.dash.resolve_media_inventory(tmp, reuse_cached=True)
             finally:
                 self.dash._current_resolve_project_id = original
             # Confirmed mismatch → full rebuild, which is unavailable without Resolve.
