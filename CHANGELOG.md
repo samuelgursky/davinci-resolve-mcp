@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.48.0
+
+Edit-engine hardening: trustworthy execute readback ahead of the first
+real-cut pilot. Live-validated end-to-end on a disposable synthetic-media
+project (24/24 checks).
+
+- **Added** `timeline_versioning(action="diff_timelines", params={from_timeline,
+  to_timeline})`: structural diff (added/removed/moved/trimmed + summary)
+  between two LIVE timelines by name — read-only, no archived snapshots
+  needed. Built for edit-engine variants, which are new-name timelines with
+  no shared version chain. The item walk and the snapshot comparison were
+  factored out of the version-snapshot path
+  (`capture_timeline_clip_usage` / `compare_usage_snapshots`) and reused.
+- **Fixed** `execute_swap` audio accounting: the lift was video-only while
+  the replacement appended linked video+audio, so item counts drifted on
+  every swap. The lift is now scoped to the target's video track plus its
+  linked audio tracks (`GetLinkedItems`, with a media-id track-scan fallback;
+  items with no linked audio and audio-only timelines are handled
+  gracefully), and readback reports per-track-type `track_counts`
+  before/after plus an `audio_accounting` block.
+- **Added** `execute_tighten` readback now includes `structural_diff`
+  (source vs variant); `execute_selects` readback includes a
+  `usage_summary` (per-track-type item counts — a diff against a source
+  timeline is meaningless for a fresh assembly).
+- **Changed** the live edit-engine validation harness asserts the tighten
+  structural diff, `diff_timelines` agreement, and swap track-count
+  symmetry (24 checks, up from 20).
+
 ## What's New in v2.47.0
 
 Edit-engine plan browser in the control panel (Media → Edit Plans) — the
