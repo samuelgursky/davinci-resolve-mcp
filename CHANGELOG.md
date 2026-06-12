@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.46.1
+
+Test and hygiene hardening; no public tool surface changes.
+
+- **Fixed** the three `InventoryCacheReuseTests` failures that appeared
+  whenever a live Resolve instance was running: the reuse/build-path tests
+  now stub the read-only Resolve probe, so the suite is green with Resolve
+  open or closed.
+- **Added** `src/utils/project_cleanup.delete_project_safely`: a retrying
+  delete helper for disposable Resolve projects (switch away from the target,
+  retry `DeleteProject` once after a pause, report the leftover by name on
+  persistent failure). The live edit-engine validation harness now uses it
+  during cleanup, so disposable pilot projects stop lingering in the library.
+
 ## What's New in v2.46.0
 
 Community PR bundle: five contributed fixes and features (#62–#66), live-validated
