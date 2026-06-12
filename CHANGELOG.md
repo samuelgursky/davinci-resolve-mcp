@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.48.1
+
+Bug fix surfaced by the first real-cut tighten pilot.
+
+- **Fixed** cross-root analysis reuse never landed in the current project's
+  DB: when the registry matched a reusable report from another project's
+  analysis root, `execute_plan_async` reported success but wrote no DB rows
+  and no local export — so `media_ref` lookups against the current media
+  pool (edit-engine planners, panel readers) found nothing. The reuse path
+  now re-keys the report to the current project's clip identity, ingests it
+  into the current root's DB, and writes a lockstep `analysis.json` export
+  (provenance kept in `reused_from`).
+
 ## What's New in v2.48.0
 
 Edit-engine hardening: trustworthy execute readback ahead of the first
