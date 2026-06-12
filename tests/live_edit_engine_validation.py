@@ -217,10 +217,14 @@ def main() -> int:
 
     finally:
         try:
-            if previous_project:
-                pm.LoadProject(previous_project)
-            deleted = pm.DeleteProject(PILOT)
-            print(f"cleanup: previous project restored; pilot deleted={deleted}")
+            from src.utils.project_cleanup import delete_project_safely
+            outcome = delete_project_safely(pm, PILOT, switch_to=previous_project)
+            if outcome["success"]:
+                print(f"cleanup: previous project restored; pilot deleted "
+                      f"(attempts={outcome['attempts']})")
+            else:
+                print(f"cleanup warning: disposable project '{outcome['leftover']}' "
+                      f"left in library ({outcome['detail']}) — delete it manually")
         except Exception as exc:
             print(f"cleanup warning: {exc}")
 
