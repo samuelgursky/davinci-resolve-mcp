@@ -271,5 +271,78 @@ class PlanSwapTests(EditEngineBase):
         self.assertFalse(plan["success"])
 
 
+class PanelPlanApiTests(EditEngineBase):
+    """The /api/edit_plans surface: list + detail payloads for the panel
+    plan browser (DB/file only — no Resolve)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._ingest_deep_clip(
+            clip_id="resolve-clip-1", name="A Clip.mp4", path="/media/a.mp4", clip_dir="a-aaaaaaaaaaaa",
+            shots=[
+                deep_shot(1, 0.0, 5.0, "high", "Opening action."),
+                deep_shot(2, 5.0, 10.0, "low", "Dead beat."),
+                deep_shot(3, 10.0, 16.0, "high", "Payoff."),
+            ],
+        )
+        self.plan = edit_engine.plan_selects(self.root, min_select_potential="high")
+        self.assertTrue(self.plan["success"], self.plan)
+
+    def _tamper(self, plan_id: str) -> None:
+        path = os.path.join(edit_engine._plan_dir(self.root), f"{plan_id}.json")
+        with open(path, "r+", encoding="utf-8") as handle:
+            data = json.load(handle)
+            data["summary"] = "tampered"
+            handle.seek(0)
+            json.dump(data, handle)
+            handle.truncate()
+
+    def test_list_plans_hides_corrupt_by_default(self) -> None:
+        self._tamper(self.plan["plan_id"])
+        rows = edit_engine.list_plans(self.root)
+        self.assertEqual(rows["plans"], [])
+
+    def test_list_plans_include_corrupt_surfaces_warning_row(self) -> None:
+        self._tamper(self.plan["plan_id"])
+        rows = edit_engine.list_plans(self.root, include_corrupt=True)
+        self.assertEqual(len(rows["plans"]), 1)
+        self.assertTrue(rows["plans"][0]["corrupt"])
+        self.assertEqual(rows["plans"][0]["plan_id"], self.plan["plan_id"])
+
+    def test_panel_list_payload(self) -> None:
+        from src import analysis_dashboard as dash
+        payload = dash.list_edit_plans_payload(self.root)
+        self.assertTrue(payload["success"], payload)
+        self.assertEqual(len(payload["plans"]), 1)
+        self.assertEqual(payload["plans"][0]["kind"], "selects")
+
+    def test_panel_detail_enriches_decisions_for_thumbnails(self) -> None:
+        from src import analysis_dashboard as dash
+        payload = dash.get_edit_plan_payload(self.root, self.plan["plan_id"])
+        self.assertTrue(payload["success"], payload)
+        self.assertFalse(payload["corrupt"])
+        decisions = payload["plan"]["decisions"]
+        self.assertEqual(len(decisions), 2)
+        for decision in decisions:
+            self.assertTrue(decision["resolve_clip_id"])
+        # make_report keyframes: index 1 @0.5s → shot 1, index 3 @14.0s → shot 3.
+        by_shot = {d["shot_index"]: d for d in decisions}
+        self.assertEqual(by_shot[1]["thumb_frame_index"], 1)
+        self.assertEqual(by_shot[3]["thumb_frame_index"], 3)
+
+    def test_panel_detail_corrupt_plan(self) -> None:
+        from src import analysis_dashboard as dash
+        self._tamper(self.plan["plan_id"])
+        payload = dash.get_edit_plan_payload(self.root, self.plan["plan_id"])
+        self.assertTrue(payload["success"])
+        self.assertTrue(payload["corrupt"])
+
+    def test_panel_detail_missing_plan(self) -> None:
+        from src import analysis_dashboard as dash
+        payload = dash.get_edit_plan_payload(self.root, "nope-nope")
+        self.assertFalse(payload["success"])
+        self.assertIn("not found", payload["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

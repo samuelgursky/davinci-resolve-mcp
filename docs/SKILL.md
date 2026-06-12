@@ -706,6 +706,12 @@ The engine needs the analysis substrate: analyzed clips in the DB (run
 `db_ingest` on older roots), transcripts for tighten, and visual embeddings
 (`build_embeddings(kinds=['visual'])`) for swap.
 
+Plans are reviewable in the control panel (Media → Edit Plans, v2.47.0+):
+decisions/lifts/alternates with thumbnails and rationale, deep links to shot
+pages, and a copyable per-kind execute prompt. The panel never executes —
+when the user says they reviewed a plan there, execution still comes back
+through chat with the confirm-token gate.
+
 **`timeline_versioning`** — Version-on-mutate, archive, rollback, brain-edit history (C6).
 
 Every destructive timeline op (compound, captions, ripple delete, gap close,

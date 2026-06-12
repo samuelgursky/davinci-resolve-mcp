@@ -2379,6 +2379,84 @@ HTML = r"""<!doctype html>
     }
     .history-rollback-btn:hover { background: var(--accent-warning); color: var(--bg-base); }
 
+    /* ─── Edit-engine plan browser ──────────────────────────────────── */
+    .plans-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      margin-bottom: var(--space-3);
+    }
+    .plans-toolbar .section-meta { margin-left: var(--space-2); }
+    .plans-list { display: grid; gap: var(--space-2); }
+    .plan-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-2) var(--space-3);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--lab-panel-elevated, var(--bg-base));
+      cursor: pointer;
+    }
+    .plan-row:hover { background: var(--bg-muted); }
+    .plan-row.is-corrupt {
+      cursor: default;
+      border-color: var(--accent-warning);
+      background: var(--accent-warning-muted);
+    }
+    .plan-row .summary { flex: 1; min-width: 0; }
+    .plan-row .saved-at { color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }
+    .plan-chip {
+      display: inline-block;
+      padding: 1px var(--space-2);
+      border-radius: var(--radius-sm);
+      font-size: var(--text-xs);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border: 1px solid var(--border-default);
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+    .plan-chip.kind-selects { color: var(--accent-success); border-color: var(--accent-success); }
+    .plan-chip.kind-tighten { color: var(--accent-warning); border-color: var(--accent-warning); }
+    .plan-chip.kind-swap { color: var(--accent-info, var(--text-secondary)); border-color: currentColor; }
+    .plan-chip.executed { color: var(--text-muted); text-transform: none; letter-spacing: 0; }
+    .plan-chip.corrupt { color: var(--accent-warning); border-color: var(--accent-warning); }
+    .plan-detail-header {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      margin-bottom: var(--space-3);
+    }
+    .plan-detail-header .timeline-name { font-weight: 600; font-size: var(--text-md); }
+    .plan-detail-body { display: grid; gap: var(--space-3); }
+    .plan-section {
+      padding: var(--space-3);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      background: var(--lab-panel-elevated, var(--bg-base));
+    }
+    .plan-section > strong { display: block; margin-bottom: var(--space-2); }
+    .plan-decision-card {
+      display: flex;
+      gap: var(--space-3);
+      padding: var(--space-2) 0;
+      border-bottom: 1px solid var(--border-default);
+    }
+    .plan-decision-card:last-child { border-bottom: none; }
+    .plan-decision-card .review-thumb { width: 120px; height: 68px; object-fit: cover; border-radius: var(--radius-sm); flex: none; }
+    .plan-decision-card .review-thumb.placeholder {
+      display: flex; align-items: center; justify-content: center;
+      background: var(--bg-muted); color: var(--text-muted); font-size: var(--text-xs);
+    }
+    .plan-decision-card .body { flex: 1; min-width: 0; display: grid; gap: 2px; align-content: start; }
+    .plan-decision-card .title-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+    .plan-decision-card .rationale { color: var(--text-secondary); font-size: var(--text-xs); }
+    .plan-decision-card .meta { color: var(--text-muted); font-size: var(--text-xs); }
+
     /* ─── Analysis caps preferences widget ──────────────────────────── */
     .caps-section {
       margin-top: var(--space-4);
@@ -3847,6 +3925,7 @@ HTML = r"""<!doctype html>
           <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="media" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m7 15 3-3 2 2 4-5 1 2"></path></svg></span>Inventory</button>
           <button class="nav-dropdown-item" data-panel-target="analysis" data-subpage-target="review" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="14" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="m21 17-5-5-9 9"></path></svg></span>Review</button>
           <button class="nav-dropdown-item" id="navHistoryItem" data-panel-target="analysis" data-subpage-target="review" data-review-view="history" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></span>History</button>
+          <button class="nav-dropdown-item" id="navPlansItem" data-panel-target="analysis" data-subpage-target="review" data-review-view="plans" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="2" width="8" height="4" rx="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><path d="M9 12h6"></path><path d="M9 16h6"></path></svg></span>Edit Plans</button>
         </div>
       </div>
       <button class="control-tab" data-panel-target="aiconsole">AI Console</button>
@@ -4191,6 +4270,20 @@ HTML = r"""<!doctype html>
             </div>
           </section>
         </div>
+      </div>
+      <div id="reviewPlansView" style="display:none">
+        <div class="plans-toolbar">
+          <div>
+            <strong>Edit plans</strong>
+            <span class="section-meta">Dry-run plans saved by the edit engine — review here, execute from chat.</span>
+          </div>
+          <button id="plansRefreshBtn" class="secondary" type="button">Refresh</button>
+        </div>
+        <div id="plansListBody" class="plans-list"><div class="empty">Loading…</div></div>
+      </div>
+      <div id="reviewPlanView" style="display:none">
+        <div id="planDetailHeader" class="plan-detail-header"></div>
+        <div id="planDetailBody" class="plan-detail-body"></div>
       </div>
     </section>
   </main>
@@ -5160,6 +5253,10 @@ HTML = r"""<!doctype html>
       if (r.view === 'combined' && Array.isArray(r.combinedClipIds) && r.combinedClipIds.length) {
         return `/combined/${r.combinedClipIds.map(encodeURIComponent).join(',')}`;
       }
+      if (r.view === 'plan' && state.plans?.currentPlanId) {
+        return `/plans/${encodeURIComponent(state.plans.currentPlanId)}`;
+      }
+      if (r.view === 'plans') return '/plans';
       return '';
     }
 
@@ -5190,6 +5287,15 @@ HTML = r"""<!doctype html>
       if (panelName === 'analysis' && subpage === 'review' && route[2] === 'history') {
         reviewSetView('history');
         refreshHistoryTimelines().catch(alertError);
+      }
+      // Deep links: #analysis/review/plans[/<plan_id>]
+      if (panelName === 'analysis' && subpage === 'review' && route[2] === 'plans') {
+        if (route[3]) {
+          openEditPlan(decodeURIComponent(route[3]), { pushHash: false }).catch(alertError);
+        } else {
+          reviewSetView('plans', { pushHash: false });
+          refreshEditPlans().catch(alertError);
+        }
       }
       // Deep links: #analysis/review/combined/<id1,id2,...>
       if (panelName === 'analysis' && subpage === 'review' && route[2] === 'combined' && route[3]) {
@@ -7210,6 +7316,229 @@ HTML = r"""<!doctype html>
       await refreshHistoryTimelines();
     }
 
+    // ─── Edit-engine plan browser (chat-first: the panel surfaces plans
+    //     and evidence; execution happens via copyable chat prompts only) ─
+    state.plans = state.plans || { list: null, currentPlanId: null, payload: null };
+
+    const PLAN_KIND_LABELS = { selects: 'Selects', tighten: 'Tighten', swap: 'Swap' };
+
+    function planExecutePrompt(plan) {
+      const id = plan.plan_id;
+      if (plan.kind === 'selects') {
+        return `Execute edit plan ${id}: call edit_engine(action="execute_selects", params={"plan_id": "${id}"}). It creates a NEW selects timeline; nothing existing is touched. Show me the readback when done.`;
+      }
+      if (plan.kind === 'tighten') {
+        return `Execute edit plan ${id}: call edit_engine(action="execute_tighten", params={"plan_id": "${id}"}). It assembles a tightened VARIANT timeline from the keep ranges; the original timeline is never mutated. Show me the readback when done.`;
+      }
+      if (plan.kind === 'swap') {
+        return `Execute edit plan ${id} with alternate <N>: call edit_engine(action="execute_swap", params={"plan_id": "${id}", "alternate_index": <N>}) — replace <N> with the number of the alternate I picked below (0-based). The timeline is version-archived before the swap. Show me the readback when done.`;
+      }
+      return `Load edit plan ${id} with edit_engine(action="get_plan", params={"plan_id": "${id}"}) and walk me through it.`;
+    }
+
+    function planThumb(row, altText) {
+      const clipId = row.resolve_clip_id;
+      const frameIndex = row.thumb_frame_index;
+      if (clipId && frameIndex != null) {
+        return `<img class="review-thumb" loading="lazy" src="/api/clips/${encodeURIComponent(clipId)}/frames/${frameIndex}" alt="${escapeHtml(altText)}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'review-thumb placeholder',textContent:'no frame'}))">`;
+      }
+      return '<div class="review-thumb placeholder">no frame</div>';
+    }
+
+    async function refreshEditPlans() {
+      const body = $('plansListBody');
+      if (body) body.innerHTML = '<div class="empty">Loading…</div>';
+      const data = await api('/api/edit_plans').catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        if (body) body.innerHTML = `<div class="empty">Error: ${escapeHtml(data?.error || 'unknown')}</div>`;
+        return;
+      }
+      state.plans.list = data.plans || [];
+      renderPlansList();
+    }
+
+    function renderPlansList() {
+      const body = $('plansListBody');
+      if (!body) return;
+      const plans = state.plans.list || [];
+      if (!plans.length) {
+        body.innerHTML = '<div class="empty">No edit plans yet. Ask your chat session to plan one, e.g. “Plan a selects reel from this bin” (edit_engine action="plan_selects").</div>';
+        return;
+      }
+      body.innerHTML = plans.map(p => {
+        if (p.corrupt) {
+          return `<div class="plan-row is-corrupt">
+            <span class="plan-chip corrupt">corrupt</span>
+            <span class="summary">Plan ${escapeHtml(p.plan_id || '?')} failed its fingerprint check — it was edited on disk or truncated. It cannot be executed; re-plan to replace it.</span>
+          </div>`;
+        }
+        const executed = p.executed_at
+          ? `<span class="plan-chip executed" title="${escapeHtml(p.executed_at)}">executed</span>` : '';
+        return `<div class="plan-row" data-plan-id="${escapeHtml(p.plan_id)}" tabindex="0" role="button" aria-label="Open plan ${escapeHtml(p.plan_id)}">
+          <span class="plan-chip kind-${escapeHtml(p.kind || '')}">${escapeHtml(PLAN_KIND_LABELS[p.kind] || p.kind || '?')}</span>
+          <span class="summary" title="${escapeHtml(p.summary || '')}">${escapeHtml(p.summary || p.plan_id)}</span>
+          ${executed}
+          <span class="saved-at">${escapeHtml(formatVersionDate(p.saved_at))}</span>
+        </div>`;
+      }).join('');
+      body.querySelectorAll('.plan-row[data-plan-id]').forEach(row => {
+        const open = () => openEditPlan(row.dataset.planId).catch(alertError);
+        row.addEventListener('click', open);
+        row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+      });
+    }
+
+    async function openEditPlan(planId, opts = {}) {
+      state.plans.currentPlanId = planId;
+      reviewSetView('plan', opts);
+      const body = $('planDetailBody');
+      const header = $('planDetailHeader');
+      if (body) body.innerHTML = '<div class="empty">Loading…</div>';
+      if (header) header.innerHTML = '';
+      const data = await api(`/api/edit_plans/${encodeURIComponent(planId)}`)
+        .catch(err => ({ success: false, error: String(err) }));
+      if (!data || !data.success) {
+        if (body) body.innerHTML = `<div class="empty">Error: ${escapeHtml(data?.error || 'unknown')}</div>`;
+        return;
+      }
+      state.plans.payload = data;
+      renderPlanDetail(data);
+    }
+
+    function renderPlanDetail(data) {
+      const header = $('planDetailHeader');
+      const body = $('planDetailBody');
+      if (!header || !body) return;
+      if (data.corrupt) {
+        header.innerHTML = `<span class="plan-chip corrupt">corrupt</span><span class="timeline-name">Plan ${escapeHtml(data.plan_id || '?')}</span>`;
+        body.innerHTML = '<div class="empty">This plan failed its fingerprint check — it was edited on disk or truncated. It cannot be executed; re-plan to replace it.</div>';
+        return;
+      }
+      const plan = data.plan || {};
+      const executed = plan.executed_at
+        ? `<span class="plan-chip executed" title="${escapeHtml(plan.executed_at)}">executed ${escapeHtml(formatVersionDate(plan.executed_at))}</span>` : '';
+      header.innerHTML = `
+        <span class="plan-chip kind-${escapeHtml(plan.kind || '')}">${escapeHtml(PLAN_KIND_LABELS[plan.kind] || plan.kind || '?')}</span>
+        <span class="timeline-name">${escapeHtml(plan.timeline_name || plan.plan_id || '')}</span>
+        ${executed}
+        <span class="saved-at" style="color:var(--text-muted);font-size:var(--text-xs)">saved ${escapeHtml(formatVersionDate(plan.saved_at))} · plan ${escapeHtml(plan.plan_id || '')}</span>`;
+
+      const sections = [];
+      if (plan.summary) {
+        sections.push(`<div class="plan-section"><strong>Summary</strong><div>${escapeHtml(plan.summary)}</div></div>`);
+      }
+      // Chat-first execute affordance: the panel NEVER executes. Executed
+      // plans keep the card (re-execution of selects is harmless and swap
+      // may target another alternate) — the chip above signals state.
+      sections.push(`<div class="plan-section"><strong>Execute (from chat)</strong>${chatPromptCard(
+        plan.kind === 'swap'
+          ? 'Pick an alternate below, then paste this in your chat session (fill in <N>):'
+          : 'Paste this in your chat session to execute the plan:',
+        planExecutePrompt(plan))}</div>`);
+      if (plan.execution_summary) {
+        sections.push(`<div class="plan-section"><strong>Execution readback</strong><pre style="margin:0;white-space:pre-wrap;font-size:var(--text-xs)">${escapeHtml(JSON.stringify(plan.execution_summary, null, 2))}</pre></div>`);
+      }
+      if (plan.settings) {
+        const settings = Object.entries(plan.settings)
+          .map(([k, v]) => `${escapeHtml(k)}=${escapeHtml(v == null ? '—' : String(v))}`).join(' · ');
+        sections.push(`<div class="plan-section"><strong>Settings</strong><div style="font-size:var(--text-xs);color:var(--text-secondary)">${settings}</div></div>`);
+      }
+      if (plan.kind === 'selects') {
+        sections.push(renderSelectsDecisions(plan));
+      } else if (plan.kind === 'tighten') {
+        sections.push(renderTightenLifts(plan));
+      } else if (plan.kind === 'swap') {
+        sections.push(renderSwapAlternates(plan));
+      }
+      body.innerHTML = sections.join('');
+      body.querySelectorAll('[data-open-shot-clip]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const clipId = btn.dataset.openShotClip;
+          const shotIndex = Number(btn.dataset.openShotIndex);
+          openClipDetail(clipId)
+            .then(() => Number.isFinite(shotIndex) ? openShotDetail(shotIndex) : null)
+            .catch(alertError);
+        });
+      });
+    }
+
+    function renderSelectsDecisions(plan) {
+      const decisions = plan.decisions || [];
+      const rankLabel = { 3: 'high', 2: 'medium', 1: 'low' };
+      const cards = decisions.map((d, i) => {
+        const range = Array.isArray(d.source_frame_range) ? `frames ${d.source_frame_range[0]}–${d.source_frame_range[1]}` : '';
+        const shotLink = d.resolve_clip_id != null && d.shot_index != null
+          ? `<button class="secondary" style="font-size:var(--text-xs);padding:1px 8px" data-open-shot-clip="${escapeHtml(d.resolve_clip_id)}" data-open-shot-index="${d.shot_index}">Open shot page</button>` : '';
+        return `<div class="plan-decision-card">
+          ${planThumb(d, `decision ${i + 1}`)}
+          <div class="body">
+            <div class="title-row">
+              <strong>${i + 1}. ${escapeHtml(d.clip_name || d.clip_uuid || '?')} · shot ${d.shot_index ?? '?'}</strong>
+              <span class="plan-chip">${escapeHtml(rankLabel[d.rank] || `rank ${d.rank}`)}</span>
+              <span class="meta">${(d.duration_seconds ?? '?')}s${range ? ` · ${range}` : ''}</span>
+              ${shotLink}
+            </div>
+            ${d.description ? `<div class="meta">${escapeHtml(d.description)}</div>` : ''}
+            <div class="rationale">${escapeHtml(d.rationale || '')}</div>
+          </div>
+        </div>`;
+      });
+      return `<div class="plan-section"><strong>Decisions (${decisions.length} shots, ~${plan.estimated_duration_seconds ?? '?'}s)</strong>${cards.join('') || '<div class="empty">No decisions.</div>'}</div>`;
+    }
+
+    function renderTightenLifts(plan) {
+      const lifts = plan.lifts || [];
+      const rows = lifts.map(l => {
+        const gap = l.evidence?.source_gap_seconds;
+        return `<tr>
+          <td class="edit-type">${escapeHtml(l.kind || 'lift')}</td>
+          <td>${escapeHtml(l.item_name || '—')}</td>
+          <td>${l.timeline_start_frame}–${l.timeline_end_frame}</td>
+          <td>${l.duration_seconds ?? '—'}s</td>
+          <td>${escapeHtml(l.rationale || '')}${gap ? ` <span style="color:var(--text-muted)">(gap ${gap[0]}–${gap[1]}s)</span>` : ''}</td>
+        </tr>`;
+      }).join('');
+      const skipped = (plan.skipped || []).map(s =>
+        `<div class="plan-decision-card"><div class="body"><div class="meta">skipped ${escapeHtml(s.item || '?')}: ${escapeHtml(s.reason || '')}</div></div></div>`).join('');
+      return `<div class="plan-section">
+        <strong>Lifts (${lifts.length} · ${plan.keep_ranges ? plan.keep_ranges.length : 0} keep ranges)</strong>
+        <table class="history-edits-table">
+          <thead><tr><th>Kind</th><th>Item</th><th>Timeline frames</th><th>Removes</th><th>Rationale</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="5">No lifts.</td></tr>'}</tbody>
+        </table>
+        ${skipped}
+      </div>`;
+    }
+
+    function renderSwapAlternates(plan) {
+      const alternates = plan.alternates || [];
+      const item = plan.item || {};
+      const current = `<div class="plan-decision-card"><div class="body">
+        <div class="title-row"><strong>Current: ${escapeHtml(item.item_name || 'item')}</strong>
+        <span class="meta">slot ${item.timeline_start_frame}–${item.timeline_end_frame} · track ${item.track_index ?? 1}</span></div>
+        ${item.current_description ? `<div class="meta">${escapeHtml(item.current_description)}</div>` : ''}
+      </div></div>`;
+      const cards = alternates.map((a, i) => {
+        const range = Array.isArray(a.source_frame_range) ? `frames ${a.source_frame_range[0]}–${a.source_frame_range[1]}` : '';
+        const shotLink = a.resolve_clip_id != null && a.shot_index != null
+          ? `<button class="secondary" style="font-size:var(--text-xs);padding:1px 8px" data-open-shot-clip="${escapeHtml(a.resolve_clip_id)}" data-open-shot-index="${a.shot_index}">Open shot page</button>` : '';
+        return `<div class="plan-decision-card">
+          ${planThumb(a, `alternate ${i}`)}
+          <div class="body">
+            <div class="title-row">
+              <strong>alternate_index ${i} · ${escapeHtml(a.clip_name || '?')} · shot ${a.shot_index ?? '?'}</strong>
+              <span class="plan-chip">score ${a.score ?? '?'}</span>
+              <span class="meta">${range}</span>
+              ${shotLink}
+            </div>
+            ${a.description ? `<div class="meta">${escapeHtml(a.description)}</div>` : ''}
+            <div class="rationale">${escapeHtml(a.rationale || '')}</div>
+          </div>
+        </div>`;
+      });
+      return `<div class="plan-section"><strong>Alternates (${alternates.length})</strong>${current}${cards.join('') || '<div class="empty">No alternates.</div>'}</div>`;
+    }
+
     // ─── Run scoping controls ──────────────────────────────────────────
     state.runScope = state.runScope || { current: null, recent: [] };
 
@@ -8088,6 +8417,10 @@ HTML = r"""<!doctype html>
       if (combinedEl) combinedEl.style.display = view === 'combined' ? '' : 'none';
       const historyEl = $('reviewHistoryView');
       if (historyEl) historyEl.style.display = view === 'history' ? '' : 'none';
+      const plansEl = $('reviewPlansView');
+      if (plansEl) plansEl.style.display = view === 'plans' ? '' : 'none';
+      const planEl = $('reviewPlanView');
+      if (planEl) planEl.style.display = view === 'plan' ? '' : 'none';
       const back = $('reviewBackBtn');
       if (back) back.style.display = view === 'bin' ? 'none' : '';
       const meta = $('reviewMeta');
@@ -8098,6 +8431,8 @@ HTML = r"""<!doctype html>
         else if (view === 'transcript') meta.textContent = `Transcript · ${state.review.currentClipData?.card?.clip_name || 'clip'}`;
         else if (view === 'combined') meta.textContent = `Combined review · ${state.review.combinedData?.clip_count || '?'} clips`;
         else if (view === 'history') meta.textContent = 'Timeline history · archived versions and brain edits per timeline';
+        else if (view === 'plans') meta.textContent = 'Edit plans · dry-run plans saved by the edit engine';
+        else if (view === 'plan') meta.textContent = `Plan ${state.plans?.currentPlanId || ''} · review here, execute from chat`;
       }
       if (opts.writePanelState !== false) {
         writePanelStateAsync({
@@ -10470,6 +10805,12 @@ HTML = r"""<!doctype html>
           if (window.location.hash !== '#analysis/review/history') {
             window.history.replaceState(null, '', '#analysis/review/history');
           }
+        } else if (control.dataset.reviewView === 'plans') {
+          reviewSetView('plans');
+          refreshEditPlans().catch(alertError);
+          if (window.location.hash !== '#analysis/review/plans') {
+            window.history.replaceState(null, '', '#analysis/review/plans');
+          }
         }
       });
     });
@@ -10587,6 +10928,10 @@ HTML = r"""<!doctype html>
     const historyRefreshEl = $('historyRefreshBtn');
     if (historyRefreshEl) {
       historyRefreshEl.onclick = () => refreshHistoryTimelines().catch(alertError);
+    }
+    const plansRefreshEl = $('plansRefreshBtn');
+    if (plansRefreshEl) {
+      plansRefreshEl.onclick = () => refreshEditPlans().catch(alertError);
     }
     const historyArchiveBtnEl = $('historyArchiveCurrentBtn');
     if (historyArchiveBtnEl) {
@@ -10706,6 +11051,13 @@ HTML = r"""<!doctype html>
         state.review.currentClipData = null;
         reviewSetView('bin');
       } else if (state.review.view === 'history') {
+        reviewSetView('bin');
+      } else if (state.review.view === 'plan') {
+        state.plans.currentPlanId = null;
+        state.plans.payload = null;
+        reviewSetView('plans');
+        refreshEditPlans().catch(alertError);
+      } else if (state.review.view === 'plans') {
         reviewSetView('bin');
       }
     };
@@ -13361,6 +13713,71 @@ def get_timeline_history_payload(
     }
 
 
+def list_edit_plans_payload(project_root: str) -> Dict[str, Any]:
+    """Edit-engine plan list for the panel browser (DB/file only, no Resolve).
+
+    Fingerprint-corrupt plans surface as {"plan_id", "corrupt": True} warning
+    rows rather than being silently hidden.
+    """
+    try:
+        from src.utils import edit_engine as _edit_engine
+        return _edit_engine.list_plans(project_root, limit=50, include_corrupt=True)
+    except Exception as exc:  # noqa: BLE001 — panel reads fail soft
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}", "plans": []}
+
+
+def get_edit_plan_payload(project_root: str, plan_id: str) -> Dict[str, Any]:
+    """Full plan detail for the panel, enriched for rendering: selects
+    decisions and swap alternates gain a `thumb_frame_index` (the shot's first
+    sampled frame, for the existing /api/clips/<id>/frames/<idx> route) and a
+    `resolve_clip_id` fallback mapped from clip_uuid. Enrichment is best-effort
+    — the plan still renders without thumbnails when the DB is unavailable.
+    """
+    try:
+        from src.utils import edit_engine as _edit_engine
+        plan = _edit_engine.load_plan(project_root, plan_id)
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+    if plan is None:
+        return {"success": False, "error": f"Plan {plan_id} not found"}
+    if plan.get("_corrupt"):
+        return {"success": True, "plan_id": plan_id, "corrupt": True}
+    plan = json.loads(json.dumps(plan, default=str))  # detach a plain copy
+    try:
+        conn = _timeline_brain_db.connect(project_root)
+        clip_id_cache: Dict[str, Any] = {}
+
+        def _enrich(row: Dict[str, Any]) -> None:
+            clip_uuid = str(row.get("clip_uuid") or "")
+            if not row.get("resolve_clip_id") and clip_uuid:
+                if clip_uuid not in clip_id_cache:
+                    hit = conn.execute(
+                        "SELECT resolve_clip_id FROM clips WHERE clip_uuid = ?",
+                        (clip_uuid,),
+                    ).fetchone()
+                    clip_id_cache[clip_uuid] = hit["resolve_clip_id"] if hit else None
+                if clip_id_cache[clip_uuid]:
+                    row["resolve_clip_id"] = clip_id_cache[clip_uuid]
+            shot_uuid = row.get("shot_uuid")
+            if shot_uuid and row.get("thumb_frame_index") is None:
+                hit = conn.execute(
+                    "SELECT MIN(frame_index) AS frame_index FROM frames WHERE shot_uuid = ?",
+                    (str(shot_uuid),),
+                ).fetchone()
+                if hit and hit["frame_index"] is not None:
+                    row["thumb_frame_index"] = int(hit["frame_index"])
+
+        for decision in plan.get("decisions") or []:
+            if isinstance(decision, dict):
+                _enrich(decision)
+        for alternate in plan.get("alternates") or []:
+            if isinstance(alternate, dict):
+                _enrich(alternate)
+    except Exception:  # noqa: BLE001 — thumbnails are progressive enhancement
+        pass
+    return {"success": True, "corrupt": False, "plan": plan}
+
+
 def proxy_timeline_versioning_action(body: Dict[str, Any]) -> Dict[str, Any]:
     """Bridge dashboard → MCP server timeline_versioning tool.
 
@@ -14472,6 +14889,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"success": False, "error": "timeline_name required"}, HTTPStatus.BAD_REQUEST)
                 return
             self._json(get_timeline_history_payload(self.state.project_root, timeline_name))
+            return
+        # ─── Edit-engine plan browser (DB/file only — no Resolve) ───────
+        if path == "/api/edit_plans":
+            self._json(list_edit_plans_payload(self.state.project_root))
+            return
+        if path.startswith("/api/edit_plans/"):
+            plan_id = unquote(path[len("/api/edit_plans/"):])
+            if not plan_id:
+                self._json({"success": False, "error": "plan_id required"}, HTTPStatus.BAD_REQUEST)
+                return
+            payload = get_edit_plan_payload(self.state.project_root, plan_id)
+            if not payload.get("success") and "not found" in str(payload.get("error", "")):
+                self._json(payload, HTTPStatus.NOT_FOUND)
+                return
+            self._json(payload)
             return
         if path == "/api/brain_edits/registry":
             self._json({"success": True, **_brain_edits.read_brain_edits_registry(self.state.project_root)})

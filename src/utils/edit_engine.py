@@ -81,7 +81,13 @@ def load_plan(project_root: str, plan_id: str) -> Optional[Dict[str, Any]]:
     return plan
 
 
-def list_plans(project_root: str, *, limit: int = 20) -> Dict[str, Any]:
+def list_plans(project_root: str, *, limit: int = 20, include_corrupt: bool = False) -> Dict[str, Any]:
+    """List saved plans, newest first.
+
+    `include_corrupt=True` (panel browser) surfaces fingerprint-mismatched
+    plans as ``{"plan_id", "corrupt": True}`` warning rows instead of hiding
+    them; the default keeps the MCP-action shape unchanged.
+    """
     directory = _plan_dir(project_root)
     rows: List[Dict[str, Any]] = []
     if os.path.isdir(directory):
@@ -90,6 +96,8 @@ def list_plans(project_root: str, *, limit: int = 20) -> Dict[str, Any]:
                 continue
             plan = load_plan(project_root, name[:-5])
             if not plan or plan.get("_corrupt"):
+                if include_corrupt:
+                    rows.append({"plan_id": name[:-5], "corrupt": True})
                 continue
             rows.append({
                 "plan_id": plan.get("plan_id"),

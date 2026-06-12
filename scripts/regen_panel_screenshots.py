@@ -57,6 +57,7 @@ def main() -> int:
         ("#preferences/analysis", "08-preferences-analysis.png", 3000),
         ("#aiconsole", "09-ai-console.png", 3000),
         ("#analysis/review/history", "10-history.png", 3500),
+        ("#analysis/review/plans", "11-edit-plans.png", 3500),
     ]
     with sync_playwright() as pw:
         browser = pw.chromium.launch()

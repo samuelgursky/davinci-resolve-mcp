@@ -26,10 +26,10 @@ pidfile and `resolve_control(action="close_control_panel")` stops it.
 
 ## Navigation and deep links
 
-Top-level sections: **Overview**, **Media** (Inventory / Review / History),
-**AI Console**, **Setup** (Resolve / MCP / Storage / Tools / Media Pool
-History), **Docs**, and **Preferences** (Analysis / Caps + Safety / Metadata
-and Markers / Paths and Workflow / MCP Updates). The project selector on the
+Top-level sections: **Overview**, **Media** (Inventory / Review / History /
+Edit Plans), **AI Console**, **Setup** (Resolve / MCP / Storage / Tools /
+Media Pool History), **Docs**, and **Preferences** (Analysis / Caps + Safety /
+Metadata and Markers / Paths and Workflow / MCP Updates). The project selector on the
 right scopes the panel to an analysis context; **View All Projects** opens a
 read-only browser over the Resolve project database with confirm-gated
 loading.
@@ -42,6 +42,7 @@ into chat:
 #analysis/media                            #analysis/review
 #analysis/review/history                   #analysis/review/clip/<clip_id>
 #analysis/review/clip/<clip_id>/shot/<n>   #analysis/review/clip/<clip_id>/transcript
+#analysis/review/plans                     #analysis/review/plans/<plan_id>
 #diagnostics/mcp                           #preferences/caps
 ```
 
@@ -130,6 +131,26 @@ timeline. Begin/end labeled runs to group related edits, archive the current
 timeline before risky work, and select any timeline to inspect its version
 chain and the edits between versions. Every destructive timeline edit made
 through the MCP archives a version here automatically.
+
+### Media → Edit Plans
+
+![Edit plan browser](../images/control-panel/11-edit-plans.png)
+
+Dry-run plans saved by the edit engine (`edit_engine` actions
+`plan_selects` / `plan_tighten` / `plan_swap`). The list shows each plan's
+kind, summary, save time, and an `executed` chip once it has run; plans that
+fail their fingerprint check appear as a warning row instead of being hidden.
+Opening a plan shows its full evidence: selects decisions render with shot
+thumbnails, rank, duration, and rationale (with a deep link to each shot
+page); tighten plans list every dead-air lift with its transcript-gap
+evidence; swap plans show the current item and each numbered alternate with
+its similarity score.
+
+The panel never executes a plan. Each detail view carries a copyable chat
+prompt (per kind, with the `alternate_index` placeholder for swaps) — paste
+it into your MCP chat session, which holds the confirm-token gate and the
+versioned execution path. Executed plans keep their execution readback
+inline.
 
 ### AI Console
 
