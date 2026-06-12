@@ -352,5 +352,68 @@ class TimelineVersioning(unittest.TestCase):
             self.assertTrue(os.path.isfile(v["drt_export_path"]))
 
 
+class DiffTimelinesTests(unittest.TestCase):
+    """Cross-name structural diff between two LIVE timelines (no archived
+    version rows needed) — the edit-engine variant readback path."""
+
+    def _project(self) -> _MockProject:
+        source = _MockTimeline("Source", unique_id="tl_src", tracks={
+            ("video", 1): [_MockTimelineItem(0, 100, "a"), _MockTimelineItem(100, 200, "b")],
+            ("audio", 1): [_MockTimelineItem(0, 200, "a")],
+        })
+        variant = _MockTimeline("Variant", unique_id="tl_var", tracks={
+            ("video", 1): [_MockTimelineItem(0, 80, "a"), _MockTimelineItem(80, 160, "c")],
+        })
+        project = _MockProject(source)
+        project._timelines.append(variant)
+        return project
+
+    def test_capture_timeline_clip_usage_shape(self) -> None:
+        rows = timeline_versioning.capture_timeline_clip_usage(
+            self._project().GetCurrentTimeline()
+        )
+        self.assertEqual(len(rows), 3)  # 2 video + 1 audio
+        self.assertEqual(
+            rows[0],
+            {"media_pool_item_id": "a", "track_type": "video", "track_index": 1,
+             "in_frame": 0, "out_frame": 100},
+        )
+
+    def test_diff_timelines_added_removed_trimmed(self) -> None:
+        out = timeline_versioning.diff_timelines(
+            project=self._project(), from_timeline="Source", to_timeline="Variant",
+        )
+        self.assertTrue(out["success"], out)
+        self.assertEqual(out["from_timeline"], "Source")
+        # a@video/1/0 trimmed 100→80; b + audio-a removed; c added.
+        self.assertEqual(out["summary"]["trimmed"], 1)
+        self.assertEqual(out["trimmed"][0]["out_frame_before"], 100)
+        self.assertEqual(out["summary"]["added"], 1)
+        self.assertEqual(out["added"][0]["media_pool_item_id"], "c")
+        removed_ids = sorted(r["media_pool_item_id"] for r in out["removed"])
+        self.assertEqual(removed_ids, ["a", "b"])  # audio a + video b
+        self.assertEqual(out["summary"]["before_clip_count"], 3)
+        self.assertEqual(out["summary"]["after_clip_count"], 2)
+
+    def test_diff_timelines_detects_moves(self) -> None:
+        project = self._project()
+        moved_variant = _MockTimeline("Moved", unique_id="tl_mv", tracks={
+            ("video", 1): [_MockTimelineItem(50, 150, "a")],
+        })
+        project._timelines.append(moved_variant)
+        out = timeline_versioning.diff_timelines(
+            project=project, from_timeline="Source", to_timeline="Moved",
+        )
+        self.assertEqual(out["summary"]["moved"], 1)
+        self.assertEqual(out["moved"][0]["media_pool_item_id"], "a")
+
+    def test_diff_timelines_missing_name_errors(self) -> None:
+        out = timeline_versioning.diff_timelines(
+            project=self._project(), from_timeline="Source", to_timeline="Nope",
+        )
+        self.assertFalse(out["success"])
+        self.assertIn("Nope", out["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -261,22 +261,11 @@ def _resolve_media_pool_item_id(item: Any) -> Optional[str]:
         return None
 
 
-def _snapshot_timeline_clip_usage(
-    *,
-    project_root: str,
-    timeline: Any,
-    timeline_name: str,
-    timeline_version: int,
-    analysis_run_id: Optional[str],
-) -> int:
-    """Walk every track/item on the timeline and INSERT a row per clip.
-
-    Returns the number of rows written. Safe to call repeatedly for the same
-    (timeline, version) — version is part of the row, not unique, so diffs
-    between two versions are a SQL JOIN on media_pool_item_id.
-    """
-    observed_at = _now_iso()
-    rows: List[Tuple[str, str, int, str, int, int, int, Optional[str], str]] = []
+def capture_timeline_clip_usage(timeline: Any) -> List[Dict[str, Any]]:
+    """Walk every track/item on a LIVE timeline into structural-usage rows
+    (no DB writes). Shared by the version snapshot writer and the cross-name
+    live diff."""
+    rows: List[Dict[str, Any]] = []
     for tt in ("video", "audio", "subtitle"):
         try:
             count = timeline.GetTrackCount(tt)
@@ -298,10 +287,39 @@ def _snapshot_timeline_clip_usage(
                     out_frame = int(item.GetEnd())
                 except Exception:
                     continue
-                rows.append((
-                    mpi_id, timeline_name, timeline_version,
-                    tt, ti, in_frame, out_frame, analysis_run_id, observed_at,
-                ))
+                rows.append({
+                    "media_pool_item_id": mpi_id,
+                    "track_type": tt,
+                    "track_index": ti,
+                    "in_frame": in_frame,
+                    "out_frame": out_frame,
+                })
+    return rows
+
+
+def _snapshot_timeline_clip_usage(
+    *,
+    project_root: str,
+    timeline: Any,
+    timeline_name: str,
+    timeline_version: int,
+    analysis_run_id: Optional[str],
+) -> int:
+    """Walk every track/item on the timeline and INSERT a row per clip.
+
+    Returns the number of rows written. Safe to call repeatedly for the same
+    (timeline, version) — version is part of the row, not unique, so diffs
+    between two versions are a SQL JOIN on media_pool_item_id.
+    """
+    observed_at = _now_iso()
+    rows: List[Tuple[str, str, int, str, int, int, int, Optional[str], str]] = [
+        (
+            usage["media_pool_item_id"], timeline_name, timeline_version,
+            usage["track_type"], usage["track_index"],
+            usage["in_frame"], usage["out_frame"], analysis_run_id, observed_at,
+        )
+        for usage in capture_timeline_clip_usage(timeline)
+    ]
 
     if not rows:
         return 0
@@ -348,9 +366,22 @@ def diff_versions(
 
     before = _snapshot(from_version)
     after = _snapshot(to_version)
-    # Position key: (media id, track type, track index, in_frame). Same key in
-    # both versions = same placement; a differing out_frame on that same key is
-    # a *trim*. A differing track/in_frame for the same media id is a *move*.
+    return {
+        "from_version": from_version,
+        "to_version": to_version,
+        **compare_usage_snapshots(before, after),
+    }
+
+
+def compare_usage_snapshots(
+    before: List[Dict[str, Any]], after: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """added/removed/moved/trimmed between two structural-usage snapshots.
+
+    Position key: (media id, track type, track index, in_frame). Same key in
+    both snapshots = same placement; a differing out_frame on that same key is
+    a *trim*. A differing track/in_frame for the same media id is a *move*.
+    """
     def _key(row: Dict[str, Any]) -> Tuple[str, str, int, int]:
         return (row["media_pool_item_id"], row["track_type"], row["track_index"], row["in_frame"])
 
@@ -382,8 +413,6 @@ def diff_versions(
             moved.append(r)
 
     return {
-        "from_version": from_version,
-        "to_version": to_version,
         "added": added,
         "removed": removed,
         "moved": moved,
@@ -396,6 +425,36 @@ def diff_versions(
             "before_clip_count": len(before),
             "after_clip_count": len(after),
         },
+    }
+
+
+def diff_timelines(
+    *,
+    project: Any,
+    from_timeline: str,
+    to_timeline: str,
+) -> Dict[str, Any]:
+    """Structural diff between two LIVE timelines by name (read-only).
+
+    Unlike diff_versions this needs no archived snapshots and works across
+    timeline NAMES — built for edit-engine variants (tighten/selects produce
+    new-name timelines that have no shared version chain with their source).
+    For moved/trimmed to mean anything the timelines should share source
+    clips; for unrelated timelines everything reports as added/removed.
+    """
+    from_tl = _find_timeline_by_name(project, from_timeline)
+    if from_tl is None:
+        return {"success": False, "error": f"Timeline '{from_timeline}' not found"}
+    to_tl = _find_timeline_by_name(project, to_timeline)
+    if to_tl is None:
+        return {"success": False, "error": f"Timeline '{to_timeline}' not found"}
+    before = capture_timeline_clip_usage(from_tl)
+    after = capture_timeline_clip_usage(to_tl)
+    return {
+        "success": True,
+        "from_timeline": from_timeline,
+        "to_timeline": to_timeline,
+        **compare_usage_snapshots(before, after),
     }
 
 

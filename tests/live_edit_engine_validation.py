@@ -184,6 +184,21 @@ def main() -> int:
                   f"lifts={done2.get('lifts_applied')}")
             original, _ = s._find_timeline_by_name(proj, "Pilot Tighten Base")
             check("original untouched", original is not None)
+            # Phase 2 hardening: readback carries a cross-name structural diff.
+            sdiff = (done2.get("readback") or {}).get("structural_diff") or {}
+            sdiff_summary = sdiff.get("summary") or {}
+            check("tighten structural diff in readback",
+                  bool(sdiff_summary) and sdiff_summary.get("before_clip_count", 0) >= 1
+                  and not sdiff.get("error"),
+                  f"summary={sdiff_summary}")
+            # And the standalone action agrees with the readback.
+            live_diff = s.timeline_versioning("diff_timelines", {
+                "from_timeline": "Pilot Tighten Base",
+                "to_timeline": done2.get("variant_timeline"),
+            })
+            check("diff_timelines action",
+                  live_diff.get("success") and live_diff.get("summary") == sdiff_summary,
+                  f"summary={live_diff.get('summary')}")
 
         # ── E3: swap (replace the selects timeline's first item) ──
         selects_tl, _ = s._find_timeline_by_name(proj, done1.get("timeline_name"))
@@ -203,6 +218,20 @@ def main() -> int:
                                                    "confirm_token": gate3.get("confirm_token")})
             check("execute_swap", done3.get("success"),
                   f"replacement={done3.get('replacement')} readback={done3.get('readback')}")
+            # Phase 2 hardening: per-track-type symmetry. The replacement
+            # appends linked video+audio after a video + linked-audio lift,
+            # so item counts per track type must be unchanged.
+            rb = done3.get("readback") or {}
+            counts_before = (rb.get("before") or {}).get("track_counts") or {}
+            counts_after = (rb.get("after") or {}).get("track_counts") or {}
+            accounting = rb.get("audio_accounting") or {}
+            check("swap track-count symmetry",
+                  bool(counts_before) and counts_before == counts_after,
+                  f"before={counts_before} after={counts_after} accounting={accounting}")
+            check("swap lifted linked audio explicitly",
+                  accounting.get("video_items_lifted", 0) >= 1
+                  and accounting.get("audio_items_lifted", 0) >= 1,
+                  f"accounting={accounting}")
 
         # ── readback: brain_edits rows with rationale ──
         from src.utils import timeline_brain_db

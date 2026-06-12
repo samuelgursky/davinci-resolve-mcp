@@ -699,7 +699,13 @@ clip-count readback plus `brain_edits` rationale rows.
   filtered to shots long enough to fill the slot exactly.
   `execute_swap(plan_id, alternate_index)` replaces the item in place
   (lift + positioned append at the same record frame) on the
-  version-archived timeline.
+  version-archived timeline. v2.48.0+: the lift is scoped to the target's
+  video track plus its linked audio tracks (GetLinkedItems with a
+  media-id fallback), and `readback` carries per-track-type
+  `track_counts` plus an `audio_accounting` block so swap symmetry is
+  verifiable. `execute_tighten` readback gains `structural_diff` (source
+  vs variant, via the same engine as `diff_timelines`); `execute_selects`
+  readback gains a `usage_summary`.
 - `list_plans(limit?)` / `get_plan(plan_id)`.
 
 The engine needs the analysis substrate: analyzed clips in the DB (run
@@ -740,6 +746,11 @@ Key actions:
   lists clips kept in place but re-trimmed (carries `out_frame_before`); `summary`
   has per-bucket counts plus `before_clip_count`/`after_clip_count`. Clips are
   keyed by media_pool_item_id and timeline position.
+- `diff_timelines(from_timeline, to_timeline)` (v2.48.0+) — the same
+  structural diff between two LIVE timelines by NAME, read-only, no archived
+  snapshots needed. Built for edit-engine variants (tighten/selects produce
+  new-name timelines with no shared version chain). For unrelated timelines
+  everything reports as added/removed.
 - `get_history(timeline_name?, analysis_run_id?, limit?)` — brain-edit rows
   with `edit_type`, `target_metric`, `before_value`, `after_value`, `delta`,
   `rationale`, and `initiator`. Filter by timeline or run; defaults to 50.

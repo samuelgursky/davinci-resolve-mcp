@@ -344,5 +344,104 @@ class PanelPlanApiTests(EditEngineBase):
         self.assertIn("not found", payload["error"])
 
 
+class _FakeMpi:
+    def __init__(self, uid: str) -> None:
+        self._uid = uid
+
+    def GetUniqueId(self) -> str:
+        return self._uid
+
+
+class _FakeItem:
+    def __init__(self, start: int, end: int, *, uid: str = "", media_id: str = "",
+                 linked: list | None = None, expose_linked: bool = True) -> None:
+        self._start, self._end = start, end
+        self._uid = uid or f"item-{media_id}-{start}"
+        self._media_id = media_id
+        self._linked = linked
+        self._expose_linked = expose_linked
+
+    def GetStart(self) -> int: return self._start
+    def GetEnd(self) -> int: return self._end
+    def GetUniqueId(self) -> str: return self._uid
+    def GetMediaPoolItem(self): return _FakeMpi(self._media_id) if self._media_id else None
+
+    def __getattr__(self, name):
+        if name == "GetLinkedItems":
+            if self._expose_linked and self._linked is not None:
+                return lambda: self._linked
+            raise AttributeError(name)
+        raise AttributeError(name)
+
+
+class _FakeTimeline:
+    def __init__(self, tracks: dict) -> None:
+        self._tracks = tracks  # {(type, index): [items]}
+
+    def GetTrackCount(self, tt: str) -> int:
+        return max((k[1] for k in self._tracks if k[0] == tt), default=0)
+
+    def GetItemListInTrack(self, tt: str, ti: int):
+        return self._tracks.get((tt, ti), [])
+
+
+class SwapAudioAccountingHelperTests(unittest.TestCase):
+    """The server-side helpers behind execute_swap's linked-audio lift."""
+
+    def _tl(self, *, expose_linked: bool = True) -> tuple:
+        audio1 = _FakeItem(0, 100, uid="au-1", media_id="m1")
+        audio2 = _FakeItem(100, 200, uid="au-2", media_id="m2")
+        video = _FakeItem(0, 100, media_id="m1", linked=[audio1],
+                          expose_linked=expose_linked)
+        tl = _FakeTimeline({
+            ("video", 1): [video, _FakeItem(100, 200, media_id="m2", linked=[audio2])],
+            ("audio", 1): [audio1, audio2],
+            ("audio", 2): [_FakeItem(0, 300, uid="music", media_id="music")],
+        })
+        return tl, video
+
+    def test_track_counts(self) -> None:
+        from src.server import _edit_engine_track_counts
+        tl, _ = self._tl()
+        self.assertEqual(_edit_engine_track_counts(tl), {"video": 2, "audio": 3})
+
+    def test_find_slot_item(self) -> None:
+        from src.server import _edit_engine_find_slot_item
+        tl, video = self._tl()
+        self.assertIs(_edit_engine_find_slot_item(tl, 1, 0, 100), video)
+        self.assertIsNone(_edit_engine_find_slot_item(tl, 1, 0, 99))
+
+    def test_linked_audio_via_get_linked_items(self) -> None:
+        from src.server import _edit_engine_linked_audio_tracks
+        tl, video = self._tl()
+        indices, note = _edit_engine_linked_audio_tracks(tl, video, 0, 100)
+        # Only track 1 carries the linked item; the music bed on track 2
+        # overlaps the slot but is NOT linked and must be left untouched.
+        self.assertEqual(indices, [1])
+        self.assertEqual(note, "")
+
+    def test_linked_audio_media_id_fallback(self) -> None:
+        from src.server import _edit_engine_linked_audio_tracks
+        tl, video = self._tl(expose_linked=False)  # GetLinkedItems unavailable
+        indices, note = _edit_engine_linked_audio_tracks(tl, video, 0, 100)
+        self.assertEqual(indices, [1])
+        self.assertEqual(note, "")
+
+    def test_no_linked_audio_is_graceful(self) -> None:
+        from src.server import _edit_engine_linked_audio_tracks
+        solo_video = _FakeItem(0, 100, media_id="m-solo", linked=[])
+        tl = _FakeTimeline({("video", 1): [solo_video]})  # audio-less timeline
+        indices, note = _edit_engine_linked_audio_tracks(tl, solo_video, 0, 100)
+        self.assertEqual(indices, [])
+        self.assertIn("no linked audio", note)
+
+    def test_missing_target_item_is_graceful(self) -> None:
+        from src.server import _edit_engine_linked_audio_tracks
+        tl, _ = self._tl()
+        indices, note = _edit_engine_linked_audio_tracks(tl, None, 0, 100)
+        self.assertEqual(indices, [])
+        self.assertIn("not found", note)
+
+
 if __name__ == "__main__":
     unittest.main()

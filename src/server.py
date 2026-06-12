@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.47.0"
+VERSION = "2.48.0"
 
 import base64
 import os
@@ -16386,6 +16386,10 @@ def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) ->
       list_versions(timeline_name) -> [{version, archived_timeline_name, created_at, ...}]
         Version chain for `timeline_name`, oldest first. Includes any retention-
         collapsed versions (drt_export_path populated).
+      diff_timelines(from_timeline, to_timeline) -> {added, removed, moved, trimmed, summary}
+        Structural diff between two LIVE timelines by name (read-only; no
+        archived versions needed). Built for edit-engine variants — tighten/
+        selects produce new-name timelines with no shared version chain.
       get_history(timeline_name?, analysis_run_id?, limit?) -> [{edit_type, target_metric, before_value, after_value, delta, ...}]
         Brain-edit history. Filter by timeline_name or analysis_run_id; defaults
         to the most recent 50 across the project.
@@ -16453,6 +16457,14 @@ def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) ->
                 to_version=int(p["to_version"]),
             ),
         }
+    if action == "diff_timelines":
+        if not p.get("from_timeline") or not p.get("to_timeline"):
+            return _err("from_timeline and to_timeline required")
+        return _timeline_versioning.diff_timelines(
+            project=project_h,
+            from_timeline=str(p["from_timeline"]),
+            to_timeline=str(p["to_timeline"]),
+        )
     if action == "get_history":
         rows = _brain_edits.get_brain_edit_history(
             project_root=project_root,
@@ -16560,6 +16572,105 @@ def _edit_engine_capture(tl) -> Dict[str, Any]:
     except Exception:
         pass
     return out
+
+
+def _edit_engine_track_counts(tl) -> Dict[str, int]:
+    """Per-track-type item counts — the swap symmetry signal in readback."""
+    counts: Dict[str, int] = {}
+    for tt in ("video", "audio"):
+        total = 0
+        try:
+            n = int(tl.GetTrackCount(tt) or 0)
+        except Exception:
+            n = 0
+        for ti in range(1, n + 1):
+            try:
+                total += len(tl.GetItemListInTrack(tt, ti) or [])
+            except Exception:
+                continue
+        counts[tt] = total
+    return counts
+
+
+def _edit_engine_find_slot_item(tl, track_index: int, slot_start: int, slot_end: int):
+    """The video item occupying exactly [slot_start, slot_end] on a track."""
+    try:
+        for cand in (tl.GetItemListInTrack("video", int(track_index)) or []):
+            if _frame_int(cand.GetStart()) == slot_start and _frame_int(cand.GetEnd()) == slot_end:
+                return cand
+    except Exception:
+        pass
+    return None
+
+
+def _edit_engine_linked_audio_tracks(
+    tl, target_item, slot_start: int, slot_end: int,
+) -> Tuple[List[int], str]:
+    """Audio track indices carrying the target item's linked audio.
+
+    Prefers GetLinkedItems; falls back to matching slot-overlapping audio
+    items that share the target's media-pool source. ([], note) when there is
+    no linked audio (audio-only handling stays untouched) or no target item.
+    """
+    if target_item is None:
+        return [], "target video item not found on its track; audio left untouched"
+    linked_ids: set = set()
+    get_linked = getattr(target_item, "GetLinkedItems", None)
+    if callable(get_linked):
+        try:
+            for linked_item in (get_linked() or []):
+                uid = getattr(linked_item, "GetUniqueId", None)
+                if callable(uid):
+                    linked_ids.add(str(uid()))
+        except Exception:
+            linked_ids = set()
+    target_media_id = None
+    try:
+        mpi = target_item.GetMediaPoolItem()
+        if mpi is not None:
+            target_media_id = str(mpi.GetUniqueId())
+    except Exception:
+        target_media_id = None
+    if not linked_ids and not target_media_id:
+        return [], "GetLinkedItems unavailable and no media id to match; audio left untouched"
+
+    indices: List[int] = []
+    try:
+        audio_tracks = int(tl.GetTrackCount("audio") or 0)
+    except Exception:
+        audio_tracks = 0
+    for ti in range(1, audio_tracks + 1):
+        try:
+            items = tl.GetItemListInTrack("audio", ti) or []
+        except Exception:
+            continue
+        for cand in items:
+            try:
+                c_start = _frame_int(cand.GetStart())
+                c_end = _frame_int(cand.GetEnd())
+            except Exception:
+                continue
+            if c_start is None or c_end is None or c_start >= slot_end or c_end <= slot_start:
+                continue
+            is_linked = False
+            if linked_ids:
+                uid = getattr(cand, "GetUniqueId", None)
+                if callable(uid):
+                    try:
+                        is_linked = str(uid()) in linked_ids
+                    except Exception:
+                        is_linked = False
+            if not is_linked and target_media_id:
+                try:
+                    c_mpi = cand.GetMediaPoolItem()
+                    is_linked = c_mpi is not None and str(c_mpi.GetUniqueId()) == target_media_id
+                except Exception:
+                    is_linked = False
+            if is_linked and ti not in indices:
+                indices.append(ti)
+    if not indices:
+        return [], "no linked audio found for the target item"
+    return indices, ""
 
 
 @mcp.tool()
@@ -16743,6 +16854,16 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             record_cursor += int(append_ci.get("end_frame", 0)) - int(append_ci.get("start_frame", 0)) + 1
         appended = mp.AppendToTimeline(built) if built else None
         readback = _edit_engine_capture(tl)
+        # A diff against a source timeline is meaningless for a fresh assembly;
+        # a usage-snapshot summary is the structural readback that fits.
+        try:
+            usage = _timeline_versioning.capture_timeline_clip_usage(tl)
+            by_type: Dict[str, int] = {}
+            for usage_row in usage:
+                by_type[usage_row["track_type"]] = by_type.get(usage_row["track_type"], 0) + 1
+            readback["usage_summary"] = {"items": len(usage), "by_track_type": by_type}
+        except Exception:
+            pass
         run_id = _analysis_runs.current_run_id()
         try:
             _brain_edits.log_brain_edit(
@@ -16820,6 +16941,17 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             return {"success": False, "error": f"variant assembly failed: {variant.get('error')}", "variant": variant}
         new_tl, _new_index = _find_timeline_by_name(proj, variant.get("name") or variant_name)
         after = _edit_engine_capture(new_tl) if new_tl else {}
+        # Cross-name structural diff (source vs variant): trustworthy readback
+        # without archived version rows — variants are new-name timelines.
+        structural_diff = None
+        if new_tl is not None:
+            try:
+                structural_diff = _timeline_versioning.compare_usage_snapshots(
+                    _timeline_versioning.capture_timeline_clip_usage(source_tl),
+                    _timeline_versioning.capture_timeline_clip_usage(new_tl),
+                )
+            except Exception as diff_exc:
+                structural_diff = {"error": f"{type(diff_exc).__name__}: {diff_exc}"}
         run_id = _analysis_runs.current_run_id()
         try:
             _brain_edits.log_brain_edit(
@@ -16865,6 +16997,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                     if before.get("duration_seconds") is not None and after.get("duration_seconds") is not None
                     else None
                 ),
+                "structural_diff": structural_diff,
             },
             "plan_id": plan.get("plan_id"),
         }
@@ -16916,14 +17049,44 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         except Exception:
             pass
         before = _edit_engine_capture(tl)
+        before["track_counts"] = _edit_engine_track_counts(tl)
+        slot_start = int(item_block.get("timeline_start_frame"))
+        slot_end = int(item_block.get("timeline_end_frame"))
+        target_track = int(item_block.get("track_index") or 1)
+        # Capture the target's linked audio BEFORE the lift so the audio lift
+        # is scoped to exactly those tracks (the replacement appends linked
+        # video+audio, so both sides of the swap stay symmetric).
+        target_item = _edit_engine_find_slot_item(tl, target_track, slot_start, slot_end)
+        linked_audio_indices, audio_note = _edit_engine_linked_audio_tracks(
+            tl, target_item, slot_start, slot_end,
+        )
         lift = _timeline_lift_range_impl(tl, {
-            "start_frame": item_block.get("timeline_start_frame"),
-            "end_frame": item_block.get("timeline_end_frame"),
+            "start_frame": slot_start,
+            "end_frame": slot_end,
+            "track_types": ["video"],
+            "track_indices": [target_track],
             "allow_partial_item_delete": True,
             "ripple": False,
         })
         if not lift.get("success"):
             return {"success": False, "error": f"lift failed: {lift.get('error')}", "lift": lift}
+        audio_lift = None
+        if linked_audio_indices:
+            audio_lift = _timeline_lift_range_impl(tl, {
+                "start_frame": slot_start,
+                "end_frame": slot_end,
+                "track_types": ["audio"],
+                "track_indices": linked_audio_indices,
+                "allow_partial_item_delete": True,
+                "ripple": False,
+            })
+            if not audio_lift.get("success"):
+                return {
+                    "success": False,
+                    "error": f"linked-audio lift failed: {audio_lift.get('error')}",
+                    "lift": lift,
+                    "audio_lift": audio_lift,
+                }
         mp = proj.GetMediaPool()
         root_folder = mp.GetRootFolder()
         timeline_start = _timeline_start_frame(tl)
@@ -16940,8 +17103,11 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         row, row_err = _build_append_clip_info_dict(root_folder, ci, 0, timeline_start)
         if row_err:
             return {"success": False, "error": f"swap append failed: {row_err.get('error')}", "lifted": lift}
+        # No mediaType on the clip info: the replacement appends video+audio
+        # linked, mirroring the video + linked-audio lift above.
         appended = mp.AppendToTimeline([row])
         after = _edit_engine_capture(tl)
+        after["track_counts"] = _edit_engine_track_counts(tl)
         run_id = _analysis_runs.current_run_id()
         try:
             _brain_edits.log_brain_edit(
@@ -16972,6 +17138,13 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             "before": before,
             "after": after,
         })
+        readback: Dict[str, Any] = {"before": before, "after": after}
+        readback["audio_accounting"] = {
+            "linked_audio_tracks_lifted": linked_audio_indices,
+            "audio_items_lifted": (audio_lift or {}).get("deleted", 0),
+            "video_items_lifted": lift.get("deleted", 0),
+            **({"note": audio_note} if audio_note else {}),
+        }
         return {
             "success": bool(appended),
             "timeline_name": tl.GetName(),
@@ -16981,7 +17154,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                 "shot_index": alternate.get("shot_index"),
                 "score": alternate.get("score"),
             },
-            "readback": {"before": before, "after": after},
+            "readback": readback,
             "plan_id": plan.get("plan_id"),
         }
 
