@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.49.0
+
+Cross-shot relationships (spec §4 — pattern recognition only): the shot
+page's Relationships group finally fills, and the edit engine can prefer
+vision-confirmed alternates.
+
+- **Added** schema v12 `shot_relationships` (same_setup_as / alt_take_of
+  symmetric, continues_from directional — the source shot continues from
+  the target) with supersede semantics (current rows have
+  `superseded_at IS NULL`).
+- **Added** `media_analysis` actions `detect_shot_relationships` /
+  `commit_shot_relationships` / `list_shot_relationships`: pairwise cosine
+  over the per-shot visual vectors (transcript continuity as a second
+  signal for continues_from) → a deferred confirmation payload with a
+  representative frame PAIR per candidate (caps pre-checked; candidates
+  live only in the detection-state stash until committed, so re-detect
+  never leaves ghosts) → vision-confirmed rows. Representative frames use
+  the shot's middle sample (first/last frames often catch fades).
+- **Added** the shot page's Relationships group now renders from the DB
+  (`continues_from` shows on the continuing shot; cross-clip targets are
+  clip-qualified).
+- **Changed** `plan_swap` prefers confirmed `alt_take_of` alternates over
+  raw cosine similarity — confirmed takes sort first (and are unioned in
+  even when the cosine search missed them); each alternate's rationale
+  states which basis ranked it.
+
 ## What's New in v2.48.1
 
 Bug fix surfaced by the first real-cut tighten pilot.
