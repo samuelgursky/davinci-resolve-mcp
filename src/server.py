@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.48.1"
+VERSION = "2.49.0"
 
 import base64
 import os
@@ -15772,6 +15772,10 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "list_entities",
         "prepare_bin_briefing",
         "commit_bin_summary",
+        # Cross-shot relationships (spec §4).
+        "detect_shot_relationships",
+        "commit_shot_relationships",
+        "list_shot_relationships",
     }:
         root = resolve_media_analysis_output_root(
             project_name=project_name,
@@ -15916,6 +15920,40 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         if action == "list_entities":
             from src.utils import entities
             return entities.list_entities(project_root, kind=p.get("kind"))
+        # Cross-shot relationships (spec §4): detect → one bounded vision
+        # confirm (frame pairs) → commit; pattern recognition only.
+        if action == "detect_shot_relationships":
+            from src.utils import shot_relationships
+            band = p.get("continues_band") or p.get("continuesBand")
+            return shot_relationships.detect_shot_relationships(
+                project_root,
+                setup_threshold=float(p.get("setup_threshold") or p.get("setupThreshold")
+                                      or shot_relationships.DEFAULT_SETUP_THRESHOLD),
+                alt_take_threshold=float(p.get("alt_take_threshold") or p.get("altTakeThreshold")
+                                         or shot_relationships.DEFAULT_ALT_TAKE_THRESHOLD),
+                continues_band=tuple(band) if isinstance(band, (list, tuple)) and len(band) == 2
+                else shot_relationships.DEFAULT_CONTINUES_BAND,
+                max_candidates=int(p.get("max_candidates") or p.get("maxCandidates")
+                                   or shot_relationships.DEFAULT_MAX_CANDIDATES),
+                job_id=p.get("job_id") or p.get("jobId"),
+            )
+        if action == "commit_shot_relationships":
+            from src.utils import shot_relationships
+            return shot_relationships.commit_shot_relationships(
+                project_root,
+                relationships_payload=p.get("relationships"),
+                vision_token=p.get("vision_token") or p.get("visionToken"),
+                author=p.get("author") or "host_chat",
+            )
+        if action == "list_shot_relationships":
+            from src.utils import shot_relationships
+            return shot_relationships.list_shot_relationships(
+                project_root,
+                clip_ref=p.get("clip_id") or p.get("clipId") or p.get("clip_dir") or p.get("clipDir"),
+                shot_uuid=p.get("shot_uuid") or p.get("shotUuid"),
+                relationship_type=p.get("relationship_type") or p.get("relationshipType"),
+                include_superseded=bool(p.get("include_superseded") or p.get("includeSuperseded")),
+            )
         if action == "prepare_bin_briefing":
             from src.utils import entities
             return entities.prepare_bin_briefing(project_root)
@@ -16348,6 +16386,9 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "list_entities",
         "prepare_bin_briefing",
         "commit_bin_summary",
+        "detect_shot_relationships",
+        "commit_shot_relationships",
+        "list_shot_relationships",
         "get_caps",
         "set_caps_preset",
         "get_usage",

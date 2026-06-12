@@ -120,7 +120,11 @@ future re-analysis so human notes survive fresh vision runs. `Open in Resolve`
 jumps straight to the clip in the source viewer with the shot's mark in/out
 set. The field groups (Visual, Content, Production, Editorial, Cuttability)
 are filled by the opt-in deep vision pass — `Deepen this shot` copies a chat
-prompt that runs it for just this shot, estimate first.
+prompt that runs it for just this shot, estimate first. The Relationships
+group (same_setup_as / continues_from / alt_take_of) fills from the
+cross-shot relationships pass (`detect_shot_relationships` →
+vision-confirm → `commit_shot_relationships`); `continues_from` is shown on
+the continuing shot.
 
 ### Media → History
 

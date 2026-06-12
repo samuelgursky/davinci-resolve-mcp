@@ -579,37 +579,79 @@ def plan_swap(
     if not found.get("success"):
         return found
     duration_frames = tl_end - tl_start
-    alternates: List[Dict[str, Any]] = []
-    for hit in found.get("results") or []:
+    needed_seconds = duration_frames / fps
+
+    # Vision-confirmed alt takes outrank raw cosine similarity (spec §4).
+    from src.utils import shot_relationships as _shot_relationships
+    confirmed_alts = set(_shot_relationships.confirmed_alt_take_shot_uuids(conn, shot["shot_uuid"]))
+
+    def _viable_alternate(
+        *, clip_uuid: Any, shot_uuid_: Any, shot_index: Any, description: Any,
+        alt_start: Any, alt_end: Any, score: Any, rationale: str,
+    ) -> Optional[Dict[str, Any]]:
         alt_clip = conn.execute(
-            "SELECT * FROM clips WHERE clip_uuid = ?", (hit.get("clip_uuid"),)
+            "SELECT * FROM clips WHERE clip_uuid = ?", (clip_uuid,)
         ).fetchone()
         if not alt_clip or not alt_clip["resolve_clip_id"]:
-            continue
+            return None
+        if alt_start is None or alt_end is None:
+            return None
+        if (float(alt_end) - float(alt_start)) < needed_seconds:
+            return None  # alternate too short to fill the slot
         alt = dict(alt_clip)
         alt_fps = _clip_fps(alt)
-        alt_start = hit.get("time_seconds_start")
-        alt_end = hit.get("time_seconds_end")
-        if alt_start is None or alt_end is None:
-            continue
-        needed_seconds = duration_frames / fps
-        if (float(alt_end) - float(alt_start)) < needed_seconds:
-            continue  # alternate too short to fill the slot
         start_frame = int(round(float(alt_start) * alt_fps))
         end_frame = start_frame + int(round(needed_seconds * alt_fps)) - 1
-        alternates.append({
-            "score": hit.get("score"),
-            "clip_uuid": hit.get("clip_uuid"),
+        return {
+            "score": score,
+            "clip_uuid": clip_uuid,
             "clip_name": alt.get("clip_name"),
             "resolve_clip_id": alt["resolve_clip_id"],
-            "shot_uuid": hit.get("entity_uuid"),
-            "shot_index": hit.get("shot_index"),
-            "description": hit.get("description"),
+            "shot_uuid": shot_uuid_,
+            "shot_index": shot_index,
+            "description": description,
             "source_frame_range": [start_frame, end_frame],
-            "rationale": f"cosine {hit.get('score')} to the current shot ({kind} embedding); long enough to fill the slot exactly",
-        })
-        if len(alternates) >= int(limit):
-            break
+            "confirmed_alt_take": str(shot_uuid_) in confirmed_alts,
+            "rationale": rationale,
+        }
+
+    alternates: List[Dict[str, Any]] = []
+    seen_shot_uuids: set = set()
+    for hit in found.get("results") or []:
+        hit_uuid = str(hit.get("entity_uuid"))
+        is_confirmed = hit_uuid in confirmed_alts
+        basis = (
+            f"vision-confirmed alt_take_of relationship (cosine {hit.get('score')} agrees)"
+            if is_confirmed
+            else f"cosine {hit.get('score')} to the current shot ({kind} embedding)"
+        )
+        alternate = _viable_alternate(
+            clip_uuid=hit.get("clip_uuid"), shot_uuid_=hit.get("entity_uuid"),
+            shot_index=hit.get("shot_index"), description=hit.get("description"),
+            alt_start=hit.get("time_seconds_start"), alt_end=hit.get("time_seconds_end"),
+            score=hit.get("score"),
+            rationale=f"{basis}; long enough to fill the slot exactly",
+        )
+        if alternate:
+            alternates.append(alternate)
+            seen_shot_uuids.add(hit_uuid)
+    # Confirmed alt takes the cosine search missed still belong in the list.
+    for alt_uuid in confirmed_alts - seen_shot_uuids:
+        alt_shot = conn.execute("SELECT * FROM shots WHERE shot_uuid = ?", (alt_uuid,)).fetchone()
+        if not alt_shot:
+            continue
+        alt_shot = dict(alt_shot)
+        alternate = _viable_alternate(
+            clip_uuid=alt_shot.get("clip_uuid"), shot_uuid_=alt_uuid,
+            shot_index=alt_shot.get("shot_index"), description=alt_shot.get("description"),
+            alt_start=alt_shot.get("time_seconds_start"), alt_end=alt_shot.get("time_seconds_end"),
+            score=None,
+            rationale="vision-confirmed alt_take_of relationship (not surfaced by the cosine search); long enough to fill the slot exactly",
+        )
+        if alternate:
+            alternates.append(alternate)
+    alternates.sort(key=lambda a: (not a.get("confirmed_alt_take"), -(a.get("score") or 0.0)))
+    alternates = alternates[: int(limit)]
     if not alternates:
         return {
             "success": False,

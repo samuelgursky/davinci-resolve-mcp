@@ -497,7 +497,9 @@ Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
 `update_shot_field`, `get_field_history`, `revert_field`,
 `list_corrections`, `deepen`, `commit_shot_vision`, `vision_pending_sweep`,
 `build_embeddings`, `find_similar`, `detect_entities`, `commit_entities`,
-`list_entities`, `prepare_bin_briefing`, and `commit_bin_summary`.
+`list_entities`, `prepare_bin_briefing`, `commit_bin_summary`,
+`detect_shot_relationships`, `commit_shot_relationships`, and
+`list_shot_relationships`.
 
 **Cross-clip entities + bin briefing v2 (v2.44.0+).** Recurring
 people/places/props across a project's media, found cheaply and confirmed
@@ -517,6 +519,29 @@ with ONE vision call per cluster:
   no vision cost); the host writes a colleague-style markdown briefing and
   calls `commit_bin_summary(briefing, briefing_token)`, which lands in
   `memory/bin_summary.md` above the v2.0 aggregate.
+
+**Cross-shot relationships (v2.49.0+).** Pattern recognition only (spec §4 —
+no editorial suggestions): `same_setup_as` / `alt_take_of` (symmetric) and
+`continues_from` (directional; the source shot continues from the target).
+- `detect_shot_relationships(setup_threshold?, alt_take_threshold?,
+  continues_band?, max_candidates?)` — pairwise cosine over the per-shot
+  visual vectors (build visual embeddings first; raise
+  `max_frames_per_clip` if shot coverage is partial), plus transcript
+  continuity as a second signal for `continues_from`. Returns a deferred
+  payload with a representative frame PAIR per candidate (caps pre-checked,
+  two frames per candidate). Candidates live only in the detection-state
+  stash until committed — re-detect replaces them.
+- The host chat reads BOTH frames of each pair and calls
+  `commit_shot_relationships(relationships=[{candidate_index, verdict:
+  confirm|reject, relationship_type?, confidence?}], vision_token)`.
+  Confirm only what the frames show; reject lookalikes. Overriding the
+  suggested type is allowed. Committed rows supersede prior machine rows
+  for the same pair.
+- `list_shot_relationships(clip_id?, shot_uuid?, relationship_type?)` —
+  current rows with clip/shot context on both ends. The shot page's
+  Relationships group fills from these rows, and `plan_swap` prefers
+  confirmed `alt_take_of` alternates over raw cosine (the rationale states
+  which basis ranked each alternate).
 
 **Embeddings + similarity (v2.43.0+).** Local-compute semantic search; no
 vendor tokens, so nothing here touches the caps ledger. Backends are

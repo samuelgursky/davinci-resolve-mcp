@@ -270,6 +270,85 @@ class PlanSwapTests(EditEngineBase):
         plan = edit_engine.plan_swap(self.root, item=item, timeline_name="TL", timeline_fps=24.0)
         self.assertFalse(plan["success"])
 
+    def _insert_alt_take_row(self, shot_uuid_a: str, shot_uuid_b: str) -> None:
+        with timeline_brain_db.transaction(self.root) as txn:
+            txn.execute(
+                """
+                INSERT INTO shot_relationships
+                    (source_shot_uuid, target_shot_uuid, relationship_type,
+                     confidence, source, author, timestamp, superseded_at)
+                VALUES (?, ?, 'alt_take_of', 'high', 'vision_relationship_v1',
+                        'host_chat', '2026-06-12T00:00:00Z', NULL)
+                """,
+                (shot_uuid_a, shot_uuid_b),
+            )
+
+    def test_swap_prefers_confirmed_alt_takes(self) -> None:
+        # A third clip whose cosine is LOWER than Alt.mp4's — but it's a
+        # vision-confirmed alt take, so it must outrank raw similarity.
+        clip3 = self._ingest_deep_clip(
+            clip_id="resolve-swap-3", name="Take2.mp4", path="/media/take2.mp4",
+            clip_dir="t-tttttttttttt",
+            shots=[deep_shot(1, 0.0, 11.0, "medium", "Confirmed alternate take.")],
+        )
+        conn = timeline_brain_db.connect(self.root)
+        take_uuid = conn.execute(
+            "SELECT shot_uuid FROM shots WHERE clip_uuid = ? AND shot_index = 1", (clip3,)
+        ).fetchone()["shot_uuid"]
+        current_uuid = conn.execute(
+            "SELECT shot_uuid FROM shots WHERE clip_uuid = ? AND shot_index = 1", (self.clip1,)
+        ).fetchone()["shot_uuid"]
+        with timeline_brain_db.transaction(self.root) as txn:
+            txn.execute(
+                """
+                INSERT OR REPLACE INTO embeddings
+                    (entity_type, entity_uuid, embedding_kind, model_name, dimension,
+                     vector, content_hash, computed_at)
+                VALUES ('shot', ?, 'visual', 'fake:clip', 3, ?, 'h', '2026-06-10T00:00:00Z')
+                """,
+                (str(take_uuid), embeddings.pack_vector([0.7, 0.3, 0.0])),
+            )
+        self._insert_alt_take_row(str(current_uuid), str(take_uuid))
+        item = {
+            "timeline_start_frame": 0, "timeline_end_frame": 240,
+            "source_start_frame": 0, "media_ref": "resolve-swap-1",
+            "item_name": "Main.mp4", "track_index": 1,
+        }
+        plan = edit_engine.plan_swap(self.root, item=item, timeline_name="TL", timeline_fps=24.0)
+        self.assertTrue(plan["success"], plan)
+        best = plan["alternates"][0]
+        self.assertEqual(best["clip_name"], "Take2.mp4")
+        self.assertTrue(best["confirmed_alt_take"])
+        self.assertIn("vision-confirmed alt_take_of", best["rationale"])
+
+    def test_swap_unions_in_confirmed_alt_missing_from_cosine(self) -> None:
+        # A confirmed alt take with NO embedding row can't come from the
+        # cosine search — plan_swap must union it in with the basis stated.
+        clip4 = self._ingest_deep_clip(
+            clip_id="resolve-swap-4", name="Take3.mp4", path="/media/take3.mp4",
+            clip_dir="u-uuuuuuuuuuuu",
+            shots=[deep_shot(1, 0.0, 11.0, "medium", "Unembedded confirmed take.")],
+        )
+        conn = timeline_brain_db.connect(self.root)
+        take_uuid = conn.execute(
+            "SELECT shot_uuid FROM shots WHERE clip_uuid = ? AND shot_index = 1", (clip4,)
+        ).fetchone()["shot_uuid"]
+        current_uuid = conn.execute(
+            "SELECT shot_uuid FROM shots WHERE clip_uuid = ? AND shot_index = 1", (self.clip1,)
+        ).fetchone()["shot_uuid"]
+        self._insert_alt_take_row(str(take_uuid), str(current_uuid))  # reversed direction
+        item = {
+            "timeline_start_frame": 0, "timeline_end_frame": 240,
+            "source_start_frame": 0, "media_ref": "resolve-swap-1",
+            "item_name": "Main.mp4", "track_index": 1,
+        }
+        plan = edit_engine.plan_swap(self.root, item=item, timeline_name="TL", timeline_fps=24.0)
+        self.assertTrue(plan["success"], plan)
+        best = plan["alternates"][0]
+        self.assertEqual(best["clip_name"], "Take3.mp4")
+        self.assertIsNone(best["score"])
+        self.assertIn("not surfaced by the cosine search", best["rationale"])
+
 
 class PanelPlanApiTests(EditEngineBase):
     """The /api/edit_plans surface: list + detail payloads for the panel

@@ -29,7 +29,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 
 logger = logging.getLogger("resolve-mcp.timeline-brain-db")
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 DB_FILENAME = "timeline_brain.sqlite"
 SOUL_DIRNAME = "_soul"
 
@@ -762,6 +762,44 @@ def _migrate_v11_entities(conn: sqlite3.Connection) -> None:
             ON entity_appearances(entity_uuid);
         CREATE INDEX IF NOT EXISTS ix_entity_appearances_clip
             ON entity_appearances(clip_uuid);
+        """
+    )
+
+
+@register_migration(12)
+def _migrate_v12_shot_relationships(conn: sqlite3.Connection) -> None:
+    """Cross-shot relationships (spec §4 — pattern recognition only).
+
+    Three types: same_setup_as / alt_take_of (symmetric — stored once with
+    the canonically-ordered pair) and continues_from (directional — the
+    SOURCE shot continues from the TARGET shot, i.e. target precedes source).
+    Rows are append-only with supersede semantics: current rows have
+    superseded_at IS NULL.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS shot_relationships (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_shot_uuid TEXT NOT NULL,
+            target_shot_uuid TEXT NOT NULL,
+            relationship_type TEXT NOT NULL CHECK(relationship_type IN
+                ('same_setup_as', 'continues_from', 'alt_take_of')),
+            confidence TEXT,
+            source TEXT NOT NULL,
+            author TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            superseded_at TEXT,
+            UNIQUE(source_shot_uuid, target_shot_uuid, relationship_type, timestamp),
+            FOREIGN KEY (source_shot_uuid) REFERENCES shots(shot_uuid) ON DELETE CASCADE,
+            FOREIGN KEY (target_shot_uuid) REFERENCES shots(shot_uuid) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_relationships_source
+            ON shot_relationships(source_shot_uuid) WHERE superseded_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_relationships_target
+            ON shot_relationships(target_shot_uuid) WHERE superseded_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_relationships_type
+            ON shot_relationships(relationship_type) WHERE superseded_at IS NULL;
         """
     )
 

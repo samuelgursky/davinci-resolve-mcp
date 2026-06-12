@@ -13144,6 +13144,30 @@ def get_analyzed_clip_shot(project_root: str, clip_id: str, shot_index: int) -> 
         })
     corrections = _v2_read_corrections_for_dir(clip_dir)
     shot_corrections = _v2_filter_corrections_for_shot(corrections, matched.get("shot_uuid"), shot_index)
+    # Cross-shot relationships (spec §4) come from the DB, not the report —
+    # fill the shot page's Relationships group when confirmed rows exist.
+    # Exported reports don't carry shot_uuid, so derive it from the DB by
+    # clip + shot_index.
+    try:
+        from src.utils import analysis_store as _analysis_store
+        from src.utils import shot_relationships as _shot_rel
+        conn = _timeline_brain_db.connect(project_root)
+        shot_uuid = matched.get("shot_uuid")
+        if not shot_uuid:
+            clip_uuid = _analysis_store.resolve_clip_uuid(conn, clip_id)
+            if clip_uuid:
+                hit = conn.execute(
+                    "SELECT shot_uuid FROM shots WHERE clip_uuid = ? AND shot_index = ?",
+                    (clip_uuid, int(shot_index)),
+                ).fetchone()
+                shot_uuid = hit["shot_uuid"] if hit else None
+        if shot_uuid:
+            relationships = _shot_rel.relationships_for_shot(conn, str(shot_uuid))
+            if relationships:
+                matched = dict(matched)
+                matched["relationships"] = relationships
+    except Exception:  # noqa: BLE001 — panel reads fail soft
+        pass
     return {
         "success": True,
         "clip_id": clip_id,
