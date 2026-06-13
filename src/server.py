@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.51.0"
+VERSION = "2.52.0"
 
 import base64
 import os
@@ -16592,6 +16592,15 @@ def _edit_engine_collect_items(tl, *, track_index: Optional[int] = None) -> List
                         pass
             except Exception:
                 pass
+            # Linked audio track indices so the planner can mirror kept ranges
+            # onto sound (see #67 — tighten variants were coming out silent).
+            try:
+                audio_indices, _audio_note = _edit_engine_linked_audio_tracks(
+                    tl, item, row["timeline_start_frame"], row["timeline_end_frame"]
+                )
+                row["audio_track_indices"] = audio_indices
+            except Exception:
+                row["audio_track_indices"] = []
             rows.append(row)
     return rows
 
@@ -16732,10 +16741,13 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
     - execute_selects(plan_id, confirm_token?) — creates a NEW selects timeline
       from the plan's clip in/out ranges. Nothing existing is touched.
     - plan_tighten(timeline_name?, target_ratio?, min_pause_seconds?,
-      handle_seconds?) — dead-air lifts from transcript-gap evidence for the
-      current (or named) timeline.
-    - execute_tighten(plan_id, confirm_token?) — duplicates the timeline and
-      applies the lifts (ripple) to the DUPLICATE, never the original.
+      handle_seconds?, include_audio?) — dead-air lifts from transcript-gap
+      evidence for the current (or named) timeline. Kept ranges mirror onto the
+      items' linked audio tracks by default so the variant is audible; pass
+      include_audio=false for a video-only (silent) assembly.
+    - execute_tighten(plan_id, confirm_token?) — assembles a tightened VARIANT
+      timeline from the plan's keep ranges (video + mirrored audio), never
+      mutating the original. Readback includes an audio_accounting block.
     - plan_swap(track_index?, timeline_start_frame | item_name, kind?, limit?)
       — alternates for one timeline item via the similarity index.
     - execute_swap(plan_id, alternate_index, confirm_token?) — replaces the
@@ -16807,6 +16819,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             target_ratio=p.get("target_ratio") or p.get("targetRatio"),
             min_pause_seconds=float(p.get("min_pause_seconds") or p.get("minPauseSeconds") or _edit_engine_mod.DEFAULT_MIN_PAUSE_SECONDS),
             handle_seconds=float(p.get("handle_seconds") or p.get("handleSeconds") or _edit_engine_mod.DEFAULT_HANDLE_SECONDS),
+            include_audio=str(p.get("include_audio", p.get("includeAudio", True))).strip().lower() not in {"false", "0", "no", "none", "off"},
         )
 
     if action == "plan_swap":
@@ -16951,6 +16964,8 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         keep_ranges = plan.get("keep_ranges") or []
         if not keep_ranges:
             return _err("plan has no keep_ranges — re-plan with this version")
+        audio_keep_ranges = sum(1 for r in keep_ranges if str(r.get("track_type", "video")).lower() == "audio")
+        video_keep_ranges = len(keep_ranges) - audio_keep_ranges
         if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
             return _issue_confirm_token(
                 action="edit_engine.execute_tighten", params=p,
@@ -16963,6 +16978,13 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                     "timeline_name": plan.get("timeline_name"),
                     "lift_count": len(lifts),
                     "keep_range_count": len(keep_ranges),
+                    "video_keep_range_count": video_keep_ranges,
+                    "audio_keep_range_count": audio_keep_ranges,
+                    "audio_note": (
+                        f"Variant carries audio ({audio_keep_ranges} audio ranges mirror the video cuts)."
+                        if audio_keep_ranges
+                        else "WARNING: variant is VIDEO-ONLY (silent) — plan has no audio ranges."
+                    ),
                     "estimated_removed_seconds": sum(l.get("duration_seconds") or 0 for l in lifts),
                 },
             )
@@ -17039,6 +17061,23 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                     else None
                 ),
                 "structural_diff": structural_diff,
+                "audio_accounting": {
+                    "planned_audio_ranges": audio_keep_ranges,
+                    "planned_video_ranges": video_keep_ranges,
+                    "variant_audio_items": sum(
+                        1 for it in (variant.get("items") or [])
+                        if (it.get("range") or {}).get("media_type") == 2
+                    ),
+                    "variant_video_items": sum(
+                        1 for it in (variant.get("items") or [])
+                        if (it.get("range") or {}).get("media_type") == 1
+                    ),
+                    "note": (
+                        "Variant carries audio mirrored from the video cuts."
+                        if audio_keep_ranges
+                        else "Variant is VIDEO-ONLY (silent) — re-plan with include_audio=True for sound."
+                    ),
+                },
             },
             "plan_id": plan.get("plan_id"),
         }

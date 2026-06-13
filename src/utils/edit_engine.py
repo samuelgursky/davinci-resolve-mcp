@@ -348,13 +348,23 @@ def plan_tighten(
     target_ratio: Optional[float] = None,
     min_pause_seconds: float = DEFAULT_MIN_PAUSE_SECONDS,
     handle_seconds: float = DEFAULT_HANDLE_SECONDS,
+    include_audio: bool = True,
 ) -> Dict[str, Any]:
     """Propose dead-air lifts for a timeline.
 
     `items` rows come from the server (Resolve read): each needs
     {timeline_start_frame, timeline_end_frame, source_start_frame,
-     media_ref (clip id / path / hash), item_name?}. Lifts are returned in
-    timeline frames, latest-first ready.
+     media_ref (clip id / path / hash), item_name?}. Optionally each row may
+    carry {audio_track_indices: [int, ...]} naming the audio tracks that hold
+    the item's linked audio. Lifts are returned in timeline frames, latest-first
+    ready.
+
+    When ``include_audio`` (the default), each kept video range is mirrored onto
+    matching audio range(s) so the assembled variant carries sound — a
+    speech-driven cut would otherwise come out silent (see #67). Audio is
+    mirrored to the item's detected ``audio_track_indices``; absent that, it
+    falls back to audio track 1, which is where a single linked A/V clip's audio
+    lives.
     """
     if not items:
         return {"success": False, "error": "No timeline items supplied"}
@@ -475,6 +485,11 @@ def plan_tighten(
             cursor = max(cursor, lift_end_sec)
         if spec["src_end_sec"] - cursor > 0.05:
             segments.append((cursor, spec["src_end_sec"]))
+        audio_indices: List[int] = []
+        if include_audio:
+            audio_indices = [int(i) for i in (item.get("audio_track_indices") or []) if int(i) > 0]
+            if not audio_indices:
+                audio_indices = [1]
         for seg_start, seg_end in segments:
             start_frame = int(round(seg_start * clip_fps))
             end_frame = max(start_frame + 1, int(round(seg_end * clip_fps)) - 1)
@@ -485,23 +500,40 @@ def plan_tighten(
                 "track_type": "video",
                 "track_index": int(item.get("track_index") or 1),
             })
+            # Mirror each kept video range onto its linked audio track(s) with
+            # identical source frames so the variant stays frame-locked and
+            # audible. mediaType 2 pulls the same media-pool item's audio.
+            for audio_index in audio_indices:
+                keep_ranges.append({
+                    "clip_id": spec["resolve_clip_id"],
+                    "start_frame": start_frame,
+                    "end_frame": end_frame,
+                    "track_type": "audio",
+                    "media_type": 2,
+                    "track_index": audio_index,
+                })
 
     removed_frames = sum(l["timeline_end_frame"] - l["timeline_start_frame"] for l in lifts)
+    audio_keep_range_count = sum(1 for r in keep_ranges if r.get("track_type") == "audio")
+    video_keep_range_count = len(keep_ranges) - audio_keep_range_count
     plan = save_plan(project_root, {
         "kind": "tighten",
         "timeline_name": timeline_name,
         "timeline_fps": fps,
         "lifts": lifts,
         "keep_ranges": keep_ranges,
+        "include_audio": bool(include_audio),
         "skipped": skipped,
         "summary": (
             f"{len(lifts)} dead-air lifts, ~{round(removed_frames / fps, 1)}s removed "
-            f"from '{timeline_name}' (assembled as a tightened variant)"
+            f"from '{timeline_name}' (assembled as a tightened variant"
+            f"{', video + audio' if include_audio else ', video only'})"
         ),
         "settings": {
             "target_ratio": target_ratio,
             "min_pause_seconds": min_pause_seconds,
             "handle_seconds": handle_seconds,
+            "include_audio": bool(include_audio),
         },
     })
     return {
@@ -514,11 +546,20 @@ def plan_tighten(
         "estimated_removed_seconds": round(removed_frames / fps, 2),
         "lifts": lifts,
         "keep_range_count": len(keep_ranges),
+        "video_keep_range_count": video_keep_range_count,
+        "audio_keep_range_count": audio_keep_range_count,
+        "include_audio": bool(include_audio),
         "skipped": skipped,
         "note": (
             "Dry-run plan. Execute with edit_engine(action='execute_tighten', "
             "params={plan_id}) — a tightened VARIANT timeline is assembled from "
-            "the keep ranges; the original timeline is never mutated."
+            "the keep ranges; the original timeline is never mutated. "
+            + (
+                f"Audio is mirrored onto matching tracks ({audio_keep_range_count} "
+                "audio ranges) so the variant is audible."
+                if include_audio
+                else "include_audio=False: the variant will be VIDEO-ONLY (silent)."
+            )
         ),
     }
 

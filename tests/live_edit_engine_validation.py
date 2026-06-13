@@ -199,6 +199,17 @@ def main() -> int:
             check("diff_timelines action",
                   live_diff.get("success") and live_diff.get("summary") == sdiff_summary,
                   f"summary={live_diff.get('summary')}")
+            # #67: the tightened variant must carry audio, not come out silent.
+            t_acct = (done2.get("readback") or {}).get("audio_accounting") or {}
+            check("tighten variant carries audio",
+                  t_acct.get("variant_audio_items", 0) >= 1
+                  and t_acct.get("planned_audio_ranges", 0) >= 1,
+                  f"audio_accounting={t_acct}")
+            v_tl, _ = s._find_timeline_by_name(proj, done2.get("variant_timeline"))
+            if v_tl is not None:
+                audio_items = v_tl.GetItemListInTrack("audio", 1) or []
+                check("tighten variant A1 not empty", len(audio_items) >= 1,
+                      f"A1 items={len(audio_items)}")
 
         # ── E3: swap (replace the selects timeline's first item) ──
         selects_tl, _ = s._find_timeline_by_name(proj, done1.get("timeline_name"))

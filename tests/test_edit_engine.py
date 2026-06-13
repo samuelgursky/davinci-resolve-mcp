@@ -203,6 +203,54 @@ class PlanTightenTests(EditEngineBase):
         starts = [l["timeline_start_frame"] for l in plan["lifts"]]
         self.assertEqual(starts, sorted(starts, reverse=True))
 
+    def test_keep_ranges_mirror_audio_by_default(self) -> None:
+        # Regression for #67: a speech-driven tighten must carry audio, not
+        # assemble a silent video-only variant.
+        plan = edit_engine.plan_tighten(
+            self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0
+        )
+        loaded = edit_engine.load_plan(self.root, plan["plan_id"])
+        keep = loaded["keep_ranges"]
+        video = [r for r in keep if r["track_type"] == "video"]
+        audio = [r for r in keep if r["track_type"] == "audio"]
+        self.assertTrue(video)
+        self.assertEqual(len(audio), len(video))  # one mirror per kept video range
+        self.assertEqual(plan["audio_keep_range_count"], len(audio))
+        self.assertEqual(plan["video_keep_range_count"], len(video))
+        self.assertTrue(plan["include_audio"])
+        # Each audio range is frame-locked to its video twin (same source frames,
+        # same clip), on audio track 1, mediaType 2.
+        for v, a in zip(video, audio):
+            self.assertEqual(a["start_frame"], v["start_frame"])
+            self.assertEqual(a["end_frame"], v["end_frame"])
+            self.assertEqual(a["clip_id"], v["clip_id"])
+            self.assertEqual(a["track_index"], 1)
+            self.assertEqual(a["media_type"], 2)
+
+    def test_audio_mirrors_detected_linked_tracks(self) -> None:
+        # When the server reports the item's linked audio track indices, mirror
+        # onto each of them.
+        plan = edit_engine.plan_tighten(
+            self.root,
+            items=[self._item(audio_track_indices=[1, 2])],
+            timeline_name="TL", timeline_fps=24.0,
+        )
+        loaded = edit_engine.load_plan(self.root, plan["plan_id"])
+        audio = [r for r in loaded["keep_ranges"] if r["track_type"] == "audio"]
+        video = [r for r in loaded["keep_ranges"] if r["track_type"] == "video"]
+        self.assertEqual(len(audio), 2 * len(video))
+        self.assertEqual({r["track_index"] for r in audio}, {1, 2})
+
+    def test_include_audio_false_is_video_only(self) -> None:
+        plan = edit_engine.plan_tighten(
+            self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0,
+            include_audio=False,
+        )
+        loaded = edit_engine.load_plan(self.root, plan["plan_id"])
+        self.assertFalse(any(r["track_type"] == "audio" for r in loaded["keep_ranges"]))
+        self.assertEqual(plan["audio_keep_range_count"], 0)
+        self.assertFalse(plan["include_audio"])
+
 
 class PlanSwapTests(EditEngineBase):
     def setUp(self) -> None:
