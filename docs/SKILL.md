@@ -722,11 +722,15 @@ clip-count readback plus `brain_edits` rationale rows.
   `execute_selects(plan_id)` creates a NEW selects timeline from the plan's
   per-shot source ranges — additive; nothing existing is touched.
 - `plan_tighten(timeline_name?, target_ratio?, min_pause_seconds?,
-  handle_seconds?)` — dead-air lifts from transcript-gap evidence for each
-  timeline item (items without transcripts are reported in `skipped`, never
-  silently trimmed). `execute_tighten(plan_id)` assembles a tightened
-  VARIANT timeline from the plan's keep ranges — true partial trims; the
-  original timeline is never mutated.
+  handle_seconds?, include_audio?)` — dead-air lifts from transcript-gap
+  evidence for each timeline item (items without transcripts are reported in
+  `skipped`, never silently trimmed). `execute_tighten(plan_id)` assembles a
+  tightened VARIANT timeline from the plan's keep ranges — true partial
+  trims; the original timeline is never mutated. v2.52.0+: kept ranges mirror
+  onto each item's linked audio track(s) so the variant is audible (a
+  speech-driven cut was previously silent — #67); pass
+  `include_audio=false` for a video-only assembly, and the
+  `execute_tighten` readback carries an `audio_accounting` block.
 - `plan_swap(timeline_start_frame | item_name, kind="visual"|"text",
   limit?)` — alternates for one timeline item via the similarity index,
   filtered to shots long enough to fill the slot exactly.

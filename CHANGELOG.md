@@ -2,6 +2,25 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.52.0
+
+`edit_engine` tighten now carries audio. Previously `execute_tighten`
+assembled a video-only variant — a speech-driven dead-air cut came out
+silent, with nothing in the preview or readback to warn you (issue #67).
+
+- **Fixed** `plan_tighten` mirrors every kept video range onto its linked
+  audio track(s) with identical source frames, so the assembled variant
+  stays frame-locked and audible. Audio targets the item's detected linked
+  audio tracks (same `GetLinkedItems` matching `execute_swap` uses), falling
+  back to audio track 1 where a single linked A/V clip's audio lives.
+- **Added** `include_audio` parameter to `plan_tighten` (default `true`).
+  Pass `include_audio=false` for the prior video-only assembly.
+- **Added** an `audio_accounting` block to the `execute_tighten` confirm
+  preview and readback (planned vs. actual audio/video item counts), so a
+  silent variant can no longer ship unnoticed. Old video-only plans
+  re-executed against this build still work and are now loudly flagged as
+  silent.
+
 ## What's New in v2.51.0
 
 CLAP audio embeddings — the final phase of the post-program improvements.
