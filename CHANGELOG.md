@@ -2,6 +2,31 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.52.1
+
+Analysis reuse no longer blocks on missing capabilities when every clip is
+satisfied by an existing report (issue #68). `build_plan` records
+`capability_gaps` from the *requested* options before the per-clip reuse
+decision runs; when a fully-reused plan only re-keys and imports existing
+reports into the current root, no fresh transcription/vision/ffprobe happens,
+so the missing-capability gate must not fire.
+
+- **Fixed** the missing-capability gate is now evaluated against the clips that
+  still need fresh analysis, not the requested-options gaps. A clip is exempt
+  only when it both skips execution and has an existing report path; any clip
+  needing fresh work still enforces the gate.
+- **Fixed** extended the exemption to the entry points that short-circuit
+  before `execute_plan_async` and were still blocking fully-reused runs: the
+  `media_analysis` analyze action, metadata-publish analysis, and batch-job
+  creation. The batch CLI `plan` preview no longer prints "Missing tools" for a
+  fully-reusable plan.
+- **Changed** the reuse/capability logic is now a shared
+  `plan_requires_capabilities()` / `executing_clips()` helper, replacing the
+  duplicated inline comprehensions so every gate stays consistent.
+- Includes PR #68 by @diesdaas, which fixed the inner `execute_plan_async` gate
+  and isolated the marker-param and host-vision tests from unrelated
+  capability/destructive-hook coupling.
+
 ## What's New in v2.52.0
 
 `edit_engine` tighten now carries audio. Previously `execute_tighten`

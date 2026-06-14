@@ -57,6 +57,8 @@ from src.utils.media_analysis import (
     detect_capabilities,
     execute_plan,
     execute_plan_async,
+    executing_clips,
+    plan_requires_capabilities,
     load_report,
     mark_registry_stale_for_clip,
     query_analysis_index,
@@ -3431,6 +3433,87 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 conn.execute("SELECT COUNT(*) FROM transcript_segments").fetchone()[0], 0)
             # The media_ref lookup the edit-engine planners depend on.
             self.assertIsNotNone(analysis_store.resolve_clip_uuid(conn, "new-resolve-id"))
+
+    def test_executing_clips_helper_excludes_pure_reuse(self):
+        """The capability gate must key off clips that still need fresh
+        analysis, not the plan's requested-options gaps. A clip is exempt only
+        when it both skips execution AND has an existing report path."""
+        reused = {"skip_execution": True, "existing_report": {"path": "/x/a.json"}}
+        fresh = {"skip_execution": False}
+        # skip_execution flagged but no report path on disk -> still executes.
+        no_path = {"skip_execution": True, "existing_report": {}}
+        self.assertEqual(executing_clips({"clips": [reused]}), [])
+        self.assertFalse(plan_requires_capabilities({"clips": [reused]}))
+        self.assertEqual(executing_clips({"clips": [reused, fresh]}), [fresh])
+        self.assertTrue(plan_requires_capabilities({"clips": [reused, fresh]}))
+        self.assertEqual(executing_clips({"clips": [no_path]}), [no_path])
+        self.assertTrue(plan_requires_capabilities({"clips": [no_path]}))
+        self.assertFalse(plan_requires_capabilities({"clips": []}))
+
+    def test_all_reused_plan_executes_despite_capability_gaps(self):
+        """build_plan records capability_gaps from the requested options before
+        the reuse decision runs. When every clip is satisfied by an existing
+        reusable report, execution only re-keys/imports it — no fresh
+        transcription/vision happens — so the missing-capability gate must NOT
+        block. Regression for the gap the PR-68 inner fix left on the entry
+        points (server analyze action, metadata publish, batch job creation)."""
+        from tests.test_analysis_store import make_report
+        from src.utils import timeline_brain_db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "source")
+            os.makedirs(source_dir)
+            source = os.path.join(source_dir, "reuse clip.mp4")
+            with open(source, "wb") as handle:
+                handle.write(b"placeholder")
+            prior_dir = os.path.join(tmp, "prior", "clips", "old-dir")
+            os.makedirs(prior_dir)
+            prior = make_report()
+            prior["clip"] = dict(prior["clip"], clip_id="old-id", file_path=source)
+            prior_path = os.path.join(prior_dir, "analysis.json")
+            with open(prior_path, "w", encoding="utf-8") as handle:
+                json.dump(prior, handle)
+
+            record = {
+                "clip_id": "new-id",
+                "clip_name": "Reuse Clip.mp4",
+                "file_path": source,
+                "media_id": "new-media",
+            }
+            # Default transcription is on, but NO backend is available here ->
+            # build_plan records a capability gap from the requested options.
+            no_backend_caps = {
+                "tools": {
+                    "ffprobe": {"available": True},
+                    "ffmpeg": {"available": True},
+                },
+                "transcription": {"available": False, "backends": []},
+                "vision": {"available": False},
+            }
+            plan = build_plan(
+                project_name="Reuse Gate",
+                project_id="project-reuse-gate",
+                records=[record],
+                target={"type": "file", "path": source},
+                params={"analysis_root": os.path.join(tmp, "analysis-root"),
+                        "depth": "standard", "session_only": True},
+                capabilities=no_backend_caps,
+            )
+            self.assertTrue(plan["capability_gaps"], plan)
+            clip_plan = plan["clips"][0]
+            clip_plan["skip_execution"] = True
+            clip_plan["cache_status"] = "reusable"
+            clip_plan["existing_report"] = {"path": prior_path}
+
+            self.addCleanup(timeline_brain_db.close_all)
+            manifest = asyncio.run(execute_plan_async(
+                plan,
+                params={"depth": "standard"},
+                capabilities=no_backend_caps,
+            ))
+            self.assertTrue(manifest["success"], manifest)
+            self.assertNotIn("capability_gaps", manifest)
+            self.assertTrue(manifest["clips"][0]["reused"])
 
     def test_summarize_and_index_db_vs_json_parity(self):
         """Phase 5 — summarize_reports and build_analysis_index source from

@@ -5117,6 +5117,37 @@ async def _maybe_run_vision_analysis(
     return _vision_analysis(record, motion, options, artifacts, capabilities)
 
 
+def _clip_is_reused(clip: Any) -> bool:
+    """A clip is satisfied by an existing report and runs no fresh analysis."""
+    return bool(
+        isinstance(clip, dict)
+        and clip.get("skip_execution")
+        and (clip.get("existing_report") or {}).get("path")
+    )
+
+
+def executing_clips(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Clips in ``plan`` that still require fresh analysis (not pure reuse)."""
+    return [
+        clip
+        for clip in plan.get("clips", [])
+        if isinstance(clip, dict) and not _clip_is_reused(clip)
+    ]
+
+
+def plan_requires_capabilities(plan: Dict[str, Any]) -> bool:
+    """True when at least one clip needs fresh analysis.
+
+    ``build_plan`` records ``capability_gaps`` from the *requested* options
+    before the per-clip reuse decision runs. When every clip is satisfied by an
+    existing reusable report, execution only re-keys/imports those reports into
+    the current root and performs no fresh transcription/vision/ffprobe — so the
+    missing-capability gate must not fire. Callers gate with
+    ``plan.get("capability_gaps") and plan_requires_capabilities(plan)``.
+    """
+    return bool(executing_clips(plan))
+
+
 async def execute_plan_async(
     plan: Dict[str, Any],
     params: Optional[Dict[str, Any]] = None,
@@ -5155,15 +5186,8 @@ async def execute_plan_async(
                 for clip in blocked
             ],
         }
-    executing_clips = [
-        clip for clip in plan.get("clips", [])
-        if not (
-            isinstance(clip, dict)
-            and clip.get("skip_execution")
-            and (clip.get("existing_report") or {}).get("path")
-        )
-    ]
-    if plan.get("capability_gaps") and executing_clips:
+    fresh_clips = executing_clips(plan)
+    if plan.get("capability_gaps") and fresh_clips:
         return {
             "success": False,
             "error": "Cannot execute analysis with missing required capabilities",
@@ -5212,13 +5236,13 @@ async def execute_plan_async(
         and vision_uses_chat_context(options, caps)
         and not _coerce_bool(params.get("confirm_deep") or params.get("confirmDeep"), default=False)
     ):
-        estimated_frames = sum(int(c.get("analysis_keyframe_budget") or 0) for c in executing_clips)
+        estimated_frames = sum(int(c.get("analysis_keyframe_budget") or 0) for c in fresh_clips)
         return {
             "success": True,
             "status": "confirmation_required",
             "reason": "deep_depth_cost_estimate",
             "estimate": {
-                "clip_count": len(executing_clips),
+                "clip_count": len(fresh_clips),
                 "estimated_frames": estimated_frames,
                 "estimated_vision_tokens": estimated_frames * AVG_VISION_TOKENS_PER_FRAME,
                 "tokens_per_frame_assumption": AVG_VISION_TOKENS_PER_FRAME,

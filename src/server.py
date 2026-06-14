@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.52.0"
+VERSION = "2.52.1"
 
 import base64
 import os
@@ -77,6 +77,7 @@ from src.utils.media_analysis import (
     execute_plan_async as execute_media_analysis_plan_async,
     install_guidance as media_analysis_install_guidance,
     load_report as load_media_analysis_report,
+    plan_requires_capabilities as media_analysis_plan_requires_capabilities,
     query_analysis_index,
     resolve_output_root as resolve_media_analysis_output_root,
     short_hash,
@@ -9226,7 +9227,7 @@ async def _publish_clip_metadata_from_analysis(
         )
         if not plan.get("success"):
             return plan
-        if plan.get("capability_gaps"):
+        if plan.get("capability_gaps") and media_analysis_plan_requires_capabilities(plan):
             return _media_analysis_missing_capabilities_response(plan, action_label="metadata publish analysis")
 
         manifest = await execute_media_analysis_plan_async(
@@ -16268,7 +16269,11 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             plan["setup_defaults_applied"] = p.get("_setup_defaults_applied")
         if warnings:
             plan["warnings"] = warnings
-        if plan.get("capability_gaps") and not bool(p.get("dry_run", True)):
+        if (
+            plan.get("capability_gaps")
+            and not bool(p.get("dry_run", True))
+            and media_analysis_plan_requires_capabilities(plan)
+        ):
             return _e2_wrap(_media_analysis_missing_capabilities_response(plan))
         if not bool(p.get("dry_run", True)):
             executed = await execute_media_analysis_plan_async(

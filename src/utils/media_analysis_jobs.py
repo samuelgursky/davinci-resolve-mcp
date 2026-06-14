@@ -24,6 +24,7 @@ from src.utils.media_analysis import (
     detect_capabilities,
     execute_plan,
     normalize_path,
+    plan_requires_capabilities,
     resolve_output_root,
     stable_clip_directory,
     summarize_reports,
@@ -369,7 +370,7 @@ def create_batch_job(
     )
     if not plan.get("success"):
         return plan
-    if plan.get("capability_gaps"):
+    if plan.get("capability_gaps") and plan_requires_capabilities(plan):
         return {
             "success": False,
             "status": "missing_required_capabilities",

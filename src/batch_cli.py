@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from src.utils.media_analysis import (
     build_plan,
     detect_capabilities,
+    plan_requires_capabilities,
 )
 from src.utils.media_analysis_jobs import (
     batch_job_status,
@@ -187,7 +188,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
             f"Est. seconds : {plan.get('estimated_seconds_after_reuse', '?')}",
             json_mode=False,
         )
-        if plan.get("capability_gaps"):
+        if plan.get("capability_gaps") and plan_requires_capabilities(plan):
             _emit(f"Missing tools: {plan['capability_gaps']}", json_mode=False)
         for w in warnings:
             _emit(f"  warning: {w}", json_mode=False)
