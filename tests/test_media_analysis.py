@@ -3235,6 +3235,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 "session_only": True,
                 "cleanup_frames": False,
                 "max_analysis_frames": 1,
+                "transcription": {"enabled": False},
                 "vision": {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER},
             }
             caps = detect_capabilities(env={})
@@ -3289,6 +3290,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 "session_only": True,
                 "cleanup_frames": True,
                 "max_analysis_frames": 3,
+                "transcription": {"enabled": False},
                 "vision": {"enabled": True, "provider": HOST_CHAT_PATHS_PROVIDER},
             }
             caps = detect_capabilities(env={})

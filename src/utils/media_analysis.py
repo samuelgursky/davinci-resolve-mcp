@@ -5155,7 +5155,15 @@ async def execute_plan_async(
                 for clip in blocked
             ],
         }
-    if plan.get("capability_gaps"):
+    executing_clips = [
+        clip for clip in plan.get("clips", [])
+        if not (
+            isinstance(clip, dict)
+            and clip.get("skip_execution")
+            and (clip.get("existing_report") or {}).get("path")
+        )
+    ]
+    if plan.get("capability_gaps") and executing_clips:
         return {
             "success": False,
             "error": "Cannot execute analysis with missing required capabilities",
@@ -5204,17 +5212,13 @@ async def execute_plan_async(
         and vision_uses_chat_context(options, caps)
         and not _coerce_bool(params.get("confirm_deep") or params.get("confirmDeep"), default=False)
     ):
-        executing = [
-            clip for clip in plan.get("clips", [])
-            if not (clip.get("skip_execution") and (clip.get("existing_report") or {}).get("path"))
-        ]
-        estimated_frames = sum(int(c.get("analysis_keyframe_budget") or 0) for c in executing)
+        estimated_frames = sum(int(c.get("analysis_keyframe_budget") or 0) for c in executing_clips)
         return {
             "success": True,
             "status": "confirmation_required",
             "reason": "deep_depth_cost_estimate",
             "estimate": {
-                "clip_count": len(executing),
+                "clip_count": len(executing_clips),
                 "estimated_frames": estimated_frames,
                 "estimated_vision_tokens": estimated_frames * AVG_VISION_TOKENS_PER_FRAME,
                 "tokens_per_frame_assumption": AVG_VISION_TOKENS_PER_FRAME,
