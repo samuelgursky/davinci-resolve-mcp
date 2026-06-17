@@ -7033,6 +7033,8 @@ _MEDIA_ANALYSIS_DEFAULT_PREFS = {
     "sampling_frame_ceiling": 80,
     "preferred_analysis_root": None,
     "preferred_generated_media_folder": None,
+    "inventory_limit": 500,
+    "inventory_exclude_bins": "assets",
     "default_post_operation_page": "stay_put",
     "marker_custom_data": "namespaced",
     "metadata_writeback_default": True,
@@ -7286,6 +7288,8 @@ def _media_analysis_effective_preferences() -> Dict[str, Any]:
     ] or list(_MEDIA_ANALYSIS_DEFAULT_PUBLISH_FIELDS)
     effective["include_confidence_scores"] = _media_analysis_bool(effective.get("include_confidence_scores"), True)
     effective["include_source_time_notes"] = _media_analysis_bool(effective.get("include_source_time_notes"), True)
+    effective["inventory_limit"] = _setup_positive_int(effective.get("inventory_limit"), 500, 1, 10000)
+    effective["inventory_exclude_bins"] = str(effective.get("inventory_exclude_bins")).strip() if effective.get("inventory_exclude_bins") is not None else "assets"
     effective["analysis_summary_style"] = _normalize_setup_choice(
         effective.get("analysis_summary_style"),
         ["full", "concise", "creative", "technical"],
@@ -10983,6 +10987,12 @@ def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: 
         "preferredgeneratedmediafolder": "preferred_generated_media_folder",
         "generated_media_folder": "preferred_generated_media_folder",
         "generatedmediafolder": "preferred_generated_media_folder",
+        "inventory_limit": "inventory_limit",
+        "inventorylimit": "inventory_limit",
+        "inventory_exclude_bins": "inventory_exclude_bins",
+        "inventoryexcludebins": "inventory_exclude_bins",
+        "exclude_bins": "inventory_exclude_bins",
+        "excludebins": "inventory_exclude_bins",
         "default_post_operation_page": "default_post_operation_page",
         "defaultpostoperationpage": "default_post_operation_page",
         "post_operation_page": "default_post_operation_page",
@@ -11449,6 +11459,8 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 "media_analysis.report_format": {"values": ["compact", "full", "machine_readable"], "storage": _media_analysis_preferences_path()},
                 "media_analysis.preferred_analysis_root": {"values": "absolute or expandable path", "storage": _media_analysis_preferences_path()},
                 "media_analysis.preferred_generated_media_folder": {"values": "absolute or expandable path", "storage": _media_analysis_preferences_path()},
+                "media_analysis.inventory_limit": {"values": "integer > 0 (default 500)", "storage": _media_analysis_preferences_path()},
+                "media_analysis.inventory_exclude_bins": {"values": "comma-separated folder names to ignore", "storage": _media_analysis_preferences_path()},
                 "media_analysis.default_post_operation_page": {"values": ["stay_put", "media", "cut", "edit", "fusion", "color", "fairlight", "deliver"], "storage": _media_analysis_preferences_path()},
                 "media_analysis.marker_custom_data": {"values": ["namespaced", "minimal"], "storage": _media_analysis_preferences_path()},
                 "media_analysis.metadata_writeback_default": {"values": [True, False], "storage": _media_analysis_preferences_path()},
