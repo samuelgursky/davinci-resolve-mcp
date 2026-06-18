@@ -2,6 +2,33 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.54.0
+
+Hardens the rest of the enum-keyed settings APIs against the same silent-failure
+class fixed for `AutoSyncAudio` in v2.53.0 (issue #70). Several Resolve methods
+key their settings dict by `resolve.<CONST>` enum attributes and silently reject
+the whole call when handed plain string keys — returning `False`/`None` with
+nothing applied and no error.
+
+- **Fixed** `CreateSubtitlesFromAudio` (both `timeline_ai.create_subtitles` and
+  `timeline.subtitle_generation_probe`) now resolves human-readable
+  `autoCaptionSettings` — `language`, `preset`, `line_break`, `chars_per_line`,
+  `gap` — into live `SUBTITLE_*`/`AUTO_CAPTION_*` enum keys/values. Unknown keys
+  and unresolvable values are dropped and reported in `ignored_settings` instead
+  of poisoning the call, and generation is read-back verified against the
+  timeline's subtitle track count (the boolean return is unreliable).
+- **Fixed** the `ProjectManager` CloudProject family (`create`/`load`/
+  `import_project`/`restore`) resolves `{cloudSettings}` into live
+  `CLOUD_SETTING_*`/`CLOUD_SYNC_*` enums (`project_name`, `media_path`,
+  `is_collab`, `sync_mode`, `is_camera_access`), dropping unknown keys into
+  `ignored_settings`.
+- **Changed** the string→enum resolution is now a shared `_resolve_enum_settings`
+  primitive driven by per-field specs, so the next enum-keyed API gets the same
+  treatment without re-implementing it.
+- **Added** `api_truth` entries for `Timeline.CreateSubtitlesFromAudio` and the
+  CloudProject family, documenting the silent-rejection + unreliable-return
+  behavior alongside the existing `AutoSyncAudio` entry.
+
 ## What's New in v2.53.0
 
 Two improvements to audio sync reliability and inventory control.
