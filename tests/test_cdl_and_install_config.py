@@ -235,6 +235,26 @@ class ConfigMergeTests(unittest.TestCase):
         self.assertEqual(parsed["url"], "https://example.com")
         self.assertEqual(parsed["a"], 1)
 
+    def test_strip_jsonc_does_not_strip_commas_inside_string_values(self):
+        # The trailing-comma step must be string-aware: a comma followed by
+        # whitespace and a brace INSIDE a string value must survive, while real
+        # trailing commas are still removed. (Regression: the prior regex pass
+        # corrupted such string values during a JSONC merge.)
+        text = (
+            '{\n'
+            '  // a comment forces the JSONC path\n'
+            '  "greeting": "hello, } world",\n'
+            '  "list": "items: a, b, ]",\n'
+            '  "arr": [1, 2, ],\n'
+            '  "obj": {"k": "v",},\n'
+            '}'
+        )
+        parsed = json.loads(install._strip_jsonc(text))
+        self.assertEqual(parsed["greeting"], "hello, } world")
+        self.assertEqual(parsed["list"], "items: a, b, ]")
+        self.assertEqual(parsed["arr"], [1, 2])
+        self.assertEqual(parsed["obj"], {"k": "v"})
+
 
 class PythonVersionGateTests(unittest.TestCase):
     def test_floor_and_above_accepted(self):

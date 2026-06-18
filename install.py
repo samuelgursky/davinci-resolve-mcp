@@ -17,7 +17,6 @@ import argparse
 import json
 import os
 import platform
-import re
 import shutil
 import subprocess
 import sys
@@ -36,7 +35,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.54.2"
+VERSION = "2.54.3"
 # Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
 # Resolve's scripting bridge loads into newer interpreters on recent builds
 # (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
@@ -511,9 +510,42 @@ def _strip_jsonc(text):
         out.append(ch)
         i += 1
     stripped = "".join(out)
-    # Drop trailing commas before a closing brace/bracket.
-    stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
-    return stripped
+    # Drop trailing commas before a closing brace/bracket — string-aware, so a
+    # comma inside a string value (e.g. "a, }") is never touched. A prior regex
+    # pass here was NOT string-aware and silently corrupted such values during a
+    # JSONC merge (follow-up to the issue #71 fix).
+    result = []
+    i = 0
+    n = len(stripped)
+    in_string = False
+    escape = False
+    while i < n:
+        ch = stripped[i]
+        if in_string:
+            result.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            result.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < n and stripped[j] in " \t\r\n":
+                j += 1
+            if j < n and stripped[j] in "}]":
+                i += 1  # trailing comma: drop it
+                continue
+        result.append(ch)
+        i += 1
+    return "".join(result)
 
 
 def read_json(path):
