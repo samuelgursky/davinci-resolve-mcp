@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -35,7 +36,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.54.1"
+VERSION = "2.54.2"
 # Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
 # Resolve's scripting bridge loads into newer interpreters on recent builds
 # (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
@@ -458,13 +459,90 @@ def build_zed_entry(python_path, server_path, api_path, lib_path, system=SYSTEM,
 
 # ─── Config File Operations ──────────────────────────────────────────────────
 
+class ConfigParseError(Exception):
+    """Existing config file has content but could not be parsed.
+
+    Callers must NOT overwrite such a file -- doing so destroys the user's
+    settings (issue #71).
+    """
+
+
+def _strip_jsonc(text):
+    """Best-effort strip of // and /* */ comments and trailing commas.
+
+    Zed's ``settings.json`` (and several other clients) accept JSON-with-comments.
+    Python's ``json`` module rejects those, so we strip them before parsing.
+    The walk is string-aware, so a ``//`` or ``/*`` sequence inside a JSON
+    string value is preserved.
+    """
+    out = []
+    i = 0
+    n = len(text)
+    in_string = False
+    escape = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            i += 2
+            while i < n and text[i] not in "\r\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    stripped = "".join(out)
+    # Drop trailing commas before a closing brace/bracket.
+    stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
+    return stripped
+
+
 def read_json(path):
-    """Read a JSON file, return empty dict if missing or invalid."""
+    """Read a JSON/JSONC config file.
+
+    Returns an empty dict when the file is absent or empty (safe to create).
+    Raises :class:`ConfigParseError` when the file has content that cannot be
+    parsed even after stripping JSONC comments and trailing commas -- callers
+    must refuse to overwrite such a file, or they would wipe the user's
+    existing settings (issue #71: Zed's settings.json ships with comments).
+    """
     try:
         with open(path, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+            raw = f.read()
+    except FileNotFoundError:
         return {}
+
+    if not raw.strip():
+        return {}
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    try:
+        return json.loads(_strip_jsonc(raw))
+    except json.JSONDecodeError as exc:
+        raise ConfigParseError(str(exc)) from exc
 
 
 def write_json(path, data):
@@ -501,8 +579,18 @@ def write_client_config(client, python_path, server_path, api_path, lib_path, dr
         preview = {config_key: {"davinci-resolve": server_entry}}
         return True, f"Would write to {config_path}:\n{json.dumps(preview, indent=2)}"
 
-    # Read existing config and merge
-    existing = read_json(config_path)
+    # Read existing config and merge. If the file exists but cannot be parsed,
+    # refuse to overwrite it -- silently replacing it would wipe the user's
+    # settings (issue #71, especially Zed's commented settings.json).
+    try:
+        existing = read_json(config_path)
+    except ConfigParseError as exc:
+        return False, (
+            f"{config_path} exists but could not be parsed ({exc}). "
+            f"Refusing to overwrite to avoid data loss. Add the "
+            f'"{config_key}" entry manually using the manual config output '
+            f"(run with --manual)."
+        )
 
     if config_key not in existing:
         existing[config_key] = {}

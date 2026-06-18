@@ -144,6 +144,98 @@ class InstallConfigTests(unittest.TestCase):
         self.assertIn('newline=""', source)
 
 
+class ConfigMergeTests(unittest.TestCase):
+    """Regression coverage for issue #71: never wipe an existing config."""
+
+    def _zed_client(self, config_path):
+        return {
+            "id": "zed",
+            "name": "Zed",
+            "get_path": lambda: config_path,
+            "config_key": "context_servers",
+        }
+
+    def _write_config(self, config_path):
+        return install.write_client_config(
+            self._zed_client(config_path),
+            Path("/tmp/python"),
+            Path("/tmp/server.py"),
+            "/Resolve/Scripting",
+            "/Resolve/fusionscript.so",
+        )
+
+    def test_jsonc_settings_are_merged_not_overwritten(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "settings.json"
+            config_path.write_text(
+                "{\n"
+                '  // Zed ships commented defaults\n'
+                '  "theme": "One Dark",\n'
+                '  "terminal": { "env": { "PATH": "/custom/bin:$PATH" } },\n'
+                "}\n"
+            )
+
+            success, _ = self._write_config(config_path)
+            self.assertTrue(success)
+
+            result = json.loads(config_path.read_text())
+            # Existing keys survive the merge.
+            self.assertEqual(result["theme"], "One Dark")
+            self.assertEqual(result["terminal"]["env"]["PATH"], "/custom/bin:$PATH")
+            # And the MCP entry was added.
+            self.assertIn("davinci-resolve", result["context_servers"])
+
+    def test_plain_json_settings_are_merged(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "settings.json"
+            config_path.write_text(json.dumps({"theme": "Ayu", "lsp": {"x": 1}}))
+
+            success, _ = self._write_config(config_path)
+            self.assertTrue(success)
+
+            result = json.loads(config_path.read_text())
+            self.assertEqual(result["theme"], "Ayu")
+            self.assertEqual(result["lsp"], {"x": 1})
+            self.assertIn("davinci-resolve", result["context_servers"])
+
+    def test_unparseable_file_is_not_overwritten(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "settings.json"
+            garbage = '{ "theme": "One Dark" this is not valid json at all '
+            config_path.write_text(garbage)
+
+            success, message = self._write_config(config_path)
+
+            self.assertFalse(success)
+            self.assertIn("could not be parsed", message)
+            # The original file must be left untouched.
+            self.assertEqual(config_path.read_text(), garbage)
+
+    def test_missing_file_is_created(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "nested" / "settings.json"
+
+            success, _ = self._write_config(config_path)
+            self.assertTrue(success)
+
+            result = json.loads(config_path.read_text())
+            self.assertIn("davinci-resolve", result["context_servers"])
+
+    def test_strip_jsonc_preserves_comment_markers_inside_strings(self):
+        text = '{ "url": "https://example.com", /* drop me */ "a": 1, }'
+        parsed = json.loads(install._strip_jsonc(text))
+        self.assertEqual(parsed["url"], "https://example.com")
+        self.assertEqual(parsed["a"], 1)
+
+
 class PythonVersionGateTests(unittest.TestCase):
     def test_floor_and_above_accepted(self):
         # The only hard requirement is the 3.10 floor (MCP SDK). Everything
