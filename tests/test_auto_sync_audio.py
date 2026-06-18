@@ -22,18 +22,37 @@ class FakeResolve:
 
 class NormalizeTest(unittest.TestCase):
     def test_string_mode_resolves_to_enum_with_resolve(self):
-        out = s._normalize_auto_sync_settings({"mode": "waveform"}, FakeResolve())
+        out, ignored = s._normalize_auto_sync_settings({"mode": "waveform"}, FakeResolve())
         self.assertEqual(out["__MODE__"], "__WAVEFORM__")
+        self.assertEqual(ignored, [])
 
     def test_timecode_mode_resolves(self):
-        out = s._normalize_auto_sync_settings({"mode": "timecode"}, FakeResolve())
+        out, _ = s._normalize_auto_sync_settings({"mode": "timecode"}, FakeResolve())
         self.assertEqual(out["__MODE__"], "__TIMECODE__")
+
+    def test_method_alias_resolves_to_enum(self):
+        # Issue #70: callers pass method="waveform" (matching the tool's own
+        # parameter naming); it must be recognized as the sync mode.
+        out, ignored = s._normalize_auto_sync_settings({"method": "waveform"}, FakeResolve())
+        self.assertEqual(out["__MODE__"], "__WAVEFORM__")
+        self.assertEqual(ignored, [])
+
+    def test_unknown_keys_are_dropped_not_forwarded(self):
+        # Issue #70: group_id/primary_clip_id are not AutoSyncAudio keys. Forwarding
+        # them makes the API silently reject the whole call, so they must be dropped
+        # and reported as ignored — not passed through.
+        out, ignored = s._normalize_auto_sync_settings(
+            {"group_id": "test", "method": "waveform", "primary_clip_id": "id1"},
+            FakeResolve(),
+        )
+        self.assertEqual(out, {"__MODE__": "__WAVEFORM__"})
+        self.assertEqual(ignored, ["group_id", "primary_clip_id"])
 
     def test_missing_resolve_falls_back_to_string_keys(self):
         # The bug condition: with no resolve object the enum constant can't be
         # resolved, so we fall back to the literal string key/value — which
         # AutoSyncAudio silently rejects (returns False).
-        out = s._normalize_auto_sync_settings({"mode": "waveform"}, None)
+        out, _ = s._normalize_auto_sync_settings({"mode": "waveform"}, None)
         self.assertIn("syncMode", out)
         self.assertEqual(out["syncMode"], "waveform")
 
@@ -49,6 +68,20 @@ class SafeAutoSyncTest(unittest.TestCase):
             )
         # Resolved enum constant present => get_resolve() supplied constants (#4 fix).
         self.assertEqual(out["settings"]["__MODE__"], "__WAVEFORM__")
+
+    def test_dry_run_surfaces_ignored_settings(self):
+        # Issue #70: unsupported keys must be reported back to the caller so a
+        # silent rejection is no longer invisible.
+        fake_mp = mock.Mock()
+        with mock.patch.object(s, "get_resolve", return_value=FakeResolve()), \
+             mock.patch.object(s, "_clips_from_params", return_value=((["c1"], []), None)), \
+             mock.patch.object(s, "_clip_summaries", return_value=[]):
+            out = s._safe_auto_sync_audio(
+                fake_mp,
+                {"settings": {"method": "waveform", "group_id": "g"}, "dry_run": True},
+            )
+        self.assertEqual(out["settings"]["__MODE__"], "__WAVEFORM__")
+        self.assertEqual(out["ignored_settings"], ["group_id"])
 
     def test_non_dry_run_calls_api_with_normalized_settings(self):
         captured = {}

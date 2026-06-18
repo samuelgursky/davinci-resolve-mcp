@@ -999,7 +999,11 @@ helpers:
 - `audio_mix_capability_report(...)`
 - `voice_isolation_capabilities(track_index?, track_type?, item_index?)`
 - `audio_mapping_report(clip_ids?)`
-- `safe_auto_sync_audio(clip_ids|selected, settings?, dry_run?)`
+- `safe_auto_sync_audio(clip_ids|selected, settings?, dry_run?)` — `settings`
+  accepts human-readable keys: `method`/`mode` (`waveform`|`timecode`),
+  `channel` (`auto`|`mix`|int), `retain_embedded_audio`, `retain_video_metadata`.
+  Unrecognized keys are dropped and echoed back in `ignored_settings` rather than
+  silently failing the call.
 - `transcription_capabilities(clip_ids?|selected?)`
 - `subtitle_generation_probe(settings?, allow_generate?)`
 - `fairlight_boundary_report`

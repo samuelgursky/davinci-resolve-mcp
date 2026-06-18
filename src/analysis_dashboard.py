@@ -4790,6 +4790,12 @@ HTML = r"""<!doctype html>
               <button type="button" class="secondary path-browse" data-browse-target="prefPreferredGeneratedMediaFolder">Browse…</button>
             </div>
           </label>
+          <label>Inventory limit
+            <input id="prefInventoryLimit" type="number" min="1" max="10000" placeholder="Default 500">
+          </label>
+          <label>Inventory exclude bins (comma separated)
+            <input id="prefInventoryExcludeBins" type="text" placeholder="None — index every folder">
+          </label>
           <label>Post-operation page
             <select id="prefPostOperationPage">
               <option value="stay_put">stay put</option>
@@ -5088,6 +5094,8 @@ HTML = r"""<!doctype html>
       prefDryRunFirstDefault: 'Prefers a preview pass before committing metadata or marker changes.',
       prefPreferredAnalysisRoot: 'Optional absolute path for analysis databases and reports. Empty uses the project analysis root.',
       prefPreferredGeneratedMediaFolder: 'Optional folder for generated sidecars or scratch outputs when a workflow needs them.',
+      prefInventoryLimit: 'Maximum number of clips to index during the Media Pool inventory walk (1–10000).',
+      prefInventoryExcludeBins: 'Comma-separated folder names to skip entirely during the inventory walk. Empty indexes every folder.',
       prefPostOperationPage: 'Resolve page to open after an operation completes, or stay put.',
       prefUpdateMode: 'Controls update checks for the MCP package.',
       prefUpdateIntervalHours: 'Minimum time between best-effort release checks.',
@@ -10233,6 +10241,8 @@ HTML = r"""<!doctype html>
       setControlChecked('prefDryRunFirstDefault', media.dry_run_first_default);
       setControlValue('prefPreferredAnalysisRoot', media.preferred_analysis_root || '');
       setControlValue('prefPreferredGeneratedMediaFolder', media.preferred_generated_media_folder || '');
+      setControlValue('prefInventoryLimit', media.inventory_limit || 500);
+      setControlValue('prefInventoryExcludeBins', media.inventory_exclude_bins || '');
       setControlValue('prefPostOperationPage', media.default_post_operation_page);
       setControlValue('prefUpdateMode', updates.mode);
       setControlValue('prefUpdateIntervalHours', updates.check_interval_hours);
@@ -10361,6 +10371,8 @@ HTML = r"""<!doctype html>
           dry_run_first_default: $('prefDryRunFirstDefault').checked,
           preferred_analysis_root: $('prefPreferredAnalysisRoot').value.trim() || 'clear',
           preferred_generated_media_folder: $('prefPreferredGeneratedMediaFolder').value.trim() || 'clear',
+          inventory_limit: parseInt($('prefInventoryLimit').value, 10) || 500,
+          inventory_exclude_bins: $('prefInventoryExcludeBins').value.trim(),
           default_post_operation_page: $('prefPostOperationPage').value,
         },
         updates: {
@@ -12013,6 +12025,7 @@ def _append_folder_media(
     records: List[Dict[str, Any]],
     warnings: List[str],
     limit: int,
+    exclude_bins: Optional[set] = None,
 ) -> bool:
     clips, clip_err = _safe_call(folder, "GetClipList")
     if clip_err:
@@ -12033,6 +12046,8 @@ def _append_folder_media(
         if len(records) >= limit:
             return True
         child_name = _safe_name(subfolder, "Unnamed")
+        if exclude_bins and child_name in exclude_bins:
+            continue
         truncated = _append_folder_media(
             subfolder,
             bin_path=f"{bin_path}/{child_name}",
@@ -12041,6 +12056,7 @@ def _append_folder_media(
             records=records,
             warnings=warnings,
             limit=limit,
+            exclude_bins=exclude_bins,
         )
         if truncated:
             return True
@@ -12256,12 +12272,13 @@ def resolve_media_inventory(
     project_root: str,
     *,
     limit: Any = 500,
+    exclude_bins: Optional[set] = None,
     recursive: bool = True,
     probe_paths: bool = True,
     reuse_cached: bool = False,
 ) -> Dict[str, Any]:
     try:
-        max_items = max(1, min(int(limit), 2000))
+        max_items = max(1, min(int(limit), 10000))
     except (TypeError, ValueError):
         max_items = 500
 
@@ -12349,6 +12366,7 @@ def resolve_media_inventory(
             records=records,
             warnings=warnings,
             limit=max_items,
+            exclude_bins=exclude_bins,
         )
         project_info = {
             "name": _safe_name(project, "Resolve Project"),
@@ -14655,6 +14673,25 @@ def _setup_defaults(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     return server_setup(action, params or {})
 
 
+def _inventory_prefs() -> Tuple[int, Optional[set]]:
+    """Return (limit, exclude_bins) for the inventory walk from media-analysis
+    preferences. ``exclude_bins`` is None when nothing is configured, so the walk
+    indexes every folder by default."""
+    try:
+        from src.server import _media_analysis_effective_preferences
+
+        prefs = _media_analysis_effective_preferences()
+    except Exception:  # noqa: BLE001 — fall back to built-in defaults
+        prefs = {}
+    try:
+        limit = max(1, min(int(prefs.get("inventory_limit", 500)), 10000))
+    except (TypeError, ValueError):
+        limit = 500
+    raw = prefs.get("inventory_exclude_bins")
+    exclude = {part.strip() for part in str(raw).split(",") if part.strip()} if raw else None
+    return limit, (exclude or None)
+
+
 class Handler(BaseHTTPRequestHandler):
     state: DashboardState
 
@@ -14838,10 +14875,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(_setup_defaults("get_defaults"))
             return
         if path == "/api/resolve/media":
+            pref_limit, exclude_bins = _inventory_prefs()
             self._json_etag(
                 resolve_media_inventory(
                     self.state.project_root,
-                    limit=(query.get("limit") or [500])[0],
+                    limit=(query.get("limit") or [pref_limit])[0],
+                    exclude_bins=exclude_bins,
                     recursive=(query.get("recursive") or ["true"])[0].lower() not in {"0", "false", "no"},
                     probe_paths=(query.get("probe") or ["1"])[0].lower() not in {"0", "false", "no"},
                     reuse_cached=(query.get("reuse") or ["0"])[0].lower() in {"1", "true", "yes"},
@@ -15429,7 +15468,8 @@ def _warm_inventory_cache(project_root: str) -> None:
     first real request builds normally.
     """
     try:
-        resolve_media_inventory(project_root)
+        pref_limit, exclude_bins = _inventory_prefs()
+        resolve_media_inventory(project_root, limit=pref_limit, exclude_bins=exclude_bins)
     except Exception:  # noqa: BLE001 — warm-up must never crash startup
         pass
 
