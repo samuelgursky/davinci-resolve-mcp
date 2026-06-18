@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.54.5
+
+Reliability + security hardening from the exhaustive reliability audit (Wave A).
+
+- **Security** `apply_spec` hooks no longer run with `shell=True`. A spec's hook
+  command is now `shlex`-split and executed without a shell, so a hook string
+  can't inject arbitrary shell (`; rm -rf …`, pipes, expansion). Hooks needing
+  shell features must invoke an interpreter explicitly (e.g. `bash -c "…"`).
+- **Fixed** the confirm-token table (`_CONFIRM_TOKENS`) is now guarded by a lock.
+  The control panel is threaded, so issue/consume/GC ran concurrently; validate-
+  then-pop is now atomic and GC can't race a write.
+- **Fixed** negative item indices are rejected instead of silently returning the
+  wrong item (Python reverse-indexing): `_get_item`, the audio item resolver, and
+  the two timeline-matte helpers now require `0 <= index < len`.
+- **Fixed** history queries clamp `limit` to `[1, 1000]`. SQLite treats a negative
+  `LIMIT` as "no limit", so a negative value could silently fetch the entire table
+  (`get_brain_edit_history`, `list_runs`, `get_media_pool_change_history`).
+  `timeline_versioning` version/limit/keep_n params are now validated (no unhandled
+  `ValueError`; `rollback` rejects negative versions before archiving). `max_files`
+  /`max_seconds` in the relink file search are clamped positive.
+- **Fixed** the server-reachable ffmpeg probes (render, audio, review) now pass
+  `timeout=120` so a hung ffmpeg can't block the server indefinitely.
+
+(Deferred to a live-validated follow-up: confirm-token gating + archiving for
+catastrophic media-pool/take/fusion deletes, and temp-directory lifecycle cleanup.)
+
 ## What's New in v2.54.4
 
 Persistence-safety hardening (generalizes issue #71 to the analysis state
