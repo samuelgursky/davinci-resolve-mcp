@@ -4,7 +4,7 @@ DaVinci Resolve MCP Server — Universal Installer
 
 Supports: macOS, Windows, Linux
 Configures: Claude Desktop, Claude Code, Cursor, VS Code (Copilot),
-            Windsurf, Cline, Roo Code, Zed, Continue, and manual setup.
+            Windsurf, Cline, Roo Code, Zed, Continue, OpenCode, and manual setup.
 
 Usage:
     python install.py                  # Interactive mode
@@ -35,7 +35,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.56.1"
+VERSION = "2.57.0"
 # Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
 # Resolve's scripting bridge loads into newer interpreters on recent builds
 # (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
@@ -392,6 +392,16 @@ MCP_CLIENTS = [
         "config_key": "mcpServers",
         "notes": "Open-source AI code assistant",
     },
+    {
+        "id": "opencode",
+        "name": "OpenCode",
+        # OpenCode uses ~/.config/opencode/opencode.json on every platform
+        # (it also reads a project-root opencode.json, but the global file is
+        # the safe default for an installer). See https://opencode.ai/docs/config/
+        "get_path": lambda: home() / ".config" / "opencode" / "opencode.json",
+        "config_key": "mcp",
+        "notes": "AI coding agent (uses its own type/enabled/command-array format)",
+    },
 ]
 
 CLIENT_IDS = [c["id"] for c in MCP_CLIENTS]
@@ -455,6 +465,33 @@ def build_zed_entry(python_path, server_path, api_path, lib_path, system=SYSTEM,
         "env": build_server_env(python_path, api_path, lib_path, system=system, python_home=python_home),
         "settings": {},
     }
+
+
+def build_opencode_entry(python_path, server_path, api_path, lib_path, system=SYSTEM, python_home=None):
+    """Build OpenCode-specific server entry (issue #72).
+
+    OpenCode's schema differs from the standard format in three ways: it wraps
+    the entry in a ``"mcp"`` key, the interpreter and script are a single
+    ``"command"`` array (no separate ``args``), and the environment block is
+    ``"environment"`` rather than ``"env"``. It also expects ``type``/``enabled``
+    discriminators. See https://opencode.ai/docs/mcp-servers/
+    """
+    return {
+        "type": "local",
+        "enabled": True,
+        "command": [str(python_path), str(server_path)],
+        "environment": build_server_env(python_path, api_path, lib_path, system=system, python_home=python_home),
+    }
+
+
+def build_entry_for_client(client, python_path, server_path, api_path, lib_path, system=SYSTEM, python_home=None):
+    """Return the server entry shaped for a specific client's config schema."""
+    builders = {
+        "zed": build_zed_entry,
+        "opencode": build_opencode_entry,
+    }
+    builder = builders.get(client["id"], build_server_entry)
+    return builder(python_path, server_path, api_path, lib_path, system=system, python_home=python_home)
 
 # ─── Config File Operations ──────────────────────────────────────────────────
 
@@ -599,13 +636,9 @@ def write_client_config(client, python_path, server_path, api_path, lib_path, dr
         return False, f"{client['name']} is not available on {platform_name()}"
 
     config_key = client["config_key"]
-    is_zed = client["id"] == "zed"
 
-    # Build the server entry
-    if is_zed:
-        server_entry = build_zed_entry(python_path, server_path, api_path, lib_path)
-    else:
-        server_entry = build_server_entry(python_path, server_path, api_path, lib_path)
+    # Build the server entry (some clients use a non-standard schema)
+    server_entry = build_entry_for_client(client, python_path, server_path, api_path, lib_path)
 
     if dry_run:
         preview = {config_key: {"davinci-resolve": server_entry}}
@@ -637,12 +670,14 @@ def generate_manual_config(python_path, server_path, api_path, lib_path):
     """Generate config snippets for manual setup."""
     entry = build_server_entry(python_path, server_path, api_path, lib_path)
     zed_entry = build_zed_entry(python_path, server_path, api_path, lib_path)
+    opencode_entry = build_opencode_entry(python_path, server_path, api_path, lib_path)
 
     standard = json.dumps({"mcpServers": {"davinci-resolve": entry}}, indent=2)
     vscode_fmt = json.dumps({"servers": {"davinci-resolve": entry}}, indent=2)
     zed_fmt = json.dumps({"context_servers": {"davinci-resolve": zed_entry}}, indent=2)
+    opencode_fmt = json.dumps({"mcp": {"davinci-resolve": opencode_entry}}, indent=2)
 
-    return standard, vscode_fmt, zed_fmt
+    return standard, vscode_fmt, zed_fmt, opencode_fmt
 
 # ─── Virtual Environment ─────────────────────────────────────────────────────
 
@@ -1539,7 +1574,7 @@ def main():
 
     # Show manual config
     if show_manual:
-        standard, vscode_fmt, zed_fmt = generate_manual_config(
+        standard, vscode_fmt, zed_fmt, opencode_fmt = generate_manual_config(
             python_path, server_path, api_path, lib_path
         )
         env_preview = build_server_env(python_path, api_path, lib_path)
@@ -1556,6 +1591,10 @@ def main():
         print(f"\n  {cyan('Zed format')} (add to ~/.config/zed/settings.json):")
         print()
         for line in zed_fmt.split("\n"):
+            print(f"    {line}")
+        print(f"\n  {cyan('OpenCode format')} (add to ~/.config/opencode/opencode.json or a project opencode.json):")
+        print()
+        for line in opencode_fmt.split("\n"):
             print(f"    {line}")
         print(f"\n  {cyan('JetBrains IDEs')} (IntelliJ, WebStorm, PyCharm, etc.):")
         print(f"    Settings → Tools → AI Assistant → Model Context Protocol (MCP)")

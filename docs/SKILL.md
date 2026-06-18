@@ -1219,6 +1219,14 @@ mutation wrappers around the raw Fusion API:
 - `safe_set_inputs(tool_name, inputs, readback?)`
 - `safe_connect_tools(target_tool, input_name, source_tool, dry_run?)`
 - `fusion_boundary_report(include_io?)`
+- `add_fusion_mask(mask_type?, width?, height?, corner_radius?, center?|center_x?/center_y?,
+  angle?, soft_edge?, border_width?, invert?, inputs?, connect_to?, connect_input?, readback?)`
+  — one-call Rectangle/Ellipse mask (e.g. rounded corners): adds the mask tool, sets its
+  params (0..1), and optionally wires it into `connect_to`'s mask input (`EffectMask` default).
+- `set_text_plus(text, tool_name?, input_name?, readback?)` / `get_text_plus(tool_name?, input_name?)`
+  — read/write the text of a Fusion `Text+` tool or Fusion title template (e.g. a "Deep"
+  title). Auto-finds the `Text+` tool when `tool_name` is omitted; `input_name` defaults to
+  `StyledText`. For non-Fusion generator titles, use `timeline(action="set_title_text")` instead.
 
 ---
 

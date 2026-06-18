@@ -91,7 +91,7 @@ class InstallConfigTests(unittest.TestCase):
         )
 
     def test_generate_manual_config_formats_include_env(self):
-        standard, vscode_fmt, zed_fmt = install.generate_manual_config(
+        standard, vscode_fmt, zed_fmt, opencode_fmt = install.generate_manual_config(
             Path("/tmp/python"),
             Path("/tmp/server.py"),
             "/Resolve/Scripting",
@@ -101,15 +101,52 @@ class InstallConfigTests(unittest.TestCase):
         standard_json = json.loads(standard)
         vscode_json = json.loads(vscode_fmt)
         zed_json = json.loads(zed_fmt)
+        opencode_json = json.loads(opencode_fmt)
 
         self.assertIn("env", standard_json["mcpServers"]["davinci-resolve"])
         self.assertIn("env", vscode_json["servers"]["davinci-resolve"])
         self.assertIn("env", zed_json["context_servers"]["davinci-resolve"])
+        # OpenCode names the env block "environment", not "env" (issue #72).
+        self.assertIn("environment", opencode_json["mcp"]["davinci-resolve"])
 
         self.assertEqual(
             standard_json["mcpServers"]["davinci-resolve"]["env"]["PYTHONPATH"],
             "/Resolve/Scripting/Modules",
         )
+
+    def test_build_opencode_entry_uses_opencode_schema(self):
+        # OpenCode's schema (issue #72): type/enabled discriminators, the
+        # interpreter and script combined into a single "command" array, and the
+        # env block keyed "environment" rather than "env".
+        entry = install.build_opencode_entry(
+            Path("/tmp/python"),
+            Path("/tmp/server.py"),
+            "/Resolve/Scripting",
+            "/Resolve/fusionscript.so",
+            system="Linux",
+        )
+
+        self.assertEqual(entry["type"], "local")
+        self.assertTrue(entry["enabled"])
+        self.assertEqual(entry["command"], ["/tmp/python", "/tmp/server.py"])
+        self.assertNotIn("args", entry)
+        self.assertNotIn("env", entry)
+        self.assertEqual(
+            entry["environment"],
+            {
+                "RESOLVE_SCRIPT_API": "/Resolve/Scripting",
+                "RESOLVE_SCRIPT_LIB": "/Resolve/fusionscript.so",
+                "PYTHONPATH": "/Resolve/Scripting/Modules",
+            },
+        )
+
+    def test_opencode_is_a_registered_client(self):
+        opencode = next(
+            (c for c in install.MCP_CLIENTS if c["id"] == "opencode"), None
+        )
+        self.assertIsNotNone(opencode)
+        self.assertEqual(opencode["config_key"], "mcp")
+        self.assertIn("opencode", str(opencode["get_path"]()))
 
     def test_verify_connection_uses_generated_env(self):
         fake_result = SimpleNamespace(
@@ -228,6 +265,49 @@ class ConfigMergeTests(unittest.TestCase):
 
             result = json.loads(config_path.read_text())
             self.assertIn("davinci-resolve", result["context_servers"])
+
+    def test_opencode_config_merges_with_opencode_schema(self):
+        import tempfile
+
+        opencode_client = {
+            "id": "opencode",
+            "name": "OpenCode",
+            "get_path": None,  # set per-test below
+            "config_key": "mcp",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "opencode.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "$schema": "https://opencode.ai/config.json",
+                        "theme": "tokyonight",
+                        "mcp": {"other-server": {"type": "local", "enabled": True}},
+                    }
+                )
+            )
+            opencode_client["get_path"] = lambda: config_path
+
+            success, _ = install.write_client_config(
+                opencode_client,
+                Path("/tmp/python"),
+                Path("/tmp/server.py"),
+                "/Resolve/Scripting",
+                "/Resolve/fusionscript.so",
+            )
+            self.assertTrue(success)
+
+            result = json.loads(config_path.read_text())
+            # Existing keys and sibling servers survive the merge.
+            self.assertEqual(result["theme"], "tokyonight")
+            self.assertIn("other-server", result["mcp"])
+            # The DaVinci entry uses OpenCode's schema, not the standard one.
+            entry = result["mcp"]["davinci-resolve"]
+            self.assertEqual(entry["type"], "local")
+            self.assertEqual(entry["command"], ["/tmp/python", "/tmp/server.py"])
+            self.assertIn("environment", entry)
+            self.assertNotIn("env", entry)
 
     def test_strip_jsonc_preserves_comment_markers_inside_strings(self):
         text = '{ "url": "https://example.com", /* drop me */ "a": 1, }'

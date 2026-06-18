@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.57.0
+
+Community feature requests #72 and #73.
+
+- **Added** OpenCode to the installer's supported MCP clients (issue #72). The
+  installer now writes/merges `~/.config/opencode/opencode.json` using OpenCode's
+  own schema (`type`/`enabled`, a combined `command` array, and an `environment`
+  block), and `--manual` prints a ready-to-paste OpenCode snippet.
+- **Added** `fusion_comp(action="add_fusion_mask", ...)` (issue #73): a one-call
+  Rectangle/Ellipse mask — adds the mask tool, sets its params (`corner_radius`,
+  `width`, `height`, `center`/`center_x`/`center_y`, etc., all 0..1), and
+  optionally wires it into a tool's mask input (`EffectMask` by default). Each
+  input is applied independently so one unsupported parameter never aborts the rest.
+- **Added** `fusion_comp(action="set_text_plus" / "get_text_plus", ...)` (issue
+  #73): read/write the text of a Fusion `Text+` tool or Fusion title template
+  (e.g. a "Deep" title), auto-finding the `Text+` tool when `tool_name` is
+  omitted. Complements `timeline(action="set_title_text")` for generator titles.
+- **Note** (issue #73) per-clip audio Stereo↔Mono conversion is not in
+  Blackmagic's scripting API and was not added. The supported surface is already
+  exposed: `timeline get_track_sub_type` (query channel format), `add_track` with
+  `audioType` (create mono/stereo tracks), `convert_to_stereo` (timeline-wide),
+  and `timeline_item get_source_audio_channel_mapping`.
+
 ## What's New in v2.56.1
 
 Final reliability batch from the exhaustive audit (Wave B + P2/P3 selections).

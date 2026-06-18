@@ -59,6 +59,7 @@ The installer can automatically configure any of these clients:
 | Roo Code | VS Code global storage |
 | Zed | `~/.config/zed/settings.json` |
 | Continue | `~/.continue/config.json` |
+| OpenCode | `~/.config/opencode/opencode.json` (or project-root `opencode.json`) |
 | JetBrains IDEs | Manual (Settings > Tools > AI Assistant > MCP) |
 
 You can configure multiple clients at once, or use `--clients manual` to get copy-paste config snippets.
