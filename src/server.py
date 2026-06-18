@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.55.1"
+VERSION = "2.55.2"
 
 import base64
 import os
@@ -12961,12 +12961,20 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
 
     if action == "save":
+        if not p.get("name"):
+            return _err("save requires name")
         return {"success": bool(r.SaveLayoutPreset(p["name"]))}
     elif action == "load":
         return {"success": bool(r.LoadLayoutPreset(p["name"]))}
     elif action == "update":
         return {"success": bool(r.UpdateLayoutPreset(p["name"]))}
     elif action == "export":
+        err, _clean = _validate_params(p, {
+            "name": {"type": str, "required": True, "non_empty": True},
+            "path": {"type": str, "required": True, "non_empty": True},
+        })
+        if err:
+            return _err(err)
         return {"success": bool(r.ExportLayoutPreset(p["name"], p["path"]))}
     elif action == "import_preset":
         if "name" in p:
@@ -13982,6 +13990,8 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         proj = pm.GetCurrentProject()
         return {"name": proj.GetName(), "id": proj.GetUniqueId()} if proj else _err("No project open")
     elif action == "create":
+        if not p.get("name"):
+            return _err("create requires name")
         media_location_path = p.get("media_location_path") or p.get("mediaLocationPath")
         if media_location_path:
             version = r.GetVersion() or [0]
@@ -13990,6 +14000,8 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         proj = pm.CreateProject(p["name"], media_location_path) if media_location_path else pm.CreateProject(p["name"])
         return _ok(name=proj.GetName()) if proj else _err(f"Failed to create '{p['name']}'")
     elif action == "load":
+        if not p.get("name"):
+            return _err("load requires name")
         proj = pm.LoadProject(p["name"])
         return _ok() if proj else _err(f"Failed to load '{p['name']}'")
     elif action == "save":
@@ -14004,13 +14016,29 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         deleted = delete_project_safely(pm, p["name"])
         return {"success": bool(deleted.get("success")), "delete_detail": deleted}
     elif action == "import_project":
+        if not p.get("path"):
+            return _err("import_project requires path")
         return {"success": bool(pm.ImportProject(p["path"], p.get("name")))}
     elif action == "export_project":
+        err, _clean = _validate_params(p, {
+            "name": {"type": str, "required": True, "non_empty": True},
+            "path": {"type": str, "required": True, "non_empty": True},
+        })
+        if err:
+            return _err(err)
         return {"success": bool(pm.ExportProject(p["name"], p["path"], p.get("with_stills_and_luts", True)))}
     elif action == "archive":
+        err, _clean = _validate_params(p, {
+            "name": {"type": str, "required": True, "non_empty": True},
+            "path": {"type": str, "required": True, "non_empty": True},
+        })
+        if err:
+            return _err(err)
         return {"success": bool(pm.ArchiveProject(p["name"], p["path"],
             p.get("src_media", True), p.get("render_cache", True), p.get("proxy_media", False)))}
     elif action == "restore":
+        if not p.get("path"):
+            return _err("restore requires path")
         return {"success": bool(pm.RestoreProject(p["path"], p.get("name")))}
     return _unknown(action, ["list","get_current","create","load","save","close","delete","import_project","export_project","archive","restore","lint","diff_to_spec","plan_spec","apply_spec", *_PROJECT_KERNEL_ACTIONS])
 
@@ -14165,10 +14193,16 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
     if action == "get_name":
         return {"name": proj.GetName()}
     elif action == "set_name":
+        if not p.get("name"):
+            return _err("set_name requires name")
         return {"success": bool(proj.SetName(p["name"]))}
     elif action == "get_setting":
         return {"settings": _ser(proj.GetSetting(p.get("name", "")))}
     elif action == "set_setting":
+        if not p.get("name"):
+            return _err("set_setting requires name")
+        if "value" not in p:
+            return _err("set_setting requires value")
         return {"success": bool(proj.SetSetting(p["name"], p["value"]))}
     elif action == "get_unique_id":
         return {"id": proj.GetUniqueId()}
@@ -15868,6 +15902,8 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
             return frame_err
         return {"data": clip.GetMarkerCustomData(frame)}
     elif action == "delete_by_color":
+        if not p.get("color"):
+            return _err("delete_by_color requires color")
         return {"success": bool(clip.DeleteMarkersByColor(p["color"]))}
     elif action == "delete_at_frame":
         frame, frame_err = _marker_frame_from_params(p)
@@ -17926,8 +17962,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                 timelines.append({"name": tl.GetName(), "id": tl.GetUniqueId(), "index": i})
         return {"timelines": timelines}
     elif action == "set_current":
-        tl = proj.GetTimelineByIndex(p["index"])
-        return {"success": bool(proj.SetCurrentTimeline(tl))} if tl else _err(f"No timeline at index {p['index']}")
+        err, clean = _validate_params(p, {"index": {"type": int, "required": True, "min": 1}})
+        if err:
+            return _err(err)
+        tl = proj.GetTimelineByIndex(clean["index"])
+        return {"success": bool(proj.SetCurrentTimeline(tl))} if tl else _err(f"No timeline at index {clean['index']}")
     elif action == "edit_kernel_capabilities":
         return _timeline_edit_kernel_capabilities()
     elif action == "conform_capabilities":
@@ -17964,7 +18003,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "get_name":
         return {"name": tl.GetName()}
     elif action == "set_name":
-        return {"success": bool(tl.SetName(p["name"]))}
+        err, clean = _validate_params(p, {"name": {"type": str, "required": True, "non_empty": True}})
+        if err:
+            return _err(err)
+        return {"success": bool(tl.SetName(clean["name"]))}
     elif action == "get_start_frame":
         return {"frame": tl.GetStartFrame()}
     elif action == "get_end_frame":
@@ -17972,10 +18014,16 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "get_start_timecode":
         return {"timecode": tl.GetStartTimecode()}
     elif action == "set_start_timecode":
-        return {"success": bool(tl.SetStartTimecode(p["timecode"]))}
+        err, clean = _validate_params(p, {"timecode": {"type": str, "required": True, "non_empty": True}})
+        if err:
+            return _err(err)
+        return {"success": bool(tl.SetStartTimecode(clean["timecode"]))}
     elif action == "get_track_count":
         return {"count": tl.GetTrackCount(p["track_type"])}
     elif action == "add_track":
+        err, _clean = _validate_params(p, {"track_type": {"enum": ["video", "audio", "subtitle"], "required": True}})
+        if err:
+            return _err(err)
         opts_in = p.get("options") or {}
         new_track_options: Dict[str, Any] = {}
         if "audio_type" in opts_in:
@@ -18515,6 +18563,8 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
             return frame_err
         return {"data": tl.GetMarkerCustomData(frame)}
     elif action == "delete_by_color":
+        if not p.get("color"):
+            return _err("delete_by_color requires color")
         return {"success": bool(tl.DeleteMarkersByColor(p["color"]))}
     elif action == "delete_at_frame":
         frame, frame_err = _marker_frame_from_params(p, tl=tl)
@@ -18682,6 +18732,11 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     elif action == "get_property":
         return {"properties": _ser(item.GetProperty(p.get("key", "")))}
     elif action == "set_property":
+        err, _clean = _validate_params(p, {"key": {"type": str, "required": True, "non_empty": True}})
+        if err:
+            return _err(err)
+        if "value" not in p:
+            return _err("'value' is required")
         return {"success": bool(item.SetProperty(p["key"], p["value"]))}
     elif action == "get_duration":
         return {"duration": item.GetDuration()}
@@ -18702,7 +18757,10 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     elif action == "get_right_offset":
         return {"offset": item.GetRightOffset()}
     elif action == "set_clip_enabled":
-        return {"success": bool(item.SetClipEnabled(p["enabled"]))}
+        err, clean = _validate_params(p, {"enabled": {"type": bool, "required": True}})
+        if err:
+            return _err(err)
+        return {"success": bool(item.SetClipEnabled(clean["enabled"]))}
     elif action == "get_clip_enabled":
         return {"enabled": bool(item.GetClipEnabled())}
     elif action == "update_sidecar":
@@ -18899,6 +18957,8 @@ def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) 
             return frame_err
         return {"data": item.GetMarkerCustomData(frame)}
     elif action == "delete_by_color":
+        if not p.get("color"):
+            return _err("delete_by_color requires color")
         return {"success": bool(item.DeleteMarkersByColor(p["color"]))}
     elif action == "delete_at_frame":
         frame, frame_err = _marker_frame_from_params(p)
