@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.54.0"
+VERSION = "2.54.1"
 
 import base64
 import os
@@ -5042,7 +5042,10 @@ def _export_timeline_checked(tl, p: Dict[str, Any]):
     folder = os.path.dirname(os.path.abspath(path))
     if folder:
         os.makedirs(folder, exist_ok=True)
-    spec = _timeline_export_spec(p, resolve)
+    # Resolve enum constants via get_resolve(), not the module global `resolve`
+    # (which can be None and silently degrade the EXPORT_* args to strings — the
+    # same failure class as issue #70).
+    spec = _timeline_export_spec(p, get_resolve())
     if p.get("dry_run"):
         return _ok(path=path, would_export=True, spec={k: v for k, v in spec.items() if k != "export_type"})
     with long_resolve_op("timeline.export_timeline_checked"):
@@ -17851,8 +17854,18 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "import_into_timeline":
         return {"success": bool(tl.ImportIntoTimeline(p["path"], p.get("options", {})))}
     elif action == "export":
+        # Timeline.Export needs resolved resolve.EXPORT_* enum *values*, which a
+        # JSON/MCP caller cannot pass — handing it a string silently fails. Resolve
+        # friendly type/subtype names (or EXPORT_* constant names) the same way
+        # export_timeline_checked does. This raw action keeps no path sandbox.
+        spec = _timeline_export_spec(p, get_resolve())
         with long_resolve_op("timeline.export"):
-            return {"success": bool(tl.Export(p["path"], p["type"], p.get("subtype", "")))}
+            success = bool(tl.Export(p["path"], spec["export_type"], spec["export_subtype"]))
+        return {
+            "success": success,
+            "export_type": spec["export_type_name"],
+            "export_subtype": spec["export_subtype_name"],
+        }
     elif action == "get_setting":
         return {"settings": _ser(tl.GetSetting(p.get("name", "")))}
     elif action == "set_setting":

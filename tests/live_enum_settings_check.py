@@ -60,12 +60,28 @@ def main() -> int:
         if cl_ignored != ["bogus"]:
             failures.append(f"unexpected cloud ignored: {cl_ignored!r}")
 
+    # --- Timeline.Export enum args (v2.54.1) --------------------------------
+    for name in ("EXPORT_FCPXML_1_10", "EXPORT_EDL", "EXPORT_NONE"):
+        if not hasattr(resolve, name):
+            failures.append(f"live handle missing export const {name}")
+    fcpxml_spec = s._timeline_export_spec({"type": "fcpxml"}, resolve)
+    edl_spec = s._timeline_export_spec({"type": "edl"}, resolve)
+    print(f"export fcpxml -> type={fcpxml_spec['export_type']!r} ({fcpxml_spec['export_type_name']}) "
+          f"subtype={fcpxml_spec['export_subtype']!r}")
+    print(f"export edl    -> type={edl_spec['export_type']!r} ({edl_spec['export_type_name']})")
+    if fcpxml_spec["export_type"] != getattr(resolve, "EXPORT_FCPXML_1_10", None):
+        failures.append("fcpxml did not resolve to live EXPORT_FCPXML_1_10 value")
+    if fcpxml_spec["export_type"] == "fcpxml":
+        failures.append("raw 'fcpxml' string would have been passed to Timeline.Export")
+    if edl_spec["export_type"] != getattr(resolve, "EXPORT_EDL", None):
+        failures.append("edl did not resolve to live EXPORT_EDL value")
+
     if failures:
         print("\nFAIL:")
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("\nPASS: live subtitle + cloud enum resolution verified (#70 follow-up)")
+    print("\nPASS: live subtitle + cloud + export enum resolution verified (#70 follow-up)")
     return 0
 
 

@@ -28,6 +28,7 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "resolve handle, and verify by reading each clip's "
                        "'Synced Audio' property (see verify_by_readback).",
         "tags": ["unreliable-return", "silent-failure", "audio", "enum"],
+        "mitigation": ["_normalize_auto_sync_settings", "_safe_auto_sync_audio"],
     },
     {
         "symbol": "Timeline.CreateSubtitlesFromAudio",
@@ -43,6 +44,7 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "and verify by reading the timeline's subtitle track count "
                        "before/after (server._safe_create_subtitles).",
         "tags": ["unreliable-return", "silent-failure", "subtitle", "enum"],
+        "mitigation": ["_normalize_auto_caption_settings", "_safe_create_subtitles"],
     },
     {
         "symbol": "ProjectManager CloudProject family (Create/Load/Import/RestoreCloudProject)",
@@ -57,6 +59,23 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "before calling, and treat the bool return from "
                        "Import/RestoreCloudProject as advisory.",
         "tags": ["silent-failure", "project", "cloud", "enum"],
+        "mitigation": ["_normalize_cloud_settings"],
+    },
+    {
+        "symbol": "Timeline.Export",
+        "object": "Timeline",
+        "signature": "(fileName, exportType, exportSubtype) -> bool",
+        "reality": "exportType/exportSubtype must be resolve.EXPORT_* enum *values* "
+                   "resolved from the live handle. A JSON/MCP caller cannot pass a "
+                   "live enum, and a plain string ('fcpxml', or even the constant "
+                   "name 'EXPORT_FCPXML_1_10') is silently rejected with no file "
+                   "written.",
+        "recommended": "Map a friendly format/subtype to the EXPORT_* constant and "
+                       "resolve it against the live handle "
+                       "(server._timeline_export_spec) before calling; verify the "
+                       "output file exists afterward.",
+        "tags": ["silent-failure", "timeline", "export", "enum"],
+        "mitigation": ["_timeline_export_spec", "_timeline_export_value"],
     },
     {
         "symbol": "Composition.Paste",
