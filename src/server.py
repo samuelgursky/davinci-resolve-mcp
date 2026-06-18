@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.54.1"
+VERSION = "2.54.2"
 
 import base64
 import os

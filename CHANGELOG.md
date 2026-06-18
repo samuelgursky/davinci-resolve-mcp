@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.54.2
+
+A destructive-overwrite bug in the installer (issue #71): the MCP client setup
+step could wipe a user's entire editor settings file instead of merging into it.
+
+- **Fixed** `install.py` silently destroyed existing client config files whose
+  contents weren't strict JSON. `read_json` swallowed `JSONDecodeError` and
+  returned `{}`, so the subsequent "merge" wrote a file containing *only* the
+  `davinci-resolve` server entry — wiping themes, terminal env vars, LSP
+  settings, keybindings, everything else. Zed was the reported victim because
+  its `settings.json` ships with `//` comments (JSONC), but the same latent
+  risk existed for **every** supported client — VS Code and Continue also accept
+  JSONC. The fix is centralized in the single read/merge path so all clients are
+  covered:
+  - `read_json` now best-effort strips JSONC `//` and `/* */` comments and
+    trailing commas (string-aware, so comment markers inside string values are
+    preserved), letting commented configs merge cleanly instead of being lost.
+  - When a config file exists but still can't be parsed after that, the
+    installer **refuses to overwrite it** and tells the user to add the entry
+    manually — rather than silently replacing their settings.
+- **Added** regression tests covering JSONC merge, plain-JSON merge,
+  refuse-to-overwrite on unparseable files, fresh-file creation, and
+  string-aware comment stripping.
+
 ## What's New in v2.54.1
 
 One more instance of the enum-keyed silent-failure class (issue #70), plus a
