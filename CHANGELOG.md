@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.56.1
+
+Final reliability batch from the exhaustive audit (Wave B + P2/P3 selections).
+
+- **Fixed** (EX11) `audio_track_probe` reported `available: true` for track index 0
+  (and negatives); audio tracks are 1-indexed, so it now requires
+  `1 <= index <= track_count`.
+- **Fixed** (EX10) `_find_timeline_item_by_id` no longer silently skips a whole
+  track type when `GetTrackCount` errors — it logs the failure so a real API error
+  isn't mistaken for "item not found".
+- **Fixed** (P3) the raw `timeline_item_color.set_cdl` now validates the ASC-CDL
+  payload (shape/ranges) before `SetCDL`, matching its safe twin — malformed CDL
+  returns a structured error instead of being silently rejected by Resolve.
+- **Fixed** (P2) `media_pool.delete_timelines` is read-back verified: it reports
+  `verified` from the project's timeline count dropping, not the unreliable boolean.
+  `import_folder` now validates its required `path`.
+
 ## What's New in v2.56.0
 
 Destructive-action registry audit (EX-REG) — a systemic version of the EX2 bug.
