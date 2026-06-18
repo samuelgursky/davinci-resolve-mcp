@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.55.2
+
+Deep-QC P1 1b — required-param validation. Mutating/destructive actions that
+hard-indexed required params (`p["name"]`, `p["index"]`, `p["color"]`, …) now
+return a structured error instead of crashing with an unhandled `KeyError` (or,
+for `set_clip_enabled`/`set_current`, coercing the value). Guarded actions:
+
+- `timeline`: `set_current`, `set_name`, `set_start_timecode`, `add_track`
+- `timeline_item`: `set_property`, `set_clip_enabled`
+- `project_manager`: `create`, `load`, `import_project`, `export_project`,
+  `archive`, `restore`
+- marker `delete_by_color` (clip / timeline / item — destructive)
+- `layout_presets`: `save`, `export`; `project_settings`: `set_name`, `set_setting`
+
 ## What's New in v2.55.1
 
 Deep-QC P1 — settings/options whitelisting + DeleteProject reliability.
