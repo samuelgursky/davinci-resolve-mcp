@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.55.0
+
+Governance for catastrophic Media Pool deletes (exhaustive audit EX2/EX3).
+
+**Behavior change:** `media_pool` `delete_clips`, `delete_folders`, and
+`delete_timelines` now require a confirm token, the same two-step handshake
+`timeline.delete_track` already uses — the first call returns
+`status: "confirmation_required"` with a `confirm_token` and a preview (count +
+names); re-call with `params.confirm_token` to execute. Callers that disable
+gating via the `destructive.require_confirm_token=false` preference are
+unaffected.
+
+- **Fixed** the destructive-action registry listed granular function names
+  (`delete_media_pool_clips`, `move_media_pool_folders`, …) that the compound
+  `media_pool` tool never dispatches, so `is_destructive()` returned False and
+  these catastrophic deletes silently skipped version-on-mutate archiving and
+  change logging. The registry now uses the real compound action strings, so the
+  deletes are archived/logged as intended.
+- **Added** confirm-token gating + previews to the three deletes (EX3). The
+  registry fix also re-enables the existing media-pool change log for them.
+- Live-validated against DaVinci Resolve Studio 21.0.0 (non-destructively): the
+  no-token call returns `confirmation_required` and deletes nothing.
+
 ## What's New in v2.54.5
 
 Reliability + security hardening from the exhaustive reliability audit (Wave A).
