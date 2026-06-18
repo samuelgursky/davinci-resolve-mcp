@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.56.0
+
+Destructive-action registry audit (EX-REG) — a systemic version of the EX2 bug.
+
+Many destructive actions were registered under the **wrong tool key**, so
+`is_destructive()` returned False and **version-on-mutate archiving / change
+logging silently never fired** for them. Examples: `create_timeline`,
+`auto_sync_audio`, `create_stereo_clip`, `append_to_timeline` were filed under
+`timeline` though `media_pool` dispatches them; `set_cdl`, `copy_grades`,
+`export_lut`, the version ops were under `timeline_item` though
+`timeline_item_color` dispatches them; the Fusion-comp and take actions used stale
+names (`add_fusion_comp`, `delete_take`) that matched no real handler.
+
+- **Fixed** rebuilt `DESTRUCTIVE_ACTIONS_BY_TOOL` so every action is keyed under
+  the tool that actually dispatches it (stale names mapped to real ones:
+  `*_fusion_comp` → `*_comp`, `*_take` → `add`/`delete`/`select`/`finalize`,
+  `import_into` → `import_into_timeline`, `create_subtitles_from_audio` →
+  `create_subtitles`). Inert entries whose tool isn't governed (media_pool_item
+  `replace_clip`/`link_*`) were dropped. Catastrophic take/Fusion-comp deletes and
+  the media-pool create/sync ops are now archived as intended.
+- **Added** the registry-drift guard now asserts *every* registry action is a real
+  handler of its tool (broad check enabled), so this class can't regress.
+
 ## What's New in v2.55.2
 
 Deep-QC P1 1b — required-param validation. Mutating/destructive actions that
