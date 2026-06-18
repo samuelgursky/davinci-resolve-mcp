@@ -2,6 +2,39 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.53.0
+
+Two improvements to audio sync reliability and inventory control.
+
+`safe_auto_sync_audio` / `media_pool.auto_sync_audio` no longer fail silently on
+human-readable settings (issue #70). The previous normalizer recognized
+`syncBy`/`mode` but not `method`, and it forwarded *every* unrecognized key
+(`group_id`, `primary_clip_id`, …) straight into `MediaPool.AutoSyncAudio` —
+which silently rejects the whole call when it sees a key it doesn't understand,
+returning `False` with nothing linked and no error.
+
+- **Fixed** `method` (matching the tool's own parameter naming) is now accepted
+  as an alias for the sync mode alongside `syncBy`/`sync_by`/`mode`/`syncMode`.
+- **Fixed** unrecognized settings keys are dropped instead of forwarded, so a
+  stray `group_id`/`primary_clip_id` no longer poisons the call. Dropped keys
+  are reported back in a new `ignored_settings` field on the response, so a
+  rejection is no longer invisible.
+- **Fixed** the raw `media_pool.auto_sync_audio` action now routes settings
+  through the same live `AUDIO_SYNC_*` enum resolution as the safe wrapper
+  (previously it passed strings straight through).
+
+The Media Pool inventory walk is now configurable:
+
+- **Added** `media_analysis.inventory_exclude_bins` — a comma-separated list of
+  folder names to skip entirely during the inventory walk (recursively). Empty
+  by default, so every folder is indexed unless you opt out.
+- **Added** `media_analysis.inventory_limit` — the maximum clips to index per
+  walk, configurable from the control panel and `setup`. The hard ceiling is
+  raised from 2000 to 10000.
+- Adapted from PR #69 by @rgxdev; the default was changed to exclude nothing
+  (the PR defaulted to excluding an `assets` bin, which would have silently
+  stopped indexing existing `assets` folders on upgrade).
+
 ## What's New in v2.52.1
 
 Analysis reuse no longer blocks on missing capabilities when every clip is
