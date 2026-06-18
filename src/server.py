@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.55.2"
+VERSION = "2.56.1"
 
 import base64
 import os
@@ -1891,7 +1891,10 @@ def _find_timeline_item_by_id(tl, timeline_item_id) -> Optional[Any]:
     for track_type in ("video", "audio", "subtitle"):
         try:
             track_count = int(tl.GetTrackCount(track_type) or 0)
-        except Exception:
+        except Exception as exc:
+            # Don't silently skip a whole track type on API error — log it so a
+            # genuine API failure isn't mistaken for "item not found" (EX10).
+            logger.warning("_find_timeline_item_by_id: GetTrackCount(%s) failed, skipping: %s", track_type, exc)
             continue
         for track_index in range(1, track_count + 1):
             for item in (tl.GetItemListInTrack(track_type, track_index) or []):
@@ -5691,8 +5694,11 @@ def _audio_capabilities():
 def _audio_track_probe(tl, p: Dict[str, Any]):
     track_index = int(p.get("track_index", 1))
     track_count = int(tl.GetTrackCount("audio") or 0)
-    out = {"track_index": track_index, "track_count": track_count, "available": track_index <= track_count}
-    if track_index > track_count:
+    # Resolve audio tracks are 1-indexed; track_index < 1 is invalid (EX11 — the
+    # old `track_index <= track_count` reported available:true for index 0).
+    out = {"track_index": track_index, "track_count": track_count,
+           "available": 1 <= track_index <= track_count}
+    if not (1 <= track_index <= track_count):
         return out
     for key, getter, args in (
         ("sub_type", "GetTrackSubType", ("audio", track_index)),
@@ -15158,7 +15164,13 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         blocked = _consume_confirm_token(action="media_pool.delete_timelines", params=p)
         if blocked:
             return blocked
-        return {"success": bool(mp.DeleteTimelines(timelines))}
+        # Read-back: DeleteTimelines' bool is unreliable; verify by the project's
+        # timeline count dropping (P2).
+        before_n = proj.GetTimelineCount()
+        raw = bool(mp.DeleteTimelines(timelines))
+        after_n = proj.GetTimelineCount()
+        return {"success": raw, "verified": after_n < before_n,
+                "timelines_before": before_n, "timelines_after": after_n}
     elif action == "append_to_timeline":
         if p.get("clip_infos") is not None:
             raw = p["clip_infos"]
@@ -15321,6 +15333,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             return _err("Clip not found")
         return {"success": bool(mp.DeleteClipMattes(clip, p["paths"]))}
     elif action == "import_folder":
+        if not p.get("path"):
+            return _err("import_folder requires path")
         return {"success": bool(mp.ImportFolderFromFile(p["path"], p.get("source_clips_path", "")))}
     elif action == "ingest_capabilities":
         return _media_pool_ingest_capabilities()
@@ -20377,7 +20391,12 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     elif action == "grade_boundary_report":
         return _grade_boundary_report(proj, item, p)
     elif action == "set_cdl":
-        return {"success": bool(item.SetCDL(_normalize_cdl(p["cdl"])))}
+        # Validate ASC-CDL shape before SetCDL (malformed CDL is silently rejected
+        # by Resolve); the raw action shares the safe twin's validator now (P3 #22).
+        validation, err = _validate_cdl_payload(p.get("cdl"))
+        if err:
+            return err
+        return {"success": bool(item.SetCDL(_normalize_cdl(validation["cdl"])))}
     elif action == "copy_grades":
         # Find target items by IDs
         _, tl, _ = _get_tl()
