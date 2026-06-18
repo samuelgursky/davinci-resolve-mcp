@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.54.4
+
+Persistence-safety hardening (generalizes issue #71 to the analysis state
+stores). A multi-agent audit found several state files whose **readers** swallow a
+`JSONDecodeError` and reset to an empty default — so a later read-modify-write
+writes back only the new field, silently wiping prior data. Atomic writes don't
+help, because the loss happens at *read* time.
+
+- **Fixed** read-modify-write paths now read strictly and **refuse to overwrite**
+  a corrupt existing file (via a shared `ConfigParseError` + `_read_json_strict`),
+  rather than clobbering it:
+  - media-analysis **preferences** — 5 write paths (set-defaults, timed-marker
+    default, sampling-mode default, AI governance, caps preset)
+  - **update-state** — configure/clear update settings (3 paths), now also written
+    atomically (temp + `os.replace`)
+  - per-clip **corrections** (human edit history — the highest-value store) —
+    update and revert paths
+- **Fixed** non-atomic writes that a crash mid-write could truncate: the bin
+  summary markdown and Fusion `.setting` files now write to a temp file and
+  `os.replace`.
+- **Fixed** a read-modify-write race on `analysis.json` under the threaded control
+  panel: transcript regeneration is now serialized under the existing state lock,
+  so a concurrent regen/batch write can't drop the other's updates.
+- Read-only callers keep their forgiving behavior (they fall back to defaults and
+  never write). New tests in `tests/test_persistence_safety.py`.
+
 ## What's New in v2.54.3
 
 Follow-up to the v2.54.2 config-merge fix (#71): the JSONC sanitizer's
