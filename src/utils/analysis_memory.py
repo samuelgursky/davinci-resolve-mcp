@@ -358,9 +358,13 @@ def regenerate_bin_summary_from_manifest(
         lines.append("\n")
 
     path = bin_summary_path(project_root)
+    # Atomic write (temp + os.replace): a crash mid-write must not truncate the
+    # bin summary that session_start_context reads at startup (PS4).
+    tmp_path = path + ".tmp"
     try:
-        with open(path, "w", encoding="utf-8") as handle:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
             handle.writelines(lines)
+        os.replace(tmp_path, path)
         return {
             "success": True,
             "path": path,
@@ -376,6 +380,11 @@ def regenerate_bin_summary_from_manifest(
             },
         }
     except OSError as exc:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
 

@@ -304,8 +304,19 @@ def splice_inputs_block(
     after_inputs = parse_instance_input_block(new_inner)
 
     os.makedirs(os.path.dirname(os.path.abspath(dest_path)) or ".", exist_ok=True)
-    with open(dest_path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(new_content)
+    # Atomic write (temp + os.replace): a crash mid-write must not truncate the
+    # Fusion .setting file and leave the GroupOperator config uneditable (PS5).
+    tmp_path = f"{dest_path}.tmp-{os.getpid()}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(new_content)
+        os.replace(tmp_path, dest_path)
+    finally:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     return {
         "source_path": os.path.abspath(source_path),

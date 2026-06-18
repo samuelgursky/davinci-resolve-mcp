@@ -15176,14 +15176,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"success": False, "error": "Transcript regeneration is loopback-only."}, HTTPStatus.FORBIDDEN)
                 return
             clip_id = path.split("/")[3]
-            self._json(regenerate_clip_transcript(
-                self.state.project_root,
-                clip_id,
-                with_words=bool(body.get("with_words", True)),
-                backend=body.get("backend") or None,
-                language=body.get("language") or None,
-                model=body.get("model") or None,
-            ))
+            # Serialize the analysis.json read-modify-write: this server is
+            # threaded, so concurrent regenerations (or a regen racing a batch
+            # job's report write) would interleave and the last writer would drop
+            # the other's updates (PS9).
+            with self.state.lock:
+                result = regenerate_clip_transcript(
+                    self.state.project_root,
+                    clip_id,
+                    with_words=bool(body.get("with_words", True)),
+                    backend=body.get("backend") or None,
+                    language=body.get("language") or None,
+                    model=body.get("model") or None,
+                )
+            self._json(result)
             return
         if path.startswith("/api/clips/") and path.endswith("/transcript/corrections"):
             if not _request_is_loopback(self):

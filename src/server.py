@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.54.3"
+VERSION = "2.54.4"
 
 import base64
 import os
@@ -7273,6 +7273,39 @@ def _media_analysis_preferences_path() -> str:
     return os.path.join(project_dir, "logs", "media-analysis-preferences.json")
 
 
+class ConfigParseError(Exception):
+    """A persisted state/config file exists but its contents could not be read.
+
+    Read-modify-write callers MUST refuse to overwrite when this is raised — a
+    transient/corrupt read returning a default, followed by a write, silently
+    wipes the user's prior data. This is the issue-#71 bug class generalized to
+    the analysis state stores (see local gameplan Phase 5 / PS1–PS3).
+    """
+
+
+def _read_json_strict(path: str) -> Dict[str, Any]:
+    """Read JSON for a read-modify-write cycle.
+
+    Returns ``{}`` only when the file is absent or empty (safe to create). Raises
+    :class:`ConfigParseError` when the file exists but cannot be read/parsed, so
+    the caller can refuse to overwrite and avoid clobbering prior contents.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise ConfigParseError(f"{path}: {exc}") from exc
+    if not raw.strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigParseError(f"{path}: {exc}") from exc
+    return payload if isinstance(payload, dict) else {}
+
+
 def _read_media_analysis_preferences() -> Dict[str, Any]:
     path = _media_analysis_preferences_path()
     try:
@@ -7281,6 +7314,12 @@ def _read_media_analysis_preferences() -> Dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+def _read_media_analysis_preferences_strict() -> Dict[str, Any]:
+    """Strict prefs read for read-modify-write paths — raises ConfigParseError on
+    a corrupt existing file so the caller refuses to overwrite (PS1)."""
+    return _read_json_strict(_media_analysis_preferences_path())
 
 
 def _write_media_analysis_preferences(preferences: Dict[str, Any]) -> None:
@@ -7669,6 +7708,12 @@ def _media_analysis_timed_marker_decision(p: Dict[str, Any]) -> Dict[str, Any]:
 
     if choice in {"default_yes", "default_no"}:
         saved = "yes" if choice == "default_yes" else "no"
+        # Strict re-read before writing: a corrupt prefs file must refuse, not
+        # clobber every saved preference (PS1).
+        try:
+            preferences = _read_media_analysis_preferences_strict()
+        except ConfigParseError as exc:
+            return _err(f"Refusing to save timed-marker default: {exc}. The preferences file exists but is unparseable; fix or delete it to avoid wiping saved settings.")
         preferences["timed_markers_default"] = saved
         preferences["timed_markers_default_updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _write_media_analysis_preferences(preferences)
@@ -7833,6 +7878,10 @@ def _media_analysis_sampling_mode_decision(p: Dict[str, Any]) -> Dict[str, Any]:
         source = "explicit"
         if save_default:
             saved = mode
+            try:
+                preferences = _read_media_analysis_preferences_strict()
+            except ConfigParseError as exc:
+                return _err(f"Refusing to save sampling-mode default: {exc}. The preferences file exists but is unparseable; fix or delete it to avoid wiping saved settings.")
             preferences["sampling_mode_default"] = mode
             preferences["sampling_mode_default_updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             _write_media_analysis_preferences(preferences)
@@ -11040,6 +11089,31 @@ def _setup_update_state() -> Dict[str, Any]:
         return {}
 
 
+def _setup_update_state_strict() -> Dict[str, Any]:
+    """Strict update-state read for read-modify-write paths — raises
+    ConfigParseError on a corrupt existing file so the caller refuses to
+    overwrite and wipe saved update prefs (PS2)."""
+    return _read_json_strict(str(update_state_path(project_dir)))
+
+
+def _write_setup_update_state(state: Dict[str, Any]) -> None:
+    """Atomically persist update state (temp + os.replace), so a crash mid-write
+    can't truncate the file that _setup_update_state then resets to {} (PS2)."""
+    path = str(update_state_path(project_dir))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}-{time.time_ns()}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
 def _setup_update_env() -> Dict[str, str]:
     env = dict(os.environ)
     state = _setup_update_state()
@@ -11263,7 +11337,13 @@ def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: 
     if not requested:
         return {"changed": False, "recognized": False}
 
-    preferences = _read_media_analysis_preferences()
+    # Strict read: this is a read-modify-write of the prefs file, so a corrupt
+    # existing file must refuse rather than seed the write from {} and wipe every
+    # saved preference (PS1).
+    try:
+        preferences = _read_media_analysis_preferences_strict()
+    except ConfigParseError as exc:
+        return _err(f"Refusing to update media-analysis defaults: {exc}. The preferences file exists but is unparseable; fix or delete it to avoid wiping saved settings.")
     before = _media_analysis_effective_preferences()
     next_preferences = dict(preferences)
     updates: Dict[str, Dict[str, Any]] = {}
@@ -11519,9 +11599,18 @@ def _setup_set_updates_defaults(update_defaults: Dict[str, Any], dry_run: bool) 
     if dry_run:
         return {"changed": True, "recognized": True, "updates": updates, "before": before, "dry_run": True}
 
+    # Strict re-read before mutating: a corrupt update-state file must refuse,
+    # not seed the write from {} and wipe saved update prefs (PS2).
+    try:
+        state = _setup_update_state_strict()
+    except ConfigParseError as exc:
+        return _err(f"Refusing to update settings: {exc}. The update-state file exists but is unparseable; fix or delete it to avoid wiping saved update preferences.")
     if "mode" in updates:
         set_update_mode(project_dir, updates["mode"]["after"], env=_setup_update_env())
-        state = _setup_update_state()
+        try:
+            state = _setup_update_state_strict()
+        except ConfigParseError as exc:
+            return _err(f"Refusing to update settings: {exc}. The update-state file became unparseable; fix or delete it to avoid wiping saved update preferences.")
     updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     if "check_interval_hours" in updates:
         state["check_interval_hours"] = updates["check_interval_hours"]["after"]
@@ -11529,9 +11618,7 @@ def _setup_set_updates_defaults(update_defaults: Dict[str, Any], dry_run: bool) 
         state["snooze_hours"] = updates["snooze_hours"]["after"]
     if updates:
         state["setup_defaults_updated_at"] = updated_at
-        with open(update_state_path(project_dir), "w", encoding="utf-8") as handle:
-            json.dump(state, handle, indent=2, sort_keys=True)
-            handle.write("\n")
+        _write_setup_update_state(state)
     return {
         "changed": bool(updates),
         "recognized": True,
@@ -11602,26 +11689,28 @@ def _setup_clear_defaults(keys: Any, dry_run: bool) -> Dict[str, Any]:
         result["cleared"].append("updates.mode")
 
     if clear_all or normalized_keys & {"updates.check_interval_hours", "check_interval_hours", "update_interval_hours"}:
-        state = _setup_update_state()
         if dry_run:
             result["update_check_interval_hours"] = {"changed": True, "dry_run": True}
         else:
+            try:
+                state = _setup_update_state_strict()
+            except ConfigParseError as exc:
+                return _err(f"Refusing to clear update interval: {exc}. The update-state file exists but is unparseable; fix or delete it to avoid wiping saved update preferences.")
             state.pop("check_interval_hours", None)
-            with open(update_state_path(project_dir), "w", encoding="utf-8") as handle:
-                json.dump(state, handle, indent=2, sort_keys=True)
-                handle.write("\n")
+            _write_setup_update_state(state)
             result["update_check_interval_hours"] = {"changed": True, "state_path": str(update_state_path(project_dir))}
         result["cleared"].append("updates.check_interval_hours")
 
     if clear_all or normalized_keys & {"updates.snooze_hours", "snooze_hours", "update_snooze_hours"}:
-        state = _setup_update_state()
         if dry_run:
             result["update_snooze_hours"] = {"changed": True, "dry_run": True}
         else:
+            try:
+                state = _setup_update_state_strict()
+            except ConfigParseError as exc:
+                return _err(f"Refusing to clear snooze: {exc}. The update-state file exists but is unparseable; fix or delete it to avoid wiping saved update preferences.")
             state.pop("snooze_hours", None)
-            with open(update_state_path(project_dir), "w", encoding="utf-8") as handle:
-                json.dump(state, handle, indent=2, sort_keys=True)
-                handle.write("\n")
+            _write_setup_update_state(state)
             result["update_snooze_hours"] = {"changed": True, "state_path": str(update_state_path(project_dir))}
         result["cleared"].append("updates.snooze_hours")
 
@@ -11988,7 +12077,7 @@ def _v2_corrections_path_for_clip(project_root: str, clip_dir: Optional[str], cl
     return None
 
 
-def _v2_read_corrections(path: str) -> Dict[str, Any]:
+def _v2_read_corrections(path: str, *, strict: bool = False) -> Dict[str, Any]:
     if not os.path.isfile(path):
         return {"schema_version": "2.0", "current": {}, "changelog": []}
     try:
@@ -12001,7 +12090,12 @@ def _v2_read_corrections(path: str) -> Dict[str, Any]:
         data.setdefault("current", {})
         data.setdefault("changelog", [])
         return data
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        # strict=True is for read-modify-write callers: an existing-but-corrupt
+        # corrections file must refuse, not reset to empty and then erase the
+        # user's human edit history on the next write (PS3, issue #71 class).
+        if strict:
+            raise ConfigParseError(f"{path}: {exc}") from exc
         return {"schema_version": "2.0", "current": {}, "changelog": []}
 
 
@@ -12049,7 +12143,10 @@ def _v2_update_field(project_root: str, p: Dict[str, Any], *, entity_type: str) 
     if not path:
         return _err(f"Could not locate clip directory for clip_id={clip_id} under {project_root}/clips/. Pass clip_dir explicitly if the clip directory is non-standard.")
 
-    data = _v2_read_corrections(path)
+    try:
+        data = _v2_read_corrections(path, strict=True)
+    except ConfigParseError as exc:
+        return _err(f"Refusing to write correction: {exc}. The corrections file exists but is unparseable; fix or remove it to avoid wiping the human edit history.")
     if clip_id and "clip_id" not in data:
         data["clip_id"] = str(clip_id)
 
@@ -12149,7 +12246,10 @@ def _v2_revert_field(project_root: str, p: Dict[str, Any]) -> Dict[str, Any]:
     path = _v2_corrections_path_for_clip(project_root, clip_dir, clip_id)
     if not path or not os.path.isfile(path):
         return _err("No corrections file exists for this clip; nothing to revert.")
-    data = _v2_read_corrections(path)
+    try:
+        data = _v2_read_corrections(path, strict=True)
+    except ConfigParseError as exc:
+        return _err(f"Refusing to revert: {exc}. The corrections file exists but is unparseable; fix or remove it to avoid wiping the human edit history.")
     key = f"{entity_type}:{entity_uuid}:{field_path}"
     if key not in data.get("current", {}):
         return _err(f"No current correction for {key}; nothing to revert.")
@@ -15896,7 +15996,10 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             return _err(f"unknown tier '{preset}'. Valid: {sorted(_resolve_ai_governance.VALID_TIERS)}")
         if mode and mode not in _AI_GOVERNANCE_MODES:
             return _err(f"unknown mode '{mode}'. Valid: {list(_AI_GOVERNANCE_MODES)}")
-        prefs = _read_media_analysis_preferences()
+        try:
+            prefs = _read_media_analysis_preferences_strict()
+        except ConfigParseError as exc:
+            return _err(f"Refusing to save AI governance: {exc}. The preferences file exists but is unparseable; fix or delete it to avoid wiping saved settings.")
         if preset:
             prefs["resolve_ai_governance_preset"] = preset
         if mode:
@@ -15916,7 +16019,10 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         if preset not in _ac.VALID_PRESETS:
             return _err(f"unknown preset '{preset}'. Valid: {sorted(_ac.VALID_PRESETS)}")
         # Update preference file directly (same pattern as set_defaults).
-        prefs = _read_media_analysis_preferences()
+        try:
+            prefs = _read_media_analysis_preferences_strict()
+        except ConfigParseError as exc:
+            return _err(f"Refusing to save caps preset: {exc}. The preferences file exists but is unparseable; fix or delete it to avoid wiping saved settings.")
         prefs["analysis_caps_preset"] = preset
         if isinstance(p.get("overrides"), dict):
             prefs["analysis_caps_overrides"] = p["overrides"]
