@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.54.3
+
+Follow-up to the v2.54.2 config-merge fix (#71): the JSONC sanitizer's
+trailing-comma step was not string-aware.
+
+- **Fixed** `_strip_jsonc` removed trailing commas with a regex applied to the
+  whole document, so a comma inside a string value followed by whitespace and a
+  closing brace/bracket — e.g. `"greeting": "hello, } world"` — had the comma
+  silently stripped *from inside the string* when merging a commented (JSONC)
+  client config. The trailing-comma pass is now string-aware (mirroring the
+  comment stripper), so string contents are never altered while real trailing
+  commas are still removed. Added regression tests covering string values that
+  contain `, }` / `, ]`. (Dropped the now-unused `re` import.)
+
 ## What's New in v2.54.2
 
 A destructive-overwrite bug in the installer (issue #71): the MCP client setup
