@@ -786,8 +786,12 @@ def delete_project(project_name: str) -> Dict[str, Any]:
     if resolve is None:
         return {"error": "Not connected to DaVinci Resolve"}
     pm = resolve.GetProjectManager()
-    result = pm.DeleteProject(project_name)
-    return {"success": bool(result), "project_name": project_name}
+    # DeleteProject is flaky (silently returns False when the target is/was
+    # current, transient first-attempt failures); route through the retry+switch
+    # guard (#19).
+    from src.utils.project_cleanup import delete_project_safely
+    deleted = delete_project_safely(pm, project_name)
+    return {"success": bool(deleted.get("success")), "project_name": project_name, "delete_detail": deleted}
 
 
 @mcp.tool()

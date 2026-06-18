@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.55.0"
+VERSION = "2.55.1"
 
 import base64
 import os
@@ -7508,6 +7508,36 @@ def _safe_int(value: Any, default: int, *, minimum: Optional[int] = None, maximu
     return parsed
 
 
+def _filter_to_keys(settings: Any, allowed) -> Tuple[Dict[str, Any], list]:
+    """Whitelist a settings/options dict to the keys a Resolve API documents.
+
+    Resolve silently ignores unrecognized keys in several options dicts (import
+    options, render settings, voice-isolation state), so a typo'd key is dropped
+    with no signal. This returns ``(filtered, ignored)`` — only known keys are
+    forwarded; ``ignored`` lists the dropped keys so the caller can surface them
+    in ``ignored_settings`` (P1 / deep-QC #4-6,23-25)."""
+    if not isinstance(settings, dict):
+        return {}, []
+    allowed_set = set(allowed)
+    filtered = {k: v for k, v in settings.items() if k in allowed_set}
+    ignored = sorted(str(k) for k in settings if k not in allowed_set)
+    return filtered, ignored
+
+
+# Documented option/state key sets (docs/reference/resolve_scripting_api.txt).
+_IMPORT_TIMELINE_OPTION_KEYS = frozenset({
+    "timelineName", "importSourceClips", "sourceClipsPath",
+    "sourceClipsFolders", "interlaceProcessing",
+})
+_IMPORT_INTO_TIMELINE_OPTION_KEYS = frozenset({
+    "autoImportSourceClipsIntoMediaPool", "ignoreFileExtensionsWhenMatching",
+    "linkToSourceCameraFiles", "useSizingInfo",
+    "importMultiChannelAudioTracksAsLinkedGroups", "insertAdditionalTracks",
+    "insertWithOffset", "sourceClipsPath", "sourceClipsFolders",
+})
+_VOICE_ISOLATION_STATE_KEYS = frozenset({"isEnabled", "amount"})
+
+
 def _setup_marker_limit(value: Any, default: int = 12) -> int:
     if isinstance(value, str) and _setup_text_key(value) in {"unlimited", "no_limit", "nolimit", "all"}:
         return 0
@@ -13405,6 +13435,9 @@ def _safe_project_delete(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     if p.get("dry_run"):
         return _ok(would_delete=True, name=name)
     current = pm.GetCurrentProject()
+    # Route through delete_project_safely: DeleteProject silently returns False
+    # when the target is/was current and is flaky on the first attempt (#19).
+    from src.utils.project_cleanup import delete_project_safely
     current_name = current.GetName() if current and _has_method(current, "GetName") else None
     if current_name == name:
         if not p.get("close_current", False):
@@ -13413,11 +13446,13 @@ def _safe_project_delete(pm, p: Dict[str, Any]) -> Dict[str, Any]:
         closed = bool(pm.CloseProject(current))
         if not closed:
             return _err(f"Failed to close current project '{name}' before delete")
-        result = {"success": bool(pm.DeleteProject(name))}
+        deleted = delete_project_safely(pm, name)
+        result = {"success": bool(deleted.get("success")), "delete_detail": deleted}
         if saved is False:
             result["warning"] = "SaveProject returned False before close; unsaved changes may have been discarded"
         return result
-    return {"success": bool(pm.DeleteProject(name))}
+    deleted = delete_project_safely(pm, name)
+    return {"success": bool(deleted.get("success")), "delete_detail": deleted}
 
 
 def _database_capabilities(pm) -> Dict[str, Any]:
@@ -13963,7 +13998,11 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         proj = pm.GetCurrentProject()
         return {"success": bool(pm.CloseProject(proj))} if proj else _err("No project open")
     elif action == "delete":
-        return {"success": bool(pm.DeleteProject(p["name"]))}
+        if not p.get("name"):
+            return _err("delete requires name")
+        from src.utils.project_cleanup import delete_project_safely
+        deleted = delete_project_safely(pm, p["name"])
+        return {"success": bool(deleted.get("success")), "delete_detail": deleted}
     elif action == "import_project":
         return {"success": bool(pm.ImportProject(p["path"], p.get("name")))}
     elif action == "export_project":
@@ -14718,7 +14757,15 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
             return missing
         return {"settings": _ser(proj.GetRenderSettings())}
     elif action == "set_settings":
-        return {"success": bool(proj.SetRenderSettings(p["settings"]))}
+        if "settings" not in p or not isinstance(p["settings"], dict):
+            return _err("set_settings requires a settings object")
+        # Whitelist to documented keys; SetRenderSettings silently ignores unknown
+        # keys, so a typo'd setting would be dropped with no signal (P1 #6).
+        settings, ignored_settings = _filter_to_keys(p["settings"], _RENDER_SETTING_KEYS)
+        result = {"success": bool(proj.SetRenderSettings(settings))}
+        if ignored_settings:
+            result["ignored_settings"] = ignored_settings
+        return result
     elif action == "list_presets":
         return {"presets": proj.GetRenderPresetList()}
     elif action == "load_preset":
@@ -14730,7 +14777,17 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     elif action == "quick_export_presets":
         return {"presets": proj.GetQuickExportRenderPresets()}
     elif action == "quick_export":
-        return _ser(proj.RenderWithQuickExport(p["preset"], p.get("params", {})))
+        if "preset" not in p:
+            return _err("quick_export requires a preset")
+        # Whitelist the documented quick-export params (unknown keys silently
+        # ignored by Resolve) (P1 #23).
+        qe_params, ignored_params = _filter_to_keys(
+            p.get("params", {}), {"TargetDir", "CustomName", "VideoQuality", "EnableUpload"}
+        )
+        out = _ser(proj.RenderWithQuickExport(p["preset"], qe_params))
+        if ignored_params and isinstance(out, dict):
+            out["ignored_params"] = ignored_params
+        return out
     elif action == "render_capabilities":
         return _render_capabilities(proj)
     elif action == "probe_render_matrix":
@@ -15036,9 +15093,17 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
     elif action == "setup_multicam_timeline":
         return _setup_multicam_timeline(proj, mp, p)
     elif action == "import_timeline":
+        # Whitelist options to the documented keys; Resolve silently ignores
+        # unknown keys, so a typo would be dropped with no signal (P1 #4).
+        options, ignored_opts = _filter_to_keys(p.get("options", {}), _IMPORT_TIMELINE_OPTION_KEYS)
         with long_resolve_op("media_pool.import_timeline"):
-            tl = mp.ImportTimelineFromFile(p["path"], p.get("options", {}))
-        return _ok(name=tl.GetName()) if tl else _err("Failed to import timeline")
+            tl = mp.ImportTimelineFromFile(p["path"], options)
+        if not tl:
+            return _err("Failed to import timeline")
+        result = _ok(name=tl.GetName())
+        if ignored_opts:
+            result["ignored_options"] = ignored_opts
+        return result
     elif action == "delete_timelines":
         count = proj.GetTimelineCount()
         timelines = []
@@ -18057,7 +18122,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         result = tl.CreateFusionClip(found)
         return _ok() if result else _err("Failed to create Fusion clip")
     elif action == "import_into_timeline":
-        return {"success": bool(tl.ImportIntoTimeline(p["path"], p.get("options", {})))}
+        options, ignored_opts = _filter_to_keys(p.get("options", {}), _IMPORT_INTO_TIMELINE_OPTION_KEYS)
+        result = {"success": bool(tl.ImportIntoTimeline(p["path"], options))}
+        if ignored_opts:
+            result["ignored_options"] = ignored_opts
+        return result
     elif action == "export":
         # Timeline.Export needs resolved resolve.EXPORT_* enum *values*, which a
         # JSON/MCP caller cannot pass — handing it a string silently fails. Resolve
@@ -18193,7 +18262,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         missing = _requires_method(tl, "SetVoiceIsolationState", "20.1")
         if missing:
             return missing
-        return {"success": bool(tl.SetVoiceIsolationState(p["track_index"], p["state"]))}
+        state, ignored_state = _filter_to_keys(p["state"], _VOICE_ISOLATION_STATE_KEYS)
+        result = {"success": bool(tl.SetVoiceIsolationState(p["track_index"], state))}
+        if ignored_state:
+            result["ignored_state_keys"] = ignored_state
+        return result
     elif action == "extract_source_frame_ranges":
         p = params or {}
         handles = int(p.get("handles", 24))
@@ -18670,7 +18743,11 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         missing = _requires_method(item, "SetVoiceIsolationState", "20.1")
         if missing:
             return missing
-        return {"success": bool(item.SetVoiceIsolationState(p["state"]))}
+        state, ignored_state = _filter_to_keys(p["state"], _VOICE_ISOLATION_STATE_KEYS)
+        result = {"success": bool(item.SetVoiceIsolationState(state))}
+        if ignored_state:
+            result["ignored_state_keys"] = ignored_state
+        return result
 
     # ── Retime ──
     elif action == "get_retime":

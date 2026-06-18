@@ -78,6 +78,18 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["_timeline_export_spec", "_timeline_export_value"],
     },
     {
+        "symbol": "ProjectManager.DeleteProject",
+        "object": "ProjectManager",
+        "signature": "(projectName) -> bool",
+        "reality": "Returns False (no deletion) when the target project is, or "
+                   "recently was, the current project, and is flaky on the first "
+                   "attempt — so a single bool() call leaves the project undeleted "
+                   "with no useful error.",
+        "recommended": "Load/close away from the target first, then retry; use "
+                       "src/utils/project_cleanup.py:delete_project_safely.",
+        "tags": ["unreliable-return", "project", "flaky"],
+    },
+    {
         "symbol": "Composition.Paste",
         "object": "Fusion Composition",
         "reality": "Passing tool.SaveSettings()'s in-memory table to Paste() / "
