@@ -234,6 +234,11 @@ def get_run(project_root: str, analysis_run_id: str) -> Optional[Dict[str, Any]]
 
 
 def list_runs(project_root: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+    # SQLite treats a negative LIMIT as "no limit"; clamp (EX8).
+    try:
+        limit = max(1, min(1000, int(limit)))
+    except (TypeError, ValueError):
+        limit = 50
     conn = timeline_brain_db.connect(project_root)
     rows = conn.execute(
         """

@@ -278,6 +278,12 @@ def get_brain_edit_history(
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
     """Return brain_edit rows, optionally filtered by timeline or run, newest first."""
+    # SQLite treats a negative LIMIT as "no limit"; clamp so a negative/huge
+    # limit can't silently fetch the whole table (EX8).
+    try:
+        limit = max(1, min(1000, int(limit)))
+    except (TypeError, ValueError):
+        limit = 50
     conn = timeline_brain_db.connect(project_root)
     clauses: List[str] = []
     args: List[Any] = []

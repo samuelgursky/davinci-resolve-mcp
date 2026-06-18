@@ -574,7 +574,7 @@ def get_timeline_matte_list(item_index: int = 0, track_type: str = "video", trac
     if not tl:
         return {"error": "No current timeline"}
     items = tl.GetItemListInTrack(track_type, track_index)
-    if not items or item_index >= len(items):
+    if not items or item_index < 0 or item_index >= len(items):  # reject negatives (EX5)
         return {"error": f"No item at index {item_index}"}
     mattes = mp.GetTimelineMatteList(items[item_index])
     return {"mattes": mattes if mattes else []}

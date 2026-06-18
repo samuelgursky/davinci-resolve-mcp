@@ -84,6 +84,11 @@ def get_media_pool_change_history(
     action: Optional[str] = None,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
+    # SQLite treats a negative LIMIT as "no limit"; clamp (EX8).
+    try:
+        limit = max(1, min(1000, int(limit)))
+    except (TypeError, ValueError):
+        limit = 50
     conn = timeline_brain_db.connect(project_root)
     clauses: List[str] = []
     args: List[Any] = []

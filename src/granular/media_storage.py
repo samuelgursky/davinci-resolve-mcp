@@ -171,7 +171,7 @@ def add_timeline_mattes_to_media_pool(timeline_item_index: int, matte_paths: Lis
         return {"error": "No current timeline"}
 
     items = timeline.GetItemListInTrack(track_type, track_index)
-    if not items or timeline_item_index >= len(items):
+    if not items or timeline_item_index < 0 or timeline_item_index >= len(items):  # reject negatives (EX5)
         return {"error": f"Timeline item at index {timeline_item_index} not found"}
 
     item = items[timeline_item_index]

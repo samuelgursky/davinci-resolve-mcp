@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.54.4"
+VERSION = "2.54.5"
 
 import base64
 import os
@@ -1006,6 +1006,10 @@ import uuid as _uuid
 
 
 _CONFIRM_TOKENS: Dict[str, Dict[str, Any]] = {}
+# The control panel runs on a threaded HTTP server, so issue/consume/gc of the
+# token table run on concurrent threads. Guard every access so a GC iteration
+# can't race a write and validate-then-pop stays atomic (EX4).
+_CONFIRM_TOKENS_LOCK = threading.RLock()
 _CONFIRM_TTL_SECONDS = 300
 
 
@@ -1023,11 +1027,13 @@ def _confirm_token_fingerprint(action: str, params: Optional[Dict[str, Any]]) ->
 
 
 def _confirm_token_gc():
-    """Drop expired tokens; called on every issue/validate."""
+    """Drop expired tokens; called on every issue/validate. Caller may already
+    hold _CONFIRM_TOKENS_LOCK (RLock makes re-entry safe)."""
     now = _time.time()
-    expired = [t for t, rec in _CONFIRM_TOKENS.items() if rec.get("expires_at", 0) < now]
-    for t in expired:
-        _CONFIRM_TOKENS.pop(t, None)
+    with _CONFIRM_TOKENS_LOCK:
+        expired = [t for t, rec in _CONFIRM_TOKENS.items() if rec.get("expires_at", 0) < now]
+        for t in expired:
+            _CONFIRM_TOKENS.pop(t, None)
 
 
 def _confirm_token_required() -> bool:
@@ -1045,16 +1051,17 @@ def _confirm_token_required() -> bool:
 
 def _issue_confirm_token(*, action: str, params: Optional[Dict[str, Any]], preview: Dict[str, Any]) -> Dict[str, Any]:
     """Mint a token. Returns the pending_user_decision response shape."""
-    _confirm_token_gc()
     token = _uuid.uuid4().hex
     fp = _confirm_token_fingerprint(action, params)
     expires_at = _time.time() + _CONFIRM_TTL_SECONDS
-    _CONFIRM_TOKENS[token] = {
-        "action": action,
-        "fingerprint": fp,
-        "expires_at": expires_at,
-        "issued_at": _time.time(),
-    }
+    with _CONFIRM_TOKENS_LOCK:
+        _confirm_token_gc()
+        _CONFIRM_TOKENS[token] = {
+            "action": action,
+            "fingerprint": fp,
+            "expires_at": expires_at,
+            "issued_at": _time.time(),
+        }
     body = _err(
         f"This action is destructive. Re-call with confirm_token to proceed.",
         code="CONFIRMATION_REQUIRED",
@@ -1082,8 +1089,9 @@ def _consume_confirm_token(*, action: str, params: Optional[Dict[str, Any]]) -> 
     token = (params or {}).get("confirm_token") or (params or {}).get("confirmToken")
     if not token:
         return None  # Caller is expected to call _issue_confirm_token in this case.
-    _confirm_token_gc()
-    rec = _CONFIRM_TOKENS.pop(token, None)  # one-time use
+    with _CONFIRM_TOKENS_LOCK:
+        _confirm_token_gc()
+        rec = _CONFIRM_TOKENS.pop(token, None)  # one-time use, atomic with gc
     if rec is None:
         return _err(
             "confirm_token is invalid, expired, or was issued by a different "
@@ -1855,7 +1863,9 @@ def _get_item(p):
     track_index = p.get("track_index", 1)
     item_index = p.get("item_index", 0)
     items = tl.GetItemListInTrack(track_type, track_index)
-    if not items or item_index >= len(items):
+    # Reject negatives explicitly: Python's reverse-indexing would otherwise
+    # silently return the wrong item for item_index < 0 (EX5).
+    if not items or not isinstance(item_index, int) or item_index < 0 or item_index >= len(items):
         return tl, None, _err(
             f"No item at index {item_index} on {track_type} track {track_index}",
             code="ITEM_INDEX_OUT_OF_RANGE", category="invalid_input",
@@ -5494,8 +5504,10 @@ def _bounded_basename_matches(
     p: Dict[str, Any],
 ) -> Tuple[List[str], Dict[str, Any]]:
     started = time.monotonic()
-    max_seconds = float(p.get("max_seconds", p.get("timeout_seconds", 20)) or 20)
-    max_files = int(p.get("max_files_scanned", p.get("maxFilesScanned", 50000)) or 50000)
+    # Clamp to positive: a negative max_seconds/max_files would trip the
+    # >= guards on the first iteration and silently return no results (EX8).
+    max_seconds = max(0.1, float(p.get("max_seconds", p.get("timeout_seconds", 20)) or 20))
+    max_files = max(1, int(p.get("max_files_scanned", p.get("maxFilesScanned", 50000)) or 50000))
     max_depth_raw = p.get("max_depth", p.get("maxDepth"))
     max_depth = int(max_depth_raw) if max_depth_raw is not None else None
     all_matches = bool(p.get("all_matches", False))
@@ -5704,7 +5716,7 @@ def _audio_item_from_params(tl, p: Dict[str, Any]):
     track_index = int(p.get("track_index", 1))
     item_index = int(p.get("item_index", 0))
     items = tl.GetItemListInTrack(track_type, track_index) or []
-    if item_index >= len(items):
+    if item_index < 0 or item_index >= len(items):  # reject negatives (EX5)
         return None, _err(f"No item at index {item_index} on {track_type} track {track_index}")
     return items[item_index], None
 
@@ -7472,6 +7484,23 @@ def _setup_positive_int(value: Any, default: int, min_value: int = 0, max_value:
     except (TypeError, ValueError):
         return default
     return max(min_value, min(parsed, max_value))
+
+
+def _safe_int(value: Any, default: int, *, minimum: Optional[int] = None, maximum: Optional[int] = None) -> int:
+    """Coerce a tool param to int without throwing; clamp to [minimum, maximum].
+
+    Used by action handlers so a non-numeric or out-of-range numeric param yields
+    a sane value instead of an unhandled ValueError or a SQLite "negative LIMIT =
+    no limit" full-table fetch (EX8)."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(parsed, maximum)
+    return parsed
 
 
 def _setup_marker_limit(value: Any, default: int = 12) -> int:
@@ -13673,14 +13702,29 @@ class _SpecLiveExecutor:
 
 
 def _make_spec_hook_runner(timeout: float = 120.0):
-    """Return a callable that runs a Hook's shell command (opt-in only)."""
+    """Return a callable that runs a Hook's command (opt-in only).
+
+    The command is split with shlex and run WITHOUT a shell, so a spec's hook
+    string cannot inject arbitrary shell (`; rm -rf …`, pipes, expansion). A
+    hook that needs shell features must invoke an explicit interpreter
+    (e.g. ``bash -c "…"``) as its own argv, making the intent visible (EX1).
+    """
+    import shlex
     import subprocess
 
     def _run(hook) -> bool:
         try:
+            argv = shlex.split(hook.command or "")
+        except ValueError as exc:
+            logger.warning("spec hook '%s' has an unparseable command: %s", hook.name or hook.command, exc)
+            return False
+        if not argv:
+            logger.warning("spec hook '%s' has an empty command", hook.name or "")
+            return False
+        try:
             proc = subprocess.run(
-                hook.command,
-                shell=True,
+                argv,
+                shell=False,
                 timeout=timeout,
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
@@ -15965,7 +16009,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             _r, _proj, project_root, _name = vctx
             session_only = bool(p.get("session_only", False))
             session_id = _AI_LEDGER_SESSION_ID if session_only else None
-            limit = int(p.get("limit", 50))
+            limit = _safe_int(p.get("limit"), 50, minimum=1, maximum=1000)
             return {
                 "success": True,
                 "session_id": _AI_LEDGER_SESSION_ID,
@@ -16821,7 +16865,7 @@ def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) ->
     if action == "list_runs":
         return {
             "success": True,
-            "runs": _analysis_runs.list_runs(project_root, limit=int(p.get("limit", 50))),
+            "runs": _analysis_runs.list_runs(project_root, limit=_safe_int(p.get("limit"), 50, minimum=1, maximum=1000)),
         }
     if action == "archive_current":
         return _timeline_versioning.archive_current_timeline(
@@ -16842,13 +16886,18 @@ def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) ->
     if action == "diff_versions":
         if not p.get("timeline_name") or "from_version" not in p or "to_version" not in p:
             return _err("timeline_name, from_version, to_version required")
+        try:
+            from_version = int(p["from_version"])
+            to_version = int(p["to_version"])
+        except (TypeError, ValueError):
+            return _err("from_version and to_version must be integers")
         return {
             "success": True,
             **_timeline_versioning.diff_versions(
                 project_root=project_root,
                 timeline_name=str(p["timeline_name"]),
-                from_version=int(p["from_version"]),
-                to_version=int(p["to_version"]),
+                from_version=from_version,
+                to_version=to_version,
             ),
         }
     if action == "diff_timelines":
@@ -16864,18 +16913,24 @@ def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) ->
             project_root=project_root,
             timeline_name=p.get("timeline_name"),
             analysis_run_id=p.get("analysis_run_id"),
-            limit=int(p.get("limit", 50)),
+            limit=_safe_int(p.get("limit"), 50, minimum=1, maximum=1000),
         )
         return {"success": True, "edits": rows}
     if action == "rollback":
         if not p.get("timeline_name") or "version" not in p:
             return _err("timeline_name and version required")
+        try:
+            version = int(p["version"])
+        except (TypeError, ValueError):
+            return _err("version must be an integer")
+        if version < 0:
+            return _err("version must be >= 0")
         return _timeline_versioning.rollback_to_version(
             resolve=resolve_h,
             project=project_h,
             project_root=project_root,
             timeline_name=str(p["timeline_name"]),
-            version=int(p["version"]),
+            version=version,
             analysis_run_id=p.get("analysis_run_id"),
         )
     if action == "prune":
@@ -16886,7 +16941,7 @@ def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) ->
             project=project_h,
             project_root=project_root,
             timeline_name=str(p["timeline_name"]),
-            keep_n=int(p.get("keep_n", 10)),
+            keep_n=_safe_int(p.get("keep_n"), 10, minimum=1, maximum=1000),
         )
     if action == "registry":
         return {"success": True, **_brain_edits.read_brain_edits_registry(project_root)}
@@ -16897,7 +16952,7 @@ def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) ->
                 project_root=project_root,
                 analysis_run_id=p.get("analysis_run_id"),
                 action=p.get("media_pool_action"),
-                limit=int(p.get("limit", 50)),
+                limit=_safe_int(p.get("limit"), 50, minimum=1, maximum=1000),
             ),
         }
     return _err(f"Unknown action: {action}")
