@@ -2,6 +2,28 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.54.1
+
+One more instance of the enum-keyed silent-failure class (issue #70), plus a
+guard so the next one can't ship unnoticed.
+
+- **Fixed** the raw `timeline.export` action passed `type`/`subtype` straight to
+  `Timeline.Export`, which needs resolved `resolve.EXPORT_*` enum *values* — a
+  JSON/MCP caller can't pass a live enum, so the action silently wrote nothing
+  for every caller. It now resolves friendly format names (and `EXPORT_*`
+  constant names) via the same `_timeline_export_spec` resolver that
+  `export_timeline_checked` uses, and reports the resolved `export_type`/
+  `export_subtype`.
+- **Fixed** `export_timeline_checked` resolved enum constants against the module
+  global `resolve` (which can be `None` and silently degrade the `EXPORT_*` args
+  to strings); it now uses `get_resolve()`, matching the issue-#70 lesson.
+- **Added** an `api_truth` ↔ mitigation guard test: every `enum`-tagged catalog
+  entry must declare a `mitigation` (the resolver/wrapper functions), each of
+  which must exist in `src.server`. The next raw enum passthrough — a documented
+  symbol with no real resolver, or a renamed/removed resolver — now fails CI.
+  Added a `Timeline.Export` catalog entry and wired `mitigation` onto the
+  `AutoSyncAudio`, `CreateSubtitlesFromAudio`, and CloudProject entries.
+
 ## What's New in v2.54.0
 
 Hardens the rest of the enum-keyed settings APIs against the same silent-failure
