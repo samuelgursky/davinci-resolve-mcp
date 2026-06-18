@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.55.1
+
+Deep-QC P1 — settings/options whitelisting + DeleteProject reliability.
+
+- **Fixed** options/settings dicts passed to several Resolve APIs are now
+  whitelisted to their documented keys, so a typo'd key is reported instead of
+  silently dropped (`_filter_to_keys` → `ignored_options`/`ignored_settings`):
+  `media_pool.import_timeline` (ImportTimelineFromFile), `timeline.import_into_timeline`
+  (ImportIntoTimeline), raw `render.set_settings` (SetRenderSettings) and
+  `render.quick_export`, and `set_voice_isolation_state` (track + item).
+- **Fixed** `ProjectManager.DeleteProject` is flaky — it silently returns False
+  when the target is/was the current project. All callers (the safe and raw
+  `project_manager.delete` actions and the granular `delete_project`) now route
+  through `delete_project_safely` (switch-away + retry) and report `delete_detail`.
+  Added an `api_truth` entry.
+- **Added** a destructive-registry drift guard (`tests/test_destructive_registry_drift.py`)
+  that asserts token-gated actions map to real handlers and locks in the media-pool
+  delete governance from v2.55.0. (It also surfaced a pre-existing registry
+  mis-keying issue now tracked for a dedicated audit.)
+
 ## What's New in v2.55.0
 
 Governance for catastrophic Media Pool deletes (exhaustive audit EX2/EX3).
