@@ -63,10 +63,12 @@ class StrictMode(unittest.TestCase):
 
     def test_strict_default_actions(self) -> None:
         self.assertTrue(destructive_hook.is_strict_required(
-            "timeline", "delete_timelines", None,
-        ))
-        self.assertTrue(destructive_hook.is_strict_required(
             "timeline", "delete_track", None,
+        ))
+        # EX-REG: delete_timelines is a media_pool action now; it is archive +
+        # confirm-token gated (EX3) rather than strict.
+        self.assertFalse(destructive_hook.is_strict_required(
+            "timeline", "delete_timelines", None,
         ))
 
     def test_ripple_delete_is_strict(self) -> None:
@@ -103,7 +105,10 @@ class WrapperWithProvider(unittest.TestCase):
             calls.append(action)
             return {"success": True, "called_through": True}
 
-        result = fake_timeline("delete_timelines", None)  # strict-default action
+        # delete_track is strict-default; pass a confirm_token so the pending-confirm
+        # gate (delete_track is also token-gated) doesn't pre-empt the archive/strict
+        # path we're exercising here.
+        result = fake_timeline("delete_track", {"confirm_token": "x"})  # strict-default action
         self.assertFalse(result["success"])
         self.assertIn("strict mode", (result["error"].get("message","") if isinstance(result["error"], dict) else result["error"]))
         self.assertEqual(calls, [], msg="underlying handler should NOT have been called")

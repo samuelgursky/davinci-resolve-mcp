@@ -40,13 +40,17 @@ logger = logging.getLogger("resolve-mcp.destructive-hook")
 # here; (b) optionally add a metric-capture entry below if it has a sensible
 # default metric.
 
+# Each action is keyed under the tool whose @_destructive_op wrapper actually
+# DISPATCHES it. Historically many entries were filed under the wrong tool key
+# (e.g. create_timeline/auto_sync_audio under "timeline" though they are media_pool
+# actions; set_cdl/copy_grades under "timeline_item" though timeline_item_color
+# dispatches them; *_fusion_comp / *_take stale names that never matched), so
+# is_destructive() returned False and version-on-mutate archiving silently did not
+# fire. EX-REG re-filed every action under its real dispatcher and dropped inert
+# entries whose tool is not @_destructive_op-wrapped (e.g. media_pool_item
+# replace_clip/link_*). The test_destructive_registry_drift guard asserts every
+# string here is a real handler so this can't regress.
 DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
-    # Real COMPOUND media_pool action strings (the @destructive_op("media_pool")
-    # wrapper queries is_destructive("media_pool", <compound action>)). The prior
-    # entries used granular function names (delete_media_pool_clips, …) and
-    # media_pool_item names that the compound tool never dispatches, so catastrophic
-    # deletes silently bypassed version-on-mutate archiving (EX2). media_pool_item
-    # link/replace actions are governed separately (its own tool is not yet wrapped).
     "media_pool": frozenset({
         "delete_clips",
         "delete_folders",
@@ -54,6 +58,14 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "move_folders",
         "delete_clip_mattes",
         "delete_timelines",
+        "create_timeline",
+        "create_timeline_from_clips",
+        "append_to_timeline",
+        "setup_multicam_timeline",
+        "create_stereo_clip",
+        "auto_sync_audio",
+        "set_clip_marks",
+        "clear_clip_marks",
     }),
     "edit_engine": frozenset({
         "execute_selects",
@@ -61,11 +73,6 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "execute_swap",
     }),
     "timeline": frozenset({
-        "create_timeline",
-        "create_timeline_from_clips",
-        "setup_multicam_timeline",
-        "delete_timelines",
-        "append_to_timeline",
         "delete_clips",
         "move_clips",
         "duplicate_clips",
@@ -75,19 +82,9 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "overwrite_range",
         "lift_range",
         "apply_cuts",
-        "create_stereo_clip",
-        "auto_sync_audio",
         "create_compound_clip",
         "create_fusion_clip",
         "convert_to_stereo",
-        "create_subtitles_from_audio",
-        "set_clip_marks",
-        "clear_clip_marks",
-        "set_clip_property",
-        "set_clip_color",
-        "clear_clip_color",
-        "replace_clip",
-        "replace_clip_preserve_sub_clip",
         "set_clips_linked",
         "duplicate",
         "insert_generator",
@@ -108,7 +105,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "set_mark_in_out",
         "clear_mark_in_out",
         "set_title_text",
-        "import_into",
+        "import_into_timeline",
     }),
     "timeline_markers": frozenset({
         "add",
@@ -120,77 +117,64 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
     "timeline_ai": frozenset({
         "detect_scene_cuts",
         "analyze_dolby_vision",
+        "create_subtitles",
     }),
     "timeline_item": frozenset({
         "set_clip_enabled",
-        "set_clip_color",
-        "clear_clip_color",
-        "add_flag",
-        "clear_flags",
         "set_property",
         "set_name",
-        "assign_to_color_group",
-        "remove_from_color_group",
-        "create_magic_mask",
-        "regenerate_magic_mask",
-        "smart_reframe",
-        "stabilize",
         "set_voice_isolation_state",
-        "set_cdl",
-        "copy_grades",
-        "reset_all_node_colors",
-        "set_color_output_cache",
-        "set_fusion_output_cache",
         "update_sidecar",
-        "export_lut",
-        "add_take",
-        "delete_take",
-        "select_take",
-        "finalize_take",
-        "add_version",
-        "delete_version",
-        "load_version",
-        "rename_version",
         "set_transform",
         "set_crop",
         "set_retime",
         "set_composite",
         "set_audio",
-        "set_stabilization",
     }),
     "timeline_item_markers": frozenset({
         "add",
+        "add_flag",
+        "clear_flags",
+        "set_clip_color",
+        "clear_clip_color",
         "delete_at_frame",
         "delete_by_custom_data",
         "delete_by_color",
         "update_custom_data",
     }),
     "timeline_item_fusion": frozenset({
-        "add_fusion_comp",
-        "delete_fusion_comp",
-        "import_fusion_comp",
-        "load_fusion_comp",
-        "rename_fusion_comp",
+        "add_comp",
+        "delete_comp",
+        "import_comp",
+        "load_comp",
+        "rename_comp",
     }),
     "timeline_item_color": frozenset({
         "set_cdl",
         "copy_grades",
         "reset_all_node_colors",
-        "set_node_enabled",
-        "set_node_cache_mode",
-        "set_lut",
-        "apply_grade_from_drx",
-        "apply_arri_cdl_lut",
+        "assign_color_group",
+        "remove_from_color_group",
+        "create_magic_mask",
+        "regenerate_magic_mask",
+        "smart_reframe",
+        "stabilize",
+        "export_lut",
+        "add_version",
+        "delete_version",
+        "load_version",
+        "rename_version",
+        "set_color_cache",
+        "set_fusion_cache",
     }),
     "timeline_item_takes": frozenset({
-        "add_take",
-        "delete_take",
-        "select_take",
-        "finalize_take",
+        "add",
+        "delete",
+        "select",
+        "finalize",
     }),
     "graph": frozenset({
         "set_lut",
-        "set_node_cache_mode",
         "set_node_enabled",
         "apply_arri_cdl_lut",
         "apply_grade_from_drx",
@@ -227,8 +211,10 @@ NO_ARCHIVE_ON_KEYS: Dict[Tuple[str, str], frozenset] = {
 # first, the user almost certainly wants to know before losing data.
 
 STRICT_DEFAULT_ACTIONS: frozenset = frozenset({
-    ("timeline", "delete_timelines"),
     ("timeline", "delete_track"),
+    # NOTE: delete_timelines is a media_pool action (EX-REG re-keyed it); it is
+    # archive+confirm-token gated (EX3) rather than strict, per the decision that
+    # strict over-blocks deletes when there is nothing to archive.
     # delete_clips with ripple=True is destructive in a way single-clip delete
     # isn't — handled separately in is_strict_required() because it depends on
     # the params payload, not just the action name.
