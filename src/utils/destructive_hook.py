@@ -41,18 +41,17 @@ logger = logging.getLogger("resolve-mcp.destructive-hook")
 # default metric.
 
 DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
+    # Real COMPOUND media_pool action strings (the @destructive_op("media_pool")
+    # wrapper queries is_destructive("media_pool", <compound action>)). The prior
+    # entries used granular function names (delete_media_pool_clips, …) and
+    # media_pool_item names that the compound tool never dispatches, so catastrophic
+    # deletes silently bypassed version-on-mutate archiving (EX2). media_pool_item
+    # link/replace actions are governed separately (its own tool is not yet wrapped).
     "media_pool": frozenset({
-        "delete_media_pool_clips",
-        "delete_media_pool_folders",
+        "delete_clips",
+        "delete_folders",
         "move_clips",
-        "move_media_pool_folders",
-        "replace_clip",
-        "replace_clip_preserve_sub_clip",
-        "link_clip_proxy_media",
-        "unlink_clip_proxy_media",
-        "link_proxy_media",
-        "unlink_proxy_media",
-        "link_clip_full_resolution_media",
+        "move_folders",
         "delete_clip_mattes",
         "delete_timelines",
     }),

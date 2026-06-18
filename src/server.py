@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.54.5"
+VERSION = "2.55.0"
 
 import base64
 import os
@@ -784,6 +784,11 @@ _destructive_hook.register_preference_provider(_destructive_preference_provider)
 _TOKEN_GATED_DESTRUCTIVE_ACTIONS = frozenset({
     ("timeline", "delete_track"),
     ("timeline", "apply_cuts"),
+    # Catastrophic media-pool deletes (EX3): irreversibly destroy clips/folders/
+    # timelines. Gated like delete_track; also archive-on-mutate via the registry.
+    ("media_pool", "delete_clips"),
+    ("media_pool", "delete_folders"),
+    ("media_pool", "delete_timelines"),
     # Phase E edit-engine loops: plan → confirm → execute.
     ("edit_engine", "execute_selects"),
     ("edit_engine", "execute_tighten"),
@@ -14935,7 +14940,20 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             for sub in (root.GetSubFolderList() or []):
                 if sub.GetUniqueId() == fid:
                     folders.append(sub)
-        return {"success": bool(mp.DeleteFolders(folders))} if folders else _err("No folders found")
+        if not folders:
+            return _err("No folders found")
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="media_pool.delete_folders", params=p,
+                preview={"operation": "media_pool.delete_folders",
+                         "warning": "Permanently deletes folders AND every clip they contain.",
+                         "folders_lost": len(folders),
+                         "names": [_clip_name(f) for f in folders][:25]},
+            )
+        blocked = _consume_confirm_token(action="media_pool.delete_folders", params=p)
+        if blocked:
+            return blocked
+        return {"success": bool(mp.DeleteFolders(folders))}
     elif action == "move_folders":
         target = _navigate_folder(mp, p["target_path"])
         if not target:
@@ -15028,7 +15046,20 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             tl = proj.GetTimelineByIndex(i)
             if tl and tl.GetUniqueId() in p["timeline_ids"]:
                 timelines.append(tl)
-        return {"success": bool(mp.DeleteTimelines(timelines))} if timelines else _err("No timelines found")
+        if not timelines:
+            return _err("No timelines found")
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="media_pool.delete_timelines", params=p,
+                preview={"operation": "media_pool.delete_timelines",
+                         "warning": "Permanently deletes timelines.",
+                         "timelines_lost": len(timelines),
+                         "names": [t.GetName() for t in timelines][:25]},
+            )
+        blocked = _consume_confirm_token(action="media_pool.delete_timelines", params=p)
+        if blocked:
+            return blocked
+        return {"success": bool(mp.DeleteTimelines(timelines))}
     elif action == "append_to_timeline":
         if p.get("clip_infos") is not None:
             raw = p["clip_infos"]
@@ -15115,7 +15146,20 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
     elif action == "delete_clips":
         clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
         clips = [c for c in clips if c]
-        return {"success": bool(mp.DeleteClips(clips))} if clips else _err("No clips found")
+        if not clips:
+            return _err("No clips found")
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="media_pool.delete_clips", params=p,
+                preview={"operation": "media_pool.delete_clips",
+                         "warning": "Permanently deletes Media Pool clips.",
+                         "clips_lost": len(clips),
+                         "names": [_clip_name(c) for c in clips][:25]},
+            )
+        blocked = _consume_confirm_token(action="media_pool.delete_clips", params=p)
+        if blocked:
+            return blocked
+        return {"success": bool(mp.DeleteClips(clips))}
     elif action == "move_clips":
         target = _navigate_folder(mp, p["target_path"])
         if not target:

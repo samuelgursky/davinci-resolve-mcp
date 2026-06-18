@@ -82,9 +82,14 @@ class HookBranchesMediaPool(unittest.TestCase):
             called.append(action)
             return {"success": True, "deleted": 2}
 
-        result = fake_media_pool("delete_media_pool_clips", {"clip_ids": ["a", "b"]})
+        # Use the REAL compound action string (EX2 fixed the registry, which had
+        # listed the granular name delete_media_pool_clips that the compound tool
+        # never dispatches). delete_clips is now confirm-token gated (EX3); pass a
+        # confirm_token to simulate the confirmed call so the wrapper proceeds to
+        # the media_pool change-logging branch instead of the token-issuance skip.
+        result = fake_media_pool("delete_clips", {"clip_ids": ["a", "b"], "confirm_token": "x"})
         self.assertTrue(result["success"])
-        self.assertEqual(called, ["delete_media_pool_clips"])
+        self.assertEqual(called, ["delete_clips"])
         self.assertEqual(result["_versioning"]["category"], "media_pool")
 
         # No timeline_versions row should have been written.
