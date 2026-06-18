@@ -30,6 +30,35 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["unreliable-return", "silent-failure", "audio", "enum"],
     },
     {
+        "symbol": "Timeline.CreateSubtitlesFromAudio",
+        "object": "Timeline",
+        "signature": "(autoCaptionSettings) -> bool",
+        "reality": "Same failure mode as AutoSyncAudio: the autoCaptionSettings "
+                   "dict is keyed by resolve.SUBTITLE_* enum constants with "
+                   "resolve.AUTO_CAPTION_* enum values, so plain string keys like "
+                   "{'language': 'korean'} are silently rejected (returns False, "
+                   "no subtitle track created). The boolean is also unreliable.",
+        "recommended": "Resolve the SUBTITLE_*/AUTO_CAPTION_* constants via the "
+                       "live resolve handle (server._normalize_auto_caption_settings) "
+                       "and verify by reading the timeline's subtitle track count "
+                       "before/after (server._safe_create_subtitles).",
+        "tags": ["unreliable-return", "silent-failure", "subtitle", "enum"],
+    },
+    {
+        "symbol": "ProjectManager CloudProject family (Create/Load/Import/RestoreCloudProject)",
+        "object": "ProjectManager",
+        "signature": "(..., cloudSettings) -> Project | bool",
+        "reality": "All four take an enum-keyed {cloudSettings} dict "
+                   "(resolve.CLOUD_SETTING_* keys, resolve.CLOUD_SYNC_* sync-mode "
+                   "values). Plain string keys are silently rejected, so a settings "
+                   "dict built from human-readable keys yields no project / False.",
+        "recommended": "Resolve the CLOUD_SETTING_*/CLOUD_SYNC_* constants via the "
+                       "live resolve handle (server._normalize_cloud_settings) "
+                       "before calling, and treat the bool return from "
+                       "Import/RestoreCloudProject as advisory.",
+        "tags": ["silent-failure", "project", "cloud", "enum"],
+    },
+    {
         "symbol": "Composition.Paste",
         "object": "Fusion Composition",
         "reality": "Passing tool.SaveSettings()'s in-memory table to Paste() / "

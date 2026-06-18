@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.53.0"
+VERSION = "2.54.0"
 
 import base64
 import os
@@ -6040,6 +6040,182 @@ def _normalize_auto_sync_settings(settings: Dict[str, Any], resolve_obj=None):
     return normalized, ignored
 
 
+def _resolve_enum_settings(resolve_obj, settings, field_specs):
+    """Resolve a human-readable settings dict into the live enum-keyed dict that
+    enum-keyed Resolve APIs require.
+
+    Several Resolve methods (``MediaPool.AutoSyncAudio``,
+    ``Timeline.CreateSubtitlesFromAudio``, the ``ProjectManager`` CloudProject
+    family) key their settings dict by ``resolve.<CONST>`` enum attributes — and
+    for many fields expect ``resolve.<CONST>`` enum *values* too. They silently
+    reject the WHOLE call when handed a plain string key (returning False/None
+    with nothing applied), so unrecognized keys must be dropped, not forwarded.
+    See utils/api_truth.py for the catalogued symbols.
+
+    ``field_specs`` is an iterable of dicts, one per supported field:
+      ``aliases``   human keys accepted for this field (case-insensitive)
+      ``key_const`` name of the ``resolve`` enum attribute used as the dict key
+      ``key_fallback`` key used when the live handle can't resolve ``key_const``
+                    (defaults to ``key_const``); keeps offline behavior readable
+      ``values``    optional ``{lowercased_str: enum_const_name}`` value map
+      ``coerce``    optional ``"int"`` | ``"bool"`` cast for plain values
+      ``bounds``    optional ``(min, max)`` clamp applied after int coercion
+
+    Returns ``(normalized, ignored)``. ``ignored`` lists input keys that no spec
+    claimed AND recognized keys whose value could not be resolved (sorted) — so a
+    field that silently fails to apply is reported rather than hidden.
+    """
+    if not settings:
+        return {}, []
+    normalized = {}
+    consumed = set()
+    lower = {str(k).strip().lower(): k for k in settings}
+
+    for spec in field_specs:
+        src_key = next((lower[a.lower()] for a in spec["aliases"] if a.lower() in lower), None)
+        if src_key is None:
+            continue
+        raw = settings[src_key]
+        key = _resolve_audio_constant(resolve_obj, spec["key_const"], spec.get("key_fallback", spec["key_const"]))
+        values_map = spec.get("values")
+        if values_map is not None and isinstance(raw, str):
+            const_name = values_map.get(raw.strip().lower())
+            if const_name is None:
+                continue  # unknown enum value — leave src_key unconsumed -> ignored
+            value = _resolve_audio_constant(resolve_obj, const_name, raw)
+        elif spec.get("coerce") == "int":
+            try:
+                value = int(raw) if not isinstance(raw, bool) else int(raw)
+            except (TypeError, ValueError):
+                continue
+            lo, hi = spec.get("bounds", (None, None))
+            if lo is not None:
+                value = max(lo, value)
+            if hi is not None:
+                value = min(hi, value)
+        elif spec.get("coerce") == "bool":
+            value = bool(raw)
+        else:
+            value = raw
+        normalized[key] = value
+        consumed.add(src_key)
+
+    ignored = sorted(str(key) for key in settings if key not in consumed)
+    return normalized, ignored
+
+
+# Timeline.CreateSubtitlesFromAudio({autoCaptionSettings}) — enum-keyed exactly
+# like AutoSyncAudio (docs/reference/resolve_scripting_api.txt lines 733-771).
+_AUTO_CAPTION_LANGUAGES = {
+    "auto": "AUTO_CAPTION_AUTO",
+    "danish": "AUTO_CAPTION_DANISH",
+    "dutch": "AUTO_CAPTION_DUTCH",
+    "english": "AUTO_CAPTION_ENGLISH",
+    "french": "AUTO_CAPTION_FRENCH",
+    "german": "AUTO_CAPTION_GERMAN",
+    "italian": "AUTO_CAPTION_ITALIAN",
+    "japanese": "AUTO_CAPTION_JAPANESE",
+    "korean": "AUTO_CAPTION_KOREAN",
+    "mandarin_simplified": "AUTO_CAPTION_MANDARIN_SIMPLIFIED",
+    "mandarin_traditional": "AUTO_CAPTION_MANDARIN_TRADITIONAL",
+    "norwegian": "AUTO_CAPTION_NORWEGIAN",
+    "portuguese": "AUTO_CAPTION_PORTUGUESE",
+    "russian": "AUTO_CAPTION_RUSSIAN",
+    "spanish": "AUTO_CAPTION_SPANISH",
+    "swedish": "AUTO_CAPTION_SWEDISH",
+}
+_AUTO_CAPTION_PRESETS = {
+    "default": "AUTO_CAPTION_SUBTITLE_DEFAULT",
+    "subtitle_default": "AUTO_CAPTION_SUBTITLE_DEFAULT",
+    "teletext": "AUTO_CAPTION_TELETEXT",
+    "netflix": "AUTO_CAPTION_NETFLIX",
+}
+_AUTO_CAPTION_LINE_BREAKS = {
+    "single": "AUTO_CAPTION_LINE_SINGLE",
+    "double": "AUTO_CAPTION_LINE_DOUBLE",
+}
+_AUTO_CAPTION_FIELD_SPECS = (
+    {"aliases": ["language", "lang", "SUBTITLE_LANGUAGE"], "key_const": "SUBTITLE_LANGUAGE", "key_fallback": "language", "values": _AUTO_CAPTION_LANGUAGES},
+    {"aliases": ["preset", "caption_preset", "SUBTITLE_CAPTION_PRESET"], "key_const": "SUBTITLE_CAPTION_PRESET", "key_fallback": "captionPreset", "values": _AUTO_CAPTION_PRESETS},
+    {"aliases": ["line_break", "linebreak", "SUBTITLE_LINE_BREAK"], "key_const": "SUBTITLE_LINE_BREAK", "key_fallback": "lineBreak", "values": _AUTO_CAPTION_LINE_BREAKS},
+    {"aliases": ["chars_per_line", "charsperline", "SUBTITLE_CHARS_PER_LINE"], "key_const": "SUBTITLE_CHARS_PER_LINE", "key_fallback": "charsPerLine", "coerce": "int", "bounds": (1, 60)},
+    {"aliases": ["gap", "SUBTITLE_GAP"], "key_const": "SUBTITLE_GAP", "key_fallback": "gap", "coerce": "int", "bounds": (0, 10)},
+)
+
+
+def _normalize_auto_caption_settings(settings, resolve_obj=None):
+    """Translate human-readable subtitle settings (e.g. ``{"language": "korean"}``)
+    into live ``SUBTITLE_*``/``AUTO_CAPTION_*`` enum keys/values for
+    ``CreateSubtitlesFromAudio``. Returns ``(normalized, ignored)``."""
+    return _resolve_enum_settings(resolve_obj, dict(settings or {}), _AUTO_CAPTION_FIELD_SPECS)
+
+
+# ProjectManager CloudProject family — {cloudSettings} is keyed by
+# resolve.CLOUD_SETTING_* constants with resolve.CLOUD_SYNC_* sync-mode values
+# (docs/reference/resolve_scripting_api.txt lines 588-603). Same silent-rejection
+# failure mode as AutoSyncAudio when handed plain string keys.
+_CLOUD_SYNC_MODES = {
+    "none": "CLOUD_SYNC_NONE",
+    "proxy_only": "CLOUD_SYNC_PROXY_ONLY",
+    "proxy": "CLOUD_SYNC_PROXY_ONLY",
+    "proxy_and_orig": "CLOUD_SYNC_PROXY_AND_ORIG",
+    "proxy_and_original": "CLOUD_SYNC_PROXY_AND_ORIG",
+}
+_CLOUD_SETTINGS_FIELD_SPECS = (
+    {"aliases": ["project_name", "name", "CLOUD_SETTING_PROJECT_NAME"], "key_const": "CLOUD_SETTING_PROJECT_NAME", "key_fallback": "projectName"},
+    {"aliases": ["project_media_path", "media_path", "CLOUD_SETTING_PROJECT_MEDIA_PATH"], "key_const": "CLOUD_SETTING_PROJECT_MEDIA_PATH", "key_fallback": "projectMediaPath"},
+    {"aliases": ["is_collab", "collab", "CLOUD_SETTING_IS_COLLAB"], "key_const": "CLOUD_SETTING_IS_COLLAB", "key_fallback": "isCollab", "coerce": "bool"},
+    {"aliases": ["sync_mode", "syncmode", "CLOUD_SETTING_SYNC_MODE"], "key_const": "CLOUD_SETTING_SYNC_MODE", "key_fallback": "syncMode", "values": _CLOUD_SYNC_MODES},
+    {"aliases": ["is_camera_access", "camera_access", "CLOUD_SETTING_IS_CAMERA_ACCESS"], "key_const": "CLOUD_SETTING_IS_CAMERA_ACCESS", "key_fallback": "isCameraAccess", "coerce": "bool"},
+)
+
+
+def _normalize_cloud_settings(settings, resolve_obj=None):
+    """Translate human-readable cloud-project settings (e.g.
+    ``{"project_name": "X", "sync_mode": "proxy_only"}``) into live
+    ``CLOUD_SETTING_*``/``CLOUD_SYNC_*`` enum keys/values. Returns
+    ``(normalized, ignored)``."""
+    return _resolve_enum_settings(resolve_obj, dict(settings or {}), _CLOUD_SETTINGS_FIELD_SPECS)
+
+
+def _safe_create_subtitles(tl, p: Dict[str, Any]):
+    """CreateSubtitlesFromAudio with enum-resolved settings + readback.
+
+    The raw boolean is unreliable (like AutoSyncAudio), so we verify by reading
+    the timeline's subtitle track count before/after and report the real delta.
+    """
+    settings, ignored = _normalize_auto_caption_settings(p.get("settings"), get_resolve())
+    if p.get("dry_run", False):
+        return _ok(would_create_subtitles=True, settings=settings, ignored_settings=ignored)
+
+    def _subtitle_track_count():
+        try:
+            return int(tl.GetTrackCount("subtitle") or 0)
+        except Exception:
+            return 0
+
+    res = verify_by_readback(
+        mutate=lambda: tl.CreateSubtitlesFromAudio(settings),
+        observe=_subtitle_track_count,
+        snapshot=_subtitle_track_count,
+        compare=lambda before, after: {
+            "verified": bool((after or 0) > (before or 0)),
+            "subtitle_tracks_before": before,
+            "subtitle_tracks_after": after,
+        },
+        label="create_subtitles_from_audio",
+        intent={"settings_keys": sorted(settings.keys()) if settings else []},
+    )
+    return {
+        "success": res["success_raw"],
+        "verified": res["verified"],
+        "subtitle_tracks_before": res.get("subtitle_tracks_before"),
+        "subtitle_tracks_after": res.get("subtitle_tracks_after"),
+        "settings": settings,
+        "ignored_settings": ignored,
+    }
+
+
 def _transcription_capabilities(mp, p: Dict[str, Any]):
     root = mp.GetRootFolder()
     clips = []
@@ -6085,13 +6261,14 @@ def _transcription_capabilities(mp, p: Dict[str, Any]):
 
 
 def _subtitle_generation_probe(tl, p: Dict[str, Any]):
-    settings = dict(p.get("settings") or {})
+    settings, ignored = _normalize_auto_caption_settings(p.get("settings"), get_resolve())
     if not p.get("allow_generate", False):
-        return _ok(would_generate=True, settings=settings, note="Pass allow_generate=True to call CreateSubtitlesFromAudio.")
+        return _ok(would_generate=True, settings=settings, ignored_settings=ignored,
+                   note="Pass allow_generate=True to call CreateSubtitlesFromAudio.")
     if not _has_method(tl, "CreateSubtitlesFromAudio"):
         return _err("CreateSubtitlesFromAudio unavailable")
     with long_resolve_op("timeline.create_subtitles_from_audio"):
-        return {"success": bool(tl.CreateSubtitlesFromAudio(settings)), "settings": settings}
+        return _safe_create_subtitles(tl, p)
 
 
 def _fairlight_boundary_report(proj, mp, tl, p: Dict[str, Any]):
@@ -13711,16 +13888,21 @@ def project_manager_cloud(action: str, params: Optional[Dict[str, Any]] = None) 
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
     pm = r.GetProjectManager()
 
+    # cloudSettings is enum-keyed (CLOUD_SETTING_*/CLOUD_SYNC_*); resolve string
+    # keys against the live handle so human-readable settings aren't silently
+    # rejected. Unrecognized keys are dropped and reported in ignored_settings.
+    settings, ignored = _normalize_cloud_settings(p.get("settings"), r)
+
     if action == "create":
-        proj = pm.CreateCloudProject(p["settings"])
-        return _ok(name=proj.GetName()) if proj else _err("Failed to create cloud project")
+        proj = pm.CreateCloudProject(settings)
+        return _ok(name=proj.GetName(), ignored_settings=ignored) if proj else _err("Failed to create cloud project")
     elif action == "load":
-        proj = pm.LoadCloudProject(p["settings"])
-        return _ok(name=proj.GetName()) if proj else _err("Failed to load cloud project")
+        proj = pm.LoadCloudProject(settings)
+        return _ok(name=proj.GetName(), ignored_settings=ignored) if proj else _err("Failed to load cloud project")
     elif action == "import_project":
-        return {"success": bool(pm.ImportCloudProject(p["path"], p["settings"]))}
+        return {"success": bool(pm.ImportCloudProject(p["path"], settings)), "ignored_settings": ignored}
     elif action == "restore":
-        return {"success": bool(pm.RestoreCloudProject(p["folder_path"], p["settings"]))}
+        return {"success": bool(pm.RestoreCloudProject(p["folder_path"], settings)), "ignored_settings": ignored}
     return _unknown(action, ["create","load","import_project","restore"])
 
 
@@ -18118,7 +18300,7 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 
     if action == "create_subtitles":
         with long_resolve_op("timeline_ai.create_subtitles"):
-            return {"success": bool(tl.CreateSubtitlesFromAudio(p.get("settings", {})))}
+            return _safe_create_subtitles(tl, p)
     elif action == "detect_scene_cuts":
         with long_resolve_op("timeline_ai.detect_scene_cuts"):
             return {"success": bool(tl.DetectSceneCuts())}

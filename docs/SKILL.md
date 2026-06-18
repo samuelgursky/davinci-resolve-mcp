@@ -1005,7 +1005,12 @@ helpers:
   Unrecognized keys are dropped and echoed back in `ignored_settings` rather than
   silently failing the call.
 - `transcription_capabilities(clip_ids?|selected?)`
-- `subtitle_generation_probe(settings?, allow_generate?)`
+- `subtitle_generation_probe(settings?, allow_generate?)` — `settings` accepts
+  human-readable keys resolved to live `SUBTITLE_*`/`AUTO_CAPTION_*` enums:
+  `language` (e.g. `english`, `korean`), `preset` (`default`|`teletext`|`netflix`),
+  `line_break` (`single`|`double`), `chars_per_line` (1–60), `gap` (0–10).
+  Unrecognized keys/values are dropped and echoed in `ignored_settings`; generation
+  is read-back verified against the subtitle track count.
 - `fairlight_boundary_report`
 
 **`timeline_markers`** — Markers and playhead on the current timeline.
@@ -1036,7 +1041,9 @@ file to disk.
 
 **`timeline_ai`** — AI/ML analysis on the current timeline.
 
-Key actions: `create_subtitles(settings?)`, `detect_scene_cuts`,
+Key actions: `create_subtitles(settings?)` (human-readable settings resolved to
+`SUBTITLE_*`/`AUTO_CAPTION_*` enums + read-back verified — see
+`subtitle_generation_probe`), `detect_scene_cuts`,
 `grab_still`, `grab_all_stills(source?)`, `analyze_dolby_vision`
 
 ---
