@@ -163,3 +163,8 @@ Samuel Gursky (samgursky@gmail.com)
 - Blackmagic Design for DaVinci Resolve and its scripting API
 - The Model Context Protocol team for enabling AI assistant integration
 - Anthropic for Claude Code, used extensively in development and testing
+
+### Community contributions
+
+- [@rgxdev](https://github.com/rgxdev) — configurable Media Pool inventory walk
+  (exclude bins + inventory limit), [#69](https://github.com/samuelgursky/davinci-resolve-mcp/pull/69) (v2.53.0)
