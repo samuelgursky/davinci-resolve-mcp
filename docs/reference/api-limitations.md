@@ -12,11 +12,22 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 6 missing capabilities, 9 bugs / unreliable behaviors.
+**Totals:** 14 missing capabilities, 9 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
 it and stays in sync via a drift guard.
+
+### Scope & completeness
+
+This list is **not guaranteed exhaustive.** It combines (a) issues hit
+while building this MCP server and (b) a `dir()` surface audit of the live
+Resolve API objects (ProjectManager, Project, MediaPool, MediaPoolItem,
+Timeline, TimelineItem, Graph) diffed against Resolve's UI feature set.
+That catches absent methods and documented constraints, but not subtler
+issues: parameters that exist yet misbehave, version-specific regressions,
+or capabilities we simply never exercised. New findings are added as
+`submit`-tagged `api_truth` entries and this document is regenerated.
 
 ## Missing Capabilities (please add)
 
@@ -66,6 +77,62 @@ equivalent, blocking full automation.
 - **Behavior:** Only CreateCloudProject, LoadCloudProject, ImportCloudProject and RestoreCloudProject exist. There is no GetCloudProjectList (list available cloud projects), no ExportToCloud, and no Add/RemoveUserToCloudProject — so cloud collaboration can't be fully automated.
 - **Workaround / current handling:** Drive cloud project listing, export, and collaborator management from the Resolve UI; only create/load/import/restore are scriptable.
 - **Tags:** missing-method, project, cloud
+
+### TimelineItem trim / move / re-time (no position setters)
+
+- **Object:** `TimelineItem`
+- **Behavior:** TimelineItem exposes GetStart, GetEnd, GetDuration, GetLeftOffset, GetRightOffset and GetSourceStart/EndFrame, but NO matching setters. A clip cannot be trimmed, slipped, slid, rolled, moved to another time/track, or have its duration changed once it is on the timeline. Verified via dir() on Resolve 21.0.0 (getters only).
+- **Workaround / current handling:** Do edit-point adjustments in the Resolve UI, or rebuild the timeline from MediaPool.AppendToTimeline clipInfos with the desired startFrame/endFrame/recordFrame.
+- **Tags:** missing-method, timeline, edit, trim
+
+### Razor / blade / split a timeline item
+
+- **Object:** `Timeline / TimelineItem`
+- **Behavior:** There is no method to split/cut/blade a clip at a given frame. Verified absent on Timeline and TimelineItem (dir(), 21.0.0).
+- **Workaround / current handling:** Split in the Resolve UI, or construct the cut up-front by appending two clipInfos with the desired in/out points.
+- **Tags:** missing-method, timeline, edit
+
+### Clip speed / retime ratio and speed ramps
+
+- **Object:** `TimelineItem`
+- **Behavior:** SetProperty exposes only retime *quality* (RetimeProcess, MotionEstimation) and transform/crop/composite/opacity keys — not the speed value itself. There is no way to set a clip to a given % speed, reverse it, or author a speed ramp. Verified against the documented SetProperty key list (21.0.0).
+- **Workaround / current handling:** Set clip speed/retime in the Resolve UI; no scripted equivalent exists.
+- **Tags:** missing-method, timeline, retime, speed
+
+### Color node graph editing and primary grade values
+
+- **Object:** `Graph / TimelineItem`
+- **Behavior:** The Graph object exposes node enable/label/count, LUT get/set, cache mode, ResetAllGrades, ApplyGradeFromDRX and ApplyArriCdlLut; TimelineItem adds SetCDL, CopyGrades and color versions. But you cannot add, delete, or connect nodes, and you cannot read or write primary grade values (lift/gamma/gain/offset/contrast/curves/qualifiers/power windows). Grading is limited to CDL, whole-grade DRX/LUT application and copying.
+- **Workaround / current handling:** Build node trees and dial grades in the Resolve UI or via DRX/CDL/LUT import; per-parameter grade control is not scriptable.
+- **Tags:** missing-method, color, grade, node
+
+### Fairlight audio levels / pan / EQ / automation / FairlightFX
+
+- **Object:** `TimelineItem / Timeline`
+- **Behavior:** There is no API to set clip or track volume, pan, EQ, audio automation, or to add/configure FairlightFX. SetProperty covers video transform only; the audio surface is read-only (GetSourceAudioChannelMapping, GetAudioMapping, voice isolation). Verified via dir() + SetProperty docs (21.0.0).
+- **Workaround / current handling:** Mix in the Fairlight UI; only voice-isolation state and channel-mapping reads are scriptable.
+- **Tags:** missing-method, audio, fairlight
+
+### Proxy / optimized-media generation
+
+- **Object:** `MediaPoolItem`
+- **Behavior:** Only LinkProxyMedia, UnlinkProxyMedia and LinkFullResolutionMedia exist (attach/detach EXISTING proxies). There is no method to generate proxies or optimized media. Verified via MediaPoolItem dir() (21.0.0).
+- **Workaround / current handling:** Trigger proxy/optimized-media generation from the Resolve UI; scripting can only link/unlink already-rendered proxies.
+- **Tags:** missing-method, media-pool, proxy
+
+### Insert / Overwrite / Replace / Fit-to-Fill edit modes
+
+- **Object:** `MediaPool / Timeline`
+- **Behavior:** MediaPool.AppendToTimeline (with optional recordFrame positioning) is the only programmatic placement. The standard edit modes — insert (ripple), overwrite, replace, fit-to-fill, place-on-top — have no API. Verified via dir() (21.0.0).
+- **Workaround / current handling:** Position clips with AppendToTimeline clipInfo recordFrame, or perform insert/overwrite/replace edits in the Resolve UI.
+- **Tags:** missing-method, timeline, edit
+
+### Smart Bins / Power Bins creation
+
+- **Object:** `MediaPool`
+- **Behavior:** Only AddSubFolder (a regular bin) exists. Smart Bins (rule-based) and Power Bins (cross-project) cannot be created or configured. Verified via MediaPool dir() (21.0.0).
+- **Workaround / current handling:** Create Smart/Power Bins in the Resolve UI; only regular bins are scriptable.
+- **Tags:** missing-method, media-pool, bins
 
 ## Bugs / Unreliable Behavior (please fix)
 

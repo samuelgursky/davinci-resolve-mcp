@@ -259,6 +259,108 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "missing",
     },
     {
+        "symbol": "TimelineItem trim / move / re-time (no position setters)",
+        "object": "TimelineItem",
+        "reality": "TimelineItem exposes GetStart, GetEnd, GetDuration, "
+                   "GetLeftOffset, GetRightOffset and GetSourceStart/EndFrame, but "
+                   "NO matching setters. A clip cannot be trimmed, slipped, slid, "
+                   "rolled, moved to another time/track, or have its duration "
+                   "changed once it is on the timeline. Verified via dir() on "
+                   "Resolve 21.0.0 (getters only).",
+        "recommended": "Do edit-point adjustments in the Resolve UI, or rebuild the "
+                       "timeline from MediaPool.AppendToTimeline clipInfos with the "
+                       "desired startFrame/endFrame/recordFrame.",
+        "tags": ["missing-method", "timeline", "edit", "trim"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Razor / blade / split a timeline item",
+        "object": "Timeline / TimelineItem",
+        "reality": "There is no method to split/cut/blade a clip at a given frame. "
+                   "Verified absent on Timeline and TimelineItem (dir(), 21.0.0).",
+        "recommended": "Split in the Resolve UI, or construct the cut up-front by "
+                       "appending two clipInfos with the desired in/out points.",
+        "tags": ["missing-method", "timeline", "edit"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Clip speed / retime ratio and speed ramps",
+        "object": "TimelineItem",
+        "reality": "SetProperty exposes only retime *quality* (RetimeProcess, "
+                   "MotionEstimation) and transform/crop/composite/opacity keys — "
+                   "not the speed value itself. There is no way to set a clip to a "
+                   "given % speed, reverse it, or author a speed ramp. Verified "
+                   "against the documented SetProperty key list (21.0.0).",
+        "recommended": "Set clip speed/retime in the Resolve UI; no scripted "
+                       "equivalent exists.",
+        "tags": ["missing-method", "timeline", "retime", "speed"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Color node graph editing and primary grade values",
+        "object": "Graph / TimelineItem",
+        "reality": "The Graph object exposes node enable/label/count, LUT get/set, "
+                   "cache mode, ResetAllGrades, ApplyGradeFromDRX and "
+                   "ApplyArriCdlLut; TimelineItem adds SetCDL, CopyGrades and color "
+                   "versions. But you cannot add, delete, or connect nodes, and you "
+                   "cannot read or write primary grade values (lift/gamma/gain/"
+                   "offset/contrast/curves/qualifiers/power windows). Grading is "
+                   "limited to CDL, whole-grade DRX/LUT application and copying.",
+        "recommended": "Build node trees and dial grades in the Resolve UI or via "
+                       "DRX/CDL/LUT import; per-parameter grade control is not "
+                       "scriptable.",
+        "tags": ["missing-method", "color", "grade", "node"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Fairlight audio levels / pan / EQ / automation / FairlightFX",
+        "object": "TimelineItem / Timeline",
+        "reality": "There is no API to set clip or track volume, pan, EQ, audio "
+                   "automation, or to add/configure FairlightFX. SetProperty covers "
+                   "video transform only; the audio surface is read-only "
+                   "(GetSourceAudioChannelMapping, GetAudioMapping, voice "
+                   "isolation). Verified via dir() + SetProperty docs (21.0.0).",
+        "recommended": "Mix in the Fairlight UI; only voice-isolation state and "
+                       "channel-mapping reads are scriptable.",
+        "tags": ["missing-method", "audio", "fairlight"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Proxy / optimized-media generation",
+        "object": "MediaPoolItem",
+        "reality": "Only LinkProxyMedia, UnlinkProxyMedia and "
+                   "LinkFullResolutionMedia exist (attach/detach EXISTING proxies). "
+                   "There is no method to generate proxies or optimized media. "
+                   "Verified via MediaPoolItem dir() (21.0.0).",
+        "recommended": "Trigger proxy/optimized-media generation from the Resolve "
+                       "UI; scripting can only link/unlink already-rendered proxies.",
+        "tags": ["missing-method", "media-pool", "proxy"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Insert / Overwrite / Replace / Fit-to-Fill edit modes",
+        "object": "MediaPool / Timeline",
+        "reality": "MediaPool.AppendToTimeline (with optional recordFrame "
+                   "positioning) is the only programmatic placement. The standard "
+                   "edit modes — insert (ripple), overwrite, replace, fit-to-fill, "
+                   "place-on-top — have no API. Verified via dir() (21.0.0).",
+        "recommended": "Position clips with AppendToTimeline clipInfo recordFrame, "
+                       "or perform insert/overwrite/replace edits in the Resolve UI.",
+        "tags": ["missing-method", "timeline", "edit"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Smart Bins / Power Bins creation",
+        "object": "MediaPool",
+        "reality": "Only AddSubFolder (a regular bin) exists. Smart Bins (rule-"
+                   "based) and Power Bins (cross-project) cannot be created or "
+                   "configured. Verified via MediaPool dir() (21.0.0).",
+        "recommended": "Create Smart/Power Bins in the Resolve UI; only regular "
+                       "bins are scriptable.",
+        "tags": ["missing-method", "media-pool", "bins"],
+        "submit": "missing",
+    },
+    {
         "symbol": "subprocess inheriting stdin under the MCP stdio server",
         "object": "(server runtime)",
         "reality": "A child process that inherits stdin can race-read bytes off "
