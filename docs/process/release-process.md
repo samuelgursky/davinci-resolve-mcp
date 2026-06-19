@@ -86,6 +86,17 @@ env RESOLVE_SCRIPT_API="/Library/Application Support/Blackmagic Design/DaVinci R
   venv/bin/python tests/live_v233_validation.py
 ```
 
+For Fusion comp changes (masks, Text+/title text), run the issue #73 harness,
+which creates a disposable Fusion-title project, exercises `add_fusion_mask` and
+`set_text_plus` / `get_text_plus`, and deletes the project:
+
+```bash
+env RESOLVE_SCRIPT_API="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting" \
+  RESOLVE_SCRIPT_LIB="/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so" \
+  PYTHONPATH="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules" \
+  venv/bin/python tests/live_fusion_mask_title_validation.py
+```
+
 One-off live harnesses are acceptable during review, but reusable coverage
 should live under `tests/`. Do not commit generated media or disposable project
 artifacts.
