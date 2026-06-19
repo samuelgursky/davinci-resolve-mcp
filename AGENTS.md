@@ -69,6 +69,10 @@ semantics.
 - Release checklist and validation rules: `docs/process/release-process.md`
 - Kernel workflow support maps: `docs/kernels/`
 - API coverage and live-test status: `docs/reference/api-coverage.md`
+- Blackmagic-facing API gaps/bugs (generated from `api_truth`):
+  `docs/reference/api-limitations.md` — when you document a new Resolve API
+  limitation, add a `submit`-tagged entry to `src/utils/api_truth.py` and
+  regenerate with `scripts/gen_api_limitations.py` (a drift guard enforces it)
 - Bundled Resolve API text: `docs/reference/resolve_scripting_api.txt`
 
 ## Key Paths

@@ -29,6 +29,11 @@ Every release bump must update all version surfaces:
 - README version badge
 - README current stats or latest-release summary when they changed
 - `CHANGELOG.md` latest release entry
+- `docs/reference/api-limitations.md` when any `submit`-tagged entry in
+  `src/utils/api_truth.py` was added or changed (a newly documented Resolve API
+  gap/bug, a closed won't-fix issue, etc.). Regenerate it — do not hand-edit:
+  `venv/bin/python scripts/gen_api_limitations.py`. The
+  `tests.test_api_limitations_doc` drift guard fails the suite if it is stale.
 - `docs/SKILL.md` when tool discovery, examples, or behavior changed
 - `docs/guides/control-panel.md` when the control panel UI changed, plus
   regenerated screenshots: start the panel against a project with analysis
@@ -48,6 +53,7 @@ Always run static checks before release:
 ```bash
 venv/bin/python tests/test_import.py
 venv/bin/python scripts/audit_api_parity.py
+venv/bin/python scripts/gen_api_limitations.py --check
 venv/bin/python -m unittest tests.test_static_undefined_names tests.test_action_list_drift tests.test_panel_docs_drift
 node bin/davinci-resolve-mcp.mjs --help
 node bin/davinci-resolve-mcp.mjs --version

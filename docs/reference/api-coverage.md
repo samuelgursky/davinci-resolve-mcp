@@ -57,6 +57,12 @@ a track via `MediaPool.AppendToTimeline`'s clipInfo `trackIndex` (exposed as
 in the verified `api_truth` ledger (query `resolve_control api_truth "track"`);
 see issue #74.
 
+The full catalogue of verified scripting-API gaps and bugs — curated for
+submission to Blackmagic Design's developer feedback — lives in
+[api-limitations.md](api-limitations.md). It is generated from the `submit`-tagged
+`api_truth` entries (`scripts/gen_api_limitations.py`) and kept in sync by a drift
+guard, so it never goes stale.
+
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|
 | Resolve | 22 | 22 | App control, pages, layout presets, render/burn-in presets, keyframe mode |
