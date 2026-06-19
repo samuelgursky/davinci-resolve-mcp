@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.57.2
+
+Consolidated, submittable list of Resolve scripting-API limitations.
+
+- **Added** `docs/reference/api-limitations.md` — a curated, behaviorally-verified
+  catalogue of Resolve scripting-API gaps and bugs, split into **Missing
+  Capabilities** (please add) and **Bugs / Unreliable Behavior** (please fix),
+  formatted for submission to Blackmagic Design's developer feedback. First cut:
+  6 missing capabilities (Source Track Selector / insert `trackIndex`, per-clip
+  audio stereo↔mono, native multicam-clip creation, transition create/copy,
+  `GetTimelineByName`, cloud project list/export/user management) and 9
+  bugs/unreliable behaviors (enum-key silent failures in `AutoSyncAudio`,
+  `CreateSubtitlesFromAudio`, CloudProject family, and `Timeline.Export`; flaky
+  `DeleteProject`; `Composition.Paste` bridge failure; `FlowView` unreliable
+  returns; truncated `Transcription` property; automation-blocking `CreateProject`
+  modal).
+- **Added** `scripts/gen_api_limitations.py` — the report is generated from the
+  `submit`-tagged entries in the `api_truth` ledger (single source of truth, also
+  queryable at runtime via `resolve_control api_truth`), so it never drifts.
+- **Changed** the release process and CI to keep it current: a new
+  `tests.test_api_limitations_doc` drift guard (added to the publish workflow)
+  fails if the doc is stale, and `docs/process/release-process.md` now requires
+  regenerating it whenever a `submit`-tagged entry changes.
+
 ## What's New in v2.57.1
 
 Investigation outcome for community feature request #74 — no behavior change.
