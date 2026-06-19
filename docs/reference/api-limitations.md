@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 14 missing capabilities, 9 bugs / unreliable behaviors.
+**Totals:** 14 missing capabilities, 10 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -21,13 +21,20 @@ it and stays in sync via a drift guard.
 ### Scope & completeness
 
 This list is **not guaranteed exhaustive.** It combines (a) issues hit
-while building this MCP server and (b) a `dir()` surface audit of the live
+while building this MCP server, (b) a `dir()` surface audit of the live
 Resolve API objects (ProjectManager, Project, MediaPool, MediaPoolItem,
-Timeline, TimelineItem, Graph) diffed against Resolve's UI feature set.
+Timeline, TimelineItem, Graph) diffed against Resolve's UI feature set,
+and (c) a live mutating harness (`tests/live_api_gap_verification.py`)
+that attempts each operation against a disposable project built from
+synthetic media and confirms it fails while a related control succeeds.
 That catches absent methods and documented constraints, but not subtler
 issues: parameters that exist yet misbehave, version-specific regressions,
 or capabilities we simply never exercised. New findings are added as
 `submit`-tagged `api_truth` entries and this document is regenerated.
+
+Note: `hasattr()`/`getattr()` cannot be used to probe this API — the
+Python bridge fabricates a callable for any attribute name (see the
+`hasattr` bug below). Method existence here was checked with `dir()`.
 
 ## Missing Capabilities (please add)
 
@@ -95,7 +102,7 @@ equivalent, blocking full automation.
 ### Clip speed / retime ratio and speed ramps
 
 - **Object:** `TimelineItem`
-- **Behavior:** SetProperty exposes only retime *quality* (RetimeProcess, MotionEstimation) and transform/crop/composite/opacity keys — not the speed value itself. There is no way to set a clip to a given % speed, reverse it, or author a speed ramp. Verified against the documented SetProperty key list (21.0.0).
+- **Behavior:** SetProperty exposes only retime *quality* (RetimeProcess, MotionEstimation) and transform/crop/composite/opacity keys — not the speed value itself. There is no way to set a clip to a given % speed, reverse it, or author a speed ramp. Verified against the documented SetProperty key list AND by live mutating attempt on 21.0.0: SetProperty('Speed'|'PlaybackSpeed'|'RetimeSpeed'|'ClipSpeed', 50) all return False, while SetProperty('RetimeProcess', 1) returns True.
 - **Workaround / current handling:** Set clip speed/retime in the Resolve UI; no scripted equivalent exists.
 - **Tags:** missing-method, timeline, retime, speed
 
@@ -109,7 +116,7 @@ equivalent, blocking full automation.
 ### Fairlight audio levels / pan / EQ / automation / FairlightFX
 
 - **Object:** `TimelineItem / Timeline`
-- **Behavior:** There is no API to set clip or track volume, pan, EQ, audio automation, or to add/configure FairlightFX. SetProperty covers video transform only; the audio surface is read-only (GetSourceAudioChannelMapping, GetAudioMapping, voice isolation). Verified via dir() + SetProperty docs (21.0.0).
+- **Behavior:** There is no API to set clip or track volume, pan, EQ, audio automation, or to add/configure FairlightFX. SetProperty covers video transform only; the audio surface is read-only (GetSourceAudioChannelMapping, GetAudioMapping, voice isolation). Verified via dir() + SetProperty docs AND by live mutating attempt on 21.0.0: SetProperty('Volume'|'Level'|'Gain'|'AudioVolume', 0) all return False (note 'Pan' is the VIDEO transform key, not audio pan, so it misleadingly succeeds).
 - **Workaround / current handling:** Mix in the Fairlight UI; only voice-isolation state and channel-mapping reads are scriptable.
 - **Tags:** missing-method, audio, fairlight
 
@@ -206,3 +213,10 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Returns None and pops a modal 'Save Current Project' dialog when the current unsaved/Untitled project blocks the switch. SaveProject() on an Untitled project re-triggers the same modal.
 - **Workaround / current handling:** CloseProject(current) to discard the untitled project without a prompt, then CreateProject; restore with LoadProject afterward.
 - **Tags:** project, modal, silent-failure
+
+### hasattr() / getattr() on Resolve API objects (attribute fabrication)
+
+- **Object:** `(all Resolve scripting objects)`
+- **Behavior:** The Python bridge returns a callable for ANY attribute name, so hasattr(obj, 'TotallyMadeUpMethod') is always True and getattr never raises. This makes capability detection by hasattr impossible — verified on 21.0.0 (hasattr reported SetStart, Razor, AddNode, GenerateProxy, AddSmartBin etc. as present though none exist). Only dir() lists the real methods.
+- **Workaround / current handling:** Never probe method existence with hasattr/getattr; test membership against dir(obj) instead. Calling a fabricated method typically returns None/False with no error.
+- **Tags:** bridge, introspection, silent-failure

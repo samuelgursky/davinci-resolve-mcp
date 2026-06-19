@@ -290,7 +290,10 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "MotionEstimation) and transform/crop/composite/opacity keys — "
                    "not the speed value itself. There is no way to set a clip to a "
                    "given % speed, reverse it, or author a speed ramp. Verified "
-                   "against the documented SetProperty key list (21.0.0).",
+                   "against the documented SetProperty key list AND by live "
+                   "mutating attempt on 21.0.0: SetProperty('Speed'|'PlaybackSpeed'"
+                   "|'RetimeSpeed'|'ClipSpeed', 50) all return False, while "
+                   "SetProperty('RetimeProcess', 1) returns True.",
         "recommended": "Set clip speed/retime in the Resolve UI; no scripted "
                        "equivalent exists.",
         "tags": ["missing-method", "timeline", "retime", "speed"],
@@ -319,7 +322,10 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "automation, or to add/configure FairlightFX. SetProperty covers "
                    "video transform only; the audio surface is read-only "
                    "(GetSourceAudioChannelMapping, GetAudioMapping, voice "
-                   "isolation). Verified via dir() + SetProperty docs (21.0.0).",
+                   "isolation). Verified via dir() + SetProperty docs AND by live "
+                   "mutating attempt on 21.0.0: SetProperty('Volume'|'Level'|'Gain'"
+                   "|'AudioVolume', 0) all return False (note 'Pan' is the VIDEO "
+                   "transform key, not audio pan, so it misleadingly succeeds).",
         "recommended": "Mix in the Fairlight UI; only voice-isolation state and "
                        "channel-mapping reads are scriptable.",
         "tags": ["missing-method", "audio", "fairlight"],
@@ -359,6 +365,21 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "bins are scriptable.",
         "tags": ["missing-method", "media-pool", "bins"],
         "submit": "missing",
+    },
+    {
+        "symbol": "hasattr() / getattr() on Resolve API objects (attribute fabrication)",
+        "object": "(all Resolve scripting objects)",
+        "reality": "The Python bridge returns a callable for ANY attribute name, so "
+                   "hasattr(obj, 'TotallyMadeUpMethod') is always True and getattr "
+                   "never raises. This makes capability detection by hasattr "
+                   "impossible — verified on 21.0.0 (hasattr reported SetStart, "
+                   "Razor, AddNode, GenerateProxy, AddSmartBin etc. as present "
+                   "though none exist). Only dir() lists the real methods.",
+        "recommended": "Never probe method existence with hasattr/getattr; test "
+                       "membership against dir(obj) instead. Calling a fabricated "
+                       "method typically returns None/False with no error.",
+        "tags": ["bridge", "introspection", "silent-failure"],
+        "submit": "bug",
     },
     {
         "symbol": "subprocess inheriting stdin under the MCP stdio server",
