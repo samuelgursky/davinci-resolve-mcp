@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.57.4
+
+Live mutating verification of the catalogued API gaps.
+
+- **Added** `tests/live_api_gap_verification.py` — attempts each catalogued
+  "missing capability" against a disposable project built from synthetic ffmpeg
+  media, recording the failing call alongside a positive control that succeeds.
+  All 8 surface-audited gaps confirmed missing on Resolve Studio 21.0.0:
+  `SetProperty('Speed', …)` / audio-level keys return False while
+  `RetimeProcess` / video-transform keys succeed; trim/move/split/proxy/node-
+  graph/Smart-Bin methods are absent (by `dir()`), while append/CDL/AddSubFolder
+  controls work.
+- **Added** a new bug entry: `hasattr()`/`getattr()` are unusable on Resolve
+  objects — the Python bridge fabricates a callable for ANY attribute name, so
+  capability detection must use `dir()`. (Discovered when the first harness pass
+  reported nonexistent methods as present.) Report now lists 14 missing + 10 bugs.
+- **Changed** the report's Scope note to record the live mutating-harness
+  methodology and the `hasattr` caveat. Strengthened the clip-speed and
+  Fairlight-audio entries with the live `SetProperty` rejection evidence (and
+  noted that `'Pan'` is the video-transform key, not audio pan).
+
 ## What's New in v2.57.3
 
 Expanded the API-limitations catalogue with a live surface audit.
