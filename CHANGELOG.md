@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.57.1
+
+Investigation outcome for community feature request #74 — no behavior change.
+
+- **Note** (issue #74) the DaVinci Resolve scripting API does not expose the
+  Source/Auto Track Selector, so there is no way to choose the destination track
+  when inserting Text+/titles/generators. Verified live on Resolve Studio 21.0.0:
+  no get/set for the selector exists; the `Insert*IntoTimeline` family takes no
+  `trackIndex` and always lands on V1; locking lower tracks makes the insert fail
+  rather than redirect; and titles/generators can't be relocated afterward (no
+  `MediaPoolItem`). Closed as won't-fix (API limitation).
+- **Documentation** recorded the limitation in the verified `api_truth` ledger
+  (query at runtime with `resolve_control api_truth "track"`) and in
+  `docs/reference/api-coverage.md`, with the supported alternative for
+  media-backed clips (`MediaPool.AppendToTimeline` clipInfo `trackIndex`, exposed
+  as `media_pool.append_to_timeline` `clip_infos`). Added a regression test.
+
 ## What's New in v2.57.0
 
 Community feature requests #72 and #73.
