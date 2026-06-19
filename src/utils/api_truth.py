@@ -159,6 +159,28 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["fusion", "timeline"],
     },
     {
+        "symbol": "Source Track Selector / destination track for Insert*IntoTimeline",
+        "object": "Timeline",
+        "reality": "There is no API to read or set the Source/Auto Track Selector "
+                   "(the Edit-page patch panel that picks the destination track). "
+                   "InsertTitleIntoTimeline, InsertFusionTitleIntoTimeline, "
+                   "InsertGeneratorIntoTimeline, InsertFusionGeneratorIntoTimeline, "
+                   "InsertOFXGeneratorIntoTimeline and "
+                   "InsertFusionCompositionIntoTimeline take no trackIndex and "
+                   "always drop the clip on the selector's current target (V1 in "
+                   "practice). Locking lower video tracks does NOT redirect the "
+                   "insert — verified live on 21.0.0: locking V1 makes the insert "
+                   "FAIL rather than land on V2. Titles/generators also can't be "
+                   "moved afterward (no MediaPoolItem, so AppendToTimeline clipInfo "
+                   "and MoveClips don't apply).",
+        "recommended": "Accept the limitation for titles/generators (insert lands "
+                       "on V1). For clips that DO have a MediaPoolItem, target a "
+                       "track with MediaPool.AppendToTimeline's clipInfo 'trackIndex' "
+                       "instead (exposed as media_pool append_to_timeline clip_infos). "
+                       "See issue #74.",
+        "tags": ["missing-method", "timeline", "title", "generator", "track"],
+    },
+    {
         "symbol": "subprocess inheriting stdin under the MCP stdio server",
         "object": "(server runtime)",
         "reality": "A child process that inherits stdin can race-read bytes off "

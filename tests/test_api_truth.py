@@ -26,6 +26,16 @@ class LookupTest(unittest.TestCase):
     def test_no_match(self):
         self.assertEqual(lookup_api_truth("nonexistent-zzz"), [])
 
+    def test_source_track_selector_limitation_recorded(self):
+        # Issue #74: the Source Track Selector / insert-destination track is not
+        # controllable via the API. The verified-limitation entry must be findable
+        # by an agent searching for the track-targeting behavior.
+        hits = lookup_api_truth("track selector")
+        self.assertTrue(any("Source Track Selector" in e["symbol"] for e in hits))
+        entry = next(e for e in hits if "Source Track Selector" in e["symbol"])
+        self.assertIn("missing-method", entry["tags"])
+        self.assertNotIn("enum", entry["tags"])  # no mitigation required
+
     def test_entries_well_formed(self):
         for e in API_TRUTH:
             self.assertIn("symbol", e)

@@ -44,6 +44,19 @@ maps `shot_descriptions[shot_index]` onto Media Pool shot markers, and triggers
 metadata writeback for that clip. Works with any MCP client whose chat model
 is vision-capable; no `sampling/createMessage` support required.
 
+Some Edit-page behavior is simply not reachable through public scripting. The
+**Source/Auto Track Selector** (the patch panel that chooses which video track a
+clip lands on) has no get/set in the API, and the `Insert*IntoTimeline` family
+(titles, generators, OFX, Fusion comps) takes no `trackIndex` — they always drop
+onto the selector's current target (V1 in practice). Locking lower tracks does
+not redirect the insert; it just makes the insert fail. Titles and generators
+can't be relocated afterward either, since they have no `MediaPoolItem` for
+`AppendToTimeline`/`MoveClips` to act on. For media-backed clips you *can* target
+a track via `MediaPool.AppendToTimeline`'s clipInfo `trackIndex` (exposed as
+`media_pool.append_to_timeline` with `clip_infos`). This limitation is recorded
+in the verified `api_truth` ledger (query `resolve_control api_truth "track"`);
+see issue #74.
+
 | Class | Methods | Tools | Description |
 |-------|---------|-------|-------------|
 | Resolve | 22 | 22 | App control, pages, layout presets, render/burn-in presets, keyframe mode |
