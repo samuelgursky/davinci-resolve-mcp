@@ -367,6 +367,79 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "missing",
     },
     {
+        "symbol": "Per-subtitle text content and timing editing",
+        "object": "TimelineItem (subtitle track)",
+        "reality": "TimelineItem on a subtitle track exposes only 21 standard "
+                   "transform/composite properties (Pan, Tilt, ZoomX, Opacity, "
+                   "Crop, etc.). There are no methods to get or set subtitle "
+                   "text (GetText/SetText), start time, end time, or duration "
+                   "for individual subtitle items. Subtitles created via "
+                   "CreateSubtitlesFromAudio or imported via the Resolve UI "
+                   "cannot have their content or timing read or modified "
+                   "programmatically. Verified via dir() and GetProperty() on "
+                   "Resolve 21.0.0.48.",
+        "recommended": "No workaround exists — subtitle text and timing are "
+                       "completely inaccessible from the scripting API. Must "
+                       "be edited in the Resolve UI.",
+        "tags": ["missing-method", "subtitle", "text", "timing"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Subtitle track styling and presets",
+        "object": "TimelineItem / Timeline / Project",
+        "reality": "There is no API method to set or query subtitle font "
+                   "family, font size, text color, background color, outline, "
+                   "shadow, position, alignment, or to apply/query subtitle "
+                   "style presets. TimelineItem.GetProperty() on subtitle "
+                   "items returns only transform/composite keys. "
+                   "Timeline.GetSetting() and Project.GetSetting() return "
+                   "None for all probed subtitle-style keys (e.g. "
+                   "'subtitleFontName', 'subtitleFontSize', "
+                   "'subtitleTextColor', 'subtitleBackgroundColor', "
+                   "'subtitlePosition', 'subtitleAlignment', "
+                   "'subtitlePreset', 'subtitleStyle'). Verified via dir(), "
+                   "GetProperty(), and GetSetting() on Resolve 21.0.0.48.",
+        "recommended": "No workaround exists — subtitle styling is UI-only. "
+                       "Burn-in overlays via Fusion titles are a visual "
+                       "alternative but do not produce proper subtitle tracks.",
+        "tags": ["missing-method", "subtitle", "style", "preset"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Speech recognition engine selection and SRT import",
+        "object": "Timeline",
+        "reality": "Timeline.CreateSubtitlesFromAudio(autoCaptionSettings) "
+                   "always uses the built-in Resolve speech recognition "
+                   "engine. There is no API parameter to select an alternative "
+                   "provider (e.g. whisper-cli, Google Speech, AWS Transcribe). "
+                   "The language selection via resolve.AUTO_CAPTION_LANGUAGE_* "
+                   "is the only customization; the engine itself cannot be "
+                   "changed. Furthermore, there is no API method to import an "
+                   "SRT file into a subtitle track programmatically — "
+                   "File -> Import -> Subtitle is UI-only.",
+        "recommended": "No workaround exists for provider selection or SRT "
+                       "import. External transcripts must be converted to SRT "
+                       "and imported through the Resolve UI.",
+        "tags": ["missing-method", "subtitle", "transcription",
+                 "speech-recognition", "asr"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Media Pool folder rename",
+        "object": "MediaPool",
+        "reality": "MediaPool exposes AddSubFolder(name), "
+                   "DeleteSubFolders([names]), and "
+                   "MoveFolders([names], targetFolder) but no "
+                   "RenameSubFolder(oldName, newName) method. Folders can be "
+                   "created, deleted, and moved, but their names cannot be "
+                   "changed through the API. Verified via dir() on Resolve "
+                   "21.0.0.",
+        "recommended": "Delete and recreate the folder with the desired name, "
+                       "or rename in the Resolve UI.",
+        "tags": ["missing-method", "media-pool", "folder"],
+        "submit": "missing",
+    },
+    {
         "symbol": "hasattr() / getattr() on Resolve API objects (attribute fabrication)",
         "object": "(all Resolve scripting objects)",
         "reality": "The Python bridge returns a callable for ANY attribute name, so "
