@@ -2,6 +2,25 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.57.3
+
+Expanded the API-limitations catalogue with a live surface audit.
+
+- **Added** 8 newly-catalogued **missing capabilities** to
+  `docs/reference/api-limitations.md`, found by a `dir()` audit of the live
+  Resolve 21.0.0 API objects diffed against the UI feature set: timeline-item
+  trim/move/re-time (getters only, no setters), razor/blade/split, clip
+  speed/retime ratio & ramps, color node-graph editing + primary grade values,
+  Fairlight audio levels/pan/EQ/automation/FairlightFX, proxy/optimized-media
+  generation, insert/overwrite/replace/fit-to-fill edit modes, and Smart/Power
+  Bin creation. The report now lists 14 missing capabilities + 9 bugs.
+- **Verified** the four previously-doc-derived entries (per-clip audio
+  stereo↔mono, native multicam creation, transitions, cloud list/export/user)
+  against the live API surface; all confirmed absent.
+- **Changed** the generated report to carry an explicit **Scope & completeness**
+  note — it is not guaranteed exhaustive (surface audit + incident log; misses
+  parameters that exist-but-misbehave and untested capabilities).
+
 ## What's New in v2.57.2
 
 Consolidated, submittable list of Resolve scripting-API limitations.
