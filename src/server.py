@@ -6559,6 +6559,78 @@ def _safe_clip_call(clip, method_name: str, *args):
         return None, str(exc)
 
 
+# Clip-property keys whose SetClipProperty/SetMetadata write returns True but is
+# silently dropped by Resolve under common project configurations (issue #77).
+# For these we read the value back and refuse to report success unless it stuck.
+_WRITEBACK_VERIFY_KEYS = frozenset({"Reel Name"})
+
+# Per-key hint explaining the most common cause of a non-persisting write.
+_WRITEBACK_VERIFY_HINTS = {
+    "Reel Name": (
+        "Reel Name is commonly gated by the project setting "
+        "'General Options > Assist using reel names from the:'. When that is "
+        "set to derive reel names from the source clip / embedding / filename "
+        "pattern, Resolve ignores scripted writes to 'Reel Name' (the call "
+        "still returns True). Set that option to blank/manual, or assign reel "
+        "names in the Resolve UI; the scripting API cannot override the gate."
+    ),
+}
+
+
+def _normalize_clip_property_value(value):
+    """Coerce a clip-property value to a comparable, trimmed string."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _verify_clip_property_writeback(clip, key, value):
+    """Confirm a just-written, known-unreliable clip property actually persisted.
+
+    Returns a structured failure dict when Resolve accepted the write (returned
+    True) but the value did not stick on read-back; returns ``None`` when the
+    write verified, the key is not in the watch list, or we cannot read it back
+    (in which case we don't override the original success). See issue #77.
+    """
+    if key not in _WRITEBACK_VERIFY_KEYS:
+        return None
+    actual, err = _safe_clip_call(clip, "GetClipProperty", key)
+    if err is not None:
+        return None  # can't read back — don't contradict the reported result
+    if isinstance(actual, dict):  # GetClipProperty('') style dict, just in case
+        actual = actual.get(key)
+    if _normalize_clip_property_value(actual) == _normalize_clip_property_value(value):
+        return None
+    return {
+        "success": False,
+        "verified": False,
+        "key": key,
+        "requested": value,
+        "actual": actual,
+        "error": (
+            f"Resolve reported success writing {key!r} but the value did not "
+            f"persist (read-back returned {actual!r})."
+        ),
+        "hint": _WRITEBACK_VERIFY_HINTS.get(key),
+    }
+
+
+def _verify_writeback(clip, written):
+    """Verify a batch of just-written {key: value} pairs.
+
+    Returns the first silent-revert failure dict, else ``None``. Only keys in
+    ``_WRITEBACK_VERIFY_KEYS`` are checked, so ordinary writes pay nothing.
+    """
+    if not isinstance(written, dict):
+        return None
+    for key, value in written.items():
+        if key in _WRITEBACK_VERIFY_KEYS:
+            fail = _verify_clip_property_writeback(clip, key, value)
+            if fail:
+                return fail
+    return None
+
+
 def _media_pool_item_summary(clip):
     if not clip:
         return None
@@ -10213,7 +10285,17 @@ def _normalize_metadata(root, mp, p: Dict[str, Any]):
         third_party_ok = True
         for key, value in third_party.items():
             third_party_ok = bool(clip.SetThirdPartyMetadata(key, value)) and third_party_ok
-        results.append({"clip_id": clip_id, "success": ok and third_party_ok})
+        row = {"clip_id": clip_id, "success": ok and third_party_ok}
+        if ok and metadata:
+            silent = _verify_writeback(clip, metadata)
+            if silent:
+                row["success"] = False
+                row["verified"] = False
+                row["unpersisted"] = {silent["key"]: silent["actual"]}
+                row["error"] = silent["error"]
+                if silent.get("hint"):
+                    row["hint"] = silent["hint"]
+        results.append(row)
     return {"success": all(row.get("success") for row in results), "count": len(results), "missing": missing, "results": results}
 
 
@@ -15696,8 +15778,18 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"metadata": _ser(clip.GetMetadata(p.get("key", "")))}
     elif action == "set_metadata":
         if "metadata" in p:
-            return {"success": bool(clip.SetMetadata(p["metadata"]))}
-        return {"success": bool(clip.SetMetadata(p["key"], p["value"]))}
+            ok = bool(clip.SetMetadata(p["metadata"]))
+            if ok:
+                silent = _verify_writeback(clip, p["metadata"])
+                if silent:
+                    return silent
+            return {"success": ok}
+        ok = bool(clip.SetMetadata(p["key"], p["value"]))
+        if ok:
+            silent = _verify_clip_property_writeback(clip, p["key"], p["value"])
+            if silent:
+                return silent
+        return {"success": ok}
     elif action == "get_third_party_metadata":
         return {"metadata": _ser(clip.GetThirdPartyMetadata(p.get("key", "")))}
     elif action == "set_third_party_metadata":
@@ -15707,7 +15799,12 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "get_clip_property":
         return {"properties": _ser(clip.GetClipProperty(p.get("key", "")))}
     elif action == "set_clip_property":
-        return {"success": bool(clip.SetClipProperty(p["key"], p["value"]))}
+        ok = bool(clip.SetClipProperty(p["key"], p["value"]))
+        if ok:
+            silent = _verify_clip_property_writeback(clip, p["key"], p["value"])
+            if silent:
+                return silent
+        return {"success": ok}
     elif action == "get_clip_color":
         return {"color": clip.GetClipColor()}
     elif action == "set_clip_color":

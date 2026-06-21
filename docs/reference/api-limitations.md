@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 14 missing capabilities, 10 bugs / unreliable behaviors.
+**Totals:** 14 missing capabilities, 11 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -220,3 +220,12 @@ values, or automation-hostile modal prompts.
 - **Behavior:** The Python bridge returns a callable for ANY attribute name, so hasattr(obj, 'TotallyMadeUpMethod') is always True and getattr never raises. This makes capability detection by hasattr impossible — verified on 21.0.0 (hasattr reported SetStart, Razor, AddNode, GenerateProxy, AddSmartBin etc. as present though none exist). Only dir() lists the real methods.
 - **Workaround / current handling:** Never probe method existence with hasattr/getattr; test membership against dir(obj) instead. Calling a fabricated method typically returns None/False with no error.
 - **Tags:** bridge, introspection, silent-failure
+
+### MediaPoolItem.SetClipProperty('Reel Name', ...)
+
+- **Object:** `MediaPoolItem`
+- **Signature:** `(propertyName, propertyValue) -> bool`
+- **Behavior:** Setting the 'Reel Name' clip property returns True but the value is silently dropped on read-back when the project is configured to derive reel names automatically (General Options > 'Assist using reel names from the:' set to source clip file / embedding / filename pattern). The same True-but-unpersisted behavior occurs via SetMetadata('Reel Name', ...). Other clip properties on the same clip (e.g. 'Comments') write and persist normally, so this is field-specific, not a bridge/permission failure. Verified on Resolve 21.0.0; reported as issue #77.
+- **Workaround / current handling:** After writing 'Reel Name', read it back with GetClipProperty('Reel Name') and refuse to report success on mismatch; surface the project-setting gate to the caller (server._verify_clip_property_writeback).
+- **Reference:** [issue #77](https://github.com/samuelgursky/davinci-resolve-mcp/issues/77)
+- **Tags:** unreliable-return, silent-failure, metadata, reel-name

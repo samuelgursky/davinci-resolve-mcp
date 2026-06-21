@@ -391,6 +391,29 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "run while serving over stdio.",
         "tags": ["runtime", "stdio", "subprocess"],
     },
+    {
+        "symbol": "MediaPoolItem.SetClipProperty('Reel Name', ...)",
+        "object": "MediaPoolItem",
+        "signature": "(propertyName, propertyValue) -> bool",
+        "reality": "Setting the 'Reel Name' clip property returns True but the "
+                   "value is silently dropped on read-back when the project is "
+                   "configured to derive reel names automatically "
+                   "(General Options > 'Assist using reel names from the:' set "
+                   "to source clip file / embedding / filename pattern). The "
+                   "same True-but-unpersisted behavior occurs via "
+                   "SetMetadata('Reel Name', ...). Other clip properties on the "
+                   "same clip (e.g. 'Comments') write and persist normally, so "
+                   "this is field-specific, not a bridge/permission failure. "
+                   "Verified on Resolve 21.0.0; reported as issue #77.",
+        "recommended": "After writing 'Reel Name', read it back with "
+                       "GetClipProperty('Reel Name') and refuse to report "
+                       "success on mismatch; surface the project-setting gate to "
+                       "the caller (server._verify_clip_property_writeback).",
+        "tags": ["unreliable-return", "silent-failure", "metadata", "reel-name"],
+        "submit": "bug",
+        "issue": 77,
+        "mitigation": ["_verify_clip_property_writeback", "_verify_writeback"],
+    },
 ]
 
 
