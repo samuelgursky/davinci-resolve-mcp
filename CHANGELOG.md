@@ -2,6 +2,37 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.57.5
+
+Fixes a silent data-loss bug on Reel Name writes (issue #77) and bundles the
+community-contributed API-limitation entries from PR #76 (issue #75).
+
+- **Fixed** (#77) `set_clip_property` / `set_metadata` reporting `success: true`
+  when writing the `Reel Name` clip property even though Resolve silently
+  dropped the value. Resolve gates `Reel Name` behind the project setting
+  *General Options > Assist using reel names from the:* — when that derives reel
+  names automatically, scripted writes are ignored but still return `True`. On a
+  batch ingest this meant hundreds of clips believed to have reel names assigned
+  when none actually stuck. The server now reads the value back after writing
+  known-unreliable keys and refuses to report success on mismatch, surfacing the
+  project-setting gate as a `hint`. Wired into `set_clip_property`,
+  `set_metadata` (both forms), and the bulk `normalize_metadata` path. Adds an
+  `api_truth` bug entry (report now lists 18 missing + 11 bugs) and 10 unit
+  tests.
+- **Added** (PR #76, thanks @swayll) four `submit: missing` API-limitation
+  entries verified on Resolve 21.0.0: per-subtitle text/timing editing, subtitle
+  track styling/presets, speech-recognition engine selection + SRT import, and
+  Media Pool folder rename. These document the API ceiling behind the subtitle
+  feature request in #75 — direct subtitle text editing and SRT round-trip are
+  not exposed by the Blackmagic scripting API.
+
+### Validation
+
+- Offline: full unit suite green; new `tests/test_reel_name_writeback.py` (10
+  tests) plus the api_truth/limitations drift guards. Live Resolve validation of
+  the Reel Name read-back is recommended but not performed here — forcing the
+  gate would require writing reel names into a live project's media metadata.
+
 ## What's New in v2.57.4
 
 Live mutating verification of the catalogued API gaps.
