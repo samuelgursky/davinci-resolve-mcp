@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 14 missing capabilities, 11 bugs / unreliable behaviors.
+**Totals:** 18 missing capabilities, 11 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -140,6 +140,34 @@ equivalent, blocking full automation.
 - **Behavior:** Only AddSubFolder (a regular bin) exists. Smart Bins (rule-based) and Power Bins (cross-project) cannot be created or configured. Verified via MediaPool dir() (21.0.0).
 - **Workaround / current handling:** Create Smart/Power Bins in the Resolve UI; only regular bins are scriptable.
 - **Tags:** missing-method, media-pool, bins
+
+### Per-subtitle text content and timing editing
+
+- **Object:** `TimelineItem (subtitle track)`
+- **Behavior:** TimelineItem on a subtitle track exposes only 21 standard transform/composite properties (Pan, Tilt, ZoomX, Opacity, Crop, etc.). There are no methods to get or set subtitle text (GetText/SetText), start time, end time, or duration for individual subtitle items. Subtitles created via CreateSubtitlesFromAudio or imported via the Resolve UI cannot have their content or timing read or modified programmatically. Verified via dir() and GetProperty() on Resolve 21.0.0.48.
+- **Workaround / current handling:** No workaround exists — subtitle text and timing are completely inaccessible from the scripting API. Must be edited in the Resolve UI.
+- **Tags:** missing-method, subtitle, text, timing
+
+### Subtitle track styling and presets
+
+- **Object:** `TimelineItem / Timeline / Project`
+- **Behavior:** There is no API method to set or query subtitle font family, font size, text color, background color, outline, shadow, position, alignment, or to apply/query subtitle style presets. TimelineItem.GetProperty() on subtitle items returns only transform/composite keys. Timeline.GetSetting() and Project.GetSetting() return None for all probed subtitle-style keys (e.g. 'subtitleFontName', 'subtitleFontSize', 'subtitleTextColor', 'subtitleBackgroundColor', 'subtitlePosition', 'subtitleAlignment', 'subtitlePreset', 'subtitleStyle'). Verified via dir(), GetProperty(), and GetSetting() on Resolve 21.0.0.48.
+- **Workaround / current handling:** No workaround exists — subtitle styling is UI-only. Burn-in overlays via Fusion titles are a visual alternative but do not produce proper subtitle tracks.
+- **Tags:** missing-method, subtitle, style, preset
+
+### Speech recognition engine selection and SRT import
+
+- **Object:** `Timeline`
+- **Behavior:** Timeline.CreateSubtitlesFromAudio(autoCaptionSettings) always uses the built-in Resolve speech recognition engine. There is no API parameter to select an alternative provider (e.g. whisper-cli, Google Speech, AWS Transcribe). The language selection via resolve.AUTO_CAPTION_LANGUAGE_* is the only customization; the engine itself cannot be changed. Furthermore, there is no API method to import an SRT file into a subtitle track programmatically — File -> Import -> Subtitle is UI-only.
+- **Workaround / current handling:** No workaround exists for provider selection or SRT import. External transcripts must be converted to SRT and imported through the Resolve UI.
+- **Tags:** missing-method, subtitle, transcription, speech-recognition, asr
+
+### Media Pool folder rename
+
+- **Object:** `MediaPool`
+- **Behavior:** MediaPool exposes AddSubFolder(name), DeleteSubFolders([names]), and MoveFolders([names], targetFolder) but no RenameSubFolder(oldName, newName) method. Folders can be created, deleted, and moved, but their names cannot be changed through the API. Verified via dir() on Resolve 21.0.0.
+- **Workaround / current handling:** Delete and recreate the folder with the desired name, or rename in the Resolve UI.
+- **Tags:** missing-method, media-pool, folder
 
 ## Bugs / Unreliable Behavior (please fix)
 
