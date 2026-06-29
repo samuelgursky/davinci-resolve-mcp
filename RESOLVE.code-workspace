@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../hyperframes-projects"
+		},
+		{
+			"path": "../remotion-projects"
+		},
+		{
+			"path": "../trainlist-graphics"
+		}
+	]
+}

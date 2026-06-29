@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude mcp *)",
+      "Bash(cp -p \"/Users/matusoberuc/Developer/remotion-projects/src/chloe-palette.ts\" \"/Users/matusoberuc/Developer/remotion-projects/src/chloe-palette.ts.2026-06-25.bak\")",
+      "Bash(cp -p \"/Users/matusoberuc/Developer/remotion-projects/PROJECT_BRIEF.md\" \"/Users/matusoberuc/Developer/remotion-projects/PROJECT_BRIEF.md.2026-06-25.bak\")",
+      "Bash(cp -p \"/Users/matusoberuc/Developer/remotion-projects/CLAUDE.md\" \"/Users/matusoberuc/Developer/remotion-projects/CLAUDE.md.2026-06-25-pre-projectpin.bak\")",
+      "Bash(cp -p \"/Users/matusoberuc/Developer/trainlist-graphics/src/theme.ts\" \"/Users/matusoberuc/Developer/trainlist-graphics/src/theme.ts.2026-06-25.bak\")",
+      "Bash(cp -p \"/Users/matusoberuc/.claude/CLAUDE.md\" \"/Users/matusoberuc/.claude/CLAUDE.md.2026-06-25-pre-renderrule.bak\")",
+      "Bash(python3 -)",
+      "Bash(node render_alpha.mjs Alaska-Day1 /tmp/test_day1.mov)",
+      "Bash(node render_all.mjs)",
+      "Bash(awk '{print $5, $9}')",
+      "Bash(jq .result.clips[0] /Users/matusoberuc/.claude/projects/-Users-matusoberuc-Developer-davinci-resolve-mcp/ed613adc-6696-46dd-91da-a0763045ba78/tool-results/mcp-davinci-resolve-timeline-1782374966231.txt)",
+      "Bash(python3 *)",
+      "mcp__ide__executeCode",
+      "Bash(ls -la /Users/matusoberuc/.claude/projects/-Users-matusoberuc-Developer-davinci-resolve-mcp/memory/)",
+      "Read(//Users/matusoberuc/.claude/projects/-Users-matusoberuc/memory/**)",
+      "Read(//Users/matusoberuc/.claude/projects/-Users-matusoberuc-Developer-davinci-resolve-mcp/memory/**)",
+      "Bash(awk '{print $1}')",
+      "Bash(git -C /Users/matusoberuc/Developer/remotion-projects status --short)",
+      "Bash(grep -oE '\\\\.[a-zA-Z0-9]+$')",
+      "Read(//Users/matusoberuc/Desktop/**)",
+      "Read(//Users/matusoberuc/.claude/**)",
+      "Read(//Users/matusoberuc/.claude/skills/**)",
+      "Edit(~/.claude/skills/mattframes-edit/**)",
+      "Bash(cd /private/tmp/claude-501 *)",
+      "Read(//private/tmp/claude-501/**)"
+    ],
+    "additionalDirectories": [
+      "/Users/matusoberuc/.claude"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "davinci-resolve"
+  ]
+}
