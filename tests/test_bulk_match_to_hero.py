@@ -1,7 +1,4 @@
-"""Contract tests for C1 — bulk_match_to_hero map-reduce shot matching.
-
-See local/design/agentic-flow-improvements-gameplan.md §3 task C1.
-"""
+"""Contract tests for C1 — bulk_match_to_hero map-reduce shot matching."""
 import unittest
 
 import src.server as compound

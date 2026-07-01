@@ -180,6 +180,23 @@ Some behavior depends on Resolve's current page or bridge state:
   if Resolve loses current timeline state, the harness records the bridge
   condition separately.
 
+## Advanced (offline) server — editorial interchange + changelist
+
+The kernel above restructures a *running* timeline. The companion advanced server
+(`davinci-resolve-advanced`, see `resolve-advanced/README.md`) authors/diffs
+timelines and reasons over editorial interchange with **no Resolve running**:
+
+- **`editorial`** — `parse_interchange` (EDL/OTIO/XMEML; **AAF = honest refuse**),
+  `turnover_changelist` (moved/retimed/replaced/new/gone between two cuts, with
+  timing silent-lie guards), `conform_manifest`, `marker_roundtrip`.
+- **`drt`** — `.drt` timeline file authoring + structural diff.
+
+Use these to answer "what changed between v3 and v4" or to hand a conform an
+accurate change list without opening either timeline. For conforming/relinking
+that change list, see the Timeline Conform / Interchange kernel and the
+`resolve-conform` skill; for the edit ↔ offline routing, see the `resolve-edit`
+skill (`.claude/skills/timeline-edit.md`).
+
 ## Development Guardrails
 
 - Use disposable projects and synthetic media for live validation.

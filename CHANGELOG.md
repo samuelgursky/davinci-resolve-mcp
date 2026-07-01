@@ -2,6 +2,170 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.58.0
+
+Major expansion of the optional **advanced** Node server (`davinci-resolve-advanced-mcp`,
+bundled in the same package) — the beyond-the-API sibling that edits Resolve files
+(`.drp`/`.drt`/`.drx`) offline. It grows from 14 to **18 tools** and adds a deterministic,
+offline grading/QC/finishing catalog. All new capability is offline, deterministic, and
+carries silent-lie guards (it refuses to fabricate a result). None of it touches the live
+Python server or its tool counts.
+
+### Added
+
+- **Grading catalog** (`drx` actions): `scope_read` (frame readouts — RGB parade, vectorscope
+  skin-line, black-balance, %clip/%crush + shot-intent signals), `intent_tags`, `verify_grade`
+  (intended vs applied → landed/drifted/missing/unverifiable), `extract_frames` (display-referred,
+  hard log-refuse), `match_to_reference`, `saturation_match`, `black_balance`, `tone_curve_transfer`
+  (luma CDF matching), `skin_match` v2 (luma-preserving skin-line metric), `author_look` / `carry_look`
+  (season-look authoring), and `lut_apply` — a reverse-engineered Body-LUT write path that attaches a
+  named `.cube` to a grade node with a round-trip assert.
+- **`deliverable` tool** — deliverable QC/compliance: `deliverable_qc` (ffprobe vs spec, pass/fail per
+  field), `loudness_qc` (EBU R128), `reframe_blanking_check`, `render_manifest` (checksum/reconcile),
+  `conform_completeness`, `re_delivery_diff`, `expand_deliverable` (texted/textless/stems entities).
+- **`media` tool** — media front-end / AE: `ingest_verify` (hash seal/verify/dupes), `media_inventory`,
+  `sync` (TC), `relink_manifest`, `rename_plan` / `reel_normalize` (refuses camera originals),
+  `turnover_package`, `project_hygiene`.
+- **`editorial` tool** — editorial integrity: `parse_interchange` (EDL/OTIO/XMEML), `turnover_changelist`
+  with timing silent-lie guards, `conform_manifest`, `marker_roundtrip`.
+- **`provenance` tool** — provenance/audit: `gallery_lineage`, `grade_provenance`, `cdl_export` (+diff),
+  `revision_tracking`, `episode_report`.
+- **Node-labeling / provenance** on every auto-emitted grade node (`AUTO:<tool> v<n> → <source>`),
+  a **runner→apply contract** (stage → live-server action mapping), and runner **stage-resume**.
+  The pipeline records per-episode decoded facts, drift, and provenance (`readback`) — the
+  substrate the maintainers' managed application mines for cross-episode insights (see the
+  README's Bradford Post Assistant note).
+- **DRX value-space calibration (Phase 1)** — one unified `space: 'ui' | 'drx'` flag on `drx`
+  `generate`/`merge`: `'ui'` (the default) takes Resolve panel numbers for every primary
+  (lift ×2, gamma ×4, gain 1:1, offset panel-delta ÷25, saturation 0–100 ÷50 — factors
+  calibrated by live panel readback against Resolve 19 Studio); `'drx'` takes raw internal
+  floats losslessly. 28 scalar/wheel/affine controls confirmed aligned. Factor reference in
+  `resolve-advanced/vendor/drx-parameters/DRX-VALUE-SCALING.md`; coverage ledger in
+  `CALIBRATION-STATUS.md` alongside it.
+- **DRX structural write fidelity (Phase 2)** — the structural write paths (windows,
+  qualifiers, HDR zones, HSL curves, ColorSlice, Color Warper) were audited against live
+  Resolve and rebuilt where broken; items marked live-verified below were confirmed by
+  applying a generated `.drx` and reading the Resolve panel:
+  - **Power windows** — true live-calibrated transform scales (rotate −UI°/180, size
+    1+(UI−50)×0.08, aspect (50−UI)/50, pan/tilt ×4096, softness ×16) replace placeholder
+    conventions the registry's old ranges clamped to garbage; linear softness masks and
+    gradient params now route to their real corrector blocks. Live-verified exact.
+  - **HDR zones** — multi-zone grades now write every zone into the single
+    `ZONE_ADJUSTMENTS` param (previously only the last zone survived the encode).
+    Live-verified with two zones exact.
+  - **Qualifiers** — HSL ranges live-verified exact; RGB and luma modes newly reachable via
+    `rgbQualifier` / `lumaQualifier` (mode flags corrected to their real varint wire form;
+    the Qualifier palette switches modes correctly). RGB live-verified exact.
+  - **ColorSlice** — new write path for the six global controls (identity scale, Hue stored
+    negated). Live-verified exact.
+  - **HSL curves** — sat/lum-axis curves write correctly with per-curve meta
+    (`hslCurveMeta`); hue-axis curves are a strict bezier control cage, and a canonical
+    emitter (`canonicalizeHueAxisPoints`) reproduces Resolve's own serialization —
+    live-verified single- AND multi-band at multiple positions and values. Known-bad
+    geometry (a bump edge landing exactly on a band slot) passes through raw instead
+    and now surfaces a `warnings` array on the `generate`/`merge` result ("renders
+    FLAT"). Because a malformed wrapped cage can crash Resolve 19 outright, caller-built
+    pre-wrapped point lists (x outside [0,1]) are **refused** unless
+    `allowWrappedHueCage:true` (the verbatim re-encode escape hatch). `generate` and
+    `merge` share the same `space:'ui'` default, and every bundled matcher emitter pins
+    `space` explicitly.
+  - **Polygon/curve window shapes** — new ct6 vertex-ring write path; geometry renders and
+    masks exactly as one window row.
+  - **Color Warper** — new pin-list write path matching the Resolve 21 wire format;
+    round-trips exactly but Resolve 19 ignores it (version-gated — pending an R21 verify).
+
+### Fixed
+
+- `drx` `parse` now reads back custom curves / HSL curves / qualifiers / power windows through the tool
+  (the augmentation passed the node params object instead of the flat corrector parameters).
+- **Two long-standing DRX "known bugs" resolved as not encoder bugs** (live panel readback):
+  `hueRotate` stores `(UI−50)/50` (input 60 → panel Hue 60.00), and `contrastHighRange` is
+  stored `1−UI` **by Resolve itself** (input 0.70 → panel ↑Rng 0.700; low range is 1:1).
+  Both now round-trip in `space:'drx'` via normalizer compensation; the old bug-locking test
+  was replaced with correct assertions.
+- Vestigial `satVsSat` registry ranges removed — they silently clamped real gradient-window
+  writes (the 0x08F000xx ids belong to the gradient window; the real Sat-vs-Sat curve is an
+  HSL spline).
+- **Blur / Key / Motion Effects palettes decoded AND writable** (the last unswept native
+  palettes): the registry's legacy "Curves corrector (Type 18)" grouping was measured
+  wrong — those ids are the Key palette (ct9, identity scales) and the Motion Effects
+  palette (a newly identified corrector type 15). Blur-palette radius/H-V ratio store as
+  (UI−0.5)×2 (two-point fit). New `gradeParams.blur` / `key` / `motionEffects` write
+  paths, panel-readback-verified (Frames varint = frames×2 confirmed); all named in the
+  registry and locked by a new fixture + calibration/write tests; the sweep grade decodes
+  with zero unknown_ params.
+- **3D-qualifier selection volume blob decoded** (the last offline-reachable opaque blob):
+  a packed header + float32 sample point cloud — the keyer's chroma-plane stroke path,
+  now lifted as `qualifier3d` with a per-sample decode locked by test.
+- **Programmatic "Cleanup Node Graph"** — Resolve's node-layout tidy is UI-only (no
+  scripting API); a before/after Project.db diff proved it rewrites only the per-node
+  x/y position varints in the graded version Body, and direct injection of rewritten
+  positions was live-verified to render with the grade intact. Two productized paths:
+  - `drx` `relayout` — rewrites node positions in a `.drx` to Resolve's own clean-row
+    layout (or explicit `positions`), byte-preserving everything else (labels, keyframes,
+    OFX). Live single-clip recipe (verified on a production clip): grab still → `relayout`
+    → `reset_all_grades` → `ApplyGradeFromDRX`. The reset is required — a same-structure
+    apply silently keeps the existing node layout (new `api_truth` entry).
+  - `project_db` `relayout_node_graphs` — whole-project sweep over every graded version
+    row (closed project, dry-run, auto-backup, per-row read-back verify, undecodable rows
+    skipped and reported, already-clean rows left untouched). Resolve caches open projects
+    in memory, so the patch is only visible after a full quit + relaunch — the result
+    says so explicitly.
+
+### Documentation
+
+- Advanced-server section + tool table updated to 18 tools; `resolve-advanced/README.md` catalog expanded.
+- **Control panel learns about the advanced server** (read-only): Setup → **Advanced**
+  (live capability card — pure-JS core + ffmpeg/sharp/better-sqlite3 status with install
+  hints), Setup → **Conform QC** (lineage-sidecar browser: snapshots, diff-vs-previous,
+  per-cut frame-QC verdicts with tallies), and Docs → **Advanced Server** (the full
+  18-tool catalog rendered in-panel). Backed by a deliberate read-only Node bridge
+  (`resolve-advanced/scripts/panel-bridge.mjs` — capabilities + lineage
+  list/show/diff/verdicts only; ingest/QC/patches stay with the MCP tools) and two new
+  panel endpoints (`/api/advanced/capabilities`, `/api/advanced/lineage`). Degrades
+  gracefully when Node.js is absent.
+- `docs/SKILL.md` gains an advanced-server operating section (value-space rules, hue-axis
+  guard/warnings, relayout recipes, closed-project DB-patch + quit/relaunch discipline) plus
+  DRX-apply gotchas and a session-start MCP-update note (surface `update_decision` once;
+  applying updates stays with `install.py` / the control panel).
+- New DRX calibration docs: `CALIBRATION-STATUS.md` (per-control coverage ledger — what is
+  confirmed, how it was verified, and what remains experimental) and a corrected
+  `DRX-VALUE-SCALING.md` (offset ÷25, saturation ÷50, contrast 1:1, affine hue/contrast-range
+  mappings).
+
+### Validation
+
+- Full offline Node suite green (671 tests / 650 pass, legacy live harnesses skip cleanly) +
+  doc-count drift guard. DRX write paths live-verified against DaVinci Resolve 19.1.3 Studio
+  by panel readback (windows, qualifiers, HDR zones, ColorSlice, HSL curves); Color Warper
+  write is R21-format and pends an R21 verify. Resolve-behavior validation for the offline
+  QC/finishing tools remains gated on real footage (they compute/plan; apply stays in the
+  live server) — no live Python-server behavior changed in this release.
+
+### Cross-platform agent guidance
+
+Also in this release: per-domain agent routing between the live Python server and the
+offline advanced server, available in every IDE — not just Claude Code. No tool counts
+change (compound 34 / granular 341 / advanced 18).
+
+- **7 per-domain MCP prompts** (`color_grade_workflow`, `timeline_edit_workflow`,
+  `conform_workflow`, `delivery_workflow`, `fusion_workflow`, `audio_workflow`,
+  `media_pool_workflow`) — slash commands in *every* MCP client, each routing a task
+  across its live tools and its offline advanced-server counterpart (compute offline,
+  apply live).
+- **9 Claude Code skills** (`.claude/skills/`): a `resolve-mcp` index plus eight domain
+  routers (color, edit, conform, delivery, fusion, audio, media-pool, media-analysis).
+  Thin bridges to the kernels; all 18 advanced tools are routed.
+- **Generated cross-platform rule files** from a single manifest
+  (`scripts/agent-rules/generate.mjs`): `.cursor/rules/*`, `.github/instructions/*` +
+  `.github/copilot-instructions.md`, `.windsurf/rules/*`, `.clinerules`, `.roo/rules/*`,
+  `.continue/rules/*`, and an `AGENTS.md` domain-routing block. Tool/action counts are
+  parsed from their canonical docs so they cannot drift; a stale generated file fails
+  `tests/test_agent_rules_drift.py`.
+- Every kernel with an offline counterpart gained an "Advanced (offline) server" section.
+  Fixed stale tool counts / doc paths that had drifted in `.github/copilot-instructions.md`,
+  `.clinerules`, `.cursorrules`, and `.windsurfrules`.
+
 ## What's New in v2.57.5
 
 Fixes a silent data-loss bug on Reel Name writes (issue #77) and bundles the
@@ -1715,8 +1879,8 @@ coverage, the destructive hook, update hardening, and update history.
 **Validation** — `tests/test_import.py`, `scripts/audit_api_parity.py`,
 `node bin/davinci-resolve-mcp.mjs --version`, `npm pack --dry-run`, and
 `git diff --check` all pass. 375 focused unit tests pass. Live Resolve
-validation covered the D1–F2 surface end-to-end against project CKY /
-Timeline 7 (D1 `retryable`, D2 XML descriptions, D3 partial-success on
+validation covered the D1–F2 surface end-to-end against a live production
+project / Timeline 7 (D1 `retryable`, D2 XML descriptions, D3 partial-success on
 plans + CAPS_REFUSAL manifests, E1 8 MCP resource URIs, E2 escalation on
 3× repeated failure, E3 `prefer_handle` job handoff with
 `batch_job_status` polling, F1 provenance block) — 6/6 PASS on the

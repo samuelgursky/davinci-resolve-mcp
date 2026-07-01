@@ -1,7 +1,4 @@
-"""Contract tests for B3 — auto-open brain-edit run on first destructive call.
-
-See local/design/agentic-flow-improvements-gameplan.md §3 task B3.
-"""
+"""Contract tests for B3 — auto-open brain-edit run on first destructive call."""
 import os
 import tempfile
 import time

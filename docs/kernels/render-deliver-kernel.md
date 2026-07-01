@@ -64,6 +64,38 @@ All actions are under `render(action=...)`.
   existing `render_presets` tool, but the live kernel probe does not fabricate
   arbitrary preset files.
 
+## Advanced (offline) server — deliverable QC, media front-end, provenance
+
+The live actions above plan and drive renders in a *running* Resolve. The
+companion advanced server (`davinci-resolve-advanced`, see
+`resolve-advanced/README.md`) QCs the **finished render** and manages media/
+provenance with **no Resolve running**. It is report-only —
+**`gate: review`, never auto-pass-clear.**
+
+- **`deliverable`** — `deliverable_qc` (ffprobe a render vs its spec → pass/fail
+  **per field**), `loudness_qc` (ebur128 LUFS/true-peak/LRA),
+  `reframe_blanking_check`, `conform_completeness` (every intended shot present),
+  `re_delivery_diff`, `render_manifest` (build/reconcile), `expand_deliverable`
+  (texted/textless/stems/slate/leader entities).
+- **`media`** (front-end / AE) — `ingest_verify` (hash seal/verify/dupes),
+  `media_inventory` (fps/codec/colorspace/TC + card gaps), `sync` (picture↔sound
+  TC + drift/MOS), `relink_manifest`, `rename_plan` (**refuses camera
+  originals**) / `reel_normalize`, `turnover_package`, `project_hygiene`.
+- **`provenance`** (audit) — `grade_provenance` ("why is this graded this way"),
+  `gallery_lineage`, `cdl_export` / `cdl_diff` (round-trip asserted),
+  `revision_tracking`, `episode_report`.
+
+Rules an agent must know:
+
+- QC tools **refuse rather than fabricate** — a "refused" result means missing
+  file, wrong spec, or a metric it cannot honestly compute.
+- Deliverable gates never auto-clear; surface the per-field verdict to a human.
+- **Deps.** `deliverable`/`media` QC needs **ffmpeg + ffprobe on PATH** (GPL, not
+  bundled) — call the advanced `capabilities` tool for status + install hints.
+
+See the `resolve-delivery` skill (`.claude/skills/delivery.md`) for the
+craft ↔ live ↔ offline routing.
+
 ## Live Evidence
 
 Final validation ran on May 9, 2026 with DaVinci Resolve Studio 20.3.2.9 and

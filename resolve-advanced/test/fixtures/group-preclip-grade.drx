@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--DbAppVer="19.1.3.0007" DbPrjVer="14"-->
+<Gallery::GyStill DbId="c0107a17-000f-400f-800f-c010c010c010">
+ <FieldsBlob/><SrcType>1</SrcType><Label>calibration color-group Pre-Clip grade (Saturation 77 → 1.54) — separate LmVersion row</Label>
+ <Width>1920</Width><Height>1080</Height><BitDepth>10</BitDepth><PAR>1</PAR><Endianship>1</Endianship>
+ <CreateTime>2026-01-01T00:00:00.000</CreateTime>
+ <pClipFullVer><ListMgt::LmVersion DbId="c0107a17-0010-4010-8010-c010c010c010"><FieldsBlob/><Name/><HasCorrection>true</HasCorrection><VerType>0</VerType><ImplVersion>1</ImplVersion><Body>8128b52ffd20c4650500040a0aba0108011a4808800f10b8081d0000803f20800f28b808350000803f38800f40b80848ffffffff0f7a240000803f003a450801100120be0128b4013801402c4a210a18080118013212121008011a0c088580803012050db81ec53f12050304050612520c0a0a08818080800c1202100260fcec98f3564a0e080110401a080801104018012001520e08020210401802200160f8d9b1e6ad0120deaae594ad0103001b1062a617e00050</Body></ListMgt::LmVersion></pClipFullVer>
+ <PrimaryCCMode>0</PrimaryCCMode>
+</Gallery::GyStill>

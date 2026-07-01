@@ -2,7 +2,7 @@
 """
 DaVinci Resolve MCP Server (Compound Tools)
 
-32 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
+34 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
 plus Fusion Fuse, DCTL, and Resolve-page Script authoring tools.
 Each tool groups related operations via an 'action' parameter.
 
@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.57.5"
+VERSION = "2.58.0"
 
 import base64
 import os
@@ -104,6 +104,7 @@ from src.utils.timeline_title_text import (
     timeline_item_get_property_map as _timeline_item_get_property_map,
 )
 from src.utils.multicam import build_multicam_setup_plan
+from src.utils.timeline_xml import analyze_timeline_xml, sanitize_timeline_xml
 from src.utils.fusion_group_settings import (
     FUSION_COMMIT_CHECKLIST,
     FUSION_GROUP_GUARDRAILS,
@@ -402,7 +403,7 @@ When finished, report exactly which media_analysis call was made, whether artifa
 
 
 # ─── F2 — MCP Prompts for common multi-step workflows ──────────────────────────
-# See local/design/agentic-flow-improvements-gameplan-2.md §3 task F2.
+# (agentic-flow improvement F2: structured confirm-token envelope.)
 # These surface as slash commands in the host UI (e.g. /davinci-resolve:match-bin-to-hero).
 
 
@@ -506,6 +507,224 @@ def prep_color_handoff(output_dir: str = "") -> str:
    - timeline version list
    - any caps usage at the time of handoff (media_analysis.get_caps)
 5. Surface the manifest path back to the user. Do not write beside source media."""
+
+
+# ─── Per-domain workflow routers ───────────────────────────────────────────────
+# Cross-platform depth: these surface as slash commands in EVERY MCP client
+# (Codex, Cursor, Copilot, Continue, Claude Desktop, …), so per-domain routing is
+# not limited to Claude Code's .claude/skills/. They mirror the repo skills of the
+# same name; keep them in sync with docs/kernels/*.
+
+
+@mcp.prompt(
+    name="color_grade_workflow",
+    title="Color / Grade Workflow",
+    description="Route a grading/look/shot-match task across the live color tools and the offline advanced grading/QC catalog.",
+)
+def color_grade_workflow() -> str:
+    return """Color / grade work spans two servers: the live Python server drives a
+running Resolve; the advanced (offline) server computes grades from frames and
+reads/writes .drx/.drp with no Resolve open. Compute offline, apply live.
+
+Frame-first rule (non-negotiable): before applying any grade, look, shot match,
+LUT, CDL, DRX, or copied grade, inspect representative Resolve-rendered frames
+(thumbnails/contact sheet/Gallery stills/marker frames) and compare
+bypass/current/after at matched timecodes; restore prior version/node state after
+a temporary bypass. Never grade from metadata or a style label alone. Preserve a
+recoverable grade version.
+
+- Live: timeline_item_color.grade_boundary_report / probe_node_graph /
+  safe_set_cdl / safe_apply_drx / grade_version_snapshot|restore; graph;
+  gallery_stills; color_group.
+- Offline (advanced server `drx` actions): match_to_reference, level_clips,
+  skin_match, shot_match, white_balance_match, contrast_normalize,
+  saturation_match, black_balance, cdl_io, grade_transfer, lut_apply,
+  author_look|carry_look, scope_read|intent_tags|gamut_legal, verify_grade.
+- Value space: drx generate/merge default to space='ui' (panel units, saturation
+  0-100 neutral 50); a `warnings` array means a hue curve rendered FLAT — surface
+  it. safe_apply_drx defaults to V1/item0 — always pass explicit track/item indices
+  and back up a still first; ApplyGradeFromDRX replaces the graph.
+- Relayout ("Cleanup Node Graph", no UI API): grab still -> drx relayout ->
+  graph.reset_all_grades -> safe_apply_drx (a same-structure apply keeps the old
+  layout). Whole project: project_db.relayout_node_graphs.
+
+Depth: docs/kernels/color-grade-kernel.md, docs/guides/color-decision-guide.md.
+The advanced grading catalog needs `sharp`; call the advanced `capabilities` tool.
+Never modify/transcode/derive source media (see AGENTS.md)."""
+
+
+@mcp.prompt(
+    name="timeline_edit_workflow",
+    title="Timeline Edit Workflow",
+    description="Route a cutting/trimming/restructuring/changelist task across the live edit tools and the offline editorial tools.",
+)
+def timeline_edit_workflow() -> str:
+    return """Editing spans two servers: the live Python server restructures a
+running timeline; the advanced (offline) server authors/diffs .drt files and
+reasons over editorial interchange with no Resolve open.
+
+- Live: timeline duplicate_clips/copy_clips/move_clips (include_linked carries
+  linked audio); copy_range/duplicate_range/overwrite_range/lift_range (no public
+  razor/split — partial overlaps blocked unless allow_partial_item_delete);
+  copy_properties (scope with a group list); edit_engine (selects/tighten/swap,
+  plan -> confirm -> execute; tighten can carry audio via keep_ranges/include_audio).
+- Offline (advanced server `editorial` actions): parse_interchange (EDL/OTIO/XMEML;
+  AAF = honest refuse), turnover_changelist (moved/retimed/replaced/new/gone with
+  timing guards), conform_manifest, marker_roundtrip; `drt` for timeline files.
+
+Use the offline tools to answer "what changed between v3 and v4" without opening
+either cut. Edits reference existing Media Pool items — never transcode/proxy/derive
+source media (see AGENTS.md).
+
+Depth: docs/kernels/timeline-edit-kernel.md, docs/guides/editorial-decision-guide.md."""
+
+
+@mcp.prompt(
+    name="conform_workflow",
+    title="Conform / Interchange Workflow",
+    description="Route a conform/relink/finishing-QC/grade-trace task across the live conform tools and the offline conform QC engine.",
+)
+def conform_workflow() -> str:
+    return """Conforming spans two servers: the live Python server imports/relinks/
+compares a running conform; the advanced (offline) server does frame-oracle QC,
+reverse-subclip repair, lineage, and grade tracing with no Resolve open.
+
+- Live: timeline probe_timeline_structure / detect_gaps_overlaps /
+  source_range_report / conform_boundary_report; export_timeline_checked /
+  import_timeline_checked (drt is the only lossless project-native round-trip;
+  EDL/FCPXML drop relationships); detect_missing_media -> build_relink_plan
+  (read-only, bounded) -> media_pool.safe_relink with approved paths only.
+- XML import via the scripting API goes OFFLINE (missing-media/generators abort);
+  use import_timeline_checked with media sanitize (FCP7/FCPXML), then exact-path
+  relink; restart a running MCP server to pick up the sanitize fix.
+- Offline (advanced server): conform (frame-oracle QC — catches wrong-but-similar
+  relinks; reversed source_start = masterFrames-1-endoffset; lineage store+diff;
+  per-cut frame QC vs reference render), color_trace (carry grades across a
+  re-conform), offline_ref (<OfflineClip> patch — no scripting API), editorial,
+  drt, project_db.
+- .drt for Resolve 19.1.3: set DbPrjVer 17 -> 16. project_db patches need the
+  project CLOSED + iConfirmProjectClosed:true, auto-backup + read-back verify, and
+  a full QUIT+relaunch of Resolve before the change is visible.
+
+Depth: docs/kernels/timeline-conform-interchange-kernel.md. better-sqlite3 gates
+lineage/reverse/DB, sharp/ffmpeg gate frame compare — call advanced `capabilities`.
+Relink plans are read-only until executed; never derive source media (see AGENTS.md)."""
+
+
+@mcp.prompt(
+    name="delivery_workflow",
+    title="Delivery / Deliverable QC Workflow",
+    description="Route a render/deliverable-QC/media-provenance task across the live render tools and the offline deliverable/media/provenance tools.",
+)
+def delivery_workflow() -> str:
+    return """Delivery spans two servers: the live Python server plans/validates/runs
+renders in a running Resolve; the advanced (offline) server QCs the FINISHED render
+and manages media/provenance with no Resolve open. Deliverable QC is report-only:
+gate=review, never auto-pass-clear.
+
+- Live: render probe_render_matrix -> validate_render_settings ->
+  safe_set_render_settings (dry-run) -> prepare_render_job (adds, does not start;
+  temp output dirs by default). safe_quick_export forces EnableUpload=False and
+  needs allow_render=True. GetRenderSettings readback is version/page dependent.
+- Offline `deliverable` actions: deliverable_qc (ffprobe vs spec, pass/fail per
+  field), loudness_qc (ebur128 LUFS/true-peak/LRA), reframe_blanking_check,
+  conform_completeness, re_delivery_diff, render_manifest, expand_deliverable
+  (texted/textless/stems/slate/leader).
+- Offline `media`: ingest_verify (hash seal/verify/dupes), media_inventory,
+  sync (picture<->sound TC + drift/MOS), relink_manifest, rename_plan (refuses
+  camera originals) / reel_normalize, turnover_package, project_hygiene.
+- Offline `provenance`: grade_provenance, gallery_lineage, cdl_export/cdl_diff
+  (round-trip asserted), revision_tracking, episode_report.
+
+QC refuses rather than fabricates; gates never auto-clear — surface per-field
+verdicts to a human. deliverable/media QC needs ffmpeg+ffprobe on PATH (GPL, not
+bundled) — call advanced `capabilities`. Render probes touch only synthetic
+fixtures, never user source media (see AGENTS.md).
+
+Depth: docs/kernels/render-deliver-kernel.md."""
+
+
+@mcp.prompt(
+    name="fusion_workflow",
+    title="Fusion Composition Workflow",
+    description="Route a Fusion comp task across the live fusion_comp tools and the offline .comp authoring tool.",
+)
+def fusion_workflow() -> str:
+    return """Fusion work spans two servers: the live Python server builds a comp on a
+running timeline item; the advanced (offline) server authors a .comp from a spec
+or template with no Resolve open. Author offline, apply live.
+
+- Live: fusion_comp probe_fusion_comp / probe_fusion_tool / safe_add_tool /
+  safe_set_inputs / safe_connect_tools / fusion_boundary_report.
+- Offline (advanced `fusion` tool): generate / generate_from_template /
+  list_templates / to_api_calls.
+
+Flow: fusion generate|to_api_calls offline -> apply live via safe_add_tool ->
+safe_set_inputs -> safe_connect_tools (to_api_calls maps directly onto those).
+Probe first — tool availability and input readability vary by Resolve/Fusion
+build; some inputs coerce or are write-only; bulk mutation needs timeline scope,
+not the active Fusion page.
+
+Depth: docs/kernels/fusion-composition-kernel.md. Never derive source media (AGENTS.md)."""
+
+
+@mcp.prompt(
+    name="audio_workflow",
+    title="Audio / Fairlight Workflow",
+    description="Route an audio/Fairlight task across the live audio tools and the offline planning/bus-routing tools.",
+)
+def audio_workflow() -> str:
+    return """Audio work spans two servers: the live Python server drives audio on a
+running Resolve; the advanced (offline) server plans tracks, routes buses, and
+edits audio files with no Resolve open. Plan/measure offline, apply live.
+
+- Live: timeline probe_audio_item|track / safe_set_audio_properties /
+  safe_auto_sync_audio / voice_isolation_capabilities / subtitle_generation_probe
+  / fairlight_boundary_report.
+- Offline `audio_plan` (pure Node): list_templates, select_template, track_plan,
+  analyze_coverage, check_loudness (R128 -23 / ATSC -24 / streaming -14).
+- Offline `fairlight`: bus routing has NO scripting API — patches the
+  FLStudioModelBA blob. read_buses_from_blob (offline); read_buses_from_db,
+  expand_buses, export_template/import_template, backup, restore (DB path; needs
+  better-sqlite3; project CLOSED + quit/relaunch like other DB patches).
+- Offline `audio`: split (silence/TC/intervals) / trim / convert (needs ffmpeg on
+  PATH — GPL, not bundled). Align/loudness-measure not yet vendored.
+
+Timeline audio SetProperty (e.g. Volume) can return false for some item types;
+the public API exposes no Fairlight automation curves — use fairlight for bus
+structure only. The offline audio ops write NEW files to scratch, never over
+source (AGENTS.md).
+
+Depth: docs/kernels/audio-fairlight-kernel.md."""
+
+
+@mcp.prompt(
+    name="media_pool_workflow",
+    title="Media Pool / Ingest Workflow",
+    description="Route a media-pool ingest/organization task across the live media_pool tools and the offline media front-end tool.",
+)
+def media_pool_workflow() -> str:
+    return """Media pool work spans two servers: the live Python server imports and
+organizes media in a running Resolve; the advanced (offline) server verifies and
+inventories a card with no Resolve open. Verify offline, import live.
+
+- Live: media_pool safe_import_media|sequence|folder / organize_clips /
+  normalize_metadata / safe_relink|unlink / link_proxy_checked / set_clip_marks /
+  setup_multicam_timeline.
+- Offline `media` (needs ffmpeg + ffprobe on PATH): ingest_verify (hash
+  seal/verify/dupes), media_inventory (fps/codec/colorspace/TC + card gaps), sync
+  (picture<->sound TC + drift/MOS), relink_manifest, rename_plan (refuses camera
+  originals) / reel_normalize, turnover_package, project_hygiene.
+
+Rule of thumb: verify + inventory the card offline BEFORE importing, then import
+and organize live. Non-media files are not imported; the kernel never proxies,
+transcodes, or derives source media. Native multicam clip creation isn't in the
+public API — the setup helper preps a stacked timeline you convert in Resolve's
+UI. Never rename/derive camera originals without explicit approval (AGENTS.md).
+For reading/analyzing footage content use the analyze_media prompt; for
+deliverable-side media QC use delivery_workflow.
+
+Depth: docs/kernels/media-pool-ingest-kernel.md, docs/guides/multicam-setup-guide.md."""
 
 
 # ─── Python Version Check ────────────────────────────────────────────────────
@@ -862,13 +1081,15 @@ _media_analysis_module.register_caps_overrides_provider(_caps_overrides_provider
 def _resolve_safe_dir(path):
     """Redirect sandbox/temp paths that Resolve can't access to ~/Desktop/resolve-stills.
 
-    Covers macOS (/var/folders, /private/var), Linux (/tmp, /var/tmp),
-    and Windows (AppData\\Local\\Temp) sandbox temp directories.
+    Covers macOS (/var/folders, /private/var, /tmp, /private/tmp), Linux (/tmp,
+    /var/tmp), and Windows (AppData\\Local\\Temp) sandbox temp directories.
     """
     system_temp = tempfile.gettempdir()
     _is_sandbox = False
     if platform.system() == "Darwin":
-        _is_sandbox = path.startswith("/var/") or path.startswith("/private/var/")
+        # /tmp is a symlink to /private/tmp on macOS — Resolve's still/gallery export
+        # silently fails into both (live-verified 2026-07-03), same as /var/folders.
+        _is_sandbox = path.startswith(("/var/", "/private/var/", "/tmp/", "/private/tmp/")) or path in ("/tmp", "/private/tmp")
     elif platform.system() == "Linux":
         _is_sandbox = path.startswith("/tmp") or path.startswith("/var/tmp")
     elif platform.system() == "Windows":
@@ -882,8 +1103,7 @@ def _resolve_safe_dir(path):
         return os.path.join(os.path.expanduser("~"), "Documents", "resolve-stills")
     return path
 
-# Error envelope categories — see local/design/agentic-flow-improvements-gameplan.md A1
-# and local/design/agentic-flow-improvements-gameplan-2.md D1 for the retryable
+# Error envelope categories (agentic-flow improvements A1/D1) — see the retryable
 # default policy. Lock these names; downstream agents and tests route on them.
 ERROR_CATEGORIES = (
     "precondition",          # missing current timeline/clip/project; tell user what to do
@@ -5100,37 +5320,144 @@ def _export_timeline_checked(tl, p: Dict[str, Any]):
     }
 
 
+def _timeline_media_coverage(tl) -> Dict[str, Any]:
+    """Count how many timeline items are linked to a Media Pool Item vs. offline.
+
+    An FCP7/FCPXML imported timeline whose media did not link has items with no
+    backing Media Pool Item — this surfaces that honestly instead of claiming a
+    clean import.
+    """
+    total = 0
+    linked = 0
+    for track_type in ("video", "audio"):
+        try:
+            count = int(tl.GetTrackCount(track_type) or 0)
+        except Exception:
+            count = 0
+        for i in range(1, count + 1):
+            for item in (tl.GetItemListInTrack(track_type, i) or []):
+                total += 1
+                try:
+                    if item.GetMediaPoolItem():
+                        linked += 1
+                except Exception:
+                    pass
+    return {"total": total, "linked": linked, "offline": total - linked}
+
+
 def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     path = p.get("path")
     if not path:
         return _err("path is required")
     if not os.path.exists(path):
         return _err(f"path does not exist: {path}")
-    if p.get("require_temp_path", True) and not _render_temp_path_ok(path):
-        return _err("path must be under the system temp directory unless require_temp_path=False")
+    # sanitize_media (alias: relink_media) rewrites the XML to drop clipitems that
+    # reference missing media or are generators (slug/solid w/ no pathurl) — both
+    # abort Resolve's scripting-API import and leave the timeline fully offline.
+    # The original is only read; the sanitized copy lands in a temp dir, so the
+    # temp-path guard never applies to it.
+    sanitize = bool(p.get("sanitize_media") or p.get("relink_media"))
+    if not sanitize and p.get("require_temp_path", True) and not _render_temp_path_ok(path):
+        return _err(
+            "path must be under the system temp directory unless require_temp_path=False",
+            remediation="Pass require_temp_path=False to import from this location, or "
+                        "sanitize_media=True to rewrite the XML for reliable media linking.",
+        )
     options = dict(p.get("options") or {})
     if p.get("timeline_name") and "timelineName" not in options:
         options["timelineName"] = p["timeline_name"]
     if "import_source_clips" in p and "importSourceClips" not in options:
         options["importSourceClips"] = bool(p["import_source_clips"])
+
+    # Optional fuzzy relink: when search roots are given, missing-at-original-path
+    # clips are matched against on-disk media (exact/ext-agnostic/normalized/reel)
+    # and their pathurl rewritten so they relink instead of being dropped.
+    search_roots = p.get("relink_search_roots") or p.get("search_roots")
+    if isinstance(search_roots, str):
+        search_roots = [search_roots]
+    if search_roots and not sanitize:
+        sanitize = True  # relinking is meaningless without the sanitize/rewrite pass
+
+    sanitize_report = None
+    import_path = path
+    if sanitize:
+        san_kwargs = {}
+        if search_roots:
+            san_kwargs["search_roots"] = list(search_roots)
+            if p.get("relink_min_confidence") is not None:
+                san_kwargs["min_confidence"] = float(p["relink_min_confidence"])
+            if p.get("verify_visually") or p.get("reference_movie"):
+                san_kwargs["verify_visually"] = True
+            if p.get("reference_movie"):
+                san_kwargs["reference_movie"] = p["reference_movie"]
+            if p.get("verify_threshold") is not None:
+                san_kwargs["verify_threshold"] = float(p["verify_threshold"])
+        try:
+            sres = sanitize_timeline_xml(path, **san_kwargs)
+        except Exception as e:
+            return _err(f"Failed to sanitize timeline XML: {e}",
+                        category="invalid_input")
+        import_path = sres["output_path"]
+        sanitize_report = {
+            k: sres[k] for k in (
+                "output_path", "timeline_name", "clip_total", "kept",
+                "removed_total", "missing_media_count", "generator_count",
+                "missing_media", "generators", "relinked_count", "relinked",
+                "ambiguous_count", "ambiguous", "scan",
+                "verified_count", "flagged_count", "flagged", "unverified_count",
+            ) if k in sres
+        }
+
     if p.get("dry_run"):
-        return _ok(path=path, options=options, would_import=True)
+        out = _ok(path=path, import_path=import_path, options=options, would_import=True)
+        if sanitize_report is not None:
+            out["sanitize"] = sanitize_report
+        return out
+
     before_ids = set()
     for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
         tl_existing = proj.GetTimelineByIndex(index)
         if tl_existing:
             before_ids.add(str(tl_existing.GetUniqueId()))
     with long_resolve_op("timeline.import_timeline_checked"):
-        imported = mp.ImportTimelineFromFile(path, options)
+        imported = mp.ImportTimelineFromFile(import_path, options)
+
+    # Resolve's API returns None even when it created an (offline) timeline. Detect
+    # the newly-created timeline via the before/after id diff so we never report a
+    # false "Failed to import" for what is really a partial success.
+    api_returned_object = bool(imported)
     if not imported:
-        return _err("Failed to import timeline")
+        for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
+            t = proj.GetTimelineByIndex(index)
+            if t and str(t.GetUniqueId()) not in before_ids:
+                imported = t
+    if not imported:
+        return _err(
+            "Failed to import timeline (Resolve created no timeline)",
+            remediation=None if sanitize else
+            "This XML may reference missing media or contain generator clips, which "
+            "abort the scripting-API import. Retry with sanitize_media=True.",
+        )
+
     imported_id = str(imported.GetUniqueId())
-    return _ok(
+    media = _timeline_media_coverage(imported)
+    out = _ok(
         name=imported.GetName(),
         id=imported_id,
         created_new=imported_id not in before_ids,
         timeline_count=proj.GetTimelineCount(),
+        api_returned_object=api_returned_object,
+        media=media,
     )
+    if sanitize_report is not None:
+        out["sanitize"] = sanitize_report
+    if media["total"] and media["offline"]:
+        msg = f"{media['offline']} of {media['total']} timeline items are offline (no linked media)."
+        if not sanitize:
+            msg += (" Retry with sanitize_media=True to drop missing-media/generator "
+                    "clips so the remaining media links automatically.")
+        out["warning"] = msg
+    return out
 
 
 def _timeline_by_selector(proj, p: Dict[str, Any], *, prefix: str):
@@ -12039,7 +12366,11 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 
     Actions:
       launch() -> {success, message}  — Launch DaVinci Resolve if not running. Call this FIRST if any tool returns a 'Not connected' error.
-      get_version() -> {product, version, version_string}
+      get_version() -> {product, version, version_string, mcp: {version, update, update_decision}}
+        — mcp.update_decision piggybacks the cached update check: if its action is
+          "notify" or "prompt", mention the available MCP update to the user ONCE
+          per session (do not nag, do not auto-apply; updates are applied via
+          install.py or the control panel).
       mcp_update_status(force_check?) -> {version, update, decision}
       set_mcp_update_policy(mode) -> {success, version, update, decision}
       ignore_mcp_update() -> {success, version, update, decision}
@@ -12188,7 +12519,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 #         "value": <any JSON>,
 #         "confidence": "low|medium|high",
 #         "source": "human" | "vision_v0.2",
-#         "author": "sam@bradfordoperations.com",
+#         "author": "editor@example.com",
 #         "timestamp": "2026-05-19T...Z"
 #       }
 #     },
@@ -18034,7 +18365,25 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       detect_gaps_overlaps(track_types?, min_gap?) -> {gaps, overlaps}
       source_range_report(handles?, merge?) -> {ranges, occurrences}
       export_timeline_checked(path, format?|type?, subtype?, require_temp_path?, dry_run?) -> {success, path, size}
-      import_timeline_checked(path, options?, timeline_name?, import_source_clips?, require_temp_path?, dry_run?) -> {success, name, id}
+      import_timeline_checked(path, options?, timeline_name?, import_source_clips?, sanitize_media?, require_temp_path?, dry_run?) -> {success, name, id, media, sanitize?, warning?}
+        Imports an FCP7 xmeml / FCPXML timeline. `media` reports {total, linked, offline}
+        coverage; `warning` flags offline items. sanitize_media=True (recommended for
+        Premiere/FCP exports) rewrites the XML first — dropping clipitems that reference
+        MISSING media or are generators (slug/solid with no media file), both of which
+        otherwise abort the scripting-API import and leave the whole timeline offline.
+        Returns `sanitize` with the kept/removed breakdown. The original is only read;
+        the sanitized copy goes to a temp dir (no require_temp_path needed when sanitizing).
+        relink_search_roots (str|list) enables fuzzy relink: clips missing at their
+        original path are matched against media under those roots (exact/ext-agnostic/
+        normalized/reel + IDF true-source) and their pathurl rewritten so they relink
+        instead of being dropped. relink_min_confidence (default 0.7) gates matches;
+        `sanitize.relinked` / `sanitize.ambiguous` report the outcome.
+        verify_visually=True (or passing reference_movie) frame-checks each proposed
+        relink against a reference (reference_movie at the clip's record position, else
+        the offline proxy at the original path) using a brightness-robust SSIM-structure
+        metric; a conflicting relink is VETOED — reverted and reported under
+        `sanitize.flagged` for human review, never silently applied. verify_threshold
+        (default 0.90) sets the structural-match bar.
       compare_timelines(right_timeline_id?|right_timeline_index?|left_snapshot?, right_snapshot?) -> {match, differences}
       probe_interchange_roundtrip(format?, output_dir?, cleanup_imported?) -> {success, export, import, comparison}
       detect_missing_media(sanitized?|sanitize_paths?, omit_raw_paths?) -> {missing, missing_count, diagnosis}
@@ -18785,7 +19134,7 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 @_destructive_op("timeline_item")
 def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Properties, transforms, speed, keyframes, and metadata for a timeline item.
-    Identify by track_type, track_index, item_index.
+    Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
 
     Actions:
       get_name(track_type?, track_index?, item_index?) -> {name}
@@ -19023,7 +19372,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 @mcp.tool()
 @_destructive_op("timeline_item_markers")
 def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Markers, flags, and clip color on timeline items. Identify by track_type, track_index, item_index.
+    """Markers, flags, and clip color on timeline items. Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
 
     Actions:
       add(frame|frame_id|frameId, color?, name?, note?, duration?, custom_data?, ...) -> {success, frame}
@@ -19100,7 +19449,7 @@ def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) 
 @mcp.tool()
 @_destructive_op("timeline_item_fusion")
 def timeline_item_fusion(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Fusion composition operations on timeline items. Identify by track_type, track_index, item_index.
+    """Fusion composition operations on timeline items. Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
 
     Actions:
       add_comp(...) -> {success}
@@ -20360,7 +20709,7 @@ def _grade_evidence_base(proj, item, p: Dict[str, Any]) -> Dict[str, Any]:
 @mcp.tool()
 @_destructive_op("timeline_item_color")
 def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Color grading, versions, LUTs, cache, and AI tools on timeline items. Identify by track_type, track_index, item_index.
+    """Color grading, versions, LUTs, cache, and AI tools on timeline items. Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
 
     <when_to_use>
     - For ANY grade recommendation, lead with action="grade_evidence_base" — composes
@@ -20565,7 +20914,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
 @mcp.tool()
 @_destructive_op("timeline_item_takes")
 def timeline_item_takes(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Take management on timeline items. Identify by track_type, track_index, item_index.
+    """Take management on timeline items. Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
 
     Actions:
       add(clip_id, start_frame?, end_frame?, ...) -> {success}
@@ -20850,8 +21199,12 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
       set_node_enabled(node_index, enabled, source?, ...) -> {success}
       apply_grade_from_drx(path, grade_mode?, source?, ...) -> {success}
         CATASTROPHIC. REPLACES the entire node graph. Prefer timeline_item_color.safe_apply_drx
-        (which snapshots the current version first). All grade_modes are full replacement —
-        there is no append mode.
+        (confirm-token gated + validated; it does NOT snapshot — grab a still/.drx backup
+        first, and ALWAYS pass track_type/track_index/item_index explicitly: the default
+        target is video track 1 item 0, not the current clip). All grade_modes are full
+        replacement — there is no append mode. Same-structure applies keep the existing
+        node layout (positions in the .drx are ignored unless the graph differs, e.g.
+        after reset_all_grades).
         grade_mode: 0="No keyframes" (default), 1="Source Timecode aligned", 2="Start Frames aligned"
       apply_arri_cdl_lut(source?, ...) -> {success}
         DESTRUCTIVE. Bakes a CDL LUT into the graph.
@@ -23901,7 +24254,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MCP Resources — E1 (see local/design/agentic-flow-improvements-gameplan-2.md)
+# MCP Resources — agentic-flow improvement E1
 #
 # Resources are read-only state surfaces that hosts can pull WITHOUT consuming
 # a turn (unlike tools, which require a tool_use round-trip). They mirror

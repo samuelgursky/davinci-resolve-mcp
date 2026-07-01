@@ -1,0 +1,18 @@
+{
+  "name": "drp-format",
+  "version": "0.1.0",
+  "description": "DaVinci Resolve DRP (Project) format \u2014 XML/binary serialization, asset packaging, grade node encoders/decoders, validation. Layer 2 (drp-validator + grade-node-extractor read from fs / zip archives).",
+  "main": "./index.js",
+  "private": true,
+  "scripts": {
+    "test": "echo 'see grade-encoder.test.js \u2014 runs via root jest config' && exit 0"
+  },
+  "dependencies": {
+    "adm-zip": "catalog:",
+    "fast-xml-parser": "catalog:",
+    "jszip": "catalog:"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

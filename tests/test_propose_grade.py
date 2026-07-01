@@ -1,7 +1,4 @@
-"""Contract tests for C2 — propose_grade structured output action.
-
-See local/design/agentic-flow-improvements-gameplan.md §3 task C2.
-"""
+"""Contract tests for C2 — propose_grade structured output action."""
 import unittest
 
 import src.server as compound

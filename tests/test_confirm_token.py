@@ -1,7 +1,4 @@
-"""Contract tests for B2 — confirm-token gate.
-
-See local/design/agentic-flow-improvements-gameplan.md §3 task B2.
-"""
+"""Contract tests for B2 — confirm-token gate."""
 import unittest
 
 import src.server as compound

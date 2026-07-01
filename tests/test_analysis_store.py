@@ -226,7 +226,7 @@ class AnalysisStoreTests(unittest.TestCase):
             entity_uuid=2,  # shot_index
             field_path="description",
             value="Corrected: tight medium, two cuts late.",
-            author="sam@bradfordoperations.com",
+            author="editor@example.com",
             reason="fix machine description",
         )
         self.assertTrue(corr["success"], corr)

@@ -120,6 +120,26 @@ params={"confirm": true, ...})`.
   the installed DaVinci Resolve 20 Manual, Edit > Chapter 42, "Multicam
   Editing," for the current UI workflow.
 
+## Advanced (offline) server — media front-end / ingest verification
+
+The actions above import and organize media in a *running* Resolve. The companion
+advanced server (`davinci-resolve-advanced`, see `resolve-advanced/README.md`)
+handles the front-end / assistant-editor ingest layer **offline, no Resolve
+running**, via the `media` tool (needs ffmpeg + ffprobe on PATH for the probing
+actions):
+
+- `ingest_verify` — hash seal / verify / dupes-by-hash (chain-of-custody).
+- `media_inventory` — fps / codec / colorspace / TC + card-gap report.
+- `sync` — picture↔sound TC alignment + drift / MOS detection.
+- `relink_manifest`, `rename_plan` (**refuses camera originals**) /
+  `reel_normalize`, `turnover_package`, `project_hygiene`.
+
+Rule of thumb: verify and inventory the card offline *before* importing, then
+import/organize live. `media` also serves the delivery side (see the
+`resolve-delivery` skill). See the `resolve-media-pool` skill
+(`.claude/skills/media-pool.md`) and the `/media_pool_workflow` prompt. Never
+rename or derive camera originals without explicit approval.
+
 ## Live Evidence
 
 Final validation ran on May 9, 2026 with DaVinci Resolve Studio 20.3.2.9 and

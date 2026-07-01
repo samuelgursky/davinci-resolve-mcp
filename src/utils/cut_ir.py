@@ -5,7 +5,7 @@ governed timeline operations. Producers emit Cuts; an executor (a later phase)
 consumes them as governed, versioned edits; a review UI shows them. This module
 provides the schema plus the deterministic Pass-1 detector — filler words, long
 pauses, and repeated lines — with no LLM. The semantic Pass-2 and the timeline
-executor are separate phases (see local/design/research/r1-cut-ir.md).
+executor are separate, later phases of the Cut-IR program.
 
 A Cut:
     {

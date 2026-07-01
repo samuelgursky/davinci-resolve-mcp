@@ -1,7 +1,4 @@
-"""E2 contract test — repeated-failure escalation tracker.
-
-See local/design/agentic-flow-improvements-gameplan-2.md §3 task E2.
-"""
+"""E2 contract test — repeated-failure escalation tracker."""
 import unittest
 
 from src.utils import failure_tracker as ft

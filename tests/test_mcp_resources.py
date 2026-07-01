@@ -1,7 +1,5 @@
 """E1 contract test — MCP resources expose read-only state without a tool turn.
 
-See local/design/agentic-flow-improvements-gameplan-2.md §3 task E1.
-
 These tests verify the resource handlers in isolation (the underlying
 callable bound to the FastMCP resource URI). We do NOT exercise the MCP
 transport here — that's the host-side spike documented in the gameplan §4.

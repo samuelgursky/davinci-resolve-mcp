@@ -1,8 +1,4 @@
-"""Contract tests for the A1 structured error envelope and D1 retryable defaults.
-
-See local/design/agentic-flow-improvements-gameplan.md §3 task A1
-and local/design/agentic-flow-improvements-gameplan-2.md §3 task D1.
-"""
+"""Contract tests for the A1 structured error envelope and D1 retryable defaults."""
 import unittest
 
 from src.server import _err, ERROR_CATEGORIES, _CATEGORY_RETRYABLE_DEFAULT

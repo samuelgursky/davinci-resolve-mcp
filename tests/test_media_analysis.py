@@ -894,7 +894,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "clip_summary": "Three distinct shots: opener, B-roll, outro.",
                     "shot_descriptions": [
                         {"shot_index": 1, "time_seconds_start": 0.0, "time_seconds_end": 2.0,
-                         "description": "Opening fisheye on rental car at driver door."},
+                         "description": "Opening fisheye on parked sedan at driver door."},
                         {"shot_index": 2, "time_seconds_start": 2.0, "time_seconds_end": 6.0,
                          "description": "Aerial driveway, no subjects in frame."},
                         {"shot_index": 3, "time_seconds_start": 6.0, "time_seconds_end": 10.0,
@@ -911,7 +911,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 plan = json.load(handle)
             shot_markers = [m for m in plan["markers"] if m["type"] == "shot"]
             by_index = {m["id"]: m for m in shot_markers}
-            self.assertEqual(by_index["shot-001"]["visual_description"], "Opening fisheye on rental car at driver door.")
+            self.assertEqual(by_index["shot-001"]["visual_description"], "Opening fisheye on parked sedan at driver door.")
             self.assertEqual(by_index["shot-002"]["visual_description"], "Aerial driveway, no subjects in frame.")
             self.assertEqual(by_index["shot-003"]["visual_description"], "Interior driver POV at the wheel.")
 
@@ -956,10 +956,10 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 clip_id="clip-partial",
                 vision_token="tok-partial-cccccccc",
                 visual={
-                    "clip_summary": "Cold open: rental car gag.",
+                    "clip_summary": "Cold open: parked sedan gag.",
                     "shot_descriptions": [
                         {"shot_index": 1, "time_seconds_start": 0.0, "time_seconds_end": 2.0,
-                         "description": "Opening fisheye on rental car."},
+                         "description": "Opening fisheye on parked sedan."},
                     ],
                     "analysis_keyframes": [
                         {"time_seconds": 0.5, "description": "Opening fisheye keyframe."},
@@ -971,7 +971,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             with open(result["marker_plan_json"], "r", encoding="utf-8") as handle:
                 plan = json.load(handle)
             shot_markers = {m["id"]: m for m in plan["markers"] if m["type"] == "shot"}
-            self.assertEqual(shot_markers["shot-001"]["visual_description"], "Opening fisheye on rental car.")
+            self.assertEqual(shot_markers["shot-001"]["visual_description"], "Opening fisheye on parked sedan.")
             # Shot 2 has no per-shot description and no in-range keyframe → fallback to clip_summary
             # tagged so reviewers can tell it was inherited, not authored for this shot.
             self.assertIn("clip summary", shot_markers["shot-002"]["visual_description"].lower())
@@ -1378,13 +1378,13 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     "clip:clip-cor-1:editorial_classification.primary_use": {
                         "value": "interview",
                         "source": "human",
-                        "author": "sam@bradfordoperations.com",
+                        "author": "editor@example.com",
                         "timestamp": "2026-05-19T10:00:00Z",
                     },
                     "shot:0:visual.shot_size": {
                         "value": "medium_close",
                         "source": "human",
-                        "author": "sam@bradfordoperations.com",
+                        "author": "editor@example.com",
                         "timestamp": "2026-05-19T10:01:00Z",
                     },
                 },

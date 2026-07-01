@@ -1,7 +1,5 @@
 """E3 contract test — `prefer_handle` opt-in for long-running analyze ops.
 
-See local/design/agentic-flow-improvements-gameplan-2.md §3 task E3.
-
 We don't actually exercise a live Resolve here — we test the dispatcher
 behavior in isolation: when `prefer_handle=true` is passed alongside an
 analyze_clip/analyze_file/analyze_bin/analyze_project/analyze_sequence,
@@ -13,7 +11,6 @@ import unittest
 
 # Replicates the relevant branch from src/server.py:13454. Kept in-test so
 # the test is self-contained even if the surrounding handler shape evolves.
-
 
 def _normalize_bool(v, default=False):
     if isinstance(v, bool):

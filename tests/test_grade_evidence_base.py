@@ -1,7 +1,4 @@
-"""Unit tests for B1 — grade_evidence_base composite read.
-
-See local/design/agentic-flow-improvements-gameplan.md §3 task B1.
-"""
+"""Unit tests for B1 — grade_evidence_base composite read."""
 import re
 import unittest
 

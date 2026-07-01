@@ -1,7 +1,5 @@
 """D3 contract test — partial-success preservation in batch manifests.
 
-See local/design/agentic-flow-improvements-gameplan-2.md §3 task D3.
-
 The helper _annotate_partial_success runs after the per-clip rows are
 populated but before the caps-refusal annotator, so it sees the same
 {success: bool, vision_status, error, record:{clip_id}} shape every

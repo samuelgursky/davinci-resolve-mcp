@@ -33,11 +33,12 @@ jobs:
       - name: Run static guard tests
         # Drift guards that gate every publish: no undefined names in src/,
         # tool action lists in sync with dispatch, control-panel guide in
-        # sync with the panel's navigation and screenshots, and the
-        # Blackmagic-facing api-limitations.md in sync with the api_truth ledger.
+        # sync with the panel's navigation and screenshots, the
+        # Blackmagic-facing api-limitations.md in sync with the api_truth ledger,
+        # and the tool counts quoted across the docs in sync with reality.
         run: |
           pip install pyflakes
-          python -m unittest tests.test_static_undefined_names tests.test_action_list_drift tests.test_panel_docs_drift tests.test_api_limitations_doc
+          python -m unittest tests.test_static_undefined_names tests.test_action_list_drift tests.test_panel_docs_drift tests.test_api_limitations_doc tests.test_doc_tool_counts
 
       - name: Run Node CLI smoke tests
         run: |

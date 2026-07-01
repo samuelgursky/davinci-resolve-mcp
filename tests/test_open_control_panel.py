@@ -137,7 +137,7 @@ class ControlPanelProbe(unittest.TestCase):
     def test_recognizes_dashboard_with_version(self) -> None:
         payload = {
             "success": True,
-            "project_name": "CKY",
+            "project_name": "DemoProject",
             "capabilities": {"mcp_version": "2.24.1"},
         }
         with mock.patch("urllib.request.urlopen") as m:
@@ -147,7 +147,7 @@ class ControlPanelProbe(unittest.TestCase):
         self.assertEqual(result, {"is_dashboard": True, "version": "2.24.1"})
 
     def test_recognizes_dashboard_without_version(self) -> None:
-        payload = {"success": True, "project_name": "CKY"}
+        payload = {"success": True, "project_name": "DemoProject"}
         with mock.patch("urllib.request.urlopen") as m:
             ctx = m.return_value.__enter__.return_value
             ctx.read.return_value = json.dumps(payload).encode("utf-8")

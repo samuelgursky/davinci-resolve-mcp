@@ -7,11 +7,11 @@ description: Media intelligence layer for the DaVinci Resolve MCP. Uses FFprobe,
 
 This skill wraps the project's canonical media analysis guide with Claude Code-specific integration.
 
-**Read `docs/media-analysis-guide.md` for the complete guide.** Everything below is Claude Code-specific context.
+**Read `docs/guides/media-analysis-guide.md` for the complete guide.** Everything below is Claude Code-specific context.
 
 ## The First Rule
 
-**Never touch the source.** Your relationship to source media is READ-ONLY. See `docs/media-analysis-guide.md` section "The First Rule: Never Touch the Source" for the full rationale from every post-production department.
+**Never touch the source.** Your relationship to source media is READ-ONLY. See `docs/guides/media-analysis-guide.md` section "The First Rule: Never Touch the Source" for the full rationale from every post-production department.
 
 ## MCP Integration
 
@@ -41,4 +41,4 @@ On first use, ask the user the three setup questions documented in the guide:
 
 ## Full Reference
 
-All analysis commands, output format, examples, proactive warnings, and principles are in `docs/media-analysis-guide.md`. Do not duplicate that content — read and follow it.
+All analysis commands, output format, examples, proactive warnings, and principles are in `docs/guides/media-analysis-guide.md`. Do not duplicate that content — read and follow it.

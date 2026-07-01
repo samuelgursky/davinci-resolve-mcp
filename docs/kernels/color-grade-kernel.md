@@ -86,6 +86,57 @@ All actions are exposed through `timeline_item_color`.
   as callable methods but are not forced in the boundary report because they can
   be asynchronous, page dependent, and expensive.
 
+## Advanced (offline) server — the grading / QC catalog
+
+The live actions above drive a *running* Resolve. The companion advanced server
+(`davinci-resolve-advanced`, see `resolve-advanced/README.md`) *computes* grades
+offline from extracted frames and reads/writes `.drx`/`.drp` grades with **no
+Resolve running**. It emits an apply-ready `.drx`; **applying it is this kernel's
+job** (`safe_apply_drx`). Node never drives Resolve.
+
+`drx` grading/QC actions (frame-stats → arithmetic → `.drx`, all local,
+deterministic, guarded — they refuse to fabricate a match rather than emit a
+silent no-op):
+
+| Action | Use when |
+| --- | --- |
+| `match_to_reference` | Match a clip toward an approved still (affine mean/std, skin-line gated, luma-preserving). |
+| `level_clips` | Level within-camera exposure/WB drift to a group hero. |
+| `skin_match` | Cross-camera skin-tone cohesion (skin-gated; throws on log/wrong-space frames). |
+| `shot_match` | B-roll cohesion (gray-world neutralize or hero match). |
+| `white_balance_match` | WB from a known-neutral patch / gray card. |
+| `contrast_normalize` | Match black/white points to a hero (affine gain+offset). |
+| `saturation_match` / `black_balance` | Saturation cohesion / neutralize a shadow cast. |
+| `cdl_io` | Import ASC CDL (`.cc`/`.ccc`/`.cdl`) → `.drx`. |
+| `grade_transfer` | Lossless Body copy — a `.drp` group / `.drx` look → apply-ready `.drx`. |
+| `lut_apply` | Attach a named `.cube` LUT to a node (round-trip asserted). |
+| `author_look` / `carry_look` | Version and carry an approved season/host look. |
+| `scope_read` / `intent_tags` / `gamut_legal` | Read frames: parade/vectorscope/clip%, shot-intent tags, broadcast-legal QC. |
+| `verify_grade` | Intended vs applied `.drx` → landed/drifted/missing/unverifiable. |
+
+Cross-server rules an agent must know:
+
+- **Value space.** `drx` `generate`/`merge` default to `space:'ui'` (Resolve
+  panel units; saturation 0–100, neutral 50). Pass `space:'drx'` only for raw
+  internal floats. Fidelity is ground-truth only for the calibrated set — check
+  the `valueFidelity` marker
+  (`resolve-advanced/vendor/drx-parameters/CALIBRATION-STATUS.md`).
+- **Hue-axis curves.** Naive `[0,1]` point lists auto-canonicalize into the
+  verified bezier cage; a `warnings` array in the result means the curve went
+  through raw and will render **FLAT** — surface it, don't ship silently.
+- **Apply targeting.** `safe_apply_drx` defaults to video track 1 / item 0 —
+  always pass `track_type`/`track_index`/`item_index` explicitly, and grab a
+  still/`.drx` backup first (`safe_apply_drx` does not snapshot).
+- **Relayout ("Cleanup Node Graph," no UI API).** Single clip, live: grab still →
+  `drx(action="relayout")` → `graph.reset_all_grades` → `safe_apply_drx` with
+  explicit indices (a same-structure apply keeps the OLD layout — the reset is
+  required). Whole project, offline: `project_db(action="relayout_node_graphs")`.
+- **Deps.** The grading catalog needs `sharp`; call the advanced `capabilities`
+  tool for live status and install hints.
+
+See the `resolve-color` skill (`.claude/skills/color-grade.md`) for the
+craft ↔ live ↔ offline routing and the frame-first rule.
+
 ## Live Probe
 
 Run the live boundary probe with:

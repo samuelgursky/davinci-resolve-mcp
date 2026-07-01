@@ -1,7 +1,4 @@
-"""F2 contract test — five workflow prompts are registered on the mcp instance.
-
-See local/design/agentic-flow-improvements-gameplan-2.md §3 task F2.
-"""
+"""F2 contract test — five workflow prompts are registered on the mcp instance."""
 import unittest
 
 

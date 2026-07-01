@@ -1,7 +1,5 @@
 """D2 contract test — flagship compound-tool docstrings carry XML semantic tags.
 
-See local/design/agentic-flow-improvements-gameplan-2.md §3 task D2.
-
 The full D2 mandate is to wrap the five biggest compound-tool docstrings in
 `<when_to_use>`, `<actions>`, `<returns>`, and `<example>` boundaries so Claude
 can use the tags as semantic anchors. This test pins the two flagship tools

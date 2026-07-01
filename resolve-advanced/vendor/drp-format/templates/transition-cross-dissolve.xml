@@ -1,0 +1,22 @@
+<Element>
+      <Sm2TiTransition DbId="a1ee9cd6-e3ba-4d5c-82a4-2e110fdcdd0a">
+       <FieldsBlob>000000020000001c8012190000002c789c6366606400028ee3f30fbf642000006baa031f</FieldsBlob>
+       <PrettyType>Cross Dissolve</PrettyType>
+       <Name>Cross Dissolve</Name>
+       <Start>88104</Start>
+       <Duration>24</Duration>
+       <LinkedItemSync/>
+       <WasDisbanded>false</WasDisbanded>
+       <MarkersBA/>
+       <UiMemento>0</UiMemento>
+       <Flags>0</Flags>
+       <PriorityIndex>0</PriorityIndex>
+       <EffectFiltersBA>000000020000003a800a37081238024a004a004a004a004a29088b015224ffffffe00000000000000c0000000000000000001800000000000c00000000000000f03f</EffectFiltersBA>
+       <ImportExportMetadataBA/>
+       <RenderTextEnabled>true</RenderTextEnabled>
+       <RenderTextGanged>true</RenderTextGanged>
+       <RenderTextPrefixed>true</RenderTextPrefixed>
+       <AlignmentType>2</AlignmentType>
+       <Position>2</Position>
+      </Sm2TiTransition>
+     </Element>

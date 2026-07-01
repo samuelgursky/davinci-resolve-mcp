@@ -21,6 +21,27 @@ Current kernel coverage: **136 actions** across **9 compound MCP tools**.
 | Project lifecycle | `project_manager` | `project_capabilities`, `probe_project_lifecycle`, `probe_project_settings`, `safe_project_create`, `safe_project_export`, `safe_project_import`, `safe_project_archive`, `safe_project_restore`, `safe_project_delete`, `safe_set_project_settings`, `project_settings_snapshot`, `database_capabilities`, `safe_set_current_database`, `preset_lifecycle_probe`, `project_boundary_report` |
 | Extension authoring | `script_plugin` | `extension_capabilities`, `probe_fuse_lifecycle`, `probe_dctl_lifecycle`, `probe_script_lifecycle`, `safe_install_extension`, `safe_remove_extension`, `refresh_or_restart_required`, `extension_boundary_report` |
 
+## Advanced (offline) server
+
+The kernels above wrap the **live** Python server (`davinci-resolve`), which
+drives a running Resolve. A companion **advanced** server
+(`davinci-resolve-advanced`, 18 tools — see `resolve-advanced/README.md`) does
+the beyond-API, **no-Resolve-running** half: it authors/edits `.drp`/`.drt`/`.drx`
+files, patches the project DB, and computes grades, conform QC, and deliverable
+QC offline. The rule of thumb is *compute offline, apply live*. Kernels that have
+an offline counterpart carry an "Advanced (offline) server" section linking the
+two:
+
+- Color / Grade → `drx` grading/QC catalog + relayout
+- Timeline Conform / Interchange → `conform`, `color_trace`, `offline_ref`, `editorial`
+- Render / Deliver → `deliverable`, `media`, `provenance`
+- Timeline Edit → `editorial` (interchange + changelist), `drt`
+
+Per-domain Claude Code skills route craft ↔ live ↔ offline automatically and live
+in `.claude/skills/`: `resolve-color`, `resolve-edit`, `resolve-conform`,
+`resolve-delivery` (plus `resolve-media-analysis`). `docs/SKILL.md` is the
+top-level brief for both servers.
+
 Helper-tool details that need more than an action list live in guides. See
 [Multicam Setup Helper Guide](../guides/multicam-setup-guide.md) for the
 `media_pool.setup_multicam_timeline` helper/API boundary and Resolve UI

@@ -1,7 +1,4 @@
-"""Contract tests for B4 — action_help pull-on-demand action guidance.
-
-See local/design/agentic-flow-improvements-gameplan.md §3 task B4.
-"""
+"""Contract tests for B4 — action_help pull-on-demand action guidance."""
 import unittest
 
 import src.server as compound

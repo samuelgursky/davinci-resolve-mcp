@@ -184,6 +184,15 @@ created, and render time against the active tier, and the AI-ops ledger
   sizes for the active project.
 - **Tools** — runtime helpers (ffprobe, ffmpeg, Whisper backends, OpenCV)
   with ready/missing status and copyable install commands.
+- **Advanced** — live capability status for the optional offline Node server
+  (`davinci-resolve-advanced-mcp`): the pure-JS core plus each user-installed
+  helper (ffmpeg, sharp, better-sqlite3) with what it enables and how to
+  install it. The full tool catalog is available under Docs → Advanced Server.
+- **Conform QC** — read-only browser for a conform lineage sidecar: point at
+  the `.db` the advanced server's `conform` tool writes to inspect snapshots,
+  diff a snapshot against its predecessor, and review per-cut frame-QC
+  verdicts (MATCH / OFFSET / WRONG / REF_OFFLINE / UNREADABLE) with tallies.
+  Ingest and QC runs stay with the MCP tools; the panel never writes.
 - **Media Pool History** — the provenance log for destructive media-pool
   operations (deletes, replaces, relinks), kept separate from timeline brain
   edits.

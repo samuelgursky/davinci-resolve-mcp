@@ -84,6 +84,45 @@ Supported aliases include `aaf`, `drt`, `edl`, `edl_cdl`, `edl_sdl`,
 - Export and import helpers require temp paths by default because they write
   interchange artifacts.
 
+## Advanced (offline) server — the conform QC engine
+
+The live actions above operate on a *running* Resolve. The companion advanced
+server (`davinci-resolve-advanced`, see `resolve-advanced/README.md`) does the
+finishing-grade conform work with **no Resolve running**, against `.drt`/`.drp`
+files and the project DB.
+
+- **`conform`** — offline conform/relink QC with **frame-oracle math, not
+  filename matching** (it catches a clip relinked to the wrong-but-similarly-named
+  source). Also: reverse/retimed subclip DB repair (reversed `source_start` =
+  `masterFrames − 1 − endoffset`, live-validated), sequence lineage store + diff +
+  rollback (hashed snapshots), and per-cut frame QC (oracle-frame vs
+  reference-render, scale-corrected, red/yellow/cyan verdicts).
+- **`color_trace`** — cross-project clip matching → a trace plan for carrying
+  grades across a re-conform (pairs with the color kernel's `drx grade_transfer`).
+- **`offline_ref`** — offline-reference clips have **no scripting API** but live
+  inside `.drp`/`.drt` as `<OfflineClip>` entries; patch them here.
+- **`editorial`** — `parse_interchange` (EDL/OTIO/XMEML; **AAF = honest refuse**),
+  `turnover_changelist` (moved/retimed/replaced/new/gone with timing guards),
+  `conform_manifest`, `marker_roundtrip`.
+- **`drt` / `project_db`** — timeline file authoring and DB patching.
+
+Gotchas the live path shares:
+
+- **XML import via the scripting API goes _offline_** (missing-media/generators
+  abort). Use `import_timeline_checked` with media **sanitize** (FCP7/FCPXML) so
+  the API imports with links intact, then exact-path relink. Restart a running MCP
+  server to pick up the sanitize fix.
+- **`.drt` version.** For DaVinci Resolve 19.1.3, set `DbPrjVer` 17 → 16 when
+  authoring a `.drt`.
+- **`project_db` patches** require the project **CLOSED** plus
+  `iConfirmProjectClosed:true`; writes auto-back-up and read-back verify. Resolve
+  caches open projects — **fully quit and relaunch** after patching.
+- **Deps.** `better-sqlite3` gates lineage/reverse/DB; `sharp`/ffmpeg gate frame
+  compare — call the advanced `capabilities` tool.
+
+See the `resolve-conform` skill (`.claude/skills/conform.md`) for the
+craft ↔ live ↔ offline routing.
+
 ## Live Probe
 
 Run the live boundary probe with:

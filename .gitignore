@@ -1,4 +1,8 @@
-# Python
+# Node (resolve-advanced — the davinci-resolve-advanced-mcp server + vendored libs)
+node_modules/
+resolve-advanced/node_modules/
+
+# Python (envs, build artifacts, caches)
 __pycache__/
 *.py[cod]
 *$py.class
@@ -6,6 +10,11 @@ __pycache__/
 .Python
 venv/
 env/
+.venv
+.env
+ENV/
+env.bak/
+venv.bak/
 build/
 develop-eggs/
 dist/
@@ -22,28 +31,33 @@ var/
 *.egg
 
 # Logs and temporary files
-logs/*.log
 *.log
+*.log.bak
 *.swp
 .DS_Store
 to_clean/
 logs_backup/
 cleanup_backup/
 tmp/
-tests/test_resolve20_results.json
 tests/*_results.json
+results.tsv
+# Keep the logs directory but not its contents
+logs/*
+!logs/.gitkeep
 
 # Configuration files with sensitive info
 # Don't ignore templates
 .mcp.json
 .mcp.json.backup
-.cursor/mcp.json
 claude_desktop_config.json
 !config-templates/*.template.json
 
-# IDE specific files
+# IDE / editor
 .idea/
 .vscode/
+.cursor/*
+# ...but track the generated cross-platform agent rules (see scripts/agent-rules/)
+!.cursor/rules/
 *.sublime-project
 *.sublime-workspace
 .specstory/
@@ -54,8 +68,6 @@ claude_desktop_config.json
 *.pid
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
@@ -75,50 +87,20 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# VS Code
-.vscode/
-
-# Cursor
-.cursor/
-
 # macOS specific files
 .AppleDouble
 .LSOverride
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Keep the logs directory but not its contents
-logs/*
-!logs/.gitkeep
-
 # Any backup directories
 *_backup/
-
-# Cursor
-.cursor/
 
 # Autoresearch framework (local development only)
 autoresearch/
 
-# Autoresearch artifacts
-run.log
-*.log.bak
-results.tsv
-
-# Local planning notes
-timeline-edit-kernel-gameplan.md
-docs/demo-video-gameplan.md
-operational-client-safety-hardening-gameplan.md
+# Local planning notes / scratch artifacts — anywhere in the tree.
+# Policy: gameplans and in-flight design docs are never committed; they live in local/.
 docs/_scratch/
 docs/_design/
-# Match gameplans / scratch artifacts anywhere in the tree, not just docs/ root.
 **/*gameplan*.md
 **/*ledger*.json
 **/*review-log*.md
@@ -127,11 +109,9 @@ docs/_design/
 # Resolve MCP media analysis artifacts
 .davinci-resolve-mcp-analysis/
 davinci-resolve-mcp-analysis/
-**/.davinci-resolve-mcp-analysis/
-**/davinci-resolve-mcp-analysis/
 
 # Local scratch / personal tooling attached to this project.
-# Holds things like the screenshot capture script, release-notes drafts,
-# and one-off repro scripts. Never shipped. See local/README.md.
+# Holds design docs, calibration references, release-notes drafts, the screenshot
+# capture script, and one-off repro scripts. Never shipped. See local/README.md.
 /local/
 .claude/launch.json

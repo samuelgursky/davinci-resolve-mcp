@@ -1,7 +1,5 @@
 """E2 — session-scoped repeated-failure tracker for the structured error envelope.
 
-See local/design/agentic-flow-improvements-gameplan-2.md §3 task E2.
-
 The model should not be the only line of defense against tight retry loops.
 This module tracks per-(scope_key, action_name) failure counts in-process. When
 the same scope hits a configurable threshold within a rolling window, the

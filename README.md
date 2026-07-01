@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.57.5-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.58.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#server-modes)
@@ -53,6 +53,78 @@ The command starts a localhost server and opens the control panel in your browse
 | Full / granular | `src/server.py --full` or `src/resolve_mcp_server.py` | 341 | Power users who want one MCP tool per Resolve API method. |
 
 The compound server is recommended unless you specifically need the granular one-tool-per-method surface.
+
+### Advanced server — beyond the scripting API (optional, Node)
+
+The same package ships a second, optional MCP server: **`davinci-resolve-advanced-mcp`** (bin
+`bin/davinci-resolve-advanced-mcp.mjs`). Where the Python server drives a *live* Resolve over the
+sanctioned scripting API, the advanced server does what the API **can't** — it reads and edits Resolve
+**files** (`.drp` / `.drt` / `.drx`) and applies DB/XML-level changes **with no Resolve running**, so it
+runs cloud *or* local. 18 tools: `drp`, `drt`, `drx` (per-clip grade codec **plus a deterministic,
+offline grading/QC catalog** — within-camera + cross-camera skin (v2 skin-line metric) + b-roll +
+neutral-patch WB matching, match-to-reference, saturation/black-balance, contrast-normalize, ASC CDL
+import, lossless grade-transfer + season-look authoring, named-LUT attach, scope reads + intent tags,
+verify-grade, display-referred frame extraction, broadcast-legal QC), `offline_ref`,
+`conform` (frame-oracle conform/relink QC + lineage), `color_trace` (carry grades across a re-conform),
+`fusion`, `audio_plan`, `fairlight` (bus routing), `audio`, `project_read`, `project_db`, `pipeline`
+(a **DB-as-truth pipeline**: compile YAML project specs into a canonical SQLite DB, then run stages with
+gates, provenance, and intent↔actual drift detection), `capabilities`, `deliverable` (deliverable QC /
+compliance), `media` (media front-end / AE ingest), `editorial` (editorial integrity / changelist),
+`provenance` (provenance / audit / episode report). It can also be consumed **as a
+library** (importable engine API), not just spawned as a server.
+
+DRX grade writes are **live-calibrated against Resolve Studio**: grade params take Resolve's
+on-screen panel units by default (`space: 'ui' | 'drx'`), and the structural writes (power windows,
+qualifiers, HDR zones, HSL curves, ColorSlice, blur/key/motion-effects) are panel-readback-verified —
+per-control status in `resolve-advanced/vendor/drx-parameters/CALIBRATION-STATUS.md`. It also closes
+a UI-only gap: **programmatic "Cleanup Node Graph"** (`drx` `relayout` for one clip, `project_db`
+`relayout_node_graphs` for a whole project) — node layout tidied, grade content byte-preserved.
+
+Add it alongside the live server (both ship in one `npm install`):
+
+```json
+{
+  "mcpServers": {
+    "davinci-resolve": { "command": "<python>", "args": ["<path>/src/server.py"] },
+    "davinci-resolve-advanced": { "command": "node", "args": ["<path>/bin/davinci-resolve-advanced-mcp.mjs"] }
+  }
+}
+```
+
+`install.py` prints both entries. The core is pure-JS/MIT with no required native modules; a few features
+need user-installed tools (ffmpeg for `audio`, `sharp`/`better-sqlite3` for some paths) — call the
+`capabilities` tool for live status and install hints.
+
+### Bradford Post Assistant — managed application (closed beta)
+
+The maintainers also build **Bradford Post Assistant**, a desktop application on top of this
+open foundation. Where the MCP servers give an agent hands, Post Assistant is the working
+copilot around them — an on-device AI assistant for post-production where client material
+never leaves the workstation:
+
+- **A post-production copilot** — a desktop app that sits alongside DaVinci Resolve and
+  watches the session live (timeline, grades, and frames — not just API calls), with an
+  embedded AI assistant and agent runtime, local media analysis (transcription, frame
+  analysis, editorial intelligence), and in-app conform QC.
+- **Memory** — persistent, encrypted on-device assistant memory plus cross-episode learning
+  mined from your pipeline's decoded facts (season-look drift, per-camera correction priors,
+  hero-frame libraries, conform path-map reuse), with accumulation managed for you and a
+  reviewed-insight workflow.
+- **Self-contained by design** — Post Assistant wires everything itself: this MCP for
+  Resolve control, the Bradford API for its extended services, and your choice of LLM
+  provider. Nothing to configure by hand, no separate clients to manage, and the app keeps
+  itself (and its bundled MCP) current with signed auto-updates.
+- **An extended professional toolset** — grade surgery on live projects, 22+ adaptive grade
+  families, a curated looks library, delivery-spec validation, editorial pacing/cleanup
+  analysis, natural-language color direction, and Fusion composition authoring — delivered
+  through the managed Bradford API.
+- **Production workflows** — the raw tools composed into finished, real-world flows
+  (turnover → conform → QC → delivery, season-look carry, episode reporting) with the
+  guardrails and approvals a client-facing shop expects.
+
+It is currently in **closed beta** — you can request access at
+[bradfordoperations.com/software/post-assistant](https://www.bradfordoperations.com/software/post-assistant).
+The open-source servers are complete and fully functional on their own.
 
 ## What You Can Do
 

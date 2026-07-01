@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--DbAppVer="19.1.3.0007" DbPrjVer="14"-->
+<Gallery::GyStill DbId="3ace2787-bac2-4fbd-9cb2-191f457855b3">
+ <FieldsBlob/>
+ <SrcType>1</SrcType>
+ <Label>calibration HSL curve sweep</Label>
+ <Width>1920</Width><Height>1080</Height><BitDepth>10</BitDepth><PAR>1</PAR><Endianship>1</Endianship>
+ <CreateTime>2026-01-01T00:00:00.000</CreateTime>
+ <pClipFullVer>
+  <ListMgt::LmVersion DbId="21cb92bf-680b-42a8-aa54-56960243c827">
+   <FieldsBlob/><Name/><HasCorrection>true</HasCorrection><VerType>0</VerType><ImplVersion>1</ImplVersion>
+   <Body>8128b52ffd60c1002d090006103d35708b3a0026f2fcbd434a3a80feb956d658f478c7777cf89a2dda953bb8dbbce35c212ddd02c39cd8a56297b4b26c646adc5bca94022c002c002f00981e55ba94b584fe2a0cb83ef3c082d5755db7714eb31e539fb9c0b98af5597de600e7a4f5bea12da1432e06cc7c51586b253176c6416b4c173de8bd4ff45978a42cdf74d17f263cd2f6079a2f7469acfd39c407c121d03a13a0a260351fac3d2958ae1a0a9168b8db3327dccd5a5b995963c964aaa831512817e9de8d74ef2d59eec6cc92186b970b868f88ac9a3c36461e985198262b77aa49ca271d98414c93943b4590d0271c010e900e0ccf936f46feffe331463a0114005fcd008183325e65ae90012007d006a0e4e52180ec9430306cf35a95e10121802002ffcd4b0633bd20078002</Body>
+  </ListMgt::LmVersion>
+ </pClipFullVer>
+ <PrimaryCCMode>0</PrimaryCCMode>
+</Gallery::GyStill>

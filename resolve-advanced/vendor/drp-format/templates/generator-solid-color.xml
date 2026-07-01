@@ -1,0 +1,21 @@
+<Element>
+      <Sm2TiGenerator DbId="8aee7ce2-17d5-4037-adfd-591ebfabaaf2">
+       <FieldsBlob/>
+       <PrettyType>Solid Color</PrettyType>
+       <Name>Solid Color</Name>
+       <Start>86400</Start>
+       <Duration>120</Duration>
+       <LinkedItemSync/>
+       <WasDisbanded>false</WasDisbanded>
+       <MarkersBA/>
+       <UiMemento>0</UiMemento>
+       <Flags>0</Flags>
+       <PriorityIndex>0</PriorityIndex>
+       <EffectFiltersBA/>
+       <ImportExportMetadataBA/>
+       <RenderTextEnabled>true</RenderTextEnabled>
+       <RenderTextGanged>true</RenderTextGanged>
+       <RenderTextPrefixed>true</RenderTextPrefixed>
+       <In/>
+      </Sm2TiGenerator>
+     </Element>

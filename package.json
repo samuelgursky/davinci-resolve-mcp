@@ -1,6 +1,6 @@
 {
   "name": "davinci-resolve-mcp",
-  "version": "2.57.5",
+  "version": "2.58.0",
   "description": "NPM bootstrapper for the DaVinci Resolve MCP Server.",
   "license": "MIT",
   "author": "Samuel Gursky <samgursky@gmail.com>",
@@ -14,11 +14,32 @@
   },
   "type": "module",
   "bin": {
-    "davinci-resolve-mcp": "./bin/davinci-resolve-mcp.mjs"
+    "davinci-resolve-mcp": "./bin/davinci-resolve-mcp.mjs",
+    "davinci-resolve-advanced-mcp": "./bin/davinci-resolve-advanced-mcp.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "adm-zip": "^0.5.16",
+    "fast-xml-parser": "^5.7.3",
+    "fzstd": "^0.1.1",
+    "jszip": "^3.10.1",
+    "uuid": "^9.0.0",
+    "zod": "^3.25.76",
+    "zstd-codec": "^0.1.5"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.0.0",
+    "js-yaml": "^4.1.0",
+    "pg": "^8.11.0",
+    "sharp": "^0.33.0"
   },
   "files": [
     "bin/",
     "src/**/*.py",
+    "resolve-advanced/server/**/*.mjs",
+    "resolve-advanced/vendor/**",
+    "resolve-advanced/package.json",
+    "resolve-advanced/README.md",
     "docs/**/*.md",
     "docs/reference/resolve_scripting_api.txt",
     "examples/**/*.md",

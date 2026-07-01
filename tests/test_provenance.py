@@ -1,7 +1,5 @@
 """F1 contract test — aggregated provenance citation map on summarize.
 
-See local/design/agentic-flow-improvements-gameplan-2.md §3 task F1.
-
 Exercises `summarize_reports` against a tmpdir that mimics the analysis-root
 layout (clips/<dir>/analysis.json files). Asserts the response carries a
 `provenance` block with source_reports keyed by signature and a generated_at

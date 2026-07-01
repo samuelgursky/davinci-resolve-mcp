@@ -103,8 +103,20 @@ def test_compound_tool_count():
 
 def test_prompt_registrations():
     source = (PROJECT_ROOT / "src" / "server.py").read_text()
-    # 2 baseline (davinci_resolve_workflow + analyze_media) + 5 F2 workflow prompts.
-    assert source.count("@mcp.prompt") == 7
+    # 2 baseline (davinci_resolve_workflow + analyze_media) + 5 F2 workflow prompts
+    # + 7 per-domain workflow routers.
+    assert source.count("@mcp.prompt") == 14
+    # Per-domain routers (cross-platform depth via MCP prompts).
+    for _name in (
+        "color_grade_workflow",
+        "timeline_edit_workflow",
+        "conform_workflow",
+        "delivery_workflow",
+        "fusion_workflow",
+        "audio_workflow",
+        "media_pool_workflow",
+    ):
+        assert f'name="{_name}"' in source
     # Baseline prompts (must not regress).
     assert 'name="analyze_media"' in source
     assert "def analyze_media(" in source
@@ -114,7 +126,7 @@ def test_prompt_registrations():
     assert "include_visuals=false" in source
     assert "Do not silently downgrade media analysis" in source
     assert "session_only=true" in source
-    # F2 workflow prompts (see local/design/agentic-flow-improvements-gameplan-2.md task F2).
+    # F2 workflow prompts (agentic-flow improvement F2).
     assert 'name="analyze_and_propose_grade"' in source
     assert 'name="match_bin_to_hero"' in source
     assert 'name="verify_timeline_coverage"' in source

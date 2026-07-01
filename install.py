@@ -35,7 +35,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.57.5"
+VERSION = "2.58.0"
 # Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
 # Resolve's scripting bridge loads into newer interpreters on recent builds
 # (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
@@ -666,14 +666,37 @@ def write_client_config(client, python_path, server_path, api_path, lib_path, dr
     return True, str(config_path)
 
 
+def build_advanced_entry(server_path):
+    """Build the config entry for the optional 'davinci-resolve-advanced' server.
+
+    This is the Node, beyond-the-scripting-API sibling (file/.drp/.drt/.drx
+    authoring + conform + editorial, no live Resolve required). It ships in the
+    same package as a second bin. Opt-in: include it only if you want the
+    file-level tools alongside the live server.
+    """
+    project_dir = Path(server_path).resolve().parents[1]  # .../src/server.py -> repo root
+    advanced_bin = project_dir / "bin" / "davinci-resolve-advanced-mcp.mjs"
+    return {"command": "node", "args": [str(advanced_bin)]}
+
+
 def generate_manual_config(python_path, server_path, api_path, lib_path):
     """Generate config snippets for manual setup."""
     entry = build_server_entry(python_path, server_path, api_path, lib_path)
     zed_entry = build_zed_entry(python_path, server_path, api_path, lib_path)
     opencode_entry = build_opencode_entry(python_path, server_path, api_path, lib_path)
+    advanced = build_advanced_entry(server_path)
 
-    standard = json.dumps({"mcpServers": {"davinci-resolve": entry}}, indent=2)
-    vscode_fmt = json.dumps({"servers": {"davinci-resolve": entry}}, indent=2)
+    # Standard snippet includes BOTH servers: the live Python server and the
+    # optional Node 'advanced' server (file-level, no Resolve). Drop the
+    # advanced entry if you only want live control.
+    standard = json.dumps({"mcpServers": {
+        "davinci-resolve": entry,
+        "davinci-resolve-advanced": advanced,
+    }}, indent=2)
+    vscode_fmt = json.dumps({"servers": {
+        "davinci-resolve": entry,
+        "davinci-resolve-advanced": advanced,
+    }}, indent=2)
     zed_fmt = json.dumps({"context_servers": {"davinci-resolve": zed_entry}}, indent=2)
     opencode_fmt = json.dumps({"mcp": {"davinci-resolve": opencode_entry}}, indent=2)
 

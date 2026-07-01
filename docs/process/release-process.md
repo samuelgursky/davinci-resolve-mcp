@@ -35,11 +35,15 @@ Every release bump must update all version surfaces:
   `venv/bin/python scripts/gen_api_limitations.py`. The
   `tests.test_api_limitations_doc` drift guard fails the suite if it is stale.
 - `docs/SKILL.md` when tool discovery, examples, or behavior changed
-- `docs/guides/control-panel.md` when the control panel UI changed, plus
+- `docs/guides/control-panel.md` — check EVERY release, not only when the
+  panel "changed": panel surfaces grow transitively (new tools, new docs pages,
+  new diagnostics cards), so review the guide for accuracy and update it plus
   regenerated screenshots: start the panel against a project with analysis
   data, then run `venv/bin/python scripts/regen_panel_screenshots.py`.
   The `tests.test_panel_docs_drift` guard fails the suite (and the publish
-  workflow) when the guide drifts from the panel's navigation or screenshots.
+  workflow) when the guide drifts from the panel's navigation or screenshots —
+  but the guard checks presence, not prose accuracy; the human pass is the
+  accuracy check.
 - Git tag, e.g. `v2.4.1`
 - GitHub Release notes
 
@@ -54,17 +58,35 @@ Always run static checks before release:
 venv/bin/python tests/test_import.py
 venv/bin/python scripts/audit_api_parity.py
 venv/bin/python scripts/gen_api_limitations.py --check
-venv/bin/python -m unittest tests.test_static_undefined_names tests.test_action_list_drift tests.test_panel_docs_drift
+node scripts/agent-rules/generate.mjs --check
+venv/bin/python -m unittest tests.test_static_undefined_names tests.test_action_list_drift tests.test_panel_docs_drift tests.test_doc_tool_counts tests.test_agent_rules_drift
 node bin/davinci-resolve-mcp.mjs --help
 node bin/davinci-resolve-mcp.mjs --version
 npm pack --dry-run
 git diff --check
 ```
 
-The three drift guards (undefined names in `src/`, tool action lists vs
-dispatch, control-panel guide vs panel navigation/screenshots) also run in the
-`Publish npm package` workflow on every `v*` tag, so a stale doc or drifted
-action list fails the publish — fix the drift rather than bypassing the gate.
+The drift guards (undefined names in `src/`, tool action lists vs dispatch,
+control-panel guide vs panel navigation/screenshots, api-limitations vs the
+api_truth ledger, and **tool counts across the docs vs reality** —
+`test_doc_tool_counts`) also run in the `Publish npm package` workflow on every
+`v*` tag, so a stale doc or drifted action list fails the publish — fix the drift
+rather than bypassing the gate.
+
+`test_doc_tool_counts` statically counts the compound (`src/server.py`), granular
+(`src/granular/`), and Node advanced (`resolve-advanced/server/index.mjs`) tools and
+asserts the numbers quoted in README, `resolve-advanced/README.md`, `docs/contributing.md`,
+`docs/SKILL.md`, `docs/reference/api-coverage.md`, and `.github/copilot-instructions.md`
+still match. When you add/remove a tool, update those docs to the counts the test prints.
+
+The cross-platform agent rule files (`.cursor/rules/*`, `.github/instructions/*`,
+`.windsurf/rules/*`, `.cursorrules`, `.windsurfrules`, the `AGENTS.md` domain-routing
+block, and `.github/copilot-instructions.md`) are **generated** by
+`scripts/agent-rules/generate.mjs`, which parses those same counts from their
+canonical docs. After a count or tool-routing change, run
+`node scripts/agent-rules/generate.mjs` and commit the result;
+`test_agent_rules_drift` fails the suite (and publish) if the committed files are
+stale. See `scripts/agent-rules/README.md`.
 
 Run focused unit tests for the changed surface. For recent timeline/marker
 helpers, this usually includes:

@@ -17,6 +17,16 @@ DaVinci Resolve must be running with **Preferences > General > "External scripti
 using"** set to **Local**. The server auto-launches Resolve if it is not running,
 but that first connection can take up to 60 seconds.
 
+**Session-start update note.** The first `resolve_control(action="get_version")`
+of a session returns an `mcp` block with the cached update check
+(`mcp.update` + `mcp.update_decision`). If `update_decision.action` is
+`"notify"` or `"prompt"`, tell the user ONCE that a newer MCP release is
+available (version + one-line pointer). Do not repeat it, do not auto-apply,
+and do not treat it as an error — updates are applied by the user via
+`python install.py` or the control panel's Settings page. If the user asks to
+check on demand, use `resolve_control(action="mcp_update_status",
+params={"force_check": true})`.
+
 Workflow Integration plugins/scripts are a separate Resolve-hosted UI mechanism.
 They are not required for this MCP server, but `docs/integrations/workflow-integrations.md`
 summarizes when they are useful for optional in-Resolve panels, UIManager
@@ -103,11 +113,54 @@ before mutating Resolve state.
 
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
-| Compound (default) | `src/server.py` | 32 tools | Most workflows — keeps context lean |
+| Compound (default) | `src/server.py` | 34 tools | Most workflows — keeps context lean |
 | Granular (full) | `src/server.py --full` | 341 tools | Power users needing one tool per API method |
 
 This skill document covers the **compound server** (the default). Each compound
 tool accepts an `action` string and an optional `params` object.
+
+### The advanced server (`davinci-resolve-advanced-mcp`)
+
+The same package ships an optional third surface: an offline Node server (18
+tools, typically registered as `davinci-resolve-advanced`) that edits Resolve
+**files** (`.drp`/`.drt`/`.drx`) and patches the project DB — no running Resolve
+required. Rule of thumb: drive a *live session* with the Python server; compute
+grades, QC, conform math, and file-level edits with the advanced server, then
+apply results through the live server. Full catalog: `resolve-advanced/README.md`.
+
+Operating rules an agent must know:
+
+- **Grade value space.** `drx` `generate`/`merge` default to `space:'ui'` —
+  params are Resolve PANEL units (lift/gamma/gain/offset panel numbers,
+  saturation 0–100 neutral 50). Pass `space:'drx'` only for raw internal floats
+  (e.g. re-encoding decoded values). Decoded values are ground truth only for
+  the calibrated native set — check the `valueFidelity` marker on `parse`
+  results; per-control status is `resolve-advanced/vendor/drx-parameters/CALIBRATION-STATUS.md`.
+- **Hue-axis curves.** Naive `[0,1]` point lists are canonicalized into the
+  verified bezier cage automatically. Pre-wrapped lists (x outside `[0,1]`) are
+  REFUSED unless `allowWrappedHueCage:true` (malformed cages can crash Resolve
+  19). If a `generate`/`merge` result carries a `warnings` array, the curve was
+  passed through raw and will render FLAT — tell the user, don't ship it silently.
+- **Node-graph relayout** (programmatic "Cleanup Node Graph"; the UI command
+  has no API). Single clip, live: `gallery_stills.grab_and_export` → advanced
+  `drx(action="relayout")` → `graph.reset_all_grades` → `safe_apply_drx` with
+  EXPLICIT item indices (the reset is required — a same-structure apply keeps
+  the old layout). Whole project, offline: `project_db(action="relayout_node_graphs")`.
+- **project_db patches** require the project CLOSED in Resolve plus
+  `iConfirmProjectClosed:true`; every write auto-backs-up and read-back
+  verifies. Resolve caches open projects in memory: after patching, fully QUIT
+  and relaunch Resolve or the patch will not be visible.
+- **Guards are load-bearing.** Advanced tools refuse rather than fabricate
+  (silent-lie guards): a thrown "refused" error usually means wrong input space,
+  log-encoded frames, or missing media — read the message before retrying.
+  Optional native deps (`better-sqlite3`, `sharp`, ffmpeg) gate some actions;
+  call the advanced `capabilities` tool for live status and install hints.
+
+Per-domain depth for both servers lives in the kernels (`docs/kernels/`), each of
+which carries an "Advanced (offline) server" section where an offline counterpart
+exists. Claude Code skills in `.claude/skills/` (`resolve-color`, `resolve-edit`,
+`resolve-conform`, `resolve-delivery`, `resolve-media-analysis`) route
+craft ↔ live ↔ offline automatically when working in that domain.
 
 The compound server also registers MCP prompts. Use `davinci_resolve_workflow`
 as the compact operating brief, and use `analyze_media` as a slash-command style
@@ -1156,6 +1209,14 @@ Key actions: `get_num_nodes(source?)`, `set_lut(node_index, lut_path, source?)`,
 `apply_grade_from_drx(path, grade_mode?, source?)` — grade_mode: `0`=no keyframes,
 `1`=source timecode aligned, `2`=start frames aligned,
 `reset_all_grades(source?)`
+
+DRX-apply gotchas (also apply to `timeline_item_color.safe_apply_drx`): ALWAYS pass
+`track_type`/`track_index`/`item_index` explicitly — the default target is video track 1
+item 0, NOT the current clip — and grab a still/`.drx` backup first (`safe_apply_drx` does
+not snapshot). When the applied `.drx` has the same node structure/ids as the target's
+current graph, Resolve keeps the existing node-editor layout (positions in the `.drx` are
+silently ignored); to re-layout a graph programmatically, reset the grade first, then
+apply (see the advanced server's `drx` `relayout` and `api_truth`).
 
 **`color_group`** — Manage color groups.
 

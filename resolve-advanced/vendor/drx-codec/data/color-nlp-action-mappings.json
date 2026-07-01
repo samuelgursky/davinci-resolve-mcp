@@ -1,0 +1,2232 @@
+{
+  "version": "1.0",
+  "schema_version": "2025-01-08",
+  "description": "Natural Language to Color Correction Action Mappings for DaVinci Resolve",
+
+  "intent_classification": {
+    "exposure": {
+      "keywords": ["brighter", "darker", "exposure", "open up", "bring down", "overexposed", "underexposed", "lighten", "darken", "bright", "dark", "luminance", "brightness", "light level", "illuminate", "dim", "shadow detail", "highlight detail", "lifted", "crushed", "clipped", "blown", "muddy", "murky", "gamma", "midtones", "mids", "lift", "gain", "offset", "stops", "ev", "ire levels", "too hot", "too dark", "needs light", "bring up", "pull down", "push up", "raise", "lower", "boost exposure", "cut exposure", "open it up", "close it down"],
+      "regex_patterns": [
+        "(?:make|get|go)\\s+(?:it\\s+)?(?:brighter|darker|lighter|dimmer)",
+        "(?:increase|decrease|raise|lower|bring\\s+(?:up|down)|push\\s+(?:up|down)|pull\\s+(?:up|down))\\s+(?:the\\s+)?(?:exposure|brightness|luminance|light\\s+level|mids|midtones|shadows|highlights|gamma|lift|gain|offset)",
+        "(?:too|very|way\\s+too|slightly)\\s+(?:bright|dark|hot|underexposed|overexposed|muddy|murky|dim)",
+        "open\\s+(?:it\\s+)?up(?:\\s+(?:a\\s+)?(?:bit|touch|lot|more))?",
+        "(?:bring|pull|push|lift|raise|boost|bump)\\s+(?:the\\s+)?(?:shadows|mids|midtones|highlights|blacks|whites)",
+        "(?:recover|save|bring\\s+back)\\s+(?:the\\s+)?(?:shadow|highlight)\\s+detail",
+        "(?:clip|crush|blow\\s+out)\\s+(?:the\\s+)?(?:blacks|whites|shadows|highlights)",
+        "(?:i\\s+can't|hard\\s+to)\\s+see\\s+(?:the\\s+)?(?:detail|shadows|face)",
+        "(?:add|need)\\s+(?:more\\s+)?(?:light|brightness|exposure)",
+        "(?:stop|half\\s+stop|quarter\\s+stop|third\\s+stop)\\s+(?:brighter|darker|up|down)"
+      ],
+      "primary_tools": ["offset", "gamma", "lift", "gain", "hdr_exposure"],
+      "contextual_hints": {
+        "shadows": { "tools": ["lift", "low_range_curve"], "typical_adjustment": 0.05 },
+        "midtones": { "tools": ["gamma", "mid_curve"], "typical_adjustment": 0.08 },
+        "highlights": { "tools": ["gain", "high_curve"], "typical_adjustment": 0.08 },
+        "overall": { "tools": ["offset", "exposure_slider"], "typical_adjustment": 0.1 }
+      }
+    },
+    "contrast": {
+      "keywords": ["contrast", "punch", "pop", "flat", "crushed", "lifted", "milky", "deep", "dynamic range", "snappy", "crispy", "crunchy", "hard", "soft contrast", "s-curve", "toe", "shoulder", "range", "separation", "tonal range", "depth", "dimension", "flat looking", "log looking", "washed", "no punch", "lifeless", "thin", "muddy", "rich", "bold", "aggressive", "harsh", "gentle", "compressed", "expanded"],
+      "regex_patterns": [
+        "(?:add|remove|increase|decrease|more|less|boost|cut|pump\\s+up|dial\\s+back)\\s+(?:the\\s+)?contrast",
+        "(?:crush|lift|raise|lower|sink|deepen)\\s+(?:the\\s+)?(?:blacks|shadows|toe)",
+        "(?:clip|roll\\s+off|compress|expand)\\s+(?:the\\s+)?(?:highlights|whites|shoulder)",
+        "make\\s+it\\s+(?:pop|punch|punchier|snappy|snappier|crispy|flat|flatter|muddy|rich|deeper)",
+        "(?:more|less|add|reduce)\\s+(?:dynamic\\s+)?range",
+        "(?:looks?|too|very)\\s+(?:flat|washed|muddy|punchy|contrasty|harsh|soft)",
+        "(?:add|apply|use)\\s+(?:an?\\s+)?s[\\-\\s]?curve",
+        "(?:expand|compress|stretch|squash)\\s+(?:the\\s+)?(?:tonal\\s+)?range",
+        "(?:more|less|add|reduce)\\s+(?:depth|dimension|separation)",
+        "(?:lift|raise)\\s+(?:the\\s+)?(?:floor|black\\s+point|pedestal)",
+        "(?:bring\\s+down|lower)\\s+(?:the\\s+)?(?:ceiling|white\\s+point)"
+      ],
+      "primary_tools": ["contrast", "curves", "lift", "gain"],
+      "contextual_hints": {
+        "natural_contrast": { "method": "lift_gain_spread", "description": "adjust lift and gain oppositely" },
+        "punchy_contrast": { "method": "s_curve", "description": "add curve with dark and bright points" },
+        "film_contrast": { "method": "soft_clip", "description": "use soft clip for rolloff" }
+      }
+    },
+    "color_balance": {
+      "keywords": ["warmer", "cooler", "white balance", "color cast", "temperature", "tint", "orange", "blue", "green", "magenta", "golden", "cold", "icy", "amber", "tungsten", "daylight", "kelvin", "wb", "color temp", "cast", "shift", "lean", "push", "toward", "neutral", "cyan", "yellow", "pink", "salmon", "sunset", "moonlight", "candlelight", "fluorescent", "mixed lighting", "correct", "neutralize"],
+      "regex_patterns": [
+        "(?:make|get|push|shift|lean)\\s+(?:it\\s+)?(?:warmer|cooler|colder|more\\s+(?:golden|amber|orange|blue|cyan|neutral))",
+        "(?:add|remove|boost|reduce)\\s+(?:warmth|coolness|orange|blue|golden\\s+tones|cold\\s+tones)",
+        "(?:fix|correct|adjust|set|dial\\s+in)\\s+(?:the\\s+)?(?:white\\s+)?balance",
+        "(?:remove|fix|kill|neutralize|correct)\\s+(?:the\\s+)?(?:green|magenta|blue|orange|yellow|pink|cyan)\\s+(?:cast|tint)",
+        "(?:too|very|way\\s+too|slightly)\\s+(?:warm|cool|cold|green|magenta|orange|blue|yellow|pink)",
+        "(?:push|shift|move)\\s+(?:toward|away\\s+from)\\s+(?:warm|cool|blue|orange|green|magenta)",
+        "(?:feels?|looks?)\\s+(?:too\\s+)?(?:tungsten|daylight|fluorescent|mixed)",
+        "(?:warm|cool)\\s+(?:the\\s+)?(?:shadows|midtones|highlights|mids|highs|lows)",
+        "(?:split|separate)\\s+(?:the\\s+)?(?:warm|cool)\\s+(?:tones|colors)",
+        "(?:more|less)\\s+(?:golden|amber|blue|cyan|teal)(?:\\s+(?:in|on)\\s+(?:the\\s+)?(?:highlights|shadows|skin))?",
+        "(?:kelvin|color\\s+temp)\\s+(?:up|down|higher|lower)"
+      ],
+      "primary_tools": ["temp", "tint", "offset_color", "lift_color", "gamma_color", "gain_color"],
+      "contextual_hints": {
+        "global_temp": { "tools": ["temp"], "description": "overall temperature shift" },
+        "shadow_color": { "tools": ["lift_color"], "description": "color in shadows only" },
+        "midtone_color": { "tools": ["gamma_color"], "description": "color in midtones only" },
+        "highlight_color": { "tools": ["gain_color"], "description": "color in highlights only" }
+      }
+    },
+    "saturation": {
+      "keywords": ["saturated", "vivid", "colorful", "muted", "dull", "vibrant", "desaturate", "saturation", "black and white", "monochrome", "chroma", "color intensity", "color boost", "punchy colors", "rich colors", "juicy", "anemic", "washed out", "faded", "pastel", "bleached", "selective saturation", "color richness", "gray", "grayscale", "bw", "b&w", "mono", "chromatic", "achromatic", "color strength"],
+      "regex_patterns": [
+        "(?:boost|increase|decrease|reduce|add|remove|pump\\s+up|dial\\s+back)\\s+(?:the\\s+)?(?:saturation|chroma|vibrance|color(?:\\s+intensity)?)",
+        "(?:more|less)\\s+(?:saturated|vivid|colorful|vibrant|muted|dull|washed)",
+        "(?:make|go|convert)\\s+(?:it\\s+)?(?:black\\s+and\\s+white|monochrome|grayscale|bw|b&w|mono)",
+        "(?:add|remove|boost|kill|drain)\\s+(?:the\\s+)?(?:color|colors|vibrance|chroma)",
+        "(?:mute|punch\\s+up|pump|saturate|desaturate)\\s+(?:the\\s+)?colors?",
+        "(?:too|very|way\\s+too|slightly)\\s+(?:saturated|colorful|dull|muted|washed|vivid)",
+        "(?:rich|juicy|anemic|weak|strong|bold|subtle)\\s+colors?",
+        "(?:color\\s+)?(?:looks?|feels?)\\s+(?:washed|faded|punchy|flat|dead|alive)",
+        "(?:pastel|bleached|bleach\\s+bypass|skip\\s+bleach)(?:\\s+look)?",
+        "(?:selective|targeted)\\s+(?:saturation|desaturation)",
+        "(?:protect|preserve)\\s+(?:the\\s+)?(?:skin|skin\\s+tones)\\s+(?:saturation|color)"
+      ],
+      "primary_tools": ["saturation", "color_boost", "sat_curves", "hsl_saturation"],
+      "contextual_hints": {
+        "global": { "tools": ["saturation"], "description": "all colors equally" },
+        "natural": { "tools": ["color_boost"], "description": "protects skin tones" },
+        "selective": { "tools": ["hsl_saturation", "qualifier"], "description": "specific colors only" }
+      }
+    },
+    "specific_color": {
+      "keywords": ["reds", "blues", "greens", "yellows", "cyans", "magentas", "sky", "skin", "grass", "foliage", "water", "oranges", "purples", "violets", "teals", "pinks", "skin tones", "flesh tones", "complexion", "face color", "lips", "eyes", "hair", "trees", "leaves", "ocean", "sea", "clouds", "sunset colors", "fire", "neon", "hue", "hue shift", "color wheel", "selective color", "isolated color", "specific hue", "particular color"],
+      "regex_patterns": [
+        "(?:adjust|change|shift|fix|punch|mute|saturate|desaturate|brighten|darken|warm|cool)\\s+(?:the\\s+)?(?:reds?|blues?|greens?|yellows?|cyans?|magentas?|oranges?|purples?|violets?|teals?|pinks?)",
+        "(?:adjust|fix|correct|warm|cool|desaturate|saturate|shift)\\s+(?:the\\s+)?(?:skin(?:\\s+tones?)?|flesh\\s+tones?|complexion|face\\s+color)",
+        "(?:make|get|shift)\\s+(?:the\\s+)?(?:sky|grass|foliage|water|ocean|trees|leaves|clouds)\\s+(?:bluer|greener|warmer|cooler|more\\s+saturated|less\\s+saturated|brighter|darker)",
+        "(?:desaturate|saturate|punch|mute|shift|rotate)\\s+(?:the\\s+)?(?:reds?|blues?|greens?|yellows?|cyans?|magentas?|oranges?)",
+        "(?:hue|color)\\s+(?:shift|rotate|adjust|change)\\s+(?:the\\s+)?(?:reds?|blues?|greens?|etc\\.?)",
+        "(?:selective|isolated|specific|targeted)\\s+color\\s+(?:adjustment|correction|grade)",
+        "(?:only|just)\\s+(?:the\\s+)?(?:reds?|blues?|greens?|skin|sky|etc\\.?)",
+        "(?:push|pull|shift)\\s+(?:the\\s+)?(?:reds?|oranges?)\\s+(?:toward|away\\s+from)\\s+(?:orange|yellow|magenta)",
+        "(?:skin|face|talent)\\s+(?:looks?|is)\\s+(?:too\\s+)?(?:red|orange|green|pale|yellow|pink|blotchy)"
+      ],
+      "primary_tools": ["qualifier", "hsl_curves", "colorslice", "color_warper", "curves_hue_vs_hue"],
+      "requires_secondary": true,
+      "contextual_hints": {
+        "skin": { "workflow": "qualify skin tones, adjust within isolated area" },
+        "sky": { "workflow": "qualify blues and cyans in upper frame, adjust" },
+        "foliage": { "workflow": "qualify greens and yellows, adjust hue and saturation" }
+      }
+    },
+    "isolation": {
+      "keywords": ["isolate", "select", "just the", "only the", "that area", "subject", "background", "vignette", "mask", "window", "power window", "qualifier", "key", "matte", "selection", "garbage matte", "roto", "magic mask", "face", "person", "talent", "actor", "foreground", "edges", "corners", "center", "specific area", "region", "zone", "inside", "outside", "tracked", "following"],
+      "regex_patterns": [
+        "(?:isolate|select|grab|pick|key|qualify|mask|window)\\s+(?:just\\s+)?(?:the\\s+)?(?:subject|background|face|sky|person|talent|foreground|hair|clothing|skin|eyes|lips)",
+        "(?:just|only)\\s+(?:the\\s+)?(?:subject|background|highlights|shadows|midtones|face|sky|that\\s+area|this\\s+part|that\\s+region)",
+        "(?:add|create|draw|make)\\s+(?:a\\s+)?(?:vignette|mask|window|power\\s+window|circular\\s+window|square\\s+window|gradient)",
+        "(?:brighten|darken|warm|cool|desaturate|saturate|soften|sharpen|blur)\\s+(?:just\\s+)?(?:the\\s+)?(?:face|subject|background|edges|corners|center|foreground)",
+        "(?:separate|split|divide)\\s+(?:the\\s+)?(?:subject|foreground)\\s+(?:from|and)\\s+(?:the\\s+)?background",
+        "(?:track|follow|stick\\s+to)\\s+(?:the\\s+)?(?:face|subject|person|talent|movement)",
+        "(?:magic\\s+mask|auto\\s+mask|ai\\s+mask|person\\s+mask|face\\s+mask|object\\s+mask)",
+        "(?:darken|burn)\\s+(?:the\\s+)?(?:edges|corners|outside|perimeter)",
+        "(?:brighten|dodge)\\s+(?:the\\s+)?(?:center|subject|face|eyes)",
+        "(?:everything\\s+)?(?:except|but)\\s+(?:the\\s+)?(?:subject|face|sky|background)",
+        "(?:inside|outside|within|around)\\s+(?:the\\s+)?(?:selection|mask|window|qualified\\s+area)"
+      ],
+      "primary_tools": ["qualifier", "window", "magic_mask", "power_window", "gradient"],
+      "requires_secondary": true,
+      "contextual_hints": {
+        "subject_isolation": { "workflow": "use magic mask or qualifier to isolate" },
+        "vignette": { "workflow": "circular window, inverted, darken edges" },
+        "face_work": { "workflow": "window or qualifier on skin tones, track if moving" }
+      }
+    },
+    "texture": {
+      "keywords": ["sharp", "soft", "detail", "texture", "clarity", "gritty", "smooth", "blur", "focus", "diffusion", "pro mist", "glimmerglass", "halation", "grain", "noise", "crunchy", "crispy", "mushy", "dreamy", "ethereal", "harsh", "gentle", "defined", "undefined", "fine detail", "midtone detail", "local contrast", "skin texture", "pores", "wrinkles", "facial detail"],
+      "regex_patterns": [
+        "(?:add|remove|increase|decrease|boost|reduce|dial\\s+(?:up|down|back))\\s+(?:the\\s+)?(?:clarity|detail|texture|sharpness|sharpening|grain|noise|diffusion|softness|blur|grit)",
+        "(?:make|get)\\s+(?:it\\s+)?(?:sharper|softer|grittier|smoother|crispier|mushier|dreamier|more\\s+ethereal|more\\s+textured)",
+        "(?:soften|sharpen|blur|smooth|texture|grain)\\s+(?:the\\s+)?(?:image|midtones|skin|face|background|highlights|shadows)",
+        "(?:too|very)\\s+(?:sharp|soft|gritty|smooth|crispy|mushy|harsh|gentle)",
+        "(?:pro\\s+mist|glimmerglass|halation|diffusion|bloom|glow)(?:\\s+(?:look|effect))?",
+        "(?:hide|reduce|minimize|soften)\\s+(?:the\\s+)?(?:skin\\s+texture|pores|wrinkles|blemishes|imperfections|facial\\s+detail)",
+        "(?:bring\\s+out|enhance|emphasize|accentuate)\\s+(?:the\\s+)?(?:detail|texture|fine\\s+detail|midtone\\s+detail)",
+        "(?:local\\s+contrast|micro\\s+contrast|midtone\\s+detail|md)",
+        "(?:add|apply|dial\\s+in)\\s+(?:film\\s+)?grain",
+        "(?:remove|reduce|denoise|clean\\s+up)\\s+(?:the\\s+)?noise"
+      ],
+      "primary_tools": ["midtone_detail", "sharpen", "blur", "mist", "grain", "denoise"],
+      "contextual_hints": {
+        "overall_detail": { "tools": ["midtone_detail"], "description": "affects whole image detail" },
+        "selective_soft": { "workflow": "qualify skin, reduce detail in selection" },
+        "film_texture": { "tools": ["grain"], "description": "add organic film-like texture" }
+      }
+    },
+    "style": {
+      "keywords": ["film look", "cinematic", "vintage", "modern", "retro", "blockbuster", "teal and orange", "look", "feel", "mood", "vibe", "aesthetic", "style", "grade", "treatment", "color grade", "film stock", "kodak", "fuji", "arri", "red", "alexa", "70s", "80s", "90s", "noir", "horror", "thriller", "romantic", "comedy", "documentary", "broadcast", "commercial", "music video", "indie", "arthouse", "hollywood", "european", "asian cinema", "golden hour", "blue hour", "day for night", "night look", "moonlight", "sunset", "sunrise", "bleach bypass", "cross process", "instagram", "vsco", "lomo", "polaroid"],
+      "regex_patterns": [
+        "(?:give|add|create|apply|dial\\s+in)\\s+(?:it\\s+)?(?:a\\s+)?(?:film|cinematic|vintage|retro|modern|classic|hollywood|indie|arthouse|documentary|broadcast|commercial|music\\s+video)\\s+(?:look|feel|style|grade|vibe|aesthetic)",
+        "(?:make|get)\\s+(?:it\\s+)?(?:look\\s+)?(?:more\\s+)?(?:cinematic|filmic|vintage|retro|modern|stylized|natural|documentary|broadcast)",
+        "(?:teal\\s+and\\s+orange|orange\\s+and\\s+teal|split\\s+tone|split\\s+toning|day\\s+for\\s+night|bleach\\s+bypass|cross\\s+process|skip\\s+bleach)",
+        "(?:like|similar\\s+to|inspired\\s+by|reminiscent\\s+of)\\s+(?:a\\s+)?(?:film|movie|(?:specific\\s+)?film\\s+stock|kodak|fuji)",
+        "(?:70s|80s|90s|2000s|fifties|sixties|seventies|eighties|nineties)\\s+(?:look|feel|style|vibe|aesthetic)",
+        "(?:noir|horror|thriller|romantic|comedy|action|sci-fi|scifi|western|period|drama)\\s+(?:look|feel|style|genre|vibe)",
+        "(?:golden\\s+hour|blue\\s+hour|magic\\s+hour|sunset|sunrise|twilight|dawn|dusk|moonlight|candlelight|firelight)\\s+(?:look|feel|lighting)?",
+        "(?:instagram|vsco|lomo|polaroid|lomography|hipster|analog|analogue)\\s+(?:look|filter|style|vibe)?",
+        "(?:match|emulate|replicate|copy|mimic)\\s+(?:the\\s+)?(?:look|style|grade)\\s+(?:of|from)",
+        "(?:film\\s+stock|stock)\\s+(?:emulation|look|simulation)\\s+(?:like|for)?\\s+(?:kodak|fuji|vision|portra|ektar)"
+      ],
+      "primary_tools": ["compound_adjustment", "lut", "film_emulation"],
+      "is_compound": true,
+      "contextual_hints": {
+        "cinematic": { "adjustments": ["contrast_up", "saturation_slight_down", "teal_shadows_orange_highlights", "vignette"] },
+        "vintage": { "adjustments": ["lift_blacks", "saturation_down", "warmth_up", "contrast_down"] },
+        "film_stock": { "workflow": "apply film emulation LUT or build manually with characteristic curves" }
+      }
+    },
+    "undo_reset": {
+      "keywords": ["undo", "reset", "revert", "go back", "start over", "clear", "remove", "cancel", "redo", "previous", "original", "before", "baseline"],
+      "regex_patterns": [
+        "(?:undo|reset|revert|clear|remove|cancel)\\s+(?:the\\s+)?(?:last\\s+)?(?:change|adjustment|correction|grade|all)",
+        "(?:go|take\\s+it)\\s+back(?:\\s+(?:one|a)\\s+step)?",
+        "(?:start|begin)\\s+(?:over|again|fresh)",
+        "(?:back\\s+to|return\\s+to)\\s+(?:the\\s+)?(?:original|baseline|beginning|start)",
+        "(?:that\\s+was)?\\s*(?:too\\s+much|wrong|not\\s+right)",
+        "(?:never\\s+mind|forget\\s+that|scratch\\s+that)"
+      ],
+      "primary_tools": ["undo", "reset_node", "reset_grade"]
+    },
+    "comparison": {
+      "keywords": ["compare", "before after", "toggle", "show original", "a/b", "side by side", "split", "wipe", "reference", "match"],
+      "regex_patterns": [
+        "(?:show|toggle|compare)\\s+(?:me\\s+)?(?:the\\s+)?(?:before|original|ungraded)",
+        "(?:before|original)\\s+(?:and\\s+)?after",
+        "(?:a/?b|side\\s+by\\s+side|split|wipe)\\s+(?:compare|comparison|view)?",
+        "(?:compare|match)\\s+(?:to|with|against)\\s+(?:the\\s+)?(?:reference|original|another\\s+shot)"
+      ],
+      "primary_tools": ["bypass", "split_screen", "reference"]
+    }
+  },
+
+  "phrase_to_action": {
+    "make it brighter": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "increase", "default_amount": 0.08 },
+        { "parameter": "primaries.gamma.y", "operation": "increase", "default_amount": 0.05 }
+      ],
+      "alternatives": [
+        { "parameter": "hdr.global.exposure", "operation": "increase", "default_amount": 0.75 }
+      ]
+    },
+    "brighten it up": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "increase", "default_amount": 0.08 },
+        { "parameter": "primaries.gamma.y", "operation": "increase", "default_amount": 0.05 }
+      ]
+    },
+    "bring up the exposure": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "increase", "default_amount": 0.1 }
+      ]
+    },
+    "increase exposure": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "increase", "default_amount": 0.08 }
+      ]
+    },
+    "raise the exposure": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "increase", "default_amount": 0.08 }
+      ]
+    },
+    "add more light": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.gamma.y", "operation": "increase", "default_amount": 0.08 }
+      ]
+    },
+    "lighten it": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.gamma.y", "operation": "increase", "default_amount": 0.06 }
+      ]
+    },
+    "its too dark": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "increase", "default_amount": 0.1 },
+        { "parameter": "primaries.gamma.y", "operation": "increase", "default_amount": 0.06 }
+      ]
+    },
+    "too underexposed": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "increase", "default_amount": 0.12 }
+      ]
+    },
+    "make it darker": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "decrease", "default_amount": 0.08 },
+        { "parameter": "primaries.gamma.y", "operation": "decrease", "default_amount": 0.05 }
+      ]
+    },
+    "darken it": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "decrease", "default_amount": 0.08 }
+      ]
+    },
+    "bring down the exposure": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "decrease", "default_amount": 0.1 }
+      ]
+    },
+    "decrease exposure": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "decrease", "default_amount": 0.08 }
+      ]
+    },
+    "lower the exposure": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "decrease", "default_amount": 0.08 }
+      ]
+    },
+    "its too bright": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.offset.y", "operation": "decrease", "default_amount": 0.1 },
+        { "parameter": "primaries.gain.y", "operation": "decrease", "default_amount": 0.05 }
+      ]
+    },
+    "too overexposed": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.gain.y", "operation": "decrease", "default_amount": 0.1 }
+      ]
+    },
+    "open it up": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.gamma.y", "operation": "increase", "default_amount": 0.08 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 }
+      ]
+    },
+    "open up the shadows": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.06 },
+        { "parameter": "primaries.gamma.y", "operation": "increase", "default_amount": 0.03 }
+      ]
+    },
+    "bring out the shadow detail": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 }
+      ]
+    },
+    "recover the shadows": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.08 }
+      ]
+    },
+    "bring down the highlights": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.gain.y", "operation": "decrease", "default_amount": 0.08 }
+      ]
+    },
+    "recover the highlights": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.gain.y", "operation": "decrease", "default_amount": 0.1 },
+        { "parameter": "curves.soft_clip.high_soft", "operation": "set", "value": 900 }
+      ]
+    },
+    "pull down the whites": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.gain.y", "operation": "decrease", "default_amount": 0.08 }
+      ]
+    },
+    "brighten the midtones": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.gamma.y", "operation": "increase", "default_amount": 0.08 }
+      ]
+    },
+    "darken the midtones": {
+      "intent": "exposure",
+      "actions": [
+        { "parameter": "primaries.gamma.y", "operation": "decrease", "default_amount": 0.08 }
+      ]
+    },
+    "add contrast": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 }
+      ],
+      "side_effects": ["may_increase_saturation"],
+      "alternatives": [
+        { "method": "s_curve", "description": "More precise control" },
+        { "method": "lift_gain_spread", "description": "Lower lift, raise gain" }
+      ]
+    },
+    "more contrast": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 }
+      ]
+    },
+    "increase contrast": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 }
+      ]
+    },
+    "boost the contrast": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 30 }
+      ]
+    },
+    "punch it up": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 30 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 8 }
+      ]
+    },
+    "punchy": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 30 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 10 }
+      ]
+    },
+    "punchy contrast": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 35 }
+      ]
+    },
+    "make it punchier": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 30 }
+      ]
+    },
+    "snappy": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 20 }
+      ]
+    },
+    "make it snappy": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 20 }
+      ]
+    },
+    "crispy": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 20 },
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 30 }
+      ]
+    },
+    "remove contrast": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 25 }
+      ]
+    },
+    "less contrast": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 20 }
+      ]
+    },
+    "reduce contrast": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 25 }
+      ]
+    },
+    "flatten the image": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 30 }
+      ]
+    },
+    "flatten it out": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 30 }
+      ]
+    },
+    "make it flat": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 35 }
+      ]
+    },
+    "too contrasty": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 25 }
+      ]
+    },
+    "crush the blacks": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.05 }
+      ],
+      "result": "deeper_blacks_less_shadow_detail",
+      "opposite": "lift the blacks"
+    },
+    "crush the shadows": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.05 }
+      ]
+    },
+    "deeper blacks": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.04 }
+      ]
+    },
+    "sink the blacks": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.05 }
+      ]
+    },
+    "lift the blacks": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 }
+      ],
+      "result": "milky_blacks_more_shadow_detail",
+      "opposite": "crush the blacks",
+      "style_associations": ["vintage", "faded_film"]
+    },
+    "lift the shadows": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 }
+      ]
+    },
+    "raise the blacks": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 }
+      ]
+    },
+    "milky blacks": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.06 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 15 }
+      ]
+    },
+    "faded blacks": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.07 }
+      ]
+    },
+    "make it pop": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 10 },
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 25 }
+      ]
+    },
+    "pop it": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 10 }
+      ]
+    },
+    "more dynamic": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 20 }
+      ]
+    },
+    "add dynamic range": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.03 },
+        { "parameter": "primaries.gain.y", "operation": "increase", "default_amount": 0.03 }
+      ]
+    },
+    "expand the range": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.04 },
+        { "parameter": "primaries.gain.y", "operation": "increase", "default_amount": 0.04 }
+      ]
+    },
+    "compress the range": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.gain.y", "operation": "decrease", "default_amount": 0.04 }
+      ]
+    },
+    "s-curve": {
+      "intent": "contrast",
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.02 },
+        { "parameter": "primaries.gain.y", "operation": "increase", "default_amount": 0.02 }
+      ]
+    },
+    "make it warmer": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 600 }
+      ],
+      "result": "orange_yellow_shift",
+      "psychological_effect": "comfort_nostalgia_intimacy"
+    },
+    "warm it up": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 600 }
+      ]
+    },
+    "add warmth": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 500 }
+      ]
+    },
+    "more warmth": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 500 }
+      ]
+    },
+    "warmer tones": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 600 }
+      ]
+    },
+    "push it warm": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 700 }
+      ]
+    },
+    "golden tones": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 800 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 8 }
+      ]
+    },
+    "more golden": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 700 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 5 }
+      ]
+    },
+    "make it cooler": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 600 }
+      ],
+      "result": "blue_shift",
+      "psychological_effect": "tension_isolation_technology"
+    },
+    "cool it down": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 600 }
+      ]
+    },
+    "add coolness": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 500 }
+      ]
+    },
+    "cooler tones": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 600 }
+      ]
+    },
+    "push it cool": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 700 }
+      ]
+    },
+    "more blue": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 600 }
+      ]
+    },
+    "bluer": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 500 }
+      ]
+    },
+    "icy cold": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 900 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 10 }
+      ]
+    },
+    "too warm": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 500 }
+      ]
+    },
+    "too cool": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 500 }
+      ]
+    },
+    "fix the white balance": {
+      "intent": "color_balance",
+      "workflow": [
+        { "step": 1, "action": "use_eyedropper_on_neutral_gray" },
+        { "step": 2, "action": "adjust_temp_and_tint" }
+      ],
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "auto_or_manual" },
+        { "parameter": "primaries.tint", "operation": "auto_or_manual" }
+      ]
+    },
+    "correct the white balance": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "auto_or_manual" },
+        { "parameter": "primaries.tint", "operation": "auto_or_manual" }
+      ]
+    },
+    "neutralize it": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "set", "value": 0 },
+        { "parameter": "primaries.tint", "operation": "set", "value": 0 }
+      ]
+    },
+    "remove the green cast": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.tint", "operation": "increase", "default_amount": 25 }
+      ],
+      "description": "push_toward_magenta"
+    },
+    "fix the green": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.tint", "operation": "increase", "default_amount": 25 }
+      ]
+    },
+    "too green": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.tint", "operation": "increase", "default_amount": 20 }
+      ]
+    },
+    "push magenta": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.tint", "operation": "increase", "default_amount": 20 }
+      ]
+    },
+    "remove the magenta cast": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.tint", "operation": "decrease", "default_amount": 25 }
+      ],
+      "description": "push_toward_green"
+    },
+    "fix the magenta": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.tint", "operation": "decrease", "default_amount": 25 }
+      ]
+    },
+    "too magenta": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.tint", "operation": "decrease", "default_amount": 20 }
+      ]
+    },
+    "too pink": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.tint", "operation": "decrease", "default_amount": 20 }
+      ]
+    },
+    "push green": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.tint", "operation": "decrease", "default_amount": 20 }
+      ]
+    },
+    "warm the highlights": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.gain.b", "operation": "decrease", "default_amount": 0.02 }
+      ]
+    },
+    "warm up the highlights": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.gain.b", "operation": "decrease", "default_amount": 0.02 }
+      ]
+    },
+    "golden highlights": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.gain.g", "operation": "increase", "default_amount": 0.02 },
+        { "parameter": "primaries.gain.b", "operation": "decrease", "default_amount": 0.03 }
+      ]
+    },
+    "cool the highlights": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.gain.b", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.gain.r", "operation": "decrease", "default_amount": 0.02 }
+      ]
+    },
+    "blue highlights": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.gain.b", "operation": "increase", "default_amount": 0.05 }
+      ]
+    },
+    "cool the shadows": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.lift.r", "operation": "decrease", "default_amount": 0.02 }
+      ]
+    },
+    "blue shadows": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.05 }
+      ]
+    },
+    "teal shadows": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.lift.g", "operation": "increase", "default_amount": 0.02 },
+        { "parameter": "primaries.lift.r", "operation": "decrease", "default_amount": 0.03 }
+      ]
+    },
+    "warm the shadows": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.lift.r", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.lift.b", "operation": "decrease", "default_amount": 0.02 }
+      ]
+    },
+    "warm up the shadows": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.lift.r", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.lift.b", "operation": "decrease", "default_amount": 0.02 }
+      ]
+    },
+    "warm the midtones": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.gamma.r", "operation": "increase", "default_amount": 0.03 },
+        { "parameter": "primaries.gamma.b", "operation": "decrease", "default_amount": 0.02 }
+      ]
+    },
+    "cool the midtones": {
+      "intent": "color_balance",
+      "actions": [
+        { "parameter": "primaries.gamma.b", "operation": "increase", "default_amount": 0.03 },
+        { "parameter": "primaries.gamma.r", "operation": "decrease", "default_amount": 0.02 }
+      ]
+    },
+    "add saturation": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 12 }
+      ],
+      "caution": "values_above_70_often_unnatural"
+    },
+    "boost saturation": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 15 }
+      ],
+      "caution": "values_above_70_often_unnatural"
+    },
+    "more saturation": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 12 }
+      ]
+    },
+    "increase saturation": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 12 }
+      ]
+    },
+    "saturate it": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 15 }
+      ]
+    },
+    "more colorful": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 15 }
+      ]
+    },
+    "richer colors": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 12 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 8 }
+      ]
+    },
+    "juicy colors": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 18 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 10 }
+      ]
+    },
+    "more vibrant": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.color_boost", "operation": "increase", "default_amount": 30 }
+      ],
+      "description": "natural_saturation_boost_protects_skin"
+    },
+    "desaturate": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 18 }
+      ]
+    },
+    "desaturate it": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 18 }
+      ]
+    },
+    "less saturation": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 }
+      ]
+    },
+    "reduce saturation": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 }
+      ]
+    },
+    "make it vibrant": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.color_boost", "operation": "increase", "default_amount": 30 }
+      ],
+      "description": "natural_saturation_boost_protects_skin"
+    },
+    "punch up the colors": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 15 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 18 }
+      ]
+    },
+    "tone down the colors": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 }
+      ],
+      "description": "reduce_saturation_muted_look"
+    },
+    "mute the colors": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 18 }
+      ]
+    },
+    "muted colors": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 18 }
+      ]
+    },
+    "less colorful": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 }
+      ]
+    },
+    "less vibrant": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.color_boost", "operation": "decrease", "default_amount": 25 }
+      ]
+    },
+    "less saturated": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 18 }
+      ]
+    },
+    "drain the color": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 25 }
+      ]
+    },
+    "pull the color out": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 30 }
+      ]
+    },
+    "make it black and white": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "set", "value": 0 }
+      ]
+    },
+    "black and white": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "set", "value": 0 }
+      ]
+    },
+    "convert to bw": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "set", "value": 0 }
+      ]
+    },
+    "monochrome": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "set", "value": 0 }
+      ]
+    },
+    "grayscale": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "set", "value": 0 }
+      ]
+    },
+    "pastel colors": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 }
+      ]
+    },
+    "washed out": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 20 },
+        { "parameter": "primaries.offset.y", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 }
+      ]
+    },
+    "faded": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 18 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 12 }
+      ]
+    },
+    "faded look": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 18 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 12 }
+      ]
+    },
+    "bleach bypass": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 30 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 35 }
+      ]
+    },
+    "skip bleach": {
+      "intent": "saturation",
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 30 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 35 }
+      ]
+    },
+    "add clarity": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 40 }
+      ],
+      "caution": "can_emphasize_skin_imperfections"
+    },
+    "more clarity": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 35 }
+      ]
+    },
+    "increase clarity": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 40 }
+      ]
+    },
+    "add detail": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 35 }
+      ]
+    },
+    "more detail": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 30 }
+      ]
+    },
+    "bring out the detail": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 40 }
+      ]
+    },
+    "sharpen it": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 35 },
+        { "parameter": "blur.sharpen", "operation": "increase", "default_amount": 20 }
+      ]
+    },
+    "make it sharper": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 35 }
+      ]
+    },
+    "crisper": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 30 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 15 }
+      ]
+    },
+    "soften the image": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 25 }
+      ],
+      "optional": [
+        { "parameter": "blur.mist", "operation": "increase", "default_amount": 15 }
+      ]
+    },
+    "make it softer": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 35 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 15 }
+      ],
+      "description": "reduce_detail_and_contrast_for_softer_look"
+    },
+    "softer": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 25 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 10 }
+      ]
+    },
+    "reduce clarity": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 30 }
+      ]
+    },
+    "less detail": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 25 }
+      ]
+    },
+    "diffused": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 30 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 15 }
+      ]
+    },
+    "add diffusion": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 35 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 18 }
+      ]
+    },
+    "pro mist look": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 40 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 20 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.03 }
+      ]
+    },
+    "halation": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 20 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 }
+      ]
+    },
+    "more gentle": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 25 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 15 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 6 }
+      ],
+      "description": "gentle_dreamy_look"
+    },
+    "soft and gentle": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 35 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 18 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 8 }
+      ],
+      "description": "soft_dreamy_romantic_look"
+    },
+    "softer and more gentle": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 35 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 18 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 8 }
+      ]
+    },
+    "dreamy": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 40 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 20 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 }
+      ],
+      "description": "ethereal_dreamy_look"
+    },
+    "dreamy look": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 40 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 20 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 }
+      ]
+    },
+    "ethereal": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 45 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 25 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 10 }
+      ]
+    },
+    "make it gritty": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 60 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 }
+      ]
+    },
+    "gritty": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 55 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 10 }
+      ]
+    },
+    "gritty look": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 55 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 10 }
+      ]
+    },
+    "raw look": {
+      "intent": "texture",
+      "actions": [
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 45 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 20 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 8 }
+      ]
+    },
+    "add a vignette": {
+      "intent": "isolation",
+      "requires_secondary": true,
+      "workflow": [
+        { "step": 1, "action": "add_serial_node" },
+        { "step": 2, "action": "create_circular_window" },
+        { "step": 3, "action": "invert_window" },
+        { "step": 4, "action": "reduce_exposure", "amount": -0.1 },
+        { "step": 5, "action": "increase_softness", "amount": 40 }
+      ]
+    },
+    "vignette": {
+      "intent": "isolation",
+      "requires_secondary": true,
+      "workflow": [
+        { "step": 1, "action": "add_serial_node" },
+        { "step": 2, "action": "create_circular_window" },
+        { "step": 3, "action": "invert_window" },
+        { "step": 4, "action": "reduce_exposure", "amount": -0.1 }
+      ]
+    },
+    "darken the edges": {
+      "intent": "isolation",
+      "requires_secondary": true,
+      "workflow": [
+        { "step": 1, "action": "add_vignette" }
+      ]
+    },
+    "brighten the face": {
+      "intent": "isolation",
+      "requires_secondary": true,
+      "workflow": [
+        { "step": 1, "action": "add_circular_window_on_face" },
+        { "step": 2, "action": "track_if_moving" },
+        { "step": 3, "action": "increase_gamma" }
+      ]
+    },
+    "brighten the subject": {
+      "intent": "isolation",
+      "requires_secondary": true,
+      "workflow": [
+        { "step": 1, "action": "use_magic_mask_or_qualifier" },
+        { "step": 2, "action": "increase_exposure" }
+      ]
+    },
+    "darken the background": {
+      "intent": "isolation",
+      "requires_secondary": true,
+      "workflow": [
+        { "step": 1, "action": "isolate_subject" },
+        { "step": 2, "action": "invert" },
+        { "step": 3, "action": "decrease_exposure" }
+      ]
+    },
+    "isolate the sky": {
+      "intent": "isolation",
+      "requires_secondary": true,
+      "workflow": [
+        { "step": 1, "action": "add_luminance_qualifier_for_highlights" },
+        { "step": 2, "action": "refine_with_gradient" }
+      ]
+    },
+    "fix the skin tones": {
+      "intent": "specific_color",
+      "requires_secondary": true,
+      "workflow": [
+        { "step": 1, "action": "use_skin_tone_qualifier" },
+        { "step": 2, "action": "adjust_hue_and_saturation" }
+      ]
+    },
+    "film look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "curves.soft_clip.high_soft", "operation": "set", "value": 850 },
+        { "parameter": "primaries.gain.b", "operation": "decrease", "default_amount": 0.02 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 5 }
+      ],
+      "optional": [
+        { "effect": "add_grain" }
+      ]
+    },
+    "filmic": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "curves.soft_clip.high_soft", "operation": "set", "value": 850 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 5 }
+      ]
+    },
+    "make it look like film": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "curves.soft_clip.high_soft", "operation": "set", "value": 850 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 5 }
+      ]
+    },
+    "cinematic look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.02 },
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.02 },
+        { "parameter": "curves.soft_clip.high_soft", "operation": "set", "value": 920 }
+      ],
+      "optional_vignette": true
+    },
+    "cinematic": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.02 },
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.02 }
+      ]
+    },
+    "make it cinematic": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.02 },
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.02 }
+      ]
+    },
+    "hollywood look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 10 },
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.02 },
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.02 }
+      ]
+    },
+    "blockbuster look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 30 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 12 },
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.03 },
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.03 }
+      ]
+    },
+    "vintage look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 },
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 400 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 18 }
+      ]
+    },
+    "vintage": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 },
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 400 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 18 }
+      ]
+    },
+    "make it vintage": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 },
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 400 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 18 }
+      ]
+    },
+    "retro look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 12 },
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 350 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 15 }
+      ]
+    },
+    "70s look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 10 },
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 500 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 12 }
+      ]
+    },
+    "80s look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 18 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 15 }
+      ]
+    },
+    "teal and orange": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.r", "operation": "decrease", "default_amount": 0.04 },
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.gain.b", "operation": "decrease", "default_amount": 0.04 }
+      ]
+    },
+    "orange and teal": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.r", "operation": "decrease", "default_amount": 0.04 },
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.05 },
+        { "parameter": "primaries.gain.b", "operation": "decrease", "default_amount": 0.04 }
+      ]
+    },
+    "complementary colors": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.04 }
+      ]
+    },
+    "split toning": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.lift.b", "operation": "increase", "default_amount": 0.03 },
+        { "parameter": "primaries.gain.r", "operation": "increase", "default_amount": 0.03 }
+      ]
+    },
+    "noir look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 35 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 40 },
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 200 }
+      ]
+    },
+    "film noir": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 40 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 45 }
+      ]
+    },
+    "moody": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 20 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 12 },
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.03 }
+      ]
+    },
+    "moody look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 20 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 12 },
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.03 }
+      ]
+    },
+    "dark and moody": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 },
+        { "parameter": "primaries.offset.y", "operation": "decrease", "default_amount": 0.05 },
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.04 }
+      ]
+    },
+    "horror look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 20 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 30 },
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 300 }
+      ]
+    },
+    "thriller look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 200 }
+      ]
+    },
+    "romantic look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 400 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 10 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 15 },
+        { "parameter": "primaries.md", "operation": "decrease", "default_amount": 20 }
+      ]
+    },
+    "day for night": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 800 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 25 },
+        { "parameter": "primaries.offset.y", "operation": "decrease", "default_amount": 0.15 }
+      ]
+    },
+    "night look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 600 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 20 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 20 }
+      ]
+    },
+    "moonlight": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 700 },
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 18 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 }
+      ]
+    },
+    "golden hour": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 900 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 15 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 10 }
+      ]
+    },
+    "golden hour look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 900 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 15 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 10 }
+      ]
+    },
+    "magic hour": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 800 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 12 },
+        { "parameter": "primaries.tint", "operation": "increase", "default_amount": 10 }
+      ]
+    },
+    "sunset look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 1000 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 18 },
+        { "parameter": "primaries.tint", "operation": "increase", "default_amount": 15 }
+      ]
+    },
+    "blue hour": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 700 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 10 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 15 }
+      ]
+    },
+    "documentary look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 10 },
+        { "parameter": "primaries.md", "operation": "increase", "default_amount": 20 }
+      ]
+    },
+    "natural look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 8 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 5 }
+      ]
+    },
+    "commercial look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 15 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 18 },
+        { "parameter": "primaries.offset.y", "operation": "increase", "default_amount": 0.03 }
+      ]
+    },
+    "music video look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 20 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 }
+      ]
+    },
+    "broadcast look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 8 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 10 }
+      ]
+    },
+    "indie film look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 10 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 12 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.03 }
+      ]
+    },
+    "arthouse look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 15 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 10 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 }
+      ]
+    },
+    "cross processed": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 300 },
+        { "parameter": "primaries.tint", "operation": "increase", "default_amount": 20 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 18 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 20 }
+      ]
+    },
+    "xpro": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.temp", "operation": "decrease", "default_amount": 300 },
+        { "parameter": "primaries.tint", "operation": "increase", "default_amount": 20 },
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 18 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 20 }
+      ]
+    },
+    "lomo look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "increase", "default_amount": 20 },
+        { "parameter": "primaries.contrast", "operation": "increase", "default_amount": 25 },
+        { "parameter": "primaries.lift.y", "operation": "decrease", "default_amount": 0.03 }
+      ]
+    },
+    "instagram filter": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 10 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.temp", "operation": "increase", "default_amount": 300 }
+      ]
+    },
+    "vsco look": {
+      "intent": "style",
+      "is_compound": true,
+      "actions": [
+        { "parameter": "primaries.saturation", "operation": "decrease", "default_amount": 12 },
+        { "parameter": "primaries.lift.y", "operation": "increase", "default_amount": 0.04 },
+        { "parameter": "primaries.contrast", "operation": "decrease", "default_amount": 10 }
+      ]
+    }
+  },
+
+  "modifiers": {
+    "intensity": {
+      "barely": { "synonyms": ["hardly", "just barely", "imperceptible", "trace", "hair of"], "multiplier": 0.2 },
+      "very_subtle": { "synonyms": ["tiny bit", "whisper of", "hint of", "touch of", "nudge"], "multiplier": 0.3 },
+      "subtle": { "synonyms": ["slight", "gentle", "a touch", "a bit", "minor", "delicate", "soft", "light"], "multiplier": 0.5 },
+      "mild": { "synonyms": ["modest", "easy", "tame", "restrained"], "multiplier": 0.6 },
+      "moderate": { "synonyms": ["some", "medium", "reasonable", "decent", "fair amount"], "multiplier": 0.75 },
+      "noticeable": { "synonyms": ["visible", "apparent", "clear", "definite"], "multiplier": 0.9 },
+      "significant": { "synonyms": ["strong", "noticeable", "considerable", "meaningful", "real"], "multiplier": 1.0 },
+      "bold": { "synonyms": ["striking", "pronounced", "marked", "emphatic"], "multiplier": 1.2 },
+      "heavy": { "synonyms": ["intense", "serious", "substantial", "major"], "multiplier": 1.35 },
+      "extreme": { "synonyms": ["aggressive", "maximum", "way more", "drastic", "radical"], "multiplier": 1.5 },
+      "massive": { "synonyms": ["huge", "enormous", "crazy", "insane", "ridiculous"], "multiplier": 1.75 },
+      "nuclear": { "synonyms": ["all the way", "full blast", "maxed out", "cranked", "slam it"], "multiplier": 2.0 }
+    },
+    "scope": {
+      "global": { "synonyms": ["overall", "everywhere", "whole image", "entire frame", "all of it", "the whole thing"], "requires_secondary": false },
+      "shadows": { "synonyms": ["in the shadows", "dark areas", "blacks", "low end", "bottom end", "dark tones", "shadow regions"], "target_range": "shadows" },
+      "deep_shadows": { "synonyms": ["crushed blacks", "toe", "very dark", "near black"], "target_range": "deep_shadows" },
+      "midtones": { "synonyms": ["in the mids", "middle tones", "gamma", "mid-range", "middle gray", "center tones"], "target_range": "midtones" },
+      "low_mids": { "synonyms": ["lower midtones", "shadow-mids", "dark grays"], "target_range": "low_mids" },
+      "high_mids": { "synonyms": ["upper midtones", "highlight-mids", "light grays"], "target_range": "high_mids" },
+      "highlights": { "synonyms": ["in the highlights", "bright areas", "whites", "highs", "top end", "bright tones", "hot areas"], "target_range": "highlights" },
+      "specular": { "synonyms": ["specular highlights", "brightest spots", "hottest areas", "clipping areas"], "target_range": "specular" },
+      "skin": { "synonyms": ["skin tones", "flesh tones", "faces", "complexion", "face area"], "target_range": "skin", "requires_secondary": true },
+      "sky": { "synonyms": ["the sky", "sky area", "clouds", "blue sky", "sky region"], "target_range": "sky", "requires_secondary": true },
+      "background": { "synonyms": ["in the background", "bg", "behind subject", "back of frame"], "target_range": "background", "requires_secondary": true },
+      "foreground": { "synonyms": ["in the foreground", "fg", "front of frame", "closer elements"], "target_range": "foreground", "requires_secondary": true },
+      "subject": { "synonyms": ["the subject", "main subject", "talent", "person", "the actor"], "target_range": "subject", "requires_secondary": true },
+      "edges": { "synonyms": ["the edges", "borders", "corners", "perimeter", "outside"], "target_range": "edges", "requires_secondary": true },
+      "center": { "synonyms": ["the center", "middle of frame", "center of image"], "target_range": "center", "requires_secondary": true },
+      "specific_area": { "synonyms": ["just this part", "only here", "that area", "this region", "selected area"], "requires_secondary": true }
+    },
+    "comparison": {
+      "more": { "operation": "increase", "multiplier": 1.0 },
+      "less": { "operation": "decrease", "multiplier": 1.0 },
+      "much_more": { "operation": "increase", "multiplier": 1.5 },
+      "way_more": { "operation": "increase", "multiplier": 1.75 },
+      "slightly_more": { "operation": "increase", "multiplier": 0.5 },
+      "a_bit_more": { "operation": "increase", "multiplier": 0.6 },
+      "a_touch_more": { "operation": "increase", "multiplier": 0.4 },
+      "much_less": { "operation": "decrease", "multiplier": 1.5 },
+      "way_less": { "operation": "decrease", "multiplier": 1.75 },
+      "slightly_less": { "operation": "decrease", "multiplier": 0.5 },
+      "a_bit_less": { "operation": "decrease", "multiplier": 0.6 },
+      "a_touch_less": { "operation": "decrease", "multiplier": 0.4 },
+      "twice_as_much": { "operation": "increase", "multiplier": 2.0 },
+      "half_as_much": { "operation": "decrease", "multiplier": 0.5 },
+      "keep_going": { "operation": "continue", "multiplier": 1.0 },
+      "more_of_that": { "operation": "continue", "multiplier": 1.0 },
+      "back_off": { "operation": "reverse", "multiplier": 0.5 },
+      "too_much": { "operation": "reverse", "multiplier": 0.7 }
+    },
+    "direction": {
+      "up": { "synonyms": ["raise", "bring up", "push up", "lift", "boost", "crank up", "bump up"], "operation": "increase" },
+      "down": { "synonyms": ["lower", "bring down", "push down", "drop", "reduce", "pull down", "knock down"], "operation": "decrease" },
+      "toward": { "synonyms": ["shift toward", "move toward", "push toward", "lean toward"], "operation": "shift" },
+      "away": { "synonyms": ["shift away", "move away", "push away", "pull away"], "operation": "shift_negative" },
+      "warmer_direction": { "synonyms": ["toward warm", "toward orange", "toward yellow", "toward amber"], "target": "warm" },
+      "cooler_direction": { "synonyms": ["toward cool", "toward blue", "toward cyan", "toward cold"], "target": "cool" },
+      "greener_direction": { "synonyms": ["toward green", "more green"], "target": "green" },
+      "magenta_direction": { "synonyms": ["toward magenta", "toward pink", "more magenta"], "target": "magenta" }
+    },
+    "quality": {
+      "smooth": { "synonyms": ["gradual", "gentle rolloff", "soft transition", "feathered"], "quality": "smooth" },
+      "harsh": { "synonyms": ["abrupt", "hard", "sharp transition", "sudden"], "quality": "harsh" },
+      "natural": { "synonyms": ["organic", "realistic", "believable", "true to life"], "quality": "natural" },
+      "stylized": { "synonyms": ["artistic", "creative", "exaggerated", "heightened"], "quality": "stylized" },
+      "clean": { "synonyms": ["precise", "surgical", "exact", "clinical"], "quality": "clean" },
+      "rough": { "synonyms": ["raw", "unpolished", "textured", "grungy"], "quality": "rough" },
+      "balanced": { "synonyms": ["even", "uniform", "consistent", "level"], "quality": "balanced" },
+      "unbalanced": { "synonyms": ["skewed", "weighted", "biased", "shifted"], "quality": "unbalanced" }
+    },
+    "temporal": {
+      "quickly": { "synonyms": ["fast", "rapid", "snappy", "instant"], "speed": "fast" },
+      "gradually": { "synonyms": ["slowly", "over time", "easing", "gently"], "speed": "slow" },
+      "suddenly": { "synonyms": ["abruptly", "sharply", "immediately"], "speed": "instant" }
+    },
+    "precision": {
+      "exactly": { "synonyms": ["precisely", "just", "right at"], "precision": "exact" },
+      "approximately": { "synonyms": ["about", "around", "roughly", "more or less"], "precision": "approximate" },
+      "between": { "synonyms": ["in the range of", "somewhere between", "from X to Y"], "precision": "range" }
+    },
+    "emphatic_patterns": {
+      "description": "Patterns that boost or reduce intensity based on emphatic language. Amplifiers STACK - 'super mega ultra' applies all three boosts!",
+      "amplifier_tiers": {
+        "tier1_mild": {
+          "boost": 0.1,
+          "words": ["pretty", "quite", "fairly", "rather", "somewhat", "kinda", "sorta", "more"],
+          "description": "Mild qualifiers, slight boost"
+        },
+        "tier2_moderate": {
+          "boost": 0.15,
+          "words": ["very", "really", "definitely", "certainly", "clearly", "noticeably", "visibly", "obviously", "actually", "truly", "genuinely"],
+          "description": "Standard emphasis words"
+        },
+        "tier3_strong": {
+          "boost": 0.2,
+          "words": ["super", "extra", "hella", "mad", "wicked", "damn", "dang", "bloody", "friggin", "freaking", "frickin", "heckin", "real", "proper", "straight up", "legit", "lowkey", "highkey", "deadass"],
+          "description": "Strong colloquial intensifiers"
+        },
+        "tier4_very_strong": {
+          "boost": 0.25,
+          "words": ["extremely", "incredibly", "seriously", "majorly", "heavily", "intensely", "severely", "deeply", "profoundly", "remarkably", "exceptionally", "particularly", "especially", "significantly", "substantially", "considerably", "dramatically"],
+          "description": "Formal strong intensifiers"
+        },
+        "tier5_extreme": {
+          "boost": 0.35,
+          "words": ["ultra", "mega", "hyper", "uber", "turbo", "giga", "tera", "maximum", "max", "peak", "ultimate", "supreme", "paramount", "radical", "drastic", "severe", "massive", "enormous", "tremendous", "immense", "colossal", "monumental", "epic"],
+          "description": "Extreme/prefix intensifiers"
+        },
+        "tier6_insane": {
+          "boost": 0.45,
+          "words": ["insanely", "ridiculously", "absurdly", "outrageously", "obscenely", "ludicrously", "preposterously", "stupidly", "crazy", "bonkers", "mental", "nuts", "bananas", "wild", "savage", "brutal", "beastly", "godly", "ungodly", "otherworldly", "astronomical"],
+          "description": "Absurdist/hyperbolic intensifiers"
+        },
+        "tier7_nuclear": {
+          "boost": 0.55,
+          "words": ["nuclear", "atomic", "thermonuclear", "apocalyptic", "cataclysmic", "earth-shattering", "mind-blowing", "face-melting", "brain-melting", "soul-crushing", "maxed", "cranked", "slammed", "pegged", "pinned", "redlined", "balls to the wall", "full send", "all out", "gonzo", "off the charts", "through the roof", "to eleven", "to the max", "to the moon"],
+          "description": "Maximum intensity - total commitment"
+        }
+      },
+      "action_intensifiers": {
+        "boost": 0.3,
+        "words": ["crank", "cranked", "slam", "slammed", "blast", "blasted", "nuke", "nuked", "crush", "crushed", "smash", "smashed", "kill", "killed", "destroy", "destroyed", "hammer", "hammered", "pound", "pounded", "pump", "pumped", "jack", "jacked", "boost", "boosted", "amp", "amped", "juice", "juiced", "goose", "goosed", "ramp", "ramped", "dial", "dialed", "push", "pushed", "shove", "shoved", "yank", "yanked", "rip", "ripped", "tear", "send", "sent", "launch", "launched"],
+        "description": "Action verbs that imply forceful adjustment"
+      },
+      "max_phrases": {
+        "boost": 0.4,
+        "patterns": ["all the way", "as X as possible", "to the max", "to the limit", "to the extreme", "to the moon", "to the stars", "full blast", "full power", "full throttle", "full strength", "full force", "full effect", "max power", "100 percent", "100%", "give it everything", "give me everything", "all you got", "dont hold back", "go hard", "go ham", "go crazy", "go nuts", "go wild", "go all in", "go all out", "go big", "let it rip", "let her rip"],
+        "description": "Phrases indicating maximum effect"
+      },
+      "boost_patterns": {
+        "repetition": {
+          "patterns": ["really really", "very very", "way way", "much much", "super super", "so so", "more more"],
+          "boost": 0.25,
+          "description": "Repeated words indicate strong emphasis"
+        },
+        "stacked_intensifiers": {
+          "patterns": ["really very", "super extremely", "incredibly very", "way too much", "so very", "so much more", "super duper", "extra extra"],
+          "boost": 0.3,
+          "description": "Multiple intensifiers stacked together"
+        },
+        "all_caps": {
+          "description": "Words in ALL CAPS indicate shouting/emphasis",
+          "boost_per_word": 0.2,
+          "examples": ["make it WARMER", "WAY more contrast", "REALLY punch it up", "SUPER MEGA warm"]
+        },
+        "exclamation_marks": {
+          "description": "Exclamation marks indicate urgency/emphasis",
+          "single": 0.15,
+          "double": 0.3,
+          "triple_plus": 0.5,
+          "examples": ["warmer!", "more contrast!!", "punch it up!!!"]
+        }
+      },
+      "reduce_patterns": {
+        "diminutives": {
+          "patterns": ["just a bit", "just a touch", "just a tad", "just a hair", "just a smidge", "just a little", "only slightly", "barely any", "hardly noticeable", "the tiniest bit", "the slightest touch", "ever so slightly"],
+          "reduction": -0.4,
+          "description": "Diminutive phrases reduce intensity"
+        },
+        "hedging": {
+          "patterns": ["maybe", "perhaps", "kind of", "sort of", "a little", "somewhat", "slightly", "a bit", "a touch", "mildly", "gently", "softly", "lightly"],
+          "reduction": -0.2,
+          "description": "Hedging language indicates uncertainty/subtlety"
+        },
+        "tentative": {
+          "patterns": ["try", "test", "experiment", "see if", "what if we", "lets see", "how about", "could we", "might want to"],
+          "reduction": -0.15,
+          "description": "Tentative language suggests careful adjustments"
+        }
+      },
+      "example_calculations": {
+        "warmer": { "base": 1.0, "boost": 0, "final": 1.0 },
+        "super warmer": { "base": 1.0, "boost": 0.2, "final": 1.2 },
+        "super mega warmer": { "base": 1.0, "boost": 0.55, "final": 1.55 },
+        "super ultra mega hyper warmer!!!": { "base": 1.0, "boost": 1.6, "final": 2.5, "note": "clamped to max 2.5" },
+        "really really WARMER!!": { "base": 1.0, "boost": 0.85, "final": 1.85 },
+        "crank up the warmth to the max": { "base": 1.0, "boost": 0.7, "final": 1.7 },
+        "just a touch warmer": { "base": 1.0, "boost": -0.4, "final": 0.6 },
+        "go absolutely nuclear on the contrast": { "base": 1.0, "boost": 1.25, "final": 2.25 }
+      }
+    }
+  },
+
+  "parameters": {
+    "primaries.lift.y": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.05, 0.05] },
+    "primaries.lift.r": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.03, 0.03] },
+    "primaries.lift.g": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.03, 0.03] },
+    "primaries.lift.b": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.03, 0.03] },
+    "primaries.gamma.y": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.1, 0.1] },
+    "primaries.gamma.r": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.05, 0.05] },
+    "primaries.gamma.g": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.05, 0.05] },
+    "primaries.gamma.b": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.05, 0.05] },
+    "primaries.gain.y": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.1, 0.15] },
+    "primaries.gain.r": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.05, 0.05] },
+    "primaries.gain.g": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.05, 0.05] },
+    "primaries.gain.b": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.05, 0.05] },
+    "primaries.offset.y": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.05, 0.05] },
+    "primaries.offset.r": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.03, 0.03] },
+    "primaries.offset.g": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.03, 0.03] },
+    "primaries.offset.b": { "range": [-1, 1], "default": 0, "typical_adjustment": [-0.03, 0.03] },
+    "primaries.temp": { "range": [-4000, 4000], "default": 0, "typical_adjustment": [-500, 800] },
+    "primaries.tint": { "range": [-100, 100], "default": 0, "typical_adjustment": [-30, 30] },
+    "primaries.contrast": { "range": [-100, 100], "default": 0, "typical_adjustment": [-20, 35] },
+    "primaries.pivot": { "range": [0, 1], "default": 0.435 },
+    "primaries.saturation": { "range": [0, 100], "default": 50, "typical_adjustment": [35, 65] },
+    "primaries.color_boost": { "range": [-100, 100], "default": 0, "typical_adjustment": [-20, 40] },
+    "primaries.md": { "range": [-100, 100], "default": 0, "typical_adjustment": [-30, 50] },
+    "primaries.hue": { "range": [0, 100], "default": 50 },
+    "primaries.shadows": { "range": [-100, 100], "default": 0 },
+    "primaries.highlights": { "range": [-100, 100], "default": 0 },
+    "hdr.global.exposure": { "range": [-5, 5], "default": 0, "unit": "stops" },
+    "hdr.global.contrast": { "range": [-100, 100], "default": 0 },
+    "hdr.global.saturation": { "range": [0, 200], "default": 100 },
+    "hdr.black_offset": { "range": [-1, 1], "default": 0 },
+    "curves.soft_clip.high": { "range": [0, 1023], "default": 1023 },
+    "curves.soft_clip.high_soft": { "range": [0, 1023], "default": 0, "typical_adjustment": [900, 1023] },
+    "curves.soft_clip.low": { "range": [0, 1023], "default": 0 },
+    "curves.soft_clip.low_soft": { "range": [0, 1023], "default": 0 },
+    "blur.radius": { "range": [0, 100], "default": 0, "typical_adjustment": [0, 15] },
+    "blur.sharpen": { "range": [0, 100], "default": 0, "typical_adjustment": [0, 40] },
+    "blur.mist": { "range": [0, 100], "default": 0, "typical_adjustment": [0, 30] }
+  },
+
+  "synonyms": {
+    "shadows": ["blacks", "shadow", "dark areas", "dark tones", "low end", "bottom end", "shadow detail", "dark regions", "the darks", "darker areas", "shadow tones", "black point", "toe", "lower tones", "crushed areas", "murky areas"],
+    "deep_shadows": ["crushed blacks", "near black", "toe region", "very dark", "super dark", "pitch black areas"],
+    "midtones": ["mids", "middle tones", "mid-range", "gamma", "middle", "middle gray", "mid values", "center tones", "neutral tones", "18% gray", "gray tones", "middle brightness", "core tones"],
+    "highlights": ["whites", "highs", "bright areas", "bright tones", "top end", "hot spots", "bright regions", "highlight detail", "the brights", "lighter areas", "white point", "shoulder", "upper tones", "peak brightness", "luminous areas"],
+    "specular_highlights": ["specular", "super bright", "clipping", "blown areas", "hottest spots", "peak white"],
+    "brighter": ["lighter", "more exposure", "open up", "bring up", "raise", "lift", "illuminate", "lighten up", "add light", "brighten up", "boost exposure", "increase brightness", "more luminous", "open it up", "bring up the levels"],
+    "darker": ["dimmer", "less exposure", "bring down", "lower", "drop", "crush", "darken up", "remove light", "reduce brightness", "pull down", "sink", "deepen", "make it darker", "less luminous"],
+    "warmer": ["more orange", "golden", "amber", "sunset", "tungsten", "more yellow", "yellower", "richer warm", "add warmth", "push warm", "toward warm", "golden tones", "orange tones", "sunset tones", "candlelit", "firelight", "incandescent"],
+    "cooler": ["more blue", "colder", "icy", "moonlight", "more cyan", "bluer", "richer cool", "add coolness", "push cool", "toward cool", "blue tones", "daylight", "overcast", "shadowy", "twilight", "arctic", "winter feel"],
+    "saturated": ["colorful", "vivid", "punchy colors", "rich colors", "vibrant", "juicy", "intense colors", "bold colors", "strong colors", "chromatic", "full color", "color-rich", "lush colors"],
+    "desaturated": ["muted", "washed out", "faded", "dull", "pale", "subdued", "pastel", "bleached", "color-weak", "less colorful", "neutral", "gray-ish", "monochromatic", "achromatic"],
+    "contrasty": ["punchy", "dynamic", "high contrast", "snappy", "crisp", "bold contrast", "hard contrast", "aggressive contrast"],
+    "flat": ["low contrast", "muddy", "dull", "lifeless", "washed", "soft contrast", "no punch", "compressed range", "milky"],
+    "sharp": ["crisp", "detailed", "textured", "high detail", "defined", "clear", "razor sharp", "tack sharp"],
+    "soft": ["smooth", "gentle", "diffused", "hazy", "dreamy", "low detail", "ethereal", "delicate", "misty"],
+    "grain": ["noise", "texture", "film grain", "grit", "graininess", "organic texture", "photochemical"],
+    "clean": ["noiseless", "smooth", "pristine", "pure", "clinical", "sterile", "digital clean"],
+    "natural": ["realistic", "true to life", "organic", "neutral", "ungraded", "as shot", "documentary style"],
+    "stylized": ["graded", "processed", "artistic", "creative look", "designed", "intentional", "crafted"],
+    "cinematic": ["filmic", "movie look", "theatrical", "hollywood", "big screen", "feature film"],
+    "broadcast": ["tv look", "rec709", "standard", "video", "news style", "clean broadcast"],
+    "exposure": ["brightness", "luminance", "light level", "overall brightness", "image brightness"],
+    "contrast": ["dynamic range", "tonal range", "punch", "snap", "bite", "separation"],
+    "saturation": ["color intensity", "chroma", "color richness", "color strength", "vibrancy"],
+    "temperature": ["white balance", "color temp", "kelvin", "warm cool balance", "wb"],
+    "tint": ["green magenta", "g/m balance", "magenta green", "color tint", "hue shift"],
+    "lift": ["shadow level", "black level", "shadow brightness", "pedestal", "setup"],
+    "gamma": ["midtone level", "mid brightness", "middle gray level", "mid control"],
+    "gain": ["highlight level", "white level", "highlight brightness", "peak level"],
+    "offset": ["master level", "overall shift", "global brightness", "dc offset"],
+    "vignette": ["edge darkening", "corner darkening", "light falloff", "edge fade"],
+    "skin_tones": ["flesh tones", "complexion", "face color", "skin color", "portrait tones"],
+    "sky_color": ["sky blue", "sky tones", "atmosphere color", "overhead color"],
+    "foliage": ["grass", "trees", "leaves", "vegetation", "greenery", "plant color"],
+    "water_color": ["ocean color", "sea color", "lake color", "water tones"]
+  },
+
+  "color_terms": {
+    "warm_colors": ["red", "orange", "yellow", "gold", "amber", "copper", "bronze", "rust", "terracotta", "coral", "peach", "apricot", "tangerine", "burnt orange", "sienna", "ochre", "mustard", "honey", "caramel", "champagne", "golden yellow", "sunset orange", "fire red", "crimson", "scarlet", "vermillion", "salmon", "rose gold"],
+    "cool_colors": ["blue", "cyan", "teal", "purple", "violet", "indigo", "navy", "azure", "cobalt", "cerulean", "sapphire", "turquoise", "aqua", "aquamarine", "periwinkle", "lavender", "lilac", "plum", "mauve", "ice blue", "steel blue", "powder blue", "midnight blue", "ocean blue", "sky blue", "robin egg blue", "electric blue", "cornflower"],
+    "neutral_colors": ["gray", "grey", "white", "black", "silver", "charcoal", "slate", "ash", "pewter", "gunmetal", "ivory", "cream", "eggshell", "bone", "off-white", "warm gray", "cool gray", "neutral gray", "graphite"],
+    "green_spectrum": ["green", "emerald", "forest green", "olive", "sage", "mint", "lime", "chartreuse", "kelly green", "hunter green", "moss", "pine", "jade", "seafoam", "pistachio", "avocado", "fern", "shamrock", "teal green", "viridian"],
+    "red_spectrum": ["red", "crimson", "scarlet", "burgundy", "maroon", "wine", "cherry", "ruby", "blood red", "brick red", "cardinal", "raspberry", "cranberry", "vermillion", "carmine", "venetian red"],
+    "orange_spectrum": ["orange", "tangerine", "peach", "coral", "apricot", "rust", "burnt orange", "terracotta", "pumpkin", "persimmon", "copper", "bronze", "sienna"],
+    "yellow_spectrum": ["yellow", "gold", "mustard", "lemon", "canary", "saffron", "amber", "honey", "butter", "cream", "ochre", "flaxen", "champagne", "maize"],
+    "blue_spectrum": ["blue", "navy", "cobalt", "azure", "cerulean", "sapphire", "indigo", "royal blue", "prussian blue", "ultramarine", "steel blue", "slate blue", "powder blue", "baby blue", "sky blue", "ice blue"],
+    "purple_spectrum": ["purple", "violet", "lavender", "lilac", "plum", "mauve", "orchid", "amethyst", "grape", "eggplant", "magenta", "fuchsia", "mulberry", "periwinkle", "heather"],
+    "brown_spectrum": ["brown", "tan", "beige", "khaki", "camel", "coffee", "chocolate", "espresso", "mocha", "walnut", "chestnut", "mahogany", "umber", "sepia", "taupe", "fawn"],
+    "skin_related": ["skin", "flesh", "face", "skin tones", "complexion", "flesh tones", "portrait tones", "face tones", "caucasian skin", "dark skin", "olive skin", "tan skin", "pale skin", "african skin", "asian skin", "latino skin", "mediterranean skin", "nordic skin", "warm skin", "cool skin", "ruddy skin", "sallow skin"],
+    "nature_colors": ["sky", "grass", "foliage", "water", "sunset", "sunrise", "ocean", "sea", "forest", "desert", "sand", "earth", "soil", "rock", "stone", "snow", "ice", "clouds", "fire", "flame", "leaves", "bark", "flowers", "petals"],
+    "time_of_day_colors": ["golden hour gold", "magic hour pink", "blue hour blue", "twilight purple", "dawn pink", "dusk orange", "noon harsh", "overcast gray", "moonlight blue", "candlelight amber", "firelight orange"],
+    "film_stock_colors": ["kodak warm", "fuji cool", "vision3 neutral", "portra skin tones", "ektar vivid", "velvia saturated", "provia natural", "cinestill halation", "kodachrome rich"],
+    "cinematic_palettes": ["teal and orange", "cyan and red", "blue and yellow", "green and magenta", "complementary split", "triadic harmony", "analogous warm", "analogous cool", "monochromatic warm", "monochromatic cool"],
+    "emotion_colors": ["warm romantic", "cool clinical", "desaturated somber", "saturated joyful", "high contrast dramatic", "low contrast peaceful", "dark moody", "bright optimistic"],
+    "lighting_colors": ["tungsten orange", "daylight blue", "fluorescent green", "led mixed", "sodium vapor orange", "mercury vapor green", "neon pink", "neon blue", "practical warm", "bounce neutral", "diffused soft"]
+  },
+
+  "problem_patterns": {
+    "too_warm": {
+      "indicators": ["orange", "yellow", "warm cast", "too warm", "orangey", "yellowy", "tungsten look", "incandescent", "amber cast", "golden cast"],
+      "common_causes": ["wrong white balance", "tungsten lighting", "sunset spill", "practicals in shot"],
+      "fix": { "parameter": "primaries.temp", "operation": "decrease", "typical_amount": 500 },
+      "severity_indicators": { "slight": 200, "moderate": 500, "severe": 1000 }
+    },
+    "too_cool": {
+      "indicators": ["blue", "cold", "cool cast", "too cool", "bluish", "icy", "sterile", "clinical blue"],
+      "common_causes": ["wrong white balance", "daylight in tungsten scene", "shade/overcast", "blue bounce"],
+      "fix": { "parameter": "primaries.temp", "operation": "increase", "typical_amount": 500 },
+      "severity_indicators": { "slight": 200, "moderate": 500, "severe": 1000 }
+    },
+    "green_cast": {
+      "indicators": ["green", "greenish", "fluorescent", "sickly green", "green tint", "office lighting", "industrial green"],
+      "common_causes": ["fluorescent lights", "LED panels", "green screen spill", "foliage reflection", "mixed lighting"],
+      "fix": { "parameter": "primaries.tint", "operation": "increase", "typical_amount": 20 },
+      "severity_indicators": { "slight": 10, "moderate": 20, "severe": 40 }
+    },
+    "magenta_cast": {
+      "indicators": ["magenta", "pink", "pinkish", "purple tint", "too magenta", "rosy"],
+      "common_causes": ["certain LED panels", "sunset reflection", "overcorrected green", "certain camera sensors"],
+      "fix": { "parameter": "primaries.tint", "operation": "decrease", "typical_amount": 20 },
+      "severity_indicators": { "slight": 10, "moderate": 20, "severe": 40 }
+    },
+    "overexposed": {
+      "indicators": ["blown out", "too bright", "hot", "clipped whites", "washed out", "overlit", "nuclear bright", "no highlight detail"],
+      "common_causes": ["too much light", "wrong exposure", "reflections", "window blow out", "sky too bright"],
+      "fix": { "parameter": "primaries.gain.y", "operation": "decrease", "typical_amount": 0.1 },
+      "alternative_fixes": [
+        { "parameter": "primaries.offset.y", "operation": "decrease", "description": "overall brightness" },
+        { "parameter": "curves.soft_clip.high_soft", "operation": "set", "value": 900, "description": "soft clip highlights" }
+      ]
+    },
+    "underexposed": {
+      "indicators": ["too dark", "muddy", "crushed blacks", "underlit", "can't see detail", "murky", "lost in shadows"],
+      "common_causes": ["not enough light", "wrong exposure", "backlit subject", "silhouette"],
+      "fix": { "parameter": "primaries.lift.y", "operation": "increase", "typical_amount": 0.05 },
+      "alternative_fixes": [
+        { "parameter": "primaries.offset.y", "operation": "increase", "description": "overall brightness" },
+        { "parameter": "primaries.gamma.y", "operation": "increase", "description": "midtone lift" }
+      ]
+    },
+    "crushed_blacks": {
+      "indicators": ["no shadow detail", "blacks are clipped", "shadows gone", "too crushed", "lost detail in darks"],
+      "common_causes": ["too much contrast", "lift too low", "wrong LUT", "viewing on bright display"],
+      "fix": { "parameter": "primaries.lift.y", "operation": "increase", "typical_amount": 0.04 }
+    },
+    "blown_highlights": {
+      "indicators": ["highlights clipped", "whites blown", "no highlight info", "sun too hot", "windows blown"],
+      "common_causes": ["overexposure", "too much gain", "wrong LUT", "HDR content on SDR"],
+      "fix": { "parameter": "primaries.gain.y", "operation": "decrease", "typical_amount": 0.08 },
+      "alternative_fixes": [
+        { "parameter": "curves.soft_clip.high_soft", "operation": "set", "value": 850, "description": "soft clip" }
+      ]
+    },
+    "flat_image": {
+      "indicators": ["no contrast", "flat", "dull", "lifeless", "log looking", "washed", "no punch", "milky"],
+      "common_causes": ["missing LUT", "wrong color space", "fog/haze", "low contrast lens", "wrong output settings"],
+      "fix": { "parameter": "primaries.contrast", "operation": "increase", "typical_amount": 25 },
+      "alternative_fixes": [
+        { "method": "lift_gain_spread", "description": "lower lift, raise gain for natural contrast" }
+      ]
+    },
+    "too_contrasty": {
+      "indicators": ["too punchy", "harsh contrast", "crushed and blown", "lost detail both ends", "clipping"],
+      "common_causes": ["too much contrast", "wrong LUT", "s-curve too aggressive"],
+      "fix": { "parameter": "primaries.contrast", "operation": "decrease", "typical_amount": 20 }
+    },
+    "oversaturated": {
+      "indicators": ["too colorful", "garish", "clown colors", "cartoonish", "colors clipping", "skin too red", "over-vivid"],
+      "common_causes": ["too much saturation", "color boost too high", "certain camera profiles", "HDR to SDR conversion"],
+      "fix": { "parameter": "primaries.saturation", "operation": "decrease", "typical_amount": 15 },
+      "check_areas": ["skin tones", "reds", "oranges"]
+    },
+    "undersaturated": {
+      "indicators": ["washed out colors", "no color", "desaturated", "gray looking", "dull colors", "anemic"],
+      "common_causes": ["saturation too low", "wrong color space", "faded film look gone wrong"],
+      "fix": { "parameter": "primaries.saturation", "operation": "increase", "typical_amount": 12 }
+    },
+    "bad_skin_tones": {
+      "indicators": ["skin looks wrong", "orange skin", "green skin", "pale skin", "red skin", "blotchy", "unhealthy looking"],
+      "common_causes": ["wrong white balance", "saturation issues", "color cast", "mixed lighting on talent"],
+      "fix": { "workflow": "isolate skin with qualifier, adjust hue/saturation/temperature" },
+      "typical_corrections": [
+        { "issue": "orange_skin", "fix": "reduce temp or desaturate oranges" },
+        { "issue": "green_skin", "fix": "add magenta tint or shift hue" },
+        { "issue": "red_skin", "fix": "desaturate reds or shift toward orange" },
+        { "issue": "pale_skin", "fix": "add warmth and slight saturation" }
+      ]
+    },
+    "bad_sky": {
+      "indicators": ["sky too bright", "sky too blue", "sky too flat", "sky clipped", "banding in sky"],
+      "common_causes": ["overexposure", "wrong white balance", "compression artifacts", "too much processing"],
+      "fix": { "workflow": "isolate sky with qualifier/gradient, adjust exposure and saturation" }
+    },
+    "noise_grain": {
+      "indicators": ["noisy", "grainy", "digital noise", "too much grain", "speckled", "sensor noise"],
+      "common_causes": ["high ISO", "underexposed and lifted", "small sensor", "aggressive noise reduction artifacts"],
+      "fix": { "workflow": "apply noise reduction or denoise in Resolve" }
+    },
+    "soft_image": {
+      "indicators": ["soft", "blurry", "not sharp", "mushy", "out of focus looking", "no detail"],
+      "common_causes": ["focus miss", "camera shake", "diffusion filter", "compression", "low resolution upscale"],
+      "fix": { "parameter": "primaries.md", "operation": "increase", "typical_amount": 30 },
+      "caution": "sharpening cannot fix true focus issues"
+    },
+    "harsh_image": {
+      "indicators": ["too sharp", "crunchy", "over-sharpened", "halos", "artificial looking", "too crispy"],
+      "common_causes": ["too much sharpening", "too much clarity", "aggressive in-camera processing"],
+      "fix": { "parameter": "primaries.md", "operation": "decrease", "typical_amount": 25 }
+    },
+    "mixed_lighting": {
+      "indicators": ["different color temps in shot", "half warm half cool", "windows daylight interior tungsten", "practicals different colors"],
+      "common_causes": ["mixed practical lights", "daylight through windows", "production lighting mix"],
+      "fix": { "workflow": "use power windows or qualifiers to treat different areas separately" }
+    },
+    "highlight_rolloff": {
+      "indicators": ["harsh highlight transition", "digital looking highlights", "no shoulder", "clipping abruptly"],
+      "common_causes": ["linear encoding", "missing film emulation", "wrong tone mapping"],
+      "fix": { "parameter": "curves.soft_clip.high_soft", "operation": "set", "value": 900 }
+    },
+    "shadow_rolloff": {
+      "indicators": ["harsh shadow transition", "digital blacks", "no toe", "shadows clip abruptly"],
+      "common_causes": ["linear encoding", "missing film emulation", "wrong tone mapping"],
+      "fix": { "parameter": "curves.soft_clip.low_soft", "operation": "set", "value": 50 }
+    },
+    "color_fringing": {
+      "indicators": ["purple fringing", "chromatic aberration", "color edges", "rainbow edges"],
+      "common_causes": ["lens chromatic aberration", "cheap lens", "high contrast edges"],
+      "fix": { "workflow": "use CA correction in Resolve or lens correction" }
+    },
+    "banding": {
+      "indicators": ["banding", "posterization", "stepping in gradients", "sky banding", "smooth areas stepping"],
+      "common_causes": ["8-bit source", "too much processing", "compression", "gradient stretching"],
+      "fix": { "workflow": "add subtle grain/dither, reduce processing, work in higher bit depth" }
+    },
+    "luminance_imbalance": {
+      "indicators": ["background brighter than subject", "subject too dark", "wrong brightness hierarchy"],
+      "common_causes": ["backlit scene", "window behind subject", "production lighting issue"],
+      "fix": { "workflow": "use power windows to balance subject and background separately" }
+    },
+    "color_crossover": {
+      "indicators": ["colors bleeding", "hue shift in tones", "shadows different color than highlights"],
+      "common_causes": ["certain film stocks", "cross-processing", "color matrix issues"],
+      "fix": { "workflow": "use lift/gamma/gain color wheels to neutralize each tonal range" }
+    }
+  }
+}

@@ -1,7 +1,4 @@
-"""Contract tests for C3 — host_tool_choice_hint in deferred-payload.
-
-See local/design/agentic-flow-improvements-gameplan.md §3 task C3.
-"""
+"""Contract tests for C3 — host_tool_choice_hint in deferred-payload."""
 import unittest
 
 from src.utils.media_analysis import build_host_chat_paths_payload

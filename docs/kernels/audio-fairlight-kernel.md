@@ -68,6 +68,28 @@ All kernel actions are exposed through `timeline`.
 - The public API does not expose full Fairlight mix automation curves or plugin
   parameter graphs.
 
+## Advanced (offline) server — Fairlight planning + bus routing
+
+The actions above drive audio on a *running* Resolve. The companion advanced
+server (`davinci-resolve-advanced`, see `resolve-advanced/README.md`) plans and
+patches audio **offline, no Resolve running**:
+
+- **`audio_plan`** (pure Node) — `list_templates`, `select_template`,
+  `track_plan`, `analyze_coverage`, `check_loudness` (against R128/ATSC/streaming
+  targets). Plan the Fairlight track/bus layout before building it live.
+- **`fairlight`** — Fairlight **bus routing**, which has *no scripting API*: it
+  patches the `FLStudioModelBA` blob directly. `read_buses_from_blob` (offline
+  codec); `read_buses_from_db`, `expand_buses`, `export_template` /
+  `import_template`, `backup`, `restore` (DB path — needs optional
+  `better-sqlite3`; project CLOSED + quit/relaunch, like other DB patches).
+- **`audio`** — offline ffmpeg ops: `split` (silence/TC/intervals), `trim`,
+  `convert` (needs ffmpeg on PATH — GPL, not bundled). Align/loudness-measure are
+  not yet vendored.
+
+Rule of thumb: plan/measure offline, apply mix/track changes live; use
+`fairlight` for bus work the scripting API can't reach. See the `resolve-audio`
+skill (`.claude/skills/audio.md`) and the `/audio_workflow` prompt.
+
 ## Live Probe
 
 Run the live boundary probe with:

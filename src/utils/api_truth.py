@@ -487,6 +487,27 @@ API_TRUTH: List[Dict[str, Any]] = [
         "issue": 77,
         "mitigation": ["_verify_clip_property_writeback", "_verify_writeback"],
     },
+    {
+        "symbol": "Graph.ApplyGradeFromDRX (node layout preserved on same-structure apply)",
+        "object": "Graph",
+        "signature": "(path, gradeMode) -> bool",
+        "reality": "When the applied .drx has the same node structure/ids as the "
+                   "target's current graph, Resolve matches nodes and KEEPS the "
+                   "existing node-editor x/y layout — the .drx's stored node "
+                   "positions are silently ignored (returns True). Positions from "
+                   "the .drx are only honored when the target graph differs "
+                   "structurally (e.g. after ResetAllGrades, or a different node "
+                   "count/ids). Verified on Resolve 19.1.3: applying a "
+                   "positions-only-modified copy of a clip's own grade back to it "
+                   "is a layout no-op.",
+        "recommended": "To programmatically re-layout a clip's node graph "
+                       "(Cleanup Node Graph has no API), reset the grade first, "
+                       "then apply the re-positioned .drx: grab still → rewrite "
+                       "node x/y → ResetAllGrades → ApplyGradeFromDRX. Grade "
+                       "values round-trip byte-identically via the lossless Body "
+                       "pass-through.",
+        "tags": ["silent-failure", "color", "node-graph", "layout", "drx"],
+    },
 ]
 
 

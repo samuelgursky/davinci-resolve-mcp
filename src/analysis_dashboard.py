@@ -17,7 +17,7 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 from src.utils.media_analysis import (
@@ -3936,6 +3936,8 @@ HTML = r"""<!doctype html>
           <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="mcp" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7v10l8 5 8-5V7l-8-5z"></path><path d="m4 7 8 5 8-5"></path><path d="M12 12v10"></path></svg></span>MCP</button>
           <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="storage" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"></path><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"></path></svg></span>Storage</button>
           <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="tools" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l2.1-2.1a6 6 0 0 1-7.6 7.6l-4 4a2.1 2.1 0 0 1-3-3l4-4a6 6 0 0 1 7.6-7.6z"></path></svg></span>Tools</button>
+          <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="advanced" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></span>Advanced</button>
+          <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="conform-qc" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 11 3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg></span>Conform QC</button>
           <button class="nav-dropdown-item" data-panel-target="diagnostics" data-subpage-target="media-pool-history" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18"></path><path d="M3 6h18"></path><path d="M3 18h18"></path></svg></span>Media Pool History</button>
         </div>
       </div>
@@ -3946,6 +3948,7 @@ HTML = r"""<!doctype html>
           <button class="nav-dropdown-item" data-panel-target="docs" data-subpage-target="release-notes" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"></path><circle cx="12" cy="12" r="9"></circle></svg></span>Release Notes</button>
           <button class="nav-dropdown-item" data-panel-target="docs" data-subpage-target="analysis-guide" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6"></path><path d="M10 22h4"></path><path d="M12 2a7 7 0 0 0-4 12c.65.55 1 1.35 1 2h6c0-.65.35-1.45 1-2A7 7 0 0 0 12 2z"></path></svg></span>Media Analysis Guide</button>
           <button class="nav-dropdown-item" data-panel-target="docs" data-subpage-target="agent-skill" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8V4H8"></path><rect x="4" y="12" width="16" height="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg></span>Agent Skill</button>
+          <button class="nav-dropdown-item" data-panel-target="docs" data-subpage-target="advanced-server" role="menuitem"><span class="nav-dropdown-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></span>Advanced Server</button>
         </div>
       </div>
       <div class="control-nav-item">
@@ -4452,6 +4455,32 @@ HTML = r"""<!doctype html>
         <span id="mpcMeta" class="mpc-meta"></span>
       </div>
       <div id="mpcTable" class="mpc-table">loading…</div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="diagnostics" data-subpage="advanced">
+      <h2>Advanced Server</h2>
+      <p class="section-copy">The optional offline Node sibling (<code>davinci-resolve-advanced-mcp</code>) edits Resolve files (<code>.drp</code>/<code>.drt</code>/<code>.drx</code>) and patches the project DB — no running Resolve required. The core is pure-JS and always available; a few features need user-installed helpers, shown live below. Full 18-tool catalog: Docs → Advanced Server.</p>
+      <div class="mpc-toolbar">
+        <button id="advRefreshBtn" class="secondary" type="button">Refresh</button>
+        <span id="advMeta" class="mpc-meta"></span>
+      </div>
+      <div class="diag-grid" id="diagnosticsAdvanced">
+        <div class="empty">Advanced-server capabilities pending.</div>
+      </div>
+    </section>
+
+    <section class="span-12 subpage" data-subpage-scope="diagnostics" data-subpage="conform-qc">
+      <h2>Conform QC</h2>
+      <p class="section-copy">Read-only browser for a conform <strong>lineage sidecar</strong> — the content-hashed snapshot store the advanced server's <code>conform</code> tool writes (<code>snapshot</code> ingest → <code>qc</code> per-cut frame verdicts). Point at a sidecar <code>.db</code> to inspect snapshots, diffs, and verdicts; ingest and QC runs stay with the MCP tools.</p>
+      <div class="mpc-toolbar">
+        <label class="mpc-toolbar-field" style="flex:1;min-width:280px">Lineage sidecar
+          <input id="cqDbPath" type="text" placeholder="/path/to/lineage.db" spellcheck="false">
+        </label>
+        <button id="cqLoadBtn" class="secondary" type="button">Load</button>
+        <span id="cqMeta" class="mpc-meta"></span>
+      </div>
+      <div id="cqSnapshots" class="mpc-table"><div class="empty">Enter the path to a lineage sidecar and Load.</div></div>
+      <div id="cqDetail" style="margin-top:12px"></div>
     </section>
   </main>
 
@@ -5007,6 +5036,7 @@ HTML = r"""<!doctype html>
       'release-notes': 'Release Notes',
       'analysis-guide': 'Media Analysis Guide',
       'agent-skill': 'Agent Skill',
+      'advanced-server': 'Advanced Server',
     };
     const SUBPAGE_LABELS = {
       analysis: {
@@ -5018,6 +5048,8 @@ HTML = r"""<!doctype html>
         mcp: 'MCP',
         storage: 'Storage',
         tools: 'Tools',
+        advanced: 'Advanced',
+        'conform-qc': 'Conform QC',
         'media-pool-history': 'Media Pool History',
       },
       docs: DOC_LABELS,
@@ -5169,6 +5201,12 @@ HTML = r"""<!doctype html>
       }
       if (next === 'projects' && !state.allProjects) {
         refreshAllProjects().catch(alertError);
+      }
+      if (next === 'diagnostics' && subpage === 'advanced' && !state.advancedCaps) {
+        refreshAdvancedCapabilities().catch(alertError);
+      }
+      if (next === 'diagnostics' && subpage === 'conform-qc') {
+        initConformQc();
       }
       if (next === 'analysis' && subpage === 'review') {
         ensureReviewPanelStateTimer();
@@ -11018,6 +11056,108 @@ HTML = r"""<!doctype html>
     });
 
     // Media Pool History (Diagnostics)
+    // ── Advanced server (capabilities card + conform lineage browser) ──
+    async function refreshAdvancedCapabilities() {
+      setHtml('advMeta', 'checking…');
+      const payload = await api('/api/advanced/capabilities');
+      state.advancedCaps = payload;
+      setHtml('advMeta', '');
+      if (!payload.success) {
+        setHtml('diagnosticsAdvanced', `<div class="empty">${escapeHtml(payload.error || 'Advanced server unavailable.')}${payload.hint ? `<div class="tool-chip-note">${escapeHtml(payload.hint)}</div>` : ''}</div>`);
+        return;
+      }
+      const caps = payload.result || {};
+      const optional = caps.optional || {};
+      const cards = [`
+        <div class="diag-card">
+          <div class="diag-card-head"><strong>Core</strong> ${statusPill('pill-ok', 'Ready')}</div>
+          <div class="diag-card-rows">${diagRow('Always available (pure-JS)', caps.core || '', {})}</div>
+        </div>`];
+      Object.keys(optional).forEach(name => {
+        const dep = optional[name] || {};
+        const ready = !!dep.available;
+        cards.push(`
+          <div class="diag-card">
+            <div class="diag-card-head"><strong>${escapeHtml(name)}</strong> ${statusPill(ready ? 'pill-ok' : 'pill-warn', ready ? 'Available' : 'Missing')}</div>
+            <div class="diag-card-rows">
+              ${diagRow('Enables', dep.enables || '', {})}
+              ${ready ? '' : diagRow('Install', dep.install || '', {})}
+            </div>
+          </div>`);
+      });
+      setHtml('diagnosticsAdvanced', cards.join(''));
+    }
+
+    const CQ_VERDICT_TONE = { MATCH: 'pill-ok', OFFSET: 'pill-warn', WRONG: 'pill-err', REF_OFFLINE: 'pill-mute', UNREADABLE: 'pill-warn' };
+    let cqInitialized = false;
+
+    function initConformQc() {
+      if (cqInitialized) return;
+      cqInitialized = true;
+      const saved = localStorage.getItem('cq_lineage_db');
+      if (saved && $('cqDbPath')) $('cqDbPath').value = saved;
+      if (saved) cqLoadSnapshots().catch(alertError);
+    }
+
+    async function cqLoadSnapshots() {
+      const db = ($('cqDbPath')?.value || '').trim();
+      if (!db) { setHtml('cqSnapshots', '<div class="empty">Enter the path to a lineage sidecar and Load.</div>'); return; }
+      localStorage.setItem('cq_lineage_db', db);
+      setHtml('cqMeta', 'loading…');
+      setHtml('cqDetail', '');
+      const payload = await api(`/api/advanced/lineage?op=list&db=${encodeURIComponent(db)}`);
+      if (!payload.success) { setHtml('cqMeta', ''); setHtml('cqSnapshots', `<div class="empty">${escapeHtml(payload.error || 'Could not read lineage db.')}</div>`); return; }
+      const snaps = (payload.result || {}).snapshots || [];
+      setHtml('cqMeta', `${snaps.length} snapshot${snaps.length === 1 ? '' : 's'}`);
+      if (!snaps.length) { setHtml('cqSnapshots', '<div class="empty">No snapshots in this sidecar yet.</div>'); return; }
+      const rows = snaps.map((snap, i) => `
+        <tr>
+          <td><code>${escapeHtml(String(snap.snapshot_id || '').slice(0, 12))}</code></td>
+          <td>${escapeHtml(snap.label || '')}</td>
+          <td>${escapeHtml(snap.reel || '')}</td>
+          <td>${escapeHtml(snap.kind || '')}</td>
+          <td>${Number(snap.cut_count) || 0}</td>
+          <td>${escapeHtml(snap.created_at || '')}</td>
+          <td>
+            <button class="secondary" type="button" data-cq-verdicts="${escapeHtml(snap.snapshot_id)}">Verdicts</button>
+            ${i + 1 < snaps.length ? `<button class="secondary" type="button" data-cq-diff-a="${escapeHtml(snaps[i + 1].snapshot_id)}" data-cq-diff-b="${escapeHtml(snap.snapshot_id)}">Diff prev</button>` : ''}
+          </td>
+        </tr>`).join('');
+      setHtml('cqSnapshots', `<table><thead><tr><th>Snapshot</th><th>Label</th><th>Reel</th><th>Kind</th><th>Cuts</th><th>Created</th><th></th></tr></thead><tbody>${rows}</tbody></table>`);
+      document.querySelectorAll('[data-cq-verdicts]').forEach(btn => btn.addEventListener('click', () => cqShowVerdicts(btn.dataset.cqVerdicts).catch(alertError)));
+      document.querySelectorAll('[data-cq-diff-a]').forEach(btn => btn.addEventListener('click', () => cqShowDiff(btn.dataset.cqDiffA, btn.dataset.cqDiffB).catch(alertError)));
+    }
+
+    async function cqShowVerdicts(snapshotId) {
+      const db = ($('cqDbPath')?.value || '').trim();
+      const payload = await api(`/api/advanced/lineage?op=verdicts&db=${encodeURIComponent(db)}&snapshot=${encodeURIComponent(snapshotId)}`);
+      if (!payload.success) { setHtml('cqDetail', `<div class="empty">${escapeHtml(payload.error || 'verdicts unavailable')}</div>`); return; }
+      const verdicts = (payload.result || {}).verdicts || [];
+      const tallies = payload.tallies || {};
+      const pills = Object.keys(tallies).map(k => `<span class="pill-legend-item"><span class="status-pill ${CQ_VERDICT_TONE[k] || 'pill-mute'}">${escapeHtml(k)}</span> ${tallies[k]}</span>`).join(' ');
+      if (!verdicts.length) { setHtml('cqDetail', `<div class="empty">No QC verdicts recorded for <code>${escapeHtml(snapshotId.slice(0, 12))}</code> yet — run conform qc via the MCP tool.</div>`); return; }
+      const rows = verdicts.map(v => `
+        <tr>
+          <td>${Number(v.cut_index)}</td>
+          <td><span class="status-pill ${CQ_VERDICT_TONE[v.verdict] || 'pill-mute'}">${escapeHtml(v.verdict || '?')}</span></td>
+          <td>${escapeHtml(v.category || '')}</td>
+          <td>${v.psnr == null ? '' : Number(v.psnr).toFixed(1)}</td>
+          <td>${escapeHtml(v.reference_ref || '')}</td>
+        </tr>`).join('');
+      setHtml('cqDetail', `<div class="pill-legend" style="margin-bottom:8px">${pills}</div><div class="mpc-table"><table><thead><tr><th>Cut</th><th>Verdict</th><th>Category</th><th>PSNR</th><th>Reference</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+    }
+
+    async function cqShowDiff(aId, bId) {
+      const db = ($('cqDbPath')?.value || '').trim();
+      const payload = await api(`/api/advanced/lineage?op=diff&db=${encodeURIComponent(db)}&a=${encodeURIComponent(aId)}&b=${encodeURIComponent(bId)}`);
+      if (!payload.success) { setHtml('cqDetail', `<div class="empty">${escapeHtml(payload.error || 'diff unavailable')}</div>`); return; }
+      setHtml('cqDetail', `<div class="mpc-table"><pre style="margin:0;white-space:pre-wrap">${escapeHtml(JSON.stringify(payload.result, null, 2))}</pre></div>`);
+    }
+
+    $('advRefreshBtn')?.addEventListener('click', () => refreshAdvancedCapabilities().catch(alertError));
+    $('cqLoadBtn')?.addEventListener('click', () => cqLoadSnapshots().catch(alertError));
+    $('cqDbPath')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') cqLoadSnapshots().catch(alertError); });
+
     $('mpcRefreshBtn')?.addEventListener('click', () => refreshMpcTable().catch(alertError));
     $('mpcLimit')?.addEventListener('change', () => refreshMpcTable().catch(alertError));
     $('mpcActionFilter')?.addEventListener('change', () => applyMpcFilter());
@@ -14021,6 +14161,7 @@ DOC_SOURCES = {
     "readme": {"title": "README", "path": "README.md"},
     "analysis-guide": {"title": "Media Analysis Guide", "path": "docs/guides/media-analysis-guide.md"},
     "agent-skill": {"title": "Agent Skill", "path": "docs/SKILL.md"},
+    "advanced-server": {"title": "Advanced Server", "path": "resolve-advanced/README.md"},
     "release-notes": {"title": "Release Notes", "path": "CHANGELOG.md"},
 }
 
@@ -14667,6 +14808,89 @@ def _dashboard_doc(doc_id: Any) -> Dict[str, Any]:
     }
 
 
+
+# ── Advanced server (Node) — read-only panel bridge ─────────────────────────
+# The panel inspects advanced-server state through resolve-advanced/scripts/
+# panel-bridge.mjs (one-shot JSON; capabilities + a read-only lineage subset).
+# Mutations (ingest, QC runs, patches) stay with the MCP tools by design.
+
+_ADVANCED_LINEAGE_OPS = {"list", "show", "diff", "verdicts"}
+
+
+def _advanced_root() -> str:
+    return os.path.join(_repo_root(), "resolve-advanced")
+
+
+def _run_advanced_bridge(surface: str, op: str, args: Optional[Dict[str, Any]] = None,
+                         timeout: float = 30.0) -> Dict[str, Any]:
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        return {"success": False, "error": "Node.js not found on PATH",
+                "hint": "Install Node.js 18+ to enable advanced-server features in the panel."}
+    bridge = os.path.join(_advanced_root(), "scripts", "panel-bridge.mjs")
+    if not os.path.isfile(bridge):
+        return {"success": False, "error": f"panel bridge missing: {bridge}"}
+    try:
+        # stdin=DEVNULL: never let a child race-read a protocol/stdin stream (api_truth).
+        proc = subprocess.run(
+            [node, bridge, str(surface), str(op), json.dumps(args or {})],
+            capture_output=True, text=True, timeout=timeout,
+            stdin=subprocess.DEVNULL, cwd=_advanced_root(),
+        )
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": f"advanced bridge timed out after {timeout:.0f}s"}
+    except OSError as exc:
+        return {"success": False, "error": str(exc)}
+    raw = (proc.stdout or "").strip()
+    try:
+        payload = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict) or "success" not in payload:
+        stderr_tail = (proc.stderr or "").strip().splitlines()[-3:]
+        return {"success": False, "error": "advanced bridge returned no JSON", "stderr": stderr_tail}
+    return payload
+
+
+def _advanced_capabilities_payload() -> Dict[str, Any]:
+    import shutil
+
+    payload = _run_advanced_bridge("capabilities", "get")
+    payload["node"] = shutil.which("node")
+    payload["root"] = _advanced_root()
+    return payload
+
+
+def _advanced_lineage_payload(op: str, params: Mapping[str, str]) -> Dict[str, Any]:
+    if op not in _ADVANCED_LINEAGE_OPS:
+        return {"success": False, "error": f"unknown lineage op '{op}' (read-only: list|show|diff|verdicts)"}
+    db = str(params.get("db") or "").strip()
+    if not db:
+        return {"success": False, "error": "db (path to the lineage SQLite sidecar) is required"}
+    db = os.path.abspath(os.path.expanduser(db))
+    # Never create a store from a browse UI — the sidecar must already exist.
+    if not os.path.isfile(db):
+        return {"success": False, "error": f"lineage db not found: {db}"}
+    args: Dict[str, Any] = {"lineageDb": db}
+    for src, dst in (("reel", "reel"), ("snapshot", "snapshotId"),
+                     ("a", "aId"), ("b", "bId"), ("ref", "referenceRef")):
+        value = str(params.get(src) or "").strip()
+        if value:
+            args[dst] = value
+    payload = _run_advanced_bridge("lineage", op, args)
+    if op == "verdicts" and payload.get("success"):
+        verdicts = ((payload.get("result") or {}).get("verdicts")) or []
+        tallies: Dict[str, int] = {}
+        for v in verdicts:
+            key = str(v.get("verdict") or "?")
+            tallies[key] = tallies.get(key, 0) + 1
+        payload["tallies"] = tallies
+    return payload
+
+
 def _setup_defaults(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from src.server import setup as server_setup
 
@@ -14838,6 +15062,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/update/preview":
             self._json(_update_preview_payload())
+            return
+        if path == "/api/advanced/capabilities":
+            self._json(_advanced_capabilities_payload())
+            return
+        if path == "/api/advanced/lineage":
+            op = (query.get("op") or [""])[0]
+            params = {k: (query.get(k) or [""])[0] for k in ("db", "reel", "snapshot", "a", "b", "ref")}
+            self._json(_advanced_lineage_payload(op, params))
             return
         if path == "/api/mcp/status":
             self._json(_mcp_status_payload())

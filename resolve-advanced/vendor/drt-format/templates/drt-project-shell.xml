@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--DbAppVer="20.3.2.0009" DbPrjVer="15"-->
+<SM_Project DbId="448364cf-b0ac-4842-98d1-281995dfdeaf">
+ <FieldsBlob>000000010000000700000026005400650078007400520065006e006400650072004900740065006d005600650063004200410000000c00ffffffff0000001e00500072006f006a00650063007400460065006100740075007200650073000000050000000000000000030000002e00500072006f006a00650063007400440062004d006900670072006100740069006f006e00530074006100740065000000040000000000000000030000004000490073005400720061006e00730063007200690062006500570069007400680053007000650061006b006500720044006500740065006300740069006f006e0000000100010000002e0049007300500072006f006a0065006300740041006700650049006e004d006900630072006f00530065006300730000000100010000001400470061006c006c0065007200790052006500660000000a000000004800390034003400640038003700370030002d0066003300300037002d0034006400330033002d0061003900620033002d006400630036003400630034003900320063006400630062000000260046007500730069006f006e00530069007a0069006e006700560065007200730069006f006e000000020000000002</FieldsBlob>
+ <LockId/>
+ <User>4d328196-5d35-4346-a389-919dfb1d280b</User>
+ <Folder/>
+ <UserId>-1</UserId>
+ <SysId>10A1DA47CF6A</SysId>
+ <ProjectId>0</ProjectId>
+ <UpToDate>true</UpToDate>
+ <OrigProjUpToDate>true</OrigProjUpToDate>
+ <RevivalTaskSetID>-1</RevivalTaskSetID>
+ <PlayHeadsSplitDisplay>false</PlayHeadsSplitDisplay>
+ <LastModTimeInSecs>0</LastModTimeInSecs>
+ <UpgradeLockSysId/>
+ <ProjectAgeInMs>30110748</ProjectAgeInMs>
+ <ProjectName>Timeline 1</ProjectName>
+ <FolderMap/>
+ <TimelineVec/>
+ <TimelineHandleVec>
+  <Element>09e142ee-6236-4daa-8316-8adf51803769</Element>
+ </TimelineHandleVec>
+ <CurrentTimelineIndex>0</CurrentTimelineIndex>
+ <StreamCursorVector>
+  <Element>0</Element>
+ </StreamCursorVector>
+ <StreamIdVector>
+  <Element>0</Element>
+ </StreamIdVector>
+ <StreamPlayHeadVector>
+  <Element>1</Element>
+ </StreamPlayHeadVector>
+ <StreamAdvanceVector>
+  <Element>1</Element>
+ </StreamAdvanceVector>
+ <GangPlayHeadVector>
+  <Element>1</Element>
+ </GangPlayHeadVector>
+ <NumTotalStreams>1</NumTotalStreams>
+ <NumPlayStreams>1</NumPlayStreams>
+ <CurrentStreamId>0</CurrentStreamId>
+ <PlayingStreamId>0</PlayingStreamId>
+ <PlayHeadMode>0</PlayHeadMode>
+ <CommonConfig>
+  <SM_Config DbId="25bcfce3-6bb1-4222-a029-d8555ae82a5d">
+   <FieldsBlob>00000001000000010000000e00530065007400750070004200410000000c00000004d600000001000004ce8128b52ffd60d3271d2600e6b7b347b058d91cbcf23df0f0b561038be5df1de57f88d38950fc663746662db2717c3eced2c931564d24b76492f89eefc348a30a56cd4769914d4a29223d80347840f1da183b992452a696009300a300efc2716b18c4b97103177aa668e3b975d77ea9fd33faefbc75bfb7a7b7eeaf6f1e7addfd35cebc6f667f3df43ace43bf6677dfcd8e737b6c779f7f979ff7cfefc54fec3bf88657bfe9377f33e96c62a2946ad08902729e943426254c8ee48f172625a3f0fdfddc5e8dcdf0f5a120b2d9184d0c85c5deef2d02dda1cd50f80e37d83038799ccc1d15fef3ef3971984993ca793497aa591a161a7d0e2a25b28d963da624b28dfe137787d15fc07fea87f90ff0138336eefebbe8e1be6b137fef2ddc3d37cd7f70a27d0f17fece61e0252612ddfb376de0be85e77ef003b8604425e384d172ae042c2d2d6d49a560acfcb254bd3039dd75eaa4727161855529c4540aabea8aade9ea525757b00824837a92dece5bddbd0ecb59ddfd9533fb6b7dd7aed3bdde5a21fe3e3c28961c67cc9c27dfbb79ac156ddb3cdffe79a7e6d5427aec1a6c5c3b3bce4785cc14d946498e41b21421810c2205497723d9a361e6a6ad74d8d9d91e93cf3bbad30ecf4ce8dae813d73d6277e0c0dd7bcfdce6c162db824994d920ccb36d0cfbfc60d7bf7f17ef89dddeaee69c8e73cdb975763d21f8ebf4747520dab70f339d71a3cb0c4a3da090504aa044886ca3190c8664e6444594136ef489172f1a38d1bb5701664b69b692664be96cedb8754459cb593566c5306398a4628aa03131d09816a84a8bec97bde0dc7c4976fc16fd236a97253c007388aa09011552fa84d3e1d0f86ff7e0b45305eb5182f568808a94593e89195091680a6896348a7d967412febadba64155647a9b21cf082dee100e3c34b8cd8e10c4581c084ab2400baca7af492106183a5ca71555922e1f47906c0c491241baa2638a799eb86874865d856e60072585e7809b633893f59638c5af7fde1191540680dea80149e514c90409928224853407d002919119dae61240e0310e0321066210844118843088282111120131c4180121c418e59407c5ce780cbf0c0500012a4d2b99cf3827aa998c235581b076b192a889ca3be848851b7e4182a3bc7c6180367ca8f1bf68696996b735cdbf88b83176db87b275880a80fec65d5f88410cdd04e975af10d7eb98524f2cda8f034fe2c9c24c69fba579c10df004a78cf81474bff4aeec7af34e15766283a7ff6fe740797aff0ce767aea673ec61f9a5ad0cbea5ada3b7db736007fb1aed767fe2f8f96a0541fcd2b1392c5f7aec768cf93d6ac731ff98c92e51c43a3cccf710b9df72f3d9c6ef8b61b585f14e9caa260021df83ed49466864f1be966ba470a2b37cf112402e896a51654079c582edf403c89c8c2f8c064b0110fca8b061820b871a8dfb0db07cbdcec014df946cc275bb6fc40048d97439421f0db613b1030fbc012f340eae6b95abc2ff75ae0a8091d16b2db68b9b2509bf531de04d1312e865c1ebb240a094be1f6d0fd83100e2d5b7828b6880ed326ee64af961122006f9f3648d6687eb79a9b2332787d64c1c86c390954adcecab6974de353e08cebcc1c739f51102959812dd7a6c7acd9e9d9db74c2544d47b813f724f4f506f3978834a876dfc85b2635afa32660ac8ea30d55694a294ada2f65f0478e9b1843573aade95825601</FieldsBlob>
+   <User/>
+   <ConfigId>0</ConfigId>
+   <UserId>0</UserId>
+   <ProjId>0</ProjId>
+   <SsnId>0</SsnId>
+   <Name>Untitled Project 2026-06-21_121613.Cfg</Name>
+   <LockSysId/>
+   <DbSavedTime>0</DbSavedTime>
+   <MultiSysData>
+    <Sm2MultiSysData DbId="5edb9d94-be95-4ed2-a19a-d045602130bf">
+     <FieldsBlob>00000001000000010000000c0044006100740061004200410000000c0000000037000000010000002f8012280000000100000001000000180031003000410031004400410034003700430046003600410000000020013000</FieldsBlob>
+     <LockSysId/>
+     <DbSavedTime>0</DbSavedTime>
+    </Sm2MultiSysData>
+   </MultiSysData>
+  </SM_Config>
+ </CommonConfig>
+ <DeletedSsnList/>
+ <IsADeliverableProject>false</IsADeliverableProject>
+ <DeliverableProjectEDLStr/>
+ <DeliverableSessionName/>
+ <NumReader>0</NumReader>
+ <ClipInfoSeed>0</ClipInfoSeed>
+ <ReelSeed>0</ReelSeed>
+ <EDLSeed>0</EDLSeed>
+ <RenderTextEnabled>true</RenderTextEnabled>
+ <RenderTextGanged>true</RenderTextGanged>
+ <RenderTextPrefixed>true</RenderTextPrefixed>
+ <activeStereoLeftSession/>
+ <activeStereoRightSession/>
+ <IsAutoSave>false</IsAutoSave>
+ <ProjRef/>
+ <Thumbnails/>
+ <MediaPool>
+  <Sm2MediaPool DbId="da2bf00c-e1b9-4dbf-aa21-c3eec5dc3f98">
+   <FieldsBlob>00000001000000010000001a0052006f006f00740046006f006c0064006500720052006500660000000a000000004800370038006100330032006300660033002d0033003500360061002d0034003900650066002d0061003300340038002d003700660031003000380032003200640031006200310062</FieldsBlob>
+   <SmartFolderVec/>
+   <StereoSource>2</StereoSource>
+  </Sm2MediaPool>
+ </MediaPool>
+ <ProjectVersion>15</ProjectVersion>
+ <GroupList/>
+ <GroupListObj>
+  <Sm2GroupList DbId="012188b9-7fa8-43ed-b0f3-1b06ab31b99b">
+   <FieldsBlob/>
+   <GroupList/>
+   <LockSysId/>
+   <DbSavedTime>0</DbSavedTime>
+  </Sm2GroupList>
+ </GroupListObj>
+ <IsLiveCollaborationEnabled>false</IsLiveCollaborationEnabled>
+ <LockableBlobMap>
+  <Sm2LockableBlobMap DbId="bc07db93-c461-438d-8421-b626e9d915ca">
+   <FieldsBlob/>
+   <LocableBlobSet>
+    <Element>
+     <Sm2MediaPoolLockableBlob DbId="6c63545c-9714-47ae-8c61-71381ee9b809">
+      <FieldsBlob/>
+      <BlobOwner>da2bf00c-e1b9-4dbf-aa21-c3eec5dc3f98</BlobOwner>
+      <DbSavedTime>0</DbSavedTime>
+     </Sm2MediaPoolLockableBlob>
+    </Element>
+   </LocableBlobSet>
+  </Sm2LockableBlobMap>
+ </LockableBlobMap>
+ <PowerNodeList>
+  <ListMgt::LmPowerNodeList DbId="ce1c55bf-58c2-4bbe-8f3d-43dd43d7758d">
+   <FieldsBlob/>
+   <PowerNodes/>
+   <LockSysId/>
+   <DbSavedTime>0</DbSavedTime>
+  </ListMgt::LmPowerNodeList>
+ </PowerNodeList>
+ <Notes/>
+ <FaceTaggingClipVec/>
+ <FaceTaggingPeopleVec/>
+</SM_Project>

@@ -1,0 +1,16 @@
+{
+  "name": "conform-qc",
+  "version": "0.1.0",
+  "description": "Conform QC & repair engine: parse a turnover, derive the frame the target tool actually shows (the Oracle), frame-compare to a reference (brightness-robust), repair resourcefully, and deliver a verified package. Pure core + injected adapters. See docs/design/conform-qc-repair-engine-2026-06-16.md.",
+  "main": "./index.js",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "fast-xml-parser": "catalog:"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

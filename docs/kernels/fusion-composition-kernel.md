@@ -104,6 +104,23 @@ in success and in error responses.
   effect parameter. Higher-level wrappers should probe before assuming a
   control exists.
 
+## Advanced (offline) server — declarative `.comp` authoring
+
+The actions above build a Fusion comp on a timeline item in a *running* Resolve.
+The companion advanced server (`davinci-resolve-advanced`, see
+`resolve-advanced/README.md`) authors Fusion compositions **offline, no Resolve
+running**, via the `fusion` tool:
+
+- `generate` / `generate_from_template` — write a `.comp` from a declarative spec
+  or a named template (`list_templates`).
+- `to_api_calls` — compile a spec into the ordered tool-creation / input /
+  connection calls the live server then replays.
+
+Rule of thumb: author and verify the comp offline, then apply it live with
+`fusion_comp` `safe_add_tool` → `safe_set_inputs` → `safe_connect_tools` (the
+`to_api_calls` output maps directly onto those). See the `resolve-fusion` skill
+(`.claude/skills/fusion.md`) and the `/fusion_workflow` prompt.
+
 ## Live Probe
 
 Run the live boundary probe with:

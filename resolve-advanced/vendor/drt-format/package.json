@@ -1,0 +1,17 @@
+{
+  "name": "drt-format",
+  "version": "0.1.0",
+  "description": "DaVinci Resolve DRT (Timeline-only) format — same SeqContainer/MpFolder schema as DRP, no project shell. Parser + builder + validator delegate to drp-format primitives.",
+  "main": "./index.js",
+  "private": true,
+  "scripts": {
+    "test": "node --test __tests__/"
+  },
+  "dependencies": {
+    "drp-format": "workspace:*",
+    "jszip": "catalog:"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
