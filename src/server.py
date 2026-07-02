@@ -526,6 +526,32 @@ resolve = None
 dvr_script = None
 _resolve_lock = threading.RLock()
 
+# On Windows the fusionscript native bridge DLL must be locatable before the
+# Python import machinery attempts to load it.  Setting PYTHONHOME, prepending
+# the Resolve install directory to PATH, and registering it with
+# os.add_dll_directory() ensures the dynamic loader can find fusionscript.dll
+# and its dependencies even when the server is launched from a virtual-env or
+# a working directory that is not the Resolve install directory.  These steps
+# MUST happen before `import DaVinciResolveScript` or the import triggers a
+# native access-violation on Windows (crash before port bind in network mode).
+if sys.platform.startswith("win") and RESOLVE_LIB_PATH:
+    _resolve_install_dir = os.path.dirname(RESOLVE_LIB_PATH)
+    if os.path.isdir(_resolve_install_dir):
+        # Ensure Python's own runtime DLLs are discoverable by the bridge.
+        if not os.environ.get("PYTHONHOME"):
+            os.environ["PYTHONHOME"] = sys.base_prefix
+        # Prepend Resolve's install dir to PATH so the loader finds
+        # fusionscript.dll and sibling DLLs even without a system-wide install.
+        _cur_path = os.environ.get("PATH", "")
+        if _resolve_install_dir.lower() not in _cur_path.lower():
+            os.environ["PATH"] = _resolve_install_dir + os.pathsep + _cur_path
+        # os.add_dll_directory is available on Python 3.8+ (Windows only).
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(_resolve_install_dir)
+            except OSError:
+                pass
+
 try:
     import DaVinciResolveScript as dvr_script
     logger.info("DaVinciResolveScript module loaded")
