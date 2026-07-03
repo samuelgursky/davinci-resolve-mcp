@@ -43,6 +43,19 @@ class LookupTest(unittest.TestCase):
             self.assertIn("recommended", e)
             self.assertIsInstance(e.get("tags", []), list)
 
+    def test_append_endframe_exclusive_bound_recorded(self):
+        # AppendToTimeline clipInfo endFrame is a half-open bound (duration =
+        # endFrame - startFrame). The entry must be findable by an agent probing
+        # append placement semantics before batch-assembling clip_infos.
+        hits = lookup_api_truth("endFrame")
+        entry = next(
+            (e for e in hits if "AppendToTimeline clipInfo endFrame" in e["symbol"]),
+            None,
+        )
+        self.assertIsNotNone(entry)
+        self.assertIn("off-by-one", entry["tags"])
+        self.assertIn("exclusive", entry["reality"].lower())
+
 
 class ApiTruthActionTest(unittest.TestCase):
     def test_action_no_connection_needed(self):
