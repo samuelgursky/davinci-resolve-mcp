@@ -339,6 +339,29 @@ def _gaps_in_range(
     return gaps
 
 
+def _dedupe_skipped(skipped: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Collapse identical (item, reason) skip rows into one entry with a count.
+
+    A timeline layer cut into many segments from one unanalyzed source clip
+    otherwise reports the same skip once per segment (87 identical rows in a
+    real two-layer session), which bloats the plan payload without adding
+    signal. First occurrence order is preserved.
+    """
+    out: List[Dict[str, Any]] = []
+    index: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+    for row in skipped:
+        key = (row.get("item"), row.get("reason"))
+        hit = index.get(key)
+        if hit is None:
+            hit = dict(row)
+            hit["count"] = 1
+            index[key] = hit
+            out.append(hit)
+        else:
+            hit["count"] += 1
+    return out
+
+
 def plan_tighten(
     project_root: str,
     *,
@@ -440,6 +463,7 @@ def plan_tighten(
                 },
             })
 
+    skipped = _dedupe_skipped(skipped)
     if not lifts:
         return {
             "success": False,
