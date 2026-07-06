@@ -20,6 +20,16 @@ class ActionFiltering(unittest.TestCase):
     def test_registered_action_is_destructive_by_default(self) -> None:
         self.assertTrue(destructive_hook.is_destructive("timeline", "delete_clips"))
 
+    def test_timeline_rename_does_not_archive(self) -> None:
+        # Issue #83: renaming a timeline is content-preserving, so it must NOT
+        # trigger version-on-mutate (renames were spawning redundant _archived
+        # copies, and renaming an archive archived the archive).
+        self.assertFalse(
+            destructive_hook.is_destructive("timeline", "set_name", {"name": "New Name"})
+        )
+        # A content-changing timeline edit still archives.
+        self.assertTrue(destructive_hook.is_destructive("timeline", "add_track"))
+
     def test_no_archive_filter_skips_notes_set_property(self) -> None:
         # set_property with key=Notes shouldn't trigger versioning…
         self.assertFalse(destructive_hook.is_destructive(

@@ -99,7 +99,10 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "set_track_enable",
         "set_track_name",
         "set_voice_isolation_state",
-        "set_name",
+        # NOTE: timeline.set_name (rename) is intentionally NOT here. A rename is
+        # content-preserving and trivially reversible, so version-on-mutate added
+        # no recovery value — it only spawned redundant `_archived` copies (one per
+        # rename, and renaming an archive archived the archive). Issue #83.
         "set_start_timecode",
         "set_setting",
         "set_mark_in_out",
