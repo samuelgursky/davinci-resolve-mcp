@@ -63,7 +63,9 @@ class RenderSettingsWhitelistTest(unittest.TestCase):
 class DeleteProjectRoutingTest(unittest.TestCase):
     def test_raw_delete_routes_through_safe_helper(self):
         fake_pm = mock.Mock()
-        with mock.patch.object(s, "_check", return_value=(fake_pm, mock.Mock(), None)), \
+        fake_resolve = mock.Mock()
+        fake_resolve.GetProjectManager.return_value = fake_pm
+        with mock.patch.object(s, "get_resolve", return_value=fake_resolve), \
              mock.patch("src.utils.project_cleanup.delete_project_safely",
                         return_value={"success": True, "attempts": 1, "leftover": None, "detail": ""}) as safe:
             out = s.project_manager("delete", {"name": "Disposable"})
@@ -72,9 +74,12 @@ class DeleteProjectRoutingTest(unittest.TestCase):
         self.assertIn("delete_detail", out)
 
     def test_raw_delete_requires_name(self):
-        with mock.patch.object(s, "_check", return_value=(mock.Mock(), mock.Mock(), None)):
+        fake_resolve = mock.Mock()
+        fake_resolve.GetProjectManager.return_value = mock.Mock()
+        with mock.patch.object(s, "get_resolve", return_value=fake_resolve):
             out = s.project_manager("delete", {})
         self.assertIn("error", out)
+        self.assertIn("name", out["error"]["message"].lower())
 
 
 if __name__ == "__main__":
