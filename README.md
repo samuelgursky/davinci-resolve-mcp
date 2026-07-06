@@ -171,7 +171,7 @@ The default server is a local stdio process launched by your MCP client; it does
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **32** compound / **341** granular |
+| MCP Tools | **34** compound / **341** granular |
 | Kernel Actions | **136** guarded workflow actions across 9 compound tools |
 | API Methods Covered | **336/336** (100%) |
 | Methods Live Tested | **331/336** (98.5%) |
@@ -234,12 +234,3 @@ Samuel Gursky (samgursky@gmail.com)
 
 - Blackmagic Design for DaVinci Resolve and its scripting API
 - The Model Context Protocol team for enabling AI assistant integration
-- Anthropic for Claude Code, used extensively in development and testing
-
-### Community contributions
-
-- [@rgxdev](https://github.com/rgxdev) — configurable Media Pool inventory walk
-  (exclude bins + inventory limit), [#69](https://github.com/samuelgursky/davinci-resolve-mcp/pull/69) (v2.53.0)
-- [@swayll](https://github.com/swayll) — Source Track Selector investigation
-  ([#74](https://github.com/samuelgursky/davinci-resolve-mcp/issues/74)); confirmed
-  + documented API limitation (v2.57.1)

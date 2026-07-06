@@ -48,6 +48,7 @@ class DocToolCountsDriftTest(unittest.TestCase):
         # (file, required substring) — each must be present verbatim.
         checks = [
             ("README.md", f"{adv} tools:"),
+            ("README.md", f"**{comp}** compound / **{gran}** granular"),
             ("resolve-advanced/README.md", f"## Tools ({adv})"),
             ("src/server.py", f"{comp} compound tools"),
             ("docs/contributing.md", f"Compound MCP server — {comp} tools"),
