@@ -79,6 +79,21 @@ class PlanSelectsTests(EditEngineBase):
         self.assertIn("best_moment", first["rationale"])
         self.assertEqual(first["source_frame_range"][0], 0)
 
+    def test_selects_source_ranges_are_half_open(self) -> None:
+        # Issue #82: AppendToTimeline clipInfo endFrame is exclusive, so a select
+        # of shot 1 (0.0-5.0s + 0.25s handle each side, clamped to clip start) must
+        # end at round(5.25s * 24fps) = 126 — NOT 125. A -1 here shaves the last
+        # frame of every select; the clip_info feeds endFrame through verbatim.
+        plan = edit_engine.plan_selects(self.root, min_select_potential="high")
+        first = plan["decisions"][0]
+        start_frame, end_frame = first["source_frame_range"]
+        self.assertEqual(start_frame, 0)
+        self.assertEqual(end_frame, 126)  # exclusive bound → duration = 126 frames
+        # clip_infos (fed to AppendToTimeline) carry the same source range verbatim.
+        loaded = edit_engine.load_plan(self.root, plan["plan_id"])
+        clip_info = loaded["clip_infos"][0]
+        self.assertEqual(clip_info["end_frame"] - clip_info["start_frame"], 126)
+
     def test_medium_threshold_includes_second_clip(self) -> None:
         plan = edit_engine.plan_selects(self.root, min_select_potential="medium")
         self.assertEqual(plan["decision_count"], 3)
@@ -160,6 +175,23 @@ class PlanTightenTests(EditEngineBase):
         self.assertEqual(lift["timeline_end_frame"], 474)
         self.assertIn("No speech", lift["rationale"])
         self.assertEqual(lift["evidence"]["basis"], "transcript_segments")
+
+    def test_keep_ranges_are_half_open(self) -> None:
+        # Issue #82: keep-range end_frame is fed to AppendToTimeline as an
+        # EXCLUSIVE endFrame, so duration = end - start. Kept segments are
+        # (0, 9.75s) and (19.75s, 20.0s) → frames [0,234] and [474,480]. A -1 here
+        # shaves the last frame off every kept segment. The variant assembler
+        # advances its record cursor by (end - start), so these must be exclusive
+        # for the tightened timeline to be gap-free and frame-accurate.
+        plan = edit_engine.plan_tighten(
+            self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0
+        )
+        loaded = edit_engine.load_plan(self.root, plan["plan_id"])
+        video = [r for r in loaded["keep_ranges"] if r["track_type"] == "video"]
+        ranges = sorted((r["start_frame"], r["end_frame"]) for r in video)
+        self.assertEqual(ranges, [(0, 234), (474, 480)])
+        # Total kept = 240 frames = 10s (original 20s minus the 10s dead-air lift).
+        self.assertEqual(sum(e - s for s, e in ranges), 240)
 
     def test_item_offset_maps_to_timeline_frames(self) -> None:
         # Item shows source 8s..20s at timeline 1000..1288 (24fps).
@@ -307,8 +339,9 @@ class PlanSwapTests(EditEngineBase):
         best = alts[0]
         self.assertEqual(best["clip_name"], "Alt.mp4")
         # Replacement fills the slot exactly: 10s at 24fps = 240 frames.
+        # endFrame is a half-open (exclusive) bound, so duration = end - start.
         frame_range = best["source_frame_range"]
-        self.assertEqual(frame_range[1] - frame_range[0] + 1, 240)
+        self.assertEqual(frame_range[1] - frame_range[0], 240)
 
     def test_swap_requires_analysis(self) -> None:
         item = {

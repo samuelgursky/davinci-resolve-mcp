@@ -18187,7 +18187,10 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                 build_errors.append({"index": i, "error": row_err.get("error")})
                 continue
             built.append(row)
-            record_cursor += int(append_ci.get("end_frame", 0)) - int(append_ci.get("start_frame", 0)) + 1
+            # AppendToTimeline endFrame is exclusive: the item occupies
+            # (end - start) frames. Advancing by +1 more leaves a 1-frame gap
+            # (black flash) between consecutive selects. See api_truth endFrame entry.
+            record_cursor += int(append_ci.get("end_frame", 0)) - int(append_ci.get("start_frame", 0))
         appended = mp.AppendToTimeline(built) if built else None
         readback = _edit_engine_capture(tl)
         # A diff against a source timeline is meaningless for a fresh assembly;

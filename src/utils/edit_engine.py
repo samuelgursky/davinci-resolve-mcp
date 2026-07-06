@@ -262,7 +262,10 @@ def plan_selects(
         if isinstance(clip_duration, (int, float)) and clip_duration:
             src_end = min(src_end, float(clip_duration))
         start_frame = int(round(src_start * fps))
-        end_frame = max(start_frame + 1, int(round(src_end * fps)) - 1)
+        # AppendToTimeline clipInfo endFrame is a half-open (exclusive) bound —
+        # duration = endFrame - startFrame. See api_truth "AppendToTimeline
+        # clipInfo endFrame". No -1: that would shave the last frame of every select.
+        end_frame = max(start_frame + 1, int(round(src_end * fps)))
         decision = {k: v for k, v in candidate.items() if not k.startswith("_")}
         decision["source_frame_range"] = [start_frame, end_frame]
         decisions.append(decision)
@@ -492,7 +495,9 @@ def plan_tighten(
                 audio_indices = [1]
         for seg_start, seg_end in segments:
             start_frame = int(round(seg_start * clip_fps))
-            end_frame = max(start_frame + 1, int(round(seg_end * clip_fps)) - 1)
+            # Half-open (exclusive) endFrame — duration = end - start. No -1, else
+            # every kept segment loses its last frame (see api_truth endFrame entry).
+            end_frame = max(start_frame + 1, int(round(seg_end * clip_fps)))
             keep_ranges.append({
                 "clip_id": spec["resolve_clip_id"],
                 "start_frame": start_frame,
@@ -642,7 +647,9 @@ def plan_swap(
         alt = dict(alt_clip)
         alt_fps = _clip_fps(alt)
         start_frame = int(round(float(alt_start) * alt_fps))
-        end_frame = start_frame + int(round(needed_seconds * alt_fps)) - 1
+        # Half-open (exclusive) endFrame — duration = end - start fills the slot
+        # exactly. No -1, else the replacement lands one frame short of the slot.
+        end_frame = start_frame + int(round(needed_seconds * alt_fps))
         return {
             "score": score,
             "clip_uuid": clip_uuid,
