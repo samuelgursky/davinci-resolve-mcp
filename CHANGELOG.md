@@ -2,6 +2,55 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.60.0
+
+A community bug-fix bundle — three external contributions plus the three issues
+they filed, integrated with the contributors credited as co-authors.
+
+### Fixed
+
+- **Frame accuracy (`edit_engine`)** — `MediaPool.AppendToTimeline` clipInfo
+  `endFrame` is an *exclusive* bound (duration = `endFrame - startFrame`), but
+  three plan builders wrote an inclusive end (`round(t*fps) - 1`) and
+  `execute_selects` advanced its record cursor by `end - start + 1`. Result:
+  `plan_tighten` kept ranges were one frame short per segment (~4.3s across 130
+  segments), `plan_selects`/`plan_swap` source ranges were one frame short, and
+  `execute_selects` left a 1-frame gap between selects. Now half-open everywhere.
+  (#82, thanks @chenyuxiaojin)
+- **Timeline rename no longer archives (`destructive_hook`)** — `timeline.set_name`
+  was version-on-mutate, so renames spawned redundant `_archived` timelines
+  (and renaming an archive archived the archive). A rename is content-preserving,
+  so it's out of the destructive registry. (#83, thanks @chenyuxiaojin)
+- **Windows startup (`server`)** — initialize the Resolve scripting env
+  (PYTHONHOME, PATH, `os.add_dll_directory`) before importing the fusionscript
+  bridge, avoiding a native access violation that crashed network transports
+  before bind. No-op off Windows. (#78, thanks @POLEPALLIANVESH)
+- Fixed a stale offline test that patched a refactored-away seam
+  (`project_manager` delete routing), restoring a fully green baseline.
+
+### Added
+
+- **`execute_tighten(..., include_details?)`** — the readback `structural_diff`
+  is compact by default (counts + a small head/tail sample) instead of embedding
+  every before/after item id (226 KB for a 130-segment tighten). The full
+  per-item diff is persisted in the plan record (`get_plan` →
+  `execution_summary.structural_diff`) and returned inline with
+  `include_details=true`. (#84, thanks @chenyuxiaojin)
+- **`plan_tighten` skip dedup** — identical `(item, reason)` skip rows collapse
+  into one entry with a `count` (an unanalyzed layer no longer repeats the same
+  row once per segment). (#81, thanks @chenyuxiaojin)
+
+### Documentation
+
+- Recorded the `AppendToTimeline` `endFrame` exclusive-bound semantics in the
+  `api_truth` ledger (internal quirk entry). (#80, thanks @chenyuxiaojin)
+
+### Validation
+
+- Full offline suite green (1343 tests). Static/drift guards pass.
+- Live Resolve validation of the #82 frame-accuracy fix (selects butt-join +
+  tighten frame-exact keep ranges) on a disposable project.
+
 ## What's New in v2.59.0
 
 First-class conform ingest for **AAF** and **DRP**, an offline **Premiere `.prproj`** reader with

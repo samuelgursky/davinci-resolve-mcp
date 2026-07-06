@@ -794,8 +794,10 @@ clip-count readback plus `brain_edits` rationale rows.
   media-id fallback), and `readback` carries per-track-type
   `track_counts` plus an `audio_accounting` block so swap symmetry is
   verifiable. `execute_tighten` readback gains `structural_diff` (source
-  vs variant, via the same engine as `diff_timelines`); `execute_selects`
-  readback gains a `usage_summary`.
+  vs variant, via the same engine as `diff_timelines`) — compact by
+  default (counts + a small sample; full per-item diff persisted in the
+  plan record via `get_plan`, or inline with `include_details=true`);
+  `execute_selects` readback gains a `usage_summary`.
 - `list_plans(limit?)` / `get_plan(plan_id)`.
 
 The engine needs the analysis substrate: analyzed clips in the DB (run

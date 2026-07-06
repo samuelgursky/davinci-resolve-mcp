@@ -160,6 +160,20 @@ def main() -> int:
                                                   "confirm_token": gate.get("confirm_token")})
         check("execute_selects", done1.get("success"),
               f"timeline={done1.get('timeline_name')} appended={done1.get('appended')} readback={done1.get('readback')}")
+        # #82: consecutive selects must be butt-joined — no 1-frame black-flash
+        # gap. The record cursor advances by (endFrame - startFrame); an inclusive
+        # +1 would leave item[i].GetEnd() one frame short of item[i+1].GetStart().
+        sel_tl, _ = s._find_timeline_by_name(proj, done1.get("timeline_name"))
+        if sel_tl is not None:
+            v_items = sel_tl.GetItemListInTrack("video", 1) or []
+            gaps = [
+                (int(a.GetEnd()), int(b.GetStart()))
+                for a, b in zip(v_items, v_items[1:])
+                if int(a.GetEnd()) != int(b.GetStart())
+            ]
+            check("selects butt-joined, no 1-frame gaps [#82]",
+                  len(v_items) >= 2 and not gaps,
+                  f"items={len(v_items)} gaps={gaps}")
 
         # ── E2: tighten (talk clip has dead air after ~5s of speech) ──
         # Build a dedicated timeline with just the talk clip.
@@ -184,6 +198,31 @@ def main() -> int:
                   f"lifts={done2.get('lifts_applied')}")
             original, _ = s._find_timeline_by_name(proj, "Pilot Tighten Base")
             check("original untouched", original is not None)
+            # #82: each kept segment must be frame-exact — the variant's total
+            # video frame count equals the sum of planned (end - start) keep
+            # ranges. An inclusive -1 would shave one frame off every segment.
+            plan_after = (s.edit_engine("get_plan", {"plan_id": plan2["plan_id"]}) or {}).get("plan") or {}
+            kr = [r for r in (plan_after.get("keep_ranges") or [])
+                  if str(r.get("track_type")) == "video"]
+            planned_frames = sum(int(r["end_frame"]) - int(r["start_frame"]) for r in kr)
+            v_tl2, _ = s._find_timeline_by_name(proj, done2.get("variant_timeline"))
+            actual_frames = 0
+            if v_tl2 is not None:
+                for it in (v_tl2.GetItemListInTrack("video", 1) or []):
+                    actual_frames += int(it.GetDuration())
+            check("tighten keep-ranges frame-exact [#82]",
+                  planned_frames >= 1 and actual_frames == planned_frames,
+                  f"planned={planned_frames} actual={actual_frames} segments={len(kr)}")
+            # #84: default readback structural_diff is compact (counts + sample);
+            # the full per-item diff is persisted in the plan record.
+            compact = (done2.get("readback") or {}).get("structural_diff") or {}
+            check("structural_diff compact by default [#84]",
+                  compact.get("truncated") is True and "sample" in compact,
+                  f"keys={sorted(compact.keys())}")
+            persisted = (plan_after.get("execution_summary") or {}).get("structural_diff") or {}
+            check("full structural_diff persisted in plan [#84]",
+                  isinstance(persisted.get("added"), list) and "summary" in persisted,
+                  f"persisted_keys={sorted(persisted.keys())}")
             # Phase 2 hardening: readback carries a cross-name structural diff.
             sdiff = (done2.get("readback") or {}).get("structural_diff") or {}
             sdiff_summary = sdiff.get("summary") or {}
