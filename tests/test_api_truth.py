@@ -36,6 +36,19 @@ class LookupTest(unittest.TestCase):
         self.assertIn("missing-method", entry["tags"])
         self.assertNotIn("enum", entry["tags"])  # no mitigation required
 
+    def test_append_endframe_exclusive_bound_recorded(self):
+        # AppendToTimeline clipInfo endFrame is a half-open bound (duration =
+        # endFrame - startFrame). The entry must be findable by an agent probing
+        # append placement semantics before batch-assembling clip_infos.
+        hits = lookup_api_truth("endFrame")
+        entry = next(
+            (e for e in hits if "AppendToTimeline clipInfo endFrame" in e["symbol"]),
+            None,
+        )
+        self.assertIsNotNone(entry)
+        self.assertIn("off-by-one", entry["tags"])
+        self.assertIn("exclusive", entry["reality"].lower())
+
     def test_entries_well_formed(self):
         for e in API_TRUTH:
             self.assertIn("symbol", e)

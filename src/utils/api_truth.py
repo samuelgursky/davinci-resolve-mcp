@@ -508,6 +508,30 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "pass-through.",
         "tags": ["silent-failure", "color", "node-graph", "layout", "drx"],
     },
+    {
+        "symbol": "MediaPool.AppendToTimeline clipInfo endFrame (exclusive bound)",
+        "object": "MediaPool",
+        "signature": "([{mediaPoolItem, startFrame, endFrame, recordFrame, "
+                     "trackIndex, mediaType}]) -> [TimelineItem]",
+        "reality": "clipInfo endFrame is an EXCLUSIVE bound: the appended item's "
+                   "duration is endFrame - startFrame frames, not "
+                   "endFrame - startFrame + 1. Verified by readback probe on "
+                   "Resolve Studio 21.0 — appending {startFrame: 6254, "
+                   "endFrame: 6348} yields a 94-frame item, and 130 such "
+                   "appends whose absolute recordFrames advance by exactly "
+                   "(endFrame - startFrame) assemble a gap-free track whose "
+                   "total length equals the sum of (end - start). Code that "
+                   "assumes an inclusive bound drifts one frame per clip: "
+                   "advancing a record cursor by (end - start + 1) leaves a "
+                   "1-frame hole between consecutive clips, and converting a "
+                   "half-open range with (end - 1) shaves the range's last "
+                   "frame.",
+        "recommended": "Treat [startFrame, endFrame) as half-open everywhere: "
+                       "duration = endFrame - startFrame; next recordFrame = "
+                       "previous recordFrame + duration; no ±1 corrections "
+                       "when mirroring keep-ranges into clipInfos.",
+        "tags": ["timeline", "edit", "off-by-one", "readback"],
+    },
 ]
 
 
