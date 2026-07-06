@@ -17906,6 +17906,47 @@ def _edit_engine_capture(tl) -> Dict[str, Any]:
     return out
 
 
+def _compact_structural_diff(diff: Any, *, sample_n: int = 3) -> Any:
+    """Trim a compare_usage_snapshots result for the default execute response.
+
+    The full added/removed/moved/trimmed rows (one per timeline item, each with
+    media_pool_item_id + track + in/out frames) dominate large tighten
+    responses — 226 KB for a 130-segment tighten (issue #84). The counts already
+    live in `summary`; keep those plus a small head/tail sample per change kind.
+    The full diff is persisted in the executed plan record (edit_engine
+    get_plan(plan_id) → plan.execution_summary.structural_diff) and returned
+    inline when the caller passes include_details=true.
+    """
+    if not isinstance(diff, dict):
+        return diff
+    # An error stand-in (diff failed) or an already-compact payload: pass through.
+    if "summary" not in diff:
+        return diff
+    sample: Dict[str, Any] = {}
+    omitted = 0
+    for kind in ("added", "removed", "moved", "trimmed"):
+        rows = diff.get(kind)
+        if not isinstance(rows, list) or not rows:
+            continue
+        if len(rows) <= sample_n:
+            sample[kind] = list(rows)
+            continue
+        # Head sample + final row so the caller sees both ends of the change set.
+        sample[kind] = list(rows[: sample_n - 1]) + [rows[-1]]
+        omitted += len(rows) - sample_n
+    return {
+        "summary": diff.get("summary"),
+        "sample": sample,
+        "truncated": True,
+        "omitted_rows": omitted,
+        "detail_hint": (
+            "Full per-item diff persisted in the plan record — retrieve via "
+            "edit_engine get_plan(plan_id) → plan.execution_summary.structural_diff, "
+            "or re-run with include_details=true to inline it."
+        ),
+    }
+
+
 def _edit_engine_track_counts(tl) -> Dict[str, int]:
     """Per-track-type item counts — the swap symmetry signal in readback."""
     counts: Dict[str, int] = {}
@@ -18027,9 +18068,12 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       evidence for the current (or named) timeline. Kept ranges mirror onto the
       items' linked audio tracks by default so the variant is audible; pass
       include_audio=false for a video-only (silent) assembly.
-    - execute_tighten(plan_id, confirm_token?) — assembles a tightened VARIANT
-      timeline from the plan's keep ranges (video + mirrored audio), never
-      mutating the original. Readback includes an audio_accounting block.
+    - execute_tighten(plan_id, confirm_token?, include_details?) — assembles a
+      tightened VARIANT timeline from the plan's keep ranges (video + mirrored
+      audio), never mutating the original. Readback includes an audio_accounting
+      block and a compact structural_diff (counts + a small sample); the full
+      per-item diff is persisted in the plan record (get_plan → execution_summary)
+      and returned inline only when include_details=true.
     - plan_swap(track_index?, timeline_start_frame | item_name, kind?, limit?)
       — alternates for one timeline item via the similarity index.
     - execute_swap(plan_id, alternate_index, confirm_token?) — replaces the
@@ -18320,12 +18364,20 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             )
         except Exception:
             pass
+        # The full per-item structural diff is persisted in the plan record so it
+        # stays retrievable (edit_engine get_plan) without bloating every
+        # response — see issue #84. The MCP response carries a compact form by
+        # default and the full diff only when include_details=true.
+        include_details = _media_analysis_bool(
+            p.get("include_details", p.get("includeDetails")), False
+        )
         _edit_engine_mod.mark_plan_executed(project_root, plan["plan_id"], {
             "variant_timeline": variant.get("name") or variant_name,
             "keep_ranges": len(keep_ranges),
             "lifts": len(lifts),
             "before": before,
             "after": after,
+            "structural_diff": structural_diff,
         })
         return {
             "success": True,
@@ -18345,7 +18397,10 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                     if before.get("duration_seconds") is not None and after.get("duration_seconds") is not None
                     else None
                 ),
-                "structural_diff": structural_diff,
+                "structural_diff": (
+                    structural_diff if include_details
+                    else _compact_structural_diff(structural_diff)
+                ),
                 "audio_accounting": {
                     "planned_audio_ranges": audio_keep_ranges,
                     "planned_video_ranges": video_keep_ranges,
