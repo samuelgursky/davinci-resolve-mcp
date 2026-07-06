@@ -225,6 +225,27 @@ class PlanTightenTests(EditEngineBase):
         self.assertEqual(len(plan["skipped"]), 1)
         self.assertIn("no analysis", plan["skipped"][0]["reason"])
 
+    def test_skipped_rows_deduped_with_count(self) -> None:
+        # One unanalyzed source cut into many timeline segments must report a
+        # single skip row with a count, not one identical row per segment
+        # (a real two-layer session produced 87 duplicates).
+        plan = edit_engine.plan_tighten(
+            self.root,
+            items=[
+                self._item(),
+                self._item(media_ref="unknown-clip", item_name="Mystery.mp4"),
+                self._item(media_ref="unknown-clip", item_name="Mystery.mp4",
+                           timeline_start_frame=480, timeline_end_frame=960),
+                self._item(media_ref="unknown-clip", item_name="Mystery.mp4",
+                           timeline_start_frame=960, timeline_end_frame=1440),
+            ],
+            timeline_name="TL", timeline_fps=24.0,
+        )
+        self.assertTrue(plan["success"])
+        self.assertEqual(len(plan["skipped"]), 1)
+        self.assertEqual(plan["skipped"][0]["count"], 3)
+        self.assertIn("no analysis", plan["skipped"][0]["reason"])
+
     def test_lifts_ordered_latest_first(self) -> None:
         # Two items, each with a dead-air tail.
         items = [
