@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.58.0"
+VERSION = "2.59.0"
 
 import base64
 import os
@@ -4340,6 +4340,7 @@ _TIMELINE_CONFORM_KERNEL_ACTIONS = [
     "source_range_report",
     "export_timeline_checked",
     "import_timeline_checked",
+    "import_from_drp",
     "compare_timelines",
     "probe_interchange_roundtrip",
     "detect_missing_media",
@@ -5345,18 +5346,108 @@ def _timeline_media_coverage(tl) -> Dict[str, Any]:
     return {"total": total, "linked": linked, "offline": total - linked}
 
 
+def _collect_media_pool_items(tl):
+    """Unique Media Pool Items referenced by a timeline's items (for RelinkClips)."""
+    items = []
+    seen = set()
+    for track_type in ("video", "audio"):
+        try:
+            count = int(tl.GetTrackCount(track_type) or 0)
+        except Exception:
+            count = 0
+        for i in range(1, count + 1):
+            for item in (tl.GetItemListInTrack(track_type, i) or []):
+                try:
+                    mpi = item.GetMediaPoolItem()
+                except Exception:
+                    mpi = None
+                if mpi is not None and id(mpi) not in seen:
+                    seen.add(id(mpi))
+                    items.append(mpi)
+    return items
+
+
+def _binary_post_import_relink(tl, mp, search_roots):
+    """Fuzzy-relink parity for binary interchange (AAF): after import, ask Resolve's media pool
+    to relink the timeline's Media Pool Items against each search root. This is the media-pool
+    analogue of the XML path-rewrite relink (which can't run on a binary file)."""
+    roots = [r for r in (search_roots or []) if isinstance(r, str) and os.path.isdir(r)]
+    if not roots:
+        return {"attempted": False, "reason": "no existing search roots", "roots": search_roots or []}
+    items = _collect_media_pool_items(tl)
+    if not items:
+        return {"attempted": False, "reason": "no Media Pool Items to relink", "roots": roots}
+    before = _timeline_media_coverage(tl)
+    calls = []
+    for root in roots:
+        try:
+            ok = bool(mp.RelinkClips(items, root))
+            calls.append({"root": root, "ok": ok})
+        except Exception as e:
+            calls.append({"root": root, "ok": False, "error": str(e)})
+    after = _timeline_media_coverage(tl)
+    return {
+        "attempted": True,
+        "roots": roots,
+        "item_count": len(items),
+        "calls": calls,
+        "before": before,
+        "after": after,
+        "linked_delta": after["linked"] - before["linked"],
+    }
+
+
+_PRPROJ_REFUSAL = (
+    "Resolve has no native .prproj importer (Premiere's project format is gzip-compressed "
+    "XML, not an interchange). Two offline routes, no Premiere needed: (1) read it with the "
+    "advanced MCP — editorial.list_sequences / editorial.parse_interchange (format 'prproj'); "
+    "(2) convert it to an importable interchange — editorial.convert_to_interchange "
+    "(target 'otio'|'edl'|'drt') — then import that here with import_timeline_checked. "
+    "Editorial timing/cuts/transitions/speed carry over; per-clip effects/Lumetri color do not. "
+    "Alternatively export FCP7 XML / AAF / FCPXML from Premiere and conform that."
+)
+
+# Binary interchange formats Resolve reads NATIVELY — the XML sanitize/relink pass
+# (which parses the file as text) does not apply. Relinking happens via the media
+# pool after import, not by rewriting the file.
+_BINARY_INTERCHANGE_EXTS = {".aaf"}
+
+
 def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     path = p.get("path")
     if not path:
         return _err("path is required")
     if not os.path.exists(path):
         return _err(f"path does not exist: {path}")
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".prproj":
+        return _err(_PRPROJ_REFUSAL, category="invalid_input")
+    # AAF (and any binary interchange) is read natively by Resolve. The XML
+    # sanitize/relink path parses the file as text, so it must be SKIPPED for AAF
+    # even when sanitize_media / relink_search_roots is passed; fuzzy XML relink is
+    # N/A (media links through the media pool). We still detect the created
+    # (possibly offline) timeline via the before/after id diff.
+    is_binary = ext in _BINARY_INTERCHANGE_EXTS
     # sanitize_media (alias: relink_media) rewrites the XML to drop clipitems that
     # reference missing media or are generators (slug/solid w/ no pathurl) — both
     # abort Resolve's scripting-API import and leave the timeline fully offline.
     # The original is only read; the sanitized copy lands in a temp dir, so the
     # temp-path guard never applies to it.
-    sanitize = bool(p.get("sanitize_media") or p.get("relink_media"))
+    sanitize_requested = bool(p.get("sanitize_media") or p.get("relink_media"))
+    binary_relink_note = None
+    _binary_has_roots = bool(p.get("relink_search_roots") or p.get("search_roots"))
+    if is_binary and _binary_has_roots:
+        binary_relink_note = (
+            f"XML path-rewrite relink is N/A for {ext} (binary) — imported as-is, then relinked "
+            "via the media pool against the search roots (see `relink`)."
+        )
+    elif is_binary and sanitize_requested:
+        binary_relink_note = (
+            f"sanitize_media is N/A for {ext} (binary) — Resolve reads it natively and media "
+            "relinks via the media pool. Imported the file as-is; pass relink_search_roots to "
+            "auto-relink after import."
+        )
+    sanitize = sanitize_requested and not is_binary
     if not sanitize and p.get("require_temp_path", True) and not _render_temp_path_ok(path):
         return _err(
             "path must be under the system temp directory unless require_temp_path=False",
@@ -5375,7 +5466,7 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     search_roots = p.get("relink_search_roots") or p.get("search_roots")
     if isinstance(search_roots, str):
         search_roots = [search_roots]
-    if search_roots and not sanitize:
+    if search_roots and not sanitize and not is_binary:
         sanitize = True  # relinking is meaningless without the sanitize/rewrite pass
 
     sanitize_report = None
@@ -5412,6 +5503,8 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
         out = _ok(path=path, import_path=import_path, options=options, would_import=True)
         if sanitize_report is not None:
             out["sanitize"] = sanitize_report
+        if binary_relink_note:
+            out["note"] = binary_relink_note
         return out
 
     before_ids = set()
@@ -5432,15 +5525,32 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
             if t and str(t.GetUniqueId()) not in before_ids:
                 imported = t
     if not imported:
+        if is_binary:
+            remediation = (
+                f"Resolve created no timeline from this {ext}. Verify it exports/opens in "
+                "Resolve directly, or convert to FCP7 XML / FCPXML upstream and import that."
+            )
+        elif sanitize:
+            remediation = None
+        else:
+            remediation = (
+                "This XML may reference missing media or contain generator clips, which "
+                "abort the scripting-API import. Retry with sanitize_media=True."
+            )
         return _err(
             "Failed to import timeline (Resolve created no timeline)",
-            remediation=None if sanitize else
-            "This XML may reference missing media or contain generator clips, which "
-            "abort the scripting-API import. Retry with sanitize_media=True.",
+            remediation=remediation,
         )
 
     imported_id = str(imported.GetUniqueId())
     media = _timeline_media_coverage(imported)
+    # AAF fuzzy-relink parity: when search roots are given for a binary import, relink through
+    # the media pool after import (the XML path-rewrite relink can't run on a binary file).
+    relink_result = None
+    if is_binary and search_roots:
+        relink_result = _binary_post_import_relink(imported, mp, search_roots)
+        if relink_result.get("after"):
+            media = relink_result["after"]
     out = _ok(
         name=imported.GetName(),
         id=imported_id,
@@ -5451,13 +5561,164 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     )
     if sanitize_report is not None:
         out["sanitize"] = sanitize_report
+    if relink_result is not None:
+        out["relink"] = relink_result
+    if binary_relink_note:
+        out["note"] = binary_relink_note
     if media["total"] and media["offline"]:
         msg = f"{media['offline']} of {media['total']} timeline items are offline (no linked media)."
-        if not sanitize:
+        if is_binary:
+            msg += (" Relink via the media pool (right-click → Relink Clips) or point Resolve "
+                    "at the media roots — AAF media links there, not by rewriting the file.")
+        elif not sanitize:
             msg += (" Retry with sanitize_media=True to drop missing-media/generator "
                     "clips so the remaining media links automatically.")
         out["warning"] = msg
     return out
+
+
+# A .drp/.drt is a zip of SeqContainer*.xml entries. Two on-disk naming conventions,
+# mirroring the Node drt-format parser: tool-authored `<folder>/SeqContainer<N>.xml`
+# and real-Resolve `SeqContainer/<uuid>.xml`. Never match MpFolder/project/Gallery.
+_SEQ_CONTAINER_RE = re.compile(r"(^|/)SeqContainer(\d*\.xml|/[^/]+\.xml)$")
+
+
+def _drp_seq_containers(zf) -> List[Dict[str, Any]]:
+    """List a .drp/.drt zip's SeqContainers as [{entry, name, index}] (0-based, sorted)."""
+    entries = sorted(n for n in zf.namelist() if not n.endswith("/") and _SEQ_CONTAINER_RE.search(n))
+    out = []
+    for index, entry in enumerate(entries):
+        try:
+            xml = zf.read(entry).decode("utf-8", "replace")
+        except Exception:
+            xml = ""
+        m = re.search(r"<Name>([\s\S]*?)</Name>", xml)
+        out.append({"entry": entry, "name": (m.group(1).strip() if m else None), "index": index})
+    return out
+
+
+def _extract_seqcontainer_from_drp(drp_path: str, seq_entry: str, out_path: str) -> None:
+    """Write a minimal .drt (zip) holding one SeqContainer as Primary1/SeqContainer1.xml."""
+    import zipfile
+
+    with zipfile.ZipFile(drp_path, "r") as zf:
+        xml = zf.read(seq_entry)
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as out:
+        out.writestr("Primary1/SeqContainer1.xml", xml)
+        out.writestr(
+            "metadata.json",
+            json.dumps(
+                {
+                    "source": "import_from_drp",
+                    "sourceDrp": drp_path,
+                    "sourceSeqContainer": seq_entry,
+                    "exportedFrom": "davinci-resolve-mcp timeline.import_from_drp",
+                },
+                indent=2,
+            ),
+        )
+
+
+def _import_from_drp(proj, mp, p: Dict[str, Any]):
+    """
+    Extract the chosen timelines from a .drp (offline zip surgery) and import each into the
+    running Resolve. Requires Resolve open. Mirrors: drt.extract_from_drp → import_timeline_checked,
+    but as one call returning per-timeline results.
+    """
+    import zipfile
+
+    drp_path = p.get("drpPath") or p.get("drp_path") or p.get("path")
+    if not drp_path:
+        return _err("drpPath is required")
+    if not os.path.exists(drp_path):
+        return _err(f"drpPath does not exist: {drp_path}")
+    ext = os.path.splitext(drp_path)[1].lower()
+    if ext == ".prproj":
+        return _err(_PRPROJ_REFUSAL, category="invalid_input")
+
+    try:
+        with zipfile.ZipFile(drp_path, "r") as zf:
+            containers = _drp_seq_containers(zf)
+    except zipfile.BadZipFile:
+        return _err(f"Not a valid .drp/.drt (not a zip archive): {drp_path}", category="invalid_input")
+    if not containers:
+        return _err(f"No SeqContainer entries found in {drp_path} — is this a .drp/.drt?", category="invalid_input")
+
+    # Selection: by name(s), by 0-based index(es), or ALL when neither is given.
+    want_names = p.get("timelineNames") or p.get("timeline_names")
+    if isinstance(want_names, str):
+        want_names = [want_names]
+    want_indexes = p.get("timelineIndexes") or p.get("timeline_indexes")
+    if isinstance(want_indexes, int):
+        want_indexes = [want_indexes]
+
+    selected: List[Dict[str, Any]] = []
+    available = [{"name": c["name"], "index": c["index"]} for c in containers]
+    if want_names:
+        by_name = {}
+        for c in containers:
+            if c["name"]:
+                by_name.setdefault(c["name"], c)
+        for nm in want_names:
+            c = by_name.get(nm)
+            if not c:
+                return _err(
+                    f"Timeline named {nm!r} not found in .drp",
+                    remediation=f"Available: {[a['name'] for a in available]}",
+                    category="invalid_input",
+                )
+            selected.append(c)
+    elif want_indexes:
+        for i in want_indexes:
+            match = next((c for c in containers if c["index"] == int(i)), None)
+            if not match:
+                return _err(f"timelineIndex {i} out of range (0..{len(containers) - 1})", category="invalid_input")
+            selected.append(match)
+    else:
+        selected = list(containers)
+
+    # Per-timeline options passthrough (importSourceClips etc.) minus selection keys.
+    base = {
+        k: v
+        for k, v in p.items()
+        if k not in ("drpPath", "drp_path", "path", "timelineNames", "timeline_names", "timelineIndexes", "timeline_indexes", "dry_run")
+    }
+
+    tmp_dir = tempfile.mkdtemp(prefix="drp_import_")
+    results = []
+    imported_count = 0
+    for c in selected:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", c["name"] or f"seq{c['index'] + 1}")
+        drt_path = os.path.join(tmp_dir, f"{c['index'] + 1}_{safe}.drt")
+        entry = {"requested": c["name"], "index": c["index"]}
+        try:
+            _extract_seqcontainer_from_drp(drp_path, c["entry"], drt_path)
+        except Exception as e:
+            entry.update(success=False, error=f"extract failed: {e}")
+            results.append(entry)
+            continue
+        if p.get("dry_run"):
+            entry.update(success=True, would_import=True, drt_path=drt_path)
+            results.append(entry)
+            continue
+        sub = dict(base)
+        sub["path"] = drt_path
+        # .drt lives under a temp dir; the temp-path guard passes regardless.
+        res = _import_timeline_checked(proj, mp, sub)
+        ok = bool(res.get("success"))
+        entry.update(res)
+        if ok:
+            imported_count += 1
+        results.append(entry)
+
+    return _ok(
+        drpPath=drp_path,
+        selected=len(selected),
+        imported=imported_count,
+        available=available,
+        results=results,
+        dry_run=bool(p.get("dry_run")),
+    )
 
 
 def _timeline_by_selector(proj, p: Dict[str, Any], *, prefix: str):
@@ -18366,7 +18627,14 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       source_range_report(handles?, merge?) -> {ranges, occurrences}
       export_timeline_checked(path, format?|type?, subtype?, require_temp_path?, dry_run?) -> {success, path, size}
       import_timeline_checked(path, options?, timeline_name?, import_source_clips?, sanitize_media?, require_temp_path?, dry_run?) -> {success, name, id, media, sanitize?, warning?}
-        Imports an FCP7 xmeml / FCPXML timeline. `media` reports {total, linked, offline}
+        Imports an FCP7 xmeml / FCPXML / AAF timeline. AAF (.aaf) is read natively by
+        Resolve — the XML sanitize pass is SKIPPED for it (media relinks via the media
+        pool, not by rewriting the file); a `note` says so. For AAF, passing
+        relink_search_roots triggers a POST-import media-pool relink (RelinkClips against
+        each root) — fuzzy-relink parity by a media-pool mechanism; the `relink` block
+        reports before/after coverage. Premiere .prproj has no Resolve importer — refused
+        with a message pointing to the advanced MCP's offline read + convert_to_interchange
+        bridge (no Premiere needed). `media` reports {total, linked, offline}
         coverage; `warning` flags offline items. sanitize_media=True (recommended for
         Premiere/FCP exports) rewrites the XML first — dropping clipitems that reference
         MISSING media or are generators (slug/solid with no media file), both of which
@@ -18384,6 +18652,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         metric; a conflicting relink is VETOED — reverted and reported under
         `sanitize.flagged` for human review, never silently applied. verify_threshold
         (default 0.90) sets the structural-match bar.
+      import_from_drp(drpPath, timelineNames?|timelineIndexes?, import_source_clips?, dry_run?) -> {success, selected, imported, available, results}
+        Extract chosen timelines from a .drp (offline zip surgery → temp .drt each) and
+        import each into the running Resolve. Omit the selector to import ALL. Enumerate
+        first with the advanced MCP drt.list_sequences / editorial.list_sequences to get
+        [{id, name, eventCount}] for a "which sequence?" picker. Requires Resolve open.
       compare_timelines(right_timeline_id?|right_timeline_index?|left_snapshot?, right_snapshot?) -> {match, differences}
       probe_interchange_roundtrip(format?, output_dir?, cleanup_imported?) -> {success, export, import, comparison}
       detect_missing_media(sanitized?|sanitize_paths?, omit_raw_paths?) -> {missing, missing_count, diagnosis}
@@ -18438,6 +18711,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if mp_err:
             return mp_err
         return _import_timeline_checked(proj, mp, p)
+    elif action == "import_from_drp":
+        _, _, mp, mp_err = _get_mp()
+        if mp_err:
+            return mp_err
+        return _import_from_drp(proj, mp, p)
     elif action == "safe_auto_sync_audio":
         _, _, mp, mp_err = _get_mp()
         if mp_err:

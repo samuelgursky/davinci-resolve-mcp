@@ -10,9 +10,11 @@
  * timing analogue of a faked grade.
  *
  * Interchange breadth AT INGEST: EDL (CMX3600) + OTIO (JSON) parse natively here; XMEML via a
- * light clipitem parse. AAF is binary — honest refuse (convert to OTIO/EDL upstream).
+ * light clipitem parse. AAF is binary — parsed offline via aaf.mjs → pyaaf2 (async, out-of-band);
+ * parseInterchange() itself stays PURE and points AAF callers at that async path. Premiere .prproj
+ * is a closed binary project — honest refuse with an actionable convert-upstream message.
  *
- * PURE + deterministic. No Resolve, no LLM.
+ * PURE + deterministic (edl/otio/xmeml). No Resolve, no LLM.
  */
 import { createRequire } from 'node:module';
 
@@ -193,7 +195,11 @@ export function parseXMEMLEvents(xml, opts = {}) {
   return events;
 }
 
-/** Dispatch by format. AAF is an honest refuse (binary — convert to OTIO/EDL upstream). */
+/**
+ * Dispatch by format (SYNC, pure over TEXT). Binary formats are handled out-of-band by their own
+ * path-based readers — AAF via aaf.mjs `parseAAF` (async, pyaaf2), .prproj via prproj.mjs
+ * `parsePrproj` (gunzip+XML). This throws to route callers there rather than faking a parse.
+ */
 export function parseInterchange(format, content, opts = {}) {
   switch (String(format).toLowerCase()) {
     case 'edl':
@@ -205,9 +211,15 @@ export function parseInterchange(format, content, opts = {}) {
     case 'fcp7':
       return parseXMEMLEvents(content, opts);
     case 'aaf':
-      throw new Error('parse_interchange: AAF is binary — not parseable offline in pure JS. Convert to OTIO or EDL upstream (e.g. via OpenTimelineIO).');
+      throw new Error(
+        'parse_interchange: AAF is binary — parse it via the async AAF path (aaf.mjs `parseAAF`, backed by pyaaf2), not the sync parseInterchange().',
+      );
+    case 'prproj':
+      throw new Error(
+        'parse_interchange: .prproj is gzip-compressed XML — parse it via the path-based reader (prproj.mjs `parsePrproj`), not the sync parseInterchange().',
+      );
     default:
-      throw new Error(`parse_interchange: unknown format '${format}' (edl|otio|xml|aaf)`);
+      throw new Error(`parse_interchange: unknown format '${format}' (edl|otio|xml|xmeml|fcp7|aaf|prproj)`);
   }
 }
 

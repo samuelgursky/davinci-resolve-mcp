@@ -91,7 +91,11 @@ Each dispatches on an `action`. Highlights:
 - **`media`** — media front-end / AE: `ingest_verify` (hash seal/verify/dupes-by-hash), `media_inventory`
   (fps/codec/colorspace/TC + card gaps), `sync` (TC picture↔sound + drift/MOS), `relink_manifest`,
   `rename_plan` (refuses camera originals) / `reel_normalize`, `turnover_package`, `project_hygiene`.
-- **`editorial`** — editorial integrity: `parse_interchange` (EDL/OTIO/XMEML; AAF = honest refuse),
+- **`editorial`** — editorial integrity: `parse_interchange` (EDL/OTIO/XMEML natively, AAF via pyaaf2,
+  **.prproj via gunzip+XML** — pass the file PATH for the binary ones), `list_sequences` (one picker entry
+  point across xml/edl/otio/drt/drp/aaf/prproj), `convert_to_interchange` (author OTIO/EDL/DRT that Resolve
+  imports, from events or a parsed source — **the .prproj→Resolve conform bridge**, no Premiere needed;
+  editorial timing/cuts/transitions/speed carry, per-clip effects/color do not),
   `turnover_changelist` (moved/retimed/replaced/new/gone + timing silent-lie guards), `conform_manifest`,
   `marker_roundtrip`.
 - **`provenance`** — provenance / audit: `gallery_lineage`, `grade_provenance` ("why is this graded this
@@ -161,6 +165,7 @@ status + install hints):
 | grading/QC catalog, `conform.verify` (frame compare) | `sharp` (optional) | native module; `npm i sharp` |
 | `pipeline` (project DB), `fairlight` live-DB path, conform lineage/reverse | `better-sqlite3` (optional) | native module; `npm i better-sqlite3`. (The `.drp`-zip Fairlight path needs none.) |
 | YAML authoring (`pipeline compile` from a YAML dir) | `js-yaml` (optional) | pure JS; `npm i js-yaml` |
+| `editorial` AAF offline preview (`parse_interchange` format `aaf`, `list_sequences` on `.aaf`) | **Python 3 + `pyaaf2`** | AAF is binary; no trustworthy pure-JS reader. The server shells out to `aaf_probe.py` (pure-Python `aaf2`). `pip install pyaaf2`. Without it, AAF **honest-refuses** with a convert-upstream hint (EDL/OTIO/`.drt` need nothing). Live AAF import is on the Python `davinci-resolve` MCP (Resolve reads AAF natively). |
 
 Missing features fail with a clear, actionable message rather than crashing; the server logs a one-line
 "needs setup" summary to stderr at startup.

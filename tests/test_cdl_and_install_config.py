@@ -114,6 +114,18 @@ class InstallConfigTests(unittest.TestCase):
             "/Resolve/Scripting/Modules",
         )
 
+        # The advanced (Node) server pins AAF_PROBE_PYTHON to the venv interpreter so the
+        # offline AAF reader (pyaaf2, installed into that venv) works out of the box.
+        advanced = standard_json["mcpServers"]["davinci-resolve-advanced"]
+        self.assertEqual(advanced["command"], "node")
+        self.assertEqual(advanced["env"]["AAF_PROBE_PYTHON"], "/tmp/python")
+
+    def test_advanced_entry_omits_env_without_python_path(self):
+        # No interpreter known → no AAF_PROBE_PYTHON pin (falls back to `python3` on PATH).
+        entry = install.build_advanced_entry(Path("/tmp/server.py"))
+        self.assertEqual(entry["command"], "node")
+        self.assertNotIn("env", entry)
+
     def test_build_opencode_entry_uses_opencode_schema(self):
         # OpenCode's schema (issue #72): type/enabled discriminators, the
         # interpreter and script combined into a single "command" array, and the

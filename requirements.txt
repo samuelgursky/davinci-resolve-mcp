@@ -1,0 +1,9 @@
+# Python dependencies installed into the venv by install.py (after mcp[cli]).
+#
+# pyaaf2 — pure-Python AAF reader (MIT). Powers the advanced (Node) MCP's OFFLINE
+# AAF preview: editorial.parse_interchange (format "aaf") and list_sequences on a
+# .aaf, via server/aaf_probe.py. The installer points the advanced server's
+# AAF_PROBE_PYTHON at this venv so the reader is available out of the box. Without
+# it, AAF preview honest-refuses (it is never faked); live AAF import into Resolve
+# does not need it (Resolve reads AAF natively).
+pyaaf2>=1.7.0

@@ -15,8 +15,10 @@ import fs from 'node:fs/promises';
 import { z } from 'zod';
 import JSZip from 'jszip';
 import { drt } from '../libs.mjs';
+import { summarizeDrtTimelines } from '../sequences.mjs';
 
 const parseSchema = z.object({ drtPath: z.string().describe('Absolute path to a .drt (or .drp) file') });
+const listSequencesSchema = z.object({ drpPath: z.string().describe('Absolute path to a .drp (or .drt) file') });
 const authorSchema = z.object({
   spec: z.object({}).passthrough().describe('{ timelines, mediaPool?, metadata? } — buildDRP shape minus the project shell'),
   outputPath: z.string().describe('Absolute path where the .drt will be written'),
@@ -71,11 +73,17 @@ const downgradeSchema = z.object({
 export const drtTool = {
   name: 'drt',
   description:
-    'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: parse, author, validate, inject_into_drp, extract_from_drp, downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
+    'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: parse, list_sequences (enumerate the timelines inside a .drp/.drt → [{id,name,eventCount,index}] to drive a "which sequence?" picker), author, validate, inject_into_drp, extract_from_drp (pull one SeqContainer out as a .drt — feed the .drt to the Python davinci-resolve MCP timeline.import_timeline_checked, or use timeline.import_from_drp to do both), downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
   async handler({ action, args }) {
     if (action === 'parse') {
       const p = parseSchema.parse(args);
       return drt().parseDRT(p.drtPath);
+    }
+    if (action === 'list_sequences') {
+      const p = listSequencesSchema.parse(args);
+      const parsed = await drt().parseDRT(p.drpPath);
+      const sequences = summarizeDrtTimelines(parsed);
+      return { path: p.drpPath, count: sequences.length, sequences };
     }
     if (action === 'author') {
       const p = authorSchema.parse(args);

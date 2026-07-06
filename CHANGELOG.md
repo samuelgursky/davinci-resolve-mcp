@@ -2,6 +2,49 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.59.0
+
+First-class conform ingest for **AAF** and **DRP**, an offline **Premiere `.prproj`** reader with
+a conform bridge, and a unified sequence enumerator — so an editorial turnover in any of these
+formats can be previewed, picked, and brought into Resolve. Everything keeps the honest-refuse
+philosophy: no format is ever faked; an unreadable file yields a clear, actionable error.
+
+### Added
+
+- **AAF** — offline preview via the advanced server's `editorial.parse_interchange` (format `aaf`)
+  and `list_sequences`, backed by the pure-Python `aaf2` (pyaaf2) reader (shelled out from Node;
+  honest-refuses with an install/convert hint when unavailable). Live AAF import now works through
+  `timeline.import_timeline_checked` — the XML sanitize pass is skipped for the binary format and,
+  when `relink_search_roots` is passed, a post-import media-pool relink runs (fuzzy-relink parity
+  via `RelinkClips`), reported in a `relink` block.
+- **DRP** — `drt.list_sequences` enumerates the timelines inside a `.drp`/`.drt`
+  (`[{id, name, eventCount}]`) to drive a picker; `timeline.import_from_drp` extracts the chosen
+  timelines (offline zip surgery → temp `.drt`) and imports each into a running Resolve.
+- **Premiere `.prproj`** — a from-scratch offline reader (gunzip + object-reference-graph walk, no
+  new dependencies) exposed through `parse_interchange` / `list_sequences`. Derives cuts, source
+  in/out, timeline positions, speed/retime, reverse, transitions, markers, and media paths. Effects
+  and Lumetri color are not translated (the Premiere→Resolve semantic gap, flagged not faked).
+- **Conform bridge** — `editorial.convert_to_interchange` authors OTIO / EDL / DRT that Resolve
+  imports, from normalized events or a parsed source. This lets a `.prproj` be conformed into
+  Resolve with no Premiere in the loop.
+- **Unified enumeration** — `editorial.list_sequences(path)` is one picker entry point across
+  xml/edl/otio/drt/drp/aaf/prproj.
+
+### Dependencies
+
+- New optional-but-default `requirements.txt` pins `pyaaf2` (pure-Python, MIT, ~1 MB) for the
+  offline AAF reader; the installer points the advanced server's `AAF_PROBE_PYTHON` at the project
+  venv so it works out of the box. Without it, AAF preview honest-refuses; nothing else needs it.
+
+### Validation
+
+- Static checks, drift guards, and focused unit tests pass (advanced Node suite 455 pass / 9 skip;
+  new `test_import_from_drp.py` and `prproj-bridge.test.mjs` / `aaf-sequences.test.mjs`). Offline
+  AAF parse validated end-to-end against a real `aaf2`-authored AAF.
+- **Not yet live-validated in Resolve**: AAF import, the post-import relink, `import_from_drp`, and
+  importing an authored OTIO/DRT from a real `.prproj`. These paths are offline-tested (fake Resolve)
+  and guarded; confirm against a live session with disposable projects before relying on them.
+
 ## What's New in v2.58.0
 
 Major expansion of the optional **advanced** Node server (`davinci-resolve-advanced-mcp`,
