@@ -62,15 +62,15 @@ The installer can automatically configure any of these clients:
 | OpenCode | `~/.config/opencode/opencode.json` (or project-root `opencode.json`) |
 | JetBrains IDEs | Manual (Settings > Tools > AI Assistant > MCP) |
 
-After setup, register the managed launcher with [Autohand Code](https://github.com/autohandai/code-cli/):
+You can configure multiple clients at once, or use `--clients manual` to get copy-paste config snippets.
+
+For [Autohand Code](https://github.com/autohandai/code-cli/), register the managed launcher after setup:
 
 ```bash
-autohand mcp add davinci-resolve npx -y davinci-resolve-mcp server
+autohand mcp add davinci-resolve npx davinci-resolve-mcp server
 ```
 
-Add `--scope project` after `mcp add` to keep the registration in the current workspace.
-
-You can configure multiple clients at once, or use `--clients manual` to get copy-paste config snippets.
+Autohand adds npx's `-y` flag automatically. Add `--scope project` after `mcp add` to keep the registration in the current workspace.
 
 ### Installer Options
 
