@@ -64,6 +64,14 @@ The installer can automatically configure any of these clients:
 
 You can configure multiple clients at once, or use `--clients manual` to get copy-paste config snippets.
 
+For [Autohand Code](https://github.com/autohandai/code-cli/), register the managed launcher after setup:
+
+```bash
+autohand mcp add davinci-resolve npx davinci-resolve-mcp server
+```
+
+Autohand adds npx's `-y` flag automatically. Add `--scope project` after `mcp add` to keep the registration in the current workspace.
+
 ### Installer Options
 
 ```bash
