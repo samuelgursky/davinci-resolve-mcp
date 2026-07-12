@@ -5822,6 +5822,15 @@ def _find_timeline_by_name(proj, name: Any):
     return None, None
 
 
+def _find_timeline_by_id(proj, timeline_id: Any):
+    want = str(timeline_id or "")
+    for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
+        tl = proj.GetTimelineByIndex(index)
+        if tl and str(tl.GetUniqueId()) == want:
+            return tl, index
+    return None, None
+
+
 def _unique_timeline_name(proj, requested_name: Any) -> str:
     base = str(requested_name or "Untitled Timeline").strip() or "Untitled Timeline"
     existing_names = set()
@@ -18644,7 +18653,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     Actions:
       list() -> {timelines}
       get_current() -> {name, id, start_frame, end_frame, start_timecode}
-      set_current(index) -> {success}  — 1-based index
+      set_current(index|id|name) -> {success}  — id/name are stable across archives; index is 1-based
       get_name() -> {name}
       set_name(name) -> {success}
       get_start_frame() -> {frame}
@@ -18823,6 +18832,16 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                 timelines.append({"name": tl.GetName(), "id": tl.GetUniqueId(), "index": i})
         return {"timelines": timelines}
     elif action == "set_current":
+        # id/name take precedence over index.
+        selector_id = p.get("id") or p.get("timeline_id")
+        selector_name = p.get("name")
+        if selector_id or selector_name:
+            tl = _find_timeline_by_id(proj, selector_id)[0] if selector_id else None
+            if tl is None and selector_name:
+                tl = _find_timeline_by_name(proj, selector_name)[0]
+            if tl is None:
+                return _err(f"No timeline matching {selector_id or selector_name!r}")
+            return {"success": bool(proj.SetCurrentTimeline(tl))}
         err, clean = _validate_params(p, {"index": {"type": int, "required": True, "min": 1}})
         if err:
             return _err(err)
