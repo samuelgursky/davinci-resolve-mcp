@@ -744,6 +744,13 @@ sys.path.insert(0, RESOLVE_MODULES_PATH)
 resolve = None
 dvr_script = None
 _resolve_lock = threading.RLock()
+# Serializes synchronous tool bodies once they run off the event loop (see
+# _install_threaded_tool_dispatch): the Resolve scripting bridge executes one
+# call at a time, so two sync tool bodies must never enter it concurrently. No
+# body re-acquires it, so a plain Lock (not RLock) states the invariant. The
+# async media_analysis tool is not wrapped and does not take this lock; it is
+# assumed not to run concurrently with another tool (true for a serial client).
+_bridge_lock = threading.Lock()
 
 # On Windows the fusionscript native bridge DLL must be locatable before the
 # Python import machinery attempts to load it.  Setting PYTHONHOME, prepending
@@ -25004,8 +25011,58 @@ def _resource_install_guidance() -> Dict[str, Any]:
 # Server Startup
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _install_threaded_tool_dispatch(fastmcp) -> int:
+    """Run synchronous tool bodies in a worker thread instead of inline on the
+    event loop.
+
+    The MCP SDK invokes a sync tool function directly on the single asyncio
+    event-loop thread, so a blocking Resolve call (or subprocess, or the up-to-
+    60s launch wait) freezes the whole server — including the stdio read loop —
+    until it returns. Wrapping each sync tool as an async function that offloads
+    to a worker thread keeps the event loop servicing the transport. Bodies are
+    serialized on _bridge_lock so the single-threaded Resolve bridge is never
+    entered concurrently. A body that outlives a client cancellation runs to
+    completion (the bridge is never left half-mutated) still holding the lock.
+
+    Couples to mcp SDK >= 1.28.1 private attrs (ToolManager._tools, Tool.fn /
+    Tool.is_async). Best-effort: if that shape changes, leave the tools as-is,
+    falling back to the current inline behavior.
+    """
+    import functools
+    import anyio
+
+    manager = getattr(fastmcp, "_tool_manager", None)
+    tools = getattr(manager, "_tools", None)
+    if not isinstance(tools, dict) or not tools:
+        return 0
+
+    def _offloaded(fn):
+        @functools.wraps(fn)
+        async def run_off_thread(**kwargs):
+            def call():
+                with _bridge_lock:
+                    return fn(**kwargs)
+            return await anyio.to_thread.run_sync(call)
+        return run_off_thread
+
+    wrapped = 0
+    for tool in tools.values():
+        if getattr(tool, "is_async", False):
+            continue
+        try:
+            tool.fn = _offloaded(tool.fn)
+            tool.is_async = True
+        except Exception as exc:  # unexpected SDK shape — keep the original tool
+            logger.warning(f"threaded tool dispatch skipped for {getattr(tool, 'name', '?')}: {exc}")
+            continue
+        wrapped += 1
+    logger.info(f"Threaded tool dispatch installed for {wrapped} tools")
+    return wrapped
+
+
 if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
+    _install_threaded_tool_dispatch(mcp)
 
     # Support --full flag to run the 341-tool granular server instead
     if "--full" in sys.argv:
@@ -25013,6 +25070,7 @@ if __name__ == "__main__":
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 
+        _install_threaded_tool_dispatch(granular_mcp)
         run_fastmcp_stdio(granular_mcp)
         sys.exit(0)
 
