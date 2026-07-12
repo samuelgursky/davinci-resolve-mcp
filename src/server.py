@@ -18670,6 +18670,28 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
     ])
 
 
+_TIMELINE_ACTIONS = [
+    "list", "get_current", "set_current", "get_name", "set_name", "get_start_frame",
+    "get_end_frame", "get_start_timecode", "set_start_timecode", "get_track_count",
+    "add_track", "delete_track", "get_track_sub_type", "set_track_enable",
+    "get_track_enabled", "set_track_lock", "get_track_locked", "get_track_name",
+    "set_track_name", "get_items", "delete_clips", "set_clips_linked", "duplicate",
+    "duplicate_clips", "copy_clips", "move_clips", "copy_range", "duplicate_range",
+    "overwrite_range", "lift_range", "story_spine_report", "create_variant_from_ranges",
+    "bulk_set_item_properties", "apply_look_to_items", "thumbnail_contact_sheet",
+    "marker_thumbnail_review", "edit_kernel_capabilities", "probe_edit_kernel_item",
+    "title_property_scan", "set_title_text", "bulk_set_title_text", "create_compound_clip",
+    "create_fusion_clip", "import_into_timeline", "export", "get_setting", "set_setting",
+    "insert_generator", "insert_fusion_generator", "insert_fusion_composition",
+    "insert_ofx_generator", "insert_title", "insert_fusion_title", "get_unique_id",
+    "get_node_graph", "get_media_pool_item", "get_transcript", "propose_cuts", "apply_cuts",
+    "get_mark_in_out", "set_mark_in_out", "clear_mark_in_out", "convert_to_stereo",
+    "get_items_in_track", "get_voice_isolation_state", "set_voice_isolation_state",
+    "extract_source_frame_ranges", "audio_mix_capability_report", "clip_where", "action_help",
+    *_TIMELINE_CONFORM_KERNEL_ACTIONS, *_TIMELINE_AUDIO_KERNEL_ACTIONS,
+]
+
+
 @mcp.tool()
 @_destructive_op("timeline")
 def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -19427,7 +19449,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if mp_err:
             return mp_err
         return _fairlight_boundary_report(proj, mp, tl, p)
-    return _unknown(action, ["list","get_current","set_current","get_name","set_name","get_start_frame","get_end_frame","get_start_timecode","set_start_timecode","get_track_count","add_track","delete_track","get_track_sub_type","set_track_enable","get_track_enabled","set_track_lock","get_track_locked","get_track_name","set_track_name","get_items","delete_clips","set_clips_linked","duplicate","duplicate_clips","copy_clips","move_clips","copy_range","duplicate_range","overwrite_range","lift_range","story_spine_report","create_variant_from_ranges","bulk_set_item_properties","apply_look_to_items","thumbnail_contact_sheet","marker_thumbnail_review","edit_kernel_capabilities","probe_edit_kernel_item","title_property_scan","set_title_text","bulk_set_title_text","create_compound_clip","create_fusion_clip","import_into_timeline","export","get_setting","set_setting","insert_generator","insert_fusion_generator","insert_fusion_composition","insert_ofx_generator","insert_title","insert_fusion_title","get_unique_id","get_node_graph","get_media_pool_item","get_transcript","propose_cuts","apply_cuts","get_mark_in_out","set_mark_in_out","clear_mark_in_out","convert_to_stereo","get_items_in_track","get_voice_isolation_state","set_voice_isolation_state","extract_source_frame_ranges","audio_mix_capability_report","clip_where","action_help",*_TIMELINE_CONFORM_KERNEL_ACTIONS,*_TIMELINE_AUDIO_KERNEL_ACTIONS])
+    return _unknown(action, _TIMELINE_ACTIONS)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -21021,22 +21043,46 @@ def _propose_grade(proj, p: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+# Full valid-action list per tool, for tools that expose one. Lets action_help
+# report every action (not only the documented subset) and tell an unknown
+# action apart from a valid-but-undocumented one.
+_TOOL_ACTIONS: Dict[str, List[str]] = {
+    "timeline": _TIMELINE_ACTIONS,
+}
+
+
 def _action_help(tool_name: str, p: Dict[str, Any]) -> Dict[str, Any]:
     """Return long-form guidance + example for a named action on tool_name."""
     name = (p or {}).get("name") or (p or {}).get("action_name")
     catalog = _ACTION_HELP.get(tool_name, {})
+    valid = _TOOL_ACTIONS.get(tool_name)
     if not name:
-        return _ok(tool=tool_name, available=sorted(catalog.keys()),
-                   note="Call action_help with params.name to retrieve guidance for a specific action.")
+        payload = {
+            "tool": tool_name,
+            "available": sorted(catalog.keys()),
+            "note": "Call action_help with params.name to retrieve guidance for a specific action.",
+        }
+        if valid is not None:
+            payload["actions"] = sorted(valid)
+            payload["note"] = ("'available' lists actions with detailed help; 'actions' lists all "
+                               "valid actions. Call action_help with params.name for one action.")
+        return _ok(**payload)
     entry = catalog.get(name)
-    if not entry:
+    if entry:
+        return _ok(tool=tool_name, action=name, **entry)
+    if valid is not None and name not in valid:
         return _err(
-            f"No help registered for {tool_name}.{name}.",
-            code="HELP_NOT_REGISTERED",
+            f"Unknown action {tool_name}.{name}.",
+            code="UNKNOWN_ACTION",
             category="invalid_input",
-            remediation=f"Call action_help() with no name for the list of actions with detailed help.",
+            remediation=f"Valid actions: {', '.join(sorted(valid))}",
         )
-    return _ok(tool=tool_name, action=name, **entry)
+    return _err(
+        f"No help registered for {tool_name}.{name}.",
+        code="HELP_NOT_REGISTERED",
+        category="invalid_input",
+        remediation="Call action_help() with no name for the list of actions with detailed help.",
+    )
 
 
 def _grade_evidence_line(*, item_name, version_label, num_nodes, has_lut, group_name,
