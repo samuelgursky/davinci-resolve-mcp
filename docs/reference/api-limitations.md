@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 18 missing capabilities, 11 bugs / unreliable behaviors.
+**Totals:** 19 missing capabilities, 11 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -133,6 +133,14 @@ equivalent, blocking full automation.
 - **Behavior:** MediaPool.AppendToTimeline (with optional recordFrame positioning) is the only programmatic placement. The standard edit modes — insert (ripple), overwrite, replace, fit-to-fill, place-on-top — have no API. Verified via dir() (21.0.0).
 - **Workaround / current handling:** Position clips with AppendToTimeline clipInfo recordFrame, or perform insert/overwrite/replace edits in the Resolve UI.
 - **Tags:** missing-method, timeline, edit
+
+### Render in Place / bake a timeline clip to new media
+
+- **Object:** `Timeline / TimelineItem / MediaPool`
+- **Behavior:** There is no scripting method for the Edit-page clip context-menu action 'Render in Place', which bakes a clip (including its Fusion composition and effects) into a NEW rendered media file and drops that file back on the timeline at the same position, replacing the source clip. No Render*/Bake*/Freeze* method exists on Timeline, TimelineItem or MediaPool in the Resolve scripting API reference (BMD docs) or a dir() audit. NOTE the frequently-confused-but-distinct sibling: the render *cache* (a temporary, non-destructive cache of a clip's Color/Fusion output that reduces playback load WITHOUT creating a new media file) IS scriptable — TimelineItem.SetColorOutputCache / SetFusionOutputCache ('Render Cache Color/Fusion Output' menu actions) and Graph.SetNodeCacheMode. Render in Place is the permanent, media-producing bake; the render cache is the transient one.
+- **Workaround / current handling:** If the goal is only to reduce playback/render load, use the render cache — exposed as timeline_item get_color_cache/set_color_cache/get_fusion_cache/set_fusion_cache and the Color-page graph node cache_mode (no new media, fully reversible). If you genuinely need a baked media file, render the clip's in/out range from the Deliver page (proj.AddRenderJob with MarkIn/MarkOut) and relink/append the result yourself, or run Render in Place from the Resolve UI. There is no one-call API equivalent. See issue #86.
+- **Reference:** [issue #86](https://github.com/samuelgursky/davinci-resolve-mcp/issues/86)
+- **Tags:** missing-method, timeline, render, cache, render-in-place, bake
 
 ### Smart Bins / Power Bins creation
 

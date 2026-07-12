@@ -356,6 +356,38 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "missing",
     },
     {
+        "symbol": "Render in Place / bake a timeline clip to new media",
+        "object": "Timeline / TimelineItem / MediaPool",
+        "reality": "There is no scripting method for the Edit-page clip "
+                   "context-menu action 'Render in Place', which bakes a clip "
+                   "(including its Fusion composition and effects) into a NEW "
+                   "rendered media file and drops that file back on the timeline "
+                   "at the same position, replacing the source clip. No "
+                   "Render*/Bake*/Freeze* method exists on Timeline, TimelineItem "
+                   "or MediaPool in the Resolve scripting API reference (BMD docs) "
+                   "or a dir() audit. NOTE the frequently-confused-but-distinct "
+                   "sibling: the render *cache* (a temporary, non-destructive "
+                   "cache of a clip's Color/Fusion output that reduces playback "
+                   "load WITHOUT creating a new media file) IS scriptable — "
+                   "TimelineItem.SetColorOutputCache / SetFusionOutputCache "
+                   "('Render Cache Color/Fusion Output' menu actions) and "
+                   "Graph.SetNodeCacheMode. Render in Place is the permanent, "
+                   "media-producing bake; the render cache is the transient one.",
+        "recommended": "If the goal is only to reduce playback/render load, use "
+                       "the render cache — exposed as timeline_item "
+                       "get_color_cache/set_color_cache/get_fusion_cache/"
+                       "set_fusion_cache and the Color-page graph node cache_mode "
+                       "(no new media, fully reversible). If you genuinely need a "
+                       "baked media file, render the clip's in/out range from the "
+                       "Deliver page (proj.AddRenderJob with MarkIn/MarkOut) and "
+                       "relink/append the result yourself, or run Render in Place "
+                       "from the Resolve UI. There is no one-call API equivalent. "
+                       "See issue #86.",
+        "tags": ["missing-method", "timeline", "render", "cache", "render-in-place", "bake"],
+        "submit": "missing",
+        "issue": 86,
+    },
+    {
         "symbol": "Smart Bins / Power Bins creation",
         "object": "MediaPool",
         "reality": "Only AddSubFolder (a regular bin) exists. Smart Bins (rule-"
