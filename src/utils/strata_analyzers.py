@@ -26,6 +26,7 @@ import subprocess
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.utils import strata, timeline_brain_db
+from src.utils.proc import safe_run
 
 logger = logging.getLogger("resolve-mcp.strata-analyzers")
 
@@ -58,8 +59,20 @@ PITCH_MAX_HZ = 400.0
 MOTION_CURVE_RATE = 10.0  # Hz
 
 
+def _ensure_tool_path() -> None:
+    """GUI-launched processes get launchd's bare PATH; reuse media_analysis's
+    augmentation so shutil.which finds Homebrew/MacPorts ffmpeg."""
+    try:
+        from src.utils.media_analysis import _ensure_path_includes_standard_tool_dirs
+
+        _ensure_path_includes_standard_tool_dirs()
+    except Exception:  # pragma: no cover - best effort
+        pass
+
+
 def capabilities() -> Dict[str, Any]:
     """What the local analyzers can run on this machine."""
+    _ensure_tool_path()
     ffmpeg = shutil.which("ffmpeg")
     return {
         "ffmpeg": {"available": bool(ffmpeg), "path": ffmpeg},
@@ -89,16 +102,23 @@ def capabilities() -> Dict[str, Any]:
 
 
 def _face_capability() -> Dict[str, Any]:
-    from src.utils import strata_faces
+    # A broken optional face stack must never take strata_status/strata_run
+    # down with it — report unavailable instead.
+    try:
+        from src.utils import strata_faces
 
-    return strata_faces.capabilities()
+        return strata_faces.capabilities()
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        return {"available": False, "error": f"face stack failed to load: {exc}"}
 
 
 def _require(*needs: str) -> Optional[Dict[str, Any]]:
     if "numpy" in needs and _np is None:
         return {"success": False, "error": "numpy is required for this analyzer", "missing": "numpy"}
-    if "ffmpeg" in needs and not shutil.which("ffmpeg"):
-        return {"success": False, "error": "ffmpeg not found on PATH", "missing": "ffmpeg"}
+    if "ffmpeg" in needs:
+        _ensure_tool_path()
+        if not shutil.which("ffmpeg"):
+            return {"success": False, "error": "ffmpeg not found on PATH", "missing": "ffmpeg"}
     return None
 
 
@@ -112,7 +132,10 @@ def _clip_row(project_root: str, clip_ref: Any) -> Tuple[Optional[Dict[str, Any]
     conn = timeline_brain_db.connect(project_root)
     clip_uuid = analysis_store.resolve_clip_uuid(conn, clip_ref)
     if not clip_uuid:
-        return None, {"success": False, "error": f"Unknown clip ref: {clip_ref!r}"}
+        return None, {
+            "success": False,
+            "error": f"Unknown clip ref: {clip_ref!r} (older analysis root? run db_ingest first)",
+        }
     row = conn.execute("SELECT * FROM clips WHERE clip_uuid = ?", (clip_uuid,)).fetchone()
     if row is None:
         return None, {"success": False, "error": f"No clips row for {clip_uuid}"}
@@ -150,7 +173,7 @@ def decode_audio(path: str, sample_rate: int = AUDIO_SAMPLE_RATE, timeout: int =
         "-f", "f32le",
         "-",
     ]
-    proc = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+    proc = safe_run(cmd, capture_output=True, timeout=timeout, check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg audio decode failed: {proc.stderr.decode('utf-8', 'replace')[:500]}")
     return _np.frombuffer(proc.stdout, dtype=_np.float32)
@@ -547,7 +570,7 @@ def run_motion_energy(project_root: str, clip_ref: Any, timeout: int = 1800) -> 
         "-f", "null", "-",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+        proc = safe_run(cmd, capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "motion analysis timed out", "clip_uuid": clip["clip_uuid"]}
     if proc.returncode != 0:

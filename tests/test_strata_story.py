@@ -102,6 +102,58 @@ class StoryBeatTests(unittest.TestCase):
         labels = {b["label"] for b in listed["beats"]}
         self.assertEqual(labels, {"machine v2", "human note"})
 
+    def test_machine_commit_never_replaces_human_row_with_same_span(self) -> None:
+        now = strata_story._now()
+        conn = timeline_brain_db.connect(self.root)
+        conn.execute(
+            """
+            INSERT INTO story_beats
+                (beat_uuid, clip_uuid, start_seconds, end_seconds, beat_type,
+                 label, summary, source, author, timestamp)
+            VALUES ('humanbeat0002', ?, 0.0, 2.0, 'emotional', 'same label', 'Sam marked this.', 'human', 'sam', ?)
+            """,
+            (self.clip_uuid, now),
+        )
+        conn.commit()
+        result = strata_story.commit_story_beats(
+            self.root, self.clip_uuid,
+            [_beat(0.0, 2.0, "topic", "same label", "machine summary")],
+        )
+        self.assertTrue(result["success"], result)
+        rows = conn.execute(
+            "SELECT source, summary FROM story_beats WHERE clip_uuid = ? AND superseded_at IS NULL",
+            (self.clip_uuid,),
+        ).fetchall()
+        sources = sorted(r["source"] for r in rows)
+        self.assertEqual(sources, ["human", strata_story.STORY_SOURCE])
+        human = [r for r in rows if r["source"] == "human"]
+        self.assertEqual(human[0]["summary"], "Sam marked this.")
+
+    def test_identical_recommit_appends_supersede_history(self) -> None:
+        strata_story.commit_story_beats(self.root, self.clip_uuid, [_beat(0.0, 4.0, label="x")])
+        strata_story.commit_story_beats(self.root, self.clip_uuid, [_beat(0.0, 4.0, label="x")])
+        conn = timeline_brain_db.connect(self.root)
+        total = conn.execute(
+            "SELECT COUNT(*) AS n FROM story_beats WHERE clip_uuid = ?", (self.clip_uuid,)
+        ).fetchone()["n"]
+        live = conn.execute(
+            "SELECT COUNT(*) AS n FROM story_beats WHERE clip_uuid = ? AND superseded_at IS NULL",
+            (self.clip_uuid,),
+        ).fetchone()["n"]
+        self.assertEqual(total, 2)
+        self.assertEqual(live, 1)
+
+    def test_duplicate_spans_in_one_commit_are_skipped(self) -> None:
+        result = strata_story.commit_story_beats(
+            self.root, self.clip_uuid,
+            [_beat(0.0, 4.0, label="x"), _beat(0.0, 4.0, label="x")],
+        )
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["beats_committed"], 1)
+        self.assertEqual(len(result["problems"]), 1)
+        listed = strata_story.list_story_beats(self.root, self.clip_uuid)
+        self.assertEqual(len(listed["beats"]), 1)
+
     def test_commit_rejects_garbage(self) -> None:
         out = strata_story.commit_story_beats(self.root, self.clip_uuid, "not a list")
         self.assertFalse(out["success"])
@@ -167,6 +219,33 @@ class StrataQueryTests(unittest.TestCase):
         out = strata_queries.strata_query(self.root)
         self.assertFalse(out["success"])
 
+    def test_bundle_surfaces_every_recorded_track(self) -> None:
+        # Human annotations on vocabulary tracks outside the old hardcoded
+        # defaults (and on custom tracks) must be reachable via the query layer.
+        with timeline_brain_db.transaction(self.root) as conn:
+            strata.record_human_event(conn, self.clip_uuid, "gesture_boundary", 1.0)
+            strata.record_human_event(conn, self.clip_uuid, "my_custom_track", 2.0)
+            strata.write_curve(
+                conn, self.clip_uuid, "loudness", [0.5] * 40,
+                sample_rate=10.0, source="loudness_v1", analyzer_version="1.0",
+            )
+        out = strata_queries.strata_query(
+            self.root, clip_ref=self.clip_uuid, start_seconds=0.0, end_seconds=5.0
+        )
+        self.assertTrue(out["success"], out)
+        self.assertIn("gesture_boundary", out["events"])
+        self.assertIn("my_custom_track", out["events"])
+        self.assertIn("loudness", out["curves"])
+
+    def test_word_find_escapes_like_metachars(self) -> None:
+        # Unescaped, "k_nobi" would wildcard-match "kenobi"; the underscore
+        # must be treated as a literal character.
+        out = strata_queries.strata_query(self.root, match_word="k_nobi")
+        self.assertTrue(out["success"], out)
+        self.assertEqual(out["hits"], [])
+        out = strata_queries.strata_query(self.root, match_word="kenobi")
+        self.assertEqual(len(out["hits"]), 1)
+
 
 class TimelineStrataTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -202,10 +281,40 @@ class TimelineStrataTests(unittest.TestCase):
         self.assertEqual(out["timeline_version"], 3)
         self.assertEqual(len(out["placements"]), 2)
         placed = out["placements"][0]
-        self.assertEqual(placed["record_in_seconds"], 10.0)
+        # Snapshot frames are absolute (start-timecode-inclusive); without a
+        # recorded timeline start frame no seconds can honestly be derived.
+        self.assertEqual(placed["record_in_frame"], 240)
+        self.assertNotIn("record_in_seconds", placed)
+        self.assertIsNone(out["timeline_start_frame"])
+        self.assertEqual(out["fps_source"], "caller")
         self.assertEqual(placed["strata"]["clip_uuid"], self.clip_uuid)
         self.assertEqual(len(placed["strata"]["words"]), 4)
         self.assertEqual(out["unresolved_media_ids"], ["unknown-media"])
+
+    def test_projection_uses_snapshot_timebase(self) -> None:
+        with timeline_brain_db.transaction(self.root) as conn:
+            conn.execute(
+                """
+                INSERT INTO timeline_versions
+                    (timeline_name, version, created_at, archived_timeline_name,
+                     archived_bin_path, fps, start_frame)
+                VALUES ('Cut 01', 3, '2026-07-12T00:00:00Z', 'Cut 01_archived_v03', 'Archive', 24.0, 96)
+                """
+            )
+        out = strata_queries.timeline_strata(self.root, "Cut 01")
+        self.assertTrue(out["success"], out)
+        self.assertEqual(out["fps"], 24.0)
+        self.assertEqual(out["fps_source"], "snapshot")
+        self.assertEqual(out["timeline_start_frame"], 96)
+        placed = out["placements"][0]
+        self.assertEqual(placed["timeline_in_frame"], 144)
+        self.assertEqual(placed["record_in_seconds"], 6.0)
+        self.assertEqual(placed["record_out_seconds"], 16.0)
+
+    def test_projection_rejects_bad_fps(self) -> None:
+        out = strata_queries.timeline_strata(self.root, "Cut 01", fps=0.0)
+        self.assertFalse(out["success"])
+        self.assertIn("fps", out["error"])
 
     def test_record_window_filter(self) -> None:
         out = strata_queries.timeline_strata(

@@ -160,6 +160,44 @@ class TimelineVersioning(unittest.TestCase):
         # Current timeline restored to original after duplication.
         self.assertIs(self.project.GetCurrentTimeline(), self.timeline)
 
+    def test_archive_snapshots_timeline_timebase(self) -> None:
+        # v14: fps + start frame are recorded so timeline_strata can convert
+        # absolute snapshot frames back to timeline-relative time.
+        self.timeline.GetSetting = lambda key: "25" if key == "timelineFrameRate" else None  # type: ignore[attr-defined]
+        self.timeline.GetStartFrame = lambda: 90000  # type: ignore[attr-defined]
+        result = timeline_versioning.archive_current_timeline(
+            resolve=None,
+            project=self.project,
+            project_root=self.project_root,
+            reason="test",
+            analysis_run_id="run_tb",
+        )
+        self.assertTrue(result["success"], msg=result)
+        conn = timeline_brain_db.connect(self.project_root)
+        row = conn.execute(
+            "SELECT fps, start_frame FROM timeline_versions WHERE id = ?",
+            (result["row_id"],),
+        ).fetchone()
+        self.assertEqual(row["fps"], 25.0)
+        self.assertEqual(row["start_frame"], 90000)
+
+    def test_archive_without_timebase_getters_stores_null(self) -> None:
+        result = timeline_versioning.archive_current_timeline(
+            resolve=None,
+            project=self.project,
+            project_root=self.project_root,
+            reason="test",
+            analysis_run_id="run_no_tb",
+        )
+        self.assertTrue(result["success"], msg=result)
+        conn = timeline_brain_db.connect(self.project_root)
+        row = conn.execute(
+            "SELECT fps, start_frame FROM timeline_versions WHERE id = ?",
+            (result["row_id"],),
+        ).fetchone()
+        self.assertIsNone(row["fps"])
+        self.assertIsNone(row["start_frame"])
+
     def test_archive_increments_version(self) -> None:
         timeline_versioning.archive_current_timeline(
             resolve=None, project=self.project, project_root=self.project_root,

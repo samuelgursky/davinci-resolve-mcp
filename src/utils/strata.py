@@ -315,8 +315,9 @@ def read_words(
         sql += " AND start_seconds < ?"
         args.append(float(end_seconds))
     if match:
-        sql += " AND word LIKE ?"
-        args.append(f"%{match}%")
+        escaped = match.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        sql += " AND word LIKE ? ESCAPE '\\'"
+        args.append(f"%{escaped}%")
     sql += " ORDER BY segment_index, word_index"
     return [
         {
@@ -395,36 +396,32 @@ def ingest_transcript_words(
 ) -> int:
     """Rebuild transcript_words for a clip from a report's transcription block.
 
-    Words normally live per-segment (``segments[*].words``); when only the
-    top-level ``words`` list exists, words are bucketed into segments by
-    start time. Returns the number of word rows written.
+    Words normally live per-segment (``segments[*].words``); segments without
+    their own words fall back to the top-level ``words`` list, bucketed by
+    start time. When the block yields no words at all, existing rows are left
+    untouched — a words-less re-analysis must not silently wipe previously
+    ingested or backfilled words. Returns the number of word rows written.
     """
-    conn.execute("DELETE FROM transcript_words WHERE clip_uuid = ?", (clip_uuid,))
     if not isinstance(transcription, dict):
         return 0
     segments = transcription.get("segments") if isinstance(transcription.get("segments"), list) else []
 
     per_segment: List[List[Dict[str, Any]]] = []
-    have_segment_words = False
     for seg in segments:
         words = seg.get("words") if isinstance(seg, dict) and isinstance(seg.get("words"), list) else []
-        if words:
-            have_segment_words = True
         per_segment.append([w for w in words if isinstance(w, dict)])
 
-    if not have_segment_words:
-        top_words = transcription.get("words") if isinstance(transcription.get("words"), list) else []
-        top_words = [w for w in top_words if isinstance(w, dict)]
-        if not top_words:
-            return 0
+    top_words = transcription.get("words") if isinstance(transcription.get("words"), list) else []
+    top_words = [w for w in top_words if isinstance(w, dict)]
+    if top_words:
         if not segments:
             per_segment = [top_words]
         else:
-            per_segment = [[] for _ in segments]
             bounds = []
             for seg in segments:
                 start = seg.get("start") if isinstance(seg, dict) else None
                 bounds.append(float(start) if isinstance(start, (int, float)) else 0.0)
+            fallback: List[List[Dict[str, Any]]] = [[] for _ in segments]
             for word in top_words:
                 t = word.get("start")
                 t = float(t) if isinstance(t, (int, float)) else 0.0
@@ -432,9 +429,12 @@ def ingest_transcript_words(
                 for i, b in enumerate(bounds):
                     if t >= b:
                         idx = i
-                per_segment[idx].append(word)
+                fallback[idx].append(word)
+            for i, words in enumerate(per_segment):
+                if not words:
+                    per_segment[i] = fallback[i]
 
-    written = 0
+    rows: List[tuple] = []
     for seg_idx, words in enumerate(per_segment):
         for word_idx, word in enumerate(words):
             text = str(word.get("word", word.get("text", ""))).strip()
@@ -442,13 +442,7 @@ def ingest_transcript_words(
                 continue
             start = word.get("start")
             end = word.get("end")
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO transcript_words
-                    (clip_uuid, segment_index, word_index, word,
-                     start_seconds, end_seconds, confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
+            rows.append(
                 (
                     clip_uuid,
                     seg_idx,
@@ -457,10 +451,21 @@ def ingest_transcript_words(
                     float(start) if isinstance(start, (int, float)) else None,
                     float(end) if isinstance(end, (int, float)) else None,
                     _word_confidence(word),
-                ),
+                )
             )
-            written += 1
-    return written
+    if not rows:
+        return 0
+    conn.execute("DELETE FROM transcript_words WHERE clip_uuid = ?", (clip_uuid,))
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO transcript_words
+            (clip_uuid, segment_index, word_index, word,
+             start_seconds, end_seconds, confidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    return len(rows)
 
 
 def backfill_transcript_words(project_root: str) -> Dict[str, Any]:

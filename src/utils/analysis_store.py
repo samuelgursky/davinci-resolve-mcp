@@ -335,9 +335,15 @@ def ingest_report(
             "SELECT created_at FROM clips WHERE clip_uuid = ?", (clip_uuid,)
         ).fetchone()
         created_at = str(existing["created_at"]) if existing else now
+        # True upsert — never INSERT OR REPLACE: REPLACE deletes the existing
+        # row first, and with PRAGMA foreign_keys=ON that cascade-deletes every
+        # child table (events/curves/transcript_words/story_beats included),
+        # wiping strata rows — human annotations among them — on every
+        # re-ingest. The v13 strata tables are NOT rebuilt by ingest, so the
+        # clips row must be updated in place.
         conn.execute(
             """
-            INSERT OR REPLACE INTO clips
+            INSERT INTO clips
                 (clip_uuid, clip_dir, resolve_clip_id, media_id, clip_name,
                  file_path, bin_path, duration_seconds, fps, resolution,
                  media_type, summary, overall_motion_level, cut_count,
@@ -345,6 +351,28 @@ def ingest_report(
                  analyzed_at, vision_status, vision_committed_at,
                  created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(clip_uuid) DO UPDATE SET
+                clip_dir=excluded.clip_dir,
+                resolve_clip_id=excluded.resolve_clip_id,
+                media_id=excluded.media_id,
+                clip_name=excluded.clip_name,
+                file_path=excluded.file_path,
+                bin_path=excluded.bin_path,
+                duration_seconds=excluded.duration_seconds,
+                fps=excluded.fps,
+                resolution=excluded.resolution,
+                media_type=excluded.media_type,
+                summary=excluded.summary,
+                overall_motion_level=excluded.overall_motion_level,
+                cut_count=excluded.cut_count,
+                shot_count=excluded.shot_count,
+                analysis_version=excluded.analysis_version,
+                depth=excluded.depth,
+                signature_hash=excluded.signature_hash,
+                analyzed_at=excluded.analyzed_at,
+                vision_status=excluded.vision_status,
+                vision_committed_at=excluded.vision_committed_at,
+                updated_at=excluded.updated_at
             """,
             (
                 clip_uuid,

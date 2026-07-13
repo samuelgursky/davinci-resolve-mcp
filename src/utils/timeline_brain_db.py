@@ -29,7 +29,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 
 logger = logging.getLogger("resolve-mcp.timeline-brain-db")
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 DB_FILENAME = "timeline_brain.sqlite"
 SOUL_DIRNAME = "_soul"
 
@@ -905,6 +905,23 @@ def _migrate_v13_perception_strata(conn: sqlite3.Connection) -> None:
             ON story_beats(clip_uuid, start_seconds) WHERE superseded_at IS NULL;
         """
     )
+
+
+@register_migration(14)
+def _migrate_v14_timeline_version_timebase(conn: sqlite3.Connection) -> None:
+    """Record the timeline's timebase on each version snapshot.
+
+    timeline_clip_usage rows store ABSOLUTE record frames (item.GetStart()
+    includes the timeline start-timecode offset, e.g. 86400 for a
+    01:00:00:00 start at 24fps). Without the timeline's fps and start frame
+    those frames cannot be converted to timeline-relative time. Snapshot
+    both at archive time; readers fall back to the documented absolute
+    convention for rows that predate this column.
+    """
+    if not _column_exists(conn, "timeline_versions", "fps"):
+        conn.execute("ALTER TABLE timeline_versions ADD COLUMN fps REAL")
+    if not _column_exists(conn, "timeline_versions", "start_frame"):
+        conn.execute("ALTER TABLE timeline_versions ADD COLUMN start_frame INTEGER")
 
 
 def latest_version(conn: sqlite3.Connection, timeline_name: str) -> Optional[int]:

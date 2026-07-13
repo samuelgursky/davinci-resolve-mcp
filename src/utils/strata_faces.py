@@ -31,14 +31,20 @@ FACE_VERSION = "1.0.0"
 
 FACE_CURVE_RATE_DEFAULT = 12.0  # analysis fps; blinks need >=10 to be caught
 
+# Broad excepts on purpose: mediapipe (and cv2) can raise non-ImportError
+# exceptions at import time (e.g. protobuf version mismatches raise TypeError).
+# A broken optional dependency must degrade to "face analyzer unavailable",
+# never crash strata_status / strata_run.
 try:  # pragma: no cover - environment-dependent
     import cv2 as _cv2
-except ImportError:  # pragma: no cover
+except Exception as _exc:  # pragma: no cover
+    logger.debug("cv2 unavailable: %s", _exc)
     _cv2 = None
 
 try:  # pragma: no cover - environment-dependent
     import mediapipe as _mp
-except ImportError:  # pragma: no cover
+except Exception as _exc:  # pragma: no cover
+    logger.debug("mediapipe unavailable: %s", _exc)
     _mp = None
 
 # FaceMesh landmark indices (canonical mediapipe topology).

@@ -13,9 +13,9 @@ source='human' are never touched and always win.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from src.utils import strata, timeline_brain_db
@@ -76,9 +76,11 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _beat_uuid(clip_uuid: str, start: float, end: float, label: str) -> str:
-    digest = hashlib.sha1(f"{clip_uuid}|{start:.3f}|{end:.3f}|{label}".encode("utf-8")).hexdigest()
-    return digest[:12]
+def _beat_uuid() -> str:
+    # Random, not content-derived: every commit inserts fresh rows, so prior
+    # rows (machine or human) can only be superseded, never replaced through
+    # a primary-key collision.
+    return uuid.uuid4().hex[:12]
 
 
 def _resolve(project_root: str, clip_ref: Any):
@@ -87,7 +89,10 @@ def _resolve(project_root: str, clip_ref: Any):
     conn = timeline_brain_db.connect(project_root)
     clip_uuid = analysis_store.resolve_clip_uuid(conn, clip_ref)
     if not clip_uuid:
-        return None, None, {"success": False, "error": f"Unknown clip ref: {clip_ref!r}"}
+        return None, None, {
+            "success": False,
+            "error": f"Unknown clip ref: {clip_ref!r} (older analysis root? run db_ingest first)",
+        }
     return conn, clip_uuid, None
 
 
@@ -193,6 +198,7 @@ def commit_story_beats(
 
     validated: List[Dict[str, Any]] = []
     problems: List[str] = []
+    seen_spans: set = set()
     for i, beat in enumerate(beats):
         if not isinstance(beat, dict):
             problems.append(f"beats[{i}] is not an object")
@@ -211,6 +217,11 @@ def commit_story_beats(
         if not label or not summary:
             problems.append(f"beats[{i}] needs label and summary")
             continue
+        span_key = (round(float(start), 3), round(float(end), 3), label)
+        if span_key in seen_spans:
+            problems.append(f"beats[{i}] duplicates an earlier beat in this commit; skipped")
+            continue
+        seen_spans.add(span_key)
         links = beat.get("links") if isinstance(beat.get("links"), list) else []
         entity_labels = beat.get("entity_labels") if isinstance(beat.get("entity_labels"), list) else []
         validated.append(
@@ -239,14 +250,14 @@ def commit_story_beats(
         for beat in validated:
             txn.execute(
                 """
-                INSERT OR REPLACE INTO story_beats
+                INSERT INTO story_beats
                     (beat_uuid, clip_uuid, start_seconds, end_seconds, beat_type,
                      label, summary, entities_json, links_json, confidence,
                      source, author, timestamp, superseded_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
-                    _beat_uuid(clip_uuid, beat["start_seconds"], beat["end_seconds"], beat["label"]),
+                    _beat_uuid(),
                     clip_uuid,
                     beat["start_seconds"],
                     beat["end_seconds"],

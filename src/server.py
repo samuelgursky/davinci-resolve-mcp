@@ -16680,6 +16680,40 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
 # TOOL 15: media_analysis
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_STRATA_CLIP_REF_KEYS = (
+    "clip_id", "clipId", "clip_uuid", "clipUuid",
+    "clip_dir", "clipDir", "file_path", "filePath",
+)
+
+
+def _strata_clip_ref(p: Dict[str, Any]) -> Any:
+    """The clip ref from any accepted alias — one place, so aliases can't drift
+    between action handlers."""
+    for key in _STRATA_CLIP_REF_KEYS:
+        value = p.get(key)
+        if value:
+            return value
+    return None
+
+
+def _opt_number(value: Any) -> Optional[float]:
+    """Coerce int/float/numeric-string to float; anything else → None.
+
+    LLM clients routinely stringify numbers; params must not crash (or be
+    silently dropped) because "12.5" arrived instead of 12.5.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 @mcp.tool()
 async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Project-scoped media analysis and guarded metadata publishing.
@@ -16751,7 +16785,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       take_diff(clip_a, clip_b, text?) -> align two takes on transcript words and diff their delivery (pace, pauses, pitch, energy) — measures only, never picks
       cut_candidates(clip_id, time_seconds, window_seconds?, fps?, limit?) -> rank cut frames around an intended joint with reasons (blink/pause/word-gap/breath/beat/motion) — aims, never decides
       strata_query(clip_id?, start_seconds?, end_seconds?, match_word?, context_seconds?, include_curve_values?, limit?) -> cross-track window bundle for a clip, or project-wide word find with joined context per hit
-      timeline_strata(timeline_name, timeline_version?, record_start_frame?, record_end_frame?, fps?) -> project clip strata through a timeline's recorded placements (whole-clip bundles; source-offset mapping needs the live item)
+      timeline_strata(timeline_name, timeline_version?, record_start_frame?, record_end_frame?, fps?) -> project clip strata through a timeline's recorded placements (whole-clip bundles; frames are absolute record frames incl. start-timecode offset; fps defaults to the snapshot's stored value; source-offset mapping needs the live item)
       plan_story_beats(clip_id) -> timecoded transcript digest + prosody evidence + JSON schema for the host model to segment into story beats (no LLM call server-side)
       commit_story_beats(clip_id, beats, source_model?) -> validate + persist host-produced story beats; machine commits supersede machine rows only, human rows always win
       list_story_beats(clip_id) -> current (non-superseded) story beats for a clip
@@ -17126,7 +17160,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         # Perception strata (schema v13).
         if action == "strata_status":
             from src.utils import strata, strata_analyzers
-            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            clip_ref = _strata_clip_ref(p)
             status = strata.strata_status(project_root, clip_ref)
             if status.get("success") and clip_ref is None:
                 status["analyzer_capabilities"] = strata_analyzers.capabilities()
@@ -17136,7 +17170,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             return strata.backfill_transcript_words(project_root)
         if action == "strata_run":
             from src.utils import strata_analyzers
-            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            clip_ref = _strata_clip_ref(p)
             if not clip_ref:
                 return _err("strata_run requires clip_id (or clip_uuid / clip_dir / file_path)")
             analyzers = p.get("analyzers") or p.get("analyzer")
@@ -17152,55 +17186,73 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             return strata_queries.take_diff(project_root, clip_a, clip_b, text=p.get("text") or p.get("line"))
         if action == "cut_candidates":
             from src.utils import strata_queries
-            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
-            t = p.get("time_seconds") if isinstance(p.get("time_seconds"), (int, float)) else p.get("timeSeconds")
-            if not clip_ref or not isinstance(t, (int, float)):
-                return _err("cut_candidates requires clip_id and time_seconds")
+            clip_ref = _strata_clip_ref(p)
+            t = _opt_number(p.get("time_seconds", p.get("timeSeconds")))
+            if not clip_ref or t is None:
+                return _err("cut_candidates requires clip_id and a numeric time_seconds")
+            fps_raw = p.get("fps")
+            fps = _opt_number(fps_raw)
+            if fps_raw is not None and fps is None:
+                return _err(f"fps must be a number, got {fps_raw!r}")
             return strata_queries.cut_candidates(
                 project_root,
                 clip_ref,
-                float(t),
-                window_seconds=float(p.get("window_seconds", p.get("windowSeconds", 0.35)) or 0.35),
-                fps=float(p["fps"]) if isinstance(p.get("fps"), (int, float)) else None,
-                limit=int(p.get("limit", 7) or 7),
+                t,
+                window_seconds=_opt_number(p.get("window_seconds", p.get("windowSeconds"))) or 0.35,
+                fps=fps,
+                limit=int(_opt_number(p.get("limit")) or 7),
             )
         if action == "strata_query":
             from src.utils import strata_queries
-            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            start_raw = p.get("start_seconds", p.get("startSeconds"))
+            end_raw = p.get("end_seconds", p.get("endSeconds"))
+            start = _opt_number(start_raw)
+            end = _opt_number(end_raw)
+            if (start_raw is not None and start is None) or (end_raw is not None and end is None):
+                return _err("start_seconds/end_seconds must be numbers")
             return strata_queries.strata_query(
                 project_root,
-                clip_ref=clip_ref,
-                start_seconds=p.get("start_seconds", p.get("startSeconds")),
-                end_seconds=p.get("end_seconds", p.get("endSeconds")),
+                clip_ref=_strata_clip_ref(p),
+                start_seconds=start,
+                end_seconds=end,
                 match_word=p.get("match_word") or p.get("matchWord") or p.get("word"),
-                context_seconds=float(p.get("context_seconds", p.get("contextSeconds", 2.0)) or 2.0),
+                context_seconds=_opt_number(p.get("context_seconds", p.get("contextSeconds"))) or 2.0,
                 include_curve_values=bool(p.get("include_curve_values", p.get("includeCurveValues", False))),
-                limit=int(p.get("limit", 20) or 20),
+                limit=int(_opt_number(p.get("limit")) or 20),
             )
         if action == "timeline_strata":
             from src.utils import strata_queries
             timeline_name = p.get("timeline_name") or p.get("timelineName") or p.get("timeline")
             if not timeline_name:
                 return _err("timeline_strata requires timeline_name")
-            version = p.get("timeline_version", p.get("timelineVersion"))
+            version_raw = p.get("timeline_version", p.get("timelineVersion"))
+            version = _opt_number(version_raw)
+            if version_raw is not None and version is None:
+                return _err(f"timeline_version must be an integer, got {version_raw!r}")
+            fps_raw = p.get("fps")
+            fps = _opt_number(fps_raw)
+            if fps_raw is not None and fps is None:
+                return _err(f"fps must be a number, got {fps_raw!r}")
+            start_frame = _opt_number(p.get("record_start_frame", p.get("recordStartFrame")))
+            end_frame = _opt_number(p.get("record_end_frame", p.get("recordEndFrame")))
             return strata_queries.timeline_strata(
                 project_root,
                 str(timeline_name),
-                timeline_version=int(version) if isinstance(version, (int, float)) else None,
-                record_start_frame=p.get("record_start_frame", p.get("recordStartFrame")),
-                record_end_frame=p.get("record_end_frame", p.get("recordEndFrame")),
-                fps=float(p.get("fps", 24.0) or 24.0),
+                timeline_version=int(version) if version is not None else None,
+                record_start_frame=int(start_frame) if start_frame is not None else None,
+                record_end_frame=int(end_frame) if end_frame is not None else None,
+                fps=fps,
                 include_curve_values=bool(p.get("include_curve_values", p.get("includeCurveValues", False))),
             )
         if action == "plan_story_beats":
             from src.utils import strata_story
-            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            clip_ref = _strata_clip_ref(p)
             if not clip_ref:
                 return _err("plan_story_beats requires clip_id")
             return strata_story.plan_story_beats(project_root, clip_ref)
         if action == "commit_story_beats":
             from src.utils import strata_story
-            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            clip_ref = _strata_clip_ref(p)
             if not clip_ref:
                 return _err("commit_story_beats requires clip_id")
             beats = p.get("beats")
@@ -17214,7 +17266,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             )
         if action == "list_story_beats":
             from src.utils import strata_story
-            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            clip_ref = _strata_clip_ref(p)
             if not clip_ref:
                 return _err("list_story_beats requires clip_id")
             return strata_story.list_story_beats(project_root, clip_ref)

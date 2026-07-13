@@ -82,6 +82,15 @@ class StrataSchemaTests(unittest.TestCase):
             self.assertIn(table, tables)
         self.assertEqual(timeline_brain_db._read_schema_version(conn), timeline_brain_db.SCHEMA_VERSION)
 
+    def test_v14_timeline_version_timebase_columns(self) -> None:
+        conn = timeline_brain_db.connect(self.root)
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(timeline_versions)").fetchall()
+        }
+        self.assertIn("fps", columns)
+        self.assertIn("start_frame", columns)
+        self.assertGreaterEqual(timeline_brain_db._read_schema_version(conn), 14)
+
 
 class TranscriptWordsTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -144,6 +153,73 @@ class TranscriptWordsTests(unittest.TestCase):
     def test_report_without_words_writes_nothing(self) -> None:
         result = self._ingest(make_report())
         self.assertEqual(result["transcript_words_written"], 0)
+
+    def test_wordless_reingest_preserves_existing_rows(self) -> None:
+        first = self._ingest(make_report_with_words())
+        conn = timeline_brain_db.connect(self.root)
+        self.assertEqual(len(strata.read_words(conn, first["clip_uuid"])), 4)
+        # Re-analysis with transcription off/unavailable must not wipe the
+        # word rows a previous run (or backfill_words) populated.
+        second = self._ingest(make_report())
+        self.assertEqual(second["clip_uuid"], first["clip_uuid"])
+        self.assertEqual(len(strata.read_words(conn, first["clip_uuid"])), 4)
+
+    def test_reingest_preserves_strata_rows(self) -> None:
+        # INSERT OR REPLACE on the clips row would cascade-delete every strata
+        # table (events/curves/words/beats — human annotations included); the
+        # ingest upsert must never delete the clips row.
+        first = self._ingest(make_report_with_words())
+        with timeline_brain_db.transaction(self.root) as txn:
+            strata.record_human_event(txn, first["clip_uuid"], "gesture_boundary", 1.0)
+            strata.write_curve(
+                txn, first["clip_uuid"], "motion_energy", [0.1] * 10,
+                sample_rate=10.0, source="motion_v1", analyzer_version="1.0",
+            )
+        self._ingest(json.loads(json.dumps(make_report_with_words())))
+        conn = timeline_brain_db.connect(self.root)
+        self.assertEqual(len(strata.read_events(conn, first["clip_uuid"], "gesture_boundary")), 1)
+        self.assertIsNotNone(strata.read_curve(conn, first["clip_uuid"], "motion_energy"))
+        self.assertEqual(len(strata.read_words(conn, first["clip_uuid"])), 4)
+
+    def test_mixed_segment_and_top_level_words_keeps_both(self) -> None:
+        report = make_report()
+        report["transcription"] = {
+            "success": True,
+            "segments": [
+                {
+                    "start": 0.0,
+                    "end": 4.0,
+                    "text": "hello there",
+                    "words": [make_word("hello", 0.2, 0.6), make_word("there", 0.7, 1.1)],
+                },
+                {"start": 4.0, "end": 9.5, "text": "general kenobi"},
+            ],
+            "words": [
+                make_word("hello", 0.2, 0.6),
+                make_word("there", 0.7, 1.1),
+                make_word("general", 4.1, 4.6),
+                make_word("kenobi", 4.8, 5.4),
+            ],
+        }
+        result = self._ingest(report)
+        self.assertEqual(result["transcript_words_written"], 4)
+        conn = timeline_brain_db.connect(self.root)
+        words = strata.read_words(conn, result["clip_uuid"])
+        self.assertEqual([w["word"] for w in words], ["hello", "there", "general", "kenobi"])
+        self.assertEqual([w["segment_index"] for w in words], [0, 0, 1, 1])
+
+    def test_word_match_escapes_like_metachars(self) -> None:
+        report = make_report_with_words()
+        report["transcription"]["segments"][0]["words"] = [
+            make_word("100%", 0.2, 0.6),
+            make_word("1000", 0.7, 1.1),
+        ]
+        result = self._ingest(report)
+        conn = timeline_brain_db.connect(self.root)
+        hits = strata.read_words(conn, result["clip_uuid"], match="100%")
+        self.assertEqual([w["word"] for w in hits], ["100%"])
+        hits = strata.read_words(conn, result["clip_uuid"], match="e_e")
+        self.assertEqual(hits, [])
 
     def test_ingest_export_round_trip_still_exact(self) -> None:
         # Word rows are derived data; the canonical blob must be untouched.

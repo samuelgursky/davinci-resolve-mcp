@@ -32,7 +32,10 @@ def _resolve(project_root: str, clip_ref: Any) -> Tuple[Optional[str], Optional[
     conn = timeline_brain_db.connect(project_root)
     clip_uuid = analysis_store.resolve_clip_uuid(conn, clip_ref)
     if not clip_uuid:
-        return None, {"success": False, "error": f"Unknown clip ref: {clip_ref!r}"}
+        return None, {
+            "success": False,
+            "error": f"Unknown clip ref: {clip_ref!r} (older analysis root? run db_ingest first)",
+        }
     return clip_uuid, None
 
 
@@ -64,9 +67,7 @@ def _delivery_metrics(
     end = float(last.get("end_seconds") or last["start_seconds"])
     duration = max(end - start, 1e-6)
 
-    pauses = [
-        e for e in strata.read_events(conn, clip_uuid, "pause", start_seconds=start, end_seconds=end)
-    ]
+    pauses = strata.read_events(conn, clip_uuid, "pause", start_seconds=start, end_seconds=end)
     hesitations = strata.read_events(conn, clip_uuid, "hesitation", start_seconds=start, end_seconds=end)
 
     metrics: Dict[str, Any] = {
@@ -82,15 +83,14 @@ def _delivery_metrics(
         "hesitation_count": len(hesitations),
     }
 
-    pitch = _finite(_curve_slice(strata.read_curve(conn, clip_uuid, "pitch"), start, end))
+    pitch_raw = _curve_slice(strata.read_curve(conn, clip_uuid, "pitch"), start, end)
+    pitch = _finite(pitch_raw)
     if len(pitch) >= 4:
         metrics["pitch"] = {
             "mean_hz": round(statistics.fmean(pitch), 1),
             "stdev_hz": round(statistics.pstdev(pitch), 1),
             "range_hz": round(max(pitch) - min(pitch), 1),
-            "voiced_ratio": round(
-                len(pitch) / max(1, len(_curve_slice(strata.read_curve(conn, clip_uuid, "pitch"), start, end))), 3
-            ),
+            "voiced_ratio": round(len(pitch) / max(1, len(pitch_raw)), 3),
         }
     energy = _finite(_curve_slice(strata.read_curve(conn, clip_uuid, "vocal_energy"), start, end))
     if len(energy) >= 4:
@@ -177,9 +177,24 @@ def take_diff(
 
 # ── strata_query — windowed cross-track fetch + word find + timeline scope ──
 
-_EVENT_TRACK_DEFAULT = ("pause", "breath", "hesitation", "beat", "downbeat", "blink")
-_CURVE_TRACK_DEFAULT = ("pitch", "vocal_energy", "speech_rate", "motion_energy",
-                        "gaze_x", "gaze_y", "expression_mouth_open", "expression_brow_raise")
+# Ordering hints only — the tracks actually fetched are whatever exists in the
+# DB for the clip (the vocabulary is open: analyzers and humans may add tracks
+# freely, and every recorded track must be reachable through the query layer).
+_EVENT_TRACK_ORDER = ("pause", "breath", "hesitation", "beat", "downbeat", "blink", "gesture_boundary")
+_CURVE_TRACK_ORDER = ("pitch", "vocal_energy", "speech_rate", "loudness", "motion_energy",
+                      "gaze_x", "gaze_y", "expression_mouth_open", "expression_brow_raise")
+
+
+def _present_tracks(conn, clip_uuid: str, table: str, order_hint: Sequence[str]) -> List[str]:
+    present = {
+        row["track"]
+        for row in conn.execute(
+            f"SELECT DISTINCT track FROM {table} WHERE clip_uuid = ?", (clip_uuid,)
+        ).fetchall()
+    }
+    ordered = [t for t in order_hint if t in present]
+    ordered.extend(sorted(present.difference(order_hint)))
+    return ordered
 
 
 def _clip_bundle(
@@ -202,14 +217,14 @@ def _clip_bundle(
     bundle["words"] = strata.read_words(conn, clip_uuid, start_seconds=start, end_seconds=end)
 
     events: Dict[str, List[Dict[str, Any]]] = {}
-    for track in _EVENT_TRACK_DEFAULT:
+    for track in _present_tracks(conn, clip_uuid, "events", _EVENT_TRACK_ORDER):
         hits = strata.read_events(conn, clip_uuid, track, start_seconds=start, end_seconds=end)
         if hits:
             events[track] = hits
     bundle["events"] = events
 
     curves: Dict[str, Any] = {}
-    for track in _CURVE_TRACK_DEFAULT:
+    for track in _present_tracks(conn, clip_uuid, "curves", _CURVE_TRACK_ORDER):
         curve = strata.read_curve(conn, clip_uuid, track)
         if curve is None:
             continue
@@ -272,12 +287,13 @@ def strata_query(
     conn = timeline_brain_db.connect(project_root)
 
     if match_word:
+        escaped = match_word.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
         sql = (
             "SELECT w.clip_uuid, w.word, w.start_seconds, w.end_seconds, c.clip_name "
             "FROM transcript_words w JOIN clips c ON c.clip_uuid = w.clip_uuid "
-            "WHERE w.word LIKE ?"
+            "WHERE w.word LIKE ? ESCAPE '\\'"
         )
-        args: List[Any] = [f"%{match_word}%"]
+        args: List[Any] = [f"%{escaped}%"]
         if clip_ref is not None:
             uuid_, err = _resolve(project_root, clip_ref)
             if err:
@@ -327,7 +343,7 @@ def timeline_strata(
     timeline_version: Optional[int] = None,
     record_start_frame: Optional[int] = None,
     record_end_frame: Optional[int] = None,
-    fps: float = 24.0,
+    fps: Optional[float] = None,
     include_curve_values: bool = False,
 ) -> Dict[str, Any]:
     """Project clip strata through a timeline's recorded placements.
@@ -337,6 +353,15 @@ def timeline_strata(
     placement strata bundles. Placement rows carry RECORD in/out frames but
     not the source offset, so bundles are whole-clip; exact source↔record
     frame mapping needs the live timeline item and is labeled as such.
+
+    Frame convention: in_frame/out_frame are ABSOLUTE record frames as
+    snapshotted from item.GetStart()/GetEnd() — they include the timeline
+    start-timecode offset (e.g. 86400 for a 01:00:00:00 start at 24fps).
+    record_start_frame/record_end_frame filters are compared in that same
+    absolute space. Snapshots taken at schema v14+ also store the timeline's
+    fps and start frame, which are used to add timeline-relative frames and
+    seconds per placement; older snapshots omit those derived fields unless
+    the caller supplies fps.
     """
     from src.utils import analysis_store
 
@@ -352,6 +377,19 @@ def timeline_strata(
                 "error": f"no clip-usage snapshots recorded for timeline {timeline_name!r}",
             }
         timeline_version = int(row["v"])
+
+    meta = conn.execute(
+        "SELECT fps, start_frame FROM timeline_versions WHERE timeline_name = ? AND version = ?",
+        (timeline_name, timeline_version),
+    ).fetchone()
+    stored_fps = float(meta["fps"]) if meta and meta["fps"] else None
+    start_frame = int(meta["start_frame"]) if meta and meta["start_frame"] is not None else None
+    fps_source = "caller" if fps is not None else ("snapshot" if stored_fps else None)
+    if fps is None:
+        fps = stored_fps
+    if fps is not None and (not isinstance(fps, (int, float)) or not math.isfinite(fps) or fps <= 0):
+        return {"success": False, "error": f"fps must be a positive number, got {fps!r}"}
+    fps = float(fps) if fps is not None else None
 
     sql = (
         "SELECT * FROM timeline_clip_usage WHERE timeline_name = ? AND timeline_version = ?"
@@ -375,9 +413,13 @@ def timeline_strata(
             "track_index": row["track_index"],
             "record_in_frame": row["in_frame"],
             "record_out_frame": row["out_frame"],
-            "record_in_seconds": round(row["in_frame"] / fps, 3),
-            "record_out_seconds": round(row["out_frame"] / fps, 3),
         }
+        if start_frame is not None:
+            placement["timeline_in_frame"] = row["in_frame"] - start_frame
+            placement["timeline_out_frame"] = row["out_frame"] - start_frame
+            if fps:
+                placement["record_in_seconds"] = round((row["in_frame"] - start_frame) / fps, 3)
+                placement["record_out_seconds"] = round((row["out_frame"] - start_frame) / fps, 3)
         if clip_uuid:
             placement["strata"] = _clip_bundle(
                 conn, clip_uuid, None, None, include_curve_values=include_curve_values
@@ -390,12 +432,22 @@ def timeline_strata(
         "success": True,
         "timeline_name": timeline_name,
         "timeline_version": timeline_version,
-        "fps_assumed": fps,
+        "fps": fps,
+        "fps_source": fps_source,
+        "timeline_start_frame": start_frame,
         "placements": placements,
         "unresolved_media_ids": sorted(set(unresolved)),
         "note": (
-            "bundles are whole-clip (clip time); usage snapshots record placement, "
-            "not source offset — frame-exact source↔record mapping needs the live item"
+            "record_in/out_frame are absolute snapshot frames (start-timecode-inclusive); "
+            "record_start/end_frame filters use that same space. Bundles are whole-clip "
+            "(clip time); usage snapshots record placement, not source offset — frame-exact "
+            "source↔record mapping needs the live item"
+            + (
+                ""
+                if start_frame is not None
+                else "; this snapshot predates the v14 timebase columns, so timeline-relative "
+                "frames/seconds are unavailable (re-archive to record them)"
+            )
         ),
     }
 
@@ -447,6 +499,9 @@ def cut_candidates(
     if fps is None:
         row = conn.execute("SELECT fps, duration_seconds FROM clips WHERE clip_uuid = ?", (uuid_,)).fetchone()
         fps = float(row["fps"]) if row and row["fps"] else 24.0
+    if not isinstance(fps, (int, float)) or not math.isfinite(fps) or fps <= 0:
+        return {"success": False, "error": f"fps must be a positive number, got {fps!r}"}
+    fps = float(fps)
     frame_dur = 1.0 / fps
 
     lo = max(0.0, time_seconds - window_seconds)

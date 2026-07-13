@@ -154,13 +154,28 @@ def archive_current_timeline(
     # the working timeline as the active one so downstream mutation hits it.
     project.SetCurrentTimeline(tl)
 
+    # Timebase snapshot — timeline_clip_usage stores ABSOLUTE record frames
+    # (GetStart() includes the start-timecode offset), so readers need the
+    # timeline's fps and start frame to recover timeline-relative time.
+    timeline_fps: Optional[float] = None
+    timeline_start_frame: Optional[int] = None
+    try:
+        timeline_fps = float(tl.GetSetting("timelineFrameRate") or 0) or None
+    except Exception:
+        pass
+    try:
+        timeline_start_frame = int(tl.GetStartFrame())
+    except Exception:
+        pass
+
     with timeline_brain_db.transaction(project_root) as txn:
         cursor = txn.execute(
             """
             INSERT INTO timeline_versions(
                 timeline_name, version, created_at, analysis_run_id,
-                archived_timeline_name, archived_bin_path, reason, initiator, actor
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                archived_timeline_name, archived_bin_path, reason, initiator, actor,
+                fps, start_frame
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 working_name,
@@ -172,6 +187,8 @@ def archive_current_timeline(
                 reason,
                 initiator,
                 actor_identity.actor_string(),
+                timeline_fps,
+                timeline_start_frame,
             ),
         )
         row_id = cursor.lastrowid

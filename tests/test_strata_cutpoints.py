@@ -15,6 +15,28 @@ from src.utils import analysis_store, strata, strata_faces, strata_queries, time
 from tests.test_analysis_store import make_report
 
 
+class DispatchCoercionTests(unittest.TestCase):
+    """The media_analysis strata dispatch helpers: LLM clients stringify
+    numbers and alias clip refs; the dispatch layer must absorb both."""
+
+    def test_opt_number_coerces_strings(self) -> None:
+        import src.server as s
+
+        self.assertEqual(s._opt_number("12.5"), 12.5)
+        self.assertEqual(s._opt_number(" 3 "), 3.0)
+        self.assertEqual(s._opt_number(7), 7.0)
+        self.assertIsNone(s._opt_number("abc"))
+        self.assertIsNone(s._opt_number(None))
+        self.assertIsNone(s._opt_number(True))
+
+    def test_strata_clip_ref_accepts_all_aliases(self) -> None:
+        import src.server as s
+
+        for key in s._STRATA_CLIP_REF_KEYS:
+            self.assertEqual(s._strata_clip_ref({key: "ref-1"}), "ref-1", key)
+        self.assertIsNone(s._strata_clip_ref({}))
+
+
 def eye(open_ratio: float):
     """Synthetic eye landmarks: unit-width eye whose EAR ≈ open_ratio."""
     half = open_ratio / 2.0
@@ -138,6 +160,14 @@ class CutCandidatesTests(unittest.TestCase):
                 conn, self.clip_uuid, "motion_energy", motion,
                 sample_rate=10.0, source="motion_v1", analyzer_version="1.0",
             )
+
+    def test_rejects_nonpositive_fps(self) -> None:
+        for bad in (0, 0.0, -24.0):
+            result = strata_queries.cut_candidates(
+                self.root, self.clip_uuid, 2.5, fps=bad
+            )
+            self.assertFalse(result["success"], result)
+            self.assertIn("fps", result["error"])
 
     def test_blink_in_pause_wins(self) -> None:
         result = strata_queries.cut_candidates(self.root, self.clip_uuid, 2.5, window_seconds=0.3)
