@@ -2,6 +2,91 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.61.0
+
+Perception strata — a timecoded track model over every analyzed clip, plus the
+query layer that turns it into editorial answers. Ten new `media_analysis`
+actions, all local compute (ffmpeg + numpy; the face tier detects opencv +
+mediapipe and degrades honestly when absent). Everything measures, compares,
+flags, or aims — nothing decides; the cut is the editor's.
+
+### Added
+
+- **Schema v13: perception strata** — two generic track shapes instead of a
+  table per sensor: `events` (point/span occurrences: pause, breath,
+  hesitation, blink, beat, downbeat, …) and `curves` (float32 time series:
+  pitch, vocal_energy, speech_rate, motion_energy, face curves), plus two
+  promotions out of the report blob: `transcript_words` (per-word timestamps
+  as queryable rows) and `story_beats` (units of meaning over the transcript).
+  Machine re-runs replace their own rows; `source='human'` rows are append-only
+  and always win.
+- **Local analyzers (`strata_run`)** — prosody (pitch/energy/speech-rate curves
+  + pause/breath/hesitation events), beat grid (beat/downbeat + tempo), motion
+  energy (per-frame luma difference), and face strata (blink/gaze/expression
+  via opencv + mediapipe when installed). `strata_status` reports the per-clip
+  track inventory and what this machine can run; `backfill_words` promotes
+  word timestamps already sitting in stored report blobs — no re-analysis.
+- **`take_diff(clip_a, clip_b, text?)`** — align two deliveries of the same
+  line on transcript words and diff pace, pauses, pitch, and energy. Deltas
+  only; it never picks a winner.
+- **`cut_candidates(clip_id, time_seconds)`** — the joint solver: scores every
+  frame around an intended cut on the cut-point grammar (cut on the blink,
+  don't cut mid-word, don't bisect a breath, pauses are doors, land on the
+  beat, cut inside movement) with human-readable reasons per candidate and
+  honest reporting of missing tracks.
+- **`strata_query`** — the strata as one queryable surface: windowed
+  cross-track bundles per clip, or project-wide word find with a joined
+  ±context bundle per hit. **`timeline_strata`** projects clip strata through
+  a versioned timeline's recorded placements.
+- **Story beats (host-LLM pass)** — `plan_story_beats` assembles a timecoded
+  digest + JSON schema (the server never calls an LLM), the host chat produces
+  the beats, `commit_story_beats` validates and persists them append-only;
+  `list_story_beats` reads them back.
+- **Schema v14: timeline timebase snapshot** — `timeline_versions` now records
+  the timeline's fps and start frame at archive time, so `timeline_strata`
+  returns timeline-relative frames/seconds instead of assuming 24fps against
+  absolute (start-timecode-inclusive) snapshot frames.
+
+### Fixed
+
+Pre-release review (multi-agent, 8 finder angles + adversarial verification)
+caught and fixed before anything shipped:
+
+- **Re-ingest cascade wipe** — the ingest `INSERT OR REPLACE` on the clips row
+  cascade-deleted every clip-child table under `PRAGMA foreign_keys=ON`. The
+  legacy children are rebuilt during ingest, so this was invisible until the
+  strata tables (which ingest does NOT rebuild — human annotations included)
+  landed on the same cascade. The clips row is now a true upsert and is never
+  deleted.
+- **Words-less re-analysis wiped word rows** — `ingest_transcript_words`
+  deleted before validating; a re-analysis without transcription (or a mixed
+  report whose words lived only at the top level) silently destroyed
+  previously backfilled rows. Now parses first, preserves existing rows when
+  the incoming report has no words, and falls back per-segment to the
+  top-level words list.
+- **Machine story-beat commits could replace human rows** — the content-hash
+  `beat_uuid` let `INSERT OR REPLACE` overwrite a human beat sharing the same
+  span+label and erased supersede history on identical recommits. Beat rows
+  now get random UUIDs and plain INSERTs; duplicate spans within one commit
+  are skipped and reported.
+- **Dispatch hardening** — stringified numbers from LLM clients no longer
+  crash `strata_query` (TypeError in curve slicing) or silently redirect
+  `timeline_strata` to the latest version; `cut_candidates` rejects
+  non-positive fps instead of ZeroDivisionError; word matches escape SQL LIKE
+  metacharacters; clip bundles fetch every recorded track (gesture_boundary,
+  loudness, custom human tracks) instead of a hardcoded subset; analyzer
+  ffmpeg calls go through the stdio-safe `proc.safe_run`; a broken
+  mediapipe/protobuf install degrades to "face unavailable" instead of
+  crashing `strata_status`.
+
+### Validation
+
+- Full offline suite: 1,418 tests green (17 new regression tests covering the
+  fixes above). Static checks, drift guards, npm pack, and API-parity audit
+  all pass. No live Resolve behavior changed beyond two defensive getter reads
+  (`GetSetting("timelineFrameRate")`, `GetStartFrame()`) at archive time, both
+  try/except-guarded and unit-tested against mock timelines.
+
 ## What's New in v2.60.0
 
 A community bug-fix bundle — three external contributions plus the three issues

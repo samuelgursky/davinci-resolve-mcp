@@ -551,8 +551,10 @@ Key actions: `capabilities`, `install_guidance`, `resolve_output_root`, `plan`,
 `list_corrections`, `deepen`, `commit_shot_vision`, `vision_pending_sweep`,
 `build_embeddings`, `find_similar`, `detect_entities`, `commit_entities`,
 `list_entities`, `prepare_bin_briefing`, `commit_bin_summary`,
-`detect_shot_relationships`, `commit_shot_relationships`, and
-`list_shot_relationships`.
+`detect_shot_relationships`, `commit_shot_relationships`,
+`list_shot_relationships`, `strata_status`, `backfill_words`, `strata_run`,
+`take_diff`, `cut_candidates`, `strata_query`, `timeline_strata`,
+`plan_story_beats`, `commit_story_beats`, and `list_story_beats`.
 
 **Cross-clip entities + bin briefing v2 (v2.44.0+).** Recurring
 people/places/props across a project's media, found cheaply and confirmed
@@ -595,6 +597,40 @@ no editorial suggestions): `same_setup_as` / `alt_take_of` (symmetric) and
   Relationships group fills from these rows, and `plan_swap` prefers
   confirmed `alt_take_of` alternates over raw cosine (the rationale states
   which basis ranked each alternate).
+
+**Perception strata (v2.61.0+, schema v13/v14).** A timecoded track model over
+each analyzed clip — events (pause/breath/hesitation/blink/beat/downbeat/…),
+sampled curves (pitch/vocal_energy/speech_rate/motion_energy/face curves),
+per-word transcript rows, and story beats. Local compute only (ffmpeg + numpy;
+face tier needs opencv + mediapipe); machine re-runs replace their own rows,
+human rows are append-only and always win. These measure and rank — they never
+decide; the editor picks.
+- `strata_status(clip_id?)` — project or per-clip track inventory plus what
+  this machine can run (`analyzer_capabilities`).
+- `strata_run(clip_id, analyzers?)` — run prosody / beat_grid / motion_energy
+  / face on one clip (default: whatever is available locally).
+- `backfill_words()` — promote word timestamps already inside stored report
+  blobs into queryable `transcript_words` rows; idempotent, no re-analysis.
+- `take_diff(clip_a, clip_b, text?)` — align two takes on transcript words
+  and diff their delivery (pace, pauses, pitch, energy). Deltas only, no
+  winner.
+- `cut_candidates(clip_id, time_seconds, window_seconds?, fps?, limit?)` —
+  rank cut frames around an intended joint with human-readable reasons
+  (blink / word-gap / pause / breath / beat / motion); missing tracks are
+  reported, never treated as "no signal".
+- `strata_query(clip_id?, start_seconds?, end_seconds?, match_word?, …)` —
+  one queryable surface: a windowed cross-track bundle for a clip, or a
+  project-wide word find with a joined ±context bundle per hit.
+- `timeline_strata(timeline_name, timeline_version?, …)` — project clip
+  strata through a versioned timeline's recorded placements. Snapshot frames
+  are absolute record frames (start-timecode-inclusive); snapshots from
+  schema v14+ carry the timeline's fps/start frame so placements also get
+  timeline-relative frames and seconds.
+- `plan_story_beats(clip_id)` / `commit_story_beats(clip_id, beats)` /
+  `list_story_beats(clip_id)` — host-LLM pass over the transcript digest
+  (the server never calls an LLM): beats are units of meaning with types
+  (topic/claim/revelation/emotional/anecdote/question/callback), links, and
+  supersede semantics.
 
 **Embeddings + similarity (v2.43.0+).** Local-compute semantic search; no
 vendor tokens, so nothing here touches the caps ledger. Backends are
