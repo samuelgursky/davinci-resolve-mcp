@@ -85,7 +85,7 @@ from src.utils.media_analysis import (
     summarize_reports as summarize_media_analysis_reports,
 )
 from src.utils.sync_detection import detect_sync_events_for_records as detect_media_sync_events
-from src.utils import actor_identity, resolve_busy
+from src.utils import actor_identity, background_jobs, resolve_busy
 from src.utils.resolve_busy import long_resolve_op
 from src.utils.media_analysis_jobs import (
     MEDIA_EXTENSIONS,
@@ -1219,6 +1219,26 @@ def _err(message, *, code=None, category=None, retryable=_RETRYABLE_UNSET,
 
 def _ok(**kw):
     return {"success": True, **kw}
+
+
+def _run_maybe_background(label: str, params: Dict[str, Any], fn):
+    """Run a long Resolve operation synchronously, or off-thread when requested.
+
+    When params carries a truthy `background` (alias `async_job`), start a polled
+    job and return its id at once; otherwise run fn inside long_resolve_op and
+    return its result, preserving the synchronous contract.
+    """
+    if params.get("background") or params.get("async_job"):
+        job_id = background_jobs.start_job(label, fn)
+        return {
+            "success": True,
+            "job_id": job_id,
+            "status": "running",
+            "label": label,
+            "note": "poll with resolve_control(action='job_status', params={'job_id': ...})",
+        }
+    with long_resolve_op(label):
+        return fn()
 
 
 def _record_action_outcome(scope_key: Optional[str], action_name: str,
@@ -5416,38 +5436,41 @@ def _export_timeline_checked(tl, p: Dict[str, Any]):
     spec = _timeline_export_spec(p, get_resolve())
     if p.get("dry_run"):
         return _ok(path=path, would_export=True, spec={k: v for k, v in spec.items() if k != "export_type"})
-    with long_resolve_op("timeline.export_timeline_checked"):
+
+    def _work():
         success = bool(tl.Export(path, spec["export_type"], spec["export_subtype"]))
-    files = []
-    primary_file = path
-    if success and os.path.isdir(path):
-        for dirpath, _, filenames in os.walk(path):
-            for filename in filenames:
-                file_path = os.path.join(dirpath, filename)
-                files.append({"path": file_path, "size": os.path.getsize(file_path)})
-        preferred_exts = (".fcpxml", ".xml", ".edl", ".drt", ".aaf", ".otio")
-        for ext in preferred_exts:
-            match = next((row["path"] for row in files if row["path"].lower().endswith(ext)), None)
-            if match:
-                primary_file = match
-                break
-    size = 0
-    if success and os.path.exists(path):
-        if os.path.isdir(path):
-            size = sum(row["size"] for row in files)
-        else:
-            size = os.path.getsize(path)
-    return {
-        "success": success,
-        "path": path,
-        "primary_file": primary_file,
-        "is_directory": bool(success and os.path.isdir(path)),
-        "files": files,
-        "size": size,
-        "format": spec["requested"],
-        "export_type": spec["export_type_name"],
-        "export_subtype": spec["export_subtype_name"],
-    }
+        files = []
+        primary_file = path
+        if success and os.path.isdir(path):
+            for dirpath, _, filenames in os.walk(path):
+                for filename in filenames:
+                    file_path = os.path.join(dirpath, filename)
+                    files.append({"path": file_path, "size": os.path.getsize(file_path)})
+            preferred_exts = (".fcpxml", ".xml", ".edl", ".drt", ".aaf", ".otio")
+            for ext in preferred_exts:
+                match = next((row["path"] for row in files if row["path"].lower().endswith(ext)), None)
+                if match:
+                    primary_file = match
+                    break
+        size = 0
+        if success and os.path.exists(path):
+            if os.path.isdir(path):
+                size = sum(row["size"] for row in files)
+            else:
+                size = os.path.getsize(path)
+        return {
+            "success": success,
+            "path": path,
+            "primary_file": primary_file,
+            "is_directory": bool(success and os.path.isdir(path)),
+            "files": files,
+            "size": size,
+            "format": spec["requested"],
+            "export_type": spec["export_type_name"],
+            "export_subtype": spec["export_subtype_name"],
+        }
+
+    return _run_maybe_background("timeline.export_timeline_checked", p, _work)
 
 
 def _timeline_media_coverage(tl) -> Dict[str, Any]:
@@ -5636,74 +5659,76 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
             out["note"] = binary_relink_note
         return out
 
-    before_ids = set()
-    for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
-        tl_existing = proj.GetTimelineByIndex(index)
-        if tl_existing:
-            before_ids.add(str(tl_existing.GetUniqueId()))
-    with long_resolve_op("timeline.import_timeline_checked"):
+    def _work():
+        before_ids = set()
+        for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
+            tl_existing = proj.GetTimelineByIndex(index)
+            if tl_existing:
+                before_ids.add(str(tl_existing.GetUniqueId()))
         imported = mp.ImportTimelineFromFile(import_path, options)
 
-    # Resolve's API returns None even when it created an (offline) timeline. Detect
-    # the newly-created timeline via the before/after id diff so we never report a
-    # false "Failed to import" for what is really a partial success.
-    api_returned_object = bool(imported)
-    if not imported:
-        for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
-            t = proj.GetTimelineByIndex(index)
-            if t and str(t.GetUniqueId()) not in before_ids:
-                imported = t
-    if not imported:
-        if is_binary:
-            remediation = (
-                f"Resolve created no timeline from this {ext}. Verify it exports/opens in "
-                "Resolve directly, or convert to FCP7 XML / FCPXML upstream and import that."
+        # Resolve's API returns None even when it created an (offline) timeline. Detect
+        # the newly-created timeline via the before/after id diff so we never report a
+        # false "Failed to import" for what is really a partial success.
+        api_returned_object = bool(imported)
+        if not imported:
+            for index in range(1, int(proj.GetTimelineCount() or 0) + 1):
+                t = proj.GetTimelineByIndex(index)
+                if t and str(t.GetUniqueId()) not in before_ids:
+                    imported = t
+        if not imported:
+            if is_binary:
+                remediation = (
+                    f"Resolve created no timeline from this {ext}. Verify it exports/opens in "
+                    "Resolve directly, or convert to FCP7 XML / FCPXML upstream and import that."
+                )
+            elif sanitize:
+                remediation = None
+            else:
+                remediation = (
+                    "This XML may reference missing media or contain generator clips, which "
+                    "abort the scripting-API import. Retry with sanitize_media=True."
+                )
+            return _err(
+                "Failed to import timeline (Resolve created no timeline)",
+                remediation=remediation,
             )
-        elif sanitize:
-            remediation = None
-        else:
-            remediation = (
-                "This XML may reference missing media or contain generator clips, which "
-                "abort the scripting-API import. Retry with sanitize_media=True."
-            )
-        return _err(
-            "Failed to import timeline (Resolve created no timeline)",
-            remediation=remediation,
-        )
 
-    imported_id = str(imported.GetUniqueId())
-    media = _timeline_media_coverage(imported)
-    # AAF fuzzy-relink parity: when search roots are given for a binary import, relink through
-    # the media pool after import (the XML path-rewrite relink can't run on a binary file).
-    relink_result = None
-    if is_binary and search_roots:
-        relink_result = _binary_post_import_relink(imported, mp, search_roots)
-        if relink_result.get("after"):
-            media = relink_result["after"]
-    out = _ok(
-        name=imported.GetName(),
-        id=imported_id,
-        created_new=imported_id not in before_ids,
-        timeline_count=proj.GetTimelineCount(),
-        api_returned_object=api_returned_object,
-        media=media,
-    )
-    if sanitize_report is not None:
-        out["sanitize"] = sanitize_report
-    if relink_result is not None:
-        out["relink"] = relink_result
-    if binary_relink_note:
-        out["note"] = binary_relink_note
-    if media["total"] and media["offline"]:
-        msg = f"{media['offline']} of {media['total']} timeline items are offline (no linked media)."
-        if is_binary:
-            msg += (" Relink via the media pool (right-click → Relink Clips) or point Resolve "
-                    "at the media roots — AAF media links there, not by rewriting the file.")
-        elif not sanitize:
-            msg += (" Retry with sanitize_media=True to drop missing-media/generator "
-                    "clips so the remaining media links automatically.")
-        out["warning"] = msg
-    return out
+        imported_id = str(imported.GetUniqueId())
+        media = _timeline_media_coverage(imported)
+        # AAF fuzzy-relink parity: when search roots are given for a binary import, relink through
+        # the media pool after import (the XML path-rewrite relink can't run on a binary file).
+        relink_result = None
+        if is_binary and search_roots:
+            relink_result = _binary_post_import_relink(imported, mp, search_roots)
+            if relink_result.get("after"):
+                media = relink_result["after"]
+        out = _ok(
+            name=imported.GetName(),
+            id=imported_id,
+            created_new=imported_id not in before_ids,
+            timeline_count=proj.GetTimelineCount(),
+            api_returned_object=api_returned_object,
+            media=media,
+        )
+        if sanitize_report is not None:
+            out["sanitize"] = sanitize_report
+        if relink_result is not None:
+            out["relink"] = relink_result
+        if binary_relink_note:
+            out["note"] = binary_relink_note
+        if media["total"] and media["offline"]:
+            msg = f"{media['offline']} of {media['total']} timeline items are offline (no linked media)."
+            if is_binary:
+                msg += (" Relink via the media pool (right-click → Relink Clips) or point Resolve "
+                        "at the media roots — AAF media links there, not by rewriting the file.")
+            elif not sanitize:
+                msg += (" Retry with sanitize_media=True to drop missing-media/generator "
+                        "clips so the remaining media links automatically.")
+            out["warning"] = msg
+        return out
+
+    return _run_maybe_background("timeline.import_timeline_checked", p, _work)
 
 
 # A .drp/.drt is a zip of SeqContainer*.xml entries. Two on-disk naming conventions,
@@ -5806,11 +5831,13 @@ def _import_from_drp(proj, mp, p: Dict[str, Any]):
     else:
         selected = list(containers)
 
-    # Per-timeline options passthrough (importSourceClips etc.) minus selection keys.
+    # Per-timeline options passthrough (importSourceClips etc.) minus selection
+    # keys; background is a top-level option, so each sub-step import runs
+    # synchronously and the loop can verify it.
     base = {
         k: v
         for k, v in p.items()
-        if k not in ("drpPath", "drp_path", "path", "timelineNames", "timeline_names", "timelineIndexes", "timeline_indexes", "dry_run")
+        if k not in ("drpPath", "drp_path", "path", "timelineNames", "timeline_names", "timelineIndexes", "timeline_indexes", "dry_run", "background", "async_job")
     }
 
     tmp_dir = tempfile.mkdtemp(prefix="drp_import_")
@@ -6025,7 +6052,8 @@ def _probe_interchange_roundtrip(proj, mp, tl, p: Dict[str, Any]):
     spec = _timeline_export_spec(p, resolve)
     base_name = p.get("name") or f"roundtrip_{str(spec['requested']).lower()}"
     path = p.get("path") or os.path.join(output_dir, base_name + spec["extension"])
-    export_result = _export_timeline_checked(tl, {**p, "path": path, "require_temp_path": p.get("require_temp_path", True)})
+    # background is a top-level option; a sub-step export must run synchronously.
+    export_result = _export_timeline_checked(tl, {**p, "path": path, "require_temp_path": p.get("require_temp_path", True), "background": False, "async_job": False})
     if export_result.get("error") or not export_result.get("success"):
         return {"success": False, "stage": "export", "export": export_result}
     import_path = export_result.get("primary_file") or export_result.get("path") or path
@@ -7019,8 +7047,9 @@ def _subtitle_generation_probe(tl, p: Dict[str, Any]):
                    note="Pass allow_generate=True to call CreateSubtitlesFromAudio.")
     if not _has_method(tl, "CreateSubtitlesFromAudio"):
         return _err("CreateSubtitlesFromAudio unavailable")
-    with long_resolve_op("timeline.create_subtitles_from_audio"):
-        return _safe_create_subtitles(tl, p)
+    return _run_maybe_background(
+        "timeline.create_subtitles_from_audio", p, lambda: _safe_create_subtitles(tl, p)
+    )
 
 
 def _fairlight_boundary_report(proj, mp, tl, p: Dict[str, Any]):
@@ -12779,6 +12808,11 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         facts about quirky/unreliable Resolve API behavior (no connection needed).
       verification_stats() -> {stats}  — readback-verification tally
         (verified/contradicted/unverified) since server start (no connection needed).
+      job_status(job_id) -> {id, label, status, result?, error?, started_at, ended_at}
+        — poll a background job started by a long op run with background=True
+          (no connection needed). status is running, done, or error.
+      list_jobs() -> {jobs}  — compact status of every known background job
+        (no connection needed).
       get_page() -> {page}
       open_page(page) -> {success}  — page: edit, cut, color, fusion, fairlight, deliver
       get_keyframe_mode() -> {mode}
@@ -12808,6 +12842,18 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         stats = _verification_stats()
         return {"stats": stats, "note": "Counts since server start. A rising "
                 "'contradicted' count means the API reported success but a readback disagreed."}
+
+    # Background-job polling is a registry read — no Resolve connection needed.
+    if action == "job_status":
+        job_id = p.get("job_id")
+        if not job_id:
+            return _err("job_status requires job_id", category="invalid_input")
+        status = background_jobs.job_status(job_id)
+        if status is None:
+            return _err(f"Unknown job_id: {job_id}", category="invalid_input")
+        return status
+    if action == "list_jobs":
+        return {"jobs": background_jobs.list_jobs()}
 
     # Control-panel actions don't require Resolve to be running.
     if action == "open_control_panel":
@@ -12901,7 +12947,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             return missing
         r.DisableBackgroundTasksForCurrentResolveSession()
         return _ok()
-    return _unknown(action, ["launch","get_version","api_truth","verification_stats","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["launch","get_version","api_truth","verification_stats","job_status","list_jobs","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
@@ -15763,7 +15809,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       setup_multicam_timeline(name, clip_ids|angles, sync_mode?, include_audio?, dry_run?) -> {success}
         — creates a stacked multicam prep timeline: one angle per video track, optional
           matching audio tracks. Native multicam clip conversion remains a Resolve UI step.
-      import_timeline(path, options?) -> {success, name}
+      import_timeline(path, options?, background?) -> {success, name | job_id}
         UNSAFE. No path sandboxing. Prefer timeline.import_timeline_checked.
       delete_timelines(timeline_ids) -> {success}
         CATASTROPHIC. Deletes timelines outright.
@@ -15948,14 +15994,17 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         # Whitelist options to the documented keys; Resolve silently ignores
         # unknown keys, so a typo would be dropped with no signal (P1 #4).
         options, ignored_opts = _filter_to_keys(p.get("options", {}), _IMPORT_TIMELINE_OPTION_KEYS)
-        with long_resolve_op("media_pool.import_timeline"):
+
+        def _work():
             tl = mp.ImportTimelineFromFile(p["path"], options)
-        if not tl:
-            return _err("Failed to import timeline")
-        result = _ok(name=tl.GetName())
-        if ignored_opts:
-            result["ignored_options"] = ignored_opts
-        return result
+            if not tl:
+                return _err("Failed to import timeline")
+            result = _ok(name=tl.GetName())
+            if ignored_opts:
+                result["ignored_options"] = ignored_opts
+            return result
+
+        return _run_maybe_background("media_pool.import_timeline", p, _work)
     elif action == "delete_timelines":
         count = proj.GetTimelineCount()
         timelines = []
@@ -16206,7 +16255,7 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       is_stale(path?) -> {stale}
       get_unique_id(path?) -> {id}
       export(path?, export_path) -> {success}
-      transcribe_audio(path?, use_speaker_detection?) -> {success}  — use_speaker_detection is Resolve 21+
+      transcribe_audio(path?, use_speaker_detection?, background?) -> {success | job_id}  — use_speaker_detection is Resolve 21+; background=true returns a job_id (poll resolve_control job_status)
       clear_transcription(path?) -> {success}
       perform_audio_classification(path?) -> {success}  — Resolve 21+
       clear_audio_classification(path?) -> {success}  — Resolve 21+
@@ -16241,10 +16290,12 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     elif action == "transcribe_audio":
         usd = _first_param(p, "use_speaker_detection", "useSpeakerDetection")
         if usd is None:
-            with long_resolve_op("folder.transcribe_audio"):
-                return {"success": bool(f.TranscribeAudio())}
-        with long_resolve_op("folder.transcribe_audio"):
-            return {"success": bool(f.TranscribeAudio(bool(usd)))}
+            return _run_maybe_background(
+                "folder.transcribe_audio", p, lambda: {"success": bool(f.TranscribeAudio())}
+            )
+        return _run_maybe_background(
+            "folder.transcribe_audio", p, lambda: {"success": bool(f.TranscribeAudio(bool(usd)))}
+        )
     elif action == "clear_transcription":
         return {"success": bool(f.ClearTranscription())}
     elif action == "perform_audio_classification":
@@ -16358,7 +16409,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       monitor_growing_file(clip_id) -> {success}
       replace_clip_preserve_sub_clip(clip_id, path) -> {success}
       get_unique_id(clip_id) -> {id}
-      transcribe_audio(clip_id, use_speaker_detection?) -> {success}  — use_speaker_detection is Resolve 21+
+      transcribe_audio(clip_id, use_speaker_detection?, background?) -> {success | job_id}  — use_speaker_detection is Resolve 21+; background=true returns a job_id (poll resolve_control job_status)
       clear_transcription(clip_id) -> {success}
       get_transcription(clip_id) -> {text, truncated, status, has_transcription}
         Read a clip's transcription. `truncated` flags when Resolve's preview
@@ -16580,10 +16631,12 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "transcribe_audio":
         usd = _first_param(p, "use_speaker_detection", "useSpeakerDetection")
         if usd is None:
-            with long_resolve_op("media_pool_item.transcribe_audio"):
-                return {"success": bool(clip.TranscribeAudio())}
-        with long_resolve_op("media_pool_item.transcribe_audio"):
-            return {"success": bool(clip.TranscribeAudio(bool(usd)))}
+            return _run_maybe_background(
+                "media_pool_item.transcribe_audio", p, lambda: {"success": bool(clip.TranscribeAudio())}
+            )
+        return _run_maybe_background(
+            "media_pool_item.transcribe_audio", p, lambda: {"success": bool(clip.TranscribeAudio(bool(usd)))}
+        )
     elif action == "clear_transcription":
         return {"success": bool(clip.ClearTranscription())}
     elif action == "get_transcription":
@@ -18996,7 +19049,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       create_fusion_clip(clip_ids) -> {success}
       import_into_timeline(path, options?) -> {success}
         UNSAFE. No path sandboxing. Prefer import_timeline_checked.
-      export(path, type, subtype?) -> {success}  — type: AAF, EDL, FCPXML, etc.
+      export(path, type, subtype?, background?) -> {success | job_id}  — type: AAF, EDL, FCPXML, etc.
         UNSAFE. No path sandboxing. Prefer export_timeline_checked.
       get_setting(name?) -> {settings}
       set_setting(name, value) -> {success}
@@ -19039,8 +19092,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       probe_timeline_structure(track_types?, include_markers?, include_clip_properties?) -> {tracks, markers}
       detect_gaps_overlaps(track_types?, min_gap?) -> {gaps, overlaps}
       source_range_report(handles?, merge?) -> {ranges, occurrences}
-      export_timeline_checked(path, format?|type?, subtype?, require_temp_path?, dry_run?) -> {success, path, size}
-      import_timeline_checked(path, options?, timeline_name?, import_source_clips?, sanitize_media?, require_temp_path?, dry_run?) -> {success, name, id, media, sanitize?, warning?}
+      export_timeline_checked(path, format?|type?, subtype?, require_temp_path?, dry_run?, background?) -> {success, path, size | job_id}
+      import_timeline_checked(path, options?, timeline_name?, import_source_clips?, sanitize_media?, require_temp_path?, dry_run?, background?) -> {success, name, id, media, sanitize?, warning? | job_id}
         Imports an FCP7 xmeml / FCPXML / AAF timeline. AAF (.aaf) is read natively by
         Resolve — the XML sanitize pass is SKIPPED for it (media relinks via the media
         pool, not by rewriting the file); a `note` says so. For AAF, passing
@@ -19346,13 +19399,16 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         # friendly type/subtype names (or EXPORT_* constant names) the same way
         # export_timeline_checked does. This raw action keeps no path sandbox.
         spec = _timeline_export_spec(p, get_resolve())
-        with long_resolve_op("timeline.export"):
+
+        def _work():
             success = bool(tl.Export(p["path"], spec["export_type"], spec["export_subtype"]))
-        return {
-            "success": success,
-            "export_type": spec["export_type_name"],
-            "export_subtype": spec["export_subtype_name"],
-        }
+            return {
+                "success": success,
+                "export_type": spec["export_type_name"],
+                "export_subtype": spec["export_subtype_name"],
+            }
+
+        return _run_maybe_background("timeline.export", p, _work)
     elif action == "get_setting":
         return {"settings": _ser(tl.GetSetting(p.get("name", "")))}
     elif action == "set_setting":
@@ -19801,9 +19857,11 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
     """AI and analysis operations on the current timeline.
 
     Actions:
-      create_subtitles(settings?) -> {success}  — auto-caption from audio
-      detect_scene_cuts() -> {success}
-      analyze_dolby_vision(clip_ids?, analysis_type?) -> {success}
+      create_subtitles(settings?, background?) -> {success | job_id}  — auto-caption from audio.
+        These are long ops: background=true returns a job_id immediately; poll
+        resolve_control(action="job_status", params={"job_id": ...}).
+      detect_scene_cuts(background?) -> {success | job_id}
+      analyze_dolby_vision(clip_ids?, analysis_type?, background?) -> {success | job_id}
       grab_still() -> {success}
       grab_all_stills(source?) -> {count}
     """
@@ -19813,11 +19871,13 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         return err
 
     if action == "create_subtitles":
-        with long_resolve_op("timeline_ai.create_subtitles"):
-            return _safe_create_subtitles(tl, p)
+        return _run_maybe_background(
+            "timeline_ai.create_subtitles", p, lambda: _safe_create_subtitles(tl, p)
+        )
     elif action == "detect_scene_cuts":
-        with long_resolve_op("timeline_ai.detect_scene_cuts"):
-            return {"success": bool(tl.DetectSceneCuts())}
+        return _run_maybe_background(
+            "timeline_ai.detect_scene_cuts", p, lambda: {"success": bool(tl.DetectSceneCuts())}
+        )
     elif action == "analyze_dolby_vision":
         clip_ids = p.get("clip_ids", [])
         items = []
@@ -19828,8 +19888,10 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                         if it.GetUniqueId() in clip_ids:
                             items.append(it)
         analysis_type = p.get("analysis_type")
-        with long_resolve_op("timeline_ai.analyze_dolby_vision"):
-            return {"success": bool(tl.AnalyzeDolbyVision(items, analysis_type))}
+        return _run_maybe_background(
+            "timeline_ai.analyze_dolby_vision", p,
+            lambda: {"success": bool(tl.AnalyzeDolbyVision(items, analysis_type))},
+        )
     elif action == "grab_still":
         still = tl.GrabStill()
         return _ok() if still else _err("Failed to grab still")
