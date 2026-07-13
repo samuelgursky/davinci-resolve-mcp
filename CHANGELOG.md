@@ -2,6 +2,46 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.61.1
+
+The strata cleanup batch deferred from the v2.61.0 review — behavior-neutral
+consolidation and hot-path efficiency. No new actions or parameters.
+
+### Changed
+
+- **One clip resolver** — `strata.resolve_clip()` replaces the four drifting
+  per-module wrappers, and rides the pre-v9 auto-ingest fallback hoisted out
+  of deep_vision into `analysis_store.resolve_clip_uuid_ingesting()`: a clip
+  ref that resolves for `deepen` now resolves identically for every strata
+  action, including on older analysis roots.
+- **One float32 codec** — `pack_curve`/`unpack_curve` delegate to
+  `embeddings.pack_vector`/`unpack_vector` instead of duplicating the BLOB
+  convention.
+- **Decode once** — `strata_run` decodes the media file a single time when
+  several audio analyzers run (prosody + beat_grid previously each ran a full
+  ffmpeg decode); the shared `_audio_context` preamble also collapses their
+  duplicated require/resolve/decode blocks.
+- **Registry-derived capabilities** — `ANALYZERS` carries run function plus
+  requires/writes metadata; `capabilities()` derives from it, so adding an
+  analyzer is one entry.
+- **Query-layer caching** — word-find hits clustering in one clip unpack each
+  curve blob once, and `timeline_strata` resolves + bundles a source clip
+  reused across many placements once.
+- **Sargable event windows (schema v15)** — windowed `read_events` bounds its
+  span-overlap lower edge by the track's `MAX(duration_seconds)` (a b-tree
+  descent via the new `ix_events_clip_track_span` index) so
+  `ix_events_clip_track` range-seeks instead of scanning the track.
+- `backfill_words` iterates report blobs lazily with a transcription
+  prefilter instead of loading every blob into memory; `detect_breaths`
+  drops its unreachable non-numpy fallbacks.
+
+### Validation
+
+- Full offline suite: 1,431 tests green (13 new covering the shared resolver
+  + pre-v9 fallback, codec identity, decode-once, per-clip caching, long-span
+  window overlap, and the index range-seek query plan). No Resolve behavior
+  changed; live test not required.
+
 ## What's New in v2.61.0
 
 Perception strata — a timecoded track model over every analyzed clip, plus the
