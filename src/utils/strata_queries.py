@@ -175,6 +175,172 @@ def take_diff(
     }
 
 
+# ── cut_candidates — the joint solver ────────────────────────────────────────
+#
+# Frame-level cut-point grammar, scored from whatever tracks exist:
+#   cut on the blink · cut inside movement, not at its poles · don't cut
+#   mid-word · don't bisect a breath · pauses are doors · land on the beat.
+# Each feature contributes points AND a human-readable reason; missing
+# tracks are reported, never silently treated as "no signal".
+
+_CUT_WEIGHTS = {
+    "mid_word": -3.0,
+    "word_gap": 1.0,
+    "in_pause": 2.0,
+    "on_blink": 2.0,
+    "bisects_breath": -1.5,
+    "clears_breath": 0.75,
+    "on_beat": 1.0,
+    "in_motion_max": 0.75,
+    "dead_still": -0.5,
+}
+
+_BLINK_TOLERANCE_FRAMES = 1.5
+_BEAT_TOLERANCE_SECONDS = 0.05
+_BREATH_CLEAR_SECONDS = 0.3
+
+
+def cut_candidates(
+    project_root: str,
+    clip_ref: Any,
+    time_seconds: float,
+    *,
+    window_seconds: float = 0.35,
+    fps: Optional[float] = None,
+    limit: int = 7,
+) -> Dict[str, Any]:
+    """Rank candidate cut frames around an intended joint, with reasons.
+
+    Scores every frame in ±window_seconds on the cut-point grammar using the
+    clip's available strata. Returns ranked candidates; the top row is a
+    recommendation to *look at*, not a decision — aim, never decide.
+    """
+    uuid_, err = _resolve(project_root, clip_ref)
+    if err:
+        return err
+    conn = timeline_brain_db.connect(project_root)
+    if fps is None:
+        row = conn.execute("SELECT fps, duration_seconds FROM clips WHERE clip_uuid = ?", (uuid_,)).fetchone()
+        fps = float(row["fps"]) if row and row["fps"] else 24.0
+    frame_dur = 1.0 / fps
+
+    lo = max(0.0, time_seconds - window_seconds)
+    hi = time_seconds + window_seconds
+    fetch_lo, fetch_hi = lo - 2.0, hi + 2.0
+
+    words = strata.read_words(conn, uuid_, start_seconds=fetch_lo, end_seconds=fetch_hi)
+    pauses = strata.read_events(conn, uuid_, "pause", start_seconds=fetch_lo, end_seconds=fetch_hi)
+    breaths = strata.read_events(conn, uuid_, "breath", start_seconds=fetch_lo, end_seconds=fetch_hi)
+    blinks = strata.read_events(conn, uuid_, "blink", start_seconds=fetch_lo, end_seconds=fetch_hi)
+    beats = strata.read_events(conn, uuid_, "beat", start_seconds=fetch_lo, end_seconds=fetch_hi)
+    motion = strata.read_curve(conn, uuid_, "motion_energy")
+
+    tracks_used = []
+    tracks_missing = []
+    for name, present in (
+        ("transcript_words", bool(words)),
+        ("pause", bool(pauses)),
+        ("breath", bool(breaths)),
+        ("blink", bool(blinks)),
+        ("beat", bool(beats)),
+        ("motion_energy", motion is not None),
+    ):
+        (tracks_used if present else tracks_missing).append(name)
+
+    def score_frame(t: float) -> Tuple[float, List[str]]:
+        score = 0.0
+        reasons: List[str] = []
+
+        if words:
+            inside = next(
+                (
+                    w for w in words
+                    if isinstance(w.get("start_seconds"), (int, float))
+                    and isinstance(w.get("end_seconds"), (int, float))
+                    and w["start_seconds"] <= t < w["end_seconds"]
+                ),
+                None,
+            )
+            if inside:
+                score += _CUT_WEIGHTS["mid_word"]
+                reasons.append(f"mid-word — bisects “{inside['word']}”")
+            else:
+                score += _CUT_WEIGHTS["word_gap"]
+                reasons.append("between words")
+
+        for pause in pauses:
+            start = float(pause["time_seconds"])
+            dur = float(pause.get("duration_seconds") or 0.0)
+            if start <= t < start + dur:
+                score += _CUT_WEIGHTS["in_pause"]
+                reasons.append(f"inside a {dur:.2f}s pause")
+                break
+
+        for blink in blinks:
+            if abs(t - float(blink["time_seconds"])) <= _BLINK_TOLERANCE_FRAMES * frame_dur:
+                score += _CUT_WEIGHTS["on_blink"]
+                reasons.append("lands on a blink")
+                break
+
+        for breath in breaths:
+            b_start = float(breath["time_seconds"])
+            b_end = b_start + float(breath.get("duration_seconds") or 0.25)
+            if b_start <= t < b_end:
+                score += _CUT_WEIGHTS["bisects_breath"]
+                reasons.append("bisects a breath")
+                break
+            if 0.0 <= t - b_end <= _BREATH_CLEAR_SECONDS:
+                score += _CUT_WEIGHTS["clears_breath"]
+                reasons.append("clears the inhale")
+                break
+
+        for beat in beats:
+            if abs(t - float(beat["time_seconds"])) <= _BEAT_TOLERANCE_SECONDS:
+                score += _CUT_WEIGHTS["on_beat"]
+                reasons.append("on the musical beat")
+                break
+
+        if motion is not None:
+            v = strata.curve_value_at(motion, t)
+            if v is not None:
+                if v >= 0.2:
+                    bonus = _CUT_WEIGHTS["in_motion_max"] * min(v, 1.0)
+                    score += bonus
+                    reasons.append(f"inside movement (energy {v:.2f})")
+                elif v < 0.05:
+                    score += _CUT_WEIGHTS["dead_still"]
+                    reasons.append("dead stillness")
+
+        return score, reasons
+
+    candidates = []
+    n_frames = int(round((hi - lo) / frame_dur)) + 1
+    for i in range(n_frames):
+        t = lo + i * frame_dur
+        score, reasons = score_frame(t)
+        candidates.append(
+            {
+                "time_seconds": round(t, 4),
+                "frame_offset": int(round((t - time_seconds) * fps)),
+                "score": round(score, 3),
+                "reasons": reasons,
+            }
+        )
+    candidates.sort(key=lambda c: (-c["score"], abs(c["frame_offset"])))
+
+    return {
+        "success": True,
+        "clip_uuid": uuid_,
+        "requested_time_seconds": time_seconds,
+        "fps": fps,
+        "window_seconds": window_seconds,
+        "candidates": candidates[: max(1, limit)],
+        "tracks_used": tracks_used,
+        "tracks_missing": tracks_missing,
+        "note": "ranked evidence, not a decision — the editor picks the frame",
+    }
+
+
 def _best_text_window(words: List[Dict[str, Any]], text: str) -> List[Dict[str, Any]]:
     """Narrow a take's words to the window best matching `text`."""
     target = [_norm_word(t) for t in text.split() if _norm_word(t)]

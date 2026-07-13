@@ -16747,8 +16747,9 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       cleanup_artifacts(frames_only=true) -> remove generated frame artifacts only
       strata_status(clip_id?) -> perception-strata inventory (events/curves/words/story beats) for the project or one clip
       backfill_words(analysis_root?) -> promote word timestamps from stored report blobs into transcript_words rows
-      strata_run(clip_id, analyzers?) -> run local strata analyzers (prosody | beat_grid | motion_energy) on one clip
+      strata_run(clip_id, analyzers?) -> run local strata analyzers (prosody | beat_grid | motion_energy | face) on one clip; default = whatever this machine can run
       take_diff(clip_a, clip_b, text?) -> align two takes on transcript words and diff their delivery (pace, pauses, pitch, energy) — measures only, never picks
+      cut_candidates(clip_id, time_seconds, window_seconds?, fps?, limit?) -> rank cut frames around an intended joint with reasons (blink/pause/word-gap/breath/beat/motion) — aims, never decides
 
     Analysis outputs stay under a davinci-resolve-mcp-analysis project root
     and are validated so they are never written beside source media. Executed
@@ -17052,6 +17053,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "backfill_words",
         "strata_run",
         "take_diff",
+        "cut_candidates",
     }:
         root = resolve_media_analysis_output_root(
             project_name=project_name,
@@ -17138,6 +17140,20 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             if not clip_a or not clip_b:
                 return _err("take_diff requires clip_a and clip_b")
             return strata_queries.take_diff(project_root, clip_a, clip_b, text=p.get("text") or p.get("line"))
+        if action == "cut_candidates":
+            from src.utils import strata_queries
+            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            t = p.get("time_seconds") if isinstance(p.get("time_seconds"), (int, float)) else p.get("timeSeconds")
+            if not clip_ref or not isinstance(t, (int, float)):
+                return _err("cut_candidates requires clip_id and time_seconds")
+            return strata_queries.cut_candidates(
+                project_root,
+                clip_ref,
+                float(t),
+                window_seconds=float(p.get("window_seconds", p.get("windowSeconds", 0.35)) or 0.35),
+                fps=float(p["fps"]) if isinstance(p.get("fps"), (int, float)) else None,
+                limit=int(p.get("limit", 7) or 7),
+            )
         # Phase B — deep shot-level vision tier.
         if action == "deepen":
             from src.utils import deep_vision
@@ -17700,6 +17716,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "backfill_words",
         "strata_run",
         "take_diff",
+        "cut_candidates",
         "get_caps",
         "set_caps_preset",
         "get_usage",

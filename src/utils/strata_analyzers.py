@@ -83,8 +83,15 @@ def capabilities() -> Dict[str, Any]:
                 "requires": ["ffmpeg"],
                 "writes": {"curves": ["motion_energy"]},
             },
+            "face": _face_capability(),
         },
     }
+
+
+def _face_capability() -> Dict[str, Any]:
+    from src.utils import strata_faces
+
+    return strata_faces.capabilities()
 
 
 def _require(*needs: str) -> Optional[Dict[str, Any]]:
@@ -605,10 +612,17 @@ def run_motion_energy(project_root: str, clip_ref: Any, timeout: int = 1800) -> 
 
 # ── dispatcher ───────────────────────────────────────────────────────────────
 
+def _run_face(project_root: str, clip_ref: Any) -> Dict[str, Any]:
+    from src.utils import strata_faces
+
+    return strata_faces.run_face_strata(project_root, clip_ref)
+
+
 ANALYZERS = {
     "prosody": run_prosody,
     "beat_grid": run_beat_grid,
     "motion_energy": run_motion_energy,
+    "face": _run_face,
 }
 
 
@@ -617,8 +631,19 @@ def run_analyzers(
     clip_ref: Any,
     analyzers: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
-    """Run one or more analyzers on a clip; per-analyzer honest results."""
-    names = list(analyzers) if analyzers else list(ANALYZERS)
+    """Run analyzers on a clip; per-analyzer honest results.
+
+    Explicitly-requested analyzers run (and fail loudly if deps are
+    missing); the default set runs only what this machine can run, and
+    names what it skipped.
+    """
+    caps = capabilities()["analyzers"]
+    if analyzers:
+        names = list(analyzers)
+        skipped: List[str] = []
+    else:
+        names = [n for n in ANALYZERS if caps.get(n, {}).get("available")]
+        skipped = [n for n in ANALYZERS if n not in names]
     unknown = [n for n in names if n not in ANALYZERS]
     if unknown:
         return {
@@ -627,7 +652,10 @@ def run_analyzers(
             "available": sorted(ANALYZERS),
         }
     results = {name: ANALYZERS[name](project_root, clip_ref) for name in names}
-    return {
+    out: Dict[str, Any] = {
         "success": all(r.get("success") for r in results.values()),
         "results": results,
     }
+    if skipped:
+        out["skipped_unavailable"] = skipped
+    return out
