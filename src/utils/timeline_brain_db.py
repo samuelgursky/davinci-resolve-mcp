@@ -29,7 +29,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 
 logger = logging.getLogger("resolve-mcp.timeline-brain-db")
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 DB_FILENAME = "timeline_brain.sqlite"
 SOUL_DIRNAME = "_soul"
 
@@ -800,6 +800,109 @@ def _migrate_v12_shot_relationships(conn: sqlite3.Connection) -> None:
             ON shot_relationships(target_shot_uuid) WHERE superseded_at IS NULL;
         CREATE INDEX IF NOT EXISTS idx_relationships_type
             ON shot_relationships(relationship_type) WHERE superseded_at IS NULL;
+        """
+    )
+
+
+@register_migration(13)
+def _migrate_v13_perception_strata(conn: sqlite3.Connection) -> None:
+    """Perception strata — the timecoded track model (strata spec §schema).
+
+    Every analyzer becomes a *track writer* into two generic shapes instead
+    of a table per sensor:
+
+    - ``events``  — point/span occurrences on clip time (blink, breath,
+      pause, beat, downbeat, gesture_boundary, …).
+    - ``curves``  — sampled time series on clip time (pitch, vocal_energy,
+      speech_rate, motion_energy, loudness, …). Values are float32 arrays
+      (same BLOB convention as ``embeddings.vector``); NaN encodes
+      "no signal at this sample" (e.g. pitch during silence).
+
+    Plus two promotions out of the report blob:
+
+    - ``transcript_words`` — per-word timestamps (already computed at
+      transcription time, previously blob-only) as queryable rows.
+    - ``story_beats`` — units of meaning over the transcript (topic /
+      claim / emotional spans), append-only with the same supersede
+      semantics as subjective_fields; human rows always win.
+
+    All times are clip-relative seconds (the v12 convention). Machine
+    re-runs replace their own (clip, track, source) rows; rows with
+    source='human' are never touched by machine writers.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_uuid TEXT NOT NULL,
+            track TEXT NOT NULL,
+            time_seconds REAL NOT NULL,
+            duration_seconds REAL,
+            payload_json TEXT,
+            source TEXT NOT NULL,
+            analyzer_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (clip_uuid) REFERENCES clips(clip_uuid) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_events_clip_track
+            ON events(clip_uuid, track, time_seconds);
+        CREATE INDEX IF NOT EXISTS ix_events_track
+            ON events(track);
+
+        CREATE TABLE IF NOT EXISTS curves (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_uuid TEXT NOT NULL,
+            track TEXT NOT NULL,
+            start_seconds REAL NOT NULL,
+            sample_rate REAL NOT NULL,
+            values_blob BLOB NOT NULL,
+            stats_json TEXT,
+            source TEXT NOT NULL,
+            analyzer_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(clip_uuid, track, source),
+            FOREIGN KEY (clip_uuid) REFERENCES clips(clip_uuid) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_curves_clip ON curves(clip_uuid, track);
+
+        CREATE TABLE IF NOT EXISTS transcript_words (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clip_uuid TEXT NOT NULL,
+            segment_index INTEGER NOT NULL,
+            word_index INTEGER NOT NULL,
+            word TEXT NOT NULL,
+            start_seconds REAL,
+            end_seconds REAL,
+            confidence REAL,
+            UNIQUE(clip_uuid, segment_index, word_index),
+            FOREIGN KEY (clip_uuid) REFERENCES clips(clip_uuid) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_words_clip_time
+            ON transcript_words(clip_uuid, start_seconds);
+
+        CREATE TABLE IF NOT EXISTS story_beats (
+            beat_uuid TEXT PRIMARY KEY,
+            clip_uuid TEXT NOT NULL,
+            start_seconds REAL NOT NULL,
+            end_seconds REAL NOT NULL,
+            beat_type TEXT,
+            label TEXT,
+            summary TEXT,
+            entities_json TEXT,
+            links_json TEXT,
+            confidence TEXT,
+            source TEXT NOT NULL,
+            author TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            superseded_at TEXT,
+            FOREIGN KEY (clip_uuid) REFERENCES clips(clip_uuid) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_story_beats_clip
+            ON story_beats(clip_uuid, start_seconds) WHERE superseded_at IS NULL;
         """
     )
 

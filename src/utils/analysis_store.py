@@ -473,6 +473,12 @@ def ingest_report(
                 ),
             )
 
+        # Word-level timestamps (v13): promote segments[*].words to rows so
+        # word-boundary queries never have to parse the report blob.
+        from src.utils import strata as _strata
+
+        words_written = _strata.ingest_transcript_words(conn, clip_uuid, transcription)
+
         # Sampled frames. Shot mapping uses frame_indices_used when present,
         # with a time-containment fallback (some commit paths don't record
         # which frame indices fed which shot).
@@ -576,6 +582,7 @@ def ingest_report(
         "shot_count": len(shot_entries),
         "subjective_fields_written": subj_written,
         "subjective_fields_preserved_human": subj_skipped_human,
+        "transcript_words_written": words_written,
     }
 
 

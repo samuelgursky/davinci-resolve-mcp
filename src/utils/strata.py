@@ -1,0 +1,532 @@
+"""Perception strata — store + query layer for the timecoded track model.
+
+The strata are per-clip, timecoded annotation tracks in the per-project
+timeline-brain DB (schema v13+): ``events`` (point/span occurrences),
+``curves`` (sampled float32 series), ``transcript_words`` (word-level
+timestamps promoted out of the report blob), and ``story_beats`` (units of
+meaning with supersede semantics).
+
+Design rules (mirrors analysis_store):
+- All times are clip-relative seconds. Timeline/record-time projection is a
+  query-layer concern (via timeline_clip_usage), never an analyzer concern.
+- Analyzers are *track writers*: a machine re-run replaces its own
+  (clip, track, source) rows. Rows with source='human' are never touched by
+  machine writers and always win.
+- No heavy imports at module level. The store layer is stdlib-only; numpy
+  and ffmpeg live in strata_analyzers and are optional.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import sqlite3
+import time
+from array import array
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from src.utils import timeline_brain_db
+
+logger = logging.getLogger("resolve-mcp.strata")
+
+HUMAN_SOURCE = "human"
+
+# Well-known track names. Not enforced by the schema (new analyzers may add
+# tracks freely); listed so agents and the dashboard have a stable vocabulary.
+EVENT_TRACKS = (
+    "pause",        # speech gap inside a spoken region (duration = gap length)
+    "breath",       # audible inhale candidate inside a speech gap
+    "hesitation",   # filler word (uh/um/er) from the transcript
+    "beat",         # musical beat (payload: {"tempo_bpm": float})
+    "downbeat",     # low-confidence bar-start estimate
+    "blink",        # eye blink (payload may carry entity_uuid)
+    "gesture_boundary",
+)
+CURVE_TRACKS = (
+    "pitch",          # Hz; NaN where unvoiced/silent
+    "vocal_energy",   # RMS 0..1
+    "speech_rate",    # words/sec smoothed
+    "motion_energy",  # mean abs frame difference 0..1
+    "loudness",       # momentary LUFS-like envelope
+)
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _dumps(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+# ── float32 blob convention (shared with embeddings.vector) ──────────────────
+
+
+def pack_curve(values: Sequence[float]) -> bytes:
+    """Encode a float sequence as a little-endian float32 BLOB."""
+    arr = array("f", (float(v) for v in values))
+    return arr.tobytes()
+
+
+def unpack_curve(blob: bytes) -> List[float]:
+    """Decode a float32 BLOB back to a list of floats."""
+    arr = array("f")
+    arr.frombytes(blob)
+    return list(arr)
+
+
+def curve_stats(values: Sequence[float]) -> Dict[str, Any]:
+    """min/max/mean over the finite samples — cheap query pre-filter."""
+    finite = [v for v in values if not math.isnan(v)]
+    if not finite:
+        return {"count": len(values), "finite_count": 0}
+    return {
+        "count": len(values),
+        "finite_count": len(finite),
+        "min": min(finite),
+        "max": max(finite),
+        "mean": sum(finite) / len(finite),
+    }
+
+
+# ── writers ──────────────────────────────────────────────────────────────────
+
+
+def replace_track_events(
+    conn: sqlite3.Connection,
+    clip_uuid: str,
+    track: str,
+    events: Iterable[Dict[str, Any]],
+    *,
+    source: str,
+    analyzer_version: str,
+) -> int:
+    """Replace this writer's rows for (clip, track): idempotent re-runs.
+
+    Each event: {time_seconds, duration_seconds?, payload?}. Human rows on
+    the same track are left untouched.
+    """
+    if source == HUMAN_SOURCE:
+        raise ValueError("machine writer API; human events go through record_human_event")
+    conn.execute(
+        "DELETE FROM events WHERE clip_uuid = ? AND track = ? AND source = ?",
+        (clip_uuid, track, source),
+    )
+    now = _now()
+    written = 0
+    for event in events:
+        t = event.get("time_seconds")
+        if not isinstance(t, (int, float)) or math.isnan(float(t)):
+            continue
+        duration = event.get("duration_seconds")
+        payload = event.get("payload")
+        conn.execute(
+            """
+            INSERT INTO events
+                (clip_uuid, track, time_seconds, duration_seconds,
+                 payload_json, source, analyzer_version, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                clip_uuid,
+                track,
+                float(t),
+                float(duration) if isinstance(duration, (int, float)) else None,
+                _dumps(payload) if payload is not None else None,
+                source,
+                analyzer_version,
+                now,
+            ),
+        )
+        written += 1
+    return written
+
+
+def record_human_event(
+    conn: sqlite3.Connection,
+    clip_uuid: str,
+    track: str,
+    time_seconds: float,
+    *,
+    duration_seconds: Optional[float] = None,
+    payload: Any = None,
+    author: str = "human",
+) -> int:
+    """Append one human-judged event (never bulk-replaced by machines)."""
+    cur = conn.execute(
+        """
+        INSERT INTO events
+            (clip_uuid, track, time_seconds, duration_seconds,
+             payload_json, source, analyzer_version, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clip_uuid,
+            track,
+            float(time_seconds),
+            float(duration_seconds) if duration_seconds is not None else None,
+            _dumps({"author": author, **(payload if isinstance(payload, dict) else {"value": payload} if payload is not None else {})}),
+            HUMAN_SOURCE,
+            "human",
+            _now(),
+        ),
+    )
+    return int(cur.lastrowid or 0)
+
+
+def write_curve(
+    conn: sqlite3.Connection,
+    clip_uuid: str,
+    track: str,
+    values: Sequence[float],
+    *,
+    sample_rate: float,
+    start_seconds: float = 0.0,
+    source: str,
+    analyzer_version: str,
+) -> Dict[str, Any]:
+    """Upsert one sampled series for (clip, track, source)."""
+    stats = curve_stats(values)
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO curves
+            (clip_uuid, track, start_seconds, sample_rate, values_blob,
+             stats_json, source, analyzer_version, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clip_uuid,
+            track,
+            float(start_seconds),
+            float(sample_rate),
+            pack_curve(values),
+            _dumps(stats),
+            source,
+            analyzer_version,
+            _now(),
+        ),
+    )
+    return stats
+
+
+# ── readers ──────────────────────────────────────────────────────────────────
+
+
+def read_events(
+    conn: sqlite3.Connection,
+    clip_uuid: str,
+    track: Optional[str] = None,
+    *,
+    start_seconds: Optional[float] = None,
+    end_seconds: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    sql = "SELECT * FROM events WHERE clip_uuid = ?"
+    args: List[Any] = [clip_uuid]
+    if track:
+        sql += " AND track = ?"
+        args.append(track)
+    if start_seconds is not None:
+        sql += " AND time_seconds >= ?"
+        args.append(float(start_seconds))
+    if end_seconds is not None:
+        sql += " AND time_seconds < ?"
+        args.append(float(end_seconds))
+    sql += " ORDER BY time_seconds"
+    out = []
+    for row in conn.execute(sql, args).fetchall():
+        item = {
+            "track": row["track"],
+            "time_seconds": row["time_seconds"],
+            "duration_seconds": row["duration_seconds"],
+            "source": row["source"],
+            "analyzer_version": row["analyzer_version"],
+        }
+        if row["payload_json"]:
+            try:
+                item["payload"] = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                pass
+        out.append(item)
+    return out
+
+
+def read_curve(
+    conn: sqlite3.Connection,
+    clip_uuid: str,
+    track: str,
+    *,
+    source: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    sql = "SELECT * FROM curves WHERE clip_uuid = ? AND track = ?"
+    args: List[Any] = [clip_uuid, track]
+    if source:
+        sql += " AND source = ?"
+        args.append(source)
+    row = conn.execute(sql + " ORDER BY created_at DESC LIMIT 1", args).fetchone()
+    if row is None:
+        return None
+    result = {
+        "track": row["track"],
+        "start_seconds": row["start_seconds"],
+        "sample_rate": row["sample_rate"],
+        "values": unpack_curve(row["values_blob"]),
+        "source": row["source"],
+        "analyzer_version": row["analyzer_version"],
+    }
+    if row["stats_json"]:
+        try:
+            result["stats"] = json.loads(row["stats_json"])
+        except (TypeError, ValueError):
+            pass
+    return result
+
+
+def curve_value_at(curve: Dict[str, Any], time_seconds: float) -> Optional[float]:
+    """Sample a curve dict (from read_curve) at a clip time. None off-range/NaN."""
+    values = curve.get("values") or []
+    if not values:
+        return None
+    idx = int(round((time_seconds - float(curve.get("start_seconds") or 0.0)) * float(curve["sample_rate"])))
+    if idx < 0 or idx >= len(values):
+        return None
+    v = values[idx]
+    return None if math.isnan(v) else v
+
+
+def read_words(
+    conn: sqlite3.Connection,
+    clip_uuid: str,
+    *,
+    start_seconds: Optional[float] = None,
+    end_seconds: Optional[float] = None,
+    match: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    sql = "SELECT * FROM transcript_words WHERE clip_uuid = ?"
+    args: List[Any] = [clip_uuid]
+    if start_seconds is not None:
+        sql += " AND start_seconds >= ?"
+        args.append(float(start_seconds))
+    if end_seconds is not None:
+        sql += " AND start_seconds < ?"
+        args.append(float(end_seconds))
+    if match:
+        sql += " AND word LIKE ?"
+        args.append(f"%{match}%")
+    sql += " ORDER BY segment_index, word_index"
+    return [
+        {
+            "segment_index": row["segment_index"],
+            "word_index": row["word_index"],
+            "word": row["word"],
+            "start_seconds": row["start_seconds"],
+            "end_seconds": row["end_seconds"],
+            "confidence": row["confidence"],
+        }
+        for row in conn.execute(sql, args).fetchall()
+    ]
+
+
+def list_tracks(conn: sqlite3.Connection, clip_uuid: str) -> Dict[str, Any]:
+    """Per-clip inventory: which tracks exist, from which writers."""
+    events = [
+        {
+            "track": row["track"],
+            "source": row["source"],
+            "analyzer_version": row["analyzer_version"],
+            "count": row["n"],
+        }
+        for row in conn.execute(
+            """
+            SELECT track, source, analyzer_version, COUNT(*) AS n
+            FROM events WHERE clip_uuid = ?
+            GROUP BY track, source, analyzer_version ORDER BY track
+            """,
+            (clip_uuid,),
+        ).fetchall()
+    ]
+    curves = [
+        {
+            "track": row["track"],
+            "source": row["source"],
+            "analyzer_version": row["analyzer_version"],
+            "sample_rate": row["sample_rate"],
+            "stats": json.loads(row["stats_json"]) if row["stats_json"] else None,
+        }
+        for row in conn.execute(
+            "SELECT track, source, analyzer_version, sample_rate, stats_json FROM curves WHERE clip_uuid = ? ORDER BY track",
+            (clip_uuid,),
+        ).fetchall()
+    ]
+    word_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM transcript_words WHERE clip_uuid = ?", (clip_uuid,)
+    ).fetchone()["n"]
+    beat_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM story_beats WHERE clip_uuid = ? AND superseded_at IS NULL",
+        (clip_uuid,),
+    ).fetchone()["n"]
+    return {
+        "events": events,
+        "curves": curves,
+        "word_count": int(word_count),
+        "story_beat_count": int(beat_count),
+    }
+
+
+# ── transcript words: ingest + backfill ──────────────────────────────────────
+
+
+def _word_confidence(word: Dict[str, Any]) -> Optional[float]:
+    for key in ("probability", "confidence", "score"):
+        value = word.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def ingest_transcript_words(
+    conn: sqlite3.Connection,
+    clip_uuid: str,
+    transcription: Dict[str, Any],
+) -> int:
+    """Rebuild transcript_words for a clip from a report's transcription block.
+
+    Words normally live per-segment (``segments[*].words``); when only the
+    top-level ``words`` list exists, words are bucketed into segments by
+    start time. Returns the number of word rows written.
+    """
+    conn.execute("DELETE FROM transcript_words WHERE clip_uuid = ?", (clip_uuid,))
+    if not isinstance(transcription, dict):
+        return 0
+    segments = transcription.get("segments") if isinstance(transcription.get("segments"), list) else []
+
+    per_segment: List[List[Dict[str, Any]]] = []
+    have_segment_words = False
+    for seg in segments:
+        words = seg.get("words") if isinstance(seg, dict) and isinstance(seg.get("words"), list) else []
+        if words:
+            have_segment_words = True
+        per_segment.append([w for w in words if isinstance(w, dict)])
+
+    if not have_segment_words:
+        top_words = transcription.get("words") if isinstance(transcription.get("words"), list) else []
+        top_words = [w for w in top_words if isinstance(w, dict)]
+        if not top_words:
+            return 0
+        if not segments:
+            per_segment = [top_words]
+        else:
+            per_segment = [[] for _ in segments]
+            bounds = []
+            for seg in segments:
+                start = seg.get("start") if isinstance(seg, dict) else None
+                bounds.append(float(start) if isinstance(start, (int, float)) else 0.0)
+            for word in top_words:
+                t = word.get("start")
+                t = float(t) if isinstance(t, (int, float)) else 0.0
+                idx = 0
+                for i, b in enumerate(bounds):
+                    if t >= b:
+                        idx = i
+                per_segment[idx].append(word)
+
+    written = 0
+    for seg_idx, words in enumerate(per_segment):
+        for word_idx, word in enumerate(words):
+            text = str(word.get("word", word.get("text", ""))).strip()
+            if not text:
+                continue
+            start = word.get("start")
+            end = word.get("end")
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO transcript_words
+                    (clip_uuid, segment_index, word_index, word,
+                     start_seconds, end_seconds, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    clip_uuid,
+                    seg_idx,
+                    word_idx,
+                    text,
+                    float(start) if isinstance(start, (int, float)) else None,
+                    float(end) if isinstance(end, (int, float)) else None,
+                    _word_confidence(word),
+                ),
+            )
+            written += 1
+    return written
+
+
+def backfill_transcript_words(project_root: str) -> Dict[str, Any]:
+    """Populate transcript_words from every stored report blob.
+
+    Reports written before v13 already carry per-word timestamps inside
+    ``transcription.segments[*].words`` — this promotes them to rows without
+    re-running any analysis. Idempotent.
+    """
+    conn = timeline_brain_db.connect(project_root)
+    rows = conn.execute("SELECT clip_uuid, report_json FROM analysis_reports").fetchall()
+    clips_seen = 0
+    clips_with_words = 0
+    words_written = 0
+    with timeline_brain_db.transaction(project_root) as txn:
+        for row in rows:
+            clips_seen += 1
+            try:
+                report = json.loads(row["report_json"])
+            except (TypeError, ValueError):
+                continue
+            transcription = report.get("transcription") if isinstance(report, dict) else None
+            if not isinstance(transcription, dict):
+                continue
+            n = ingest_transcript_words(txn, str(row["clip_uuid"]), transcription)
+            if n:
+                clips_with_words += 1
+                words_written += n
+    return {
+        "success": True,
+        "clips_seen": clips_seen,
+        "clips_with_words": clips_with_words,
+        "words_written": words_written,
+    }
+
+
+# ── status ───────────────────────────────────────────────────────────────────
+
+
+def strata_status(project_root: str, clip_ref: Any = None) -> Dict[str, Any]:
+    """Project-level (or per-clip) strata inventory."""
+    from src.utils import analysis_store
+
+    conn = timeline_brain_db.connect(project_root)
+    if clip_ref is not None:
+        clip_uuid = analysis_store.resolve_clip_uuid(conn, clip_ref)
+        if not clip_uuid:
+            return {"success": False, "error": f"Unknown clip ref: {clip_ref!r}"}
+        return {"success": True, "clip_uuid": clip_uuid, **list_tracks(conn, clip_uuid)}
+
+    def _count(sql: str) -> int:
+        return int(conn.execute(sql).fetchone()[0])
+
+    track_rows = conn.execute(
+        "SELECT track, COUNT(*) AS n, COUNT(DISTINCT clip_uuid) AS clips FROM events GROUP BY track"
+    ).fetchall()
+    curve_rows = conn.execute(
+        "SELECT track, COUNT(DISTINCT clip_uuid) AS clips FROM curves GROUP BY track"
+    ).fetchall()
+    return {
+        "success": True,
+        "schema_version": timeline_brain_db.SCHEMA_VERSION,
+        "clips": _count("SELECT COUNT(*) FROM clips"),
+        "clips_with_words": _count("SELECT COUNT(DISTINCT clip_uuid) FROM transcript_words"),
+        "word_count": _count("SELECT COUNT(*) FROM transcript_words"),
+        "event_tracks": [
+            {"track": r["track"], "events": r["n"], "clips": r["clips"]} for r in track_rows
+        ],
+        "curve_tracks": [{"track": r["track"], "clips": r["clips"]} for r in curve_rows],
+        "story_beat_count": _count(
+            "SELECT COUNT(*) FROM story_beats WHERE superseded_at IS NULL"
+        ),
+    }

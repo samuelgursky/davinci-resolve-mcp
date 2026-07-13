@@ -16745,6 +16745,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       cancel_batch_job(job_id) -> stop future slices
       resume_batch_job(job_id) -> requeue a canceled or interrupted job
       cleanup_artifacts(frames_only=true) -> remove generated frame artifacts only
+      strata_status(clip_id?) -> perception-strata inventory (events/curves/words/story beats) for the project or one clip
+      backfill_words(analysis_root?) -> promote word timestamps from stored report blobs into transcript_words rows
 
     Analysis outputs stay under a davinci-resolve-mcp-analysis project root
     and are validated so they are never written beside source media. Executed
@@ -17043,6 +17045,9 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "detect_shot_relationships",
         "commit_shot_relationships",
         "list_shot_relationships",
+        # Perception strata (schema v13) — timecoded track model.
+        "strata_status",
+        "backfill_words",
     }:
         root = resolve_media_analysis_output_root(
             project_name=project_name,
@@ -17102,6 +17107,14 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         if action == "db_ingest":
             from src.utils import analysis_store
             return analysis_store.ingest_project(project_root)
+        # Perception strata (schema v13).
+        if action == "strata_status":
+            from src.utils import strata
+            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            return strata.strata_status(project_root, clip_ref)
+        if action == "backfill_words":
+            from src.utils import strata
+            return strata.backfill_transcript_words(project_root)
         # Phase B — deep shot-level vision tier.
         if action == "deepen":
             from src.utils import deep_vision
@@ -17660,6 +17673,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "detect_shot_relationships",
         "commit_shot_relationships",
         "list_shot_relationships",
+        "strata_status",
+        "backfill_words",
         "get_caps",
         "set_caps_preset",
         "get_usage",
