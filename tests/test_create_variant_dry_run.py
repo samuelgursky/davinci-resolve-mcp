@@ -1,6 +1,6 @@
 import unittest
 
-from src.server import _timeline_create_variant_from_ranges
+from src.server import _timeline_create_variant_from_ranges, _build_append_clip_info_dict
 from tests._error_envelope_helpers import err_message, is_err
 
 
@@ -84,6 +84,43 @@ class CreateVariantDryRunTest(unittest.TestCase):
         })
         self.assertTrue(is_err(res))
         self.assertIn("requires valid start_frame/end_frame", err_message(res))
+
+    def test_pack_dry_run_needs_no_record_frame(self):
+        proj = _proj_with_clip("mp-1")
+        res = _timeline_create_variant_from_ranges(proj, SourceTimelineStub(), {
+            "name": "variant",
+            "dry_run": True,
+            "pack": True,
+            "ranges": [{"clip_id": "mp-1", "start_frame": 0, "end_frame": 100}],
+        })
+        self.assertTrue(res.get("would_create_timeline"))
+        self.assertIsNone(res["ranges"][0]["record_frame"])
+
+
+class BuildAppendClipInfoPackTest(unittest.TestCase):
+    def setUp(self):
+        self.root = RootFolderStub([MediaPoolItemStub("mp-1")])
+
+    def test_pack_omits_record_frame(self):
+        info, err = _build_append_clip_info_dict(
+            self.root, {"clip_id": "mp-1", "start_frame": 0, "end_frame": 100, "track_index": 1},
+            0, pack=True)
+        self.assertIsNone(err)
+        self.assertNotIn("recordFrame", info)
+
+    def test_non_pack_still_requires_record_frame(self):
+        info, err = _build_append_clip_info_dict(
+            self.root, {"clip_id": "mp-1", "start_frame": 0, "end_frame": 100, "track_index": 1},
+            0, pack=False)
+        self.assertIsNone(info)
+        self.assertIn("record_frame", err_message(err))
+
+    def test_non_pack_reports_record_frame_before_track_index(self):
+        # Missing both: record_frame is validated first (preserved error order).
+        info, err = _build_append_clip_info_dict(
+            self.root, {"clip_id": "mp-1", "start_frame": 0, "end_frame": 100}, 0, pack=False)
+        self.assertIsNone(info)
+        self.assertIn("record_frame", err_message(err))
 
 
 if __name__ == "__main__":

@@ -2418,11 +2418,13 @@ def _build_append_clip_info_dict(
     ci: Dict[str, Any],
     index: int,
     timeline_start_frame: Optional[int] = None,
+    pack: bool = False,
 ):
     """Build one MediaPool.AppendToTimeline clipInfo map (Python API uses camelCase keys).
 
     See docs/reference/resolve_scripting_api.txt: mediaPoolItem, startFrame, endFrame,
-    optional mediaType, trackIndex, recordFrame.
+    optional mediaType, trackIndex, recordFrame. With pack=True, recordFrame is omitted
+    so Resolve appends each clip contiguously at the end of its track.
     """
     if not isinstance(ci, dict):
         return None, _err(f"clip_infos[{index}] must be an object")
@@ -2439,14 +2441,15 @@ def _build_append_clip_info_dict(
             f"clip_infos[{index}] requires start_frame/startFrame and end_frame/endFrame "
             "(source range on the MediaPoolItem)"
         )
-    rf = ci.get("recordFrame", ci.get("record_frame"))
-    if rf is None:
-        return None, _err(
-            f"clip_infos[{index}] requires record_frame/recordFrame (timeline record frame)"
-        )
-    rf, rf_err = _normalize_record_frame(ci, index, timeline_start_frame)
-    if rf_err:
-        return None, rf_err
+    if not pack:
+        rf = ci.get("recordFrame", ci.get("record_frame"))
+        if rf is None:
+            return None, _err(
+                f"clip_infos[{index}] requires record_frame/recordFrame (timeline record frame)"
+            )
+        rf, rf_err = _normalize_record_frame(ci, index, timeline_start_frame)
+        if rf_err:
+            return None, rf_err
     ti = ci.get("trackIndex", ci.get("track_index"))
     if ti is None:
         return None, _err(
@@ -2456,9 +2459,10 @@ def _build_append_clip_info_dict(
         "mediaPoolItem": mp_item,
         "startFrame": sf,
         "endFrame": ef,
-        "recordFrame": rf,
         "trackIndex": ti,
     }
+    if not pack:
+        out["recordFrame"] = rf
     mt = ci.get("mediaType", ci.get("media_type"))
     if mt is not None:
         out["mediaType"] = mt
@@ -4926,6 +4930,10 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
             start_frame = int(source_tl.GetStartFrame())
         except Exception:
             start_frame = 0
+    # pack=True butts clips together at the end of each track (record_frame is
+    # ignored); Resolve packs by actual placed duration, so the result is gap-free
+    # even when source and timeline frame rates differ.
+    pack = bool(p.get("pack", False))
     built = []
     cursor_by_track: Dict[Tuple[int, int], int] = {}
     max_tracks = {"video": 1, "audio": 1}
@@ -4949,9 +4957,12 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
             return _err(f"ranges[{index}] requires valid start_frame/end_frame")
         record_frame = _frame_int(row.get("record_frame", row.get("recordFrame")))
         key = (int(media_type), track_index)
-        if record_frame is None:
-            record_frame = cursor_by_track.get(key, start_frame)
-        cursor_by_track[key] = record_frame + (end - start)
+        if pack:
+            record_frame = None  # Resolve packs at the end of the track
+        else:
+            if record_frame is None:
+                record_frame = cursor_by_track.get(key, start_frame)
+            cursor_by_track[key] = record_frame + (end - start)
         built.append({
             "clip_id": row.get("clip_id") or row.get("media_pool_item_id"),
             "start_frame": start,
@@ -4966,7 +4977,7 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
     # vs commit, so a dry run fails on the same id/frame errors as the commit.
     append_infos = []
     for row in built:
-        clip_info, clip_err = _build_append_clip_info_dict(root, row, row["_index"])
+        clip_info, clip_err = _build_append_clip_info_dict(root, row, row["_index"], pack=pack)
         if clip_err:
             return clip_err
         append_infos.append(clip_info)
@@ -20813,9 +20824,10 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
             "summary": "Build a variant timeline from N source ranges. Video-only unless ranges include track_type='audio'. Source-safe; dry_run validates clip ids and frame ranges.",
             "params": (
                 "name, ranges: [{clip_id|media_pool_item_id, start_frame, end_frame, "
-                "record_frame?, track_type?}], markers?, cdl?, dry_run?  — clip_id is a "
+                "record_frame?, track_type?}], pack?, markers?, cdl?, dry_run?  — clip_id is a "
                 "media-pool item id (not a timeline-item id); start_frame/end_frame are SOURCE "
-                "frames, end_frame exclusive (source duration = end_frame - start_frame)"
+                "frames, end_frame exclusive (source duration = end_frame - start_frame). "
+                "pack=true butts clips together at the end of each track (gap-free, ignores record_frame)"
             ),
             "returns": "{success, id, items}  — items[].placed = placed frames; items[].range = the requested range",
             "example": (
