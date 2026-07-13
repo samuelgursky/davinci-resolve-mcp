@@ -16747,6 +16747,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       cleanup_artifacts(frames_only=true) -> remove generated frame artifacts only
       strata_status(clip_id?) -> perception-strata inventory (events/curves/words/story beats) for the project or one clip
       backfill_words(analysis_root?) -> promote word timestamps from stored report blobs into transcript_words rows
+      strata_run(clip_id, analyzers?) -> run local strata analyzers (prosody | beat_grid | motion_energy) on one clip
+      take_diff(clip_a, clip_b, text?) -> align two takes on transcript words and diff their delivery (pace, pauses, pitch, energy) — measures only, never picks
 
     Analysis outputs stay under a davinci-resolve-mcp-analysis project root
     and are validated so they are never written beside source media. Executed
@@ -17048,6 +17050,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         # Perception strata (schema v13) — timecoded track model.
         "strata_status",
         "backfill_words",
+        "strata_run",
+        "take_diff",
     }:
         root = resolve_media_analysis_output_root(
             project_name=project_name,
@@ -17109,12 +17113,31 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             return analysis_store.ingest_project(project_root)
         # Perception strata (schema v13).
         if action == "strata_status":
-            from src.utils import strata
+            from src.utils import strata, strata_analyzers
             clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
-            return strata.strata_status(project_root, clip_ref)
+            status = strata.strata_status(project_root, clip_ref)
+            if status.get("success") and clip_ref is None:
+                status["analyzer_capabilities"] = strata_analyzers.capabilities()
+            return status
         if action == "backfill_words":
             from src.utils import strata
             return strata.backfill_transcript_words(project_root)
+        if action == "strata_run":
+            from src.utils import strata_analyzers
+            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            if not clip_ref:
+                return _err("strata_run requires clip_id (or clip_uuid / clip_dir / file_path)")
+            analyzers = p.get("analyzers") or p.get("analyzer")
+            if isinstance(analyzers, str):
+                analyzers = [analyzers]
+            return strata_analyzers.run_analyzers(project_root, clip_ref, analyzers)
+        if action == "take_diff":
+            from src.utils import strata_queries
+            clip_a = p.get("clip_a") or p.get("clipA") or p.get("take_a") or p.get("takeA")
+            clip_b = p.get("clip_b") or p.get("clipB") or p.get("take_b") or p.get("takeB")
+            if not clip_a or not clip_b:
+                return _err("take_diff requires clip_a and clip_b")
+            return strata_queries.take_diff(project_root, clip_a, clip_b, text=p.get("text") or p.get("line"))
         # Phase B — deep shot-level vision tier.
         if action == "deepen":
             from src.utils import deep_vision
@@ -17675,6 +17698,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "list_shot_relationships",
         "strata_status",
         "backfill_words",
+        "strata_run",
+        "take_diff",
         "get_caps",
         "set_caps_preset",
         "get_usage",
