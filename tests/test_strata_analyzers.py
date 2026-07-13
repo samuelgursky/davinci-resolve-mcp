@@ -271,6 +271,36 @@ class AnalyzerRunnerTests(unittest.TestCase):
         self.assertFalse(bad["success"])
         self.assertIn("available", bad)
 
+    def test_run_analyzers_decodes_audio_once(self) -> None:
+        from unittest import mock
+
+        wav_path = os.path.join(self.root, "take3.wav")
+        write_wav(wav_path, synth_speech_like([(0.5, 1.5)], duration=2.0))
+        clip_uuid = self._ingest_clip_for(wav_path, duration=2.0)
+        with mock.patch.object(sa, "decode_audio", wraps=sa.decode_audio) as spy:
+            result = sa.run_analyzers(self.root, clip_uuid, ["prosody", "beat_grid"])
+        self.assertTrue(result["results"]["prosody"]["success"], result)
+        self.assertTrue(result["results"]["beat_grid"]["success"], result)
+        self.assertEqual(spy.call_count, 1)
+
+    def test_run_analyzers_shared_decode_error_reported_per_analyzer(self) -> None:
+        clip_uuid = self._ingest_clip_for(os.path.join(self.root, "gone2.wav"))
+        result = sa.run_analyzers(self.root, clip_uuid, ["prosody", "beat_grid"])
+        self.assertFalse(result["success"])
+        for name in ("prosody", "beat_grid"):
+            self.assertFalse(result["results"][name]["success"])
+            self.assertIn("not accessible", result["results"][name]["error"])
+
+    def test_capabilities_derived_from_registry(self) -> None:
+        caps = sa.capabilities()["analyzers"]
+        self.assertEqual(set(caps), set(sa.ANALYZERS))
+        for name, spec in sa.ANALYZERS.items():
+            if "capability" in spec:
+                continue
+            self.assertEqual(caps[name]["requires"], list(spec["requires"]))
+            self.assertEqual(caps[name]["writes"], spec["writes"])
+            self.assertIn("available", caps[name])
+
 
 @unittest.skipIf(np is None, "numpy not available")
 @unittest.skipIf(FFMPEG is None, "ffmpeg not available")

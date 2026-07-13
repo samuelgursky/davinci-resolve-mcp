@@ -200,6 +200,45 @@ def resolve_clip_uuid(conn: sqlite3.Connection, ref: Any) -> Optional[str]:
     return None
 
 
+def resolve_clip_uuid_ingesting(
+    project_root: str, conn: sqlite3.Connection, clip_ref: Any
+) -> Optional[str]:
+    """resolve_clip_uuid plus the pre-v9 fallback: when the DB has no rows
+    for the ref, walk clips/*/analysis.json for a matching report and ingest
+    it. Shared by deep_vision and the strata layers so a clip that resolves
+    for one resolves for all."""
+    clip_uuid = resolve_clip_uuid(conn, clip_ref)
+    if clip_uuid:
+        return clip_uuid
+    ma = _ma()
+    clips_root = os.path.join(project_root, "clips")
+    candidate = str(clip_ref or "")
+    if not os.path.isdir(clips_root):
+        return None
+    for entry in sorted(os.listdir(clips_root)):
+        report_path = os.path.join(clips_root, entry, "analysis.json")
+        if not os.path.isfile(report_path):
+            continue
+        try:
+            with open(report_path, "r", encoding="utf-8") as handle:
+                report = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        clip_block = report.get("clip") or {}
+        if candidate not in (
+            entry,
+            str(clip_block.get("clip_id") or ""),
+            str(clip_block.get("media_id") or ""),
+            ma.normalize_path(clip_block.get("file_path") or ""),
+        ):
+            continue
+        ingest = ingest_report(project_root, report, clip_dir=os.path.join(clips_root, entry))
+        if ingest.get("success"):
+            return str(ingest["clip_uuid"])
+        return None
+    return None
+
+
 # ── ingest ────────────────────────────────────────────────────────────────────
 
 

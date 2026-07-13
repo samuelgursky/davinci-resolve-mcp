@@ -237,6 +237,17 @@ class StrataQueryTests(unittest.TestCase):
         self.assertIn("my_custom_track", out["events"])
         self.assertIn("loudness", out["curves"])
 
+    def test_word_find_caches_curve_reads_per_clip(self) -> None:
+        from unittest import mock
+
+        # Every fixture word contains "e" → 4 hits in the same clip; the
+        # clip's one curve must be read/unpacked once, not once per hit.
+        with mock.patch.object(strata, "read_curve", wraps=strata.read_curve) as spy:
+            out = strata_queries.strata_query(self.root, match_word="e")
+        self.assertTrue(out["success"], out)
+        self.assertEqual(len(out["hits"]), 4)
+        self.assertEqual(spy.call_count, 1)
+
     def test_word_find_escapes_like_metachars(self) -> None:
         # Unescaped, "k_nobi" would wildcard-match "kenobi"; the underscore
         # must be treated as a literal character.
@@ -315,6 +326,29 @@ class TimelineStrataTests(unittest.TestCase):
         out = strata_queries.timeline_strata(self.root, "Cut 01", fps=0.0)
         self.assertFalse(out["success"])
         self.assertIn("fps", out["error"])
+
+    def test_repeated_placements_share_one_bundle(self) -> None:
+        from unittest import mock
+
+        with timeline_brain_db.transaction(self.root) as conn:
+            conn.execute(
+                """
+                INSERT INTO timeline_clip_usage
+                    (media_pool_item_id, timeline_name, timeline_version,
+                     track_type, track_index, in_frame, out_frame, observed_at)
+                VALUES ('aaaa-bbbb', 'Cut 01', 3, 'video', 1, 700, 800, '2026-07-12T00:00:00Z')
+                """
+            )
+        with mock.patch.object(
+            analysis_store, "resolve_clip_uuid", wraps=analysis_store.resolve_clip_uuid
+        ) as spy:
+            out = strata_queries.timeline_strata(self.root, "Cut 01")
+        self.assertTrue(out["success"], out)
+        resolved = [p for p in out["placements"] if "strata" in p]
+        self.assertEqual(len(resolved), 2)
+        # Same source clip → one resolve per distinct media id, one shared bundle.
+        self.assertEqual(spy.call_count, 2)  # aaaa-bbbb + unknown-media
+        self.assertIs(resolved[0]["strata"], resolved[1]["strata"])
 
     def test_record_window_filter(self) -> None:
         out = strata_queries.timeline_strata(

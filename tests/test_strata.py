@@ -91,6 +91,27 @@ class StrataSchemaTests(unittest.TestCase):
         self.assertIn("start_frame", columns)
         self.assertGreaterEqual(timeline_brain_db._read_schema_version(conn), 14)
 
+    def test_v15_events_span_index_exists(self) -> None:
+        conn = timeline_brain_db.connect(self.root)
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        self.assertIn("ix_events_clip_track_span", indexes)
+        self.assertGreaterEqual(timeline_brain_db._read_schema_version(conn), 15)
+
+    def test_curve_codec_matches_embeddings_vector_codec(self) -> None:
+        from src.utils import embeddings
+
+        values = [0.0, 1.5, -2.25, float("nan")]
+        packed = strata.pack_curve(values)
+        self.assertEqual(packed, embeddings.pack_vector(values))
+        round_tripped = strata.unpack_curve(packed)
+        self.assertEqual(round_tripped[:3], [0.0, 1.5, -2.25])
+        self.assertTrue(round_tripped[3] != round_tripped[3])  # NaN survives
+
 
 class TranscriptWordsTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -261,6 +282,55 @@ class TranscriptWordsTests(unittest.TestCase):
         self.assertEqual(summary["clips_seen"], ingested)
 
 
+class ResolveClipTests(unittest.TestCase):
+    """The one shared resolver: DB refs, pre-v9 disk fallback, media gate."""
+
+    def setUp(self) -> None:
+        self.root = tempfile.mkdtemp(prefix="strata-resolve-test-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.addCleanup(timeline_brain_db.close_all)
+
+    def test_resolves_ingested_clip(self) -> None:
+        result = analysis_store.ingest_report(
+            self.root, make_report_with_words(), clip_dir="resolve-clip"
+        )
+        conn, clip, err = strata.resolve_clip(self.root, result["clip_uuid"])
+        self.assertIsNone(err)
+        self.assertEqual(clip["clip_uuid"], result["clip_uuid"])
+        self.assertIsNotNone(conn)
+
+    def test_unknown_ref_is_honest(self) -> None:
+        _conn, clip, err = strata.resolve_clip(self.root, "nope-never-seen")
+        self.assertIsNone(clip)
+        self.assertFalse(err["success"])
+        self.assertIn("db_ingest", err["error"])
+
+    def test_pre_v9_disk_report_auto_ingests(self) -> None:
+        # A report on disk but absent from the DB (pre-v9 analysis root) must
+        # resolve via the same auto-ingest fallback deepen uses.
+        clip_dir = os.path.join(self.root, "clips", "prev9-clip")
+        os.makedirs(clip_dir)
+        with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as handle:
+            json.dump(make_report_with_words(), handle)
+        conn, clip, err = strata.resolve_clip(self.root, "prev9-clip")
+        self.assertIsNone(err, err)
+        words = strata.read_words(conn, clip["clip_uuid"])
+        self.assertEqual(len(words), 4)
+        # strata_status resolves through the same path.
+        status = strata.strata_status(self.root, "prev9-clip")
+        self.assertTrue(status["success"], status)
+
+    def test_require_media_gates_on_file(self) -> None:
+        result = analysis_store.ingest_report(
+            self.root, make_report_with_words(), clip_dir="media-clip"
+        )
+        _conn, clip, err = strata.resolve_clip(
+            self.root, result["clip_uuid"], require_media=True
+        )
+        self.assertIsNone(clip)
+        self.assertIn("not accessible", err["error"])
+
+
 class EventTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = tempfile.mkdtemp(prefix="strata-events-test-")
@@ -311,6 +381,45 @@ class EventTests(unittest.TestCase):
         window = strata.read_events(conn, self.clip_uuid, "beat", start_seconds=1.0, end_seconds=2.0)
         self.assertEqual([e["time_seconds"] for e in window], [1.0, 1.5])
         self.assertEqual(window[0]["payload"], {"tempo_bpm": 120.0})
+
+    def test_long_span_starting_before_window_still_overlaps(self) -> None:
+        # The sargable rewrite bounds the lower edge by the track's longest
+        # span — an event much longer than any static cutoff must survive.
+        with timeline_brain_db.transaction(self.root) as conn:
+            strata.replace_track_events(
+                conn, self.clip_uuid, "pause",
+                [
+                    {"time_seconds": 0.0, "duration_seconds": 120.0},  # long room-tone span
+                    {"time_seconds": 130.0, "duration_seconds": 0.5},
+                ],
+                source="prosody_v1", analyzer_version="1.0",
+            )
+        conn = timeline_brain_db.connect(self.root)
+        window = strata.read_events(
+            conn, self.clip_uuid, "pause", start_seconds=100.0, end_seconds=101.0
+        )
+        self.assertEqual([e["time_seconds"] for e in window], [0.0])
+
+    def test_windowed_read_uses_index_range_seek(self) -> None:
+        with timeline_brain_db.transaction(self.root) as conn:
+            strata.replace_track_events(
+                conn, self.clip_uuid, "beat",
+                [{"time_seconds": float(i) * 0.5} for i in range(10)],
+                source="beatgrid_v1", analyzer_version="1.0",
+            )
+        conn = timeline_brain_db.connect(self.root)
+        plan = " ".join(
+            row[3]
+            for row in conn.execute(
+                "EXPLAIN QUERY PLAN SELECT * FROM events WHERE clip_uuid = ? AND track = ?"
+                " AND time_seconds >= ?"
+                " AND (time_seconds >= ? OR time_seconds + COALESCE(duration_seconds, 0) > ?)"
+                " AND time_seconds < ? ORDER BY time_seconds",
+                (self.clip_uuid, "beat", 0.5, 1.0, 1.0, 2.0),
+            ).fetchall()
+        )
+        self.assertIn("USING INDEX ix_events_clip_track", plan)
+        self.assertIn("time_seconds>?", plan.replace(" ", ""))
 
 
 class CurveTests(unittest.TestCase):

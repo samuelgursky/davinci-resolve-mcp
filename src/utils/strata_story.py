@@ -84,16 +84,10 @@ def _beat_uuid() -> str:
 
 
 def _resolve(project_root: str, clip_ref: Any):
-    from src.utils import analysis_store
-
-    conn = timeline_brain_db.connect(project_root)
-    clip_uuid = analysis_store.resolve_clip_uuid(conn, clip_ref)
-    if not clip_uuid:
-        return None, None, {
-            "success": False,
-            "error": f"Unknown clip ref: {clip_ref!r} (older analysis root? run db_ingest first)",
-        }
-    return conn, clip_uuid, None
+    conn, clip, err = strata.resolve_clip(project_root, clip_ref)
+    if err:
+        return None, None, err
+    return conn, clip["clip_uuid"], None
 
 
 def plan_story_beats(project_root: str, clip_ref: Any) -> Dict[str, Any]:

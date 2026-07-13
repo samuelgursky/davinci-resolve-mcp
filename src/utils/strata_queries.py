@@ -27,16 +27,8 @@ def _norm_word(word: str) -> str:
 
 
 def _resolve(project_root: str, clip_ref: Any) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-    from src.utils import analysis_store
-
-    conn = timeline_brain_db.connect(project_root)
-    clip_uuid = analysis_store.resolve_clip_uuid(conn, clip_ref)
-    if not clip_uuid:
-        return None, {
-            "success": False,
-            "error": f"Unknown clip ref: {clip_ref!r} (older analysis root? run db_ingest first)",
-        }
-    return clip_uuid, None
+    _conn, clip, err = strata.resolve_clip(project_root, clip_ref)
+    return (clip["clip_uuid"] if clip else None), err
 
 
 def _finite(values: Sequence[float]) -> List[float]:
@@ -204,28 +196,45 @@ def _clip_bundle(
     end: Optional[float],
     *,
     include_curve_values: bool = False,
+    cache: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Everything the strata know about one clip window, joined."""
+    """Everything the strata know about one clip window, joined.
+
+    ``cache`` (keyed by clip_uuid) memoizes the window-independent reads —
+    the clips row, present-track lists, and full curve blobs — so callers
+    building many bundles for the same clip (word-find hits cluster by clip)
+    unpack each curve once. Windowed reads stay per call.
+    """
+    memo = cache.setdefault(clip_uuid, {}) if cache is not None else {}
     bundle: Dict[str, Any] = {"clip_uuid": clip_uuid}
-    row = conn.execute(
-        "SELECT clip_name, duration_seconds, fps FROM clips WHERE clip_uuid = ?", (clip_uuid,)
-    ).fetchone()
+    if "row" not in memo:
+        memo["row"] = conn.execute(
+            "SELECT clip_name, duration_seconds, fps FROM clips WHERE clip_uuid = ?", (clip_uuid,)
+        ).fetchone()
+    row = memo["row"]
     if row:
         bundle["clip_name"] = row["clip_name"]
         bundle["fps"] = row["fps"]
 
     bundle["words"] = strata.read_words(conn, clip_uuid, start_seconds=start, end_seconds=end)
 
+    if "event_tracks" not in memo:
+        memo["event_tracks"] = _present_tracks(conn, clip_uuid, "events", _EVENT_TRACK_ORDER)
     events: Dict[str, List[Dict[str, Any]]] = {}
-    for track in _present_tracks(conn, clip_uuid, "events", _EVENT_TRACK_ORDER):
+    for track in memo["event_tracks"]:
         hits = strata.read_events(conn, clip_uuid, track, start_seconds=start, end_seconds=end)
         if hits:
             events[track] = hits
     bundle["events"] = events
 
+    if "curve_tracks" not in memo:
+        memo["curve_tracks"] = _present_tracks(conn, clip_uuid, "curves", _CURVE_TRACK_ORDER)
+    loaded_curves = memo.setdefault("curves_by_track", {})
     curves: Dict[str, Any] = {}
-    for track in _present_tracks(conn, clip_uuid, "curves", _CURVE_TRACK_ORDER):
-        curve = strata.read_curve(conn, clip_uuid, track)
+    for track in memo["curve_tracks"]:
+        if track not in loaded_curves:
+            loaded_curves[track] = strata.read_curve(conn, clip_uuid, track)
+        curve = loaded_curves[track]
         if curve is None:
             continue
         lo = start if start is not None else 0.0
@@ -303,6 +312,7 @@ def strata_query(
         sql += " ORDER BY w.clip_uuid, w.start_seconds LIMIT ?"
         args.append(int(limit))
         hits = []
+        bundle_cache: Dict[str, Dict[str, Any]] = {}
         for row in conn.execute(sql, args).fetchall():
             t = row["start_seconds"]
             hit: Dict[str, Any] = {
@@ -318,6 +328,7 @@ def strata_query(
                     max(0.0, t - context_seconds),
                     t + context_seconds,
                     include_curve_values=include_curve_values,
+                    cache=bundle_cache,
                 )
             hits.append(hit)
         return {"success": True, "mode": "word_find", "match": match_word, "hits": hits}
@@ -405,10 +416,17 @@ def timeline_strata(
 
     placements = []
     unresolved = []
+    # A source clip reused across many cuts resolves and bundles once: the
+    # whole-clip bundle (start=end=None) is identical for every placement.
+    resolve_memo: Dict[str, Optional[str]] = {}
+    bundle_memo: Dict[str, Dict[str, Any]] = {}
     for row in conn.execute(sql, args).fetchall():
-        clip_uuid = analysis_store.resolve_clip_uuid(conn, row["media_pool_item_id"])
+        media_id = row["media_pool_item_id"]
+        if media_id not in resolve_memo:
+            resolve_memo[media_id] = analysis_store.resolve_clip_uuid(conn, media_id)
+        clip_uuid = resolve_memo[media_id]
         placement = {
-            "media_pool_item_id": row["media_pool_item_id"],
+            "media_pool_item_id": media_id,
             "track_type": row["track_type"],
             "track_index": row["track_index"],
             "record_in_frame": row["in_frame"],
@@ -421,11 +439,13 @@ def timeline_strata(
                 placement["record_in_seconds"] = round((row["in_frame"] - start_frame) / fps, 3)
                 placement["record_out_seconds"] = round((row["out_frame"] - start_frame) / fps, 3)
         if clip_uuid:
-            placement["strata"] = _clip_bundle(
-                conn, clip_uuid, None, None, include_curve_values=include_curve_values
-            )
+            if clip_uuid not in bundle_memo:
+                bundle_memo[clip_uuid] = _clip_bundle(
+                    conn, clip_uuid, None, None, include_curve_values=include_curve_values
+                )
+            placement["strata"] = bundle_memo[clip_uuid]
         else:
-            unresolved.append(row["media_pool_item_id"])
+            unresolved.append(media_id)
         placements.append(placement)
 
     return {

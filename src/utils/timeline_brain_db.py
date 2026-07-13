@@ -29,7 +29,7 @@ from typing import Callable, Dict, Iterator, Optional, Tuple
 
 logger = logging.getLogger("resolve-mcp.timeline-brain-db")
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 DB_FILENAME = "timeline_brain.sqlite"
 SOUL_DIRNAME = "_soul"
 
@@ -922,6 +922,23 @@ def _migrate_v14_timeline_version_timebase(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE timeline_versions ADD COLUMN fps REAL")
     if not _column_exists(conn, "timeline_versions", "start_frame"):
         conn.execute("ALTER TABLE timeline_versions ADD COLUMN start_frame INTEGER")
+
+
+@register_migration(15)
+def _migrate_v15_events_span_index(conn: sqlite3.Connection) -> None:
+    """Index (clip_uuid, track, duration_seconds) on events.
+
+    strata.read_events bounds its windowed lower edge by the track's longest
+    span (the sargable form of span-overlap); this index makes that
+    MAX(duration_seconds) probe a single b-tree descent instead of a track
+    scan.
+    """
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS ix_events_clip_track_span
+            ON events(clip_uuid, track, duration_seconds);
+        """
+    )
 
 
 def latest_version(conn: sqlite3.Connection, timeline_name: str) -> Optional[int]:

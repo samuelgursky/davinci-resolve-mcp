@@ -21,12 +21,14 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import sqlite3
 import time
-from array import array
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from src.utils import timeline_brain_db
+from src.utils.embeddings import pack_vector as _pack_vector
+from src.utils.embeddings import unpack_vector as _unpack_vector
 
 logger = logging.getLogger("resolve-mcp.strata")
 
@@ -60,20 +62,67 @@ def _dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
-# ── float32 blob convention (shared with embeddings.vector) ──────────────────
+# ── clip resolution — the ONE resolver for every strata surface ──────────────
+
+
+def resolve_clip(
+    project_root: str,
+    clip_ref: Any,
+    *,
+    require_media: bool = False,
+) -> Tuple[Optional[sqlite3.Connection], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Resolve a clip ref to ``(conn, clip, error)`` — exactly one of
+    ``clip``/``error`` is set (conn is always usable when clip is set).
+
+    ``clip`` carries {clip_uuid, clip_name, file_path, duration_seconds, fps}.
+    Uses the same pre-v9 auto-ingest fallback as deep_vision, so a ref that
+    resolves for deepen resolves identically for every strata action. With
+    ``require_media=True`` the clip's media file must exist on disk.
+    """
+    from src.utils import analysis_store
+
+    conn = timeline_brain_db.connect(project_root)
+    clip_uuid = analysis_store.resolve_clip_uuid_ingesting(project_root, conn, clip_ref)
+    if not clip_uuid:
+        return conn, None, {
+            "success": False,
+            "error": f"Unknown clip ref: {clip_ref!r} (older analysis root? run db_ingest first)",
+        }
+    row = conn.execute(
+        "SELECT clip_uuid, clip_name, file_path, duration_seconds, fps FROM clips WHERE clip_uuid = ?",
+        (clip_uuid,),
+    ).fetchone()
+    if row is None:
+        return conn, None, {"success": False, "error": f"No clips row for {clip_uuid}"}
+    clip = {
+        "clip_uuid": clip_uuid,
+        "clip_name": row["clip_name"],
+        "file_path": row["file_path"],
+        "duration_seconds": row["duration_seconds"],
+        "fps": row["fps"],
+    }
+    if require_media:
+        file_path = clip["file_path"]
+        if not file_path or not os.path.isfile(file_path):
+            return conn, None, {
+                "success": False,
+                "error": f"Media file not accessible for clip {clip['clip_name']!r}: {file_path!r}",
+                "clip_uuid": clip_uuid,
+            }
+    return conn, clip, None
+
+
+# ── float32 blob convention — ONE codec, shared with embeddings.vector ───────
 
 
 def pack_curve(values: Sequence[float]) -> bytes:
     """Encode a float sequence as a little-endian float32 BLOB."""
-    arr = array("f", (float(v) for v in values))
-    return arr.tobytes()
+    return _pack_vector([float(v) for v in values])
 
 
 def unpack_curve(blob: bytes) -> List[float]:
     """Decode a float32 BLOB back to a list of floats."""
-    arr = array("f")
-    arr.frombytes(blob)
-    return list(arr)
+    return _unpack_vector(blob)
 
 
 def curve_stats(values: Sequence[float]) -> Dict[str, Any]:
@@ -230,9 +279,23 @@ def read_events(
     # inside it — a 3 s pause that began before the window is still a pause.
     # Point events (no duration) use the half-open [start, end) convention.
     if start_seconds is not None:
-        sql += " AND (time_seconds >= ? OR time_seconds + COALESCE(duration_seconds, 0) > ?)"
-        args.append(float(start_seconds))
-        args.append(float(start_seconds))
+        start = float(start_seconds)
+        # A bare OR on the overlap test is non-sargable (ix_events_clip_track
+        # could never range-seek on time_seconds). Bound the lower edge by the
+        # track's longest span instead: no overlapping event can start earlier
+        # than start - MAX(duration). The MAX probe is a single b-tree descent
+        # via ix_events_clip_track_span (v15).
+        span_sql = "SELECT MAX(duration_seconds) FROM events WHERE clip_uuid = ?"
+        span_args: List[Any] = [clip_uuid]
+        if track:
+            span_sql += " AND track = ?"
+            span_args.append(track)
+        max_span = conn.execute(span_sql, span_args).fetchone()[0] or 0.0
+        sql += (
+            " AND time_seconds >= ?"
+            " AND (time_seconds >= ? OR time_seconds + COALESCE(duration_seconds, 0) > ?)"
+        )
+        args.extend([start - float(max_span), start, start])
     if end_seconds is not None:
         sql += " AND time_seconds < ?"
         args.append(float(end_seconds))
@@ -476,13 +539,19 @@ def backfill_transcript_words(project_root: str) -> Dict[str, Any]:
     re-running any analysis. Idempotent.
     """
     conn = timeline_brain_db.connect(project_root)
-    rows = conn.execute("SELECT clip_uuid, report_json FROM analysis_reports").fetchall()
-    clips_seen = 0
+    clips_seen = int(conn.execute("SELECT COUNT(*) FROM analysis_reports").fetchone()[0])
     clips_with_words = 0
     words_written = 0
     with timeline_brain_db.transaction(project_root) as txn:
-        for row in rows:
-            clips_seen += 1
+        # Lazy cursor + substring prefilter: never hold every multi-MB report
+        # blob in memory at once, and skip parsing reports that cannot carry
+        # words. Reads and writes share the cached connection but touch
+        # different tables, so interleaving is safe.
+        cursor = txn.execute(
+            "SELECT clip_uuid, report_json FROM analysis_reports "
+            "WHERE report_json LIKE '%\"transcription\"%'"
+        )
+        for row in cursor:
             try:
                 report = json.loads(row["report_json"])
             except (TypeError, ValueError):
@@ -507,14 +576,12 @@ def backfill_transcript_words(project_root: str) -> Dict[str, Any]:
 
 def strata_status(project_root: str, clip_ref: Any = None) -> Dict[str, Any]:
     """Project-level (or per-clip) strata inventory."""
-    from src.utils import analysis_store
-
     conn = timeline_brain_db.connect(project_root)
     if clip_ref is not None:
-        clip_uuid = analysis_store.resolve_clip_uuid(conn, clip_ref)
-        if not clip_uuid:
-            return {"success": False, "error": f"Unknown clip ref: {clip_ref!r}"}
-        return {"success": True, "clip_uuid": clip_uuid, **list_tracks(conn, clip_uuid)}
+        conn, clip, err = resolve_clip(project_root, clip_ref)
+        if err:
+            return err
+        return {"success": True, "clip_uuid": clip["clip_uuid"], **list_tracks(conn, clip["clip_uuid"])}
 
     def _count(sql: str) -> int:
         return int(conn.execute(sql).fetchone()[0])

@@ -123,37 +123,8 @@ def _now() -> str:
 def _clip_context(project_root: str, clip_ref: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Resolve a clip to (context, error). Auto-ingests the JSON report when
     the DB has no rows yet (pre-v9 analysis roots)."""
-    ma = _ma()
     conn = timeline_brain_db.connect(project_root)
-    clip_uuid = analysis_store.resolve_clip_uuid(conn, clip_ref)
-    if not clip_uuid:
-        # Pre-v9 report? Find the analysis.json by walking clips/ and ingest it.
-        clips_root = os.path.join(project_root, "clips")
-        candidate = str(clip_ref or "")
-        if os.path.isdir(clips_root):
-            for entry in sorted(os.listdir(clips_root)):
-                report_path = os.path.join(clips_root, entry, "analysis.json")
-                if not os.path.isfile(report_path):
-                    continue
-                try:
-                    with open(report_path, "r", encoding="utf-8") as handle:
-                        report = json.load(handle)
-                except (OSError, json.JSONDecodeError):
-                    continue
-                clip_block = report.get("clip") or {}
-                if candidate not in (
-                    entry,
-                    str(clip_block.get("clip_id") or ""),
-                    str(clip_block.get("media_id") or ""),
-                    ma.normalize_path(clip_block.get("file_path") or ""),
-                ):
-                    continue
-                ingest = analysis_store.ingest_report(
-                    project_root, report, clip_dir=os.path.join(clips_root, entry)
-                )
-                if ingest.get("success"):
-                    clip_uuid = ingest["clip_uuid"]
-                break
+    clip_uuid = analysis_store.resolve_clip_uuid_ingesting(project_root, conn, clip_ref)
     if not clip_uuid:
         return None, f"No analyzed clip found for {clip_ref!r} (run db_ingest if this is an older analysis root)"
     clip_row = conn.execute("SELECT * FROM clips WHERE clip_uuid = ?", (clip_uuid,)).fetchone()

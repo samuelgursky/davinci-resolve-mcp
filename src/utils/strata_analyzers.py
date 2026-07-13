@@ -17,10 +17,8 @@ and DB writes.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
-import os
 import shutil
 import subprocess
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -71,33 +69,30 @@ def _ensure_tool_path() -> None:
 
 
 def capabilities() -> Dict[str, Any]:
-    """What the local analyzers can run on this machine."""
+    """What the local analyzers can run on this machine.
+
+    Derived from the ANALYZERS registry — adding an analyzer there is the
+    single edit; this report and run_analyzers' default set follow.
+    """
     _ensure_tool_path()
     ffmpeg = shutil.which("ffmpeg")
+    have = {"ffmpeg": bool(ffmpeg), "numpy": _np is not None}
+    analyzers: Dict[str, Any] = {}
+    for name, spec in ANALYZERS.items():
+        probe = spec.get("capability")
+        if probe is not None:
+            analyzers[name] = probe()
+            continue
+        requires = spec["requires"]
+        analyzers[name] = {
+            "available": all(have.get(req, False) for req in requires),
+            "requires": list(requires),
+            "writes": spec["writes"],
+        }
     return {
         "ffmpeg": {"available": bool(ffmpeg), "path": ffmpeg},
         "numpy": {"available": _np is not None},
-        "analyzers": {
-            "prosody": {
-                "available": bool(ffmpeg) and _np is not None,
-                "requires": ["ffmpeg", "numpy"],
-                "writes": {
-                    "curves": ["pitch", "vocal_energy", "speech_rate"],
-                    "events": ["pause", "breath", "hesitation"],
-                },
-            },
-            "beat_grid": {
-                "available": bool(ffmpeg) and _np is not None,
-                "requires": ["ffmpeg", "numpy"],
-                "writes": {"events": ["beat", "downbeat"]},
-            },
-            "motion_energy": {
-                "available": bool(ffmpeg),
-                "requires": ["ffmpeg"],
-                "writes": {"curves": ["motion_energy"]},
-            },
-            "face": _face_capability(),
-        },
+        "analyzers": analyzers,
     }
 
 
@@ -126,36 +121,10 @@ def _require(*needs: str) -> Optional[Dict[str, Any]]:
 
 
 def _clip_row(project_root: str, clip_ref: Any) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """Resolve a clip ref to {clip_uuid, file_path, duration_seconds, fps}."""
-    from src.utils import analysis_store
-
-    conn = timeline_brain_db.connect(project_root)
-    clip_uuid = analysis_store.resolve_clip_uuid(conn, clip_ref)
-    if not clip_uuid:
-        return None, {
-            "success": False,
-            "error": f"Unknown clip ref: {clip_ref!r} (older analysis root? run db_ingest first)",
-        }
-    row = conn.execute("SELECT * FROM clips WHERE clip_uuid = ?", (clip_uuid,)).fetchone()
-    if row is None:
-        return None, {"success": False, "error": f"No clips row for {clip_uuid}"}
-    file_path = row["file_path"]
-    if not file_path or not os.path.isfile(file_path):
-        return None, {
-            "success": False,
-            "error": f"Media file not accessible for clip {row['clip_name']!r}: {file_path!r}",
-            "clip_uuid": clip_uuid,
-        }
-    return (
-        {
-            "clip_uuid": clip_uuid,
-            "clip_name": row["clip_name"],
-            "file_path": file_path,
-            "duration_seconds": row["duration_seconds"],
-            "fps": row["fps"],
-        },
-        None,
-    )
+    """Resolve a clip ref to {clip_uuid, file_path, duration_seconds, fps};
+    analyzers read the media file, so it must exist."""
+    _conn, clip, err = strata.resolve_clip(project_root, clip_ref, require_media=True)
+    return clip, err
 
 
 # ── decoding ─────────────────────────────────────────────────────────────────
@@ -177,6 +146,40 @@ def decode_audio(path: str, sample_rate: int = AUDIO_SAMPLE_RATE, timeout: int =
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg audio decode failed: {proc.stderr.decode('utf-8', 'replace')[:500]}")
     return _np.frombuffer(proc.stdout, dtype=_np.float32)
+
+
+def _audio_context(
+    project_root: str,
+    clip_ref: Any,
+    *,
+    clip: Optional[Dict[str, Any]] = None,
+    samples: "Any" = None,
+) -> Tuple[Optional[Dict[str, Any]], "Any", Optional[Dict[str, Any]]]:
+    """The shared audio-analyzer preamble: deps → clip row → decoded samples.
+
+    Returns (clip, samples, error). Pass a previously resolved ``clip`` and
+    decoded ``samples`` to skip the ffmpeg decode — run_analyzers uses this
+    so prosody and beat_grid share one decode of the same media file.
+    """
+    missing = _require("ffmpeg", "numpy")
+    if missing:
+        return None, None, missing
+    if clip is None:
+        clip, err = _clip_row(project_root, clip_ref)
+        if err:
+            return None, None, err
+    if samples is None:
+        try:
+            samples = decode_audio(clip["file_path"])
+        except (RuntimeError, subprocess.TimeoutExpired) as exc:
+            return None, None, {"success": False, "error": str(exc), "clip_uuid": clip["clip_uuid"]}
+    if samples.size == 0:
+        return None, None, {
+            "success": False,
+            "error": "clip has no decodable audio",
+            "clip_uuid": clip["clip_uuid"],
+        }
+    return clip, samples, None
 
 
 # ── prosody: pure compute ────────────────────────────────────────────────────
@@ -326,7 +329,9 @@ def detect_breaths(
     """
     if not len(energy):
         return []
-    arr = _np.asarray(energy, dtype=_np.float64) if _np is not None else None
+    # numpy assumed: every caller sits behind _require("numpy"), matching the
+    # sibling compute functions in this module.
+    arr = _np.asarray(energy, dtype=_np.float64)
     breaths: List[Dict[str, Any]] = []
     for pause in pauses:
         start = float(pause["time_seconds"])
@@ -335,9 +340,9 @@ def detect_breaths(
         hi = min(int((start + dur) * curve_rate), len(energy))
         if hi - lo < 3:
             continue
-        seg = arr[lo:hi] if arr is not None else energy[lo:hi]
-        floor = float(_np.percentile(seg, 20)) if arr is not None else min(seg)
-        peak_idx = int(_np.argmax(seg)) if arr is not None else max(range(len(seg)), key=lambda i: seg[i])
+        seg = arr[lo:hi]
+        floor = float(_np.percentile(seg, 20))
+        peak_idx = int(_np.argmax(seg))
         peak = float(seg[peak_idx])
         # Bump: clearly above the gap floor, clearly below speech (~1.0 scale).
         if peak >= floor + 0.05 and peak <= 0.5:
@@ -354,28 +359,25 @@ def detect_breaths(
 # ── prosody: runner ──────────────────────────────────────────────────────────
 
 
-def run_prosody(project_root: str, clip_ref: Any) -> Dict[str, Any]:
+def run_prosody(
+    project_root: str,
+    clip_ref: Any,
+    *,
+    clip: Optional[Dict[str, Any]] = None,
+    samples: "Any" = None,
+) -> Dict[str, Any]:
     """Compute + persist prosody strata for one clip.
 
     Writes curves pitch / vocal_energy / speech_rate and events pause /
     breath / hesitation. Requires the clip's media file, ffmpeg, numpy, and
-    (for word-derived tracks) transcript_words rows.
+    (for word-derived tracks) transcript_words rows. ``clip``/``samples``
+    accept a pre-resolved row and pre-decoded audio (see _audio_context).
     """
-    missing = _require("ffmpeg", "numpy")
-    if missing:
-        return missing
-    clip, err = _clip_row(project_root, clip_ref)
+    clip, samples, err = _audio_context(project_root, clip_ref, clip=clip, samples=samples)
     if err:
         return err
     conn = timeline_brain_db.connect(project_root)
     words = strata.read_words(conn, clip["clip_uuid"])
-
-    try:
-        samples = decode_audio(clip["file_path"])
-    except (RuntimeError, subprocess.TimeoutExpired) as exc:
-        return {"success": False, "error": str(exc), "clip_uuid": clip["clip_uuid"]}
-    if samples.size == 0:
-        return {"success": False, "error": "clip has no decodable audio", "clip_uuid": clip["clip_uuid"]}
 
     duration = clip["duration_seconds"] or (samples.size / AUDIO_SAMPLE_RATE)
     energy = compute_energy_curve(samples)
@@ -447,7 +449,6 @@ def compute_beat_grid(
     Downbeats are a phase-of-strongest-onset estimate every 4 beats —
     explicitly low-confidence (no meter detection).
     """
-    hop = int(sample_rate * HOP_SECONDS)
     win = int(sample_rate * FRAME_SECONDS)
     frames, _, _ = _frame_signal(samples, sample_rate)
     if frames.shape[0] < 16:
@@ -500,20 +501,20 @@ def compute_beat_grid(
     }
 
 
-def run_beat_grid(project_root: str, clip_ref: Any) -> Dict[str, Any]:
-    """Compute + persist the musical beat grid for one clip."""
-    missing = _require("ffmpeg", "numpy")
-    if missing:
-        return missing
-    clip, err = _clip_row(project_root, clip_ref)
+def run_beat_grid(
+    project_root: str,
+    clip_ref: Any,
+    *,
+    clip: Optional[Dict[str, Any]] = None,
+    samples: "Any" = None,
+) -> Dict[str, Any]:
+    """Compute + persist the musical beat grid for one clip.
+
+    ``clip``/``samples`` accept a pre-resolved row and pre-decoded audio
+    (see _audio_context)."""
+    clip, samples, err = _audio_context(project_root, clip_ref, clip=clip, samples=samples)
     if err:
         return err
-    try:
-        samples = decode_audio(clip["file_path"])
-    except (RuntimeError, subprocess.TimeoutExpired) as exc:
-        return {"success": False, "error": str(exc), "clip_uuid": clip["clip_uuid"]}
-    if samples.size == 0:
-        return {"success": False, "error": "clip has no decodable audio", "clip_uuid": clip["clip_uuid"]}
 
     grid = compute_beat_grid(samples)
     beat_events = [
@@ -641,11 +642,36 @@ def _run_face(project_root: str, clip_ref: Any) -> Dict[str, Any]:
     return strata_faces.run_face_strata(project_root, clip_ref)
 
 
-ANALYZERS = {
-    "prosody": run_prosody,
-    "beat_grid": run_beat_grid,
-    "motion_energy": run_motion_energy,
-    "face": _run_face,
+# The single analyzer registry: run function + dependency/track metadata.
+# capabilities() and run_analyzers' default set derive from it, so a new
+# analyzer is one entry here (or a "capability" probe for stacks that
+# self-describe, like face). "audio" marks analyzers that consume the shared
+# mono PCM decode.
+ANALYZERS: Dict[str, Dict[str, Any]] = {
+    "prosody": {
+        "run": run_prosody,
+        "requires": ("ffmpeg", "numpy"),
+        "writes": {
+            "curves": ["pitch", "vocal_energy", "speech_rate"],
+            "events": ["pause", "breath", "hesitation"],
+        },
+        "audio": True,
+    },
+    "beat_grid": {
+        "run": run_beat_grid,
+        "requires": ("ffmpeg", "numpy"),
+        "writes": {"events": ["beat", "downbeat"]},
+        "audio": True,
+    },
+    "motion_energy": {
+        "run": run_motion_energy,
+        "requires": ("ffmpeg",),
+        "writes": {"curves": ["motion_energy"]},
+    },
+    "face": {
+        "run": _run_face,
+        "capability": _face_capability,
+    },
 }
 
 
@@ -658,7 +684,8 @@ def run_analyzers(
 
     Explicitly-requested analyzers run (and fail loudly if deps are
     missing); the default set runs only what this machine can run, and
-    names what it skipped.
+    names what it skipped. When several audio analyzers run, the media
+    file is decoded once and the samples are shared.
     """
     caps = capabilities()["analyzers"]
     if analyzers:
@@ -674,7 +701,24 @@ def run_analyzers(
             "error": f"Unknown analyzer(s): {', '.join(unknown)}",
             "available": sorted(ANALYZERS),
         }
-    results = {name: ANALYZERS[name](project_root, clip_ref) for name in names}
+
+    audio_names = [n for n in names if ANALYZERS[n].get("audio")]
+    shared_clip: Optional[Dict[str, Any]] = None
+    shared_samples: "Any" = None
+    shared_err: Optional[Dict[str, Any]] = None
+    if len(audio_names) > 1:
+        shared_clip, shared_samples, shared_err = _audio_context(project_root, clip_ref)
+
+    results: Dict[str, Any] = {}
+    for name in names:
+        if name in audio_names and shared_err is not None:
+            results[name] = shared_err
+        elif name in audio_names and shared_clip is not None:
+            results[name] = ANALYZERS[name]["run"](
+                project_root, clip_ref, clip=shared_clip, samples=shared_samples
+            )
+        else:
+            results[name] = ANALYZERS[name]["run"](project_root, clip_ref)
     out: Dict[str, Any] = {
         "success": all(r.get("success") for r in results.values()),
         "results": results,
