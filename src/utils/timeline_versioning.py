@@ -137,6 +137,18 @@ def archive_current_timeline(
     conn = timeline_brain_db.connect(project_root)
 
     next_version = (timeline_brain_db.latest_version(conn, working_name) or 0) + 1
+    # The brain DB is not the only writer of archive names: other sessions,
+    # machines, or a crash between DuplicateTimeline and the version INSERT can
+    # leave `<name>_archived_vNN` timelines the DB has never heard of. A name
+    # collision makes DuplicateTimeline fail AND raises a blocking modal dialog
+    # in the Resolve UI, so bump past every suffix that exists in the project.
+    for existing_tl in _list_all_timelines(project):
+        try:
+            m = ARCHIVED_SUFFIX_PATTERN.match(existing_tl.GetName())
+        except Exception:
+            continue
+        if m and m.group("base") == working_name and m.group("v"):
+            next_version = max(next_version, int(m.group("v")) + 1)
     archived_name = f"{working_name}_archived_v{next_version:02d}"
 
     # Resolve duplication must happen on the live timeline; pin current folder
