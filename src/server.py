@@ -3472,6 +3472,27 @@ def _timeline_media_type(track_type: str):
     return None
 
 
+def _track_selector(p: Dict[str, Any]):
+    """(track_type, track_index, err) from a params dict.
+
+    Accepts the 1-based track index as either ``index`` or ``track_index``. err
+    is a validation message (None on success) so a missing or malformed selector
+    returns a structured error.
+    """
+    normalized = dict(p)
+    if normalized.get("index") is None and normalized.get("track_index") is not None:
+        normalized["index"] = normalized["track_index"]
+    err, clean = _validate_params(normalized, {
+        "track_type": {"type": str, "required": True, "enum": ["video", "audio", "subtitle"]},
+        "index": {"type": int, "required": True, "min": 1},
+    })
+    if err:
+        if err.startswith("'index' is required"):
+            err = "requires a 1-based track index ('index' or 'track_index')"
+        return None, None, err
+    return clean["track_type"], clean["index"], None
+
+
 def _timeline_track_count(tl, track_type: str):
     try:
         return int(tl.GetTrackCount(track_type) or 0)
@@ -18852,7 +18873,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       get_track_locked(track_type, index) -> {locked}
       get_track_name(track_type, index) -> {name}
       set_track_name(track_type, index, name) -> {success}
-      get_items(track_type, index) -> {items}
+      get_items(track_type, index|track_index) -> {items}  — track_type: video|audio|subtitle
       clip_where(filters|track_type?, track_index?, name_contains?, duration_lt?, duration_gt?) -> {clips, match_count, total_clips}
         Find clips on the current timeline matching named filters (AND). Pass filters
         inline or as a `filters` dict. Live filters: track_type, track_index,
@@ -18928,7 +18949,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       set_mark_in_out(mark_in, mark_out, type?) -> {success}
       clear_mark_in_out(type?) -> {success}
       convert_to_stereo() -> {success}
-      get_items_in_track(track_type, track_index) -> {items}
+      get_items_in_track(track_type, track_index|index) -> {items}  — full serialization of each item
       get_voice_isolation_state(track_index) -> {isEnabled, amount}
       set_voice_isolation_state(track_index, state) -> {success}
       extract_source_frame_ranges(handles?, gap_max?, skip_extensions?) -> {timeline_name, frame_ranges, occurrences, ...}
@@ -19134,7 +19155,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "set_track_name":
         return {"success": bool(tl.SetTrackName(p["track_type"], p["index"], p["name"]))}
     elif action == "get_items":
-        items = tl.GetItemListInTrack(p["track_type"], p["index"])
+        track_type, track_index, err = _track_selector(p)
+        if err:
+            return _err(err)
+        items = tl.GetItemListInTrack(track_type, track_index)
         return {"items": [{"name": it.GetName(), "id": it.GetUniqueId(), "start": it.GetStart(), "end": it.GetEnd(), "duration": it.GetDuration()} for it in (items or [])]}
     elif action == "delete_clips":
         # Find timeline items by unique IDs
@@ -19362,7 +19386,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "convert_to_stereo":
         return {"success": bool(tl.ConvertTimelineToStereo())}
     elif action == "get_items_in_track":
-        return {"items": _ser(tl.GetItemListInTrack(p["track_type"], p["track_index"]))}
+        track_type, track_index, err = _track_selector(p)
+        if err:
+            return _err(err)
+        return {"items": _ser(tl.GetItemListInTrack(track_type, track_index))}
     elif action == "get_voice_isolation_state":
         missing = _requires_method(tl, "GetVoiceIsolationState", "20.1")
         if missing:
@@ -20691,6 +20718,18 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
         },
     },
     "timeline": {
+        "get_items": {
+            "summary": "List items on one track as a summary (name/id/start/end/duration).",
+            "params": "track_type (video|audio|subtitle), index|track_index (1-based)",
+            "returns": "{items: [{name, id, start, end, duration}]}",
+            "example": 'timeline(action="get_items", params={"track_type": "video", "index": 1})',
+        },
+        "get_items_in_track": {
+            "summary": "List items on one track with full per-item serialization.",
+            "params": "track_type (video|audio|subtitle), track_index|index (1-based)",
+            "returns": "{items}",
+            "example": 'timeline(action="get_items_in_track", params={"track_type": "audio", "track_index": 1})',
+        },
         "duplicate_clips": {
             "summary": "Re-place the same MediaPool media with the same source trim. Video clips only.",
             "params": "clip_ids?|selected?, target_track_index?|track_offset?, placement? (same_time|offset|at_playhead|track_above|after_source|next_gap), record_frame?, record_frame_offset?, copy_properties?, include_linked?",
