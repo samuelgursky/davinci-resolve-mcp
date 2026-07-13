@@ -16344,7 +16344,9 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       clear_transcription(clip_id) -> {success}
       get_transcription(clip_id) -> {text, truncated, status, has_transcription}
         Read a clip's transcription. `truncated` flags when Resolve's preview
-        property cut the text off (the full transcript is longer).
+        property cut the text off (the full transcript is longer). Clip-level and
+        separate from the timeline subtitle transcript (timeline.get_transcript)
+        that propose_cuts uses.
       extract_frames(clip_id, timestamps, output_dir?) -> {frame_paths, output_dir, count, errors}
         Extract still JPEGs from the clip's source at the given timestamps (seconds)
         via ffmpeg. Source-safe: reads source, writes only to a scratch dir.
@@ -18893,7 +18895,9 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     PREFER probe_* / *_capabilities / *_boundary_report / *_checked / dry_run variants
     where they exist. Raw mutators are kept for advanced callers but bypass guardrails.
     DESTRUCTIVE actions auto-archive the current timeline (C6); pass strict=true for
-    refuse-on-archive-failure behavior on the catastrophic ops.
+    refuse-on-archive-failure behavior on the catastrophic ops. To thread several
+    destructive calls into ONE archived predecessor instead of N, wrap them in
+    timeline_versioning begin_run/end_run.
 
     Frame numbers are TIMELINE/record frames (position on the timeline) unless an action
     says SOURCE. Source frames are positions within a media-pool clip's own media:
@@ -18988,7 +18992,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       get_node_graph() -> {available}
       get_media_pool_item() -> {name, id}
       get_transcript(with_timecodes?) -> {text, cue_count, has_subtitles, cues}
-        Read the timeline's subtitle track(s) as transcript text.
+        Read the timeline's subtitle track(s) as transcript text. This is the
+        TIMELINE subtitle transcript that propose_cuts consumes; it is separate
+        from clip-level transcription (produced by transcribe_audio on a
+        folder/clip, read via media_pool_item get_transcription), which does not
+        drive timeline cuts.
       propose_cuts(cues?, long_pause_frames?) -> {cuts, cut_count, basis_cue_count, pass, note}
         DRY-RUN. Mechanically detect candidate cuts (filler words, long pauses,
         repeated lines) from the subtitle transcript. Proposes only; applies nothing.
@@ -20806,7 +20814,8 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
             "params": (
                 "name, ranges: [{clip_id|media_pool_item_id, start_frame, end_frame, "
                 "record_frame?, track_type?}], markers?, cdl?, dry_run?  — clip_id is a "
-                "media-pool item id (not a timeline-item id); start_frame/end_frame are SOURCE frames"
+                "media-pool item id (not a timeline-item id); start_frame/end_frame are SOURCE "
+                "frames, end_frame exclusive (source duration = end_frame - start_frame)"
             ),
             "returns": "{success, id, items}  — items[].placed = placed frames; items[].range = the requested range",
             "example": (
