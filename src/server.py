@@ -4046,6 +4046,20 @@ def _timeline_copy_range_impl(proj, tl, p: Dict[str, Any], *, overwrite: bool = 
     return out
 
 
+def _apply_cuts_skip_reason(cut):
+    """Why a CutList entry is not applicable by apply_cuts, or None if it is."""
+    if not isinstance(cut, dict):
+        return "not an object"
+    if cut.get("action") not in ("lift", "ripple_delete"):
+        return f"action {cut.get('action')!r} is not lift or ripple_delete"
+    span = cut.get("span")
+    if not isinstance(span, dict):
+        return "missing span"
+    if span.get("start") is None or span.get("end") is None:
+        return "span missing start/end"
+    return None
+
+
 def _timeline_lift_range_impl(tl, p: Dict[str, Any]):
     start, end, items, err = _collect_timeline_items_in_range(tl, p)
     if err:
@@ -18941,7 +18955,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       propose_cuts(cues?, long_pause_frames?) -> {cuts, cut_count, basis_cue_count, pass, note}
         DRY-RUN. Mechanically detect candidate cuts (filler words, long pauses,
         repeated lines) from the subtitle transcript. Proposes only; applies nothing.
-      apply_cuts(cuts, dry_run?, confirm_token?, allow_partial_item_delete?) -> {applied, total, results}
+      apply_cuts(cuts, dry_run?, confirm_token?, allow_partial_item_delete?) -> {applied, total, skipped, results}
+        skipped lists cuts that were not applicable, each with a reason.
         Apply a CutList (from propose_cuts) as lift/ripple deletes. DRY-RUN by
         default; applying is DESTRUCTIVE — confirm-token gated and a timeline
         version is archived first. Cuts apply latest-first.
@@ -19322,12 +19337,14 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         cuts = p.get("cuts")
         if not isinstance(cuts, list):
             return _err("apply_cuts requires 'cuts' (a list, e.g. from propose_cuts)")
-        applicable = [
-            c for c in cuts
-            if isinstance(c, dict) and c.get("action") in ("lift", "ripple_delete")
-            and isinstance(c.get("span"), dict)
-            and c["span"].get("start") is not None and c["span"].get("end") is not None
-        ]
+        applicable = []
+        skipped = []
+        for index, c in enumerate(cuts):
+            reason = _apply_cuts_skip_reason(c)
+            if reason:
+                skipped.append({"index": index, "cut": c, "reason": reason})
+            else:
+                applicable.append(c)
         applicable.sort(key=lambda c: c["span"]["start"], reverse=True)
         plan = [{"action": c["action"], "span": c["span"], "kind": c.get("kind")} for c in applicable]
 
@@ -19336,6 +19353,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                 "dry_run": True,
                 "would_apply": len(applicable),
                 "plan": plan,
+                "skipped": skipped,
                 "note": "No edits made. Re-run with dry_run=false (and a confirm_token) to apply.",
             }
 
@@ -19349,6 +19367,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                                "archived first.",
                     "would_apply": len(applicable),
                     "plan": plan,
+                    "skipped": skipped,
                 },
             )
         blocked = _consume_confirm_token(action="timeline.apply_cuts", params=p)
@@ -19368,7 +19387,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
             results.append({"action": c["action"], "span": sp, "result": res})
         applied = sum(1 for r in results
                       if isinstance(r["result"], dict) and r["result"].get("success"))
-        return {"success": True, "applied": applied, "total": len(applicable), "results": results}
+        return {"success": True, "applied": applied, "total": len(applicable),
+                "skipped": skipped, "results": results}
     elif action == "get_mark_in_out":
         return _ser(tl.GetMarkInOut())
     elif action == "set_mark_in_out":
