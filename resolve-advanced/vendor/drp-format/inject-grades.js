@@ -22,8 +22,10 @@ function listSeqContainerEntries(zip) {
   const out = [];
   zip.forEach((relativePath, entry) => {
     if (entry.dir) return;
-    // Match any "<anything>/SeqContainer<N>.xml" path.
-    if (/(^|\/)SeqContainer\d*\.xml$/.test(relativePath)) {
+    // Two shapes in the wild: legacy flat "SeqContainer<N>.xml" files, and the
+    // "SeqContainer/<uuid>.xml" folder layout Resolve 19 exports (which
+    // grade-node-extractor already handles). Match both.
+    if (/(^|\/)SeqContainer\d*\.xml$/.test(relativePath) || /(^|\/)SeqContainer\/[^/]+\.xml$/.test(relativePath)) {
       out.push(relativePath);
     }
   });
