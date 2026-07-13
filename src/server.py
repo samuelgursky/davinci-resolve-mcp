@@ -4897,6 +4897,18 @@ def _variant_item_placement(item) -> Dict[str, Any]:
     }
 
 
+def _variant_audio_summary(built):
+    """Video/audio range counts for an assembled variant, warning when it carries
+    no audio. create_variant_from_ranges places exactly the ranges given, so a
+    video-only range list yields a silent timeline."""
+    video = sum(1 for row in built if row.get("media_type") == 1)
+    audio = sum(1 for row in built if row.get("media_type") == 2)
+    summary = {"video_ranges": video, "audio_ranges": audio}
+    if audio == 0:
+        summary["warning"] = "video-only (no audio): add ranges with track_type='audio' to carry sound"
+    return summary
+
+
 def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> Dict[str, Any]:
     ranges = p.get("ranges") or p.get("clip_infos")
     if not isinstance(ranges, list) or not ranges:
@@ -4968,6 +4980,7 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
                 for row in built
             ],
             "markers": p.get("markers") or [],
+            "audio": _variant_audio_summary(built),
             "would_create_timeline": True,
         }
     new_tl = mp.CreateEmptyTimeline(name)
@@ -5029,6 +5042,7 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
         "id": new_tl.GetUniqueId(),
         "items": items_out,
         "placement_mismatches": placement_mismatches,
+        "audio": _variant_audio_summary(built),
         "markers": marker_results,
         "look": look_result,
         "gaps_overlaps": _detect_gaps_overlaps_from_snapshot(_timeline_conform_snapshot(new_tl, {}), {}),
@@ -18662,6 +18676,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                 "audio_accounting": {
                     "planned_audio_ranges": audio_keep_ranges,
                     "planned_video_ranges": video_keep_ranges,
+                    # variant_* count placed items; variant["audio"] counts requested ranges.
                     "variant_audio_items": sum(
                         1 for it in (variant.get("items") or [])
                         if (it.get("range") or {}).get("media_type") == 2
@@ -20787,7 +20802,7 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
             ),
         },
         "create_variant_from_ranges": {
-            "summary": "Build a variant timeline from N source ranges. Source-safe; dry_run validates clip ids and frame ranges.",
+            "summary": "Build a variant timeline from N source ranges. Video-only unless ranges include track_type='audio'. Source-safe; dry_run validates clip ids and frame ranges.",
             "params": (
                 "name, ranges: [{clip_id|media_pool_item_id, start_frame, end_frame, "
                 "record_frame?, track_type?}], markers?, cdl?, dry_run?  — clip_id is a "
