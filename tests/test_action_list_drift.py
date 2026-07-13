@@ -27,16 +27,22 @@ ALIASES = {
 
 
 def _module_list_constants(tree):
+    """Module-level ``NAME = [str, ...]`` constants, resolved in file order so a
+    list may splat an earlier constant (``[*OTHER, "x"]``)."""
     consts = {}
     for node in tree.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             if isinstance(node.value, (ast.List, ast.Tuple)):
-                values = [
-                    elt.value
-                    for elt in node.value.elts
-                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                ]
-                if len(values) == len(node.value.elts):
+                values, resolvable = [], True
+                for elt in node.value.elts:
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                        values.append(elt.value)
+                    elif isinstance(elt, ast.Starred) and isinstance(elt.value, ast.Name) and elt.value.id in consts:
+                        values.extend(consts[elt.value.id])
+                    else:
+                        resolvable = False
+                        break
+                if resolvable:
                     consts[node.targets[0].id] = values
     return consts
 
@@ -60,9 +66,16 @@ def _implemented_actions(fn):
 def _listed_actions(fn, consts):
     for node in ast.walk(fn):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_unknown":
-            if len(node.args) >= 2 and isinstance(node.args[1], ast.List):
+            if len(node.args) < 2:
+                continue
+            arg = node.args[1]
+            if isinstance(arg, ast.Name):
+                if arg.id in consts:
+                    return set(consts[arg.id]), True
+                return None, False
+            if isinstance(arg, ast.List):
                 listed, resolvable = set(), True
-                for elt in node.args[1].elts:
+                for elt in arg.elts:
                     if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
                         listed.add(elt.value)
                     elif isinstance(elt, ast.Starred) and isinstance(elt.value, ast.Name) and elt.value.id in consts:
@@ -78,7 +91,7 @@ class ActionListDriftTest(unittest.TestCase):
         tree = ast.parse(SERVER.read_text())
         consts = _module_list_constants(tree)
         problems = []
-        checked = 0
+        checked_names = []
         for node in tree.body:
             # Async tools (e.g. media_analysis) drifted unchecked for several
             # releases because only FunctionDef was inspected.
@@ -90,7 +103,7 @@ class ActionListDriftTest(unittest.TestCase):
             implemented = _implemented_actions(node)
             if not implemented:
                 continue
-            checked += 1
+            checked_names.append(node.name)
             aliases = ALIASES.get(node.name, set())
             missing = sorted(implemented - listed - aliases)
             phantom = sorted(listed - implemented)
@@ -98,7 +111,10 @@ class ActionListDriftTest(unittest.TestCase):
                 problems.append(f"{node.name}: implemented but not listed: {missing}")
             if phantom:
                 problems.append(f"{node.name}: listed but not implemented: {phantom}")
-        self.assertGreater(checked, 10, "drift checker found too few tools — parser broken?")
+        self.assertGreater(len(checked_names), 10, "drift checker found too few tools — parser broken?")
+        # timeline's list is a module constant (_TIMELINE_ACTIONS); fail loudly if
+        # it ever stops resolving instead of silently dropping from coverage.
+        self.assertIn("timeline", checked_names)
         self.assertEqual(problems, [], "\n".join(problems))
 
     def test_no_unreachable_actions_inside_membership_blocks(self):
