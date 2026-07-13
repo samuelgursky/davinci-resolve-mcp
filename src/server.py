@@ -4837,6 +4837,31 @@ def _timeline_apply_look_to_items(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _variant_item_placement(item) -> Dict[str, Any]:
+    """Report an appended item's placed frame positions in both frame spaces.
+    record_* are TIMELINE frames (GetStart/GetEnd/GetDuration); source_start is
+    a SOURCE frame."""
+    def _read(method):
+        fn = getattr(item, method, None)
+        if not callable(fn):
+            return None
+        try:
+            return _frame_int(fn())
+        except Exception:
+            return None
+    record_start = _read("GetStart")
+    record_end = _read("GetEnd")
+    duration = _read("GetDuration")
+    if duration is None and record_start is not None and record_end is not None:
+        duration = record_end - record_start
+    return {
+        "record_start": record_start,
+        "record_end": record_end,
+        "duration": duration,
+        "source_start": _timeline_item_source_start(item),
+    }
+
+
 def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> Dict[str, Any]:
     ranges = p.get("ranges") or p.get("clip_infos")
     if not isinstance(ranges, list) or not ranges:
@@ -4890,6 +4915,14 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
             "_source_row": row,
             "_index": index,
         })
+    # Resolve every clip (media-pool id + frame range) before choosing dry-run
+    # vs commit, so a dry run fails on the same id/frame errors as the commit.
+    append_infos = []
+    for row in built:
+        clip_info, clip_err = _build_append_clip_info_dict(root, row, row["_index"])
+        if clip_err:
+            return clip_err
+        append_infos.append(clip_info)
     if p.get("dry_run", False):
         return {
             "success": True,
@@ -4915,21 +4948,23 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
         while int(new_tl.GetTrackCount(track_type) or 0) < needed:
             if not new_tl.AddTrack(track_type):
                 break
-    append_infos = []
-    for row in built:
-        clip_info, clip_err = _build_append_clip_info_dict(root, row, row["_index"])
-        if clip_err:
-            return clip_err
-        append_infos.append(clip_info)
     appended = mp.AppendToTimeline(append_infos)
     if not appended:
         return _err("AppendToTimeline returned no items for variant")
     items_out = []
+    placement_mismatches = 0
     for index, item in enumerate(appended):
         item_out, item_err = _serialize_appended_timeline_item(item, index, allow_empty_timeline_item_id=True)
         if item_err:
             return item_err
-        item_out["range"] = {key: value for key, value in built[index].items() if not key.startswith("_")}
+        requested = {key: value for key, value in built[index].items() if not key.startswith("_")}
+        item_out["range"] = requested  # the requested range (still carries media_type/track_index)
+        placed = _variant_item_placement(item)  # the frame positions Resolve placed it at
+        item_out["placed"] = placed
+        requested_duration = requested["end_frame"] - requested["start_frame"]
+        if placed["duration"] is not None and placed["duration"] != requested_duration:
+            item_out["duration_delta"] = placed["duration"] - requested_duration
+            placement_mismatches += 1
         transform = built[index]["_source_row"].get("transform")
         if isinstance(transform, dict):
             item_out["transform"] = {}
@@ -4958,6 +4993,7 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
         "name": new_tl.GetName(),
         "id": new_tl.GetUniqueId(),
         "items": items_out,
+        "placement_mismatches": placement_mismatches,
         "markers": marker_results,
         "look": look_result,
         "gaps_overlaps": _detect_gaps_overlaps_from_snapshot(_timeline_conform_snapshot(new_tl, {}), {}),
@@ -18778,6 +18814,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     DESTRUCTIVE actions auto-archive the current timeline (C6); pass strict=true for
     refuse-on-archive-failure behavior on the catastrophic ops.
 
+    Frame numbers are TIMELINE/record frames (position on the timeline) unless an action
+    says SOURCE. Source frames are positions within a media-pool clip's own media:
+    create_variant_from_ranges takes SOURCE start_frame/end_frame; extract_source_frame_ranges
+    and source_range_report return SOURCE ranges.
+
     Actions:
       list() -> {timelines}
       get_current() -> {name, id, start_frame, end_frame, start_timecode}
@@ -18826,7 +18867,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       copy_range/duplicate_range(start_frame, end_frame, record_frame, ...) -> {results, count}
       overwrite_range(start_frame, end_frame, record_frame, ...) -> {results, count}
       lift_range(start_frame, end_frame, allow_partial_item_delete?, ripple?) -> {success, deleted}
-        DESTRUCTIVE. Removes items in a record-frame range. ripple=True closes the gap.
+        DESTRUCTIVE. Deletes timeline items whose record-frame range overlaps [start,end].
+        ripple=True closes the gap left by those deleted items (shifts later clips left). It
+        does NOT close a pre-existing empty gap: if no item overlaps the range, deleted=0 and
+        nothing moves. (frames here are TIMELINE/record frames.)
       story_spine_report() -> {beats, track_summaries, source_ranges, audio_spine}
       create_variant_from_ranges(name, ranges, markers?, cdl?, dry_run?) -> {success, id, items}
         # example: action_help(name='<action_name>')
@@ -20643,17 +20687,20 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
             ),
         },
         "create_variant_from_ranges": {
-            "summary": "Build a variant timeline from N source ranges. Source-safe; supports dry_run.",
-            "params": "name, ranges: [{source_clip_id|clip_id, start_frame, end_frame, record_frame?, track_type?}], markers?, cdl?, dry_run?",
-            "returns": "{success, id, items}",
+            "summary": "Build a variant timeline from N source ranges. Source-safe; dry_run validates clip ids and frame ranges.",
+            "params": (
+                "name, ranges: [{clip_id|media_pool_item_id, start_frame, end_frame, "
+                "record_frame?, track_type?}], markers?, cdl?, dry_run?  — clip_id is a "
+                "media-pool item id (not a timeline-item id); start_frame/end_frame are SOURCE frames"
+            ),
+            "returns": "{success, id, items}  — items[].placed = placed frames; items[].range = the requested range",
             "example": (
                 'timeline(action="create_variant_from_ranges", params={\n'
                 '  "name": "v02_tighter_act1",\n'
                 '  "ranges": [\n'
-                '    {"source_clip_id": "TimelineItem-abc", "start_frame": 108000, "end_frame": 108120},\n'
-                '    {"source_clip_id": "TimelineItem-def", "start_frame": 108300, "end_frame": 108400}\n'
+                '    {"clip_id": "<media-pool-item-id>", "start_frame": 1200, "end_frame": 1320},\n'
+                '    {"clip_id": "<media-pool-item-id>", "start_frame": 1500, "end_frame": 1600}\n'
                 '  ],\n'
-                '  "markers": [{"frame": 0, "color": "Blue", "name": "Act1 turn"}],\n'
                 '  "dry_run": True\n'
                 '})'
             ),
