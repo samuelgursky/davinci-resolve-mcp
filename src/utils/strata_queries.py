@@ -175,6 +175,231 @@ def take_diff(
     }
 
 
+# ── strata_query — windowed cross-track fetch + word find + timeline scope ──
+
+_EVENT_TRACK_DEFAULT = ("pause", "breath", "hesitation", "beat", "downbeat", "blink")
+_CURVE_TRACK_DEFAULT = ("pitch", "vocal_energy", "speech_rate", "motion_energy",
+                        "gaze_x", "gaze_y", "expression_mouth_open", "expression_brow_raise")
+
+
+def _clip_bundle(
+    conn,
+    clip_uuid: str,
+    start: Optional[float],
+    end: Optional[float],
+    *,
+    include_curve_values: bool = False,
+) -> Dict[str, Any]:
+    """Everything the strata know about one clip window, joined."""
+    bundle: Dict[str, Any] = {"clip_uuid": clip_uuid}
+    row = conn.execute(
+        "SELECT clip_name, duration_seconds, fps FROM clips WHERE clip_uuid = ?", (clip_uuid,)
+    ).fetchone()
+    if row:
+        bundle["clip_name"] = row["clip_name"]
+        bundle["fps"] = row["fps"]
+
+    bundle["words"] = strata.read_words(conn, clip_uuid, start_seconds=start, end_seconds=end)
+
+    events: Dict[str, List[Dict[str, Any]]] = {}
+    for track in _EVENT_TRACK_DEFAULT:
+        hits = strata.read_events(conn, clip_uuid, track, start_seconds=start, end_seconds=end)
+        if hits:
+            events[track] = hits
+    bundle["events"] = events
+
+    curves: Dict[str, Any] = {}
+    for track in _CURVE_TRACK_DEFAULT:
+        curve = strata.read_curve(conn, clip_uuid, track)
+        if curve is None:
+            continue
+        lo = start if start is not None else 0.0
+        hi = end if end is not None else (lo + len(curve["values"]) / float(curve["sample_rate"]))
+        window = _finite(_curve_slice(curve, lo, hi))
+        entry: Dict[str, Any] = {"sample_rate": curve["sample_rate"], "source": curve["source"]}
+        if window:
+            entry["window_stats"] = {
+                "min": round(min(window), 4),
+                "max": round(max(window), 4),
+                "mean": round(sum(window) / len(window), 4),
+            }
+        if include_curve_values:
+            entry["values"] = _curve_slice(curve, lo, hi)
+            entry["start_seconds"] = lo
+        curves[track] = entry
+    bundle["curves"] = curves
+
+    beat_sql = "SELECT * FROM story_beats WHERE clip_uuid = ? AND superseded_at IS NULL"
+    args: List[Any] = [clip_uuid]
+    if start is not None:
+        beat_sql += " AND end_seconds > ?"
+        args.append(start)
+    if end is not None:
+        beat_sql += " AND start_seconds < ?"
+        args.append(end)
+    bundle["story_beats"] = [
+        {
+            "beat_uuid": r["beat_uuid"],
+            "start_seconds": r["start_seconds"],
+            "end_seconds": r["end_seconds"],
+            "beat_type": r["beat_type"],
+            "label": r["label"],
+            "summary": r["summary"],
+        }
+        for r in conn.execute(beat_sql + " ORDER BY start_seconds", args).fetchall()
+    ]
+    return bundle
+
+
+def strata_query(
+    project_root: str,
+    *,
+    clip_ref: Any = None,
+    start_seconds: Optional[float] = None,
+    end_seconds: Optional[float] = None,
+    match_word: Optional[str] = None,
+    context_seconds: float = 2.0,
+    include_curve_values: bool = False,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """The strata as one queryable surface.
+
+    Modes:
+    - clip window: clip_ref (+ start/end) → the full cross-track bundle.
+    - word find:   match_word (project-wide or within clip_ref) → each hit
+      with a ±context_seconds bundle around it — "find the moment", joined.
+    """
+    conn = timeline_brain_db.connect(project_root)
+
+    if match_word:
+        sql = (
+            "SELECT w.clip_uuid, w.word, w.start_seconds, w.end_seconds, c.clip_name "
+            "FROM transcript_words w JOIN clips c ON c.clip_uuid = w.clip_uuid "
+            "WHERE w.word LIKE ?"
+        )
+        args: List[Any] = [f"%{match_word}%"]
+        if clip_ref is not None:
+            uuid_, err = _resolve(project_root, clip_ref)
+            if err:
+                return err
+            sql += " AND w.clip_uuid = ?"
+            args.append(uuid_)
+        sql += " ORDER BY w.clip_uuid, w.start_seconds LIMIT ?"
+        args.append(int(limit))
+        hits = []
+        for row in conn.execute(sql, args).fetchall():
+            t = row["start_seconds"]
+            hit: Dict[str, Any] = {
+                "clip_uuid": row["clip_uuid"],
+                "clip_name": row["clip_name"],
+                "word": row["word"],
+                "time_seconds": t,
+            }
+            if isinstance(t, (int, float)):
+                hit["context"] = _clip_bundle(
+                    conn,
+                    row["clip_uuid"],
+                    max(0.0, t - context_seconds),
+                    t + context_seconds,
+                    include_curve_values=include_curve_values,
+                )
+            hits.append(hit)
+        return {"success": True, "mode": "word_find", "match": match_word, "hits": hits}
+
+    if clip_ref is None:
+        return {"success": False, "error": "strata_query needs clip_id and/or match_word"}
+    uuid_, err = _resolve(project_root, clip_ref)
+    if err:
+        return err
+    return {
+        "success": True,
+        "mode": "clip_window",
+        "start_seconds": start_seconds,
+        "end_seconds": end_seconds,
+        **_clip_bundle(conn, uuid_, start_seconds, end_seconds, include_curve_values=include_curve_values),
+    }
+
+
+def timeline_strata(
+    project_root: str,
+    timeline_name: str,
+    *,
+    timeline_version: Optional[int] = None,
+    record_start_frame: Optional[int] = None,
+    record_end_frame: Optional[int] = None,
+    fps: float = 24.0,
+    include_curve_values: bool = False,
+) -> Dict[str, Any]:
+    """Project clip strata through a timeline's recorded placements.
+
+    Reads timeline_clip_usage (snapshotted at archive time), resolves each
+    placed media-pool item back to its analyzed clip, and returns per-
+    placement strata bundles. Placement rows carry RECORD in/out frames but
+    not the source offset, so bundles are whole-clip; exact source↔record
+    frame mapping needs the live timeline item and is labeled as such.
+    """
+    from src.utils import analysis_store
+
+    conn = timeline_brain_db.connect(project_root)
+    if timeline_version is None:
+        row = conn.execute(
+            "SELECT MAX(timeline_version) AS v FROM timeline_clip_usage WHERE timeline_name = ?",
+            (timeline_name,),
+        ).fetchone()
+        if row is None or row["v"] is None:
+            return {
+                "success": False,
+                "error": f"no clip-usage snapshots recorded for timeline {timeline_name!r}",
+            }
+        timeline_version = int(row["v"])
+
+    sql = (
+        "SELECT * FROM timeline_clip_usage WHERE timeline_name = ? AND timeline_version = ?"
+    )
+    args: List[Any] = [timeline_name, timeline_version]
+    if record_start_frame is not None:
+        sql += " AND out_frame > ?"
+        args.append(int(record_start_frame))
+    if record_end_frame is not None:
+        sql += " AND in_frame < ?"
+        args.append(int(record_end_frame))
+    sql += " ORDER BY track_type, track_index, in_frame"
+
+    placements = []
+    unresolved = []
+    for row in conn.execute(sql, args).fetchall():
+        clip_uuid = analysis_store.resolve_clip_uuid(conn, row["media_pool_item_id"])
+        placement = {
+            "media_pool_item_id": row["media_pool_item_id"],
+            "track_type": row["track_type"],
+            "track_index": row["track_index"],
+            "record_in_frame": row["in_frame"],
+            "record_out_frame": row["out_frame"],
+            "record_in_seconds": round(row["in_frame"] / fps, 3),
+            "record_out_seconds": round(row["out_frame"] / fps, 3),
+        }
+        if clip_uuid:
+            placement["strata"] = _clip_bundle(
+                conn, clip_uuid, None, None, include_curve_values=include_curve_values
+            )
+        else:
+            unresolved.append(row["media_pool_item_id"])
+        placements.append(placement)
+
+    return {
+        "success": True,
+        "timeline_name": timeline_name,
+        "timeline_version": timeline_version,
+        "fps_assumed": fps,
+        "placements": placements,
+        "unresolved_media_ids": sorted(set(unresolved)),
+        "note": (
+            "bundles are whole-clip (clip time); usage snapshots record placement, "
+            "not source offset — frame-exact source↔record mapping needs the live item"
+        ),
+    }
+
+
 # ── cut_candidates — the joint solver ────────────────────────────────────────
 #
 # Frame-level cut-point grammar, scored from whatever tracks exist:

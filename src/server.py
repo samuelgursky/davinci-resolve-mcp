@@ -16750,6 +16750,11 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       strata_run(clip_id, analyzers?) -> run local strata analyzers (prosody | beat_grid | motion_energy | face) on one clip; default = whatever this machine can run
       take_diff(clip_a, clip_b, text?) -> align two takes on transcript words and diff their delivery (pace, pauses, pitch, energy) — measures only, never picks
       cut_candidates(clip_id, time_seconds, window_seconds?, fps?, limit?) -> rank cut frames around an intended joint with reasons (blink/pause/word-gap/breath/beat/motion) — aims, never decides
+      strata_query(clip_id?, start_seconds?, end_seconds?, match_word?, context_seconds?, include_curve_values?, limit?) -> cross-track window bundle for a clip, or project-wide word find with joined context per hit
+      timeline_strata(timeline_name, timeline_version?, record_start_frame?, record_end_frame?, fps?) -> project clip strata through a timeline's recorded placements (whole-clip bundles; source-offset mapping needs the live item)
+      plan_story_beats(clip_id) -> timecoded transcript digest + prosody evidence + JSON schema for the host model to segment into story beats (no LLM call server-side)
+      commit_story_beats(clip_id, beats, source_model?) -> validate + persist host-produced story beats; machine commits supersede machine rows only, human rows always win
+      list_story_beats(clip_id) -> current (non-superseded) story beats for a clip
 
     Analysis outputs stay under a davinci-resolve-mcp-analysis project root
     and are validated so they are never written beside source media. Executed
@@ -17054,6 +17059,11 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "strata_run",
         "take_diff",
         "cut_candidates",
+        "strata_query",
+        "timeline_strata",
+        "plan_story_beats",
+        "commit_story_beats",
+        "list_story_beats",
     }:
         root = resolve_media_analysis_output_root(
             project_name=project_name,
@@ -17154,6 +17164,60 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 fps=float(p["fps"]) if isinstance(p.get("fps"), (int, float)) else None,
                 limit=int(p.get("limit", 7) or 7),
             )
+        if action == "strata_query":
+            from src.utils import strata_queries
+            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            return strata_queries.strata_query(
+                project_root,
+                clip_ref=clip_ref,
+                start_seconds=p.get("start_seconds", p.get("startSeconds")),
+                end_seconds=p.get("end_seconds", p.get("endSeconds")),
+                match_word=p.get("match_word") or p.get("matchWord") or p.get("word"),
+                context_seconds=float(p.get("context_seconds", p.get("contextSeconds", 2.0)) or 2.0),
+                include_curve_values=bool(p.get("include_curve_values", p.get("includeCurveValues", False))),
+                limit=int(p.get("limit", 20) or 20),
+            )
+        if action == "timeline_strata":
+            from src.utils import strata_queries
+            timeline_name = p.get("timeline_name") or p.get("timelineName") or p.get("timeline")
+            if not timeline_name:
+                return _err("timeline_strata requires timeline_name")
+            version = p.get("timeline_version", p.get("timelineVersion"))
+            return strata_queries.timeline_strata(
+                project_root,
+                str(timeline_name),
+                timeline_version=int(version) if isinstance(version, (int, float)) else None,
+                record_start_frame=p.get("record_start_frame", p.get("recordStartFrame")),
+                record_end_frame=p.get("record_end_frame", p.get("recordEndFrame")),
+                fps=float(p.get("fps", 24.0) or 24.0),
+                include_curve_values=bool(p.get("include_curve_values", p.get("includeCurveValues", False))),
+            )
+        if action == "plan_story_beats":
+            from src.utils import strata_story
+            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            if not clip_ref:
+                return _err("plan_story_beats requires clip_id")
+            return strata_story.plan_story_beats(project_root, clip_ref)
+        if action == "commit_story_beats":
+            from src.utils import strata_story
+            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            if not clip_ref:
+                return _err("commit_story_beats requires clip_id")
+            beats = p.get("beats")
+            if beats is None:
+                return _err("commit_story_beats requires beats")
+            return strata_story.commit_story_beats(
+                project_root,
+                clip_ref,
+                beats,
+                source_model=p.get("source_model") or p.get("sourceModel"),
+            )
+        if action == "list_story_beats":
+            from src.utils import strata_story
+            clip_ref = p.get("clip_id") or p.get("clipId") or p.get("clip_uuid") or p.get("clipUuid") or p.get("clip_dir") or p.get("clipDir") or p.get("file_path") or p.get("filePath")
+            if not clip_ref:
+                return _err("list_story_beats requires clip_id")
+            return strata_story.list_story_beats(project_root, clip_ref)
         # Phase B — deep shot-level vision tier.
         if action == "deepen":
             from src.utils import deep_vision
@@ -17717,6 +17781,11 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "strata_run",
         "take_diff",
         "cut_candidates",
+        "strata_query",
+        "timeline_strata",
+        "plan_story_beats",
+        "commit_story_beats",
+        "list_story_beats",
         "get_caps",
         "set_caps_preset",
         "get_usage",

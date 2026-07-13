@@ -226,8 +226,12 @@ def read_events(
     if track:
         sql += " AND track = ?"
         args.append(track)
+    # Window semantics: a span event overlaps the window, not merely starts
+    # inside it — a 3 s pause that began before the window is still a pause.
+    # Point events (no duration) use the half-open [start, end) convention.
     if start_seconds is not None:
-        sql += " AND time_seconds >= ?"
+        sql += " AND (time_seconds >= ? OR time_seconds + COALESCE(duration_seconds, 0) > ?)"
+        args.append(float(start_seconds))
         args.append(float(start_seconds))
     if end_seconds is not None:
         sql += " AND time_seconds < ?"
