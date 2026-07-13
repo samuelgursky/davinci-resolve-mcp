@@ -2,6 +2,70 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.62.0
+
+Community contribution by [@lukeashford](https://github.com/lukeashford)
+([#87](https://github.com/samuelgursky/davinci-resolve-mcp/pull/87), closing
+[#88](https://github.com/samuelgursky/davinci-resolve-mcp/issues/88)): server
+robustness for long operations plus a batch of timeline-tool ergonomics and
+correctness fixes. Every new option is opt-in; default behavior is unchanged.
+
+### Added
+
+- **Background jobs for long ops** — transcription, subtitle generation,
+  scene-cut/Dolby analysis, and timeline export/import can exceed the MCP
+  client's tool-window timeout. Passing `background=true` now returns a
+  `job_id` immediately; poll with `resolve_control(action="job_status")` or
+  list with `list_jobs` (both connection-free). Generic registry in
+  `src/utils/background_jobs.py`; workers run under the `resolve_busy` gate,
+  and finished jobs are pruned after an hour.
+- **`create_variant_from_ranges` pack mode** — `pack=true` butts clips
+  together at the end of each track (omits `recordFrame`), gap-free even when
+  source and timeline frame rates differ. Live-validated.
+- **`timeline set_current` by id/name** — accepts a stable `id`/`name`
+  selector (precedence id → name → index), not only the shifting 1-based
+  index.
+
+### Fixed
+
+- **Transport wedge** — synchronous tool bodies ran inline on the single
+  asyncio event-loop thread, so a blocking Resolve call (or the up-to-60s
+  launch wait) froze the whole server including the stdio read loop. Sync tool
+  bodies now run in a worker thread, serialized on a bridge lock so the
+  single-threaded scripting bridge is never entered concurrently; degrades to
+  inline behavior if the SDK shape changes.
+- **`create_variant_from_ranges` honesty** — results report actual placement
+  (`items[].placed` in both frame spaces, plus a `placement_mismatches`
+  count) instead of echoing the requested frames; `dry_run` resolves clip ids
+  and validates frame ranges so it fails on the same errors as the commit
+  path (and no longer leaves an orphan timeline on a bad id); the response
+  reports audio presence and warns on a video-only (silent) range list.
+- **`get_items` / `get_items_in_track`** — validate their track selector
+  (structured error instead of a bare `KeyError`), accept `index` or
+  `track_index`, and gained `action_help` entries.
+- **`apply_cuts`** — reports `skipped` cuts with reasons instead of silently
+  dropping non-applicable entries.
+- **`action_help`** — lists every valid action (not only the documented
+  subset) and distinguishes an unknown action (`UNKNOWN_ACTION`) from a
+  valid-but-undocumented one (`HELP_NOT_REGISTERED`).
+
+### Documentation
+
+- Corrected `create_variant_from_ranges` help: `clip_id` is a media-pool item
+  id (not a timeline-item id); `start_frame`/`end_frame` are SOURCE frames,
+  `end_frame` exclusive. Stated the timeline tool's frame-space convention
+  once, clarified `lift_range` ripple behavior on empty gaps,
+  `begin_run`/`end_run` batching, and the timeline-subtitle vs clip-level
+  transcript distinction.
+
+### Validation
+
+- Full offline suite: 1,483 tests green (70 new).
+- Transport offload, background jobs, and `create_variant_from_ranges`
+  placement/pack behavior were live-validated against Resolve Studio 21 by
+  the contributor; the threaded-dispatch SDK coupling was additionally
+  verified against the pinned mcp SDK (1.27) over a real stdio session.
+
 ## What's New in v2.61.1
 
 The strata cleanup batch deferred from the v2.61.0 review — behavior-neutral
