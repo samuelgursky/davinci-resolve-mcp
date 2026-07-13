@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.62.1
+
+Two correctness fixes for real-world project/DRP layouts. No new tool surface;
+default behavior is unchanged.
+
+### Fixed
+
+- **Timeline archiving survives out-of-band archive names** — the archive
+  version counter was sourced solely from the local brain DB, so any
+  `<name>_archived_vNN` timeline the DB hadn't recorded (another
+  session/machine, or a crash between `DuplicateTimeline` and the version
+  `INSERT`) collided on the next archive: `DuplicateTimeline` failed and Resolve
+  raised a blocking "Unable to Rename Timeline" modal that wedged the UI.
+  `archive_current_timeline` now scans every existing `_archived_vNN` suffix in
+  the project and treats the DB counter as a floor, not the source of truth.
+- **`inject_grades` handles the `SeqContainer/<uuid>.xml` folder layout** —
+  `listSeqContainerEntries` only matched the legacy flat `SeqContainer<N>.xml`
+  naming, so `inject_grades` threw `No SeqContainer*.xml found` on DRPs using
+  the `SeqContainer/<uuid>.xml` folder layout that Resolve 19 exports (the same
+  layout the grade-node extractor already handles). Both shapes are now matched.
+
+### Validation
+
+- Static checks and focused unit tests
+  (`tests.test_timeline_versioning`, `tests.test_import_from_drp`) run. The DRP
+  fix is offline zip surgery requiring no Resolve; the archiving fix is
+  defensive counter logic covered by unit tests.
+
 ## What's New in v2.62.0
 
 Community contribution by [@lukeashford](https://github.com/lukeashford)
