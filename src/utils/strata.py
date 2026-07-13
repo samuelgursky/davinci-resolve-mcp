@@ -520,6 +520,16 @@ def strata_status(project_root: str, clip_ref: Any = None) -> Dict[str, Any]:
     curve_rows = conn.execute(
         "SELECT track, COUNT(DISTINCT clip_uuid) AS clips FROM curves GROUP BY track"
     ).fetchall()
+    clip_rows = conn.execute(
+        """
+        SELECT c.clip_uuid, c.clip_name, c.duration_seconds, c.fps, c.media_type,
+               (SELECT COUNT(*) FROM transcript_words w WHERE w.clip_uuid = c.clip_uuid) AS word_count,
+               (SELECT COUNT(DISTINCT track) FROM events e WHERE e.clip_uuid = c.clip_uuid) AS event_track_count,
+               (SELECT COUNT(DISTINCT track) FROM curves v WHERE v.clip_uuid = c.clip_uuid) AS curve_track_count,
+               (SELECT COUNT(*) FROM story_beats b WHERE b.clip_uuid = c.clip_uuid AND b.superseded_at IS NULL) AS story_beat_count
+        FROM clips c ORDER BY c.clip_name LIMIT 500
+        """
+    ).fetchall()
     return {
         "success": True,
         "schema_version": timeline_brain_db.SCHEMA_VERSION,
@@ -533,4 +543,18 @@ def strata_status(project_root: str, clip_ref: Any = None) -> Dict[str, Any]:
         "story_beat_count": _count(
             "SELECT COUNT(*) FROM story_beats WHERE superseded_at IS NULL"
         ),
+        "clip_rows": [
+            {
+                "clip_uuid": r["clip_uuid"],
+                "clip_name": r["clip_name"],
+                "duration_seconds": r["duration_seconds"],
+                "fps": r["fps"],
+                "media_type": r["media_type"],
+                "word_count": int(r["word_count"]),
+                "event_track_count": int(r["event_track_count"]),
+                "curve_track_count": int(r["curve_track_count"]),
+                "story_beat_count": int(r["story_beat_count"]),
+            }
+            for r in clip_rows
+        ],
     }
