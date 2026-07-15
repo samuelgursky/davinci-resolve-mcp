@@ -10,11 +10,11 @@
  * the repo root for the published package.)
  */
 
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serverEntry = path.resolve(__dirname, '..', 'resolve-advanced', 'server', 'index.mjs');
 
-const { startServer } = await import(serverEntry);
+const { startServer } = await import(pathToFileURL(serverEntry).href);
 await startServer();
