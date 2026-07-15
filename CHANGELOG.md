@@ -2,6 +2,33 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.62.2
+
+A single cross-platform launcher fix. No new tool surface; default behavior is
+unchanged on macOS/Linux.
+
+### Fixed
+
+- **Advanced server launcher no longer crashes on Windows** —
+  `bin/davinci-resolve-advanced-mcp.mjs` resolved the server entry to an
+  absolute filesystem path and passed it straight to dynamic `import()`. On
+  Windows that path (e.g. `C:\...\resolve-advanced\server\index.mjs`) is parsed
+  by Node's ESM loader as a URL whose drive letter reads as the protocol, so the
+  launcher died on arrival with
+  `ERR_UNSUPPORTED_ESM_URL_SCHEME` ("Received protocol 'c:'"). The path is now
+  converted with `pathToFileURL()` before importing — the canonical
+  cross-platform way to hand an absolute path to `import()`. macOS/Linux behavior
+  is unchanged, and paths containing spaces or special characters are now handled
+  correctly on every platform. Thanks to Ryan Saunders (@Alpha7449) for the
+  report and fix.
+
+### Validation
+
+- Static checks and `node --check` on the modified launcher run. This is the only
+  dynamic `import()` call site in the repo receiving an absolute filesystem path;
+  the fix touches the Node advanced launcher only and changes no Resolve
+  scripting behavior, so a live Resolve run is not required.
+
 ## What's New in v2.62.1
 
 Two correctness fixes for real-world project/DRP layouts. No new tool surface;
