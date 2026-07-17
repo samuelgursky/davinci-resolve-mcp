@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.62.2"
+VERSION = "2.62.3"
 
 import base64
 import os
@@ -97,6 +97,7 @@ from src.utils.media_analysis_jobs import (
     run_batch_job_slice as run_media_analysis_batch_job_slice,
 )
 from src.utils.platform import get_resolve_paths, get_resolve_plugin_paths
+from src.utils.lut_paths import master_lut_dir, ensure_lut_in_master
 from src.utils import fuse_templates, dctl_templates, script_templates
 from src.utils.timeline_title_text import (
     candidate_title_property_keys as _candidate_title_property_keys,
@@ -22087,8 +22088,9 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 ok = bool(g.SetLUT(node_index, relocated))
                 if ok:
                     return {"success": True, "resolved_lut": relocated,
-                            "note": "LUT copied into the master LUT dir; "
-                                    "SetLUT does not resolve the user LUT dir."}
+                            "note": "LUT staged under the master LUT dir "
+                                    "(MCP/ subfolder) and applied; SetLUT does "
+                                    "not resolve the user LUT dir."}
         return {"success": ok}
     elif action == "get_node_cache":
         return {"cache": g.GetNodeCacheMode(p["node_index"])}
@@ -23790,60 +23792,11 @@ def _dctl_dir(category: str = "lut") -> str:
                      "Valid: lut, aces_idt, aces_odt")
 
 
-def _master_lut_dir() -> str:
-    """Return Resolve's master (system) LUT directory.
-
-    Resolve's Graph.SetLUT() resolves relative LUT names, and even absolute
-    paths, ONLY against the master LUT root -- NOT the per-user LUT dir that
-    _dctl_dir('lut') / dctl install writes to. Verified live on Resolve Studio
-    21.0.2: SetLUT(1, 'Foo.cube') succeeds when Foo.cube is in the master dir,
-    and returns False for the same file in the user dir or via an absolute
-    user-dir path.
-    """
-    plat = platform.system().lower()
-    if plat == "windows":
-        programdata = os.environ.get("PROGRAMDATA", r"C:\\ProgramData")
-        return os.path.join(programdata, "Blackmagic Design",
-                            "DaVinci Resolve", "Support", "LUT")
-    if plat == "linux":
-        for cand in ("/opt/resolve/LUT", "/home/resolve/LUT"):
-            if os.path.isdir(cand):
-                return cand
-        return "/opt/resolve/LUT"
-    # darwin / default
-    return "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
-
-
-def _ensure_lut_in_master(lut_path: str) -> Optional[str]:
-    """Make a LUT resolvable by Graph.SetLUT().
-
-    Locates the file named by lut_path (absolute, user LUT dir, or already in
-    the master dir), copies it into the master LUT dir when needed, and returns
-    the basename to hand back to SetLUT. Returns None if the source cannot be
-    found or the master dir is not writable.
-    """
-    master = _master_lut_dir()
-    base = os.path.basename(lut_path)
-    candidates = []
-    if os.path.isabs(lut_path):
-        candidates.append(lut_path)
-    else:
-        try:
-            candidates.append(os.path.join(_dctl_dir("lut"), lut_path))
-        except Exception:
-            pass
-        candidates.append(os.path.join(master, lut_path))
-    src = next((c for c in candidates if os.path.isfile(c)), None)
-    if not src:
-        return None
-    dst = os.path.join(master, base)
-    if os.path.abspath(src) != os.path.abspath(dst):
-        try:
-            os.makedirs(master, exist_ok=True)
-            shutil.copy2(src, dst)
-        except Exception:
-            return None
-    return base
+# LUT relocation for Graph.SetLUT lives in src.utils.lut_paths so server.py and
+# src/granular/graph.py share one implementation (see the module docstring for
+# the live-verified behavior). Thin aliases keep the existing call sites stable.
+_master_lut_dir = master_lut_dir
+_ensure_lut_in_master = ensure_lut_in_master
 
 
 def _validate_dctl_name(name: str) -> Optional[Dict[str, Any]]:

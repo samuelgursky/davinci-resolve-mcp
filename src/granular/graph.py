@@ -1,6 +1,7 @@
 """Color page graph, LUT, and color-group tools."""
 
 from src.granular.common import *  # noqa: F401,F403
+from src.utils.lut_paths import ensure_lut_in_master
 
 resolve = ResolveProxy()
 
@@ -39,8 +40,25 @@ def graph_set_lut(node_index: int, lut_path: str, item_index: int = 0, track_typ
     graph = item.GetNodeGraph()
     if not graph:
         return {"error": "No node graph available"}
-    result = graph.SetLUT(node_index, lut_path)
-    return {"success": bool(result)}
+    ok = bool(graph.SetLUT(node_index, lut_path))
+    if not ok:
+        # SetLUT resolves LUTs only against the master LUT dir, not the per-user
+        # dir dctl installs to. Relocate into the master dir and retry.
+        relocated = ensure_lut_in_master(lut_path)
+        if relocated:
+            try:
+                project = resolve.GetProjectManager().GetCurrentProject()
+                if project:
+                    project.RefreshLUTList()
+            except Exception:
+                pass
+            ok = bool(graph.SetLUT(node_index, relocated))
+            if ok:
+                return {"success": True, "resolved_lut": relocated,
+                        "note": "LUT staged under the master LUT dir "
+                                "(MCP/ subfolder) and applied; SetLUT does "
+                                "not resolve the user LUT dir."}
+    return {"success": ok}
 
 
 @mcp.tool()

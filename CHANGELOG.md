@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.62.3
+
+A single grading fix (PR #90, by @Mldphotohraphie), extended and hardened. No
+new tool surface.
+
+### Fixed
+
+- **`graph set_lut` now applies LUTs/DCTLs installed by the `dctl` tool** —
+  the `dctl` tool installs into Resolve's per-user LUT directory, but
+  `Graph.SetLUT()` resolves LUT paths (relative names *and* absolute paths)
+  only against the master (system) LUT directory. A freshly installed LUT could
+  therefore never be applied, and `set_lut` always returned
+  `{"success": false}`. Verified live on Resolve Studio 21: `SetLUT` fails for a
+  user-dir LUT even after `RefreshLUTList()` and even via an absolute user-dir
+  path, so relocation into the master dir is genuinely required. On a `SetLUT`
+  failure the server now locates the LUT, stages it under a namespaced
+  `MCP/` subfolder of the master LUT dir (avoiding basename collisions with
+  stock/vendor LUTs), calls `RefreshLUTList()`, and retries. No behavior change
+  when `SetLUT` already succeeds. Applied to both `graph set_lut` (`src/server.py`)
+  and the granular `graph_set_lut` (`src/granular/graph.py`) via a shared
+  `src/utils/lut_paths.py` helper, with offline coverage in
+  `tests/test_lut_paths.py`.
+
 ## What's New in v2.62.2
 
 A single cross-platform launcher fix. No new tool surface; default behavior is
