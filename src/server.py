@@ -22070,7 +22070,26 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     elif action == "get_lut":
         return {"lut": g.GetLUT(p["node_index"])}
     elif action == "set_lut":
-        return {"success": bool(g.SetLUT(p["node_index"], p["lut_path"]))}
+        node_index = p["node_index"]
+        lut_path = p["lut_path"]
+        ok = bool(g.SetLUT(node_index, lut_path))
+        if not ok:
+            # Resolve resolves LUTs for SetLUT only against the master LUT dir,
+            # not the per-user dir that dctl install writes to. Relocate and retry.
+            relocated = _ensure_lut_in_master(lut_path)
+            if relocated:
+                try:
+                    _, proj, _lut_err = _check()
+                    if proj:
+                        proj.RefreshLUTList()
+                except Exception:
+                    pass
+                ok = bool(g.SetLUT(node_index, relocated))
+                if ok:
+                    return {"success": True, "resolved_lut": relocated,
+                            "note": "LUT copied into the master LUT dir; "
+                                    "SetLUT does not resolve the user LUT dir."}
+        return {"success": ok}
     elif action == "get_node_cache":
         return {"cache": g.GetNodeCacheMode(p["node_index"])}
     elif action == "set_node_cache":
@@ -23769,6 +23788,62 @@ def _dctl_dir(category: str = "lut") -> str:
         return paths["aces_odt_dir"]
     raise ValueError(f"Unknown DCTL category '{category}'. "
                      "Valid: lut, aces_idt, aces_odt")
+
+
+def _master_lut_dir() -> str:
+    """Return Resolve's master (system) LUT directory.
+
+    Resolve's Graph.SetLUT() resolves relative LUT names, and even absolute
+    paths, ONLY against the master LUT root -- NOT the per-user LUT dir that
+    _dctl_dir('lut') / dctl install writes to. Verified live on Resolve Studio
+    21.0.2: SetLUT(1, 'Foo.cube') succeeds when Foo.cube is in the master dir,
+    and returns False for the same file in the user dir or via an absolute
+    user-dir path.
+    """
+    plat = platform.system().lower()
+    if plat == "windows":
+        programdata = os.environ.get("PROGRAMDATA", r"C:\\ProgramData")
+        return os.path.join(programdata, "Blackmagic Design",
+                            "DaVinci Resolve", "Support", "LUT")
+    if plat == "linux":
+        for cand in ("/opt/resolve/LUT", "/home/resolve/LUT"):
+            if os.path.isdir(cand):
+                return cand
+        return "/opt/resolve/LUT"
+    # darwin / default
+    return "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
+
+
+def _ensure_lut_in_master(lut_path: str) -> Optional[str]:
+    """Make a LUT resolvable by Graph.SetLUT().
+
+    Locates the file named by lut_path (absolute, user LUT dir, or already in
+    the master dir), copies it into the master LUT dir when needed, and returns
+    the basename to hand back to SetLUT. Returns None if the source cannot be
+    found or the master dir is not writable.
+    """
+    master = _master_lut_dir()
+    base = os.path.basename(lut_path)
+    candidates = []
+    if os.path.isabs(lut_path):
+        candidates.append(lut_path)
+    else:
+        try:
+            candidates.append(os.path.join(_dctl_dir("lut"), lut_path))
+        except Exception:
+            pass
+        candidates.append(os.path.join(master, lut_path))
+    src = next((c for c in candidates if os.path.isfile(c)), None)
+    if not src:
+        return None
+    dst = os.path.join(master, base)
+    if os.path.abspath(src) != os.path.abspath(dst):
+        try:
+            os.makedirs(master, exist_ok=True)
+            shutil.copy2(src, dst)
+        except Exception:
+            return None
+    return base
 
 
 def _validate_dctl_name(name: str) -> Optional[Dict[str, Any]]:
