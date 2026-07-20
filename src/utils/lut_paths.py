@@ -2,10 +2,11 @@
 
 Resolve's Graph.SetLUT() resolves relative LUT names -- and even absolute
 paths -- ONLY against the master (system) LUT root, NOT the per-user LUT dir
-that the dctl tool installs into. Verified live on Resolve Studio 21: SetLUT
-succeeds for a LUT in the master dir (by relative or subfolder path) and
+that the dctl tool installs into. Verified live on Resolve Studio 19.1.3.7:
+SetLUT succeeds for a LUT in the master dir (by relative or subfolder path) and
 returns False for the same file in the user dir, even after RefreshLUTList and
-even via an absolute user-dir path. These helpers relocate a user-dir LUT into
+even via an absolute user-dir path. (The originating report, PR #90, observed
+the same behavior on Studio 21.0.2.) These helpers relocate a user-dir LUT into
 a namespaced subfolder of the master dir so SetLUT can resolve it.
 """
 
@@ -19,7 +20,7 @@ from src.utils.platform import get_resolve_plugin_paths
 # Subfolder under the master LUT root where relocated LUTs are staged. SetLUT
 # resolves relative paths against the master root, so a subfolder path like
 # "MCP/Foo.cube" works AND avoids clobbering stock/vendor LUTs that share a
-# basename (e.g. InstantC.cube). Verified live on Resolve Studio 21.
+# basename (e.g. InstantC.cube). Verified live on Resolve Studio 19.1.3.7.
 MASTER_LUT_RELOCATE_SUBDIR = "MCP"
 
 

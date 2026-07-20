@@ -14,9 +14,10 @@ new tool surface.
   `Graph.SetLUT()` resolves LUT paths (relative names *and* absolute paths)
   only against the master (system) LUT directory. A freshly installed LUT could
   therefore never be applied, and `set_lut` always returned
-  `{"success": false}`. Verified live on Resolve Studio 21: `SetLUT` fails for a
-  user-dir LUT even after `RefreshLUTList()` and even via an absolute user-dir
-  path, so relocation into the master dir is genuinely required. On a `SetLUT`
+  `{"success": false}`. Verified live on Resolve Studio 19.1.3.7: `SetLUT` fails
+  for a user-dir LUT even after `RefreshLUTList()` and even via an absolute
+  user-dir path, so relocation into the master dir is genuinely required. (The
+  originating report, PR #90, observed the same on Studio 21.0.2.) On a `SetLUT`
   failure the server now locates the LUT, stages it under a namespaced
   `MCP/` subfolder of the master LUT dir (avoiding basename collisions with
   stock/vendor LUTs), calls `RefreshLUTList()`, and retries. No behavior change
