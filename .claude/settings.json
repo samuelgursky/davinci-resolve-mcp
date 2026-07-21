@@ -1,0 +1,22 @@
+{
+  "model": "opus[1m]",
+  "permissions": {
+    "allow": [
+      "Bash(node render_one.mjs *)",
+      "Bash(node render_batch.mjs *)",
+      "Bash(node render_4k.mjs *)",
+      "Bash(node render_gfx_batch.mjs *)",
+      "Bash(node render_still_check.mjs *)",
+      "Bash(ffprobe *)",
+      "Bash(/Users/matusoberuc/.local/bin/ffprobe *)",
+      "Bash(/Users/matusoberuc/MattFrames/editing/tools/transcribe.sh *)",
+      "Bash(/Users/matusoberuc/MattFrames/editing/tools/flicker_scan.sh *)",
+      "Bash(/Users/matusoberuc/MattFrames/editing/davinci-resolve-mcp/venv/bin/python3 /Users/matusoberuc/MattFrames/editing/mattframes-review/eyes/eyes.py *)",
+      "Bash(/Users/matusoberuc/MattFrames/editing/davinci-resolve-mcp/venv/bin/python3 /Users/matusoberuc/MattFrames/editing/mattframes-review/eyes/strip_tiler.py *)",
+      "Bash(/Users/matusoberuc/MattFrames/editing/davinci-resolve-mcp/venv/bin/python3 /Users/matusoberuc/MattFrames/editing/mattframes-review/eyes/payload_strip.py)",
+      "Bash(/Users/matusoberuc/MattFrames/editing/mattframes-review/eyes/resolve_screenshot.sh *)",
+      "Bash(python3 /Users/matusoberuc/MattFrames/editing/mattframes-review/review.py *)",
+      "Bash(/Users/matusoberuc/.local/bin/uvx --from kinocut kino doctor)"
+    ]
+  }
+}

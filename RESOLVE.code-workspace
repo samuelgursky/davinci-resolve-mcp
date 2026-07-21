@@ -12,5 +12,9 @@
 		{
 			"path": "../trainlist-graphics"
 		}
-	]
+	],
+	"settings": {
+		"workbench.colorTheme": "Dark Modern",
+		"editor.tabSize": 4
+	}
 }
