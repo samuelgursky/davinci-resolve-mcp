@@ -820,6 +820,14 @@ clip-count readback plus `brain_edits` rationale rows.
   speech-driven cut was previously silent — #67); pass
   `include_audio=false` for a video-only assembly, and the
   `execute_tighten` readback carries an `audio_accounting` block.
+- `plan_silence_ripple(timeline_name?, track_index?, threshold_db?,
+  min_strip_frames?, pre_head_frames?, post_tail_frames?, include_audio?)` —
+  waveform silence strips via ffmpeg `silencedetect`, mirroring Resolve's
+  *Clip → Audio Operations → Ripple Delete Silence* (defaults: −30 dB,
+  10-frame minimum strip, 0 pre-head, 1 post-tail frame). Items without
+  readable file paths land in `skipped`. `execute_silence_ripple(plan_id)`
+  assembles a tightened VARIANT timeline from keep ranges — same safety model
+  as `execute_tighten` (original untouched, confirm token, audio mirroring).
 - `plan_swap(timeline_start_frame | item_name, kind="visual"|"text",
   limit?)` — alternates for one timeline item via the similarity index,
   filtered to shots long enough to fill the slot exactly.

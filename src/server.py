@@ -1045,6 +1045,7 @@ _TOKEN_GATED_DESTRUCTIVE_ACTIONS = frozenset({
     # Phase E edit-engine loops: plan → confirm → execute.
     ("edit_engine", "execute_selects"),
     ("edit_engine", "execute_tighten"),
+    ("edit_engine", "execute_silence_ripple"),
     ("edit_engine", "execute_swap"),
     ("graph", "apply_grade_from_drx"),
     ("graph", "reset_all_grades"),
@@ -18420,6 +18421,12 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       block and a compact structural_diff (counts + a small sample); the full
       per-item diff is persisted in the plan record (get_plan → execution_summary)
       and returned inline only when include_details=true.
+    - plan_silence_ripple(timeline_name?, track_index?, threshold_db?,
+      min_strip_frames?, pre_head_frames?, post_tail_frames?, include_audio?)
+      — waveform silence strips via ffmpeg silencedetect (Resolve's Ripple Delete
+      Silence parity). Items without readable file paths are skipped.
+    - execute_silence_ripple(plan_id, confirm_token?, include_details?) —
+      same variant assembly as execute_tighten; original timeline untouched.
     - plan_swap(track_index?, timeline_start_frame | item_name, kind?, limit?)
       — alternates for one timeline item via the similarity index.
     - execute_swap(plan_id, alternate_index, confirm_token?) — replaces the
@@ -18491,6 +18498,26 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             target_ratio=p.get("target_ratio") or p.get("targetRatio"),
             min_pause_seconds=float(p.get("min_pause_seconds") or p.get("minPauseSeconds") or _edit_engine_mod.DEFAULT_MIN_PAUSE_SECONDS),
             handle_seconds=float(p.get("handle_seconds") or p.get("handleSeconds") or _edit_engine_mod.DEFAULT_HANDLE_SECONDS),
+            include_audio=str(p.get("include_audio", p.get("includeAudio", True))).strip().lower() not in {"false", "0", "no", "none", "off"},
+        )
+
+    if action == "plan_silence_ripple":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        tl = (_find_timeline_by_name(proj, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj.GetCurrentTimeline())
+        if not tl:
+            return _err("Timeline not found")
+        items = _edit_engine_collect_items(tl, track_index=p.get("track_index") or p.get("trackIndex"))
+        return _edit_engine_mod.plan_silence_ripple(
+            project_root,
+            items=items,
+            timeline_name=tl.GetName(),
+            timeline_fps=_edit_engine_timeline_fps(tl),
+            threshold_db=float(p.get("threshold_db") if p.get("threshold_db") is not None else p.get("thresholdDb") if p.get("thresholdDb") is not None else _edit_engine_mod.DEFAULT_SILENCE_THRESHOLD_DB),
+            min_strip_frames=float(p.get("min_strip_frames") if p.get("min_strip_frames") is not None else p.get("minStripFrames") if p.get("minStripFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_MIN_STRIP_FRAMES),
+            pre_head_frames=float(p.get("pre_head_frames") if p.get("pre_head_frames") is not None else p.get("preHeadFrames") if p.get("preHeadFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_PRE_HEAD_FRAMES),
+            post_tail_frames=float(p.get("post_tail_frames") if p.get("post_tail_frames") is not None else p.get("postTailFrames") if p.get("postTailFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_POST_TAIL_FRAMES),
             include_audio=str(p.get("include_audio", p.get("includeAudio", True))).strip().lower() not in {"false", "0", "no", "none", "off"},
         )
 
@@ -18769,6 +18796,141 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             "plan_id": plan.get("plan_id"),
         }
 
+    if action == "execute_silence_ripple":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        plan = _edit_engine_mod.load_plan(project_root, str(p.get("plan_id") or p.get("planId") or ""))
+        if not plan or plan.get("_corrupt"):
+            return _err("plan not found (or failed its fingerprint check) — re-plan")
+        if plan.get("kind") != "silence_ripple":
+            return _err(f"plan {plan.get('plan_id')} is a {plan.get('kind')} plan")
+        lifts = plan.get("lifts") or []
+        keep_ranges = plan.get("keep_ranges") or []
+        if not keep_ranges:
+            return _err("plan has no keep_ranges — re-plan with this version")
+        audio_keep_ranges = sum(1 for r in keep_ranges if str(r.get("track_type", "video")).lower() == "audio")
+        video_keep_ranges = len(keep_ranges) - audio_keep_ranges
+        settings = plan.get("settings") or {}
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            return _issue_confirm_token(
+                action="edit_engine.execute_silence_ripple", params=p,
+                preview={
+                    "operation": "edit_engine.execute_silence_ripple",
+                    "warning": (
+                        "Assembles a silence-ripple VARIANT timeline from waveform "
+                        "keep ranges; the original timeline is not modified."
+                    ),
+                    "timeline_name": plan.get("timeline_name"),
+                    "lift_count": len(lifts),
+                    "keep_range_count": len(keep_ranges),
+                    "video_keep_range_count": video_keep_ranges,
+                    "audio_keep_range_count": audio_keep_ranges,
+                    "settings": settings,
+                    "estimated_removed_seconds": sum(l.get("duration_seconds") or 0 for l in lifts),
+                },
+            )
+        blocked = _consume_confirm_token(action="edit_engine.execute_silence_ripple", params=p)
+        if blocked:
+            return blocked
+        source_tl, _src_index = _find_timeline_by_name(proj, plan.get("timeline_name"))
+        if not source_tl:
+            return _err(f"Timeline '{plan.get('timeline_name')}' not found")
+        before = _edit_engine_capture(source_tl)
+        variant_name = f"{plan.get('timeline_name')} — silence ripple {time.strftime('%H%M%S')}"
+        variant = _timeline_create_variant_from_ranges(proj, source_tl, {
+            "ranges": keep_ranges,
+            "name": variant_name,
+        })
+        if not variant.get("success"):
+            return {"success": False, "error": f"variant assembly failed: {variant.get('error')}", "variant": variant}
+        new_tl, _new_index = _find_timeline_by_name(proj, variant.get("name") or variant_name)
+        after = _edit_engine_capture(new_tl) if new_tl else {}
+        structural_diff = None
+        if new_tl is not None:
+            try:
+                structural_diff = _timeline_versioning.compare_usage_snapshots(
+                    _timeline_versioning.capture_timeline_clip_usage(source_tl),
+                    _timeline_versioning.capture_timeline_clip_usage(new_tl),
+                )
+            except Exception as diff_exc:
+                structural_diff = {"error": f"{type(diff_exc).__name__}: {diff_exc}"}
+        run_id = _analysis_runs.current_run_id()
+        try:
+            _brain_edits.log_brain_edit(
+                project_root=project_root,
+                analysis_run_id=run_id or "edit-engine",
+                edit_type="edit_engine.silence_ripple_result",
+                tool_name="edit_engine",
+                action_name="execute_silence_ripple",
+                timeline_before=plan.get("timeline_name"),
+                timeline_after=variant.get("name") or variant_name,
+                target_metric=_brain_edits.METRIC_DURATION_SECONDS,
+                metric_direction="decrease",
+                before_value=before.get("duration_seconds"),
+                after_value=after.get("duration_seconds"),
+                rationale=plan.get("summary"),
+                params={"plan_id": plan.get("plan_id"), "settings": settings},
+                result_summary={"keep_ranges": len(keep_ranges), "lifts": len(lifts)},
+            )
+        except Exception:
+            pass
+        include_details = _media_analysis_bool(
+            p.get("include_details", p.get("includeDetails")), False
+        )
+        _edit_engine_mod.mark_plan_executed(project_root, plan["plan_id"], {
+            "variant_timeline": variant.get("name") or variant_name,
+            "keep_ranges": len(keep_ranges),
+            "lifts": len(lifts),
+            "before": before,
+            "after": after,
+            "structural_diff": structural_diff,
+            "settings": settings,
+        })
+        return {
+            "success": True,
+            "original_timeline": plan.get("timeline_name"),
+            "variant_timeline": variant.get("name") or variant_name,
+            "lifts_applied": len(lifts),
+            "keep_ranges": len(keep_ranges),
+            "settings": settings,
+            "lift_rationales": [
+                {"lift": [l["timeline_start_frame"], l["timeline_end_frame"]], "rationale": l.get("rationale")}
+                for l in lifts
+            ],
+            "readback": {
+                "before": before,
+                "after": after,
+                "removed_seconds": (
+                    round(before["duration_seconds"] - after["duration_seconds"], 2)
+                    if before.get("duration_seconds") is not None and after.get("duration_seconds") is not None
+                    else None
+                ),
+                "structural_diff": (
+                    structural_diff if include_details
+                    else _compact_structural_diff(structural_diff)
+                ),
+                "audio_accounting": {
+                    "planned_audio_ranges": audio_keep_ranges,
+                    "planned_video_ranges": video_keep_ranges,
+                    "variant_audio_items": sum(
+                        1 for it in (variant.get("items") or [])
+                        if (it.get("range") or {}).get("media_type") == 2
+                    ),
+                    "variant_video_items": sum(
+                        1 for it in (variant.get("items") or [])
+                        if (it.get("range") or {}).get("media_type") == 1
+                    ),
+                    "note": (
+                        "Variant carries audio mirrored from the video cuts."
+                        if audio_keep_ranges
+                        else "Variant is VIDEO-ONLY (silent) — re-plan with include_audio=True for sound."
+                    ),
+                },
+            },
+            "plan_id": plan.get("plan_id"),
+        }
+
     if action == "execute_swap":
         _r, proj, project_root, err = _project_context(need_resolve=True)
         if err:
@@ -18930,6 +19092,8 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "execute_selects",
         "plan_tighten",
         "execute_tighten",
+        "plan_silence_ripple",
+        "execute_silence_ripple",
         "plan_swap",
         "execute_swap",
         "list_plans",
