@@ -70,6 +70,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
     "edit_engine": frozenset({
         "execute_selects",
         "execute_tighten",
+        "execute_silence_ripple",
         "execute_swap",
     }),
     "timeline": frozenset({

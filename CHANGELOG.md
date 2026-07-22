@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## Unreleased
+
+### Added
+
+- **`plan_silence_ripple` / `execute_silence_ripple`** — waveform-driven dead-air
+  removal that mirrors Resolve's *Ripple Delete Silence* dialog (ffmpeg
+  `silencedetect` → keep-range variant assembly). Tunable `threshold_db`,
+  `min_strip_frames`, `pre_head_frames`, and `post_tail_frames`. Original
+  timeline is never mutated; execution is confirm-gated like `execute_tighten`.
+  New module: `src/utils/silence_ripple.py`; tests in
+  `tests/test_silence_ripple.py` and `tests/test_edit_engine.py`.
+
 ## What's New in v2.62.3
 
 A single grading fix (PR #90, by @Mldphotohraphie), extended and hardened. No

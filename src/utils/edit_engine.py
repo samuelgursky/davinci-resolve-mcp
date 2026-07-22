@@ -31,10 +31,15 @@ import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.utils import analysis_memory, analysis_store, timeline_brain_db
+from src.utils import silence_ripple as _silence_ripple_mod
 
 PLAN_DIR_NAME = "edit_plans"
 DEFAULT_HANDLE_SECONDS = 0.25
 DEFAULT_MIN_PAUSE_SECONDS = 1.5
+DEFAULT_SILENCE_THRESHOLD_DB = _silence_ripple_mod.DEFAULT_THRESHOLD_DB
+DEFAULT_SILENCE_MIN_STRIP_FRAMES = _silence_ripple_mod.DEFAULT_MIN_STRIP_FRAMES
+DEFAULT_SILENCE_PRE_HEAD_FRAMES = _silence_ripple_mod.DEFAULT_PRE_HEAD_FRAMES
+DEFAULT_SILENCE_POST_TAIL_FRAMES = _silence_ripple_mod.DEFAULT_POST_TAIL_FRAMES
 
 _SELECT_RANK = {"high": 3, "medium": 2, "low": 1}
 
@@ -589,6 +594,224 @@ def plan_tighten(
                 if include_audio
                 else "include_audio=False: the variant will be VIDEO-ONLY (silent)."
             )
+        ),
+    }
+
+
+# ── E2b: waveform silence ripple (Resolve UI parity) ─────────────────────────
+
+
+def _resolve_media_path(conn, item: Dict[str, Any]) -> Optional[str]:
+    path = item.get("media_path") or item.get("file_path")
+    if path and os.path.isfile(str(path)):
+        return str(path)
+    clip_uuid = analysis_store.resolve_clip_uuid(conn, item.get("media_ref"))
+    if not clip_uuid:
+        clip_uuid = analysis_store.resolve_clip_uuid(conn, item.get("media_path"))
+    if not clip_uuid:
+        return None
+    row = conn.execute("SELECT file_path FROM clips WHERE clip_uuid = ?", (clip_uuid,)).fetchone()
+    if not row or not row["file_path"]:
+        return None
+    fp = str(row["file_path"])
+    return fp if os.path.isfile(fp) else None
+
+
+def plan_silence_ripple(
+    project_root: str,
+    *,
+    items: Sequence[Dict[str, Any]],
+    timeline_name: str,
+    timeline_fps: float,
+    threshold_db: float = DEFAULT_SILENCE_THRESHOLD_DB,
+    min_strip_frames: float = DEFAULT_SILENCE_MIN_STRIP_FRAMES,
+    pre_head_frames: float = DEFAULT_SILENCE_PRE_HEAD_FRAMES,
+    post_tail_frames: float = DEFAULT_SILENCE_POST_TAIL_FRAMES,
+    include_audio: bool = True,
+) -> Dict[str, Any]:
+    """Propose silence strips from waveform detection (ffmpeg silencedetect).
+
+    Mirrors Resolve's *Clip → Audio Operations → Ripple Delete Silence*.
+    Each timeline item is analyzed over its source trim; detected silences
+    become lifts assembled into a tightened VARIANT via keep_ranges.
+    """
+    if not items:
+        return {"success": False, "error": "No timeline items supplied"}
+    fps = float(timeline_fps) if timeline_fps and float(timeline_fps) > 0 else 24.0
+    min_strip_sec = _silence_ripple_mod.frames_to_seconds(min_strip_frames, fps)
+    pre_head_sec = _silence_ripple_mod.frames_to_seconds(pre_head_frames, fps)
+    post_tail_sec = _silence_ripple_mod.frames_to_seconds(post_tail_frames, fps)
+    conn = timeline_brain_db.connect(project_root)
+
+    lifts: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    item_specs: List[Dict[str, Any]] = []
+    timeline_total_frames = 0
+
+    for item_index, item in enumerate(items):
+        try:
+            tl_start = int(item["timeline_start_frame"])
+            tl_end = int(item["timeline_end_frame"])
+            src_start_frame = int(item.get("source_start_frame") or 0)
+        except (KeyError, TypeError, ValueError):
+            skipped.append({"item": item.get("item_name"), "reason": "missing frame fields"})
+            continue
+        timeline_total_frames += max(0, tl_end - tl_start)
+        media_path = _resolve_media_path(conn, item)
+        if not media_path:
+            skipped.append({"item": item.get("item_name"), "reason": "no readable media file path"})
+            item_specs.append({"item_index": item_index, "missing_path": True, "item": item})
+            continue
+
+        clip_uuid = analysis_store.resolve_clip_uuid(conn, item.get("media_ref"))
+        clip_row = None
+        clip_fps = fps
+        resolve_clip_id = None
+        if clip_uuid:
+            clip_row = conn.execute("SELECT * FROM clips WHERE clip_uuid = ?", (clip_uuid,)).fetchone()
+            if clip_row:
+                clip_fps = _clip_fps(dict(clip_row))
+                resolve_clip_id = dict(clip_row).get("resolve_clip_id")
+
+        src_start_sec = src_start_frame / clip_fps
+        src_end_sec = src_start_sec + (tl_end - tl_start) / fps
+        strip_regions, keep_segments = _silence_ripple_mod.plan_item_silence_strips(
+            media_path,
+            src_start_sec,
+            src_end_sec,
+            threshold_db=float(threshold_db),
+            min_strip_sec=min_strip_sec,
+            pre_head_sec=pre_head_sec,
+            post_tail_sec=post_tail_sec,
+        )
+
+        spec = {
+            "item_index": item_index,
+            "item": item,
+            "clip_uuid": clip_uuid,
+            "clip_fps": clip_fps,
+            "resolve_clip_id": resolve_clip_id or item.get("media_ref"),
+            "src_start_sec": src_start_sec,
+            "src_end_sec": src_end_sec,
+            "keep_segments": keep_segments,
+            "strip_regions": strip_regions,
+        }
+        item_specs.append(spec)
+
+        for strip_start, strip_end in strip_regions:
+            lift_start = tl_start + int(round((strip_start - src_start_sec) * fps))
+            lift_end = tl_start + int(round((strip_end - src_start_sec) * fps))
+            if lift_end <= lift_start:
+                continue
+            lifts.append({
+                "kind": "silence",
+                "action": "ripple_delete",
+                "timeline_start_frame": lift_start,
+                "timeline_end_frame": lift_end,
+                "duration_seconds": round((lift_end - lift_start) / fps, 3),
+                "item_name": item.get("item_name"),
+                "item_index": item_index,
+                "source_lift_seconds": [round(strip_start, 3), round(strip_end, 3)],
+                "rationale": (
+                    f"Waveform silence {round(strip_start, 2)}s–{round(strip_end, 2)}s "
+                    f"(threshold {threshold_db} dB, min {min_strip_frames} frames)."
+                ),
+                "evidence": {
+                    "basis": "ffmpeg_silencedetect",
+                    "threshold_db": threshold_db,
+                    "source_gap_seconds": [round(strip_start, 3), round(strip_end, 3)],
+                },
+            })
+
+    skipped = _dedupe_skipped(skipped)
+    if not lifts:
+        return {
+            "success": False,
+            "error": "No silence regions found above threshold",
+            "skipped": skipped,
+            "note": (
+                f"threshold_db={threshold_db}, min_strip_frames={min_strip_frames}; "
+                "items without readable file paths are skipped."
+            ),
+        }
+
+    lifts.sort(key=lambda l: -l["timeline_start_frame"])
+
+    keep_ranges: List[Dict[str, Any]] = []
+    for spec in item_specs:
+        if spec.get("missing_path") or not spec.get("resolve_clip_id"):
+            continue
+        item = spec["item"]
+        clip_fps = spec["clip_fps"]
+        audio_indices: List[int] = []
+        if include_audio:
+            audio_indices = [int(i) for i in (item.get("audio_track_indices") or []) if int(i) > 0]
+            if not audio_indices:
+                audio_indices = [1]
+        for seg_start, seg_end in spec.get("keep_segments") or []:
+            start_frame = int(round(seg_start * clip_fps))
+            end_frame = max(start_frame + 1, int(round(seg_end * clip_fps)))
+            keep_ranges.append({
+                "clip_id": spec["resolve_clip_id"],
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "track_type": "video",
+                "track_index": int(item.get("track_index") or 1),
+            })
+            for audio_index in audio_indices:
+                keep_ranges.append({
+                    "clip_id": spec["resolve_clip_id"],
+                    "start_frame": start_frame,
+                    "end_frame": end_frame,
+                    "track_type": "audio",
+                    "media_type": 2,
+                    "track_index": audio_index,
+                })
+
+    removed_frames = sum(l["timeline_end_frame"] - l["timeline_start_frame"] for l in lifts)
+    audio_keep_range_count = sum(1 for r in keep_ranges if r.get("track_type") == "audio")
+    video_keep_range_count = len(keep_ranges) - audio_keep_range_count
+    plan = save_plan(project_root, {
+        "kind": "silence_ripple",
+        "timeline_name": timeline_name,
+        "timeline_fps": fps,
+        "lifts": lifts,
+        "keep_ranges": keep_ranges,
+        "include_audio": bool(include_audio),
+        "skipped": skipped,
+        "summary": (
+            f"{len(lifts)} silence strips, ~{round(removed_frames / fps, 1)}s removed "
+            f"from '{timeline_name}' (waveform ripple-delete variant"
+            f"{', video + audio' if include_audio else ', video only'})"
+        ),
+        "settings": {
+            "threshold_db": threshold_db,
+            "min_strip_frames": min_strip_frames,
+            "pre_head_frames": pre_head_frames,
+            "post_tail_frames": post_tail_frames,
+            "include_audio": bool(include_audio),
+        },
+    })
+    return {
+        "success": True,
+        "status": "plan_ready",
+        "plan_id": plan["plan_id"],
+        "kind": "silence_ripple",
+        "timeline_name": timeline_name,
+        "lift_count": len(lifts),
+        "estimated_removed_seconds": round(removed_frames / fps, 2),
+        "lifts": lifts,
+        "keep_range_count": len(keep_ranges),
+        "video_keep_range_count": video_keep_range_count,
+        "audio_keep_range_count": audio_keep_range_count,
+        "include_audio": bool(include_audio),
+        "skipped": skipped,
+        "note": (
+            "Dry-run plan. Execute with edit_engine(action='execute_silence_ripple', "
+            "params={plan_id}) — a tightened VARIANT timeline is assembled from "
+            "waveform silence detection; the original timeline is never mutated. "
+            "Tune threshold_db / min_strip_frames to match Resolve's "
+            "Ripple Delete Silence dialog."
         ),
     }
 

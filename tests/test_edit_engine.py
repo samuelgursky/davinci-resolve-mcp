@@ -305,6 +305,71 @@ class PlanTightenTests(EditEngineBase):
         self.assertFalse(plan["include_audio"])
 
 
+class PlanSilenceRippleTests(EditEngineBase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.clip = self._ingest_deep_clip(
+            clip_id="resolve-clip-s", name="Talk.mp4", path="/media/talk.mp4", clip_dir="s-ssssssssssss",
+            shots=[deep_shot(1, 0.0, 20.0, "medium", "Single take.")],
+        )
+
+    def _item(self, **overrides) -> dict:
+        item = {
+            "timeline_start_frame": 0,
+            "timeline_end_frame": 480,
+            "source_start_frame": 0,
+            "media_ref": "resolve-clip-s",
+            "item_name": "Talk.mp4",
+            "track_index": 1,
+        }
+        item.update(overrides)
+        return item
+
+    def test_plan_proposes_waveform_lifts(self) -> None:
+        from unittest import mock
+
+        strip = [(9.5, 19.75)]
+        keep = [(0.0, 9.5), (19.75, 20.0)]
+        with mock.patch.object(edit_engine, "_resolve_media_path", return_value="/media/talk.mp4"), \
+             mock.patch.object(edit_engine._silence_ripple_mod, "plan_item_silence_strips", return_value=(strip, keep)):
+            plan = edit_engine.plan_silence_ripple(
+                self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0
+            )
+        self.assertTrue(plan["success"], plan)
+        self.assertEqual(plan["kind"], "silence_ripple")
+        self.assertEqual(plan["lift_count"], 1)
+        lift = plan["lifts"][0]
+        self.assertEqual(lift["evidence"]["basis"], "ffmpeg_silencedetect")
+        self.assertEqual(lift["timeline_start_frame"], 228)
+        self.assertEqual(lift["timeline_end_frame"], 474)
+
+    def test_keep_ranges_half_open_with_audio(self) -> None:
+        from unittest import mock
+
+        strip = [(9.5, 19.75)]
+        keep = [(0.0, 9.5), (19.75, 20.0)]
+        with mock.patch.object(edit_engine, "_resolve_media_path", return_value="/media/talk.mp4"), \
+             mock.patch.object(edit_engine._silence_ripple_mod, "plan_item_silence_strips", return_value=(strip, keep)):
+            plan = edit_engine.plan_silence_ripple(
+                self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0
+            )
+        loaded = edit_engine.load_plan(self.root, plan["plan_id"])
+        video = [r for r in loaded["keep_ranges"] if r["track_type"] == "video"]
+        audio = [r for r in loaded["keep_ranges"] if r["track_type"] == "audio"]
+        self.assertEqual(len(audio), len(video))
+        ranges = sorted((r["start_frame"], r["end_frame"]) for r in video)
+        self.assertEqual(ranges, [(0, 228), (474, 480)])
+
+    def test_missing_media_path_skipped(self) -> None:
+        plan = edit_engine.plan_silence_ripple(
+            self.root,
+            items=[self._item(media_ref="missing-clip", item_name="Mystery.mp4")],
+            timeline_name="TL", timeline_fps=24.0,
+        )
+        self.assertFalse(plan["success"])
+        self.assertIn("skipped", plan)
+
+
 class PlanSwapTests(EditEngineBase):
     def setUp(self) -> None:
         super().setUp()
