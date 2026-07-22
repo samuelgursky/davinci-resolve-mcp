@@ -30,6 +30,32 @@ class SilenceRippleLogicTests(unittest.TestCase):
     def test_frames_to_seconds(self) -> None:
         self.assertAlmostEqual(silence_ripple.frames_to_seconds(10, 30.0), 1 / 3.0)
 
+    def test_build_args_single_stream_uses_af(self) -> None:
+        args = silence_ripple.build_silencedetect_args(
+            "/media/a.mov", 2.0, 10.0,
+            threshold_db=-30.0, min_duration_sec=0.4, audio_streams=1,
+        )
+        self.assertIn("-af", args)
+        self.assertNotIn("-filter_complex", args)
+        self.assertIn("-vn", args)
+        self.assertIn("silencedetect=noise=-30.0dB:d=0.4", args)
+
+    def test_build_args_multi_stream_merges_all_channels(self) -> None:
+        """Production MXF: one mono stream per channel — a dead scratch channel
+        must not read as all-silence, so every stream is merged first."""
+        args = silence_ripple.build_silencedetect_args(
+            "/media/a.mxf", 0.0, 20.0,
+            threshold_db=-30.0, min_duration_sec=0.4, audio_streams=5,
+        )
+        idx = args.index("-filter_complex")
+        graph = args[idx + 1]
+        self.assertEqual(
+            graph,
+            "[0:a:0][0:a:1][0:a:2][0:a:3][0:a:4]amerge=inputs=5,"
+            "silencedetect=noise=-30.0dB:d=0.4",
+        )
+        self.assertNotIn("-af", args)
+
 
 if __name__ == "__main__":
     unittest.main()

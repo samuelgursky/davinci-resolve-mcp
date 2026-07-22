@@ -816,7 +816,7 @@ def plan_silence_ripple(
             "include_audio": bool(include_audio),
         },
     })
-    return {
+    result = {
         "success": True,
         "status": "plan_ready",
         "plan_id": plan["plan_id"],
@@ -838,6 +838,13 @@ def plan_silence_ripple(
             "Ripple Delete Silence dialog."
         ),
     }
+    if video_keep_range_count == 0:
+        result["warning"] = (
+            "Plan removes ALL planned content (no keep ranges survived) — "
+            "the source audio may be quieter than threshold_db throughout. "
+            "Check the threshold before executing; execution will refuse this plan."
+        )
+    return result
 
 
 # ── E3: swap alternates ──────────────────────────────────────────────────────

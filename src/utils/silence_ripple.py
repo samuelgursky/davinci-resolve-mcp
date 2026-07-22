@@ -35,6 +35,51 @@ def frames_to_seconds(frames: float, fps: float) -> float:
     return float(frames) / fps
 
 
+def audio_stream_count(media_path: str) -> int:
+    """Number of audio streams in the file (0 when ffprobe fails)."""
+    from src.utils.media_analysis import _ffprobe
+
+    probe = _ffprobe(media_path)
+    if not probe.get("success"):
+        return 0
+    streams = (probe.get("raw") or {}).get("streams") or []
+    return sum(1 for s in streams if s.get("codec_type") == "audio")
+
+
+def build_silencedetect_args(
+    media_path: str,
+    start_sec: float,
+    duration: float,
+    *,
+    threshold_db: float,
+    min_duration_sec: float,
+    audio_streams: int,
+) -> List[str]:
+    """ffmpeg argv for silence detection over a source slice.
+
+    Multi-stream sources (e.g. production MXF with one mono stream per
+    channel) are merged first: silencedetect's default joint mode then only
+    triggers when EVERY channel is silent — matching Resolve's dialog, and
+    immune to a dead scratch channel reading as all-silence. -vn skips the
+    (potentially 4K) video decode entirely.
+    """
+    detect = f"silencedetect=noise={threshold_db}dB:d={min_duration_sec}"
+    args = [
+        "ffmpeg", "-hide_banner", "-nostats",
+        "-ss", str(start_sec),
+        "-i", media_path,
+        "-t", str(duration),
+        "-vn",
+    ]
+    if audio_streams > 1:
+        inputs = "".join(f"[0:a:{i}]" for i in range(audio_streams))
+        args += ["-filter_complex", f"{inputs}amerge=inputs={audio_streams},{detect}"]
+    else:
+        args += ["-af", detect]
+    args += ["-f", "null", "-"]
+    return args
+
+
 def detect_silence_in_range(
     media_path: str,
     start_sec: float,
@@ -45,26 +90,34 @@ def detect_silence_in_range(
 ) -> List[Tuple[float, float]]:
     """Return absolute-file silence intervals within [start_sec, end_sec).
 
-    Uses ffmpeg silencedetect on the trimmed slice. Timestamps are converted
-    back to absolute source-file seconds.
+    Uses ffmpeg silencedetect on the trimmed slice (all audio streams merged).
+    Timestamps are converted back to absolute source-file seconds.
     """
     if not media_path or not os.path.isfile(media_path):
         return []
     if end_sec <= start_sec:
         return []
     duration = end_sec - start_sec
-    audio_filter = f"silencedetect=noise={threshold_db}dB:d={min_duration_sec}"
     from src.utils.media_analysis import _run_command
 
-    args = [
-        "ffmpeg", "-hide_banner", "-nostats",
-        "-ss", str(start_sec),
-        "-i", media_path,
-        "-t", str(duration),
-        "-af", audio_filter,
-        "-f", "null", "-",
-    ]
+    streams = audio_stream_count(media_path)
+    if streams == 0:
+        return []
+    args = build_silencedetect_args(
+        media_path, start_sec, duration,
+        threshold_db=threshold_db, min_duration_sec=min_duration_sec,
+        audio_streams=streams,
+    )
     code, _, stderr = _run_command(args)
+    if code != 0 and streams > 1:
+        # amerge can refuse mismatched sample rates — fall back to the
+        # default single-stream selection rather than dropping evidence.
+        args = build_silencedetect_args(
+            media_path, start_sec, duration,
+            threshold_db=threshold_db, min_duration_sec=min_duration_sec,
+            audio_streams=1,
+        )
+        code, _, stderr = _run_command(args)
     if code != 0:
         return []
     parsed = _parse_silencedetect(stderr)
