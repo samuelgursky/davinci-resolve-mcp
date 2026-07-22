@@ -657,13 +657,10 @@ def plan_silence_ripple(
             skipped.append({"item": item.get("item_name"), "reason": "missing frame fields"})
             continue
         timeline_total_frames += max(0, tl_end - tl_start)
-        media_path = _resolve_media_path(conn, item)
-        if not media_path:
-            skipped.append({"item": item.get("item_name"), "reason": "no readable media file path"})
-            item_specs.append({"item_index": item_index, "missing_path": True, "item": item})
-            continue
 
         clip_uuid = analysis_store.resolve_clip_uuid(conn, item.get("media_ref"))
+        if not clip_uuid:
+            clip_uuid = analysis_store.resolve_clip_uuid(conn, item.get("media_path"))
         clip_row = None
         clip_fps = fps
         resolve_clip_id = None
@@ -672,9 +669,47 @@ def plan_silence_ripple(
             if clip_row:
                 clip_fps = _clip_fps(dict(clip_row))
                 resolve_clip_id = dict(clip_row).get("resolve_clip_id")
+        resolve_clip_id = resolve_clip_id or item.get("media_ref")
+        if not resolve_clip_id:
+            skipped.append({
+                "item": item.get("item_name"),
+                "reason": "no media reference — OMITTED from the assembled variant",
+            })
+            continue
 
         src_start_sec = src_start_frame / clip_fps
         src_end_sec = src_start_sec + (tl_end - tl_start) / fps
+        spec = {
+            "item_index": item_index,
+            "item": item,
+            "clip_uuid": clip_uuid,
+            "clip_fps": clip_fps,
+            "resolve_clip_id": resolve_clip_id,
+            "src_start_sec": src_start_sec,
+            "src_end_sec": src_end_sec,
+            # Default: ride along whole. Overwritten below when waveform
+            # evidence is available for this item.
+            "keep_segments": [(src_start_sec, src_end_sec)],
+            "strip_regions": [],
+        }
+
+        media_path = _resolve_media_path(conn, item)
+        if not media_path:
+            skipped.append({
+                "item": item.get("item_name"),
+                "reason": "no readable media file path — kept whole in variant",
+            })
+            item_specs.append(spec)
+            continue
+        if not _silence_ripple_mod.ffmpeg_available():
+            return {
+                "success": False,
+                "error": (
+                    "ffmpeg not found on PATH — waveform silence detection "
+                    "requires ffmpeg (see media_analysis capabilities)"
+                ),
+            }
+
         strip_regions, keep_segments = _silence_ripple_mod.plan_item_silence_strips(
             media_path,
             src_start_sec,
@@ -684,18 +719,8 @@ def plan_silence_ripple(
             pre_head_sec=pre_head_sec,
             post_tail_sec=post_tail_sec,
         )
-
-        spec = {
-            "item_index": item_index,
-            "item": item,
-            "clip_uuid": clip_uuid,
-            "clip_fps": clip_fps,
-            "resolve_clip_id": resolve_clip_id or item.get("media_ref"),
-            "src_start_sec": src_start_sec,
-            "src_end_sec": src_end_sec,
-            "keep_segments": keep_segments,
-            "strip_regions": strip_regions,
-        }
+        spec["keep_segments"] = keep_segments
+        spec["strip_regions"] = strip_regions
         item_specs.append(spec)
 
         for strip_start, strip_end in strip_regions:
@@ -731,7 +756,8 @@ def plan_silence_ripple(
             "skipped": skipped,
             "note": (
                 f"threshold_db={threshold_db}, min_strip_frames={min_strip_frames}; "
-                "items without readable file paths are skipped."
+                "items without readable file paths carry no waveform evidence "
+                "(kept whole — see skipped)."
             ),
         }
 
@@ -739,8 +765,6 @@ def plan_silence_ripple(
 
     keep_ranges: List[Dict[str, Any]] = []
     for spec in item_specs:
-        if spec.get("missing_path") or not spec.get("resolve_clip_id"):
-            continue
         item = spec["item"]
         clip_fps = spec["clip_fps"]
         audio_indices: List[int] = []

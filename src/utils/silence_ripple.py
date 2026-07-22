@@ -14,7 +14,8 @@ Settings map to the Resolve dialog:
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+import shutil
+from typing import List, Sequence, Tuple
 
 from src.utils.media_analysis import _parse_silencedetect
 
@@ -22,6 +23,10 @@ DEFAULT_THRESHOLD_DB = -30.0
 DEFAULT_MIN_STRIP_FRAMES = 10
 DEFAULT_PRE_HEAD_FRAMES = 0
 DEFAULT_POST_TAIL_FRAMES = 1
+
+
+def ffmpeg_available() -> bool:
+    return shutil.which("ffmpeg") is not None
 
 
 def frames_to_seconds(frames: float, fps: float) -> float:

@@ -825,7 +825,8 @@ clip-count readback plus `brain_edits` rationale rows.
   waveform silence strips via ffmpeg `silencedetect`, mirroring Resolve's
   *Clip → Audio Operations → Ripple Delete Silence* (defaults: −30 dB,
   10-frame minimum strip, 0 pre-head, 1 post-tail frame). Items without
-  readable file paths land in `skipped`. `execute_silence_ripple(plan_id)`
+  readable file paths ride along whole (reported in `skipped`), so the
+  variant never silently loses content. `execute_silence_ripple(plan_id)`
   assembles a tightened VARIANT timeline from keep ranges — same safety model
   as `execute_tighten` (original untouched, confirm token, audio mirroring).
 - `plan_swap(timeline_start_frame | item_name, kind="visual"|"text",

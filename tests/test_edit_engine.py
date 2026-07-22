@@ -368,6 +368,63 @@ class PlanSilenceRippleTests(EditEngineBase):
         )
         self.assertFalse(plan["success"])
         self.assertIn("skipped", plan)
+        self.assertIn("kept whole", plan["skipped"][0]["reason"])
+
+    def test_missing_path_item_rides_along_whole(self) -> None:
+        """A pathless item must land in the variant untouched, not vanish."""
+        from unittest import mock
+
+        strip = [(9.5, 19.75)]
+        keep = [(0.0, 9.5), (19.75, 20.0)]
+        real_resolver = edit_engine._resolve_media_path
+
+        def resolver(conn, item):
+            if item.get("media_ref") == "resolve-clip-s":
+                return "/media/talk.mp4"
+            return real_resolver(conn, item)
+
+        items = [
+            self._item(),
+            self._item(
+                media_ref="offline-clip", item_name="Offline.mp4",
+                timeline_start_frame=480, timeline_end_frame=720,
+            ),
+        ]
+        with mock.patch.object(edit_engine, "_resolve_media_path", side_effect=resolver), \
+             mock.patch.object(edit_engine._silence_ripple_mod, "plan_item_silence_strips", return_value=(strip, keep)):
+            plan = edit_engine.plan_silence_ripple(
+                self.root, items=items, timeline_name="TL", timeline_fps=24.0
+            )
+        self.assertTrue(plan["success"], plan)
+        self.assertEqual(plan["lift_count"], 1)
+        loaded = edit_engine.load_plan(self.root, plan["plan_id"])
+        offline_video = [
+            r for r in loaded["keep_ranges"]
+            if r["track_type"] == "video" and r["clip_id"] == "offline-clip"
+        ]
+        # Full 240-frame item preserved as one keep range (0–240 half-open).
+        self.assertEqual([(r["start_frame"], r["end_frame"]) for r in offline_video], [(0, 240)])
+        self.assertTrue(any("kept whole" in s["reason"] for s in plan["skipped"]))
+
+    def test_item_without_media_ref_is_omitted_and_reported(self) -> None:
+        plan = edit_engine.plan_silence_ripple(
+            self.root,
+            items=[self._item(media_ref=None, item_name="NoRef.mp4")],
+            timeline_name="TL", timeline_fps=24.0,
+        )
+        self.assertFalse(plan["success"])
+        self.assertIn("OMITTED", plan["skipped"][0]["reason"])
+
+    def test_ffmpeg_missing_returns_clear_error(self) -> None:
+        from unittest import mock
+
+        with mock.patch.object(edit_engine, "_resolve_media_path", return_value="/media/talk.mp4"), \
+             mock.patch.object(edit_engine._silence_ripple_mod, "ffmpeg_available", return_value=False):
+            plan = edit_engine.plan_silence_ripple(
+                self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0
+            )
+        self.assertFalse(plan["success"])
+        self.assertIn("ffmpeg", plan["error"])
 
 
 class PlanSwapTests(EditEngineBase):

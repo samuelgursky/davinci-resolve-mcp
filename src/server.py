@@ -18424,7 +18424,8 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
     - plan_silence_ripple(timeline_name?, track_index?, threshold_db?,
       min_strip_frames?, pre_head_frames?, post_tail_frames?, include_audio?)
       — waveform silence strips via ffmpeg silencedetect (Resolve's Ripple Delete
-      Silence parity). Items without readable file paths are skipped.
+      Silence parity). Items without readable file paths ride along whole
+      (reported in skipped).
     - execute_silence_ripple(plan_id, confirm_token?, include_details?) —
       same variant assembly as execute_tighten; original timeline untouched.
     - plan_swap(track_index?, timeline_start_frame | item_name, kind?, limit?)
