@@ -2,7 +2,10 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
-## Unreleased
+## What's New in v2.63.0
+
+Waveform silence ripple for the edit engine (PR #91, by @EliteSystemsAI),
+adopted with follow-up hardening and live-validated in Resolve Studio.
 
 ### Added
 
@@ -13,6 +16,26 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
   timeline is never mutated; execution is confirm-gated like `execute_tighten`.
   New module: `src/utils/silence_ripple.py`; tests in
   `tests/test_silence_ripple.py` and `tests/test_edit_engine.py`.
+
+### Fixed (hardening on the PR before release)
+
+- **Skipped items ride along whole** — timeline items without a readable media
+  file path now emit a full-range keep (video + mirrored audio) so the
+  assembled variant never silently loses content; only items with no media
+  reference at all are omitted, and the `skipped` reason says so explicitly.
+- **All audio streams are merged before detection** — production MXF often
+  carries one mono PCM stream per channel, and ffmpeg's default stream
+  selection could land on a dead scratch channel, reading entire takes as
+  silence. Detection now merges every audio stream (silence only when ALL
+  channels are silent — Resolve's dialog semantics), with a single-stream
+  fallback if `amerge` refuses the graph. Found by live validation on 5-stream
+  interview masters.
+- **No pointless video decode** — silence detection runs with `-vn`, so 4K
+  ProRes sources no longer decode picture just to scan audio.
+- **Clear failure modes** — a missing ffmpeg binary now reports itself instead
+  of "no silence regions found", and a plan whose keep ranges are empty
+  (source quieter than `threshold_db` throughout) carries an explicit warning
+  and is refused at execution.
 
 ## What's New in v2.62.3
 
