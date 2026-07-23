@@ -35,7 +35,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.63.1"
+VERSION = "2.63.2"
 # Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
 # Resolve's scripting bridge loads into newer interpreters on recent builds
 # (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
@@ -282,6 +282,37 @@ def appdata():
     """Windows %APPDATA% equivalent."""
     return Path(os.environ.get("APPDATA", home() / "AppData" / "Roaming"))
 
+def localappdata():
+    """Windows %LOCALAPPDATA% equivalent."""
+    return Path(os.environ.get("LOCALAPPDATA", home() / "AppData" / "Local"))
+
+def windows_claude_desktop_config():
+    """Resolve the Claude Desktop config path on Windows, MSIX-aware (issue #93).
+
+    Claude Desktop for Windows ships as an MSIX package (even when downloaded
+    from the official website, not the Store). MSIX filesystem virtualization
+    redirects the app's %APPDATA% reads/writes into a per-package container,
+    so the app actually uses:
+
+        %LOCALAPPDATA%\\Packages\\Claude_<publisherhash>\\LocalCache\\Roaming\\Claude\\
+
+    A config written to the documented %APPDATA%\\Claude\\ location is invisible
+    to the app -- the server silently never appears. Prefer the containerized
+    path whenever a Claude MSIX package directory with that structure exists;
+    fall back to %APPDATA%\\Claude\\ otherwise. The publisher-hash suffix is
+    globbed rather than hard-coded so a re-signed package still matches.
+    """
+    packages = localappdata() / "Packages"
+    try:
+        candidates = sorted(packages.glob("Claude_*"))
+    except OSError:
+        candidates = []
+    for pkg in candidates:
+        virtual = pkg / "LocalCache" / "Roaming" / "Claude"
+        if virtual.is_dir():
+            return virtual / "claude_desktop_config.json"
+    return appdata() / "Claude" / "claude_desktop_config.json"
+
 def xdg_config():
     """Linux XDG_CONFIG_HOME or default."""
     return Path(os.environ.get("XDG_CONFIG_HOME", home() / ".config"))
@@ -314,7 +345,7 @@ MCP_CLIENTS = [
         "name": "Claude Desktop",
         "get_path": lambda: {
             "Darwin":  home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json",
-            "Windows": appdata() / "Claude" / "claude_desktop_config.json",
+            "Windows": windows_claude_desktop_config(),
             "Linux":   xdg_config() / "Claude" / "claude_desktop_config.json",
         }.get(SYSTEM),
         "config_key": "mcpServers",

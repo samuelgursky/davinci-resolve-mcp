@@ -2,7 +2,9 @@
 
 import importlib.util
 import json
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -159,6 +161,64 @@ class InstallConfigTests(unittest.TestCase):
         self.assertIsNotNone(opencode)
         self.assertEqual(opencode["config_key"], "mcp")
         self.assertIn("opencode", str(opencode["get_path"]()))
+
+    def test_claude_desktop_prefers_msix_virtualized_path(self):
+        """Issue #93: MSIX builds of Claude Desktop read config from a
+        package-containerized path, not %APPDATA%\\Claude\\."""
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "Local"
+            roaming = Path(tmp) / "Roaming"
+            virtual = (
+                local / "Packages" / "Claude_pzs8sxrjxfjjc"
+                / "LocalCache" / "Roaming" / "Claude"
+            )
+            virtual.mkdir(parents=True)
+            env = {"LOCALAPPDATA": str(local), "APPDATA": str(roaming)}
+            with patch.dict(os.environ, env):
+                path = install.windows_claude_desktop_config()
+            self.assertEqual(path, virtual / "claude_desktop_config.json")
+
+    def test_claude_desktop_falls_back_to_appdata_without_msix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "Local"
+            roaming = Path(tmp) / "Roaming"
+            (local / "Packages").mkdir(parents=True)
+            env = {"LOCALAPPDATA": str(local), "APPDATA": str(roaming)}
+            with patch.dict(os.environ, env):
+                path = install.windows_claude_desktop_config()
+            self.assertEqual(
+                path, roaming / "Claude" / "claude_desktop_config.json"
+            )
+
+    def test_claude_desktop_ignores_msix_package_never_launched(self):
+        """A Claude_* package dir without LocalCache/Roaming/Claude (app never
+        run) must not divert the config away from %APPDATA%."""
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "Local"
+            roaming = Path(tmp) / "Roaming"
+            (local / "Packages" / "Claude_pzs8sxrjxfjjc").mkdir(parents=True)
+            env = {"LOCALAPPDATA": str(local), "APPDATA": str(roaming)}
+            with patch.dict(os.environ, env):
+                path = install.windows_claude_desktop_config()
+            self.assertEqual(
+                path, roaming / "Claude" / "claude_desktop_config.json"
+            )
+
+    def test_claude_desktop_client_uses_msix_helper_on_windows(self):
+        client = next(
+            c for c in install.MCP_CLIENTS if c["id"] == "claude-desktop"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "Local"
+            virtual = (
+                local / "Packages" / "Claude_abc123"
+                / "LocalCache" / "Roaming" / "Claude"
+            )
+            virtual.mkdir(parents=True)
+            env = {"LOCALAPPDATA": str(local), "APPDATA": str(Path(tmp) / "Roaming")}
+            with patch.dict(os.environ, env), patch.object(install, "SYSTEM", "Windows"):
+                path = client["get_path"]()
+            self.assertEqual(path, virtual / "claude_desktop_config.json")
 
     def test_verify_connection_uses_generated_env(self):
         fake_result = SimpleNamespace(

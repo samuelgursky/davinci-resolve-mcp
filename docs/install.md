@@ -50,7 +50,7 @@ The installer can automatically configure any of these clients:
 
 | Client | Config Written To |
 |--------|-------------------|
-| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS); `%APPDATA%\Claude\claude_desktop_config.json` (Windows, see MSIX note below) |
 | Claude Code | `.mcp.json` (project root) |
 | Cursor | `~/.cursor/mcp.json` |
 | VS Code (Copilot) | `.vscode/mcp.json` (workspace) |
@@ -63,6 +63,15 @@ The installer can automatically configure any of these clients:
 | JetBrains IDEs | Manual (Settings > Tools > AI Assistant > MCP) |
 
 You can configure multiple clients at once, or use `--clients manual` to get copy-paste config snippets.
+
+> **Windows MSIX note (Claude Desktop):** Claude Desktop for Windows is
+> distributed as an MSIX package — even when downloaded from the official
+> website. MSIX filesystem virtualization redirects the app's config to
+> `%LOCALAPPDATA%\Packages\Claude_<publisherhash>\LocalCache\Roaming\Claude\claude_desktop_config.json`,
+> and the app never reads the documented `%APPDATA%\Claude\` path (which may
+> still exist on disk). The installer detects the virtualized location and
+> writes there automatically. If the server does not appear in Claude Desktop
+> after a manual setup, check both locations.
 
 For [Autohand Code](https://github.com/autohandai/code-cli/), register the managed launcher after setup:
 
