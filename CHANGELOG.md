@@ -2,6 +2,25 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.63.2
+
+Installer fix for Windows MSIX builds of Claude Desktop (issue #93, reported by
+@corolorn). No tool-surface change.
+
+### Fixed
+
+- **Installer writes Claude Desktop config to the MSIX-virtualized path on
+  Windows** — Claude Desktop for Windows ships as an MSIX package (even from
+  the official website), and MSIX filesystem virtualization redirects the
+  app's config to
+  `%LOCALAPPDATA%\Packages\Claude_<publisherhash>\LocalCache\Roaming\Claude\claude_desktop_config.json`.
+  The installer previously wrote to the documented `%APPDATA%\Claude\` path,
+  which the MSIX-packaged app never reads, so the server silently never
+  appeared. The installer now detects the containerized path (publisher hash
+  globbed, not hard-coded) and writes there when present, falling back to
+  `%APPDATA%\Claude\` for non-MSIX installs. Documented both locations in
+  `docs/install.md`.
+
 ## What's New in v2.63.1
 
 Documentation-only. Records the `Graph.SetLUT` master-LUT-dir behavior (from the
