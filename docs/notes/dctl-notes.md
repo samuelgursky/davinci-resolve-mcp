@@ -19,7 +19,12 @@ Relevant existing actions:
   Resolve's LUT folders.
 - `graph(action="set_lut", params={"node_index": 1, "lut_path": "..."})`
   wraps `Graph.SetLUT(nodeIndex, lutPath)`. DCTLs that Resolve exposes through
-  LUT selection follow the same discovery constraints as LUTs.
+  LUT selection follow the same discovery constraints as LUTs. **Caveat:**
+  `install` writes to the per-user LUT dir, but `SetLUT` resolves only against
+  the *master* LUT dir (not even an absolute user-dir path works, and
+  `refresh_luts` does not help). `set_lut` now auto-relocates the file into an
+  `MCP/` subfolder of the master dir and retries — see `docs/notes/lut-notes.md`
+  ("master LUT dir only") and the `Graph.SetLUT` entry in `api_truth.py`.
 - `graph(action="get_lut", params={"node_index": 1})` wraps `Graph.GetLUT()`.
 - `graph(action="get_tools_in_node", ...)` may report ResolveFX tools present
   in a Color page node, but the scripting API does not expose a general

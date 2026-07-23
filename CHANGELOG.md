@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.63.1
+
+Documentation-only. Records the `Graph.SetLUT` master-LUT-dir behavior (from the
+v2.62.3 fix) in the canonical reference surfaces. No code or tool-surface change.
+
+### Documentation
+
+- **`api_truth` + api-limitations report** — added a `Graph.SetLUT` entry
+  (`submit: bug`, #90): `SetLUT` resolves LUT paths only against the master
+  (system) LUT dir and configured custom paths, never the per-user dir the
+  `dctl` tool installs to; an absolute user-dir path fails too, and
+  `RefreshLUTList()` does not help, while a master-subfolder path resolves.
+  Verified live on Studio 19.1.3.7 (same behavior reported on 21.0.2 in #90).
+  Regenerated `docs/reference/api-limitations.md`.
+- **`docs/notes/lut-notes.md`** — corrected a misleading claim that any valid
+  absolute path resolves (an absolute path into the user LUT dir does not),
+  added a "master LUT dir only" section, and documented the per-user install
+  location.
+- **`docs/notes/dctl-notes.md`** — noted the same caveat on the `set_lut`
+  action, including that `set_lut` now auto-relocates into the master dir.
+
 ## What's New in v2.63.0
 
 Waveform silence ripple for the edit engine (PR #91, by @EliteSystemsAI),

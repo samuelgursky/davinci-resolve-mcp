@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 19 missing capabilities, 11 bugs / unreliable behaviors.
+**Totals:** 19 missing capabilities, 12 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -265,3 +265,12 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** After writing 'Reel Name', read it back with GetClipProperty('Reel Name') and refuse to report success on mismatch; surface the project-setting gate to the caller (server._verify_clip_property_writeback).
 - **Reference:** [issue #77](https://github.com/samuelgursky/davinci-resolve-mcp/issues/77)
 - **Tags:** unreliable-return, silent-failure, metadata, reel-name
+
+### Graph.SetLUT (master-LUT-dir-only resolution)
+
+- **Object:** `Graph`
+- **Signature:** `(nodeIndex, lutPath) -> bool`
+- **Behavior:** SetLUT resolves lutPath ONLY against the master (system) LUT directory and its configured custom LUT paths -- NOT the per-user LUT dir that the dctl tool / Project LUT install writes to. A bare basename in the user dir returns False, and so does an ABSOLUTE path pointing into the user dir; RefreshLUTList() does not change this. A subfolder-relative path under the master root (e.g. 'MCP/Foo.cube') DOES resolve. Net effect: a LUT/DCTL the dctl tool just installed can never be applied by SetLUT as-is, so set_lut used to always return {success: false}. Verified live on Studio 19.1.3.7 (basename and absolute user-dir path both False, before and after RefreshLUTList; master-dir and master-subfolder paths True); the originating report (PR #90) observed the same on 21.0.2, so it is not version-specific.
+- **Workaround / current handling:** On a False return, locate the LUT, copy it into a namespaced subfolder of the master LUT dir (MCP/, so it does not clobber stock LUTs by basename), call RefreshLUTList(), and retry with the master-relative path. graph.set_lut and the granular graph_set_lut now do this automatically via src.utils.lut_paths.ensure_lut_in_master.
+- **Reference:** [issue #90](https://github.com/samuelgursky/davinci-resolve-mcp/issues/90)
+- **Tags:** color, lut, path-resolution, silent-failure

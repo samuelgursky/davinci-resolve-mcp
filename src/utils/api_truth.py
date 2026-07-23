@@ -564,6 +564,35 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "when mirroring keep-ranges into clipInfos.",
         "tags": ["timeline", "edit", "off-by-one", "readback"],
     },
+    {
+        "symbol": "Graph.SetLUT (master-LUT-dir-only resolution)",
+        "object": "Graph",
+        "signature": "(nodeIndex, lutPath) -> bool",
+        "reality": "SetLUT resolves lutPath ONLY against the master (system) LUT "
+                   "directory and its configured custom LUT paths -- NOT the "
+                   "per-user LUT dir that the dctl tool / Project LUT install "
+                   "writes to. A bare basename in the user dir returns False, and "
+                   "so does an ABSOLUTE path pointing into the user dir; "
+                   "RefreshLUTList() does not change this. A subfolder-relative "
+                   "path under the master root (e.g. 'MCP/Foo.cube') DOES resolve. "
+                   "Net effect: a LUT/DCTL the dctl tool just installed can never "
+                   "be applied by SetLUT as-is, so set_lut used to always return "
+                   "{success: false}. Verified live on Studio 19.1.3.7 (basename "
+                   "and absolute user-dir path both False, before and after "
+                   "RefreshLUTList; master-dir and master-subfolder paths True); "
+                   "the originating report (PR #90) observed the same on 21.0.2, "
+                   "so it is not version-specific.",
+        "recommended": "On a False return, locate the LUT, copy it into a "
+                       "namespaced subfolder of the master LUT dir (MCP/, so it "
+                       "does not clobber stock LUTs by basename), call "
+                       "RefreshLUTList(), and retry with the master-relative path. "
+                       "graph.set_lut and the granular graph_set_lut now do this "
+                       "automatically via src.utils.lut_paths.ensure_lut_in_master.",
+        "tags": ["color", "lut", "path-resolution", "silent-failure"],
+        "submit": "bug",
+        "issue": 90,
+        "mitigation": ["_ensure_lut_in_master"],
+    },
 ]
 
 
