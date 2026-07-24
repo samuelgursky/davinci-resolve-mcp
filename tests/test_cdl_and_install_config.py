@@ -106,6 +106,38 @@ class InstallConfigTests(unittest.TestCase):
             },
         )
 
+    def test_verify_connection_routes_through_connect_resolve(self):
+        """The installer's post-install probe must use connect_resolve so
+        Network mode (RESOLVE_SCRIPT_HOST) uses the IP-targeted overload, and
+        must inject the repo root so that import resolves."""
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["script"] = argv[-1]
+            captured["timeout"] = kwargs.get("timeout")
+            captured["env"] = kwargs.get("env")
+            return SimpleNamespace(stdout="CONNECTED: DaVinci Resolve Studio 20.3", stderr="", returncode=0)
+
+        repo_root = str(Path(install.__file__).resolve().parent)
+        with patch.dict(
+            os.environ,
+            {"RESOLVE_SCRIPT_HOST": "127.0.0.1", "RESOLVE_SCRIPT_TIMEOUT": "12.5"},
+            clear=True,
+        ), patch.object(install.subprocess, "run", side_effect=fake_run):
+            ok, detail = install.verify_resolve_connection(
+                Path("/tmp/python"),
+                "/Resolve/Scripting",
+                "/Resolve/fusionscript.so",
+            )
+
+        self.assertTrue(ok)
+        self.assertIn("connect_resolve", captured["script"])
+        self.assertIn(repo_root, captured["script"])
+        # RESOLVE_SCRIPT_HOST propagated into the probe env by build_server_env.
+        self.assertEqual(captured["env"].get("RESOLVE_SCRIPT_HOST"), "127.0.0.1")
+        # Process timeout accommodates the configured network timeout (12.5 + 2).
+        self.assertGreaterEqual(captured["timeout"], 14.5)
+
     def test_windows_entry_adds_pythonhome(self):
         entry = install.build_server_entry(
             Path(r"C:\venv\Scripts\python.exe"),

@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import json
+import math
 import os
 import platform
 import shutil
@@ -817,12 +818,21 @@ def verify_resolve_connection(python_path, api_path, lib_path):
 
     env = {**os.environ, **build_server_env(python_path, api_path, lib_path)}
     modules_path = env["PYTHONPATH"]
+    repo_root = str(Path(__file__).resolve().parent)
+    # Route through connect_resolve so Network mode (RESOLVE_SCRIPT_HOST, propagated
+    # into env by build_server_env) uses the explicit IP-targeted overload. Fall
+    # back to Local-mode discovery if the helper cannot be imported.
     test_script = textwrap.dedent(f"""\
         import sys
         sys.path.insert(0, {modules_path!r})
+        sys.path.insert(0, {repo_root!r})
         try:
             import DaVinciResolveScript as dvr
-            resolve = dvr.scriptapp('Resolve')
+            try:
+                from src.utils.resolve_connection import connect_resolve
+            except Exception:
+                connect_resolve = lambda mod: mod.scriptapp('Resolve')
+            resolve = connect_resolve(dvr)
             if resolve:
                 name = resolve.GetProductName()
                 ver = resolve.GetVersionString()
@@ -835,12 +845,22 @@ def verify_resolve_connection(python_path, api_path, lib_path):
             print(f"ERROR: {{e}}")
     """)
 
+    process_timeout = 10.0
+    configured_timeout = env.get("RESOLVE_SCRIPT_TIMEOUT")
+    if configured_timeout:
+        try:
+            network_timeout = float(configured_timeout)
+            if math.isfinite(network_timeout) and network_timeout > 0:
+                process_timeout = max(process_timeout, network_timeout + 2)
+        except ValueError:
+            pass
+
     try:
         result = subprocess.run(
             [str(python_path), "-c", test_script],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=process_timeout,
             env=env,
         )
         output = result.stdout.strip() or result.stderr.strip()

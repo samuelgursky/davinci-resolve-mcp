@@ -44,6 +44,7 @@ from src.utils.media_analysis_jobs import (
     run_batch_job_slice,
 )
 from src.utils.platform import setup_environment
+from src.utils.resolve_connection import connect_resolve
 from src.utils.analysis_memory import read_panel_state, write_panel_state
 from src.utils import brain_edits as _brain_edits
 from src.utils import timeline_versioning as _timeline_versioning
@@ -11838,7 +11839,7 @@ def _connect_resolve_read_only() -> Tuple[Any, Optional[str]]:
         except Exception as exc:
             return None, f"Resolve scripting API unavailable: {exc}"
         try:
-            resolve = dvr_script.scriptapp("Resolve")
+            resolve = connect_resolve(dvr_script)
         except Exception as exc:
             return None, f"Resolve connection failed: {exc}"
         if resolve is None:
