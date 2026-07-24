@@ -79,21 +79,50 @@ which ffmpeg && ffmpeg -version 2>&1 | head -1
 which whisper 2>/dev/null || which whisper-cpp 2>/dev/null || python3 -c "import whisper" 2>/dev/null
 ```
 
-An HTTP MLX Audio Router can be used without installing a transcription module
-into the Resolve MCP Python environment:
+One or more HTTP transcription adapters can be registered without installing a
+transcription module into the Resolve MCP Python environment. Providers are
+selected as `http:<id>`, in configuration order:
 
 ```bash
-export DAVINCI_RESOLVE_MCP_MLX_AUDIO_URL=http://127.0.0.1:8000
-# Optional: omit this to use the router's own default model.
-export DAVINCI_RESOLVE_MCP_MLX_AUDIO_MODEL=mlx-community/Qwen3-ASR-1.7B-8bit
+export DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS='[
+  {
+    "id": "audiobox-local",
+    "label": "Audiobox local",
+    "base_url": "http://127.0.0.1:8000",
+    "model": "mlx-community/Qwen3-ASR-1.7B-8bit",
+    "request_body": {"provider": "mlx"}
+  },
+  {
+    "id": "studio-asr",
+    "label": "Studio ASR",
+    "base_url": "https://asr.example.com",
+    "headers": {"Authorization": "Bearer replace-me"},
+    "health_path": "/ready",
+    "transcribe_path": "/v1/transcribe",
+    "field_map": {"audio": "input_path"},
+    "response_field": "result"
+  }
+]'
 ```
 
-The configured service must expose `GET /health`, returning JSON with
-`{"status":"ok"}`, and `POST /stt`. The transcription request uses the local
-source path and requests JSON output; the response must contain a `transcript`
-string whose value is a JSON object with `text` and `segments`. The
-[Audiobox MLX Audio Router](https://github.com/double2tea/Audiobox) implements
-this contract. Model download behavior follows the existing
+Each provider requires `id` and `base_url`. Optional fields are `label`,
+`model`, `health_path`, `transcribe_path`, `health_field`, `health_value`,
+`headers`, `request_body`, `field_map`, and `response_field`. Authentication
+headers are used for health and transcription requests but are omitted from
+capability reports.
+
+The default adapter contract uses `GET /health` with `{"status":"ok"}` and
+`POST /stt`. Its JSON request includes `audio`, `output_path`, `format`,
+`verbose`, `allow_download`, and optional `model` and `language` fields.
+`request_body` adds adapter-specific values, while `field_map` renames standard
+request fields. The response may return a transcript object, a JSON-encoded
+transcript string, or plain text under `response_field` (default
+`transcript`). The normalized transcript object uses `text` and `segments`.
+
+[Audiobox MLX Audio Router](https://github.com/double2tea/Audiobox) is one
+adapter implementation, not a built-in backend requirement. Other local,
+network, or cloud-backed adapters can be added through configuration without
+changing MCP source code. Model download behavior follows the existing
 `allow_model_download` transcription option.
 
 FFprobe is required. If missing:
