@@ -22,6 +22,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -354,6 +356,9 @@ _ensure_path_includes_standard_tool_dirs()
 ANALYSIS_DIR_NAME = "davinci-resolve-mcp-analysis"
 HIDDEN_ANALYSIS_DIR_NAME = ".davinci-resolve-mcp-analysis"
 ANALYSIS_VERSION = "0.2"
+
+MLX_AUDIO_ROUTER_URL_ENV = "DAVINCI_RESOLVE_MCP_MLX_AUDIO_URL"
+MLX_AUDIO_ROUTER_MODEL_ENV = "DAVINCI_RESOLVE_MCP_MLX_AUDIO_MODEL"
 ANALYSIS_INDEX_FILENAME = "index.sqlite"
 ANALYSIS_REGISTRY_FILENAME = "analysis_registry.json"
 ANALYSIS_INDEX_SCHEMA_VERSION = 1
@@ -1606,6 +1611,49 @@ def install_plan_for(tool_name: str, platform_id: Optional[str] = None) -> Dict[
     }
 
 
+def _detect_mlx_audio_router(env: Dict[str, str]) -> Dict[str, Any]:
+    router_url = (env.get(MLX_AUDIO_ROUTER_URL_ENV) or "").strip().rstrip("/")
+    model = (env.get(MLX_AUDIO_ROUTER_MODEL_ENV) or "").strip() or None
+    if not router_url:
+        return {
+            "available": False,
+            "configured": False,
+            "url_env": MLX_AUDIO_ROUTER_URL_ENV,
+            "model_env": MLX_AUDIO_ROUTER_MODEL_ENV,
+        }
+    if not router_url.startswith(("http://", "https://")):
+        return {
+            "available": False,
+            "configured": True,
+            "url": router_url,
+            "model": model,
+            "error": f"{MLX_AUDIO_ROUTER_URL_ENV} must use http:// or https://",
+        }
+
+    try:
+        request = urllib.request.Request(f"{router_url}/health", method="GET")
+        with urllib.request.urlopen(request, timeout=1.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("status") != "ok":
+            raise ValueError("health response status is not 'ok'")
+    except (OSError, ValueError) as exc:
+        return {
+            "available": False,
+            "configured": True,
+            "url": router_url,
+            "model": model,
+            "error": str(exc),
+        }
+
+    return {
+        "available": True,
+        "configured": True,
+        "url": router_url,
+        "model": model,
+        "api_version": payload.get("api_version"),
+    }
+
+
 def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Detect available analysis helpers without installing or downloading."""
     env = env if env is not None else os.environ
@@ -1618,6 +1666,7 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     mlx_whisper = importlib.util.find_spec("mlx_whisper") is not None
     cv2 = importlib.util.find_spec("cv2") is not None
     provider = env.get("DAVINCI_RESOLVE_MCP_VISION_PROVIDER")
+    mlx_audio_router = _detect_mlx_audio_router(env)
 
     sync_events = detect_sync_event_capabilities()
 
@@ -1653,6 +1702,7 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
             "whisper_cli": _tool_entry("whisper_cli", bool(whisper_cli), {"path": whisper_cli}),
             "whisper_cpp": _tool_entry("whisper_cpp", bool(whisper_cpp), {"path": whisper_cpp}),
             "mlx_whisper": _tool_entry("mlx_whisper", bool(mlx_whisper), {"python_module": "mlx_whisper"}),
+            "mlx_audio_router": mlx_audio_router,
             "opencv": _tool_entry("opencv", bool(cv2), {"python_module": "cv2"}),
             "ollama_embeddings": _tool_entry(
                 "ollama_embeddings",
@@ -1672,9 +1722,10 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         },
         "embeddings": embedding_caps,
         "transcription": {
-            "available": bool(whisper_cli or whisper_cpp or mlx_whisper),
+            "available": bool(mlx_audio_router["available"] or whisper_cli or whisper_cpp or mlx_whisper),
             "backends": [
                 name for name, available in (
+                    ("mlx_audio_router", mlx_audio_router["available"]),
                     ("whisper_cli", bool(whisper_cli)),
                     ("whisper_cpp", bool(whisper_cpp)),
                     ("mlx_whisper", bool(mlx_whisper)),
@@ -1730,12 +1781,13 @@ def install_guidance(capabilities: Optional[Dict[str, Any]] = None) -> Dict[str,
         missing["transcription"] = {
             "required_for": ["transcription analysis", "default Resolve media analysis"],
             "options": [
+                f"Configure an MLX Audio Router with {MLX_AUDIO_ROUTER_URL_ENV}",
                 "Install/configure whisper CLI",
                 "Install/configure whisper-cpp",
                 "Install mlx-whisper on supported Apple Silicon systems",
             ],
             "macos": "Ask the user before running: brew install whisper-cpp, or configure another supported local Whisper backend.",
-            "note": "The MCP server must not install these automatically.",
+            "note": "The MCP server must not install backends or download model files automatically.",
         }
     if not tools.get("opencv", {}).get("available"):
         missing["opencv"] = {
@@ -3934,6 +3986,95 @@ def _transcribe_with_mlx_whisper(path: str, artifacts: Dict[str, Any], transcrip
     return payload
 
 
+def _transcribe_with_mlx_audio_router(
+    path: str,
+    artifacts: Dict[str, Any],
+    transcription: Dict[str, Any],
+) -> Dict[str, Any]:
+    router_url = str(
+        transcription.get("router_url")
+        or os.environ.get(MLX_AUDIO_ROUTER_URL_ENV)
+        or ""
+    ).strip().rstrip("/")
+    if not router_url:
+        return {
+            "success": False,
+            "status": "skipped",
+            "backend": "mlx_audio_router",
+            "reason": f"Set {MLX_AUDIO_ROUTER_URL_ENV} to the MLX Audio Router base URL.",
+        }
+
+    model = str(
+        transcription.get("model")
+        or os.environ.get(MLX_AUDIO_ROUTER_MODEL_ENV)
+        or ""
+    ).strip()
+    transcript_json = artifacts.get("transcript_json") or artifacts["analysis_json"]
+    output_base = os.path.splitext(transcript_json)[0]
+    request_payload = {
+        "provider": "mlx",
+        "audio": path,
+        "output_path": output_base,
+        "format": "json",
+        "verbose": False,
+        "allow_download": _coerce_bool(transcription.get("allow_model_download"), default=False),
+    }
+    if model:
+        request_payload["model"] = model
+    request = urllib.request.Request(
+        f"{router_url}/stt",
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=int(transcription.get("timeout", 1800))) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace").strip()
+        return {
+            "success": False,
+            "backend": "mlx_audio_router",
+            "error": detail or f"MLX Audio Router returned HTTP {exc.code}",
+        }
+    except (OSError, ValueError) as exc:
+        return {"success": False, "backend": "mlx_audio_router", "error": str(exc)}
+
+    if not isinstance(response_payload, dict):
+        return {
+            "success": False,
+            "backend": "mlx_audio_router",
+            "error": "MLX Audio Router response must be a JSON object.",
+        }
+    raw_transcript = response_payload.get("transcript")
+    if not isinstance(raw_transcript, str) or not raw_transcript.strip():
+        return {
+            "success": False,
+            "backend": "mlx_audio_router",
+            "error": "MLX Audio Router response did not include a JSON transcript.",
+        }
+    try:
+        raw = json.loads(raw_transcript)
+    except json.JSONDecodeError as exc:
+        return {
+            "success": False,
+            "backend": "mlx_audio_router",
+            "error": f"MLX Audio Router transcript is not valid JSON: {exc}",
+        }
+    if not isinstance(raw, dict):
+        return {
+            "success": False,
+            "backend": "mlx_audio_router",
+            "error": "MLX Audio Router transcript JSON must be an object.",
+        }
+
+    payload = _normalize_transcript_payload(raw, "mlx_audio_router", transcription.get("language"))
+    if response_payload.get("model") or model:
+        payload["model"] = response_payload.get("model") or model
+    _write_transcript_artifacts(payload, artifacts)
+    return payload
+
+
 def _transcribe(path: str, artifacts: Dict[str, Any], options: Dict[str, Any], capabilities: Dict[str, Any]) -> Dict[str, Any]:
     transcription = options.get("transcription") or {}
     if not _coerce_bool(transcription.get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED):
@@ -3975,6 +4116,8 @@ def _transcribe(path: str, artifacts: Dict[str, Any], options: Dict[str, Any], c
             payload = {"success": True, "backend": backend, "language": transcription.get("language", "unknown"), "segments": segments, "text": " ".join(s.get("text", "") for s in segments)}
             _write_transcript_artifacts(payload, artifacts)
             return payload
+        if backend == "mlx_audio_router":
+            return _transcribe_with_mlx_audio_router(path, artifacts, transcription)
         if backend in {"whisper_cli", "mlx_whisper"}:
             if not _coerce_bool(transcription.get("allow_model_download"), default=False):
                 return {
@@ -4016,7 +4159,7 @@ def _transcribe(path: str, artifacts: Dict[str, Any], options: Dict[str, Any], c
     # original branches below so behaviour stays identical for those.
     if result is not None and result.get("status") != "fallthrough":
         return result
-    if backend in {"mock", "local_mock", "whisper_cli", "mlx_whisper"}:
+    if backend in {"mock", "local_mock", "mlx_audio_router", "whisper_cli", "mlx_whisper"}:
         return result if result is not None else {"success": False, "backend": backend}
     elif backend == "whisper_cpp":
         if not transcription.get("model_path"):

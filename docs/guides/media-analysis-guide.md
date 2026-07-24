@@ -79,6 +79,23 @@ which ffmpeg && ffmpeg -version 2>&1 | head -1
 which whisper 2>/dev/null || which whisper-cpp 2>/dev/null || python3 -c "import whisper" 2>/dev/null
 ```
 
+An HTTP MLX Audio Router can be used without installing a transcription module
+into the Resolve MCP Python environment:
+
+```bash
+export DAVINCI_RESOLVE_MCP_MLX_AUDIO_URL=http://127.0.0.1:8000
+# Optional: omit this to use the router's own default model.
+export DAVINCI_RESOLVE_MCP_MLX_AUDIO_MODEL=mlx-community/Qwen3-ASR-1.7B-8bit
+```
+
+The configured service must expose `GET /health`, returning JSON with
+`{"status":"ok"}`, and `POST /stt`. The transcription request uses the local
+source path and requests JSON output; the response must contain a `transcript`
+string whose value is a JSON object with `text` and `segments`. The
+[Audiobox MLX Audio Router](https://github.com/double2tea/Audiobox) implements
+this contract. Model download behavior follows the existing
+`allow_model_download` transcription option.
+
 FFprobe is required. If missing:
 - macOS: `brew install ffmpeg`
 - Linux: `sudo apt install ffmpeg` or `sudo dnf install ffmpeg`
