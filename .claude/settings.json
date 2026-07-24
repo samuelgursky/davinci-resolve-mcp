@@ -1,5 +1,4 @@
 {
-  "model": "opus[1m]",
   "permissions": {
     "allow": [
       "Bash(node render_one.mjs *)",
@@ -16,7 +15,12 @@
       "Bash(/Users/matusoberuc/MattFrames/editing/davinci-resolve-mcp/venv/bin/python3 /Users/matusoberuc/MattFrames/editing/mattframes-review/eyes/payload_strip.py)",
       "Bash(/Users/matusoberuc/MattFrames/editing/mattframes-review/eyes/resolve_screenshot.sh *)",
       "Bash(python3 /Users/matusoberuc/MattFrames/editing/mattframes-review/review.py *)",
-      "Bash(/Users/matusoberuc/.local/bin/uvx --from kinocut kino doctor)"
+      "Bash(/Users/matusoberuc/.local/bin/uvx --from kinocut kino doctor)",
+      "Bash(git mv *)",
+      "Bash(echo \"findings file archived, exit $?\")",
+      "Bash(git add *)",
+      "Bash(mdfind -onlyin /Volumes/BACKUP \"057_REUNIFICATION_FULL_VER2\")"
     ]
-  }
+  },
+  "model": "opus[1m]"
 }
