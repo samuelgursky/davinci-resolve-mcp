@@ -74,6 +74,7 @@ from src.utils.media_analysis import (
     stable_clip_directory,
     stable_clip_hash,
     stable_clip_match_hashes,
+    _transcribe_with_mlx_audio_router,
     update_analysis_registry,
     vision_is_pending_host_analysis,
 )
@@ -725,6 +726,58 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertTrue(caps["vision"]["enabled_by_default"])
         self.assertEqual(caps["vision"]["default_provider"], HOST_CHAT_PATHS_PROVIDER)
         self.assertTrue(caps["vision"]["available"])
+
+    @unittest.mock.patch("src.utils.media_analysis.urllib.request.urlopen")
+    def test_capability_detection_prefers_configured_mlx_audio_router(self, urlopen):
+        response = unittest.mock.MagicMock()
+        response.read.return_value = json.dumps({"status": "ok", "api_version": 7}).encode("utf-8")
+        urlopen.return_value.__enter__.return_value = response
+
+        caps = detect_capabilities(
+            env={"DAVINCI_RESOLVE_MCP_MLX_AUDIO_URL": "http://127.0.0.1:8000/"}
+        )
+
+        self.assertTrue(caps["tools"]["mlx_audio_router"]["available"])
+        self.assertEqual(caps["tools"]["mlx_audio_router"]["url"], "http://127.0.0.1:8000")
+        self.assertEqual(caps["transcription"]["backends"][0], "mlx_audio_router")
+
+    @unittest.mock.patch("src.utils.media_analysis.urllib.request.urlopen")
+    def test_mlx_audio_router_transcription_writes_normalized_artifacts(self, urlopen):
+        response = unittest.mock.MagicMock()
+        response.read.return_value = json.dumps({
+            "model": "mlx-community/Qwen3-ASR-1.7B-8bit",
+            "transcript": json.dumps({
+                "language": "zh",
+                "text": "你好世界",
+                "segments": [{"start": 0.0, "end": 1.25, "text": "你好世界"}],
+            }, ensure_ascii=False),
+        }, ensure_ascii=False).encode("utf-8")
+        urlopen.return_value.__enter__.return_value = response
+
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = {
+                "analysis_json": os.path.join(tmp, "analysis.json"),
+                "transcript_json": os.path.join(tmp, "transcript.json"),
+                "transcript_srt": os.path.join(tmp, "transcript.srt"),
+                "transcript_vtt": os.path.join(tmp, "transcript.vtt"),
+            }
+            result = _transcribe_with_mlx_audio_router(
+                "/tmp/source.wav",
+                artifacts,
+                {"router_url": "http://127.0.0.1:8000", "allow_model_download": False},
+            )
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["backend"], "mlx_audio_router")
+            self.assertEqual(result["text"], "你好世界")
+            self.assertTrue(os.path.exists(artifacts["transcript_json"]))
+            with open(artifacts["transcript_srt"], encoding="utf-8") as handle:
+                self.assertIn("你好世界", handle.read())
+
+        request = urlopen.call_args.args[0]
+        request_payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(request_payload["provider"], "mlx")
+        self.assertFalse(request_payload["allow_download"])
 
     def test_request_capabilities_report_host_chat_paths_vision(self):
         with tempfile.TemporaryDirectory() as tmp:
