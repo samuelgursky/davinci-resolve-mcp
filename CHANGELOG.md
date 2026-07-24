@@ -2,6 +2,48 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.65.0
+
+Bundles two community contributions from @double2tea: an optional HTTP
+transcription backend and a localized, build-aware control panel. Both are
+opt-in and change no default behavior — with neither configured, existing
+transcription backends and the English panel work exactly as before.
+
+### Added
+
+- **MLX Audio Router transcription backend** (PR #95, @double2tea) — an optional
+  HTTP transcription backend that runs outside the Resolve MCP Python
+  environment. Enabled only when `DAVINCI_RESOLVE_MCP_MLX_AUDIO_URL` is set and a
+  bounded `GET /health` probe succeeds; an optional
+  `DAVINCI_RESOLVE_MCP_MLX_AUDIO_MODEL` overrides the router's default model.
+  When configured and healthy it is preferred in transcription capability
+  ordering, and its response is normalized into the existing JSON/SRT/VTT
+  transcript artifacts. Standard-library only (`urllib`); the MCP server never
+  installs, starts, or downloads anything on the router's behalf, and existing
+  Whisper backends are untouched when no URL is set.
+- **Control panel localization (English / Simplified Chinese)** (PR #96,
+  @double2tea) — a persistent language switch on the local control panel.
+  English remains the authored, canonical UI; the browser stores only the
+  selected locale in `localStorage` and the initial locale follows browser
+  preferences. Translation runs client-side over the DOM (text nodes plus
+  `aria-label`/`title`/`placeholder`) and is fully reversible; no server API or
+  persisted project data changes.
+- **Build-aware AI console** (PR #96, @double2tea) — the Resolve AI console now
+  uses the runtime capability payload to disable actions the connected Resolve
+  build cannot execute, distinguishing "Requires Resolve 21+" from "Unavailable
+  on this build" and surfacing the Resolve 20 transcription methods
+  (`TranscribeAudio` / `ClearTranscription`). Narrow-screen navigation and the
+  mobile footer were also improved.
+
+### Validation
+
+- Static checks and drift guards pass; `tests/test_media_analysis.py` (110),
+  `tests/test_control_panel_i18n.py` + `tests/test_control_panel_ai_capabilities.py`
+  + `tests/test_open_control_panel.py` (14) pass on the merged tree.
+- No DaVinci Resolve scripting behavior changed: PR #95 is a self-contained
+  HTTP/stdlib backend gated behind an env var, and PR #96 changes only the
+  control panel's client-side HTML/JS. Live Resolve validation not required.
+
 ## What's New in v2.64.0
 
 Adds opt-in support for DaVinci Resolve's **Network** external-scripting mode
