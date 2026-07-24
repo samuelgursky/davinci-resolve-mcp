@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -357,8 +358,8 @@ ANALYSIS_DIR_NAME = "davinci-resolve-mcp-analysis"
 HIDDEN_ANALYSIS_DIR_NAME = ".davinci-resolve-mcp-analysis"
 ANALYSIS_VERSION = "0.2"
 
-MLX_AUDIO_ROUTER_URL_ENV = "DAVINCI_RESOLVE_MCP_MLX_AUDIO_URL"
-MLX_AUDIO_ROUTER_MODEL_ENV = "DAVINCI_RESOLVE_MCP_MLX_AUDIO_MODEL"
+HTTP_TRANSCRIPTION_PROVIDERS_ENV = "DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS"
+HTTP_TRANSCRIPTION_BACKEND_PREFIX = "http:"
 ANALYSIS_INDEX_FILENAME = "index.sqlite"
 ANALYSIS_REGISTRY_FILENAME = "analysis_registry.json"
 ANALYSIS_INDEX_SCHEMA_VERSION = 1
@@ -1611,46 +1612,112 @@ def install_plan_for(tool_name: str, platform_id: Optional[str] = None) -> Dict[
     }
 
 
-def _detect_mlx_audio_router(env: Dict[str, str]) -> Dict[str, Any]:
-    router_url = (env.get(MLX_AUDIO_ROUTER_URL_ENV) or "").strip().rstrip("/")
-    model = (env.get(MLX_AUDIO_ROUTER_MODEL_ENV) or "").strip() or None
-    if not router_url:
-        return {
-            "available": False,
-            "configured": False,
-            "url_env": MLX_AUDIO_ROUTER_URL_ENV,
-            "model_env": MLX_AUDIO_ROUTER_MODEL_ENV,
-        }
-    if not router_url.startswith(("http://", "https://")):
+def _http_provider_endpoint(provider: Dict[str, Any], path_key: str) -> str:
+    path = str(provider[path_key]).strip()
+    if path.startswith(("http://", "https://")):
+        return path
+    return f"{provider['base_url']}/{path.lstrip('/')}"
+
+
+def _load_http_transcription_providers(env: Dict[str, str]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    raw = (env.get(HTTP_TRANSCRIPTION_PROVIDERS_ENV) or "").strip()
+    if not raw:
+        return [], None
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return [], f"{HTTP_TRANSCRIPTION_PROVIDERS_ENV} is not valid JSON: {exc}"
+    if not isinstance(entries, list):
+        return [], f"{HTTP_TRANSCRIPTION_PROVIDERS_ENV} must be a JSON array"
+
+    providers: List[Dict[str, Any]] = []
+    seen_ids = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            return [], f"HTTP transcription provider at index {index} must be an object"
+        provider_id = str(entry.get("id") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", provider_id):
+            return [], f"HTTP transcription provider at index {index} has an invalid id"
+        if provider_id in seen_ids:
+            return [], f"Duplicate HTTP transcription provider id: {provider_id}"
+        seen_ids.add(provider_id)
+
+        base_url = str(entry.get("base_url") or "").strip().rstrip("/")
+        parsed_url = urllib.parse.urlparse(base_url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            return [], f"HTTP transcription provider '{provider_id}' base_url must use http:// or https://"
+        headers = entry.get("headers") or {}
+        request_body = entry.get("request_body") or {}
+        field_map = entry.get("field_map") or {}
+        if not isinstance(headers, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in headers.items()):
+            return [], f"HTTP transcription provider '{provider_id}' headers must be a string map"
+        if not isinstance(request_body, dict):
+            return [], f"HTTP transcription provider '{provider_id}' request_body must be an object"
+        if not isinstance(field_map, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in field_map.items()):
+            return [], f"HTTP transcription provider '{provider_id}' field_map must be a string map"
+
+        label = str(entry.get("label") or provider_id).strip() or provider_id
+        providers.append({
+            "id": provider_id,
+            "label": label,
+            "base_url": base_url,
+            "model": str(entry.get("model") or "").strip() or None,
+            "health_path": str(entry.get("health_path") or "/health").strip(),
+            "transcribe_path": str(entry.get("transcribe_path") or "/stt").strip(),
+            "health_field": str(entry.get("health_field") or "status").strip(),
+            "health_value": entry.get("health_value", "ok"),
+            "response_field": str(entry.get("response_field", "transcript")).strip(),
+            "headers": dict(headers),
+            "request_body": dict(request_body),
+            "field_map": dict(field_map),
+        })
+    return providers, None
+
+
+def _detect_http_transcription_providers(env: Dict[str, str]) -> Dict[str, Any]:
+    providers, config_error = _load_http_transcription_providers(env)
+    if config_error:
         return {
             "available": False,
             "configured": True,
-            "url": router_url,
-            "model": model,
-            "error": f"{MLX_AUDIO_ROUTER_URL_ENV} must use http:// or https://",
+            "config_env": HTTP_TRANSCRIPTION_PROVIDERS_ENV,
+            "error": config_error,
+            "providers": [],
         }
 
-    try:
-        request = urllib.request.Request(f"{router_url}/health", method="GET")
-        with urllib.request.urlopen(request, timeout=1.0) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        if payload.get("status") != "ok":
-            raise ValueError("health response status is not 'ok'")
-    except (OSError, ValueError) as exc:
-        return {
-            "available": False,
-            "configured": True,
-            "url": router_url,
-            "model": model,
-            "error": str(exc),
+    detected = []
+    for provider in providers:
+        public = {
+            "id": provider["id"],
+            "label": provider["label"],
+            "url": provider["base_url"],
+            "model": provider["model"],
+            "backend": f"{HTTP_TRANSCRIPTION_BACKEND_PREFIX}{provider['id']}",
         }
+        try:
+            request = urllib.request.Request(
+                _http_provider_endpoint(provider, "health_path"),
+                headers=provider["headers"],
+                method="GET",
+            )
+            with urllib.request.urlopen(request, timeout=1.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("health response must be a JSON object")
+            if payload.get(provider["health_field"]) != provider["health_value"]:
+                raise ValueError(
+                    f"health field '{provider['health_field']}' did not equal the configured ready value"
+                )
+            public.update({"available": True, "api_version": payload.get("api_version")})
+        except (OSError, ValueError) as exc:
+            public.update({"available": False, "error": str(exc)})
+        detected.append(public)
 
     return {
-        "available": True,
-        "configured": True,
-        "url": router_url,
-        "model": model,
-        "api_version": payload.get("api_version"),
+        "available": any(provider["available"] for provider in detected),
+        "configured": bool(providers),
+        "config_env": HTTP_TRANSCRIPTION_PROVIDERS_ENV,
+        "providers": detected,
     }
 
 
@@ -1666,7 +1733,7 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     mlx_whisper = importlib.util.find_spec("mlx_whisper") is not None
     cv2 = importlib.util.find_spec("cv2") is not None
     provider = env.get("DAVINCI_RESOLVE_MCP_VISION_PROVIDER")
-    mlx_audio_router = _detect_mlx_audio_router(env)
+    http_transcription = _detect_http_transcription_providers(env)
 
     sync_events = detect_sync_event_capabilities()
 
@@ -1702,7 +1769,7 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
             "whisper_cli": _tool_entry("whisper_cli", bool(whisper_cli), {"path": whisper_cli}),
             "whisper_cpp": _tool_entry("whisper_cpp", bool(whisper_cpp), {"path": whisper_cpp}),
             "mlx_whisper": _tool_entry("mlx_whisper", bool(mlx_whisper), {"python_module": "mlx_whisper"}),
-            "mlx_audio_router": mlx_audio_router,
+            "http_transcription": http_transcription,
             "opencv": _tool_entry("opencv", bool(cv2), {"python_module": "cv2"}),
             "ollama_embeddings": _tool_entry(
                 "ollama_embeddings",
@@ -1722,10 +1789,13 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         },
         "embeddings": embedding_caps,
         "transcription": {
-            "available": bool(mlx_audio_router["available"] or whisper_cli or whisper_cpp or mlx_whisper),
+            "available": bool(http_transcription["available"] or whisper_cli or whisper_cpp or mlx_whisper),
             "backends": [
+                provider["backend"]
+                for provider in http_transcription["providers"]
+                if provider["available"]
+            ] + [
                 name for name, available in (
-                    ("mlx_audio_router", mlx_audio_router["available"]),
                     ("whisper_cli", bool(whisper_cli)),
                     ("whisper_cpp", bool(whisper_cpp)),
                     ("mlx_whisper", bool(mlx_whisper)),
@@ -1781,7 +1851,7 @@ def install_guidance(capabilities: Optional[Dict[str, Any]] = None) -> Dict[str,
         missing["transcription"] = {
             "required_for": ["transcription analysis", "default Resolve media analysis"],
             "options": [
-                f"Configure an MLX Audio Router with {MLX_AUDIO_ROUTER_URL_ENV}",
+                f"Configure one or more HTTP providers with {HTTP_TRANSCRIPTION_PROVIDERS_ENV}",
                 "Install/configure whisper CLI",
                 "Install/configure whisper-cpp",
                 "Install mlx-whisper on supported Apple Silicon systems",
@@ -3986,33 +4056,17 @@ def _transcribe_with_mlx_whisper(path: str, artifacts: Dict[str, Any], transcrip
     return payload
 
 
-def _transcribe_with_mlx_audio_router(
+def _transcribe_with_http_provider(
     path: str,
     artifacts: Dict[str, Any],
     transcription: Dict[str, Any],
+    provider: Dict[str, Any],
 ) -> Dict[str, Any]:
-    router_url = str(
-        transcription.get("router_url")
-        or os.environ.get(MLX_AUDIO_ROUTER_URL_ENV)
-        or ""
-    ).strip().rstrip("/")
-    if not router_url:
-        return {
-            "success": False,
-            "status": "skipped",
-            "backend": "mlx_audio_router",
-            "reason": f"Set {MLX_AUDIO_ROUTER_URL_ENV} to the MLX Audio Router base URL.",
-        }
-
-    model = str(
-        transcription.get("model")
-        or os.environ.get(MLX_AUDIO_ROUTER_MODEL_ENV)
-        or ""
-    ).strip()
+    backend = f"{HTTP_TRANSCRIPTION_BACKEND_PREFIX}{provider['id']}"
+    model = str(transcription.get("model") or provider.get("model") or "").strip()
     transcript_json = artifacts.get("transcript_json") or artifacts["analysis_json"]
     output_base = os.path.splitext(transcript_json)[0]
-    request_payload = {
-        "provider": "mlx",
+    canonical_payload = {
         "audio": path,
         "output_path": output_base,
         "format": "json",
@@ -4020,11 +4074,19 @@ def _transcribe_with_mlx_audio_router(
         "allow_download": _coerce_bool(transcription.get("allow_model_download"), default=False),
     }
     if model:
-        request_payload["model"] = model
+        canonical_payload["model"] = model
+    if transcription.get("language"):
+        canonical_payload["language"] = transcription["language"]
+    request_payload = dict(provider.get("request_body") or {})
+    field_map = provider.get("field_map") or {}
+    for key, value in canonical_payload.items():
+        request_payload[field_map.get(key, key)] = value
+    headers = {"Content-Type": "application/json"}
+    headers.update(provider.get("headers") or {})
     request = urllib.request.Request(
-        f"{router_url}/stt",
+        _http_provider_endpoint(provider, "transcribe_path"),
         data=json.dumps(request_payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -4034,41 +4096,46 @@ def _transcribe_with_mlx_audio_router(
         detail = exc.read().decode("utf-8", errors="replace").strip()
         return {
             "success": False,
-            "backend": "mlx_audio_router",
-            "error": detail or f"MLX Audio Router returned HTTP {exc.code}",
+            "backend": backend,
+            "provider": provider["label"],
+            "error": detail or f"HTTP transcription provider returned HTTP {exc.code}",
         }
     except (OSError, ValueError) as exc:
-        return {"success": False, "backend": "mlx_audio_router", "error": str(exc)}
+        return {"success": False, "backend": backend, "provider": provider["label"], "error": str(exc)}
 
     if not isinstance(response_payload, dict):
         return {
             "success": False,
-            "backend": "mlx_audio_router",
-            "error": "MLX Audio Router response must be a JSON object.",
+            "backend": backend,
+            "provider": provider["label"],
+            "error": "HTTP transcription response must be a JSON object.",
         }
-    raw_transcript = response_payload.get("transcript")
-    if not isinstance(raw_transcript, str) or not raw_transcript.strip():
+    response_field = provider.get("response_field")
+    if response_field and response_field not in response_payload:
         return {
             "success": False,
-            "backend": "mlx_audio_router",
-            "error": "MLX Audio Router response did not include a JSON transcript.",
+            "backend": backend,
+            "provider": provider["label"],
+            "error": f"HTTP transcription response did not include '{response_field}'.",
         }
-    try:
-        raw = json.loads(raw_transcript)
-    except json.JSONDecodeError as exc:
-        return {
-            "success": False,
-            "backend": "mlx_audio_router",
-            "error": f"MLX Audio Router transcript is not valid JSON: {exc}",
-        }
+    raw_transcript = response_payload[response_field] if response_field else response_payload
+    if isinstance(raw_transcript, str):
+        try:
+            raw = json.loads(raw_transcript)
+        except json.JSONDecodeError:
+            raw = {"text": raw_transcript, "segments": []}
+    else:
+        raw = raw_transcript
     if not isinstance(raw, dict):
         return {
             "success": False,
-            "backend": "mlx_audio_router",
-            "error": "MLX Audio Router transcript JSON must be an object.",
+            "backend": backend,
+            "provider": provider["label"],
+            "error": "HTTP transcription payload must resolve to a JSON object or text string.",
         }
 
-    payload = _normalize_transcript_payload(raw, "mlx_audio_router", transcription.get("language"))
+    payload = _normalize_transcript_payload(raw, backend, transcription.get("language"))
+    payload["provider"] = provider["label"]
     if response_payload.get("model") or model:
         payload["model"] = response_payload.get("model") or model
     _write_transcript_artifacts(payload, artifacts)
@@ -4116,8 +4183,20 @@ def _transcribe(path: str, artifacts: Dict[str, Any], options: Dict[str, Any], c
             payload = {"success": True, "backend": backend, "language": transcription.get("language", "unknown"), "segments": segments, "text": " ".join(s.get("text", "") for s in segments)}
             _write_transcript_artifacts(payload, artifacts)
             return payload
-        if backend == "mlx_audio_router":
-            return _transcribe_with_mlx_audio_router(path, artifacts, transcription)
+        if isinstance(backend, str) and backend.startswith(HTTP_TRANSCRIPTION_BACKEND_PREFIX):
+            providers, config_error = _load_http_transcription_providers(os.environ)
+            if config_error:
+                return {"success": False, "backend": backend, "error": config_error}
+            provider_id = backend[len(HTTP_TRANSCRIPTION_BACKEND_PREFIX):]
+            provider = next((item for item in providers if item["id"] == provider_id), None)
+            if provider is None:
+                return {
+                    "success": False,
+                    "status": "skipped",
+                    "backend": backend,
+                    "reason": f"HTTP transcription provider '{provider_id}' is not configured.",
+                }
+            return _transcribe_with_http_provider(path, artifacts, transcription, provider)
         if backend in {"whisper_cli", "mlx_whisper"}:
             if not _coerce_bool(transcription.get("allow_model_download"), default=False):
                 return {
@@ -4159,7 +4238,13 @@ def _transcribe(path: str, artifacts: Dict[str, Any], options: Dict[str, Any], c
     # original branches below so behaviour stays identical for those.
     if result is not None and result.get("status") != "fallthrough":
         return result
-    if backend in {"mock", "local_mock", "mlx_audio_router", "whisper_cli", "mlx_whisper"}:
+    if (
+        backend in {"mock", "local_mock", "whisper_cli", "mlx_whisper"}
+        or (
+            isinstance(backend, str)
+            and backend.startswith(HTTP_TRANSCRIPTION_BACKEND_PREFIX)
+        )
+    ):
         return result if result is not None else {"success": False, "backend": backend}
     elif backend == "whisper_cpp":
         if not transcription.get("model_path"):

@@ -74,7 +74,8 @@ from src.utils.media_analysis import (
     stable_clip_directory,
     stable_clip_hash,
     stable_clip_match_hashes,
-    _transcribe_with_mlx_audio_router,
+    _load_http_transcription_providers,
+    _transcribe_with_http_provider,
     update_analysis_registry,
     vision_is_pending_host_analysis,
 )
@@ -728,31 +729,77 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertTrue(caps["vision"]["available"])
 
     @unittest.mock.patch("src.utils.media_analysis.urllib.request.urlopen")
-    def test_capability_detection_prefers_configured_mlx_audio_router(self, urlopen):
+    def test_capability_detection_prefers_multiple_configured_http_providers(self, urlopen):
         response = unittest.mock.MagicMock()
         response.read.return_value = json.dumps({"status": "ok", "api_version": 7}).encode("utf-8")
         urlopen.return_value.__enter__.return_value = response
 
-        caps = detect_capabilities(
-            env={"DAVINCI_RESOLVE_MCP_MLX_AUDIO_URL": "http://127.0.0.1:8000/"}
-        )
+        providers = [
+            {
+                "id": "audiobox-local",
+                "label": "Audiobox",
+                "base_url": "http://127.0.0.1:8000/",
+                "headers": {"Authorization": "Bearer hidden"},
+                "request_body": {"provider": "mlx"},
+            },
+            {
+                "id": "studio-asr",
+                "base_url": "https://asr.example.test",
+                "health_path": "/ready",
+                "transcribe_path": "/v1/transcribe",
+            },
+        ]
+        caps = detect_capabilities(env={
+            "DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS": json.dumps(providers)
+        })
 
-        self.assertTrue(caps["tools"]["mlx_audio_router"]["available"])
-        self.assertEqual(caps["tools"]["mlx_audio_router"]["url"], "http://127.0.0.1:8000")
-        self.assertEqual(caps["transcription"]["backends"][0], "mlx_audio_router")
+        tool = caps["tools"]["http_transcription"]
+        self.assertTrue(tool["available"])
+        self.assertEqual([item["id"] for item in tool["providers"]], ["audiobox-local", "studio-asr"])
+        self.assertNotIn("headers", tool["providers"][0])
+        self.assertNotIn("request_body", tool["providers"][0])
+        self.assertEqual(caps["transcription"]["backends"][:2], ["http:audiobox-local", "http:studio-asr"])
+        health_requests = [call.args[0] for call in urlopen.call_args_list]
+        self.assertEqual(health_requests[0].get_header("Authorization"), "Bearer hidden")
+        self.assertEqual(health_requests[1].full_url, "https://asr.example.test/ready")
+
+    def test_http_provider_configuration_fails_fast(self):
+        providers, error = _load_http_transcription_providers({
+            "DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS": json.dumps([
+                {"id": "duplicate", "base_url": "http://127.0.0.1:8000"},
+                {"id": "duplicate", "base_url": "https://asr.example.test"},
+            ])
+        })
+
+        self.assertEqual(providers, [])
+        self.assertEqual(error, "Duplicate HTTP transcription provider id: duplicate")
 
     @unittest.mock.patch("src.utils.media_analysis.urllib.request.urlopen")
-    def test_mlx_audio_router_transcription_writes_normalized_artifacts(self, urlopen):
+    def test_http_provider_customizes_request_and_writes_normalized_artifacts(self, urlopen):
         response = unittest.mock.MagicMock()
         response.read.return_value = json.dumps({
             "model": "mlx-community/Qwen3-ASR-1.7B-8bit",
-            "transcript": json.dumps({
+            "result": {
                 "language": "zh",
                 "text": "你好世界",
                 "segments": [{"start": 0.0, "end": 1.25, "text": "你好世界"}],
-            }, ensure_ascii=False),
+            },
         }, ensure_ascii=False).encode("utf-8")
         urlopen.return_value.__enter__.return_value = response
+        provider_config = [{
+            "id": "audiobox-local",
+            "label": "Audiobox local",
+            "base_url": "http://127.0.0.1:8000",
+            "model": "mlx-community/Qwen3-ASR-1.7B-8bit",
+            "headers": {"Authorization": "Bearer test-token"},
+            "request_body": {"provider": "mlx"},
+            "field_map": {"audio": "input_path"},
+            "response_field": "result",
+        }]
+        providers, error = _load_http_transcription_providers({
+            "DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS": json.dumps(provider_config)
+        })
+        self.assertIsNone(error)
 
         with tempfile.TemporaryDirectory() as tmp:
             artifacts = {
@@ -761,14 +808,16 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 "transcript_srt": os.path.join(tmp, "transcript.srt"),
                 "transcript_vtt": os.path.join(tmp, "transcript.vtt"),
             }
-            result = _transcribe_with_mlx_audio_router(
+            result = _transcribe_with_http_provider(
                 "/tmp/source.wav",
                 artifacts,
-                {"router_url": "http://127.0.0.1:8000", "allow_model_download": False},
+                {"allow_model_download": False},
+                providers[0],
             )
 
             self.assertTrue(result["success"])
-            self.assertEqual(result["backend"], "mlx_audio_router")
+            self.assertEqual(result["backend"], "http:audiobox-local")
+            self.assertEqual(result["provider"], "Audiobox local")
             self.assertEqual(result["text"], "你好世界")
             self.assertTrue(os.path.exists(artifacts["transcript_json"]))
             with open(artifacts["transcript_srt"], encoding="utf-8") as handle:
@@ -777,7 +826,34 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         request = urlopen.call_args.args[0]
         request_payload = json.loads(request.data.decode("utf-8"))
         self.assertEqual(request_payload["provider"], "mlx")
+        self.assertEqual(request_payload["input_path"], "/tmp/source.wav")
+        self.assertNotIn("audio", request_payload)
         self.assertFalse(request_payload["allow_download"])
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-token")
+
+    @unittest.mock.patch("src.utils.media_analysis.urllib.request.urlopen")
+    def test_http_provider_rejects_missing_response_field(self, urlopen):
+        response = unittest.mock.MagicMock()
+        response.read.return_value = json.dumps({"error": "not ready"}).encode("utf-8")
+        urlopen.return_value.__enter__.return_value = response
+        provider = {
+            "id": "studio-asr",
+            "label": "Studio ASR",
+            "base_url": "https://asr.example.test",
+            "transcribe_path": "/stt",
+            "response_field": "result",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _transcribe_with_http_provider(
+                "/tmp/source.wav",
+                {"analysis_json": os.path.join(tmp, "analysis.json")},
+                {},
+                provider,
+            )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "HTTP transcription response did not include 'result'.")
 
     def test_request_capabilities_report_host_chat_paths_vision(self):
         with tempfile.TemporaryDirectory() as tmp:
