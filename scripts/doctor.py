@@ -7,16 +7,19 @@ mutating anything. Prints OK/WARN/FAIL lines (or JSON with --json) and exits
 nonzero only when a FAIL is present.
 
 Run: `python3 scripts/doctor.py`
+Network mode: `python3 scripts/doctor.py --resolve-host 127.0.0.1`
 
 Overridable via environment: DAVINCI_MCP_REPO, DAVINCI_MCP_PYTHON,
 CODEX_HOME, CLAUDE_DESKTOP_CONFIG, RESOLVE_APP, RESOLVE_SCRIPT_API,
-RESOLVE_SCRIPT_MODULES, RESOLVE_SCRIPT_LIB.
+RESOLVE_SCRIPT_MODULES, RESOLVE_SCRIPT_LIB, RESOLVE_SCRIPT_HOST,
+RESOLVE_SCRIPT_TIMEOUT.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -128,26 +131,41 @@ def git_head() -> str:
     return head["stdout"] or head["stderr"] or "git describe produced no output"
 
 
-def resolve_probe() -> dict[str, Any]:
+def resolve_probe(
+    resolve_host: str | None = None,
+    resolve_timeout: float | None = None,
+) -> dict[str, Any]:
     if not PYTHON.exists():
         return {"import_ok": False, "error": f"{PYTHON} is missing"}
 
     code = f"""
 import json
 import sys
+sys.path.insert(0, {str(REPO)!r})
 sys.path.insert(0, {str(RESOLVE_MODULES)!r})
 try:
     import DaVinciResolveScript as dvr
-    resolve = dvr.scriptapp("Resolve")
-    payload = {{
-        "import_ok": True,
-        "module": getattr(dvr, "__file__", None),
-        "resolve_connected": bool(resolve),
-        "product": resolve.GetProductName() if resolve else None,
-        "version": resolve.GetVersionString() if resolve else None,
-    }}
+    from src.utils.resolve_connection import connect_resolve
 except Exception as exc:
     payload = {{"import_ok": False, "error": repr(exc)}}
+else:
+    try:
+        resolve = connect_resolve(dvr)
+    except Exception as exc:
+        payload = {{
+            "import_ok": True,
+            "module": getattr(dvr, "__file__", None),
+            "resolve_connected": False,
+            "connection_error": repr(exc),
+        }}
+    else:
+        payload = {{
+            "import_ok": True,
+            "module": getattr(dvr, "__file__", None),
+            "resolve_connected": bool(resolve),
+            "product": resolve.GetProductName() if resolve else None,
+            "version": resolve.GetVersionString() if resolve else None,
+        }}
 print(json.dumps(payload))
 """
     env = {
@@ -156,7 +174,26 @@ print(json.dumps(payload))
         "RESOLVE_SCRIPT_LIB": str(RESOLVE_LIB),
         "PYTHONPATH": str(RESOLVE_MODULES),
     }
-    proc = subprocess.run([str(PYTHON), "-c", code], capture_output=True, text=True, timeout=12, env=env)
+    if resolve_host is not None:
+        env["RESOLVE_SCRIPT_HOST"] = resolve_host
+    if resolve_timeout is not None:
+        env["RESOLVE_SCRIPT_TIMEOUT"] = str(resolve_timeout)
+    process_timeout = 12.0
+    configured_timeout = env.get("RESOLVE_SCRIPT_TIMEOUT")
+    if configured_timeout:
+        try:
+            network_timeout = float(configured_timeout)
+            if math.isfinite(network_timeout) and network_timeout > 0:
+                process_timeout = max(process_timeout, network_timeout + 2)
+        except ValueError:
+            pass
+    proc = subprocess.run(
+        [str(PYTHON), "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=process_timeout,
+        env=env,
+    )
     output = (proc.stdout or proc.stderr).strip()
     try:
         payload = json.loads(output)
@@ -166,7 +203,10 @@ print(json.dumps(payload))
     return payload
 
 
-def collect() -> list[dict[str, str]]:
+def collect(
+    resolve_host: str | None = None,
+    resolve_timeout: float | None = None,
+) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
 
     check(results, "OK" if REPO.exists() else "FAIL", "MCP checkout", str(REPO))
@@ -186,18 +226,27 @@ def collect() -> list[dict[str, str]]:
     pyver = run([str(PYTHON), "--version"]) if PYTHON.exists() else {"ok": False, "stdout": "", "stderr": "missing"}
     check(results, "OK" if pyver["ok"] else "FAIL", "Python version", pyver["stdout"] or pyver["stderr"])
 
-    probe = resolve_probe()
+    probe = resolve_probe(resolve_host, resolve_timeout)
     if probe.get("import_ok"):
         check(results, "OK", "DaVinciResolveScript import", str(probe.get("module")))
         if probe.get("resolve_connected"):
             detail = f"{probe.get('product')} {probe.get('version')}"
             check(results, "OK", "Resolve scripting connection", detail)
+        elif probe.get("connection_error"):
+            check(
+                results,
+                "FAIL",
+                "Resolve scripting connection",
+                str(probe["connection_error"]),
+            )
         else:
             check(
                 results,
                 "WARN",
                 "Resolve scripting connection",
-                'Module import worked, but scriptapp("Resolve") returned no object. Open DaVinci Resolve Studio, set Preferences > General > External scripting using = Local, and restart Resolve.',
+                "Module import worked, but scriptapp returned no object. Use "
+                "External scripting = Local, or Network with --resolve-host "
+                "set to the Resolve host IP, then restart Resolve.",
             )
     else:
         check(results, "FAIL", "DaVinciResolveScript import", str(probe.get("error")))
@@ -211,9 +260,18 @@ def collect() -> list[dict[str, str]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    parser.add_argument(
+        "--resolve-host",
+        help="Resolve host IP for Network scripting mode",
+    )
+    parser.add_argument(
+        "--resolve-timeout",
+        type=float,
+        help="Network connection timeout in seconds (default: 5)",
+    )
     args = parser.parse_args()
 
-    results = collect()
+    results = collect(args.resolve_host, args.resolve_timeout)
     if args.json:
         print(json.dumps({"checks": results}, indent=2))
     else:

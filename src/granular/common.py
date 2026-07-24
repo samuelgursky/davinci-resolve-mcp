@@ -44,6 +44,7 @@ from src.utils.layout_presets import (
 )
 from src.utils.object_inspection import inspect_object, print_object_help
 from src.utils.platform import get_platform, get_resolve_paths
+from src.utils.resolve_connection import connect_resolve
 from src.utils.project_properties import (
     get_all_project_properties,
     get_color_settings,
@@ -233,7 +234,7 @@ dvr_script = None
 try:
     import DaVinciResolveScript as dvr_script  # type: ignore
 
-    resolve = dvr_script.scriptapp("Resolve")
+    resolve = connect_resolve(dvr_script)
     if resolve:
         logger.info(
             f"Connected to DaVinci Resolve: {resolve.GetProductName()} {resolve.GetVersionString()}"
@@ -311,7 +312,7 @@ def _try_connect():
     """Attempt to connect to Resolve once. Returns resolve object or None."""
     global resolve
     try:
-        candidate = dvr_script.scriptapp("Resolve")
+        candidate = connect_resolve(dvr_script)
         if candidate and _is_resolve_handle_live(candidate):
             resolve = candidate
             logger.info(f"Connected: {resolve.GetProductName()} {resolve.GetVersionString()}")

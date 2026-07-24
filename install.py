@@ -474,6 +474,13 @@ def build_server_env(python_path, api_path, lib_path, system=SYSTEM, python_home
     if system == "Windows":
         env["PYTHONHOME"] = str(python_home or get_python_base_install(python_path))
 
+    host = os.environ.get("RESOLVE_SCRIPT_HOST")
+    if host:
+        env["RESOLVE_SCRIPT_HOST"] = host
+        timeout = os.environ.get("RESOLVE_SCRIPT_TIMEOUT")
+        if timeout:
+            env["RESOLVE_SCRIPT_TIMEOUT"] = timeout
+
     return env
 
 
