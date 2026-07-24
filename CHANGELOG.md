@@ -2,6 +2,44 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.66.0
+
+Generalizes the HTTP transcription backend introduced in v2.65.0 into a
+configuration-driven registry, so additional local, network, or cloud-backed
+adapters no longer require MCP source changes. Contributed in PR #97 by
+@double2tea.
+
+### Changed
+
+- **Pluggable HTTP transcription providers** (PR #97, @double2tea) — the
+  MLX-specific router backend is replaced by an ordered registry of HTTP
+  transcription providers registered via
+  `DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS` (a JSON array). Each entry
+  requires `id` and `base_url`; optional adapter fields cover `label`, `model`,
+  `health_path`, `transcribe_path`, `health_field`, `health_value`, `headers`,
+  `request_body`, `field_map`, and `response_field`. Configured providers are
+  selected as stable `http:<id>` backend names and preferred in transcription
+  capability ordering. Auth headers are sent on health and transcription
+  requests but kept out of capability reports, and malformed configuration
+  fails fast. Response handling now accepts a transcript object, a JSON-encoded
+  transcript string, or plain text under the configured `response_field`.
+  Audiobox is documented as one adapter example rather than a core requirement.
+
+### Removed
+
+- The `DAVINCI_RESOLVE_MCP_MLX_AUDIO_URL` / `DAVINCI_RESOLVE_MCP_MLX_AUDIO_MODEL`
+  environment variables added in v2.65.0 are superseded by the generic provider
+  registry above. To keep an Audiobox/MLX router, register it as a provider:
+  `[{"id":"audiobox-local","base_url":"http://127.0.0.1:8000","request_body":{"provider":"mlx"}}]`.
+
+### Validation
+
+- `tests/test_media_analysis.py` and the analysis caps/runs/store suites pass
+  (153 on the merged tree); static checks and drift guards pass.
+- No DaVinci Resolve scripting behavior changed: the change is confined to the
+  stdlib HTTP transcription path and is gated behind an env var. Live Resolve
+  validation not required.
+
 ## What's New in v2.65.0
 
 Bundles two community contributions from @double2tea: an optional HTTP
