@@ -58,13 +58,14 @@ class NormalizeCDLTests(unittest.TestCase):
 
 class InstallConfigTests(unittest.TestCase):
     def test_build_server_entry_includes_env(self):
-        entry = install.build_server_entry(
-            Path("/tmp/python"),
-            Path("/tmp/server.py"),
-            "/Resolve/Scripting",
-            "/Resolve/fusionscript.so",
-            system="Linux",
-        )
+        with patch.dict(os.environ, {}, clear=True):
+            entry = install.build_server_entry(
+                Path("/tmp/python"),
+                Path("/tmp/server.py"),
+                "/Resolve/Scripting",
+                "/Resolve/fusionscript.so",
+                system="Linux",
+            )
 
         self.assertEqual(entry["command"], "/tmp/python")
         self.assertEqual(entry["args"], ["/tmp/server.py"])
@@ -73,6 +74,34 @@ class InstallConfigTests(unittest.TestCase):
             {
                 "RESOLVE_SCRIPT_API": "/Resolve/Scripting",
                 "RESOLVE_SCRIPT_LIB": "/Resolve/fusionscript.so",
+                "PYTHONPATH": "/Resolve/Scripting/Modules",
+            },
+        )
+
+    def test_build_server_entry_includes_explicit_network_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RESOLVE_SCRIPT_HOST": "resolve.example.test",
+                "RESOLVE_SCRIPT_TIMEOUT": "12.5",
+            },
+            clear=True,
+        ):
+            entry = install.build_server_entry(
+                Path("/tmp/python"),
+                Path("/tmp/server.py"),
+                "/Resolve/Scripting",
+                "/Resolve/fusionscript.so",
+                system="Linux",
+            )
+
+        self.assertEqual(
+            entry["env"],
+            {
+                "RESOLVE_SCRIPT_API": "/Resolve/Scripting",
+                "RESOLVE_SCRIPT_LIB": "/Resolve/fusionscript.so",
+                "RESOLVE_SCRIPT_HOST": "resolve.example.test",
+                "RESOLVE_SCRIPT_TIMEOUT": "12.5",
                 "PYTHONPATH": "/Resolve/Scripting/Modules",
             },
         )

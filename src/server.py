@@ -97,6 +97,7 @@ from src.utils.media_analysis_jobs import (
     run_batch_job_slice as run_media_analysis_batch_job_slice,
 )
 from src.utils.platform import get_resolve_paths, get_resolve_plugin_paths
+from src.utils.resolve_connection import connect_resolve
 from src.utils.lut_paths import master_lut_dir, ensure_lut_in_master
 from src.utils import fuse_templates, dctl_templates, script_templates
 from src.utils.timeline_title_text import (
@@ -804,7 +805,7 @@ def _try_connect():
         if dvr_script is None:
             return None
         try:
-            candidate = dvr_script.scriptapp("Resolve")
+            candidate = connect_resolve(dvr_script)
             if candidate and _is_resolve_handle_live(candidate):
                 resolve = candidate
                 logger.info(f"Connected: {resolve.GetProductName()} {resolve.GetVersionString()}")

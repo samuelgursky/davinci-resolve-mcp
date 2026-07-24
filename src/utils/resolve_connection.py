@@ -3,35 +3,66 @@
 DaVinci Resolve Connection Utilities
 """
 
-import os
 import logging
+import math
+import os
+
 from .platform import get_platform, get_resolve_paths, setup_environment
 
 logger = logging.getLogger("davinci-resolve-mcp.connection")
+
+DEFAULT_RESOLVE_SCRIPT_TIMEOUT = 5.0
+
+
+def _network_timeout():
+    value = os.environ.get(
+        "RESOLVE_SCRIPT_TIMEOUT",
+        str(DEFAULT_RESOLVE_SCRIPT_TIMEOUT),
+    )
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise ValueError(
+            "RESOLVE_SCRIPT_TIMEOUT must be a positive finite number"
+        ) from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError(
+            "RESOLVE_SCRIPT_TIMEOUT must be a positive finite number"
+        )
+    return timeout
+
+
+def connect_resolve(dvr_script):
+    """Create a Resolve handle, optionally targeting an explicit network host."""
+    host = os.environ.get("RESOLVE_SCRIPT_HOST")
+    if host:
+        return dvr_script.scriptapp("Resolve", host, _network_timeout())
+    return dvr_script.scriptapp("Resolve")
+
 
 def initialize_resolve():
     """Initialize connection to DaVinci Resolve application."""
     try:
         # Import the DaVinci Resolve scripting module
         import DaVinciResolveScript as dvr_script
-        
+
         # Get the resolve object
-        resolve = dvr_script.scriptapp("Resolve")
-        
+        resolve = connect_resolve(dvr_script)
+
         if resolve is None:
             logger.error("Failed to get Resolve object. Is DaVinci Resolve running?")
             return None
-        
+
         logger.info(f"Connected to DaVinci Resolve: {resolve.GetProductName()} {resolve.GetVersionString()}")
         return resolve
-    
+
     except ImportError:
         platform_name = get_platform()
         paths = get_resolve_paths()
-        
+
         logger.error("Failed to import DaVinciResolveScript. Check environment variables.")
         logger.error("RESOLVE_SCRIPT_API, RESOLVE_SCRIPT_LIB, and PYTHONPATH must be set correctly.")
-        
+
         if platform_name == 'darwin':
             logger.error("On macOS, typically:")
             logger.error(f'export RESOLVE_SCRIPT_API="{paths["api_path"]}"')
@@ -47,24 +78,25 @@ def initialize_resolve():
             logger.error(f'export RESOLVE_SCRIPT_API="{paths["api_path"]}"')
             logger.error(f'export RESOLVE_SCRIPT_LIB="{paths["lib_path"]}"')
             logger.error(f'export PYTHONPATH="$PYTHONPATH:{paths["modules_path"]}"')
-        
+
         return None
-    
+
     except Exception as e:
         logger.error(f"Unexpected error initializing Resolve: {str(e)}")
         return None
+
 
 def check_environment_variables():
     """Check if the required environment variables are set."""
     resolve_script_api = os.environ.get("RESOLVE_SCRIPT_API")
     resolve_script_lib = os.environ.get("RESOLVE_SCRIPT_LIB")
-    
+
     missing_vars = []
     if not resolve_script_api:
         missing_vars.append("RESOLVE_SCRIPT_API")
     if not resolve_script_lib:
         missing_vars.append("RESOLVE_SCRIPT_LIB")
-    
+
     return {
         "all_set": len(missing_vars) == 0,
         "missing": missing_vars,
@@ -72,6 +104,7 @@ def check_environment_variables():
         "resolve_script_lib": resolve_script_lib
     }
 
+
 def set_default_environment_variables():
     """Set the default environment variables based on platform."""
-    return setup_environment() 
+    return setup_environment()

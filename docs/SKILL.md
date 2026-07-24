@@ -14,8 +14,14 @@ session — projects, timelines, clips, color grading, Fusion compositions, audi
 render queues, and more — through natural language.
 
 DaVinci Resolve must be running with **Preferences > General > "External scripting
-using"** set to **Local**. The server auto-launches Resolve if it is not running,
-but that first connection can take up to 60 seconds.
+using"** set to **Local**, or set to **Network** with `RESOLVE_SCRIPT_HOST`
+configured to the Resolve host IP (use `127.0.0.1` on the same machine). The
+server auto-launches Resolve if it is not running, but that first connection can
+take up to 60 seconds.
+
+Network scripting permits remote control of Resolve. Use Local mode when remote
+access is unnecessary; otherwise restrict access with host firewall and network
+controls.
 
 **Session-start update note.** The first `resolve_control(action="get_version")`
 of a session returns an `mcp` block with the cached update check
