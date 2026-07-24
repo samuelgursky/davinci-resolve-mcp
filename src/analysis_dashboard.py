@@ -49,6 +49,7 @@ from src.utils.analysis_memory import read_panel_state, write_panel_state
 from src.utils import brain_edits as _brain_edits
 from src.utils import timeline_versioning as _timeline_versioning
 from src.utils import timeline_brain_db as _timeline_brain_db
+from src.control_panel_i18n import localization_script
 
 
 HTML = r"""<!doctype html>
@@ -615,6 +616,33 @@ HTML = r"""<!doctype html>
       align-items: center;
       gap: var(--space-2);
       min-width: 0;
+    }
+    .language-switch {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 2px;
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elevated-1);
+    }
+    .language-switch button {
+      min-height: 26px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 2px;
+      background: transparent;
+      color: var(--text-tertiary);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .language-switch button:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+    .language-switch button.active {
+      background: var(--accent-brand-muted);
+      color: var(--accent-brand-hover);
     }
     .version-badge {
       position: relative;
@@ -2505,15 +2533,56 @@ HTML = r"""<!doctype html>
     .ai-op-btn.danger { background: #b4452f; }
     .ai-caps-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
       gap: var(--space-2);
       margin-top: var(--space-2);
     }
     .ai-caps-item {
+      display: grid;
+      grid-template-columns: 9px minmax(0, 1fr) auto;
+      align-items: center;
+      column-gap: 8px;
+      row-gap: 2px;
+      padding: var(--space-2) 0;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: var(--text-xs);
+    }
+    .ai-build-summary {
       display: flex;
       align-items: center;
-      gap: 8px;
-      font-size: var(--text-xs);
+      justify-content: space-between;
+      gap: var(--space-3);
+      padding: var(--space-3);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elevated-1);
+      margin-bottom: var(--space-3);
+    }
+    .ai-build-summary strong { color: var(--text-primary); }
+    .ai-build-count { color: var(--text-secondary); font-size: var(--ops-text-label); }
+    .ai-caps-extra { grid-column: 2 / -1; }
+    .ai-caps-status {
+      grid-column: 3;
+      grid-row: 1;
+      color: var(--text-tertiary);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .ai-caps-status.available { color: var(--accent-success); }
+    .ai-section-unavailable > :not(.caps-section-head),
+    .ai-section-unavailable .caps-section-hint {
+      display: none;
+    }
+    .ai-section-unavailable .caps-section-head {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0;
+    }
+    .ai-section-status {
+      color: var(--accent-warning);
+      font-size: 10px;
+      font-weight: 600;
     }
     .ai-caps-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
     .ai-caps-dot.on { background: #34a853; }
@@ -3903,7 +3972,19 @@ HTML = r"""<!doctype html>
       .settings-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 620px) {
+      main { padding-bottom: var(--space-3); }
+      .lab-footer {
+        position: static;
+        height: auto;
+        min-height: 112px;
+      }
       .overview-grid { grid-template-columns: 1fr; }
+      .nav-left { flex: 0 0 auto; }
+      .wordmark span:first-child { display: none; }
+      .nav-links > .github-icon-link { display: none; }
+      .version-badge .version-label { display: none; }
+      .version-badge { padding: 0 8px; }
+      .language-switch button { padding: 0 6px; }
     }
   </style>
 </head>
@@ -3969,6 +4050,10 @@ HTML = r"""<!doctype html>
       </div>
     </nav>
     <div class="nav-links">
+      <div class="language-switch" role="group" aria-label="Interface language">
+        <button type="button" data-locale="zh-CN" aria-pressed="false">中文</button>
+        <button type="button" data-locale="en" aria-pressed="false">EN</button>
+      </div>
       <button id="versionBadge" class="version-badge" type="button" aria-label="MCP version and updates" title="MCP version">
         <span class="version-label">MCP</span>
         <span class="version-number" id="versionNumber">…</span>
@@ -4296,7 +4381,7 @@ HTML = r"""<!doctype html>
     <section class="span-12">
       <div class="section-top">
         <div>
-          <h2>Resolve 21 AI Console</h2>
+          <h2>Resolve AI Console</h2>
           <p class="section-sub">Run Resolve's local AI operations on the current Media Pool folder or a specific clip. These run on Resolve's GPU/AI engine — the analysis and slate ops are safe and reversible; <strong>motion-deblur</strong> and <strong>speech generation</strong> create new media files and ask for confirmation first. Source media is never modified. Every run is recorded in the <em>Resolve 21 AI ops</em> ledger (Preferences → Caps + Safety).</p>
         </div>
       </div>
@@ -4305,8 +4390,8 @@ HTML = r"""<!doctype html>
         <div class="caps-section-hint">Checking which AI methods this Resolve build exposes…</div>
       </div>
 
-      <div class="caps-section" style="margin-top:12px;">
-        <div class="caps-section-head"><div class="caps-section-title">Governance</div>
+      <div class="caps-section" id="aiGovernanceSection" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Governance <span class="ai-section-status"></span></div>
           <div class="caps-section-hint">Per-session limits for the two media-creating ops (deblur, speech). In <strong>Advisory</strong> mode you're warned in the confirm dialog but never blocked; in <strong>Enforce</strong> mode an over-tier run is refused until you raise the tier, relax the mode, or consciously override. Pick the tier that matches the job.</div></div>
         <div id="aiGovTiers" class="caps-preset-cards" role="radiogroup" aria-label="AI governance tier"></div>
         <div class="review-view-toggle" id="aiGovMode" role="radiogroup" aria-label="Governance mode" style="margin-top:10px;">
@@ -4349,8 +4434,8 @@ HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <div class="caps-section" style="margin-top:12px;">
-        <div class="caps-section-head"><div class="caps-section-title">Motion deblur</div>
+      <div class="caps-section" id="aiMotionDeblurSection" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Motion deblur <span class="ai-section-status"></span></div>
           <div class="caps-section-hint">Renders new deblurred media. Creates files; asks for confirmation. Leave fields blank for Resolve defaults.</div></div>
         <div class="settings-grid">
           <label>Format <input id="aiDeblurFormat" type="text" placeholder="mov"></label>
@@ -4362,8 +4447,8 @@ HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <div class="caps-section" style="margin-top:12px;">
-        <div class="caps-section-head"><div class="caps-section-title">Speech generator</div>
+      <div class="caps-section" id="aiSpeechSection" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Speech generator <span class="ai-section-status"></span></div>
           <div class="caps-section-hint">AI text-to-speech. Requires the AI Speech Generator Extra. Creates a new audio item; asks for confirmation.</div></div>
         <div class="settings-grid">
           <label style="grid-column:1/-1;">Text <textarea id="aiSpeechText" rows="2" placeholder="Text to synthesize"></textarea></label>
@@ -4378,8 +4463,8 @@ HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <div class="caps-section" style="margin-top:12px;">
-        <div class="caps-section-head"><div class="caps-section-title">Session</div>
+      <div class="caps-section" id="aiSessionSection" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Session <span class="ai-section-status"></span></div>
           <div class="caps-section-hint">Quiet Resolve's background tasks for this session before heavy work. Resets on restart.</div></div>
         <div class="ai-op-row"><button class="ai-op-btn ghost" data-ai-op="disable_background_tasks">Disable background tasks</button></div>
       </div>
@@ -4960,6 +5045,8 @@ HTML = r"""<!doctype html>
   </footer>
 
   <script>
+    /* CONTROL_PANEL_I18N */
+
     const state = {
       boot: null,
       projects: null,
@@ -5846,6 +5933,7 @@ HTML = r"""<!doctype html>
       renderOverview();
       renderDiagnostics();
       renderProjects();
+      if (_aiConsoleInit) renderAiConsole();
       refreshRecentRootsDropdown();
     }
 
@@ -7795,23 +7883,33 @@ HTML = r"""<!doctype html>
       clear_audio_classification: 'clear_audio_classification',
       analyze_for_intellisearch: 'analyze_for_intellisearch',
       analyze_for_slate: 'analyze_for_slate',
+      transcribe_audio: 'transcribe_audio',
+      clear_transcription: 'clear_transcription',
       remove_motion_blur: 'remove_motion_blur',
       generate_speech: 'generate_speech',
       disable_background_tasks: 'disable_background_tasks',
     };
+    const AI_OP_REQUIRES_21 = new Set([
+      'perform_audio_classification', 'clear_audio_classification',
+      'analyze_for_intellisearch', 'analyze_for_slate', 'remove_motion_blur',
+      'generate_speech', 'disable_background_tasks',
+    ]);
     let _aiConsoleInit = false;
 
     function renderAiConsole() {
       const feats = (state.boot?.resolve?.ai_features) || {};
       const features = feats.features || {};
       const requiresExtra = feats.requires_extra || {};
+      const version = state.boot?.resolve?.version_string || 'unknown';
       const capsEl = $('aiConsoleCaps');
       if (capsEl) {
         if (state.boot?.resolve?.available !== true) {
           capsEl.innerHTML = '<div class="caps-section-hint">Resolve is not connected. Open a project in DaVinci Resolve, then reload.</div>';
         } else {
-          const items = Object.keys(AI_OP_LABELS)
-            .filter(op => op in AI_OP_FEATURE)
+          const ops = Object.keys(AI_OP_LABELS).filter(op => op in AI_OP_FEATURE);
+          const availableCount = ops.filter(op => !!features[AI_OP_FEATURE[op]]).length;
+          const items = ops
+            .sort((a, b) => Number(!!features[AI_OP_FEATURE[b]]) - Number(!!features[AI_OP_FEATURE[a]]))
             .map(op => {
               const key = AI_OP_FEATURE[op];
               const on = !!features[key];
@@ -7819,13 +7917,45 @@ HTML = r"""<!doctype html>
               return `<div class="ai-caps-item"><span class="ai-caps-dot ${on ? 'on' : 'off'}"></span>`
                 + `<span>${escapeHtml(AI_OP_LABELS[op])}</span>`
                 + (extra ? `<span class="ai-caps-extra">· needs ${escapeHtml(extra)}</span>` : '')
+                + `<span class="ai-caps-status ${on ? 'available' : ''}">${on ? 'Available now' : (AI_OP_REQUIRES_21.has(op) ? 'Requires Resolve 21+' : 'Unavailable on this build')}</span>`
                 + `</div>`;
             }).join('');
-          capsEl.innerHTML = `<div class="caps-section-head"><div class="caps-section-title">Available on this Resolve build</div>`
-            + `<div class="caps-section-hint">A grey dot means the method is absent (older Resolve). "needs …" means the method is present but requires that Extra to actually run — install via Extras Download Manager.</div></div>`
+          capsEl.innerHTML = `<div class="ai-build-summary"><strong>DaVinci Resolve ${escapeHtml(version)}</strong><span class="ai-build-count">${availableCount} of ${ops.length} AI console actions available now</span></div>`
+            + `<div class="caps-section-head"><div class="caps-section-title">Available on this Resolve build</div>`
+            + `<div class="caps-section-hint">Unavailable actions are disabled. Resolve 21 methods may also require the named Extra from Extras Download Manager.</div></div>`
             + `<div class="ai-caps-grid">${items}</div>`;
         }
       }
+      document.querySelectorAll('#panel-aiconsole .ai-op-btn').forEach(btn => {
+        const feature = AI_OP_FEATURE[btn.dataset.aiOp];
+        const available = feature ? !!features[feature] : false;
+        btn.disabled = !available;
+        btn.title = available ? '' : (AI_OP_REQUIRES_21.has(btn.dataset.aiOp)
+          ? 'Requires DaVinci Resolve 21 or newer'
+          : 'Unavailable on this Resolve build');
+      });
+      const speakerDetection = $('aiSpeakerDetection');
+      if (speakerDetection) {
+        const resolveMajor = Number(state.boot?.resolve?.version?.[0] || 0);
+        speakerDetection.disabled = resolveMajor < 21;
+        speakerDetection.title = resolveMajor < 21 ? 'Speaker detection requires DaVinci Resolve 21 or newer' : '';
+      }
+      const sectionAvailability = {
+        aiGovernanceSection: !!features.remove_motion_blur || !!features.generate_speech,
+        aiMotionDeblurSection: !!features.remove_motion_blur,
+        aiSpeechSection: !!features.generate_speech,
+        aiSessionSection: !!features.disable_background_tasks,
+      };
+      Object.entries(sectionAvailability).forEach(([id, available]) => {
+        const section = $(id);
+        if (!section) return;
+        section.classList.toggle('ai-section-unavailable', !available);
+        const status = section.querySelector('.ai-section-status');
+        if (status) status.textContent = available ? '' : 'Requires Resolve 21+';
+        section.querySelectorAll('input, textarea, select, button').forEach(control => {
+          control.disabled = !available;
+        });
+      });
       // Slate color dropdown (once).
       const sel = $('aiSlateColor');
       if (sel && !sel.options.length) {
@@ -7925,7 +8055,7 @@ HTML = r"""<!doctype html>
         refreshResolveAiOps().catch(() => {});
         refreshGovernance().catch(() => {});
       } finally {
-        buttons.forEach(b => { b.disabled = false; });
+        renderAiConsole();
       }
     }
 
@@ -7961,6 +8091,9 @@ HTML = r"""<!doctype html>
           <div class="caps-preset-card-stats">${stats}</div>
         </button>`;
       }).join('');
+      if ($('aiGovernanceSection')?.classList.contains('ai-section-unavailable')) {
+        el.querySelectorAll('button').forEach(button => { button.disabled = true; });
+      }
     }
     function renderGovUsage() {
       const el = $('aiGovUsage');
@@ -11780,6 +11913,8 @@ HTML = r"""<!doctype html>
 </html>
 """
 
+HTML = HTML.replace("/* CONTROL_PANEL_I18N */", localization_script())
+
 
 def _safe_call(obj: Any, method_name: str, *args: Any) -> Tuple[Any, Optional[str]]:
     if obj is None or not hasattr(obj, method_name):
@@ -11891,6 +12026,8 @@ def _resolve_ai_features(resolve: Any) -> Dict[str, Any]:
         "generate_speech": has(project, "GenerateSpeech"),
         "perform_audio_classification": has(folder, "PerformAudioClassification"),
         "clear_audio_classification": has(folder, "ClearAudioClassification"),
+        "transcribe_audio": has(folder, "TranscribeAudio"),
+        "clear_transcription": has(folder, "ClearTranscription"),
         "analyze_for_intellisearch": has(folder, "AnalyzeForIntellisearch"),
         "analyze_for_slate": has(folder, "AnalyzeForSlate"),
         "remove_motion_blur": has(folder, "RemoveMotionBlur"),
