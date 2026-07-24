@@ -2,6 +2,45 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.64.0
+
+Adds opt-in support for DaVinci Resolve's **Network** external-scripting mode
+(PR #91… correction: PR #94, by @double2tea), so the MCP can drive a Resolve
+instance addressed by IP — including a Resolve running on the same machine with
+`External scripting using = Network`. Contributed in PR #94 by @double2tea,
+with two additional connection sites hardened during adoption. Local mode is
+unchanged and remains the default.
+
+### Added
+
+- **Resolve Network scripting mode** — set `RESOLVE_SCRIPT_HOST` to the Resolve
+  host IP (`127.0.0.1` on the same machine) to route connections through
+  Resolve's explicit IP-targeted `scriptapp("Resolve", host, timeout)` overload.
+  `RESOLVE_SCRIPT_TIMEOUT` (positive finite seconds, default 5) bounds the
+  connection wait. When `RESOLVE_SCRIPT_HOST` is absent, the server uses the
+  one-argument Local discovery exactly as before. A shared `connect_resolve`
+  helper centralizes this behavior; the compound server, granular server,
+  analysis dashboard, `scripts/doctor.py`, and the installer's post-install
+  connection probe all route through it. The installer copies
+  `RESOLVE_SCRIPT_HOST`/`RESOLVE_SCRIPT_TIMEOUT` into generated client configs
+  when present in its environment.
+- **`doctor.py` Network flags** — `python3 scripts/doctor.py --resolve-host
+  <ip> [--resolve-timeout <seconds>]` runs the read-only connection check
+  against a Network-mode host.
+
+### Security
+
+- Network scripting permits remote control of Resolve. Documentation (SKILL.md,
+  install.md) advises using Local mode when remote access is unnecessary, and
+  otherwise restricting access with host firewall and network controls.
+
+### Validation
+
+- Live-validated on DaVinci Resolve Studio 19.1.3.7: Local mode (one-argument
+  discovery) and Network mode (`--resolve-host 127.0.0.1 --resolve-timeout 8`)
+  both connect through the shared `connect_resolve` helper. PR author validated
+  against Studio 20.3.2.9 in Network mode. Full offline suite: 1514 tests.
+
 ## What's New in v2.63.2
 
 Installer fix for Windows MSIX builds of Claude Desktop (issue #93, reported by
