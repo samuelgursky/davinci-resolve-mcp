@@ -59,12 +59,19 @@ venv/bin/python tests/test_import.py
 venv/bin/python scripts/audit_api_parity.py
 venv/bin/python scripts/gen_api_limitations.py --check
 node scripts/agent-rules/generate.mjs --check
-venv/bin/python -m unittest tests.test_static_undefined_names tests.test_action_list_drift tests.test_panel_docs_drift tests.test_doc_tool_counts tests.test_agent_rules_drift
+venv/bin/python -m unittest tests.test_static_undefined_names tests.test_duplicate_definitions tests.test_action_list_drift tests.test_panel_docs_drift tests.test_doc_tool_counts tests.test_agent_rules_drift
 node bin/davinci-resolve-mcp.mjs --help
 node bin/davinci-resolve-mcp.mjs --version
 npm pack --dry-run
 git diff --check
 ```
+
+`test_duplicate_definitions` asserts no module-level name is defined twice under
+`src/`. A second `def foo` silently replaces the first, and in a module the size
+of `src/server.py` the two can be thousands of lines apart with different
+signatures. pyflakes does **not** catch this — it only reports redefinition of an
+*unused* name, so the dangerous case (first definition used, then shadowed)
+passes clean.
 
 The drift guards (undefined names in `src/`, tool action lists vs dispatch,
 control-panel guide vs panel navigation/screenshots, api-limitations vs the

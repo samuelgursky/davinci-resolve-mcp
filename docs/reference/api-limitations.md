@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 19 missing capabilities, 12 bugs / unreliable behaviors.
+**Totals:** 20 missing capabilities, 13 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -177,6 +177,14 @@ equivalent, blocking full automation.
 - **Workaround / current handling:** Delete and recreate the folder with the desired name, or rename in the Resolve UI.
 - **Tags:** missing-method, media-pool, folder
 
+### Project.SetCurrentRenderFormatAndCodec
+
+- **Object:** `Project`
+- **Signature:** `(format, codec) -> bool`
+- **Behavior:** Some render formats expose NO codecs at all — GetRenderCodecs('wav') and GetRenderCodecs('gif') both return {} on Studio 19.1.3.7 — and the call then rejects every codec value, including the empty string, the format id itself, and any plausible name ('Linear PCM'). There is no documented way to select such a format through this API, so an audio-only WAV deliverable is not expressible in scripting.
+- **Workaround / current handling:** Check GetRenderCodecs(format) first; when it is empty, treat the format as unreachable through this API rather than guessing a codec value. Render audio-only via ExportVideo=False on a format that does expose codecs, or drive it from a saved render preset.
+- **Tags:** render, deliver, audio, unsupported
+
 ## Bugs / Unreliable Behavior (please fix)
 
 Methods that exist but misbehave — silent failures, unreliable return
@@ -274,3 +282,12 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** On a False return, locate the LUT, copy it into a namespaced subfolder of the master LUT dir (MCP/, so it does not clobber stock LUTs by basename), call RefreshLUTList(), and retry with the master-relative path. graph.set_lut and the granular graph_set_lut now do this automatically via src.utils.lut_paths.ensure_lut_in_master.
 - **Reference:** [issue #90](https://github.com/samuelgursky/davinci-resolve-mcp/issues/90)
 - **Tags:** color, lut, path-resolution, silent-failure
+
+### Project.GetRenderCodecs
+
+- **Object:** `Project`
+- **Signature:** `(renderFormat) -> {codec description: codec name}`
+- **Behavior:** Returns {description: id} — the human-readable description is the KEY and the id Resolve actually accepts is the VALUE. SetCurrentRenderFormatAndCodec, GetRenderCodecs and GetRenderResolutions all require the id, so passing the description a user sees in the Deliver page is rejected. Verified live on Studio 19.1.3.7: ('mov', 'Apple ProRes 422 HQ') -> False while ('mov', 'ProRes422HQ') -> True, and ('mp4', 'H.264') -> False while ('mp4', 'H264') -> True. It affects every family, not only the ones whose id differs obviously. Mirrors the same trap in GetRenderFormats, which returns {format: extension}.
+- **Workaround / current handling:** Normalize both arguments through the live maps before calling: src.utils.render_ids.render_format_id_from_formats and render_codec_id_from_codecs accept a description or an id and return the id.
+- **Reference:** [issue #59](https://github.com/samuelgursky/davinci-resolve-mcp/issues/59)
+- **Tags:** render, deliver, silent-failure, id-vs-label

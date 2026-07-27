@@ -44,6 +44,10 @@ from src.utils.layout_presets import (
 )
 from src.utils.object_inspection import inspect_object, print_object_help
 from src.utils.platform import get_platform, get_resolve_paths
+from src.utils.render_ids import (
+    render_codec_id_from_codecs,
+    render_format_id_from_formats,
+)
 from src.utils.resolve_connection import connect_resolve
 from src.utils.project_properties import (
     get_all_project_properties,
@@ -81,7 +85,7 @@ if not logging.getLogger().handlers:
         handlers=[logging.StreamHandler()],
     )
 
-VERSION = "2.66.0"
+VERSION = "2.67.0"
 logger = logging.getLogger("davinci-resolve-mcp")
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")

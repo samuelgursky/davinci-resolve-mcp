@@ -22,11 +22,32 @@ Bridges delivery *craft* to this repo's *tools*.
 | Plan / validate / run renders in a **running** Resolve | `davinci-resolve` (Python, live) | `render`, `render_presets` |
 | QC a **finished render** vs spec, verify ingest, build manifests/provenance with **no Resolve open** | `davinci-resolve-advanced` (Node) | `deliverable`, `media`, `provenance` |
 
+## Delivery targets (the short path)
+
+Named render intents. `list_delivery_targets` → `prepare_delivery_job(target,
+target_dir)`. Ask for `prores422hq_master`, `dnxhr_hqx_master`, `h264_1080p_web`,
+or an alias (`youtube`, `tiktok`, `avid`, `stems`). One definition emits BOTH the
+Resolve render settings and the `deliverable_qc` spec, so the returned `qc_spec`
+is what you QC the finished file against — do not hand-write a second spec.
+
+- Format/codec resolve against the **live** matrix. A target this machine or
+  license cannot render fails with the available lists; it never silently
+  substitutes. Use `check_availability: true` to see what this install supports.
+- Image-sequence targets return `qc_spec: null` — `deliverable_qc` probes one
+  file, a sequence is many. That is expected, not a gap.
+- Bitrate is deliberately unset (Resolve has no bitrate key). Pin quality
+  yourself via `settings` if a spec demands it.
+
+Use the lower-level path below when you need something no target covers.
+
 ## Live render essentials
 
 - Discover then validate then apply: `probe_render_matrix` (formats/codecs/res) →
   `validate_render_settings` → `safe_set_render_settings` (dry-run capable) →
   `prepare_render_job` (adds a job, does **not** start it).
+- Format AND codec accept display names or ids; both normalize against the live
+  maps. A rejected pair is a hard error with the available codecs — it never
+  queues a job in the previously set codec.
 - Render lifecycle helpers require **temp output dirs by default**; real delivery
   paths need explicit lower-level actions.
 - `GetRenderSettings` readback is version/page dependent — the kernel validates
@@ -47,6 +68,19 @@ file, not the timeline:
 - `render_manifest` — build / reconcile the manifest of what was delivered.
 - `expand_deliverable` — derive texted / textless / stems / slate / leader
   entities from a master.
+- `spec_from_authored` — turn the authored deliverable vocabulary (codec display
+  names, `"1920x1080"`, `"-16 LUFS"`, `<SHOW>_<EP>_<YYYYMMDD>.mov` naming) into a
+  `deliverable_qc` spec plus a `loudness_qc` target. Anything it cannot map is
+  listed in `unmapped[]` rather than dropped, so an unrecognized codec surfaces
+  instead of quietly producing a spec with no codec check in it.
+
+Two things that bite when hand-writing specs, both handled by the projections:
+
+- `container` is `"mov"` for **both** .mov and .mp4 — ffprobe reports
+  `format_name=mov,mp4,m4a,...` for each and only the first token is kept. Use
+  `video.codec` to tell them apart; a spec asserting `container: "mp4"` always fails.
+- Loudness is **not** a `deliverable_qc` field. It comes back as a separate
+  `loudnessTarget` for `loudness_qc`.
 
 ## Media front-end + provenance
 

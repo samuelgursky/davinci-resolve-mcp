@@ -1363,6 +1363,16 @@ Render / Deliver kernel actions (v2.9.0+) add planning and safety layers:
 `export_render_boundary_report`. See `docs/kernels/render-deliver-kernel.md` for the
 live-tested format/codec, settings, job, and Quick Export boundary map.
 
+Delivery targets (v2.67.0+) are named render intents — `list_delivery_targets`,
+`resolve_delivery_target(target)`, `prepare_delivery_job(target, target_dir)`.
+Ask for `prores422hq_master`, `dnxhr_hqx_master`, `h264_1080p_web`, or a platform
+alias like `youtube` / `tiktok`, and one definition supplies both the Resolve
+render settings and the ffprobe QC spec the advanced server checks the output
+against. Format/codec resolve against the live matrix, so a target this machine
+or license cannot render fails with the available lists rather than silently
+rendering something else. `list_delivery_targets` with `check_availability: true`
+reports what this install can actually deliver.
+
 ---
 
 ## Common Workflows

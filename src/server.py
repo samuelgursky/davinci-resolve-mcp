@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.66.0"
+VERSION = "2.67.0"
 
 import base64
 import os
@@ -49,6 +49,11 @@ from src.utils.cut_ir import build_cut_list as _build_cut_list
 from src.utils.page_lock import open_page_serialized as _open_page_serialized
 from src.utils.proc import safe_run
 from src.utils.readback import verify_by_readback, verification_stats as _verification_stats
+from src.utils.render_ids import (
+    render_codec_id_from_codecs as _render_codec_id_from_codecs,
+    render_format_id_from_formats as _render_format_id_from_formats,
+)
+from src.utils import delivery_targets as _delivery_targets
 from src.utils.update_check import (
     check_for_updates,
     clear_update_prompt_preferences,
@@ -15233,6 +15238,9 @@ _RENDER_KERNEL_ACTIONS = [
     "quick_export_capabilities",
     "safe_quick_export",
     "export_render_boundary_report",
+    "list_delivery_targets",
+    "resolve_delivery_target",
+    "prepare_delivery_job",
 ]
 
 
@@ -15256,24 +15264,6 @@ def _render_formats(proj):
     return _ser(formats)
 
 
-def _render_format_id_from_formats(formats: Any, fmt: str) -> str:
-    if not isinstance(fmt, str) or not fmt or not isinstance(formats, dict):
-        return fmt
-    if fmt in formats:
-        return formats.get(fmt) or fmt
-    if fmt in formats.values():
-        return fmt
-    needle = fmt.lower()
-    for label, format_id in formats.items():
-        label_text = str(label)
-        id_text = str(format_id)
-        if label_text.lower() == needle:
-            return id_text or fmt
-        if id_text.lower() == needle:
-            return id_text
-    return fmt
-
-
 def _render_format_id(proj, fmt: str, formats: Optional[Dict[str, Any]] = None) -> str:
     if formats is None:
         formats = _render_formats(proj)
@@ -15292,6 +15282,15 @@ def _render_format_requested(requested: Optional[List[Any]], label: str, extensi
         if isinstance(item, str) and item.lower() in {label.lower(), extension_text.lower(), format_id.lower()}:
             return True
     return False
+
+
+def _render_codec_id(proj, fmt: str, codec: str, formats: Optional[Dict[str, Any]] = None) -> str:
+    """Resolve a codec display name to its id for `fmt` (itself label-or-id tolerant)."""
+    try:
+        codecs = proj.GetRenderCodecs(_render_format_id(proj, fmt, formats)) or {}
+    except Exception:
+        return codec
+    return _render_codec_id_from_codecs(codecs, codec)
 
 
 def _render_codecs(proj, fmt: str, formats: Optional[Dict[str, Any]] = None):
@@ -15490,7 +15489,33 @@ def _prepare_render_job(proj, p: Dict[str, Any]):
     before = _render_settings_snapshot(proj)
     format_success = None
     if p.get("format") and p.get("codec"):
-        format_success = bool(proj.SetCurrentRenderFormatAndCodec(_render_format_id(proj, p["format"]), p["codec"]))
+        formats = _render_formats(proj)
+        format_id = _render_format_id_from_formats(formats, p["format"])
+        codec_id = _render_codec_id(proj, format_id, p["codec"], formats)
+        format_success = bool(proj.SetCurrentRenderFormatAndCodec(format_id, codec_id))
+        if not format_success:
+            # Refuse to queue. Continuing here would apply settings, return a real
+            # job id, and report success=True for a job that renders in the
+            # PREVIOUSLY set format/codec — with format_success=False the only
+            # signal, buried in the payload.
+            return _err(
+                f"Could not set render format/codec: {p['format']} / {p['codec']}",
+                code="RENDER_FORMAT_CODEC_REJECTED",
+                category="invalid_input",
+                reason="Resolve rejected the format/codec pair; no render job was queued.",
+                remediation=(
+                    "Check render(action='get_formats') and "
+                    "render(action='get_codecs', params={'format': ...}) for what this "
+                    "machine, license, and plugin set actually support."
+                ),
+                state={
+                    "requested_format": p["format"],
+                    "requested_codec": p["codec"],
+                    "resolved_format_id": format_id,
+                    "resolved_codec_id": codec_id,
+                    "available_codecs": _render_codecs(proj, format_id, formats),
+                },
+            )
     settings_success = bool(proj.SetRenderSettings(settings))
     job_id = proj.AddRenderJob() if settings_success else None
     return {
@@ -15501,6 +15526,186 @@ def _prepare_render_job(proj, p: Dict[str, Any]):
         "before": before,
         "settings": settings,
     }
+
+
+# ── Delivery targets ────────────────────────────────────────────────────────
+# Named render intents. One definition emits both the Resolve render settings
+# and the ffprobe-shaped QC spec, so the advanced server can verify a rendered
+# file against the same intent that produced it. See src/utils/delivery_targets.py.
+
+
+def _delivery_target_extras() -> Dict[str, Any]:
+    """User-defined targets from logs/delivery-targets.json; {} if absent/broken."""
+    try:
+        return _delivery_targets.load_user_targets(
+            _delivery_targets.user_targets_path(project_dir)
+        )
+    except Exception as exc:  # pragma: no cover - defensive; loader already tolerates
+        logger.warning("could not load user delivery targets: %s", exc)
+        return {}
+
+
+def _delivery_timeline_fps(proj) -> Optional[float]:
+    """Timeline frame rate for targets that inherit it. None when unavailable.
+
+    Distinct from `_timeline_fps(tl)` above, which takes a timeline and returns a
+    (fps, err) tuple for timecode math.
+    """
+    try:
+        timeline = proj.GetCurrentTimeline()
+        if not timeline:
+            return None
+        value = timeline.GetSetting("timelineFrameRate")
+        return float(value) if value else None
+    except Exception:
+        return None
+
+
+def _resolve_delivery_target_live(proj, p: Dict[str, Any]):
+    """Resolve a named target against the LIVE format/codec matrix.
+
+    Returns (payload, error). Availability is machine/license/plugin dependent,
+    so a target that cannot be satisfied here fails with the actual available
+    lists rather than handing Resolve a name it will reject.
+    """
+    name = p.get("target")
+    if not name:
+        return None, _err(
+            "target is required",
+            code="MISSING_TARGET",
+            category="invalid_input",
+            remediation="Call render(action='list_delivery_targets') to see the available names.",
+        )
+    extras = _delivery_target_extras()
+    target = _delivery_targets.resolve_target(name, p.get("overrides"), extra_targets=extras)
+    if target is None:
+        return None, _err(
+            f"Unknown delivery target: {name}",
+            code="UNKNOWN_DELIVERY_TARGET",
+            category="invalid_input",
+            remediation="Call render(action='list_delivery_targets') to see the available names.",
+            state={"known_targets": sorted(_delivery_targets.list_targets(extras))},
+        )
+
+    formats = _render_formats(proj)
+    format_id = _delivery_targets.select_available(target.format_candidates, formats)
+    if not format_id:
+        return None, _err(
+            f"Delivery target '{target.id}' needs a render format this machine does not expose",
+            code="DELIVERY_TARGET_FORMAT_UNAVAILABLE",
+            category="unsupported",
+            reason="Render format availability depends on the Resolve version, license, and installed IO plugins.",
+            remediation="Check render(action='get_formats'); a codec plugin may need installing, or Resolve restarting.",
+            state={"target": target.id, "tried": list(target.format_candidates), "available_formats": formats},
+        )
+
+    codecs = _render_codecs(proj, format_id, formats)
+    codec_id = _delivery_targets.select_available(target.codec_candidates, codecs)
+    if not codec_id:
+        return None, _err(
+            f"Delivery target '{target.id}' needs a codec this machine does not expose for {format_id}",
+            code="DELIVERY_TARGET_CODEC_UNAVAILABLE",
+            category="unsupported",
+            reason="Codec availability depends on the Resolve version, license, and installed IO plugins.",
+            remediation="Check render(action='get_codecs', params={'format': ...}); a codec plugin may need installing, or Resolve restarting.",
+            state={
+                "target": target.id,
+                "format_id": format_id,
+                "tried": list(target.codec_candidates),
+                "available_codecs": codecs,
+            },
+        )
+
+    fps = _delivery_timeline_fps(proj)
+    qc_spec = _delivery_targets.to_qc_spec(target, timeline_fps=fps)
+    return (
+        {
+            "target": target.id,
+            "label": target.label,
+            "tier": target.tier,
+            "format_id": format_id,
+            "codec_id": codec_id,
+            "timeline_fps": fps,
+            "settings": _delivery_targets.to_render_settings(target, timeline_fps=fps),
+            "qc_spec": qc_spec,
+            "qc_note": (
+                None
+                if qc_spec
+                else "This target renders an image sequence; deliverable_qc probes a single file, so it has no QC spec."
+            ),
+            "notes": list(target.notes),
+        },
+        None,
+    )
+
+
+def _list_delivery_targets(proj, p: Dict[str, Any]):
+    tier = p.get("tier")
+    if tier is not None and tier not in _delivery_targets.TIERS:
+        return _err(
+            f"Unknown tier: {tier}",
+            code="UNKNOWN_DELIVERY_TIER",
+            category="invalid_input",
+            state={"known_tiers": list(_delivery_targets.TIERS)},
+        )
+    extras = _delivery_target_extras()
+    listing = _delivery_targets.list_targets(extras, tier=tier)
+
+    if p.get("check_availability"):
+        # Resolve every target against the live matrix so the caller sees what
+        # this machine/license can actually render, not just what ships.
+        formats = _render_formats(proj)
+        codec_cache: Dict[str, Any] = {}
+        for target_id, entry in listing.items():
+            target = _delivery_targets.resolve_target(target_id, extra_targets=extras)
+            format_id = _delivery_targets.select_available(target.format_candidates, formats)
+            entry["available"] = False
+            entry["format_id"] = format_id
+            entry["codec_id"] = None
+            if not format_id:
+                entry["unavailable_reason"] = "format not exposed by this Resolve install"
+                continue
+            if format_id not in codec_cache:
+                codec_cache[format_id] = _render_codecs(proj, format_id, formats)
+            codec_id = _delivery_targets.select_available(target.codec_candidates, codec_cache[format_id])
+            entry["codec_id"] = codec_id
+            if not codec_id:
+                entry["unavailable_reason"] = f"no matching codec for format '{format_id}'"
+                continue
+            entry["available"] = True
+
+    return _ok(
+        targets=listing,
+        schema_version=_delivery_targets.SCHEMA_VERSION,
+        tiers=list(_delivery_targets.TIERS),
+        availability_checked=bool(p.get("check_availability")),
+    )
+
+
+def _prepare_delivery_job(proj, p: Dict[str, Any]):
+    """Resolve a named target, then queue a render job for it.
+
+    Target settings are the base; anything in `settings` wins, so a caller can
+    pin TargetDir/CustomName (or override a dimension) without restating the target.
+    """
+    resolved, err = _resolve_delivery_target_live(proj, p)
+    if err:
+        return err
+    settings = dict(resolved["settings"])
+    settings.update(p.get("settings") or {})
+    prepared = _prepare_render_job(
+        proj,
+        {
+            **{k: v for k, v in p.items() if k not in ("target", "overrides", "settings")},
+            "settings": settings,
+            "format": resolved["format_id"],
+            "codec": resolved["codec_id"],
+        },
+    )
+    if isinstance(prepared, dict) and not prepared.get("error"):
+        prepared["delivery_target"] = resolved["target"]
+        prepared["qc_spec"] = resolved["qc_spec"]
+    return prepared
 
 
 def _render_job_lifecycle_probe(proj, p: Dict[str, Any]):
@@ -15610,6 +15815,16 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       quick_export_capabilities() -> {presets, safe_params, guards}
       safe_quick_export(preset, target_dir?|params?, custom_name?, dry_run?, allow_render?) -> {success, status}
       export_render_boundary_report(include_matrix?, max_pairs?, include_quick_export?) -> {capabilities, settings, matrix?}
+      list_delivery_targets(tier?, check_availability?) -> {targets, tiers, schema_version}
+      resolve_delivery_target(target, overrides?) -> {format_id, codec_id, settings, qc_spec}
+      prepare_delivery_job(target, target_dir, overrides?, settings?, custom_name?, dry_run?) -> {success, job_id, qc_spec}
+
+    Delivery targets are named render intents (`prores422hq_master`, `youtube`,
+    `tiktok`, ...). One definition emits both the Resolve render settings and an
+    ffprobe-shaped QC spec, so the advanced server's `deliverable_qc` can verify a
+    rendered file against the same intent that produced it. Format/codec are
+    resolved against the live matrix, so an intent unavailable on this
+    machine/license fails with the actual available lists.
     """
     p = params or {}
     _, proj, err = _check()
@@ -15644,14 +15859,48 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return {"codecs": _render_codecs(proj, p["format"])}
     elif action == "get_format_and_codec":
         return _ser(proj.GetCurrentRenderFormatAndCodec())
+    elif action == "list_delivery_targets":
+        return _list_delivery_targets(proj, p)
+    elif action == "resolve_delivery_target":
+        _resolved, _target_err = _resolve_delivery_target_live(proj, p)
+        return _target_err if _target_err else _ok(**_resolved)
+    elif action == "prepare_delivery_job":
+        return _prepare_delivery_job(proj, p)
     elif action == "set_format_and_codec":
-        return {"success": bool(proj.SetCurrentRenderFormatAndCodec(_render_format_id(proj, p["format"]), p["codec"]))}
+        _formats = _render_formats(proj)
+        _format_id = _render_format_id_from_formats(_formats, p["format"])
+        _codec_id = _render_codec_id(proj, _format_id, p["codec"], _formats)
+        if not proj.SetCurrentRenderFormatAndCodec(_format_id, _codec_id):
+            # Availability is machine/license/plugin dependent, so name what this
+            # install actually exposes instead of just reporting False.
+            return _err(
+                f"Could not set render format/codec: {p['format']} / {p['codec']}",
+                code="RENDER_FORMAT_CODEC_REJECTED",
+                category="invalid_input",
+                reason="Resolve rejected the format/codec pair.",
+                remediation=(
+                    "Check render(action='get_formats') and "
+                    "render(action='get_codecs', params={'format': ...}). If the codec comes "
+                    "from an IO plugin, confirm it is installed and Resolve has been restarted."
+                ),
+                state={
+                    "requested_format": p["format"],
+                    "requested_codec": p["codec"],
+                    "resolved_format_id": _format_id,
+                    "resolved_codec_id": _codec_id,
+                    "available_codecs": _render_codecs(proj, _format_id, _formats),
+                },
+            )
+        return {"success": True, "format_id": _format_id, "codec_id": _codec_id}
     elif action == "get_mode":
         return {"mode": proj.GetCurrentRenderMode()}
     elif action == "set_mode":
         return {"success": bool(proj.SetCurrentRenderMode(p["mode"]))}
     elif action == "get_resolutions":
-        return {"resolutions": _ser(proj.GetRenderResolutions(_render_format_id(proj, p["format"]), p["codec"]))}
+        _formats = _render_formats(proj)
+        _format_id = _render_format_id_from_formats(_formats, p["format"])
+        _codec_id = _render_codec_id(proj, _format_id, p["codec"], _formats)
+        return {"resolutions": _ser(proj.GetRenderResolutions(_format_id, _codec_id))}
     elif action == "get_settings":
         missing = _requires_method(proj, "GetRenderSettings", "unknown")
         if missing:

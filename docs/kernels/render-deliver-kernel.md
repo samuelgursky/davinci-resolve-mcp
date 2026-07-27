@@ -24,6 +24,38 @@ All actions are under `render(action=...)`.
 | `quick_export_capabilities` | Supported | Lists Quick Export presets and enforced safety guards. |
 | `safe_quick_export` | Supported dry-run | Validates temp target, forces `EnableUpload=False`, and requires `allow_render=True` before actual Quick Export execution. |
 | `export_render_boundary_report` | Supported | Combines capabilities, settings snapshot, format matrix, and Quick Export capabilities. |
+| `list_delivery_targets` | Supported | Lists named render intents, optionally filtered by tier and checked against the live format/codec matrix. |
+| `resolve_delivery_target` | Supported | Resolves a named target to live format/codec ids plus its render settings and QC spec. |
+| `prepare_delivery_job` | Supported | Resolves a named target and queues a render job for it, returning the QC spec that verifies the output. |
+
+## Delivery Targets
+
+A delivery target is a **named render intent** (`prores422hq_master`,
+`h264_1080p_web`, `dnxhr_hqx_master`, ...) defined once in
+`src/utils/delivery_targets.py` and projected two ways: onto Resolve
+`SetRenderSettings` keys, and onto the ffprobe-shaped spec the advanced server's
+`deliverable_qc` consumes. The render and the check that verifies it therefore
+come from one definition.
+
+- **Ids describe the deliverable; platform names are aliases.** `youtube`,
+  `tiktok`, `reels` and friends point at spec-descriptive ids. When a platform
+  changes its guidance you repoint an alias rather than rewrite a target, so no
+  committed id can become a lie about what it produces.
+- **Format and codec are candidate lists**, resolved against the live matrix at
+  call time. Codec description strings vary by Resolve version, license, and
+  installed IO plugins, so a target names the spellings it knows and the first
+  available one wins.
+- **Unavailable targets fail loudly** with `DELIVERY_TARGET_FORMAT_UNAVAILABLE` /
+  `DELIVERY_TARGET_CODEC_UNAVAILABLE` and the machine's actual available lists.
+  Use `list_delivery_targets` with `check_availability` to see what this install
+  can render before planning around it.
+- **The QC spec asserts only what the render settings pin.** Bitrate is not
+  encoded (Resolve exposes no bitrate key — only `VideoQuality`, whose type
+  varies per codec), and image-sequence targets carry no QC spec at all because
+  `deliverable_qc` probes a single file.
+- Users can add targets in `logs/delivery-targets.json` (override the path with
+  `DAVINCI_RESOLVE_MCP_DELIVERY_TARGETS`). A malformed entry is skipped with a
+  warning rather than taking out the shipped set.
 
 ## Supported Boundaries
 

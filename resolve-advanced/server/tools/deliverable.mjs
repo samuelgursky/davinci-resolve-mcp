@@ -10,11 +10,13 @@
  *   re_delivery_diff       — old vs new render: frame-count/duration Δ + spec drift
  *   render_manifest        — build (checksums + frame counts) / reconcile actual outputs
  *   expand_deliverable     — model texted/textless/stems/slate/leader entities + their rules
+ *   spec_from_authored     — authored deliverable vocabulary → deliverable_qc spec + loudness target
  */
 import { z } from 'zod';
 import { deliverableQc, loudnessQc, reframeBlankingCheck, conformCompleteness, reDeliveryDiff } from '../deliverable-qc.mjs';
 import { buildManifest, reconcileManifest } from '../render-manifest.mjs';
 import { expandDeliverable } from '../deliverable-entities.mjs';
+import { deliverableSpecFromAuthored, deliverableSpecsFromAuthored } from '../deliverable-spec-bridge.mjs';
 
 const specSchema = z.object({}).passthrough();
 
@@ -64,10 +66,21 @@ const expandSchema = z.object({
   entities: z.array(z.enum(['texted', 'textless', 'stems_ME', 'slate', 'leader'])).optional(),
 });
 
+const specFromAuthoredSchema = z
+  .object({
+    deliverable: specSchema
+      .optional()
+      .describe('One authored deliverable: { id?, video:{codec,res,fps,color}, audio:{config,loudness}, container?, naming? }'),
+    deliverables: z.array(specSchema).optional().describe('An authored deliverables: list'),
+  })
+  .refine((a) => !!a.deliverable !== !!a.deliverables, {
+    message: 'pass exactly one of deliverable or deliverables',
+  });
+
 export const deliverableTool = {
   name: 'deliverable',
   description:
-    'Deliverable QC / compliance (Cluster D) — the #1 reject-preventer. MEASURE/report-only (gate: review — never auto-pass-clear). Actions: deliverable_qc (ffprobe a render vs its spec → pass/fail per field: codec/raster/fps/scan/color tags/audio layout/naming/duration), loudness_qc (ebur128 integrated LUFS + true-peak dBTP + LRA vs target), reframe_blanking_check (letterbox/pillarbox + active-picture bounds + illegal edge pixels), conform_completeness (all online, handles, duration == reference frame-exact), re_delivery_diff (old vs new render: frame/duration Δ + spec drift), render_manifest (build checksums+frame-counts / reconcile actual outputs), expand_deliverable (model texted/textless/stems/slate/leader entities + rules). Needs ffmpeg/ffprobe on PATH for the file actions.',
+    'Deliverable QC / compliance (Cluster D) — the #1 reject-preventer. MEASURE/report-only (gate: review — never auto-pass-clear). Actions: deliverable_qc (ffprobe a render vs its spec → pass/fail per field: codec/raster/fps/scan/color tags/audio layout/naming/duration), loudness_qc (ebur128 integrated LUFS + true-peak dBTP + LRA vs target), reframe_blanking_check (letterbox/pillarbox + active-picture bounds + illegal edge pixels), conform_completeness (all online, handles, duration == reference frame-exact), re_delivery_diff (old vs new render: frame/duration Δ + spec drift), render_manifest (build checksums+frame-counts / reconcile actual outputs), expand_deliverable (model texted/textless/stems/slate/leader entities + rules), spec_from_authored (authored deliverable vocabulary — codec display names, "1920x1080", "-16 LUFS", naming templates — into a deliverable_qc spec + loudness_qc target, reporting anything it could not map). Needs ffmpeg/ffprobe on PATH for the file actions.',
   async handler({ action, args }) {
     if (action === 'deliverable_qc') {
       const p = deliverableQcSchema.parse(args);
@@ -99,6 +112,12 @@ export const deliverableTool = {
     if (action === 'expand_deliverable') {
       const p = expandSchema.parse(args);
       return expandDeliverable({ name: p.name, spec: p.spec, entities: p.entities });
+    }
+    if (action === 'spec_from_authored') {
+      const p = specFromAuthoredSchema.parse(args);
+      return p.deliverables
+        ? { deliverables: deliverableSpecsFromAuthored(p.deliverables) }
+        : deliverableSpecFromAuthored(p.deliverable);
     }
     throw new Error(`Unknown deliverable action: ${action}`);
   },

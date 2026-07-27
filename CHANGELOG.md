@@ -2,6 +2,89 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.67.0
+
+Adds **delivery targets** — named render intents that carry their own QC spec —
+and fixes a silent render-codec bug found while designing them.
+
+### Fixed
+
+- **Render codec display names were rejected.** `GetRenderCodecs` returns
+  `{description: id}`, but the codec was passed to
+  `SetCurrentRenderFormatAndCodec`, `GetRenderResolutions`, and
+  `prepare_render_job` **raw** while the format was normalized. Verified live on
+  Studio 19.1.3.7: `('mov', 'Apple ProRes 422 HQ')` returns False while
+  `('mov', 'ProRes422HQ')` returns True — and the same holds for
+  `('mp4', 'H.264')` vs `('mp4', 'H264')`. Any render set by the codec name shown
+  in the Deliver page failed, across every codec family. This is the codec half
+  of the format-id fix (issue #59).
+- **A rejected format/codec no longer queues a job anyway.**
+  `prepare_render_job` previously applied settings and called `AddRenderJob()`
+  even when `SetCurrentRenderFormatAndCodec` returned False, reporting
+  `success: True` with `format_success: False` buried in the payload — a queued
+  job that would render in the *previously set* codec. It now returns
+  `RENDER_FORMAT_CODEC_REJECTED` with the machine's available codecs and queues
+  nothing. `set_format_and_codec` returns the same structured error instead of a
+  bare `success: False`.
+- **The granular server never received the issue #59 fix.**
+  `get_render_codecs` passed a raw display name, and
+  `set_current_render_format_and_codec` passed both format and codec raw. The
+  resolvers now live in `src/utils/render_ids.py` and are shared by both servers,
+  so the two cannot drift apart again.
+
+### Added
+
+- **Delivery targets** (`src/utils/delivery_targets.py`) — 28 named render
+  intents across master / web / sequence / broadcast / package tiers, every one
+  resolved live against Resolve Studio 19.1.3.7 (20 formats / 271 pairs). One
+  definition projects onto both Resolve `SetRenderSettings` keys and the
+  ffprobe-shaped spec `deliverable_qc` consumes, so a render and the check that
+  verifies it come from the same source. New `render` actions:
+  `list_delivery_targets`, `resolve_delivery_target`, `prepare_delivery_job`.
+  - Ids describe the deliverable (`prores422hq_master`, `h264_1080p_web`);
+    platform names (`youtube`, `tiktok`, `avid`, `stems`) are **aliases**, so a
+    platform changing its guidance repoints an alias instead of rewriting a target.
+  - Format and codec are ordered **candidate lists** resolved against the live
+    matrix, because codec descriptions vary by Resolve version, license, and
+    installed IO plugins. An unavailable target fails with the machine's actual
+    available lists; `list_delivery_targets` with `check_availability` reports
+    what this install can render.
+  - User-defined targets load from `logs/delivery-targets.json` (override with
+    `DAVINCI_RESOLVE_MCP_DELIVERY_TARGETS`); a malformed entry is skipped with a
+    warning rather than taking out the shipped set.
+- **`deliverable(action="spec_from_authored")`** on the advanced server —
+  projects the authored deliverable vocabulary (codec display names,
+  `"1920x1080"`, `"-16 LUFS"`, `<SHOW>_<EP>_<YYYYMMDD>.mov` naming templates)
+  onto a `deliverable_qc` spec plus a `loudness_qc` target. Anything it cannot
+  map is reported in `unmapped[]` rather than dropped.
+- **The `deliver` apply contract now carries QC specs.**
+  `APPLY_CONTRACT.deliver` emits `qc[]` alongside each deliverable, so a render
+  job travels with the spec that will verify it. Previously a stub.
+- **`tests.test_duplicate_definitions`** — static guard against a module-level
+  name being defined twice under `src/`. pyflakes does not catch this (it only
+  reports redefinition of an *unused* name), and the dangerous case is exactly
+  the one it misses. Added to the release validation set.
+
+### Notes
+
+- Bitrate is deliberately not encoded in delivery targets: Resolve exposes no
+  bitrate render-setting key, only `VideoQuality`, whose type varies per codec.
+- Image-sequence and package (IMF/DCP) targets return no QC spec —
+  `deliverable_qc` probes a single file, and those render many files or a
+  directory. Every such target carries an explicit `qc_skip_reason`, so a missing
+  check is always explained rather than silent.
+- **There is no audio-only WAV target.** The `Wave` format exposes zero codecs
+  and `SetCurrentRenderFormatAndCodec('wav', …)` rejects every value tried,
+  including the empty string. Recorded in `src/utils/api_truth.py` and the
+  generated `docs/reference/api-limitations.md`.
+- The live pass corrected candidate spellings that were wrong: plain
+  `"DNxHR HQX"` / `"DNxHR 444"` do not exist (live labels carry a bit depth),
+  DPX/TIFF codecs are `"RGB 10 bits"` not `"RGB 10-bit"`, and PNG is not a
+  Resolve render format.
+- `container` is `"mov"` for both `.mov` and `.mp4`: ffprobe reports
+  `format_name=mov,mp4,m4a,3gp,3g2,mj2` for each and only the first token is
+  kept, so `video.codec` is what discriminates them.
+
 ## What's New in v2.66.0
 
 Generalizes the HTTP transcription backend introduced in v2.65.0 into a

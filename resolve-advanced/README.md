@@ -87,7 +87,10 @@ Each dispatches on an `action`. Highlights:
 - **`deliverable`** — deliverable QC / compliance: `deliverable_qc` (ffprobe a render vs its spec →
   pass/fail per field), `loudness_qc` (ebur128 LUFS/true-peak/LRA), `reframe_blanking_check`,
   `conform_completeness`, `re_delivery_diff`, `render_manifest` (build/reconcile), `expand_deliverable`
-  (texted/textless/stems/slate/leader entities). Report-only (`gate: review` — never auto-pass-clear).
+  (texted/textless/stems/slate/leader entities), `spec_from_authored` (authored deliverable vocabulary —
+  codec display names, `"1920x1080"`, `"-16 LUFS"`, naming templates — into a `deliverable_qc` spec plus a
+  `loudness_qc` target, reporting anything it could not map). Report-only (`gate: review` — never
+  auto-pass-clear).
 - **`media`** — media front-end / AE: `ingest_verify` (hash seal/verify/dupes-by-hash), `media_inventory`
   (fps/codec/colorspace/TC + card gaps), `sync` (TC picture↔sound + drift/MOS), `relink_manifest`,
   `rename_plan` (refuses camera originals) / `reel_normalize`, `turnover_package`, `project_hygiene`.
