@@ -27,9 +27,17 @@ Render an mp4 only to preview the cut, and say that is what it is.
 1. **Probe before importing.** `ffprobe` every clip for `r_frame_rate`,
    `avg_frame_rate`, and `rotation`. Two things routinely differ from what the
    filenames and Resolve suggest — see Verified traps.
-2. **Set project settings before any timeline exists.** `timelineFrameRate` is
-   locked once a timeline is created. Use
-   `project_manager safe_set_project_settings`.
+2. **Set BOTH frame rates before any timeline exists.** `timelineFrameRate` is
+   locked once a timeline is created — set it via
+   `project_manager safe_set_project_settings`. `timelinePlaybackFrameRate`
+   cannot be set through the API at all, so **ask the user to set it in the UI
+   now**, as a setup step:
+
+   > Project Settings (gear, bottom-right) → Master Settings → Playback frame rate
+
+   Do not defer this to the end or write it off as cosmetic. Confirm both read
+   the shooting frame rate before assembling; a mismatch has been reported to
+   affect playback and output, not just the display.
 3. **Import into a named bin**, then `media_pool set_current_folder` to it.
 4. **Analyse** — `media_analysis analyze_bin`, `sampling_mode="adaptive_capped"`.
    Complete the `commit_vision` loop for every clip; leaving one in
@@ -66,7 +74,7 @@ wrong result rather than an error.
 | `create_timeline_from_clips` needs the current folder | Bare `Failed to create timeline from clip_infos`, valid clip_ids | `media_pool set_current_folder` to the clips' bin first |
 | Phone footage carries a `rotation` flag | Stored 3840x2160, displays 2160x3840 | Check `rotation` in ffprobe; Resolve honours it. **Do not reframe** — it is already vertical |
 | Phone footage is **VFR** | `avg_frame_rate` differs per clip and from `r_frame_rate` | Match the timeline to what Resolve conforms to (its reported clip FPS), not to `r_frame_rate` |
-| `timelinePlaybackFrameRate` is read-only | `set_setting` returns False for every value form | Monitoring only — the render follows `timelineFrameRate`. Tell the user to fix it in Master Settings |
+| `timelinePlaybackFrameRate` is read-only | `set_setting` returns False for every value form, before and after a timeline exists | No API path. Ask the user to set it in Master Settings during setup (step 2), not at handover |
 | Fusion comps built via API never render | Nodes report success and read back correctly; output unchanged | No scripted path to burn text over a clip. Don't attempt it. `delete_comp` also fails — rebuild the timeline to clear one |
 
 Destructive ops auto-archive the timeline, so several edits leave
