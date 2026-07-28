@@ -27,26 +27,34 @@ Render an mp4 only to preview the cut, and say that is what it is.
 1. **Probe before importing.** `ffprobe` every clip for `r_frame_rate`,
    `avg_frame_rate`, and `rotation`. Two things routinely differ from what the
    filenames and Resolve suggest — see Verified traps.
-2. **Set BOTH frame rates before any timeline exists.** `timelineFrameRate` is
-   locked once a timeline is created — set it via
+2. **For a series, add a timeline to the existing project — don't create a new
+   one.** Check `project_manager list` first. One project per series keeps the
+   bins, analysed clips and settings in one place; one per episode scatters
+   them. Only create a project for a genuinely new series.
+
+3. **On a NEW project, set BOTH frame rates before any timeline exists.**
+   `timelineFrameRate` is locked once a timeline is created — set it via
    `project_manager safe_set_project_settings`. `timelinePlaybackFrameRate`
    cannot be set through the API at all, so **ask the user to set it in the UI
    now**, as a setup step:
 
    > Project Settings (gear, bottom-right) → Master Settings → Playback frame rate
 
-   Do not defer this to the end or write it off as cosmetic. Confirm both read
-   the shooting frame rate before assembling; a mismatch has been reported to
-   affect playback and output, not just the display.
-3. **Import into a named bin**, then `media_pool set_current_folder` to it.
-4. **Analyse** — `media_analysis analyze_bin`, `sampling_mode="adaptive_capped"`.
+   Do not defer this to the end or write it off as cosmetic; a mismatch has been
+   reported to affect playback and output, not just the display. On an existing
+   project, read both back and only raise it if they are wrong.
+4. **Import into a bin named for the episode**, then
+   `media_pool set_current_folder` to it. One bin per episode, not one shared
+   dump — it keeps `analyze_bin` scoped and the Media Pool readable across a
+   long series.
+5. **Analyse** — `media_analysis analyze_bin`, `sampling_mode="adaptive_capped"`.
    Complete the `commit_vision` loop for every clip; leaving one in
    `pending_host_vision_analysis` is a failure, not a partial success (AGENTS.md).
-5. **Find shots via contact sheets**, not one frame at a time:
+6. **Find shots via contact sheets**, not one frame at a time:
    `python3 scripts/contact_sheet.py <clip_dir> <out_dir>` — see Shot finding.
-6. **Assemble in one call** — `media_pool create_timeline_from_clips` with
-   positioned `clip_infos`.
-7. **Verify** — `timeline detect_gaps_overlaps` must return zero of both, and
+7. **Assemble in one call** — `media_pool create_timeline_from_clips` with
+   positioned `clip_infos`. Name the timeline for the episode.
+8. **Verify** — `timeline detect_gaps_overlaps` must return zero of both, and
    check the total duration against the target.
 
 ## Shot finding at scale
@@ -61,7 +69,14 @@ index. Roughly a 15x saving with no loss of coverage.
 
 Ask for **short clips per subject** rather than 20-35 minute takes when the
 shooter can choose. `adaptive_capped` tops out at 80 frames per clip, so a
-35-minute take gets sampled only to about its first 16 minutes.
+35-minute take gets sampled only to about its first 16 minutes — the tail is
+never seen.
+
+**When footage arrives pre-culled** (the shooter has already thrown away the
+unusable takes), scale the effort down: fewer frames per clip, fewer sheets, and
+trust the selection rather than hunting for the good moments. The expensive part
+of shot finding is separating usable from unusable, and that work is already
+done. Don't re-litigate it.
 
 ## Verified traps
 
