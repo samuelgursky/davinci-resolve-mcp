@@ -2,6 +2,24 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.67.1
+
+Documentation correction. No code changes — v2.67.0 already ships the correct
+behavior.
+
+### Changed
+
+- **`docs/kernels/render-deliver-kernel.md` no longer quotes a format/codec count
+  as portable.** It presented "23 formats and 99 format/codec pairs" as the
+  expected probe result; a live probe on Studio 19.1.3.7 found 20 formats and 271
+  pairs. Both mentions now carry the build they came from and point at probing
+  the machine in hand (`probe_render_matrix`, or `list_delivery_targets` with
+  `check_availability`) instead of comparing against a fixed number.
+- The kernel's boundary list now records the two traps the delivery-target work
+  verified live: codec **descriptions are not codec ids** (`H.264` vs `H264`, not
+  only the ProRes family), and some formats expose **no codecs at all** (`Wave`,
+  `GIF` on 19.1.3.7) and cannot be selected through this API.
+
 ## What's New in v2.67.0
 
 Adds **delivery targets** — named render intents that carry their own QC spec —
