@@ -55,6 +55,16 @@ def get_resolve_paths():
         lib_path = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
         modules_path = os.path.join(api_path, "Modules")
     
+    # An explicit install location wins over the platform default: Resolve is
+    # not always under /Applications (external volume, custom install dir).
+    env_api = os.environ.get("RESOLVE_SCRIPT_API")
+    if env_api and os.path.isdir(env_api):
+        api_path = env_api
+        modules_path = os.path.join(api_path, "Modules")
+    env_lib = os.environ.get("RESOLVE_SCRIPT_LIB")
+    if env_lib and os.path.isfile(env_lib):
+        lib_path = env_lib
+
     return {
         "api_path": api_path,
         "lib_path": lib_path,
