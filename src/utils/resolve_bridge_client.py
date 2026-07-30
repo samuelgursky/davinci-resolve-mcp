@@ -288,7 +288,7 @@ class BridgeProxy:
             cache[key] = names
         return names
 
-    def __getattr__(self, name: str) -> _BoundMethod:
+    def __getattr__(self, name: str) -> Any:
         if name.startswith("__") and name.endswith("__"):
             # Let normal dunder lookup fail rather than sending it over the wire.
             raise AttributeError(name)
@@ -298,8 +298,19 @@ class BridgeProxy:
             # and the cached set is keyed on a provenance hint, so it is not
             # allowed to be the last word on it.
             if name not in self._methods(refresh=True):
+                # Not a method. It may still be an API *constant*: `EXPORT_AAF`,
+                # `AUDIO_SYNC_*` and friends are plain attributes that `dir()`
+                # does not list, and returning them is the difference between a
+                # working conform export and one that silently posts the string
+                # "EXPORT_AAF" to Resolve.
+                probe = self._transport.request("get_attribute",
+                                                {"target": self._handle, "name": name}) or {}
+                if probe.get("kind") == "value":
+                    return _decode_value(self._transport, probe.get("value"))
                 # Matches native semantics: hasattr() is False, getattr(..., None)
                 # is None, and a capability check refuses instead of guessing.
+                # A `callable` answer lands here too — Resolve fabricates one for
+                # any name, so it is not evidence the attribute exists.
                 raise AttributeError(
                     f"{self._shape or self._type_name or 'Resolve object'} has no attribute "
                     f"{name!r} in this Resolve build"

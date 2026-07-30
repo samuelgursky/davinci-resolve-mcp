@@ -1434,3 +1434,103 @@ class MethodSetIdentityTests(unittest.TestCase):
         self.assertIn("GetCurrentProject", transport.method_cache["resolve.GetProjectManager"])
         # And a name that is genuinely absent still refuses after the re-check.
         self.assertFalse(hasattr(manager, "NoSuchMethod"))
+
+
+class AttributeReadingTests(unittest.TestCase):
+    """Resolve's API constants are attributes, and `dir()` does not list them.
+
+    `Timeline.Export(path, resolve.EXPORT_AAF, resolve.EXPORT_AAF_NEW)` is the
+    documented conform idiom; `resolve.AUDIO_SYNC_*` configures AutoSyncAudio.
+    Measured on 21.0.3.7: `dir(resolve)` returns 34 names, none of them
+    `EXPORT_*`, while the constants themselves read back as real values
+    (EXPORT_EDL 2.0, EXPORT_NONE -1.0, EXPORT_OTIO 15.0).
+
+    With no way to read them the proxy answered `hasattr(resolve, "EXPORT_AAF")`
+    False, and `_timeline_export_value` in the server then falls through to
+    passing the bare string "EXPORT_AAF" to Resolve — a silent degradation of the
+    whole conform surface rather than a failure anyone would see.
+    """
+
+    class RemoteLike:
+        """Resolve's shape: dir() lists methods only, getattr never raises."""
+
+        CONSTANTS = {"EXPORT_AAF": 0.0, "EXPORT_EDL": 2.0, "EXPORT_NONE": -1.0}
+
+        def GetProductName(self):
+            return "DaVinci Resolve"
+
+        def __dir__(self):
+            return ["GetProductName"]
+
+        def __getattr__(self, name):
+            # Unknown names come back as None instead of raising — the measured
+            # behaviour that makes None indistinguishable from absent.
+            return self.CONSTANTS.get(name)
+
+    def _serve(self, target):
+        import tempfile
+        from src.utils import resolve_bridge_client as rbc
+        from src.utils import resolve_bridge_ops as rbo
+
+        root = tempfile.mkdtemp(prefix="attr_")
+        ops = rbo.ResolveOperations(target, media_roots=[root], output_roots=[root])
+        config = {"host": "127.0.0.1", "port": 0, "token": TOKEN, "auth_clock_skew_seconds": 60}
+        bridge = rb.Bridge(target, config, rbo.make_dispatch(ops))
+        bridge.start()
+        self.addCleanup(bridge.stop)
+        transport = rbc.BridgeTransport({**config, "port": bridge.port})
+        return rbc.BridgeProxy(transport, "resolve", type_name="Resolve", shape="resolve"), transport
+
+    def test_constants_absent_from_dir_are_still_readable(self) -> None:
+        resolve, _ = self._serve(self.RemoteLike())
+        self.assertEqual(resolve.EXPORT_AAF, 0.0)
+        self.assertEqual(resolve.EXPORT_EDL, 2.0)
+        # -1.0 and 0.0 are both falsy; a caller must be able to tell them apart
+        # from "not there", so identity of the value matters, not truthiness.
+        self.assertEqual(resolve.EXPORT_NONE, -1.0)
+        self.assertTrue(hasattr(resolve, "EXPORT_AAF"))
+
+    def test_methods_are_still_methods_not_values(self) -> None:
+        resolve, _ = self._serve(self.RemoteLike())
+        self.assertEqual(resolve.GetProductName(), "DaVinci Resolve")
+
+    def test_a_none_answer_does_not_make_hasattr_true_for_everything(self) -> None:
+        """The trap that reading attributes could have re-opened.
+
+        Resolve returns None for a name that does not exist, so treating a
+        present-but-None attribute as a value would answer `hasattr` with True
+        for any string at all — exactly the always-true behaviour the strict
+        proxy exists to replace.
+        """
+        resolve, _ = self._serve(self.RemoteLike())
+        self.assertFalse(hasattr(resolve, "Xyzzy_NotAThing"))
+        self.assertIsNone(getattr(resolve, "TotallyMadeUpConstant", None))
+
+    def test_the_bridge_reports_the_kind_rather_than_a_bare_value(self) -> None:
+        from src.utils import resolve_bridge_ops as rbo
+
+        _, transport = self._serve(self.RemoteLike())
+        self.assertEqual(transport.request("get_attribute", {"target": "resolve", "name": "EXPORT_EDL"}),
+                         {"kind": "value", "value": 2.0})
+        self.assertEqual(transport.request("get_attribute", {"target": "resolve", "name": "GetProductName"})["kind"],
+                         "callable")
+        self.assertEqual(transport.request("get_attribute", {"target": "resolve", "name": "Nope"})["kind"],
+                         "none")
+        # A plain Python object CAN tell absence apart, and still does.
+        plain, plain_transport = self._serve(type("Plain", (), {"REAL": 7})())
+        self.assertEqual(plain_transport.request("get_attribute", {"target": "resolve", "name": "REAL"}),
+                         {"kind": "value", "value": 7})
+        self.assertEqual(plain_transport.request("get_attribute", {"target": "resolve", "name": "Nope"})["kind"],
+                         "absent")
+        self.assertIn("get_attribute", rbo.ResolveOperations.OPERATIONS)
+
+    def test_private_names_are_refused_here_too(self) -> None:
+        from src.utils import resolve_bridge_ops as rbo
+
+        _, transport = self._serve(self.RemoteLike())
+        for name in ("__class__", "_secret", "__globals__"):
+            with self.subTest(name=name):
+                with self.assertRaises(Exception) as ctx:
+                    transport.request("get_attribute", {"target": "resolve", "name": name})
+                self.assertEqual(getattr(ctx.exception, "code", None), "method_not_allowed")
+        self.assertTrue(rbo.ResolveOperations.PROXY_OPERATIONS)

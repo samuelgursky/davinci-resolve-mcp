@@ -161,7 +161,7 @@ class ResolveOperations:
         "set_current_timeline",
     )
     #: The transparent proxy. See the module docstring for its security model.
-    PROXY_OPERATIONS = ("call", "release_handles", "list_methods")
+    PROXY_OPERATIONS = ("call", "release_handles", "list_methods", "get_attribute")
     #: Lifecycle: they act on the bridge, never on the project. Separated from the
     #: write surface so "writes stay narrower than reads" keeps measuring what it
     #: was written to measure.
@@ -634,6 +634,58 @@ class ResolveOperations:
         graph is the wrong-target failure the session scoping exists to prevent.
         """
         return self._lifecycle_stop("reload")
+
+    #: Distinguishes "attribute is absent" from "attribute is present and None",
+    #: which `getattr(obj, name, None)` cannot.
+    _MISSING = object()
+
+    def op_get_attribute(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Read a non-callable attribute — Resolve's API constants live here.
+
+        `Timeline.Export(path, resolve.EXPORT_AAF, resolve.EXPORT_AAF_NEW)` is the
+        documented way to export, and `resolve.AUDIO_SYNC_*` is the documented way
+        to configure AutoSyncAudio. Both are plain attributes, and **`dir()` does
+        not list them** — measured on 21.0.3.7, where `dir(resolve)` returns 34
+        names and not one `EXPORT_*` among them.
+
+        Without this operation the proxy answers `hasattr(resolve, "EXPORT_AAF")`
+        with False, and the server's own resolver then falls back to passing the
+        bare string `"EXPORT_AAF"` to Resolve. That is a silent degradation of the
+        entire conform surface, which is why reading attributes is a first-class
+        operation rather than something a caller works around.
+
+        `kind` is reported rather than a bare value so a caller can tell a
+        constant from a method from an absence, instead of inferring it from a
+        None that could mean any of the three.
+        """
+        name = arguments.get("name")
+        if not isinstance(name, str) or not name:
+            raise OperationError("invalid_arguments", "name must be a non-empty string")
+        if name.startswith("_"):
+            raise OperationError("method_not_allowed", "private and dunder attributes are not reachable")
+        target = self._resolve_target(arguments.get("target", "resolve"))
+        try:
+            value = getattr(target, name, self._MISSING)
+        except Exception as exc:  # noqa: BLE001 - a raising getattr is an answer
+            raise OperationError("resolve_raised", f"reading {name} raised: {str(exc)[:200]}")
+        if value is self._MISSING:
+            return {"kind": "absent"}
+        if callable(value):
+            # Left to `call`. Reported rather than returned because Resolve
+            # fabricates a callable for names that do not exist, so "callable"
+            # is not evidence the attribute is real — `dir()` is.
+            return {"kind": "callable"}
+        if value is None:
+            # Measured on 21.0.3.7: `getattr(resolve, "Xyzzy_NotAThing")` returns
+            # None rather than raising, so the sentinel above never fires on a
+            # Resolve object and None cannot be told apart from absence. Reported
+            # as its own kind instead of as a value, because returning it would
+            # make `hasattr` true for every name anyone ever asks about — the
+            # always-true trap this whole path exists to avoid.
+            return {"kind": "none",
+                    "note": "present-but-None; on Resolve objects this is indistinguishable "
+                            "from absent, because getattr never raises"}
+        return {"kind": "value", "value": self._encode(value, shape=f"{self._shape_of(arguments.get('target', 'resolve'))}.{name}")}
 
     def op_release_handles(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Drop handles a client no longer needs, or all of them."""
