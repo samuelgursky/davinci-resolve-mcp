@@ -804,11 +804,32 @@ def _is_resolve_handle_live(candidate) -> bool:
         return False
 
 
+def _bridge_requested() -> bool:
+    """Has the operator asked for the in-app bridge?
+
+    Read at call time rather than at import, so a server started before the
+    variable was set still honours it.
+    """
+    try:
+        from src.utils import resolve_bridge_client
+
+        return resolve_bridge_client.bridge_enabled()
+    except Exception:  # pragma: no cover - the client is optional
+        return False
+
+
 def _try_connect():
     """Attempt to connect to Resolve once. Returns resolve object or None."""
     global resolve
     with _resolve_lock:
-        if dvr_script is None:
+        # `dvr_script` is Blackmagic's module, and it ships with the *installer*,
+        # not the App Store build — a free-edition-only machine has no
+        # Developer/Scripting/Modules tree at all, so the import fails. Bailing
+        # here made the bridge unreachable on precisely the configuration it
+        # exists for: `connect_resolve` accepts None in bridge mode, and this
+        # returned before ever calling it. Verified by blocking the import with a
+        # healthy bridge listening — get_resolve() answered None.
+        if dvr_script is None and not _bridge_requested():
             return None
         try:
             candidate = connect_resolve(dvr_script)
@@ -823,13 +844,34 @@ def _try_connect():
             resolve = None
             return None
 
+#: macOS puts the two editions in different places, and only the first was ever
+#: checked — so an auto-launch on a machine with both would start Studio even
+#: when the free edition was the one in use. Ordered installer-first to keep the
+#: previous behaviour where Studio is present.
+_MACOS_RESOLVE_APPS = (
+    "/Applications/DaVinci Resolve/DaVinci Resolve.app",  # installer / Studio
+    "/Applications/DaVinci Resolve.app",                  # App Store, free
+)
+
+
 def _launch_resolve():
     """Launch DaVinci Resolve and wait for it to become available."""
+    if _bridge_requested():
+        # Launching cannot produce a bridge. The listener only exists once
+        # someone runs Workspace > Scripts > resolve_bridge inside an already
+        # running Resolve, so starting the application here would open a window
+        # nobody asked for and still fail to connect.
+        logger.error(
+            "The in-app bridge is enabled but not answering. Start it from "
+            "Workspace > Scripts > resolve_bridge inside the running Resolve; "
+            "launching the application cannot start it."
+        )
+        return False
     sys_name = platform.system().lower()
     if sys_name == "darwin":
-        app_path = "/Applications/DaVinci Resolve/DaVinci Resolve.app"
-        if not os.path.exists(app_path):
-            logger.error(f"DaVinci Resolve not found at {app_path}")
+        app_path = next((p for p in _MACOS_RESOLVE_APPS if os.path.exists(p)), None)
+        if app_path is None:
+            logger.error("DaVinci Resolve not found in %s", list(_MACOS_RESOLVE_APPS))
             return False
         subprocess.Popen(["open", app_path], stdin=subprocess.DEVNULL)
     elif sys_name == "windows":

@@ -1534,3 +1534,77 @@ class AttributeReadingTests(unittest.TestCase):
                     transport.request("get_attribute", {"target": "resolve", "name": name})
                 self.assertEqual(getattr(ctx.exception, "code", None), "method_not_allowed")
         self.assertTrue(rbo.ResolveOperations.PROXY_OPERATIONS)
+
+
+class ServerReachesTheBridgeTests(unittest.TestCase):
+    """The bridge has to be reachable on the machine it was built for.
+
+    Blackmagic's `DaVinciResolveScript` ships with the *installer*, not with the
+    App Store build — a free-edition-only machine has no
+    Developer/Scripting/Modules tree at all, so the import fails and
+    `server.dvr_script` is None. `_try_connect` returned on that check before ever
+    calling `connect_resolve`, which is the function that accepts None in bridge
+    mode. Verified against a healthy live bridge with the import blocked:
+    `get_resolve()` answered None, so the entire feature was inert on its target
+    configuration.
+    """
+
+    def _server_module(self):
+        import importlib
+
+        module = importlib.import_module("src.server")
+        return module
+
+    def test_a_missing_scripting_module_no_longer_blocks_the_bridge(self) -> None:
+        from unittest import mock
+
+        server = self._server_module()
+        sentinel = mock.MagicMock(name="bridge-proxy")
+        with mock.patch.object(server, "dvr_script", None), \
+                mock.patch.object(server, "_bridge_requested", return_value=True), \
+                mock.patch.object(server, "connect_resolve", return_value=sentinel) as connect, \
+                mock.patch.object(server, "_is_resolve_handle_live", return_value=True):
+            self.assertIs(server._try_connect(), sentinel)
+        # And it was handed None, which is exactly what bridge mode expects.
+        connect.assert_called_once_with(None)
+
+    def test_without_the_bridge_a_missing_module_still_short_circuits(self) -> None:
+        from unittest import mock
+
+        server = self._server_module()
+        with mock.patch.object(server, "dvr_script", None), \
+                mock.patch.object(server, "_bridge_requested", return_value=False), \
+                mock.patch.object(server, "connect_resolve") as connect:
+            self.assertIsNone(server._try_connect())
+        connect.assert_not_called()
+
+    def test_bridge_mode_never_auto_launches_resolve(self) -> None:
+        """Launching cannot produce a bridge, and opens a window nobody asked for.
+
+        The listener only exists once someone runs Workspace > Scripts inside an
+        already-running Resolve, so an auto-launch here fails to connect anyway —
+        after starting an application unprompted.
+        """
+        from unittest import mock
+
+        server = self._server_module()
+        with mock.patch.object(server, "_bridge_requested", return_value=True), \
+                mock.patch.object(server.subprocess, "Popen") as popen:
+            self.assertFalse(server._launch_resolve())
+        popen.assert_not_called()
+
+    def test_both_macos_editions_are_candidates_for_auto_launch(self) -> None:
+        """Only the installer path was checked, so a free-only machine found nothing
+        — and a machine with both always got Studio."""
+        server = self._server_module()
+        self.assertIn("/Applications/DaVinci Resolve.app", server._MACOS_RESOLVE_APPS)
+        self.assertIn("/Applications/DaVinci Resolve/DaVinci Resolve.app", server._MACOS_RESOLVE_APPS)
+
+    def test_bridge_requested_reads_the_environment_at_call_time(self) -> None:
+        from unittest import mock
+
+        server = self._server_module()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(server._bridge_requested())
+        with mock.patch.dict(os.environ, {"DAVINCI_RESOLVE_BRIDGE": "1"}):
+            self.assertTrue(server._bridge_requested())
