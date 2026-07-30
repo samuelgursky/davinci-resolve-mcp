@@ -1588,9 +1588,14 @@ class ServerReachesTheBridgeTests(unittest.TestCase):
         from unittest import mock
 
         server = self._server_module()
+        # conftest replaces `_launch_resolve` for the whole suite so no test can
+        # open Resolve; this is the one test that must exercise the real thing, so
+        # it reaches for the original. The fallback keeps it working under plain
+        # unittest, where conftest never loads.
+        launch = getattr(server, "_launch_resolve_unpatched", server._launch_resolve)
         with mock.patch.object(server, "_bridge_requested", return_value=True), \
                 mock.patch.object(server.subprocess, "Popen") as popen:
-            self.assertFalse(server._launch_resolve())
+            self.assertFalse(launch())
         popen.assert_not_called()
 
     def test_both_macos_editions_are_candidates_for_auto_launch(self) -> None:
