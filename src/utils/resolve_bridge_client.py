@@ -188,6 +188,7 @@ def _decode_value(transport: BridgeTransport, value: Any) -> Any:
         handle = value.get("__handle__")
         if handle is not None:
             return BridgeProxy(transport, handle, type_name=value.get("__type__"),
+                               shape=value.get("__shape__"),
                                strict_attributes=getattr(transport, "strict_attributes", True))
         return {k: _decode_value(transport, v) for k, v in value.items()}
     if isinstance(value, list):
@@ -233,38 +234,57 @@ class BridgeProxy:
     unrelated error instead of refusing cleanly at the check.
 
     So an unknown name raises `AttributeError`, exactly as the native object
-    would. The method set is fetched once per object *type* and shared across
-    every proxy of that type, so this costs one extra round trip per distinct
-    type per session, not per object.
+    would.
+
+    **Method sets are cached by provenance, never by type name.** Every live
+    Resolve object reports `type(obj).__name__ == "PyRemoteObject"` — measured on
+    21.0.3.7, where the Resolve root carries 34 methods, Project 49 and
+    TimelineItem 88, all under that single name. Caching on it let the first
+    object touched define `hasattr` for every object after it: `GetProjectManager()`
+    came back holding the *Resolve root's* method set, so `.GetCurrentProject()`
+    raised AttributeError and any chain longer than one call was broken. Nothing
+    caught it in unit tests because the fakes have distinct class names.
+
+    Provenance — "whatever `resolve.GetProjectManager` returns" — discriminates
+    properly and costs the bridge nothing. It is a *hint* (it assumes one method
+    always returns one shape), so **absence is re-verified against the object
+    itself** before raising. A wrong or stale hint therefore cannot manufacture a
+    missing method, which is the only direction that breaks capability detection;
+    in the other direction it yields a method that fails when called, which is
+    what native Resolve does for every name anyway.
     """
 
-    __slots__ = ("_transport", "_handle", "_type_name", "_strict")
+    __slots__ = ("_transport", "_handle", "_type_name", "_shape", "_strict")
 
     def __init__(self, transport: BridgeTransport, handle: str, *, type_name: Optional[str] = None,
-                 strict_attributes: bool = True) -> None:
+                 shape: Optional[str] = None, strict_attributes: bool = True) -> None:
         object.__setattr__(self, "_transport", transport)
         object.__setattr__(self, "_handle", handle)
         object.__setattr__(self, "_type_name", type_name)
+        object.__setattr__(self, "_shape", shape)
         # `strict_attributes=False` permits any name, i.e. the naive-proxy
         # behaviour where hasattr is always True. Only for talking to a bridge
         # too old to support `list_methods`; `connect()` refuses those outright,
         # so this is an explicit opt-in for diagnostics, never the default.
         object.__setattr__(self, "_strict", strict_attributes)
 
-    def _methods(self) -> frozenset:
-        # Cached on the transport, so all Timeline proxies from one bridge share
-        # a single fetch while a second bridge keeps its own answer.
+    def _cache_key(self) -> str:
+        # Never `_type_name`: it is `PyRemoteObject` for every live object.
+        return self._shape or self._handle
+
+    def _methods(self, *, refresh: bool = False) -> frozenset:
+        # Cached on the transport, so sibling objects from one bridge share a
+        # single fetch while a second bridge keeps its own answer.
         cache = self._transport.method_cache
-        key = self._type_name or self._handle
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
+        key = self._cache_key()
+        if not refresh:
+            cached = cache.get(key)
+            if cached is not None:
+                return cached
         result = self._transport.request("list_methods", {"target": self._handle}) or {}
         names = frozenset(result.get("methods") or ())
-        # Key on the type the bridge reports, so sibling objects reuse this.
-        actual = result.get("type") or key
         with self._transport.cache_lock:
-            cache[actual] = names
+            cache[result.get("shape") or key] = names
             cache[key] = names
         return names
 
@@ -273,12 +293,17 @@ class BridgeProxy:
             # Let normal dunder lookup fail rather than sending it over the wire.
             raise AttributeError(name)
         if self._strict and name not in self._methods():
-            # Matches native semantics: hasattr() is False, getattr(..., None)
-            # is None, and a capability check refuses instead of guessing.
-            raise AttributeError(
-                f"{self._type_name or 'Resolve object'} has no attribute {name!r} "
-                "in this Resolve build"
-            )
+            # Only now pay for a fresh look. Absence is the answer that has to be
+            # right — it is what `getattr(tl, "CreateMagicMask", None)` acts on —
+            # and the cached set is keyed on a provenance hint, so it is not
+            # allowed to be the last word on it.
+            if name not in self._methods(refresh=True):
+                # Matches native semantics: hasattr() is False, getattr(..., None)
+                # is None, and a capability check refuses instead of guessing.
+                raise AttributeError(
+                    f"{self._shape or self._type_name or 'Resolve object'} has no attribute "
+                    f"{name!r} in this Resolve build"
+                )
         return _BoundMethod(self._transport, self._handle, name)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -366,7 +391,7 @@ def connect(*, timeout: float = DEFAULT_TIMEOUT_SECONDS, require_enabled: bool =
         ) from exc
 
     transport = BridgeTransport(config, timeout=timeout)
-    proxy = BridgeProxy(transport, "resolve", type_name="Resolve")
+    proxy = BridgeProxy(transport, "resolve", type_name="Resolve", shape="resolve")
     # Prove the far end is alive now, rather than failing on the first real call
     # somewhere deep in a tool.
     health = transport.request("health", {})

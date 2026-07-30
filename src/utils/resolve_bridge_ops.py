@@ -425,15 +425,35 @@ class ResolveOperations:
     #: `resolve` object.
     ROOT_NAMES = ("resolve", "project_manager", "project", "media_pool", "current_timeline")
 
-    def _mint(self, obj: Any) -> str:
+    def _mint(self, obj: Any, shape: str = "?") -> str:
         self._handle_counter += 1
         handle = "h:%s:%d" % (self._session, self._handle_counter)
-        self._handles[handle] = obj
+        self._handles[handle] = (obj, shape)
         # Bounded, oldest-first. A caller that loses a handle re-fetches; an
         # unbounded table would pin every enumerated item for the session.
         while len(self._handles) > self.MAX_HANDLES:
             self._handles.popitem(last=False)
         return handle
+
+    def _shape_of(self, target: Any) -> str:
+        """Provenance, used by the client as a method-set cache key.
+
+        `type(obj).__name__` cannot serve: every live Resolve object is a
+        `PyRemoteObject`, so caching on it makes the first object touched define
+        `hasattr` for every object afterwards. Provenance — "whatever
+        `resolve.GetProjectManager` returns" — actually discriminates, and costs
+        nothing to compute.
+
+        It is a *hint*, not a proof: it assumes one method always returns one
+        shape. The client is required to re-verify before reporting a method
+        **missing**, so a wrong hint can never manufacture an absence. A wrong
+        hint in the other direction just yields a method that fails when called,
+        which is what native Resolve does for every name anyway.
+        """
+        if isinstance(target, str) and target in self.ROOT_NAMES:
+            return target
+        entry = self._handles.get(target) if isinstance(target, str) else None
+        return entry[1] if entry else "?"
 
     def _named_root(self, name: str) -> Any:
         if name == "resolve":
@@ -465,7 +485,7 @@ class ResolveOperations:
         if target.startswith("h:"):
             if target in self._handles:
                 self._handles.move_to_end(target)
-                return self._handles[target]
+                return self._handles[target][0]
             raise OperationError(
                 "stale_handle",
                 "that handle is no longer held by the bridge — re-fetch the object and retry",
@@ -476,17 +496,26 @@ class ResolveOperations:
             f"target must be one of {list(self.ROOT_NAMES)} or a bridge-issued handle",
         )
 
-    def _encode(self, value: Any, depth: int = 0) -> Any:
-        """Resolve return value -> JSON-safe, minting handles for live objects."""
+    def _encode(self, value: Any, depth: int = 0, shape: str = "?") -> Any:
+        """Resolve return value -> JSON-safe, minting handles for live objects.
+
+        Every object produced by one call carries the same shape, including the
+        elements of a returned list — a track's timeline items are homogeneous,
+        which is exactly the case where sharing a cached method set pays.
+        """
         if value is None or isinstance(value, (bool, int, float, str)):
             return value
         if depth > 6:
             return str(value)
         if isinstance(value, (list, tuple)):
-            return [self._encode(v, depth + 1) for v in list(value)[: self.max_items]]
+            return [self._encode(v, depth + 1, shape) for v in list(value)[: self.max_items]]
         if isinstance(value, dict):
-            return {str(k): self._encode(v, depth + 1) for k, v in list(value.items())[: self.max_items]}
-        return {"__handle__": self._mint(value), "__type__": type(value).__name__}
+            return {str(k): self._encode(v, depth + 1, shape) for k, v in list(value.items())[: self.max_items]}
+        return {
+            "__handle__": self._mint(value, shape),
+            "__type__": type(value).__name__,
+            "__shape__": shape,
+        }
 
     def _decode(self, value: Any) -> Any:
         """Argument -> live object, rehydrating handles the bridge itself issued."""
@@ -513,7 +542,8 @@ class ResolveOperations:
         if method.startswith("_"):
             # Closes __class__/__globals__/__reduce__ traversal off the live object.
             raise OperationError("method_not_allowed", "private and dunder attributes are not reachable")
-        target = self._resolve_target(arguments.get("target", "resolve"))
+        target_key = arguments.get("target", "resolve")
+        target = self._resolve_target(target_key)
         if target is None:
             raise OperationError("not_found", "the requested object is not available right now")
         fn = getattr(target, method, None)
@@ -536,23 +566,36 @@ class ResolveOperations:
                 "resolve_raised",
                 f"Resolve raised while running {method}: {str(exc)[:200]}",
             )
-        return {"value": self._encode(result)}
+        return {"value": self._encode(result, shape=f"{self._shape_of(target_key)}.{method}")}
 
     def op_list_methods(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """The real callable method names on a target.
+        """The public attribute names on a target — what `hasattr` should answer.
 
-        The proxy needs this to answer `hasattr` truthfully. Without it a
-        `__getattr__`-based proxy claims every name exists, so capability
-        detection — `getattr(obj, "CreateMagicMask", None)` — silently passes for
-        methods this Resolve build does not have, and the failure resurfaces
-        later as an unrelated error.
+        The proxy needs this. Without it a `__getattr__`-based proxy claims every
+        name exists, so capability detection — `getattr(obj, "CreateMagicMask",
+        None)` — silently passes for methods this Resolve build does not have,
+        and the failure resurfaces later as an unrelated error.
+
+        **`dir()` is the whole answer; do not filter with `callable(getattr(...))`.**
+        Two measured reasons, both specific to Resolve's Python objects:
+
+        1. It cannot reject anything. Resolve's bridge fabricates a callable for
+           *any* attribute name, so the test is true by construction — that is the
+           documented limitation this operation exists to work around, and `dir()`
+           is the only thing that tells the truth.
+        2. It is ruinously slow. Each `getattr` is an IPC round trip into Resolve,
+           so filtering costs one round trip **per name**: measured at 5-10 ms for
+           a 30-88 method object against 0.85 ms for an ordinary call. Removing it
+           makes introspection as cheap as any other call.
+
+        `type()` is returned for diagnostics only. It is **not** an identity: every
+        live Resolve object is a `PyRemoteObject` regardless of what it is, so
+        anything that caches on it conflates a Timeline with the Resolve root.
         """
-        target = self._resolve_target(arguments.get("target", "resolve"))
-        names = sorted(
-            name for name in dir(target)
-            if not name.startswith("_") and callable(getattr(target, name, None))
-        )
-        return {"type": type(target).__name__, "methods": names}
+        target_key = arguments.get("target", "resolve")
+        target = self._resolve_target(target_key)
+        names = sorted(name for name in dir(target) if not name.startswith("_"))
+        return {"type": type(target).__name__, "shape": self._shape_of(target_key), "methods": names}
 
     # -- lifecycle ---------------------------------------------------------
     #

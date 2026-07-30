@@ -1319,3 +1319,118 @@ class LauncherTemplateTests(unittest.TestCase):
         allowed = {"base64", "importlib", "os", "sys", "traceback",
                    "DaVinciResolveScript", "resolve_bridge", "resolve_bridge_ops"}
         self.assertFalse(imported - allowed, f"launcher imports {imported - allowed}")
+
+
+class MethodSetIdentityTests(unittest.TestCase):
+    """Reproduces the live defect: one class name for every Resolve object.
+
+    Measured on DaVinci Resolve 21.0.3.7 (free) — the Resolve root, Project and
+    TimelineItem all report `type(obj).__name__ == "PyRemoteObject"`, with 34, 49
+    and 88 methods respectively. Caching method sets on that name made the first
+    object touched define `hasattr` for every object afterwards, so
+    `resolve.GetProjectManager().GetCurrentProject()` raised AttributeError
+    against real Resolve while passing every unit test — because the fakes here
+    have distinct class names and so never collided.
+
+    The fixtures below deliberately share ONE class name, which is what makes
+    this a regression test rather than a restatement.
+    """
+
+    class PyRemoteObject:
+        """Stands in for Resolve's single wrapper class."""
+
+        def __init__(self, methods, children=None):
+            self._names = tuple(methods)
+            self._children = children or {}
+            for name in methods:
+                setattr(self, name, (lambda _n=name: self._children.get(_n, _n)))
+
+        def __dir__(self):
+            return list(self._names)
+
+    def _serve(self, root):
+        import tempfile
+        from src.utils import resolve_bridge_client as rbc
+        from src.utils import resolve_bridge_ops as rbo
+
+        temp = tempfile.mkdtemp(prefix="shape_")
+        ops = rbo.ResolveOperations(root, media_roots=[temp], output_roots=[temp])
+        config = {"host": "127.0.0.1", "port": 0, "token": TOKEN, "auth_clock_skew_seconds": 60}
+        bridge = rb.Bridge(root, config, rbo.make_dispatch(ops))
+        bridge.start()
+        self.addCleanup(bridge.stop)
+        transport = rbc.BridgeTransport({**config, "port": bridge.port})
+        return rbc.BridgeProxy(transport, "resolve", type_name="Resolve", shape="resolve"), transport
+
+    def _tree(self):
+        project = self.PyRemoteObject(["GetName", "GetTimelineCount"])
+        manager = self.PyRemoteObject(["GetCurrentProject", "SaveProject"],
+                                      {"GetCurrentProject": project})
+        return self.PyRemoteObject(["GetProductName", "GetProjectManager"],
+                                   {"GetProjectManager": manager})
+
+    def test_a_chain_survives_every_object_sharing_one_class_name(self) -> None:
+        resolve, _ = self._serve(self._tree())
+        self.assertEqual(resolve.GetProductName(), "GetProductName")
+        manager = resolve.GetProjectManager()
+        # The failing step against real Resolve: `GetCurrentProject` is absent
+        # from the *root's* method set, which is what the type-keyed cache held.
+        project = manager.GetCurrentProject()
+        self.assertEqual(project.GetName(), "GetName")
+
+    def test_capability_detection_still_refuses_what_is_genuinely_absent(self) -> None:
+        resolve, _ = self._serve(self._tree())
+        manager = resolve.GetProjectManager()
+        self.assertTrue(hasattr(manager, "SaveProject"))
+        self.assertFalse(hasattr(manager, "CreateMagicMask"))
+        self.assertIsNone(getattr(manager, "SmartReframe", None))
+        # A root method must not leak onto a child through a shared cache entry.
+        self.assertFalse(hasattr(manager, "GetProductName"))
+
+    def test_the_cache_is_keyed_on_provenance_not_the_class_name(self) -> None:
+        resolve, transport = self._serve(self._tree())
+        resolve.GetProductName()
+        manager = resolve.GetProjectManager()
+        manager.SaveProject()
+        self.assertIn("resolve", transport.method_cache)
+        self.assertIn("resolve.GetProjectManager", transport.method_cache)
+        self.assertNotIn("PyRemoteObject", transport.method_cache)
+        self.assertNotEqual(
+            transport.method_cache["resolve"],
+            transport.method_cache["resolve.GetProjectManager"],
+        )
+
+    def test_siblings_from_one_call_share_a_single_fetch(self) -> None:
+        """The reason provenance beats keying per handle: homogeneous lists."""
+        items = [self.PyRemoteObject(["GetName", "GetStart"]) for _ in range(20)]
+        track = self.PyRemoteObject(["GetItemListInTrack"], {"GetItemListInTrack": items})
+        resolve, transport = self._serve(track)
+        resolve.GetItemListInTrack  # warm the root's own shape, which is not what this measures
+
+        seen = []
+        original = transport.request
+
+        def counting(operation, arguments):
+            seen.append(operation)
+            return original(operation, arguments)
+
+        transport.request = counting
+        for item in resolve.GetItemListInTrack():
+            item.GetName()
+        # 20 items: one list_methods for the shape they share, not one each.
+        self.assertEqual(seen.count("list_methods"), 1, seen)
+
+    def test_absence_is_reverified_so_a_stale_shape_cannot_invent_one(self) -> None:
+        """The safety net under the provenance hint.
+
+        Poison the cache with a shape that lacks a method the object really has.
+        A cache that were the last word would report it missing; re-verifying
+        against the object itself is what makes a wrong hint harmless.
+        """
+        resolve, transport = self._serve(self._tree())
+        manager = resolve.GetProjectManager()
+        transport.method_cache["resolve.GetProjectManager"] = frozenset({"SaveProject"})
+        self.assertTrue(hasattr(manager, "GetCurrentProject"))
+        self.assertIn("GetCurrentProject", transport.method_cache["resolve.GetProjectManager"])
+        # And a name that is genuinely absent still refuses after the re-check.
+        self.assertFalse(hasattr(manager, "NoSuchMethod"))
