@@ -11,10 +11,17 @@ counts by hand and drift. This asserts the docs still match — a stale count fa
 offline suite and the release publish gate instead of shipping wrong numbers.
 
 Fix drift by updating the docs to the printed counts, not by loosening this test.
-(`@mcp.tool(` matches both the bare `()` and the `(annotations=...)` forms; the static
-counts are cross-checked against the runtime tool registry and agree: 34 / 341.)
+The counts are cross-checked against the runtime tool registry and agree: 34 / 341.
+
+Decorators are counted from the **parsed syntax tree**, not by matching the text
+`@mcp.tool(`. A regex counts the string wherever it appears, including inside a
+docstring — which is how a comment explaining where a decorator has to sit once
+reported a 35th tool and failed this guard. Prose that mentions the decorator is
+not a tool, and a guard that cannot tell the difference reports drift that is not
+there.
 """
 
+import ast
 import pathlib
 import re
 import unittest
@@ -22,12 +29,22 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+def _is_mcp_tool(decorator: ast.expr) -> bool:
+    """`@mcp.tool()` and `@mcp.tool(annotations=...)`, bare or called."""
+    node = decorator.func if isinstance(decorator, ast.Call) else decorator
+    return isinstance(node, ast.Attribute) and node.attr == "tool" and (
+        isinstance(node.value, ast.Name) and node.value.id == "mcp"
+    )
+
+
 def _count_decorators(*rel_globs: str) -> int:
     total = 0
     for rel in rel_globs:
-        base = ROOT
-        for path in sorted(base.glob(rel)):
-            total += len(re.findall(r"@mcp\.tool\(", path.read_text()))
+        for path in sorted(ROOT.glob(rel)):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    total += sum(1 for d in node.decorator_list if _is_mcp_tool(d))
     return total
 
 

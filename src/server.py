@@ -16,6 +16,8 @@ VERSION = "2.68.0"
 import base64
 import os
 import sys
+import functools
+import inspect
 import json
 import logging
 import math
@@ -1223,6 +1225,120 @@ _CATEGORY_RETRYABLE_DEFAULT: Dict[str, bool] = {
 
 # Sentinel so `retryable=None` from a caller is distinguishable from "unspecified".
 _RETRYABLE_UNSET = object()
+
+
+class _MissingParam(KeyError):
+    """A tool action subscripted a parameter the caller did not supply.
+
+    Subclasses `KeyError` so any existing `except KeyError` in the codebase keeps
+    behaving as it did; what it adds is the ability to tell a *missing argument*
+    apart from a KeyError on some other dict — a Resolve settings map, a parsed
+    JSON body — which would otherwise be reported to the caller as "you forgot an
+    argument" when the real fault is ours.
+    """
+
+
+class _Params(dict):
+    """The params dict, wired so a missing key is a diagnosable refusal.
+
+    Actions have historically reached into `p["track_type"]` directly. When the
+    key is absent that raises a bare `KeyError`, which escapes the action, escapes
+    the tool, and reaches the client as
+    `ToolError: Error executing tool timeline: 'track_type'` — no code, no
+    category, no remediation, and nothing an agent can route on. Measured across
+    the whole surface: **99 of 512 declared actions** failed that way.
+
+    Two ways to fix that were available. Rewriting all 99 sites to use
+    `contracts.validate` gives the best individual errors but is 99 chances to get
+    a spec wrong, and leaves the 100th site to be written next month. Catching
+    `KeyError` at the tool boundary closes the class in one place but cannot tell
+    which dict raised, so an unrelated internal KeyError would be mislabelled as
+    the caller's mistake.
+
+    This is the third option: keep the boundary catch, but make the *parameters*
+    raise something only they can raise. False positives become impossible by
+    construction.
+
+    `contracts.validate` remains the better tool wherever a type, a range or an
+    enum also needs checking, and the actions that already use it keep doing so.
+    This is deliberately **not** a migration of the 99 — rewriting them would add
+    99 opportunities to write a spec wrong without improving the defect being
+    fixed here, and it would still leave the next new action unguarded. What is
+    lost by not migrating is bounded: a *wrong* value still reaches Resolve, which
+    answers None or False, so the result is a truthful failure rather than a
+    misleading success.
+    """
+
+    def __missing__(self, key):
+        raise _MissingParam(key)
+
+
+def _params(params: Optional[Dict[str, Any]]) -> "_Params":
+    """Every tool body starts here, so every action gets the diagnosable dict.
+
+    Note `_Params(params or {})` rather than a truthiness dance: an empty
+    `_Params` is falsy like any empty dict, so `p = params or {}` would have
+    quietly handed back a *plain* dict in exactly the no-arguments case this
+    exists to serve.
+    """
+    return _Params(params or {})
+
+
+def _missing_param_error(exc: _MissingParam, action: str) -> Dict[str, Any]:
+    """Turn a missing parameter into the envelope the rest of the surface uses."""
+    name = exc.args[0] if exc.args else "parameter"
+    slug = re.sub(r"[^A-Z0-9]+", "_", str(name).upper()).strip("_") or "PARAMETER"
+    return _err(
+        f"'{name}' is required",
+        code=f"MISSING_{slug}",
+        category="invalid_input",
+        remediation=f"pass {name} in params, e.g. params={{\"{name}\": ...}}",
+        state={"action": action, "missing": str(name)},
+    )
+
+
+def _guarded_action_name(args, kwargs) -> str:
+    """The `action` this call was for, wherever it was passed."""
+    if "action" in kwargs:
+        return str(kwargs["action"])
+    return str(args[0]) if args else "?"
+
+
+def _guard_missing_params(fn):
+    """Tool decorator: report a missing parameter instead of leaking a KeyError.
+
+    Sits *under* `@mcp.tool()` so FastMCP registers the guarded callable.
+    `functools.wraps` keeps the name, docstring and signature FastMCP builds the
+    tool schema from.
+
+    Two things this has to preserve, both learned by breaking them:
+
+    - **Async tools must stay coroutine functions.** `media_analysis` is `async`,
+      and a synchronous wrapper around it returned an un-awaited coroutine that
+      FastMCP could not use — the tool stopped answering entirely, taking its 71
+      actions with it. `inspect.iscoroutinefunction` decides which wrapper to
+      build, and a test now pins that async tools are still async afterwards.
+    - **The signature is not (action, params).** `media_analysis` also takes
+      `ctx: Optional[Context]`, so the wrapper forwards `*args, **kwargs` rather
+      than naming parameters it does not know about.
+    """
+    if inspect.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except _MissingParam as exc:
+                return _missing_param_error(exc, _guarded_action_name(args, kwargs))
+    else:
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except _MissingParam as exc:
+                return _missing_param_error(exc, _guarded_action_name(args, kwargs))
+
+    wrapper.__wrapped_by_missing_param_guard__ = True
+    return wrapper
 
 
 def _err(message, *, code=None, category=None, retryable=_RETRYABLE_UNSET,
@@ -12687,6 +12803,7 @@ def _setup_clear_defaults(keys: Any, dry_run: bool) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@_guard_missing_params
 def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Configure MCP conversational defaults and setup preferences.
 
@@ -12700,7 +12817,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
       media_analysis.*: analysis, metadata, marker, reporting, and workflow defaults
       updates.*: MCP update policy, interval, and snooze defaults
     """
-    p = params or {}
+    p = _params(params)
     if action in {"schema", "capabilities", "options"}:
         return {
             "actions": ["schema", "get_defaults", "set_defaults", "clear_defaults"],
@@ -12840,6 +12957,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
 
 
 @mcp.tool()
+@_guard_missing_params
 def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """App-level DaVinci Resolve operations.
 
@@ -12882,7 +13000,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       restore_state(state_token) -> {success, restored: {...}}
         — Returns Resolve to a previously-saved state.
     """
-    p = params or {}
+    p = _params(params)
 
     # api_truth is a static knowledge lookup — no Resolve connection needed.
     if action == "api_truth":
@@ -13859,6 +13977,7 @@ def _close_control_panel() -> Dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage DaVinci Resolve UI layout presets.
 
@@ -13870,7 +13989,7 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
       import_preset(path, name?) -> {success}
       delete(name) -> {success}
     """
-    p = params or {}
+    p = _params(params)
     r = get_resolve()
     if r is None:
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
@@ -13905,6 +14024,7 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Import/export render and burn-in presets.
 
@@ -13914,7 +14034,7 @@ def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
       import_burnin(path) -> {success}
       export_burnin(name, path) -> {success}
     """
-    p = params or {}
+    p = _params(params)
     r = get_resolve()
     if r is None:
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
@@ -14815,6 +14935,7 @@ def _project_lint_live(r, pm) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@_guard_missing_params
 def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage DaVinci Resolve projects.
 
@@ -14856,7 +14977,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         settings are applied in dependency order; markers only added if absent. Hooks run only
         when run_hooks=true (executes shell from the spec — opt-in).
     """
-    p = params or {}
+    p = _params(params)
     r = get_resolve()
     if r is None:
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
@@ -14963,6 +15084,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def project_manager_folders(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Navigate and manage project folders in the Project Manager.
 
@@ -14975,7 +15097,7 @@ def project_manager_folders(action: str, params: Optional[Dict[str, Any]] = None
       goto_root() -> {success}
       goto_parent() -> {success}
     """
-    p = params or {}
+    p = _params(params)
     r = get_resolve()
     if r is None:
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
@@ -15007,6 +15129,7 @@ def project_manager_folders(action: str, params: Optional[Dict[str, Any]] = None
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def project_manager_cloud(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Cloud project operations (requires DaVinci Resolve cloud infrastructure).
 
@@ -15016,7 +15139,7 @@ def project_manager_cloud(action: str, params: Optional[Dict[str, Any]] = None) 
       import_project(path, settings) -> {success}
       restore(folder_path, settings) -> {success}
     """
-    p = params or {}
+    p = _params(params)
     r = get_resolve()
     if r is None:
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
@@ -15045,6 +15168,7 @@ def project_manager_cloud(action: str, params: Optional[Dict[str, Any]] = None) 
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def project_manager_database(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage DaVinci Resolve project databases.
 
@@ -15053,7 +15177,7 @@ def project_manager_database(action: str, params: Optional[Dict[str, Any]] = Non
       list() -> {databases}
       set_current(db_info) -> {success}  — db_info: {DbType, DbName}
     """
-    p = params or {}
+    p = _params(params)
     r = get_resolve()
     if r is None:
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
@@ -15076,6 +15200,7 @@ def project_manager_database(action: str, params: Optional[Dict[str, Any]] = Non
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Project metadata, settings, and color groups.
 
@@ -15100,7 +15225,7 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
       apply_fairlight_preset(preset_name) -> {success}
       generate_speech(speech_generation_settings, timecode?) -> {success, new, new_id}  — Resolve 21+, AI Speech Generator; creates new audio media (confirm-gated)
     """
-    p = params or {}
+    p = _params(params)
     _, proj, err = _check()
     if err:
         return err
@@ -15853,6 +15978,7 @@ def _export_render_boundary_report(proj, p: Dict[str, Any]):
 
 
 @mcp.tool()
+@_guard_missing_params
 def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Render pipeline: jobs, presets, formats, codecs, and rendering.
 
@@ -15901,7 +16027,7 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     resolved against the live matrix, so an intent unavailable on this
     machine/license fails with the actual available lists.
     """
-    p = params or {}
+    p = _params(params)
     _, proj, err = _check()
     if err:
         return err
@@ -16044,6 +16170,7 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def media_storage(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Browse storage volumes and import media into the Media Pool.
 
@@ -16060,7 +16187,7 @@ def media_storage(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       add_clip_mattes(clip_id, paths, stereo_eye?) -> {success}
       add_timeline_mattes(paths) -> {items}
     """
-    p = params or {}
+    p = _params(params)
     r = get_resolve()
     if r is None:
         return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
@@ -16111,6 +16238,7 @@ def media_storage(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("media_pool")
 def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage the Media Pool: folders, clips, timelines, import/export.
@@ -16198,7 +16326,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       copy_clip_annotations(source_clip_id, target_clip_ids, include_markers?, include_flags?, include_clip_color?, dry_run?) -> {success, results}
       media_pool_boundary_report(depth?, clip_ids?, selected?) -> {capabilities, media_pool, items?}
     """
-    p = params or {}
+    p = _params(params)
     _, proj, mp, err = _get_mp()
     if err:
         return err
@@ -16575,6 +16703,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Operations on Media Pool folders.
 
@@ -16593,7 +16722,7 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       analyze_for_slate(path?, marker_color?) -> {success}  — Resolve 21+, AI Slate ID Extra
       remove_motion_blur(path?, deblur_option?) -> {success, created}  — Resolve 21+; renders NEW media (confirm-gated)
     """
-    p = params or {}
+    p = _params(params)
     _, _, mp, err = _get_mp()
     if err:
         return err
@@ -16716,6 +16845,7 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Operations on a media pool clip. Identify clip by clip_id.
 
@@ -16767,7 +16897,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
           verified empirically on Resolve Studio 20.3.2.9. If BMD changes the
           behavior the clip will still be selected — editor double-clicks to load.
     """
-    p = params or {}
+    p = _params(params)
     _, _, mp, err = _get_mp()
     if err:
         return err
@@ -17080,6 +17210,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Markers and flags on media pool clips. Identify clip by clip_id.
 
@@ -17100,7 +17231,7 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
       monitor_growing_file(clip_id) -> {success}
       replace_clip_preserve_sub_clip(clip_id, path) -> {success}
     """
-    p = params or {}
+    p = _params(params)
     _, _, mp, err = _get_mp()
     if err:
         return err
@@ -17212,6 +17343,7 @@ def _opt_number(value: Any) -> Optional[float]:
 
 
 @mcp.tool()
+@_guard_missing_params
 async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Project-scoped media analysis and guarded metadata publishing.
 
@@ -17308,7 +17440,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
     vision-dependent metadata to Resolve. Works with any MCP client whose chat
     model is vision-capable; no sampling/createMessage support required.
     """
-    p = _media_analysis_apply_setup_defaults(action, dict(params or {}))
+    p = _params(_media_analysis_apply_setup_defaults(action, dict(params or {})))
 
     # First-run frame-sampling prompt: if the user has never chosen a sampling
     # mode (and didn't pass one this call), ask before spending any vision
@@ -18384,6 +18516,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Timeline version-on-mutate, archive, rollback, and brain-edit history (C6).
 
@@ -18431,7 +18564,7 @@ def timeline_versioning(action: str, params: Optional[Dict[str, Any]] = None) ->
     if ctx is None:
         return _err("No current project / can't resolve project root")
     resolve_h, project_h, project_root, project_name = ctx
-    p = params or {}
+    p = _params(params)
 
     if action == "begin_run":
         return _analysis_runs.begin_run(
@@ -18756,6 +18889,7 @@ def _edit_engine_linked_audio_tracks(
 
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("edit_engine")
 def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Evidence-driven edit loops (Phase E): selects assembly, tighten, swap.
@@ -18797,7 +18931,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       timeline (version-archived first).
     - list_plans(limit?) / get_plan(plan_id)
     """
-    p = params or {}
+    p = _params(params)
 
     def _project_context(*, need_resolve: bool) -> Tuple[Optional[Any], Optional[Any], Optional[str], Optional[Dict[str, Any]]]:
         # An explicit analysis_root always wins — the evidence DB the caller
@@ -19562,6 +19696,7 @@ _TIMELINE_ACTIONS = [
 
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("timeline")
 def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Timeline operations: tracks, clips, import/export, generators, titles.
@@ -19747,7 +19882,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     For long-form per-action guidance and a worked example, call:
       timeline(action="action_help", params={"name": "<action>"})
     """
-    p = params or {}
+    p = _params(params)
     # action_help is pull-on-demand metadata; no Resolve connection needed.
     if action == "action_help":
         return _action_help("timeline", p)
@@ -20148,7 +20283,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
             result["ignored_state_keys"] = ignored_state
         return result
     elif action == "extract_source_frame_ranges":
-        p = params or {}
+        p = _params(params)
         handles = int(p.get("handles", 24))
         gap_max = int(p.get("gap_max", 30))
         audio_ext = tuple(
@@ -20335,6 +20470,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("timeline_markers")
 def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
     """Markers and playhead operations on the current timeline.
@@ -20370,7 +20506,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
       export_review_report(scope?, include_capabilities?) -> {title, annotations, capabilities?}
       annotation_boundary_report(scope?) -> {capabilities, annotations}
     """
-    p = params or {}
+    p = _params(params)
     _, tl, err = _get_tl()
     if err:
         return err
@@ -20455,6 +20591,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("timeline_ai")
 def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """AI and analysis operations on the current timeline.
@@ -20468,7 +20605,7 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       grab_still() -> {success}
       grab_all_stills(source?) -> {count}
     """
-    p = params or {}
+    p = _params(params)
     _, tl, err = _get_tl()
     if err:
         return err
@@ -20509,6 +20646,7 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("timeline_item")
 def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Properties, transforms, speed, keyframes, and metadata for a timeline item.
@@ -20560,7 +20698,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 
     Default: track_type="video", track_index=1, item_index=0
     """
-    p = params or {}
+    p = _params(params)
     tl, item, err = _get_item(p)
     if err:
         return err
@@ -20748,6 +20886,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("timeline_item_markers")
 def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Markers, flags, and clip color on timeline items. Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
@@ -20770,7 +20909,7 @@ def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) 
 
     Default: track_type="video", track_index=1, item_index=0
     """
-    p = params or {}
+    p = _params(params)
     _, item, err = _get_item(p)
     if err:
         return err
@@ -20825,6 +20964,7 @@ def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) 
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("timeline_item_fusion")
 def timeline_item_fusion(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fusion composition operations on timeline items. Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
@@ -20845,7 +20985,7 @@ def timeline_item_fusion(action: str, params: Optional[Dict[str, Any]] = None) -
 
     Default: track_type="video", track_index=1, item_index=0
     """
-    p = params or {}
+    p = _params(params)
     _, item, err = _get_item(p)
     if err:
         return err
@@ -22126,6 +22266,7 @@ def _grade_evidence_base(proj, item, p: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("timeline_item_color")
 def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Color grading, versions, LUTs, cache, and AI tools on timeline items. Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
@@ -22216,7 +22357,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     For long-form per-action guidance and a worked example, call:
       timeline_item_color(action="action_help", params={"name": "<action>"})
     """
-    p = params or {}
+    p = _params(params)
     if action == "action_help":
         return _action_help("timeline_item_color", p)
     _, item, err = _get_item(p)
@@ -22331,6 +22472,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("timeline_item_takes")
 def timeline_item_takes(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Take management on timeline items. Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
@@ -22346,7 +22488,7 @@ def timeline_item_takes(action: str, params: Optional[Dict[str, Any]] = None) ->
 
     Default: track_type="video", track_index=1, item_index=0
     """
-    p = params or {}
+    p = _params(params)
     _, item, err = _get_item(p)
     if err:
         return err
@@ -22379,6 +22521,7 @@ def timeline_item_takes(action: str, params: Optional[Dict[str, Any]] = None) ->
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def gallery(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Gallery album management.
 
@@ -22394,7 +22537,7 @@ def gallery(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, A
 
     album_index is 0-based into the still albums list.
     """
-    p = params or {}
+    p = _params(params)
     _, proj, err = _check()
     if err:
         return err
@@ -22444,6 +22587,7 @@ def gallery(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, A
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage stills in gallery albums (best results on Color page).
 
@@ -22464,7 +22608,7 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     File data is inlined in the response (DRX as text, images as base64).
     cleanup (default true) deletes exported files from disk after inlining.
     """
-    p = params or {}
+    p = _params(params)
     _, proj, err = _check()
     if err:
         return err
@@ -22597,6 +22741,7 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 @_destructive_op("graph")
 def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Node graph operations (color grading nodes). Source can be timeline, timeline item, or color group.
@@ -22636,7 +22781,7 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     For long-form per-action guidance and a worked example, call:
       graph(action="action_help", params={"name": "<action>"})
     """
-    p = params or {}
+    p = _params(params)
     if action == "action_help":
         return _action_help("graph", p)
     source = p.get("source", "timeline")
@@ -22739,6 +22884,7 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+@_guard_missing_params
 def color_group(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage color groups and their node graphs.
 
@@ -22750,7 +22896,7 @@ def color_group(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       get_pre_clip_graph(group_name) -> {available, num_nodes}
       get_post_clip_graph(group_name) -> {available, num_nodes}
     """
-    p = params or {}
+    p = _params(params)
     _, proj, err = _check()
     if err:
         return err
@@ -23661,6 +23807,7 @@ def _fusion_get_text_plus(comp, p: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@_guard_missing_params
 def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fusion composition node graph operations.
 
@@ -23731,7 +23878,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       ColorCorrector, RectangleMask, EllipseMask, Tracker, MediaIn, MediaOut,
       Loader, Saver, Glow, FilmGrain, CornerPositioner, DeltaKeyer, UltraKeyer
     """
-    p = params or {}
+    p = _params(params)
 
     if action == "bulk_set_inputs":
         return _fusion_comp_bulk_set_inputs(p)
@@ -24231,6 +24378,7 @@ def _validate_glsl_minimal(source: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@_guard_missing_params
 def fuse_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install Fusion Fuse plugins (.fuse files).
 
@@ -24257,7 +24405,7 @@ def fuse_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
           docs/authoring/fuse-dctl-authoring.md for the per-kind option spec.
       list_templates() -> {kinds}
     """
-    p = params or {}
+    p = _params(params)
 
     if action == "path":
         return {"fuses_dir": _fuses_dir()}
@@ -24474,6 +24622,7 @@ _DCTL_VALID_CATEGORIES = ("lut", "aces_idt", "aces_odt")
 
 
 @mcp.tool()
+@_guard_missing_params
 def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install DCTL files (Color page custom shaders + ACES transforms).
 
@@ -24510,7 +24659,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
           pass that as the `category` argument to install().
       list_templates() -> {kinds, kind_categories}
     """
-    p = params or {}
+    p = _params(params)
 
     def _category(default: str = "lut") -> Tuple[Optional[Dict[str, Any]], str]:
         cat = p.get("category", default)
@@ -25403,6 +25552,7 @@ def _extension_boundary_report(p: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@_guard_missing_params
 def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install Resolve-page Lua/Python scripts (Workspace → Scripts menu).
 
@@ -25458,7 +25608,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       refresh_or_restart_required(extension_type, category?) -> {refresh_luts, restart_required}
       extension_boundary_report(include_template_matrix?) -> {capabilities, template_matrix, dry_run_probes}
     """
-    p = params or {}
+    p = _params(params)
 
     if action == "extension_capabilities":
         return _extension_capabilities()
