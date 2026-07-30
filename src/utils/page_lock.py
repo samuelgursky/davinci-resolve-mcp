@@ -59,7 +59,11 @@ def page_lock():
         yield
     finally:
         _depth -= 1
-        if _depth == 0 and _fh is not None:
+        # `_fh` is only ever set inside the `_HAS_FCNTL` branch above, so this
+        # is transitively safe — but state the dependency rather than relying on
+        # a reader tracing it, since a future assignment elsewhere would make
+        # this an AttributeError on a platform without fcntl.
+        if _depth == 0 and _fh is not None and _HAS_FCNTL:
             try:
                 fcntl.flock(_fh, fcntl.LOCK_UN)
             except OSError:

@@ -234,6 +234,11 @@ mcp.tool = _tool_with_default_annotations
 
 resolve = None
 dvr_script = None
+#: `dvr_script` may be None when Resolve is not installed; every use passes it
+#: to `connect_resolve()`, which treats None as "not available" and returns None.
+_OPTIONAL_DEPENDENCY_CONTRACT = (
+    "DaVinciResolveScript: always routed through connect_resolve(), which is None-tolerant"
+)
 
 try:
     import DaVinciResolveScript as dvr_script  # type: ignore
