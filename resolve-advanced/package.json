@@ -15,7 +15,8 @@
   "files": [
     "server/**/*.mjs",
     "vendor/**",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
