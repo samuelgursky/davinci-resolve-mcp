@@ -4,7 +4,12 @@ This guide covers Resolve requirements, the universal installer, supported MCP c
 
 ## Requirements
 
-- **DaVinci Resolve Studio** 18.5+ (macOS, Windows, or Linux) — the free edition does not support external scripting
+- **DaVinci Resolve** 18.5+ (macOS, Windows, or Linux). **Studio** supports
+  external scripting directly. The **free edition** does not — Blackmagic gates
+  external scripting to Studio — but it is still reachable through the
+  [free-edition in-app bridge](../README.md#free-edition-in-app-bridge), which
+  runs inside Resolve from the ungated **Workspace ▸ Scripts** menu. Everything
+  below assumes Studio unless the bridge is in use
 - **Python 3.10+** (the MCP SDK requires 3.10). **3.10–3.12 is the lowest-risk
   choice**; 3.13/3.14 also work on recent Resolve builds — see below
 - DaVinci Resolve running with **Preferences > General > "External scripting using"**

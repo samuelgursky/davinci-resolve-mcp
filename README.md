@@ -231,9 +231,11 @@ Extension authoring references live in [docs/authoring](docs/authoring/). Resolv
 
 ## Requirements
 
-- DaVinci Resolve Studio 18.5+ on macOS, Windows, or Linux. The free edition does not support external scripting.
+- DaVinci Resolve 18.5+ on macOS, Windows, or Linux. **Studio** supports external scripting directly. The **free edition** does not — Blackmagic gates external scripting to Studio — but it is still reachable through the [in-app bridge](#free-edition-in-app-bridge), which runs inside Resolve from the ungated **Workspace ▸ Scripts** menu.
 - Python 3.10+ (3.10-3.12 is the lowest-risk range). Python 3.13/3.14 also work on recent Resolve builds (verified on Studio 20.3.2); older builds may fail to connect on 3.13+, in which case use 3.10-3.12.
-- Resolve external scripting set to **Local**.
+- Resolve external scripting set to **Local** (Studio). On the free edition this
+  preference has no effect — use the [in-app bridge](#free-edition-in-app-bridge)
+  instead.
 
 Resolve 19.1.3 remains the compatibility baseline. Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2. Resolve 21.0 scripting additions (audio classification, speaker-detection transcription, IntelliSearch, slate analysis, motion-deblur, speech generation, session background-task control) are exposed behind runtime capability detection, so they stay inert on older builds and activate automatically on Resolve 21+.
 

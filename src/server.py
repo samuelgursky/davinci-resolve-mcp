@@ -163,8 +163,13 @@ mcp = FastMCP(
     "DaVinciResolveMCP",
     instructions=(
         "DaVinci Resolve MCP Server — controls Resolve via its Scripting API. "
-        "Tools automatically launch Resolve if it is not running (may take up to 60s on first call). "
-        "If a tool returns a connection error, Resolve Studio may not be installed or external scripting is disabled."
+        "If no Resolve is running, tools launch one (up to 60s on the first call); "
+        "if one is already running they never launch a second. "
+        "On a connection error, read the error's own remediation field — it names the "
+        "fix that applies. External scripting is Studio-only, but the free edition is "
+        "reachable via the in-app bridge (Workspace > Scripts > resolve_bridge, with "
+        "DAVINCI_RESOLVE_BRIDGE=1), so a connection error does NOT mean the free "
+        "edition is unsupported."
     ),
 )
 

@@ -1721,6 +1721,31 @@ def main():
                         f"             This can happen on Python 3.13+ with older Resolve builds. "
                         f"If MCP tools fail, recreate the venv with Python 3.10-3.12."
                     )
+                elif resolve_running:
+                    # Running, healthy interpreter, still no connection. Reporting
+                    # "Not running — start Resolve" here (as this branch used to)
+                    # is both wrong and a dead end: Resolve *is* running. This is
+                    # the free-edition signature — external scripting is gated to
+                    # Studio — and the bridge is the way through, so say so
+                    # rather than sending the user to restart an app that is up.
+                    print(
+                        f"  Resolve:   {yellow('Running, but external scripting returned no connection')}"
+                    )
+                    print(
+                        "             On Studio: Preferences > General > "
+                        "'External scripting using' = Local."
+                    )
+                    print(
+                        "             On the free edition: external scripting is gated to Studio, "
+                        "but the in-app bridge works —"
+                    )
+                    print(
+                        "               python scripts/install_resolve_bridge.py"
+                    )
+                    print(
+                        "               then Workspace > Scripts > resolve_bridge, "
+                        "and set DAVINCI_RESOLVE_BRIDGE=1"
+                    )
                 else:
                     print(f"  Resolve:   {yellow('Not running')} — start Resolve to use MCP tools")
             else:
