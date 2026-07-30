@@ -182,12 +182,22 @@ def probe_surface(roots: Sequence[str] = SOURCE_ROOTS) -> Dict[str, Any]:
 #: MediaPoolItem or Graph — which between them carry most of the read surface
 #: worth qualifying (LUTs, node graphs, source timings, metadata).
 _INDEX = "[]"
+#: Pick the first element of a returned list for which `method()` is truthy.
+#: Indexing blindly is not good enough: a timeline's first video item is often a
+#: generator or a title, which has no MediaPoolItem and answers None to every
+#: node-graph question. Measured on a real timeline — `GetNumNodes` and
+#: `GetNodeGraph` both None on an SMPTE Color Bar, and 1 and a live graph on the
+#: clip sitting next to it. Taking index 0 therefore reported the whole grading
+#: surface as unreachable, which is the silent coverage gap this module exists to
+#: refuse.
+_FIRST_WITH = "[first-with]"
 
 _PM = ("GetProjectManager", ())
 _PROJECT = (_PM, ("GetCurrentProject", ()))
 _POOL = _PROJECT + (("GetMediaPool", ()),)
 _TIMELINE = _PROJECT + (("GetCurrentTimeline", ()),)
-_TIMELINE_ITEM = _TIMELINE + (("GetItemListInTrack", ("video", 1)), (_INDEX, (0,)))
+_TIMELINE_ITEM = _TIMELINE + (("GetItemListInTrack", ("video", 1)),
+                              (_FIRST_WITH, ("GetMediaPoolItem",)))
 _GALLERY = _PROJECT + (("GetGallery", ()),)
 
 OBJECT_GRAPH: Tuple[Tuple[str, Tuple[Any, ...]], ...] = (
@@ -228,6 +238,22 @@ def walk(resolve: Any, chain: Iterable[Tuple[str, Tuple[Any, ...]]]) -> Any:
             if not isinstance(current, (list, tuple)) or len(current) <= index:
                 return None
             current = current[index]
+            continue
+        if method == _FIRST_WITH:
+            if not isinstance(current, (list, tuple)):
+                return None
+            probe = args[0]
+            chosen = None
+            for candidate in current:
+                try:
+                    if getattr(candidate, probe, lambda: None)():
+                        chosen = candidate
+                        break
+                except Exception:  # noqa: BLE001 - an unusable candidate, not a verdict
+                    continue
+            if chosen is None:
+                return None
+            current = chosen
             continue
         function = getattr(current, method, None)
         if function is None:

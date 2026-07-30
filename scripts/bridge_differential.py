@@ -147,8 +147,16 @@ def scenario_set_lut(resolve: Any, _workspace: Path) -> Dict[str, Any]:
     items = timeline.GetItemListInTrack("video", 1) or []
     if not items:
         return {"skipped": "no clip on video track 1"}
-    item = items[0]
-    observations: Dict[str, Any] = {"node_count": item.GetNumNodes()}
+    # Not items[0]: a generator or title has no MediaPoolItem and answers None to
+    # every node question, so grading it silently produces a row of nulls that
+    # reads like a bridge failure. Measured on a real timeline — SMPTE Color Bar
+    # returns None for GetNumNodes and GetNodeGraph, the clip beside it returns 1
+    # and a live graph.
+    item = next((i for i in items if i.GetMediaPoolItem()), None)
+    if item is None:
+        return {"skipped": "video track 1 holds only generators/titles, which cannot be graded",
+                "items_seen": len(items)}
+    observations: Dict[str, Any] = {"clip": item.GetName(), "node_count": item.GetNumNodes()}
     original = item.GetLUT(1)
     observations["lut_before"] = original
     # An empty path is the documented way to clear a node's LUT, so it is a
