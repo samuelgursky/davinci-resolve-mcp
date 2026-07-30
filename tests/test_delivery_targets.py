@@ -9,15 +9,20 @@ import unittest
 from src.utils.delivery_targets import (
     DELIVERY_TARGETS,
     ENV_USER_TARGETS,
+    LOUDNESS_STANDARDS,
+    LRA_ADVISORY_LU,
     OVERRIDE_KEYS,
     TARGET_ALIASES,
     TIERS,
     DeliveryTarget,
+    list_loudness_standards,
     list_targets,
     load_user_targets,
+    normalize_loudness_standard,
     normalize_target_name,
     resolve_target,
     select_available,
+    to_loudness_target,
     to_qc_spec,
     to_render_settings,
     user_targets_path,
@@ -356,6 +361,188 @@ class UserTargetsTest(unittest.TestCase):
 
     def test_override_keys_are_all_real_dataclass_fields(self):
         self.assertFalse(OVERRIDE_KEYS - set(DeliveryTarget.__dataclass_fields__))
+
+
+class LoudnessStandardsTableTest(unittest.TestCase):
+    def test_ids_match_their_keys(self):
+        for key, standard in LOUDNESS_STANDARDS.items():
+            self.assertEqual(key, standard.id)
+
+    def test_numbers_are_physically_sane(self):
+        for standard in LOUDNESS_STANDARDS.values():
+            with self.subTest(standard=standard.id):
+                # Programme loudness is negative; a positive target is a typo.
+                self.assertLess(standard.integrated, 0.0)
+                self.assertGreater(standard.tolerance_lu, 0.0)
+                # A ceiling at or above 0 dBTP would permit inter-sample clipping.
+                self.assertLess(standard.true_peak_max_dbtp, 0.0)
+
+    def test_no_standard_mandates_an_lra_cap(self):
+        # LRA is advisory here. If a standard ever gains a cap, to_loudness_target
+        # emits lraMax and this test should be updated deliberately, not silently.
+        for standard in LOUDNESS_STANDARDS.values():
+            self.assertIsNone(standard.lra_max, standard.id)
+
+    def test_only_ott_is_dialogue_gated(self):
+        gated = {s.id for s in LOUDNESS_STANDARDS.values() if s.dialogue_gated}
+        self.assertEqual(gated, {"ott_dialogue_gated"})
+
+    def test_no_shipped_target_names_a_standard(self):
+        # Documented invariant: guessing a programme loudness for a render intent
+        # would assert a number the deliverable never promised.
+        named = {t.id: t.loudness_standard for t in DELIVERY_TARGETS.values() if t.loudness_standard}
+        self.assertEqual(named, {})
+
+    def test_every_standard_is_listed(self):
+        listing = list_loudness_standards()
+        self.assertEqual(set(listing), set(LOUDNESS_STANDARDS))
+        self.assertEqual(listing["ebu_r128"]["integrated_lufs"], -23.0)
+
+    def test_name_normalisation_folds_separators(self):
+        self.assertEqual(normalize_loudness_standard("EBU-R128"), "ebu_r128")
+        self.assertEqual(normalize_loudness_standard(" atsc a85 "), "atsc_a85")
+        self.assertIsNone(normalize_loudness_standard("bbc_r128"))
+        self.assertIsNone(normalize_loudness_standard(None))
+
+
+class LoudnessProjectionTest(unittest.TestCase):
+    def _target(self, standard, **kw):
+        return resolve_target("h264_1080p_web", {"loudness_standard": standard, **kw})
+
+    def test_absent_contract_projects_to_none(self):
+        self.assertIsNone(to_loudness_target(DELIVERY_TARGETS["h264_1080p_web"]))
+
+    def test_full_program_standard_asserts_integrated_and_true_peak(self):
+        projected = to_loudness_target(self._target("ebu_r128"))
+        self.assertEqual(
+            projected["target"],
+            {"integrated": -23.0, "integratedTol": 0.5, "truePeakMax": -1.0},
+        )
+        self.assertEqual(projected["meta"]["measurement_basis"], "full_program")
+        self.assertFalse(projected["meta"]["dialogue_gated"])
+
+    def test_dialogue_gated_standard_asserts_true_peak_only(self):
+        projected = to_loudness_target(self._target("ott_dialogue_gated"))
+        # The whole point: no gradeable integrated value, because loudness_qc
+        # measures full-program and would produce a meaningless verdict.
+        self.assertEqual(projected["target"], {"truePeakMax": -2.0})
+        self.assertNotIn("integrated", projected["target"])
+        self.assertNotIn("integratedTol", projected["target"])
+        meta = projected["meta"]
+        self.assertEqual(meta["measurement_basis"], "dialogue_gated")
+        self.assertEqual(meta["dialogue_gated_integrated_lufs"], -27.0)
+        self.assertIn("dialogue-gated meter", meta["integrated_not_asserted_reason"])
+
+    def test_no_standard_emits_an_lra_assertion(self):
+        for standard_id in LOUDNESS_STANDARDS:
+            with self.subTest(standard=standard_id):
+                projected = to_loudness_target(self._target(standard_id))
+                self.assertNotIn("lraMax", projected["target"])
+                self.assertEqual(projected["meta"]["lra_advisory_lu"], LRA_ADVISORY_LU)
+
+    def test_audio_free_target_projects_to_none(self):
+        self.assertIsNone(to_loudness_target(self._target("web", export_audio=False)))
+
+    def test_loudness_never_leaks_into_the_qc_spec(self):
+        # deliverable_qc asserts what the render pinned; loudness is not that.
+        spec = to_qc_spec(self._target("ebu_r128"))
+        self.assertNotIn("loudness", spec)
+        self.assertNotIn("integrated", json.dumps(spec))
+
+    def test_emitted_window_accepts_the_edge_and_rejects_beyond_it(self):
+        # One pass and one fail per full-program standard, graded exactly the way
+        # loudness_qc does: abs(measured - integrated) <= tol.
+        for standard_id, standard in LOUDNESS_STANDARDS.items():
+            if standard.dialogue_gated:
+                continue
+            emitted = to_loudness_target(self._target(standard_id))["target"]
+            target_i, tol = emitted["integrated"], emitted["integratedTol"]
+            with self.subTest(standard=standard_id):
+                at_edge = target_i + tol
+                beyond = target_i + tol + 0.1
+                self.assertLessEqual(abs(at_edge - target_i), tol)
+                self.assertGreater(abs(beyond - target_i), tol)
+
+    def test_true_peak_ceiling_rejects_a_hotter_measurement(self):
+        # Graded the way loudness_qc does: measured <= truePeakMax.
+        for standard_id in LOUDNESS_STANDARDS:
+            emitted = to_loudness_target(self._target(standard_id))["target"]
+            ceiling = emitted["truePeakMax"]
+            with self.subTest(standard=standard_id):
+                self.assertTrue(ceiling <= ceiling, "a measurement at the ceiling passes")
+                self.assertFalse(ceiling + 0.1 <= ceiling, "0.1 dB hotter fails")
+                self.assertTrue(-99.0 <= ceiling, "a quiet mix passes the ceiling")
+
+
+class LoudnessOverrideTest(unittest.TestCase):
+    def test_named_standard_is_applied_and_folded(self):
+        target = resolve_target("h264_1080p_web", {"loudness_standard": "EBU-R128"})
+        self.assertEqual(target.loudness_standard, "ebu_r128")
+        self.assertEqual(target.loudness.integrated, -23.0)
+
+    def test_unknown_standard_is_ignored_not_raised(self):
+        with self.assertLogs("resolve-mcp.delivery-targets", level="WARNING") as logs:
+            target = resolve_target("h264_1080p_web", {"loudness_standard": "bbc_r128"})
+        self.assertIsNone(target.loudness_standard)
+        self.assertIn("unknown loudness standard", "\n".join(logs.output))
+
+    def test_listing_exposes_the_named_standard(self):
+        listing = list_targets({"x": resolve_target("h264_1080p_web", {"loudness_standard": "web"})})
+        self.assertEqual(listing["x"]["loudness_standard"], "web")
+        self.assertIsNone(listing["h264_1080p_web"]["loudness_standard"])
+
+
+class LoudnessUserTargetTest(unittest.TestCase):
+    def _write(self, payload):
+        handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump(payload, handle)
+        handle.close()
+        self.addCleanup(os.unlink, handle.name)
+        return handle.name
+
+    def test_user_file_can_name_a_standard(self):
+        path = self._write({"targets": {"bcast": {
+            "format": "MXF OP1A", "codec": "DNxHR HQ", "loudness_standard": "ebu_r128",
+        }}})
+        self.assertEqual(load_user_targets(path)["bcast"].loudness_standard, "ebu_r128")
+
+    def test_user_file_with_a_bogus_standard_still_loads_the_target(self):
+        path = self._write({"targets": {"bcast": {
+            "format": "MXF OP1A", "codec": "DNxHR HQ", "loudness_standard": "nonsense",
+        }}})
+        loaded = load_user_targets(path)
+        self.assertIn("bcast", loaded)  # a bad loudness field must not drop the target
+        self.assertIsNone(loaded["bcast"].loudness_standard)
+
+
+class LoudnessProseDriftTest(unittest.TestCase):
+    """Numbers quoted in prose must match the constants they describe.
+
+    This is the LUT_SIZE class of bug: a constant is bumped, the sentence
+    describing it is not, and the documentation becomes a confident lie that
+    nothing detects. Each standard's `source` string quotes its own figures, so
+    they are parsed back out and compared.
+    """
+
+    def test_source_prose_matches_the_numbers(self) -> None:
+        import re
+
+        for standard in LOUDNESS_STANDARDS.values():
+            with self.subTest(standard=standard.id):
+                quoted = {float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", standard.source)}
+                self.assertTrue(
+                    quoted,
+                    f"{standard.id}: source quotes no figures, so drift here is undetectable",
+                )
+                self.assertIn(
+                    standard.integrated, quoted,
+                    f"{standard.id}: integrated {standard.integrated} not quoted in {standard.source!r}",
+                )
+                self.assertIn(
+                    standard.true_peak_max_dbtp, quoted,
+                    f"{standard.id}: true peak {standard.true_peak_max_dbtp} not quoted in "
+                    f"{standard.source!r}",
+                )
 
 
 if __name__ == "__main__":

@@ -47,6 +47,40 @@ Both omissions follow the module's core rule:
 Asserting a field the render never controlled produces QC failures that say
 nothing about the deliverable — so unset fields are absent from both projections.
 
+## Loudness is a fourth projection, not a QC-spec field
+
+`deliverable_qc` asserts what the *render* pinned. Program loudness is not one of
+those things — the mix sets it, not `SetRenderSettings` — so a loudness contract
+would violate the rule above if it lived in `to_qc_spec()`. It is a separate
+projection, `to_loudness_target()`, feeding the `loudness_qc` action, whose
+target vocabulary is `{integrated, integratedTol, truePeakMax, lraMax}`.
+
+A loudness failure therefore means "the mix is wrong", never "the render settings
+are wrong", and the two never get confused in one verdict.
+
+**Dialogue-gated standards emit no gradeable `integrated` value.** `loudness_qc`
+measures full-program via ebur128; a dialogue-gated spec measures only speech.
+Grading one against the other produces a verdict that says nothing reliable, so
+the integrated number is carried in `meta` for a human or a dialogue-gated meter
+and the emitted target asserts only true peak and LRA — which *are* valid
+full-program. That is the same rule as above: assert only what is actually
+verifiable.
+
+**No per-target custom numbers yet.** A target names a standard; it cannot carry
+a bespoke integrated/tolerance pair (a show bible asking for −24 LKFS ±1 rather
+than ATSC's ±2). Free-text loudness on the authored side is already handled by
+the advanced server's `spec_from_authored`. If bespoke numbers are needed here,
+the standards table is what should grow — not five more fields on every target.
+
+## No shipped target names a loudness standard by default
+
+A ProRes master has no inherent program loudness, and even a broadcast handoff
+depends on territory (EBU vs ATSC). Guessing one would assert a number the
+deliverable never promised. `loudness_standard` is therefore unset everywhere in
+the shipped table and is named explicitly per call, per user override, or per
+project. The value here is that the *numbers* are correct and named when someone
+does ask for them, instead of being invented at the call site.
+
 ## Not every target has a QC projection
 
 Image-sequence targets render *many* files and package targets (IMF, DCP) render
@@ -104,6 +138,94 @@ TIERS = ("master", "web", "sequence", "broadcast", "package")
 VERIFIED_ON = "DaVinci Resolve Studio 19.1.3.7 (2026-07-27, 20 formats / 271 pairs)"
 
 
+# ── Loudness standards ──────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class LoudnessStandard:
+    """One named program-loudness contract, projected onto `loudness_qc`.
+
+    `integrated` / `tolerance_lu` are the integrated-loudness window;
+    `true_peak_max_dbtp` is a ceiling. `lra_max` is None for every standard
+    shipped here — none of them mandate a loudness-range cap, and asserting one
+    would invent a failure the spec never asked for. A wide LRA is surfaced as
+    advice by the projection instead.
+
+    `dialogue_gated` marks a standard whose integrated figure is measured over
+    dialogue only. Those emit no gradeable integrated value — see the module
+    docstring.
+    """
+
+    id: str
+    label: str
+    integrated: float
+    tolerance_lu: float
+    true_peak_max_dbtp: float
+    lra_max: Optional[float] = None
+    dialogue_gated: bool = False
+    source: str = ""
+
+
+#: Advisory threshold. Above this, a mix is unusually dynamic for delivery and
+#: worth a human look — but no standard here makes it a failure, so it never is.
+LRA_ADVISORY_LU = 20.0
+
+LOUDNESS_STANDARDS: Dict[str, LoudnessStandard] = {
+    standard.id: standard
+    for standard in (
+        LoudnessStandard(
+            id="web",
+            label="Web / social",
+            integrated=-16.0,
+            tolerance_lu=2.0,
+            true_peak_max_dbtp=-1.0,
+            source="Common streaming/social practice: platforms normalise around -16 LUFS, true peak <= -1 dBTP.",
+        ),
+        LoudnessStandard(
+            id="podcast",
+            label="Podcast (stereo)",
+            integrated=-16.0,
+            tolerance_lu=1.5,
+            true_peak_max_dbtp=-1.0,
+            source="Podcast stereo convention: -16 LUFS +/-1.5 LU, true peak <= -1 dBTP.",
+        ),
+        LoudnessStandard(
+            id="ebu_r128",
+            label="EBU R128 broadcast",
+            integrated=-23.0,
+            tolerance_lu=0.5,
+            true_peak_max_dbtp=-1.0,
+            source="EBU R128: -23 LUFS +/-0.5 LU, true peak <= -1 dBTP.",
+        ),
+        LoudnessStandard(
+            id="atsc_a85",
+            label="ATSC A/85 (US broadcast)",
+            integrated=-24.0,
+            tolerance_lu=2.0,
+            true_peak_max_dbtp=-2.0,
+            source="ATSC A/85: -24 LKFS +/-2 LU, true peak <= -2 dBTP.",
+        ),
+        LoudnessStandard(
+            id="ott_dialogue_gated",
+            label="OTT dialogue-gated",
+            integrated=-27.0,
+            tolerance_lu=2.0,
+            true_peak_max_dbtp=-2.0,
+            dialogue_gated=True,
+            source="OTT dialogue-gated delivery: -27 LUFS +/-2 LU over dialogue only, true peak <= -2 dBTP.",
+        ),
+    )
+}
+
+
+def normalize_loudness_standard(name: Any) -> Optional[str]:
+    """Fold a user-supplied standard name to a canonical id, or None if unknown."""
+    if not isinstance(name, str):
+        return None
+    key = name.strip().lower().replace("-", "_").replace(" ", "_")
+    return key if key in LOUDNESS_STANDARDS else None
+
+
 # ── Target model ────────────────────────────────────────────────────────────
 
 
@@ -137,6 +259,10 @@ class DeliveryTarget:
     export_audio: bool = True
     export_alpha: bool = False
 
+    # Program loudness. An id into LOUDNESS_STANDARDS, or None for "do not pin".
+    # Unset on every shipped target — see the module docstring for why.
+    loudness_standard: Optional[str] = None
+
     verified: str = ""
     source: str = ""
     notes: Tuple[str, ...] = ()
@@ -154,6 +280,13 @@ class DeliveryTarget:
     @property
     def has_qc_projection(self) -> bool:
         return bool(self.qc_codec or self.qc_audio_codec)
+
+    @property
+    def loudness(self) -> Optional[LoudnessStandard]:
+        """The named standard, or None when the target pins no loudness."""
+        if not self.loudness_standard:
+            return None
+        return LOUDNESS_STANDARDS.get(self.loudness_standard)
 
 
 # ── Shipped table ───────────────────────────────────────────────────────────
@@ -539,6 +672,7 @@ OVERRIDE_KEYS = frozenset(
         "qc_container",
         "qc_codec",
         "qc_audio_codec",
+        "loudness_standard",
     }
 )
 
@@ -633,6 +767,19 @@ def resolve_target(
                 patch[key] = bool(raw)
             elif key == "fps":
                 patch[key] = float(raw)
+            elif key == "loudness_standard":
+                # Validate against the table rather than accepting any string:
+                # an unrecognised standard would otherwise ride through as a
+                # target that silently emits no loudness projection at all.
+                canonical_standard = normalize_loudness_standard(raw)
+                if canonical_standard is None:
+                    logger.warning(
+                        "ignoring unknown loudness standard %r (known: %s)",
+                        raw,
+                        ", ".join(sorted(LOUDNESS_STANDARDS)),
+                    )
+                    continue
+                patch[key] = canonical_standard
             else:
                 patch[key] = str(raw)
         except (TypeError, ValueError):
@@ -666,6 +813,7 @@ def list_targets(
             "export_alpha": target.export_alpha,
             "has_qc_projection": target.has_qc_projection,
             "qc_skip_reason": target.qc_skip_reason,
+            "loudness_standard": target.loudness_standard,
             "verified": target.verified,
             "source": target.source,
             "notes": list(target.notes),
@@ -755,6 +903,83 @@ def to_qc_spec(
             spec["audio"] = audio
 
     return spec or None
+
+
+def to_loudness_target(target: DeliveryTarget) -> Optional[Dict[str, Any]]:
+    """Project a target onto the `loudness_qc` target vocabulary.
+
+    Returns None when the target pins no loudness — most do not, and an absent
+    contract must stay absent rather than becoming a guessed one.
+
+    Shape::
+
+        {"target": {"integrated": -23.0, "integratedTol": 0.5,
+                    "truePeakMax": -1.0},
+         "meta": {"standard": "ebu_r128", ...}}
+
+    `target` is handed straight to `loudness_qc`; `meta` is for the human-facing
+    verdict. They are separated so nothing in `meta` can ever be mistaken for a
+    gradeable assertion.
+
+    A dialogue-gated standard emits **no** `integrated` key: `loudness_qc`
+    measures full-program via ebur128, and grading a dialogue-gated number
+    against a full-program measurement produces a pass/fail that means nothing.
+    The figure travels in `meta.dialogue_gated_integrated_lufs` for a human or a
+    properly gated meter, and only true peak is asserted.
+
+    No `lraMax` is emitted: no standard here mandates one. `meta.lra_advisory_lu`
+    carries the threshold above which a mix is worth a look, as advice.
+    """
+    standard = target.loudness
+    if standard is None:
+        return None
+    if not target.export_audio:
+        return None
+
+    assertions: Dict[str, Any] = {"truePeakMax": standard.true_peak_max_dbtp}
+    meta: Dict[str, Any] = {
+        "standard": standard.id,
+        "label": standard.label,
+        "source": standard.source,
+        "dialogue_gated": standard.dialogue_gated,
+        "lra_advisory_lu": LRA_ADVISORY_LU,
+    }
+
+    if standard.dialogue_gated:
+        meta["measurement_basis"] = "dialogue_gated"
+        meta["dialogue_gated_integrated_lufs"] = standard.integrated
+        meta["dialogue_gated_tolerance_lu"] = standard.tolerance_lu
+        meta["integrated_not_asserted_reason"] = (
+            "loudness_qc measures full-program loudness; this standard is measured over "
+            "dialogue only. Verify the integrated figure with a dialogue-gated meter — a "
+            "full-program pass or fail against it would not mean anything."
+        )
+    else:
+        meta["measurement_basis"] = "full_program"
+        assertions["integrated"] = standard.integrated
+        assertions["integratedTol"] = standard.tolerance_lu
+
+    if standard.lra_max is not None:
+        assertions["lraMax"] = standard.lra_max
+
+    return {"target": assertions, "meta": meta}
+
+
+def list_loudness_standards() -> Dict[str, Dict[str, Any]]:
+    """Introspection payload so an agent names a standard instead of inventing one."""
+    return {
+        standard.id: {
+            "id": standard.id,
+            "label": standard.label,
+            "integrated_lufs": standard.integrated,
+            "tolerance_lu": standard.tolerance_lu,
+            "true_peak_max_dbtp": standard.true_peak_max_dbtp,
+            "lra_max": standard.lra_max,
+            "dialogue_gated": standard.dialogue_gated,
+            "source": standard.source,
+        }
+        for standard in sorted(LOUDNESS_STANDARDS.values(), key=lambda s: s.id)
+    }
 
 
 # ── User overrides ──────────────────────────────────────────────────────────
