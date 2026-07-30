@@ -669,7 +669,15 @@ class TestScriptExecution(unittest.TestCase):
             'name': 'LuaNoResolve', 'category': 'Utility', 'language': 'lua',
         })
         self.assertIn('error', r)
-        self.assertIn("isn't running", (r["error"].get("message","") if isinstance(r["error"], dict) else r["error"]))
+        # Assert the contract, not the prose. The message is now derived from
+        # whether a Resolve is actually running, so matching its wording made this
+        # test pass or fail according to what the developer had open. `category` is
+        # what a caller routes on and it does not move.
+        error = r["error"]
+        self.assertIsInstance(error, dict)
+        self.assertEqual(error["category"], "not_connected")
+        self.assertIn(error["code"],
+                      {"RESOLVE_NOT_RUNNING", "SCRIPTING_UNAVAILABLE", "BRIDGE_UNAVAILABLE"})
 
     # ── run_inline Python ──────────────────────────────────────────────────
 

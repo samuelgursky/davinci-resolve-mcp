@@ -85,6 +85,19 @@ class DocToolCountsDriftTest(unittest.TestCase):
             if needle not in text:
                 stale.append(f"{rel}: expected to contain {needle!r}")
 
+        # Presence is not enough. `src/server.py` said "34 compound tools" in its
+        # module docstring and "32 compound tools" in the agent-facing workflow
+        # prompt, and the presence check above passed on the first while the second
+        # went out to every agent. Any *other* number in front of the phrase is
+        # drift, wherever it sits.
+        for rel in ("src/server.py", "docs/SKILL.md", "docs/contributing.md"):
+            text = (ROOT / rel).read_text()
+            for wrong in re.findall(r"\b(\d+)\s+compound tools", text):
+                if int(wrong) != comp:
+                    stale.append(
+                        f"{rel}: says {wrong!r} compound tools; there are {comp}"
+                    )
+
         self.assertEqual(
             stale,
             [],

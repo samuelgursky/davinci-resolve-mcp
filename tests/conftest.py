@@ -49,6 +49,13 @@ def _never_touch_a_real_resolve():
         LAUNCH_ATTEMPTS.append(os.environ.get("PYTEST_CURRENT_TEST", "<unknown test>"))
         return False
 
+    def offline_resolve_is_running():
+        # False, so error messages derived from it are the same on every machine.
+        # Without this a test asserting on the "no Resolve" message passed or failed
+        # according to whether the developer happened to have Resolve open — which
+        # is exactly the host dependence this file exists to remove.
+        return False
+
     def offline_get_resolve():
         # None is the honest answer for an offline suite: it is exactly what a
         # machine with Resolve closed reports, so actions take their
@@ -63,15 +70,19 @@ def _never_touch_a_real_resolve():
     # Without this, a test asserting "a genuinely absent Resolve is still launched"
     # silently exercises the stub above and passes for the wrong reason — which is
     # how one of them was caught.
+    real_running = server.resolve_is_running
     server._launch_resolve_unpatched = real_launch
     server._get_resolve_unpatched = real_get
+    server._resolve_is_running_unpatched = real_running
     server._launch_resolve = blocked_launch
     server.get_resolve = offline_get_resolve
+    server.resolve_is_running = offline_resolve_is_running
     try:
         yield
     finally:
         server._launch_resolve = real_launch
         server.get_resolve = real_get
+        server.resolve_is_running = real_running
 
 
 @pytest.fixture(autouse=True)

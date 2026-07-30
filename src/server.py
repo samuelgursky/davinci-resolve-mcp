@@ -296,7 +296,7 @@ def davinci_resolve_workflow() -> str:
     return """Use this DaVinci Resolve MCP server as a guarded post-production control surface.
 
 Core pattern:
-- Prefer the 32 compound tools and their action names over raw scripting.
+- Prefer the 34 compound tools and their action names over raw scripting.
 - Start by probing state: resolve_control.get_version/get_page, project_manager.get_current, timeline.get_current, and media_pool.probe_media_pool.
 - Before mutating timelines, media pools, render settings, grades, projects, databases, or extensions, prefer the matching probe, capabilities, boundary_report, safe_*, or dry_run action when one exists.
 - Preserve source media integrity. Never transcode, proxy, rewrite, move, rename, or create derivatives of source media unless the user explicitly asks. Analysis output belongs in sidecars or analysis directories.
@@ -962,6 +962,60 @@ def get_resolve():
         logger.info("Resolve not running, attempting to launch automatically...")
         _launch_resolve()
         return resolve
+
+
+def _not_connected_error():
+    """The caller-facing "no Resolve" error, describing what is actually the case.
+
+    Eleven call sites used to assert that Resolve was not running, that starting it
+    had been tried and failed, and that the reader should check their Studio
+    install. Once `get_resolve` stopped launching a second application, all three
+    claims were wrong: nothing was launched, Resolve *is* running, and a
+    free-edition user was being sent to check an install they may not have. The
+    accurate guidance was only reaching the log.
+
+    So the message is derived from the situation instead of asserted, and it names
+    the fix that applies: enable external scripting on Studio, or use the in-app
+    bridge on the free edition.
+    """
+    running = resolve_is_running()
+    bridge_on = _bridge_requested()
+    if bridge_on:
+        return _err(
+            "The in-app bridge is enabled but not answering.",
+            code="BRIDGE_UNAVAILABLE", category="not_connected",
+            # `not_connected` defaults to retryable because auto-launch may
+            # succeed next time. Nothing here will: the listener only appears once
+            # someone runs the script inside Resolve, so an agent retrying on a
+            # loop it cannot win is strictly worse than being told to stop.
+            retryable=False,
+            reason="DAVINCI_RESOLVE_BRIDGE is set, so no other transport is tried.",
+            remediation="In Resolve, run Workspace > Scripts > resolve_bridge. If it is not in "
+                        "that menu, run `python scripts/install_resolve_bridge.py` and restart "
+                        "Resolve; a framework Python from python.org is required for Resolve to "
+                        "list .py scripts at all.",
+            state={"resolve_running": running, "bridge_enabled": True},
+        )
+    if running:
+        return _err(
+            "DaVinci Resolve is running but is not answering the scripting API.",
+            code="SCRIPTING_UNAVAILABLE", category="not_connected",
+            # Not retryable: a preference has to change, or the bridge has to be
+            # started. Retrying the same call cannot make either happen.
+            retryable=False,
+            reason="External scripting is a Studio feature; the free edition refuses it "
+                   "regardless of the preference. Resolve was NOT launched again.",
+            remediation="On Studio: Preferences > General > 'External scripting using' = Local. "
+                        "On the free edition: install the in-app bridge, run "
+                        "Workspace > Scripts > resolve_bridge, and set DAVINCI_RESOLVE_BRIDGE=1.",
+            state={"resolve_running": True, "bridge_enabled": False},
+        )
+    return _err(
+        "DaVinci Resolve is not running and could not be started.",
+        code="RESOLVE_NOT_RUNNING", category="not_connected",
+        remediation="Start DaVinci Resolve and open a project, then retry.",
+        state={"resolve_running": bool(running), "bridge_enabled": False},
+    )
 
 
 def _destructive_versioning_provider() -> Optional[Tuple[Any, Any, str, Optional[str]]]:
@@ -13114,11 +13168,11 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         r = get_resolve()  # auto-launches if not running
         if r is not None:
             return _ok(message="DaVinci Resolve is running and connected.")
-        return _err("Could not connect to DaVinci Resolve. Check that Resolve Studio is installed and 'External scripting using' is set to Local in Preferences.")
+        return _not_connected_error()
 
     r = get_resolve()  # auto-launches if not running
     if r is None:
-        return _err("Could not connect to DaVinci Resolve after auto-launch attempt. Check that Resolve Studio is installed.")
+        return _not_connected_error()
 
     if action == "get_version":
         update_env = _setup_update_env()
@@ -14041,7 +14095,7 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     p = _params(params)
     r = get_resolve()
     if r is None:
-        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
+        return _not_connected_error()
 
     if action == "save":
         if not p.get("name"):
@@ -14086,7 +14140,7 @@ def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     p = _params(params)
     r = get_resolve()
     if r is None:
-        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
+        return _not_connected_error()
 
     if action == "import_render":
         return {"success": bool(r.ImportRenderPreset(p["path"]))}
@@ -15029,7 +15083,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     p = _params(params)
     r = get_resolve()
     if r is None:
-        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
+        return _not_connected_error()
     pm = r.GetProjectManager()
 
     if action == "lint":
@@ -15149,7 +15203,7 @@ def project_manager_folders(action: str, params: Optional[Dict[str, Any]] = None
     p = _params(params)
     r = get_resolve()
     if r is None:
-        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
+        return _not_connected_error()
     pm = r.GetProjectManager()
 
     if action == "list":
@@ -15191,7 +15245,7 @@ def project_manager_cloud(action: str, params: Optional[Dict[str, Any]] = None) 
     p = _params(params)
     r = get_resolve()
     if r is None:
-        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
+        return _not_connected_error()
     pm = r.GetProjectManager()
 
     # cloudSettings is enum-keyed (CLOUD_SETTING_*/CLOUD_SYNC_*); resolve string
@@ -15229,7 +15283,7 @@ def project_manager_database(action: str, params: Optional[Dict[str, Any]] = Non
     p = _params(params)
     r = get_resolve()
     if r is None:
-        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
+        return _not_connected_error()
     pm = r.GetProjectManager()
 
     if action == "get_current":
@@ -16239,7 +16293,7 @@ def media_storage(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     p = _params(params)
     r = get_resolve()
     if r is None:
-        return _err("Could not connect to DaVinci Resolve. It was not running and auto-launch failed. Check that Resolve Studio is installed.")
+        return _not_connected_error()
     ms = r.GetMediaStorage()
 
     if action == "get_volumes":
@@ -24985,8 +25039,7 @@ def _execute_python_script(path: str, args: List[str],
 def _execute_lua_script(path: str) -> Dict[str, Any]:
     r = get_resolve()
     if r is None:
-        return _err("Cannot run Lua script — Resolve isn't running and "
-                    "auto-launch failed.")
+        return _not_connected_error()
     fusion = r.Fusion()
     if fusion is None:
         return _err("handle.Fusion() returned None — cannot run Lua scripts.")
@@ -25051,7 +25104,7 @@ def _run_inline_lua(source: str) -> Dict[str, Any]:
     """
     r = get_resolve()
     if r is None:
-        return _err("Cannot run Lua — Resolve isn't running and auto-launch failed.")
+        return _not_connected_error()
     fusion = r.Fusion()
     if fusion is None:
         return _err("handle.Fusion() returned None — cannot run inline Lua.")
@@ -26161,5 +26214,5 @@ if __name__ == "__main__":
         logger.error(f"Unknown --transport {transport!r}; use stdio|sse|streamable-http")
         sys.exit(2)
 
-    logger.info(f"Starting DaVinci Resolve MCP Server (32 compound tools)")
+    logger.info("Starting DaVinci Resolve MCP Server (34 compound tools)")
     run_fastmcp_stdio(mcp)

@@ -1680,6 +1680,15 @@ class NeverLaunchARunningResolveTests(unittest.TestCase):
 
         return importlib.import_module("src.server")
 
+    def _detector(self, server):
+        """The real `resolve_is_running`, not conftest's offline stand-in.
+
+        conftest pins it to False so every test's error messages read the same on
+        any machine. These two tests are about the detector itself, so they need
+        the original — the stub would make them assert on the stub.
+        """
+        return getattr(server, "_resolve_is_running_unpatched", server.resolve_is_running)
+
     def _get_resolve(self, server):
         """The real `get_resolve`, not conftest's offline stand-in.
 
@@ -1745,17 +1754,144 @@ class NeverLaunchARunningResolveTests(unittest.TestCase):
         from unittest import mock
 
         server = self._server()
+        detect = self._detector(server)
         with mock.patch.object(server.subprocess, "run", side_effect=OSError("no ps")):
-            self.assertIsNone(server.resolve_is_running())
+            self.assertIsNone(detect())
 
     def test_detection_finds_a_running_resolve_in_a_process_listing(self) -> None:
         from unittest import mock
 
         server = self._server()
+        detect = self._detector(server)
         listing = mock.Mock(returncode=0,
                             stdout="/Applications/DaVinci Resolve.app/Contents/MacOS/Resolve\nfinder\n")
         with mock.patch.object(server.subprocess, "run", return_value=listing):
-            self.assertTrue(server.resolve_is_running())
+            self.assertTrue(detect())
         empty = mock.Mock(returncode=0, stdout="finder\nDock\n")
         with mock.patch.object(server.subprocess, "run", return_value=empty):
-            self.assertFalse(server.resolve_is_running())
+            self.assertFalse(detect())
+
+
+class NotConnectedMessageTests(unittest.TestCase):
+    """What the *caller* is told, not just what gets logged.
+
+    Nine call sites asserted "It was not running and auto-launch failed. Check that
+    Resolve Studio is installed." Once `get_resolve` stopped launching a second
+    application that was wrong in every way that mattered: no launch was attempted,
+    Resolve *was* running, and a free-edition user was being sent to check a Studio
+    install they may not have. Observed end to end — the accurate guidance went to
+    the log while the tool returned the stale text.
+    """
+
+    def _server(self):
+        import importlib
+
+        return importlib.import_module("src.server")
+
+    def test_a_running_but_unscriptable_resolve_is_described_accurately(self) -> None:
+        from unittest import mock
+
+        server = self._server()
+        with mock.patch.object(server, "resolve_is_running", return_value=True), \
+                mock.patch.object(server, "_bridge_requested", return_value=False):
+            error = server._not_connected_error()["error"]
+        self.assertEqual(error["code"], "SCRIPTING_UNAVAILABLE")
+        self.assertEqual(error["category"], "not_connected")
+        self.assertNotIn("auto-launch", error["message"].lower())
+        # Both remedies named: the caller may be on either edition.
+        self.assertIn("External scripting", error["remediation"])
+        self.assertIn("DAVINCI_RESOLVE_BRIDGE", error["remediation"])
+        self.assertTrue(error["state"]["resolve_running"])
+
+    def test_bridge_mode_points_at_the_bridge_not_at_preferences(self) -> None:
+        from unittest import mock
+
+        server = self._server()
+        with mock.patch.object(server, "resolve_is_running", return_value=True), \
+                mock.patch.object(server, "_bridge_requested", return_value=True):
+            error = server._not_connected_error()["error"]
+        self.assertEqual(error["code"], "BRIDGE_UNAVAILABLE")
+        self.assertIn("Workspace > Scripts > resolve_bridge", error["remediation"])
+        # The framework-Python trap cost four restarts to find once; a caller
+        # staring at an empty Scripts menu should not have to rediscover it.
+        self.assertIn("framework Python", error["remediation"])
+
+    def test_a_genuinely_absent_resolve_says_so(self) -> None:
+        from unittest import mock
+
+        server = self._server()
+        with mock.patch.object(server, "resolve_is_running", return_value=False), \
+                mock.patch.object(server, "_bridge_requested", return_value=False):
+            error = server._not_connected_error()["error"]
+        self.assertEqual(error["code"], "RESOLVE_NOT_RUNNING")
+        self.assertIn("not running", error["message"])
+
+    def test_no_error_message_still_claims_an_auto_launch_that_did_not_happen(self) -> None:
+        """Checked over `_err(...)` string literals, not the file text.
+
+        A plain substring search flags the comment naming the `not_connected`
+        category and the docstring explaining why the old wording was retired —
+        prose is not a message. Two real sites *were* found this way, both phrased
+        "Resolve isn't running and auto-launch failed", which a grep for the other
+        wording had missed.
+        """
+        import ast
+
+        tree = ast.parse((REPO / "src/server.py").read_text(encoding="utf-8"))
+        offenders = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "_err"):
+                continue
+            for piece in ast.walk(node):
+                if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                    lowered = piece.value.lower()
+                    if "auto-launch" in lowered or "resolve studio is installed" in lowered:
+                        offenders.append(f"line {node.lineno}: {piece.value[:70]}")
+        self.assertEqual(
+            offenders, [],
+            "these _err() messages assert a launch that no longer happens:\n  "
+            + "\n  ".join(offenders),
+        )
+
+
+class NotConnectedRetryabilityTests(unittest.TestCase):
+    """A failure the caller must act on is not retryable.
+
+    `not_connected` defaults to retryable=True because auto-launch might succeed
+    next time. Neither of the blocked cases can: one needs a preference changed,
+    the other needs a script started inside Resolve. Reporting them as retryable
+    sends an agent into a loop it cannot win — the same defect the missing-argument
+    envelope had.
+    """
+
+    def _server(self):
+        import importlib
+
+        return importlib.import_module("src.server")
+
+    def test_the_blocked_cases_are_not_retryable(self) -> None:
+        from unittest import mock
+
+        server = self._server()
+        for running, bridge, expected_code in (
+            (True, False, "SCRIPTING_UNAVAILABLE"),
+            (True, True, "BRIDGE_UNAVAILABLE"),
+        ):
+            with self.subTest(code=expected_code):
+                with mock.patch.object(server, "resolve_is_running", return_value=running), \
+                        mock.patch.object(server, "_bridge_requested", return_value=bridge):
+                    error = server._not_connected_error()["error"]
+                self.assertEqual(error["code"], expected_code)
+                self.assertFalse(error["retryable"], error)
+
+    def test_a_simply_absent_resolve_stays_retryable(self) -> None:
+        """Starting Resolve and calling again is the natural flow, so keep it."""
+        from unittest import mock
+
+        server = self._server()
+        with mock.patch.object(server, "resolve_is_running", return_value=False), \
+                mock.patch.object(server, "_bridge_requested", return_value=False):
+            error = server._not_connected_error()["error"]
+        self.assertEqual(error["code"], "RESOLVE_NOT_RUNNING")
+        self.assertTrue(error["retryable"])
