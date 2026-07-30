@@ -37,9 +37,9 @@ _SCRIPTS_SUFFIX = "Library/Application Support/Blackmagic Design/DaVinci Resolve
 #: Two traps, both hit on a real install:
 #:
 #: 1. `<container>/Data/Library/Application Support/Fusion/Scripts/Utility`
-#:    exists and is pre-scaffolded with Color/Comp/Deliver/Edit/Tool/Utility —
-#:    but that is **Fusion's standalone tree**, not Resolve's, and Resolve does
-#:    not scan it. Keying on "which directory already exists" picks the decoy.
+#:    exists and is pre-scaffolded with Color/Comp/Deliver/Edit/Tool/Utility, but
+#:    it is **Fusion's standalone tree**, not Resolve's. Keying on "which
+#:    directory already exists" picks it over the one the README documents.
 #: 2. Resolve does not create its own `Fusion/Scripts` tree until a script is
 #:    installed, so requiring the target to pre-exist skips the free edition
 #:    entirely — the one build the bridge exists for.
@@ -47,6 +47,16 @@ _SCRIPTS_SUFFIX = "Library/Application Support/Blackmagic Design/DaVinci Resolve
 #: So: a container that exists means the edition is installed, and the tree is
 #: *created*. Blackmagic's README is the authority on the suffix, not the
 #: filesystem.
+#:
+#: **Correction, measured on free 21.0.3.7:** an earlier version of trap 1 said
+#: Resolve "does not scan" the Fusion standalone tree. It does — a marker left in
+#: `<container>/Data/Library/Application Support/Fusion/Scripts/Utility` appeared
+#: under Workspace ▸ Scripts, as did one in
+#: `<container>/Data/Documents/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility`.
+#: So Lite scans more locations than the README documents. That changes nothing
+#: about *where to install* — the documented paths work, and each extra target is
+#: another chance for the App Management prompt to stall the copy — but the reason
+#: to prefer them is that they are documented, not that the others are dead.
 _SANDBOX_MARKER = "com.blackmagic-design."
 #: Containers that are not Resolve (RAW Player, Speed Test, the IO XPC helper).
 _NON_RESOLVE_CONTAINERS = ("BlackmagicRaw", "IOXPC")

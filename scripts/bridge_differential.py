@@ -75,11 +75,21 @@ def scenario_render(resolve: Any, workspace: Path) -> Dict[str, Any]:
     observations: Dict[str, Any] = {}
     formats = project.GetRenderFormats() or {}
     observations["format_count"] = len(formats)
-    observations["codec_count_for_mov"] = len(project.GetRenderCodecs("mov") or {})
+    codecs = project.GetRenderCodecs("mov") or {}
+    observations["codec_count_for_mov"] = len(codecs)
 
     output = workspace / "bridge_render_probe"
     output.mkdir(parents=True, exist_ok=True)
-    observations["set_format"] = project.SetCurrentRenderFormatAndCodec("mov", "H.264")
+    # `GetRenderCodecs` returns {description: id} and only the **id** is accepted.
+    # Passing the description shown in the Deliver page returns False — verified
+    # again here on free 21.0.3.7: 'H.264' -> False, 'H264' -> True. Feeding it the
+    # description made this observation permanently False for a documented reason,
+    # which is a harness reporting a known trap as if it were a finding.
+    codec_id = codecs.get("H.264") or next(iter(codecs.values()), None)
+    observations["codec_id"] = codec_id
+    observations["set_format"] = (
+        project.SetCurrentRenderFormatAndCodec("mov", codec_id) if codec_id else False
+    )
     observations["set_settings"] = project.SetRenderSettings({
         "TargetDir": str(output),
         "CustomName": "bridge_render_probe",
