@@ -1662,3 +1662,100 @@ class HandleEvictionTests(unittest.TestCase):
         for _ in range(200):
             self._mint(ops)
         self.assertLessEqual(len(ops._handles), 8)
+
+
+class NeverLaunchARunningResolveTests(unittest.TestCase):
+    """Failing to connect is not the same as nothing running.
+
+    Conflating them opened an application nobody asked for, three times before it
+    was traced. The free edition refuses external scripting *by design*, so on a
+    machine where only it is running `_try_connect` always fails — and
+    `get_resolve` then launched **Studio**, a second and different application, on
+    every tool call. On this machine both editions are installed, which is why it
+    kept picking the wrong one.
+    """
+
+    def _server(self):
+        import importlib
+
+        return importlib.import_module("src.server")
+
+    def _get_resolve(self, server):
+        """The real `get_resolve`, not conftest's offline stand-in.
+
+        conftest replaces it suite-wide so no test can reach a live Resolve. These
+        tests are about what that function decides, so they need the original —
+        calling the stub instead makes them pass without exercising anything.
+        """
+        return getattr(server, "_get_resolve_unpatched", server.get_resolve)
+
+    def test_a_running_but_unscriptable_resolve_is_not_launched_again(self) -> None:
+        """The exact free-edition case: something is up, scripting refuses."""
+        from unittest import mock
+
+        server = self._server()
+        with mock.patch.object(server, "_try_connect", return_value=None), \
+                mock.patch.object(server, "resolve_is_running", return_value=True), \
+                mock.patch.object(server, "_launch_resolve") as launch:
+            self.assertIsNone(self._get_resolve(server)())
+        launch.assert_not_called()
+
+    def test_an_undeterminable_answer_does_not_launch_either(self) -> None:
+        """`None` means "cannot tell", and must not decay into "nothing is running".
+
+        That decay is the whole bug in miniature: the answer that leads to opening
+        an application is the one you must never reach by accident.
+        """
+        from unittest import mock
+
+        server = self._server()
+        with mock.patch.object(server, "_try_connect", return_value=None), \
+                mock.patch.object(server, "resolve_is_running", return_value=None), \
+                mock.patch.object(server, "_launch_resolve") as launch:
+            self.assertIsNone(self._get_resolve(server)())
+        launch.assert_not_called()
+
+    def test_a_genuinely_absent_resolve_is_still_launched(self) -> None:
+        """The behaviour README documents, preserved: nothing running -> launch."""
+        from unittest import mock
+
+        server = self._server()
+        with mock.patch.object(server, "_try_connect", return_value=None), \
+                mock.patch.object(server, "resolve_is_running", return_value=False), \
+                mock.patch.object(server, "_launch_resolve") as launch:
+            self._get_resolve(server)()
+        launch.assert_called_once()
+
+    def test_detection_covers_both_macos_editions_and_the_other_platforms(self) -> None:
+        server = self._server()
+        patterns = server._RESOLVE_PROCESS_PATTERNS
+        # The App Store build is `/Applications/DaVinci Resolve.app/...` and the
+        # installer build `/Applications/DaVinci Resolve/DaVinci Resolve.app/...`;
+        # one pattern has to match both, or the edition that is running is missed.
+        for command in (
+            "/Applications/DaVinci Resolve.app/Contents/MacOS/Resolve",
+            "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/MacOS/Resolve",
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(any(p in command for p in patterns), command)
+        self.assertTrue(any("Resolve.exe" in p for p in patterns))
+        self.assertTrue(any("/opt/resolve/bin/resolve" in p for p in patterns))
+
+    def test_detection_reports_none_when_it_cannot_look(self) -> None:
+        from unittest import mock
+
+        server = self._server()
+        with mock.patch.object(server.subprocess, "run", side_effect=OSError("no ps")):
+            self.assertIsNone(server.resolve_is_running())
+
+    def test_detection_finds_a_running_resolve_in_a_process_listing(self) -> None:
+        from unittest import mock
+
+        server = self._server()
+        listing = mock.Mock(returncode=0,
+                            stdout="/Applications/DaVinci Resolve.app/Contents/MacOS/Resolve\nfinder\n")
+        with mock.patch.object(server.subprocess, "run", return_value=listing):
+            self.assertTrue(server.resolve_is_running())
+        empty = mock.Mock(returncode=0, stdout="finder\nDock\n")
+        with mock.patch.object(server.subprocess, "run", return_value=empty):
+            self.assertFalse(server.resolve_is_running())

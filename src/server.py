@@ -899,6 +899,37 @@ def _launch_resolve():
     logger.warning("Resolve did not respond within 60s after launch")
     return False
 
+#: Process names that mean a DaVinci Resolve application is already running.
+#: Deliberately not the full path: the App Store build lives at
+#: `/Applications/DaVinci Resolve.app` and the installer build inside
+#: `/Applications/DaVinci Resolve/`, and either one counts.
+_RESOLVE_PROCESS_PATTERNS = (
+    "DaVinci Resolve.app/Contents/MacOS/Resolve",   # macOS, both editions
+    "Resolve.exe",                                  # Windows
+    "/opt/resolve/bin/resolve",                     # Linux
+)
+
+
+def resolve_is_running() -> Optional[bool]:
+    """Is a Resolve application already up? None when it cannot be determined.
+
+    Best-effort and dependency-free. `None` rather than `False` on failure, so an
+    unanswerable question never silently becomes "nothing is running" — which is
+    the answer that leads to launching something.
+    """
+    try:
+        if platform.system().lower() == "windows":
+            out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=10, check=False)
+        else:
+            out = subprocess.run(["ps", "-Ao", "command="], capture_output=True, text=True, timeout=10, check=False)
+        if out.returncode != 0 and not out.stdout:
+            return None
+        listing = out.stdout or ""
+    except Exception:  # pragma: no cover - defensive; an unknown answer is None
+        return None
+    return any(pattern in listing for pattern in _RESOLVE_PROCESS_PATTERNS)
+
+
 def get_resolve():
     """Lazy connection to Resolve — connects on first tool call, auto-launches if needed."""
     global resolve
@@ -909,7 +940,25 @@ def get_resolve():
         # Try to connect to an already-running Resolve.
         if _try_connect():
             return resolve
-        # Not running — launch it automatically.
+        # Failing to connect is NOT the same as nothing running, and conflating
+        # them opened an application nobody asked for. The free edition refuses
+        # external scripting by design, so on a machine where only it is running
+        # `_try_connect` always fails — and this then launched *Studio*, a second,
+        # different application, on every tool call. Reported three times before
+        # it was traced.
+        already_running = resolve_is_running()
+        if already_running:
+            logger.error(
+                "DaVinci Resolve is already running but is not answering the scripting API, "
+                "so it will NOT be launched again. Either enable Preferences > General > "
+                "'External scripting using' = Local (Studio only), or, on the free edition, "
+                "use the in-app bridge: install it, run Workspace > Scripts > resolve_bridge, "
+                "and set DAVINCI_RESOLVE_BRIDGE=1."
+            )
+            return None
+        if already_running is None:
+            logger.warning("Could not determine whether Resolve is running; not launching it.")
+            return None
         logger.info("Resolve not running, attempting to launch automatically...")
         _launch_resolve()
         return resolve

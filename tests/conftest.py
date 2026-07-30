@@ -56,10 +56,15 @@ def _never_touch_a_real_resolve():
         # happens to be running.
         return None
 
-    # Kept reachable so the one test that *asserts* on the real launch behaviour
-    # can still call it. `getattr` with a fallback at the callsite means that test
-    # also works under plain unittest, where conftest never loads.
+    # Kept reachable so the tests that *assert on this very behaviour* can call the
+    # real thing. `getattr` with a fallback at the callsite means they also work
+    # under plain unittest, where conftest never loads.
+    #
+    # Without this, a test asserting "a genuinely absent Resolve is still launched"
+    # silently exercises the stub above and passes for the wrong reason — which is
+    # how one of them was caught.
     server._launch_resolve_unpatched = real_launch
+    server._get_resolve_unpatched = real_get
     server._launch_resolve = blocked_launch
     server.get_resolve = offline_get_resolve
     try:
@@ -67,6 +72,26 @@ def _never_touch_a_real_resolve():
     finally:
         server._launch_resolve = real_launch
         server.get_resolve = real_get
+
+
+@pytest.fixture(autouse=True)
+def _no_cached_resolve_handle_between_tests():
+    """Clear the module-global handle `get_resolve()` memoises.
+
+    `_try_connect` assigns to `server.resolve`, and `get_resolve` returns that
+    early whenever `_is_resolve_handle_live` accepts it. A MagicMock passes that
+    check — every attribute is truthy — so a test that installs one leaves it
+    cached for every test after it, which then never reaches the code it meant to
+    exercise. Found the honest way: a test asserting Resolve *is* launched when
+    absent passed alone and failed in its own file.
+    """
+    from src import server
+
+    server.resolve = None
+    try:
+        yield
+    finally:
+        server.resolve = None
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
