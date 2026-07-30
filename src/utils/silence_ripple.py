@@ -58,8 +58,33 @@ from src.utils.media_analysis import _parse_silencedetect
 
 DEFAULT_THRESHOLD_DB = -30.0
 DEFAULT_MIN_STRIP_FRAMES = 10
-DEFAULT_PRE_HEAD_FRAMES = 0
-DEFAULT_POST_TAIL_FRAMES = 1
+
+#: Guard bands around a removed silence. These are the difference between a cut
+#: that sounds clean and one that clips speech, and they were previously 0 and 1
+#: frame — effectively none.
+#:
+#: `apply_silence_handles` shrinks each detected silence [s, e] inward:
+#: `s + pre_head` and `e - post_tail`. Only what remains is removed. So:
+#:
+#: - **pre_head protects the OUTGOING word's decay.** `silencedetect` marks `s`
+#:   the moment amplitude falls below the gate, but a word's tail — and the room
+#:   reverb after it — stays audible below that gate. Stripping from `s` clips
+#:   the release and the cut sounds abrupt.
+#: - **post_tail protects the INCOMING word's onset.** `silencedetect` marks `e`
+#:   when amplitude rises back above the gate. A soft attack (s, f, th, or any
+#:   unstressed syllable) crosses the gate *later* than the word actually
+#:   begins, so `e` sits inside the word. Stripping up to `e` eats the attack.
+#:
+#: post_tail is the larger of the two because that asymmetry is the one users
+#: hear: reviewers of the first public tutorial for this project independently
+#: reported that "the first split seconds of your clips are trimmed so the audio
+#: is a bit cut off" — an eaten onset, produced by a one-frame onset guard.
+#:
+#: Frames, not milliseconds, to match Resolve's own handle model and the rest of
+#: this module's API. At 24 fps these are 83 ms and 167 ms; at 30 fps, 67 ms and
+#: 133 ms — both inside the range dialogue editors use by hand.
+DEFAULT_PRE_HEAD_FRAMES = 2
+DEFAULT_POST_TAIL_FRAMES = 4
 
 #: Where in the trough→peak bracket the gate sits. Above 0.5 deliberately: see
 #: the module docstring — silencedetect compares instantaneous amplitude while
@@ -72,6 +97,68 @@ DIGITAL_SILENCE_HEADROOM_DB = 24.0
 #: Absolute band. Outside it a "calibrated" gate is not credible for dialogue.
 GATE_MIN_DB = -60.0
 GATE_MAX_DB = -24.0
+
+#: How aggressively to tighten. The default is deliberately the *loosest* one.
+#:
+#: Editorial practice is that a first assembly contains everything and tightens
+#: over successive passes — the first cut is supposed to be long. Tools default
+#: the other way because tight output demos better, and that is backwards for
+#: the person doing the work: trimming a generous assembly is fast and visible,
+#: while recovering material the machine already discarded is slow and, worse,
+#: invisible — you cannot review a cut that was never proposed.
+#:
+#: Each preset scales the guard bands and the minimum strip length. `generous`
+#: widens the guards and only removes long, unambiguous gaps. `tight` reproduces
+#: roughly the historical behaviour for anyone who wants it back.
+TIGHTNESS_PRESETS = {
+    "generous": {"guard_scale": 1.5, "min_strip_scale": 1.5},
+    "balanced": {"guard_scale": 1.0, "min_strip_scale": 1.0},
+    "tight": {"guard_scale": 0.5, "min_strip_scale": 0.6},
+}
+DEFAULT_TIGHTNESS = "generous"
+
+
+def resolve_tightness(tightness: Optional[str]) -> Tuple[str, dict]:
+    """Map a tightness name to its scaling factors.
+
+    Unknown names are an error rather than a silent fall-back to the default:
+    a caller asking for "aggressive" and quietly getting "generous" would be
+    told nothing and see cuts they did not ask for.
+    """
+    name = (tightness or DEFAULT_TIGHTNESS).strip().lower()
+    if name not in TIGHTNESS_PRESETS:
+        raise ValueError(
+            f"unknown tightness {tightness!r}; expected one of "
+            f"{', '.join(sorted(TIGHTNESS_PRESETS))}"
+        )
+    return name, dict(TIGHTNESS_PRESETS[name])
+
+
+def apply_tightness(
+    *,
+    tightness: Optional[str],
+    pre_head_frames: float,
+    post_tail_frames: float,
+    min_strip_frames: float,
+) -> dict:
+    """Scale guards and minimum strip length by the chosen tightness.
+
+    Guards are floored at the module defaults regardless of preset: `tight` is
+    allowed to remove more, never to start clipping speech again. That floor is
+    the whole point of the guard bands and is not a knob.
+    """
+    name, scales = resolve_tightness(tightness)
+    return {
+        "tightness": name,
+        "pre_head_frames": max(
+            DEFAULT_PRE_HEAD_FRAMES, pre_head_frames * scales["guard_scale"]
+        ),
+        "post_tail_frames": max(
+            DEFAULT_POST_TAIL_FRAMES, post_tail_frames * scales["guard_scale"]
+        ),
+        "min_strip_frames": max(1.0, min_strip_frames * scales["min_strip_scale"]),
+    }
+
 
 #: ffmpeg spells the trough "RMS through"; accept a corrected spelling too so a
 #: future ffmpeg fixing the typo does not silently drop us to the fallback.

@@ -174,5 +174,89 @@ class GatePolicyTests(unittest.TestCase):
         self.assertIsNone(payload["separation_db"])  # inf is not JSON-safe
 
 
+class SpeechGuardBandTests(unittest.TestCase):
+    """Guards that keep a removed silence from eating the speech on either side.
+
+    These shipped as pre_head=0 / post_tail=1 frame — effectively no guard — and
+    nothing asserted them, so the defect was invisible to the suite. Reviewers of
+    the first public tutorial for this project heard it directly: "the first
+    split seconds of your clips are trimmed so the audio is a bit cut off."
+
+    The mechanism is asymmetric and the tests below pin both halves:
+      * pre_head protects the OUTGOING word's decay (silencedetect marks the
+        silence start once amplitude drops under the gate, while the tail and
+        room reverb are still audible below it).
+      * post_tail protects the INCOMING word's onset (silencedetect marks the
+        silence end once amplitude climbs back over the gate, which for a soft
+        attack happens *after* the word has actually begun).
+    """
+
+    FPS = 24.0
+
+    def test_guard_defaults_are_non_zero(self) -> None:
+        self.assertGreater(
+            silence_ripple.DEFAULT_PRE_HEAD_FRAMES, 0,
+            "pre_head of 0 strips a word's decay; the cut sounds abrupt.",
+        )
+        self.assertGreater(
+            silence_ripple.DEFAULT_POST_TAIL_FRAMES, 0,
+            "post_tail of 0 strips the next word's attack.",
+        )
+
+    def test_onset_guard_is_the_larger_of_the_two(self) -> None:
+        """An eaten onset is more audible than an eaten decay — protect it more."""
+        self.assertGreaterEqual(
+            silence_ripple.DEFAULT_POST_TAIL_FRAMES,
+            silence_ripple.DEFAULT_PRE_HEAD_FRAMES,
+        )
+
+    def test_defaults_never_reach_the_speech_on_either_side(self) -> None:
+        """The exact defect: with the old defaults the strip touched the onset."""
+        word_ends, word_starts = 10.0, 12.0  # detected silence == [10.0, 12.0]
+        pre = silence_ripple.frames_to_seconds(silence_ripple.DEFAULT_PRE_HEAD_FRAMES, self.FPS)
+        post = silence_ripple.frames_to_seconds(silence_ripple.DEFAULT_POST_TAIL_FRAMES, self.FPS)
+        strip = silence_ripple.apply_silence_handles(
+            [(word_ends, word_starts)],
+            pre_head_sec=pre,
+            post_tail_sec=post,
+            range_start=0.0,
+            range_end=20.0,
+        )
+        self.assertEqual(len(strip), 1)
+        strip_start, strip_end = strip[0]
+        self.assertGreater(
+            strip_start, word_ends,
+            "strip begins at the outgoing word's decay — that audio is removed",
+        )
+        self.assertLess(
+            strip_end, word_starts,
+            "strip runs up to the incoming word's onset — the attack is clipped",
+        )
+
+    def test_guards_survive_into_keep_segments(self) -> None:
+        """Guarding the strip is pointless if the keep-segment math undoes it."""
+        pre = silence_ripple.frames_to_seconds(silence_ripple.DEFAULT_PRE_HEAD_FRAMES, self.FPS)
+        post = silence_ripple.frames_to_seconds(silence_ripple.DEFAULT_POST_TAIL_FRAMES, self.FPS)
+        strip = silence_ripple.apply_silence_handles(
+            [(10.0, 12.0)], pre_head_sec=pre, post_tail_sec=post,
+            range_start=0.0, range_end=20.0,
+        )
+        keep = silence_ripple.silence_to_keep_segments(0.0, 20.0, strip)
+        self.assertEqual(len(keep), 2)
+        self.assertGreater(keep[0][1], 10.0, "kept audio must extend past the word's end")
+        self.assertLess(keep[1][0], 12.0, "kept audio must start before the next word's onset")
+
+    def test_a_silence_shorter_than_its_guards_is_left_alone(self) -> None:
+        """Better to leave a short gap in than to cut into speech on both sides."""
+        pre = silence_ripple.frames_to_seconds(silence_ripple.DEFAULT_PRE_HEAD_FRAMES, self.FPS)
+        post = silence_ripple.frames_to_seconds(silence_ripple.DEFAULT_POST_TAIL_FRAMES, self.FPS)
+        tiny = (10.0, 10.0 + (pre + post) / 2.0)
+        strip = silence_ripple.apply_silence_handles(
+            [tiny], pre_head_sec=pre, post_tail_sec=post,
+            range_start=0.0, range_end=20.0,
+        )
+        self.assertEqual(strip, [], "guards overlapped; nothing should be removed")
+
+
 if __name__ == "__main__":
     unittest.main()
