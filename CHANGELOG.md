@@ -2,6 +2,78 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.68.2
+
+Bug fixes. The server no longer opens a second DaVinci Resolve, and a failed
+connection now tells the caller what is actually wrong.
+
+### Fixed
+
+- **The server launched Resolve when one was already running — usually the wrong
+  one.** The free edition refuses external scripting by design, so on a machine
+  where only it is running `scriptapp("Resolve")` always returns None.
+  `get_resolve()` read that as *"Resolve is not running"* and ran `open` on the
+  application; with both editions installed that started **Studio**, a second and
+  different application, on every tool call.
+
+  `resolve_is_running()` now answers the question that was being assumed. It
+  returns None when it cannot tell, deliberately — "cannot tell" must never decay
+  into "nothing is running", because that is the answer that leads to launching
+  something. A genuinely absent Resolve is still launched, as documented, and the
+  macOS candidate list now contains **both** editions rather than only the
+  installer path.
+- **The error a caller received described something that had not happened.**
+  Eleven sites asserted that Resolve was not running, that starting it had been
+  tried and failed, and that the reader should check their Studio install. After
+  the fix above none of that was true, and the accurate guidance was only reaching
+  the log. `_not_connected_error()` derives the message from the situation and
+  names the applicable remedy — external scripting on Studio, or the in-app bridge
+  on the free edition, including the framework-Python prerequisite. Three codes:
+  `SCRIPTING_UNAVAILABLE`, `BRIDGE_UNAVAILABLE`, `RESOLVE_NOT_RUNNING`.
+- **Those two are marked `retryable: false`.** The `not_connected` category
+  defaults to retryable because auto-launch may succeed next time; neither of
+  these can — one needs a preference changed, the other a script started inside
+  Resolve — and reporting them as retryable sends an agent into a loop it cannot
+  win.
+- **The offline test suite opened Resolve, and connected to whatever was running.**
+  A stub-based audio test reached for `AUDIO_SYNC_*`, which are attributes on the
+  *live* object, so it called `get_resolve()`, found nothing, and started Resolve;
+  when Resolve *was* open it connected instead, making the test's result depend on
+  the state of the machine. `tests/conftest.py` closes both suite-wide and names
+  any launch attempt in the terminal summary.
+- **`src/server.py` reported the wrong tool count to every agent.** Its module
+  docstring said "34 compound tools" while the agent-facing workflow prompt and
+  the startup log line said 32. The drift guard only required the correct number
+  to appear *somewhere* in the file, so the wrong one shipped. It now rejects any
+  other count in front of that phrase, and counts decorators from the parsed
+  syntax tree rather than by matching text — a docstring mentioning
+  `@mcp.tool()` had been counted as a 35th tool.
+- **The bridge harness graded the wrong clip and reported a known trap as a
+  finding.** It took the first video item, which is often a generator or title
+  that has no MediaPoolItem and answers None to every node query, so the grading
+  surface read as unreachable; it now takes the first gradeable item. And it
+  passed the codec *description* `"H.264"` to `SetCurrentRenderFormatAndCodec`,
+  which only accepts the id `"H264"`, making that observation permanently false
+  for a documented reason.
+
+### Changed
+
+- `scripts/install_resolve_bridge.py` no longer claims Resolve ignores Fusion's
+  standalone script tree. Measured on free 21.0.3.7: markers left in two
+  undocumented container paths both appeared under Workspace ▸ Scripts, so Lite
+  scans more locations than the README documents. Install behaviour is unchanged —
+  the documented paths work, and each extra target is another chance for the macOS
+  App Management prompt to stall the copy — but the stated reason is now the true
+  one.
+
+### Validated
+
+Free edition alone (21.0.3.7, App Store), Studio never launched at any point,
+confirmed by process check after every stage: 165/165 read-shaped MCP actions
+clean with Blackmagic's module blocked; 109/112 API read methods exercised; render
+to a non-empty file with `set_format` true; AAF/DRT/EDL/FCPXML all written;
+SetLUT clears and reads back. Suite 1913 passing.
+
 ## What's New in v2.68.1
 
 Bug fix. A missing tool argument now returns the structured error envelope the
