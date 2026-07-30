@@ -103,6 +103,14 @@ class BridgeTransport:
         self.timeout = float(timeout)
         #: Propagated to proxies decoded from this transport's replies.
         self.strict_attributes = True
+        #: type name -> frozenset of method names, scoped to **this** transport.
+        #: Per-transport rather than per-class because the method set is the
+        #: answer to "what does this Resolve build have", and two builds can be
+        #: bridged from one process — the differential harness does exactly that.
+        #: A shared cache would let free 21's surface answer for Studio 19, which
+        #: is the precise question `list_methods` exists to get right.
+        self.method_cache: Dict[str, frozenset] = {}
+        self.cache_lock = threading.Lock()
         # The in-Resolve side serialises native calls anyway; serialising here too
         # keeps request/response pairing simple and matches the _bridge_lock
         # discipline the rest of the server already follows.
@@ -232,11 +240,6 @@ class BridgeProxy:
 
     __slots__ = ("_transport", "_handle", "_type_name", "_strict")
 
-    #: type name -> frozenset of method names. Shared across instances: all
-    #: Timeline proxies have the same surface, so one fetch serves all of them.
-    _METHOD_CACHE: Dict[str, frozenset] = {}
-    _CACHE_LOCK = threading.Lock()
-
     def __init__(self, transport: BridgeTransport, handle: str, *, type_name: Optional[str] = None,
                  strict_attributes: bool = True) -> None:
         object.__setattr__(self, "_transport", transport)
@@ -249,17 +252,20 @@ class BridgeProxy:
         object.__setattr__(self, "_strict", strict_attributes)
 
     def _methods(self) -> frozenset:
+        # Cached on the transport, so all Timeline proxies from one bridge share
+        # a single fetch while a second bridge keeps its own answer.
+        cache = self._transport.method_cache
         key = self._type_name or self._handle
-        cached = self._METHOD_CACHE.get(key)
+        cached = cache.get(key)
         if cached is not None:
             return cached
         result = self._transport.request("list_methods", {"target": self._handle}) or {}
         names = frozenset(result.get("methods") or ())
         # Key on the type the bridge reports, so sibling objects reuse this.
         actual = result.get("type") or key
-        with self._CACHE_LOCK:
-            self._METHOD_CACHE[actual] = names
-            self._METHOD_CACHE[key] = names
+        with self._transport.cache_lock:
+            cache[actual] = names
+            cache[key] = names
         return names
 
     def __getattr__(self, name: str) -> _BoundMethod:
@@ -288,6 +294,55 @@ class BridgeProxy:
         """Drop handles the bridge is holding. Long sessions should call this."""
         return self._transport.request(
             "release_handles", {} if handles is None else {"handles": handles}
+        )
+
+    def bridge_shutdown(self) -> Dict[str, Any]:
+        """Stop the in-Resolve listener so Workspace ▸ Scripts can start it again.
+
+        Does not wait: the reply is written before the listener goes away, and
+        there is nothing to come back to.
+        """
+        return self._transport.request("shutdown", {})
+
+    def bridge_reload(self, *, wait: bool = True, timeout: float = 30.0,
+                      poll_seconds: float = 0.1) -> Dict[str, Any]:
+        """Re-import the in-Resolve runtime from disk, in place.
+
+        This is what makes the bridge iterable: re-run the installer, call this,
+        and the new code is live without touching Resolve's UI.
+
+        Waiting is keyed on the surface's `session` id rather than on health
+        merely answering, because for a short window after the reply the *old*
+        listener is still accepting connections — a naive "wait until health
+        works" returns immediately, against the code being replaced.
+
+        **Every handle from before is dead.** The new session mints new ids, so
+        existing proxies raise `stale_handle` and must be re-fetched from a root.
+        """
+        before = (self.bridge_health() or {}).get("session")
+        result = dict(self._transport.request("reload", {}) or {})
+        if not wait:
+            return result
+        deadline = time.monotonic() + timeout
+        last_error: Optional[Exception] = None
+        while time.monotonic() < deadline:
+            time.sleep(poll_seconds)
+            try:
+                health = self.bridge_health() or {}
+            except (BridgeUnavailable, BridgeCallError) as exc:
+                last_error = exc  # expected while the listener is down
+                continue
+            session = health.get("session")
+            if session and session != before:
+                self._transport.method_cache.clear()
+                return {**result, "session": session, "reloaded": True,
+                        "operations": health.get("operations")}
+        raise BridgeCallError(
+            "reload_timeout",
+            f"the bridge did not come back within {timeout:g}s"
+            + (f" (last error: {last_error})" if last_error else "")
+            + ". Check the script's output inside Resolve — a reload that fails to "
+              "import keeps serving the previous runtime.",
         )
 
 

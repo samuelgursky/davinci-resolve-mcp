@@ -57,6 +57,18 @@ neither is available.
 exist, so a caller discovers the surface rather than assuming parity with the
 direct transport.
 
+## Lifecycle operations act on the bridge, not the project
+
+`shutdown` and `reload` stop the listener. They exist because the launcher blocks
+— the script that started the bridge cannot be re-run while it is alive, and the
+runtime inside Resolve's Scripts folder is a copy taken at install time, so a
+repository change strands a stale bridge with no way back short of quitting
+Resolve. `reload` re-imports from disk in place and needs no UI interaction.
+
+They carry no gate beyond the token, deliberately: a caller holding it can
+already drive Resolve through `call`, so refusing them would guard nothing while
+removing the only remote recovery path.
+
 ## False is an error
 
 Resolve's API returns False or None for failure far more often than it raises.
@@ -150,7 +162,11 @@ class ResolveOperations:
     )
     #: The transparent proxy. See the module docstring for its security model.
     PROXY_OPERATIONS = ("call", "release_handles", "list_methods")
-    OPERATIONS = READ_OPERATIONS + WRITE_OPERATIONS + PROXY_OPERATIONS
+    #: Lifecycle: they act on the bridge, never on the project. Separated from the
+    #: write surface so "writes stay narrower than reads" keeps measuring what it
+    #: was written to measure.
+    LIFECYCLE_OPERATIONS = ("shutdown", "reload")
+    OPERATIONS = READ_OPERATIONS + WRITE_OPERATIONS + PROXY_OPERATIONS + LIFECYCLE_OPERATIONS
 
     #: Handle-table ceiling. Every entry pins a live Resolve proxy object, so an
     #: unbounded table is a memory leak inside Resolve that grows with every
@@ -158,10 +174,22 @@ class ResolveOperations:
     #: loses a handle gets a clear `stale_handle` error and can re-fetch.
     MAX_HANDLES = 4096
 
-    def __init__(self, resolve: Any, *, media_roots: List[str], output_roots: List[str], max_items: int = 500) -> None:
+    def __init__(
+        self,
+        resolve: Any,
+        *,
+        media_roots: List[str],
+        output_roots: List[str],
+        max_items: int = 500,
+        lifecycle: Optional[Callable[[str], Dict[str, Any]]] = None,
+    ) -> None:
         if resolve is None:
             raise OperationError("resolve_unavailable", "Resolve object is not available")
         self.resolve = resolve
+        # Supplied by whatever owns the listener (the launcher). Absent means the
+        # lifecycle operations report `capability_unavailable` rather than
+        # pretending to stop something they have no handle on.
+        self._lifecycle = lifecycle
         self.policy = PathPolicy(media_roots, output_roots)
         self.max_items = max(1, min(int(max_items), 5000))
         self._routes: Dict[str, Callable[[Dict[str, Any]], Any]] = {
@@ -247,11 +275,18 @@ class ResolveOperations:
             "current_page": self._call(self.resolve, "GetCurrentPage"),
             "current_project": self._call(project, "GetName") if project is not None else None,
             "surface_version": PROTOCOL_SURFACE_VERSION,
+            # Handles are scoped to this id. A client that sees it change knows
+            # its handles are gone — which is how `reload` is waited on, since
+            # the bridge comes back on the same port with a new object graph.
+            "session": self._session,
             # The caller discovers the surface rather than assuming parity with
             # the direct transport — this bridge is deliberately a subset.
             "operations": sorted(self.OPERATIONS),
             "read_operations": sorted(self.READ_OPERATIONS),
             "write_operations": sorted(self.WRITE_OPERATIONS),
+            # False when nothing owns the listener, so a client can tell
+            # "this bridge cannot be stopped remotely" from "I forgot to ask".
+            "lifecycle_available": self._lifecycle is not None,
             "policy": {
                 "media_roots": list(self.policy.media_roots),
                 "output_roots": list(self.policy.output_roots),
@@ -518,6 +553,44 @@ class ResolveOperations:
             if not name.startswith("_") and callable(getattr(target, name, None))
         )
         return {"type": type(target).__name__, "methods": names}
+
+    # -- lifecycle ---------------------------------------------------------
+    #
+    # These stop or restart the bridge, never the project. No extra gate beyond
+    # the token: a caller holding it can already drive Resolve through `call`, so
+    # refusing them here would guard nothing while removing the only way to
+    # recover a stale bridge without quitting Resolve.
+
+    def _lifecycle_stop(self, mode: str) -> Dict[str, Any]:
+        if self._lifecycle is None:
+            raise OperationError(
+                "capability_unavailable",
+                "this bridge was started without a lifecycle owner, so it cannot stop itself; "
+                "quit the script inside Resolve instead",
+            )
+        outcome = self._lifecycle(mode) or {}
+        # The reply has to be written before the listener goes away, so the
+        # handler returns now and the teardown happens in the serve loop.
+        return {"stopping": True, "mode": mode, **outcome}
+
+    def op_shutdown(self, _arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Stop the listener so Workspace ▸ Scripts can start it again."""
+        return self._lifecycle_stop("exit")
+
+    def op_reload(self, _arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Re-import the runtime from disk and serve again, in the same process.
+
+        The in-Resolve runtime is a copy taken at install time, so a repository
+        change leaves the bridge stale with no way back except quitting Resolve.
+        This closes that loop: re-run the installer, call `reload`, and the new
+        code is live without touching the UI.
+
+        Handles do not survive: the new `ResolveOperations` has a new session, so
+        a client's existing proxies get `stale_handle` and re-fetch. That is the
+        designed behaviour — silently resolving an old handle against a new object
+        graph is the wrong-target failure the session scoping exists to prevent.
+        """
+        return self._lifecycle_stop("reload")
 
     def op_release_handles(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Drop handles a client no longer needs, or all of them."""

@@ -43,6 +43,22 @@ starting a listener, which is how the question gets answered empirically.
 - Operations are **named and allowlisted**. A method-name prefix match is a
   spelling convention, not a security boundary: `startswith("Delete")` admits
   `DeleteProject`, and arbitrary `Import`/`Export` admit arbitrary paths.
+
+## Stopping without restarting Resolve
+
+Because the listener blocks, the script that started it cannot be re-run while it
+is alive, and the copy of the runtime inside Resolve's Scripts folder is taken at
+install time — so a repository change leaves a *stale* bridge with no way back
+short of quitting Resolve. `request_stop()` gives a client the two ways out:
+
+- ``exit``   — stop, so Workspace ▸ Scripts can start it again;
+- ``reload`` — stop, re-import the runtime from disk, and start again in the same
+  process, needing no UI interaction at all.
+
+`validate_runtime_sources()` is what makes the second one safe: the new sources
+must compile *before* the running listener is asked to stop, so a syntax error
+is refused by a bridge that is still serving rather than discovered by one that
+has already gone.
 """
 
 from __future__ import annotations
@@ -76,6 +92,16 @@ PREAUTH_READ_TIMEOUT_S = 5.0
 MAX_CONCURRENT_CONNECTIONS = 16
 #: Post-auth: a real Resolve call can be slow, but not unbounded.
 OPERATION_TIMEOUT_S = 300.0
+
+#: How a running bridge may be asked to stop. `exit` leaves nothing listening;
+#: `reload` asks the launcher to re-import the runtime and start again.
+STOP_MODES = ("exit", "reload")
+#: The runtime files the launcher imports, and therefore what `reload` must be
+#: able to compile before anyone is asked to stop.
+RUNTIME_MODULES = ("resolve_bridge.py", "resolve_bridge_ops.py")
+#: How long `serve()` waits for in-flight requests to finish before closing the
+#: listener, so the reply to `shutdown` reaches the client that asked for it.
+STOP_DRAIN_TIMEOUT_S = 5.0
 
 #: Parent-process names that mean "this script is a child of Resolve".
 #: `scripts/resolve_bridge_probe.py` duplicates this list because it must be
@@ -238,6 +264,33 @@ def load_config(path: str) -> Dict[str, Any]:
     return {"host": "127.0.0.1", "port": port, "token": token, "auth_clock_skew_seconds": skew}
 
 
+def validate_runtime_sources(runtime_root: str) -> list:
+    """Problems that would make re-importing the runtime fail. Empty means safe.
+
+    Checked *before* the running listener is asked to stop. A reload that stops
+    first and discovers the breakage afterwards leaves no bridge at all — and no
+    way to start one without the Scripts menu, which is the situation reload
+    exists to avoid. Compiling is not proof the module imports cleanly, so the
+    launcher still loads into a throwaway module object and keeps the old one on
+    failure; this catches the overwhelmingly common case (a typo) at the point
+    where refusing is free.
+    """
+    problems = []
+    for name in RUNTIME_MODULES:
+        path = os.path.join(runtime_root, name)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                source = handle.read()
+        except OSError as exc:
+            problems.append(f"{name}: cannot be read ({exc})")
+            continue
+        try:
+            compile(source, path, "exec")
+        except SyntaxError as exc:
+            problems.append(f"{name}: does not compile (line {exc.lineno}: {exc.msg})")
+    return problems
+
+
 # ── authentication ───────────────────────────────────────────────────────────
 
 
@@ -358,6 +411,8 @@ class Bridge:
         self._slots = threading.Semaphore(MAX_CONCURRENT_CONNECTIONS)
         self._server: Optional[_Server] = None
         self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._stop_mode: Optional[str] = None
 
     def acquire_slot(self) -> bool:
         return self._slots.acquire(blocking=False)
@@ -386,12 +441,65 @@ class Bridge:
             with self._operation_lock:
                 result = self._dispatch(operation, arguments)
         except Exception as exc:
-            return {
-                "id": request_id,
-                "ok": False,
-                "error": {"code": "operation_failed", "message": str(exc)[:300]},
+            # The surface chooses stable codes — `stale_handle` tells a client to
+            # re-fetch, `ambiguous_locator` tells it to disambiguate, and so on.
+            # Collapsing them all to `operation_failed` here would strip exactly
+            # the information they exist to carry, leaving the client one
+            # undifferentiated failure and a string to pattern-match. Read by
+            # attribute rather than by import: the transport must not depend on
+            # the surface module, and anything raising a str `code` qualifies.
+            code = getattr(exc, "code", None)
+            details = getattr(exc, "details", None)
+            error = {
+                "code": code if isinstance(code, str) and code else "operation_failed",
+                "message": str(exc)[:300],
             }
+            if isinstance(details, dict) and details:
+                try:
+                    json.dumps(details)
+                except (TypeError, ValueError):
+                    pass  # a detail we cannot send must not cost the whole reply
+                else:
+                    error["details"] = details
+            return {"id": request_id, "ok": False, "error": error}
         return {"id": request_id, "ok": True, "result": result}
+
+    def request_stop(self, mode: str = "exit") -> str:
+        """Ask `serve()` to come back. Returns without waiting, on purpose.
+
+        The caller is inside a request handler: stopping the listener here would
+        tear down the socket the reply still has to travel over. Setting a flag
+        lets `process()` finish normally and `serve()` do the teardown after it
+        has drained.
+        """
+        if mode not in STOP_MODES:
+            raise ValueError(f"stop mode must be one of {list(STOP_MODES)}")
+        self._stop_mode = mode
+        self._stop_event.set()
+        return mode
+
+    @property
+    def stop_mode(self) -> Optional[str]:
+        return self._stop_mode
+
+    def _drain(self, timeout: float) -> bool:
+        """Wait until no handler is in flight, so replies are already on the wire.
+
+        Every handler holds a slot for the whole of `handle()`, and the reply is
+        written inside it (`wbufsize = 0`, so the write is a `sendall`, not a
+        buffer). Reclaiming every slot therefore means every reply has been sent
+        — deterministic, where a fixed grace period would only be probable.
+        """
+        deadline = time.monotonic() + timeout
+        held = 0
+        while held < MAX_CONCURRENT_CONNECTIONS and time.monotonic() < deadline:
+            if self._slots.acquire(blocking=False):
+                held += 1
+            else:
+                time.sleep(0.01)
+        for _ in range(held):
+            self._slots.release()
+        return held == MAX_CONCURRENT_CONNECTIONS
 
     def start(self) -> "Bridge":
         self._server = _Server((self.config["host"], self.config["port"]), self)
@@ -414,17 +522,36 @@ class Bridge:
         """Start, then block or return according to the detected host model.
 
         Returns immediately in-process (the caller keeps a reference alive);
-        blocks until Resolve exits as a child process. Either choice made wrongly
-        is fatal, which is why the detection is explicit and reported.
+        blocks until Resolve exits, or until a client asks it to stop, as a child
+        process. Either choice made wrongly is fatal, which is why the detection
+        is explicit and reported.
+
+        The returned dict carries `stop_reason`, which is how the launcher knows
+        whether to exit or to re-import the runtime and serve again.
         """
-        model = host_model or _host_model()
+        model = dict(host_model or _host_model())
         self.start()
         if not model["blocking_required"]:
+            model["stop_reason"] = None
             return model
         expected_parent = model["parent_pid"]
+        reason = "resolve_exited"
         try:
-            while self._thread is not None and self._thread.is_alive() and os.getppid() == expected_parent:
-                self._thread.join(timeout=poll_seconds)
+            while True:
+                if self._stop_event.is_set():
+                    reason = self._stop_mode or "exit"
+                    break
+                if self._thread is None or not self._thread.is_alive():
+                    reason = "listener_died"
+                    break
+                if os.getppid() != expected_parent:
+                    break
+                # Waiting on the event rather than joining the thread makes a
+                # requested stop immediate instead of up to `poll_seconds` late.
+                self._stop_event.wait(poll_seconds)
+            if self._stop_event.is_set():
+                self._drain(STOP_DRAIN_TIMEOUT_S)
         finally:
             self.stop()
+        model["stop_reason"] = reason
         return model

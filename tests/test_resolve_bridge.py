@@ -11,9 +11,13 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
+from pathlib import Path
 
 from src.utils import resolve_bridge as rb
+
+REPO = Path(__file__).resolve().parent.parent
 
 
 def signed(token: str, *, timestamp: int, nonce: str, operation: str = "health", request_id: str = "1"):
@@ -518,7 +522,54 @@ class BridgeIntegrationTests(unittest.TestCase):
 
         # An unlisted operation is refused by the surface, not executed.
         blocked = signed(TOKEN, timestamp=int(_time.time()), nonce="k" * 24, operation="DeleteProject")
-        self.assertEqual(roundtrip(blocked)["error"]["code"], "operation_failed")
+        refusal = roundtrip(blocked)["error"]
+        # The surface's own code, not a flattened `operation_failed`. This
+        # assertion previously read `operation_failed` and so enshrined the
+        # opposite: `process()` was discarding every code the surface chose, and
+        # no test caught it because every other code assertion in this file calls
+        # `ops.dispatch` directly and never crosses the transport.
+        self.assertEqual(refusal["code"], "operation_not_allowed")
+        self.assertIn("health", refusal["details"]["available"])
+
+    def test_surface_error_codes_survive_the_transport(self) -> None:
+        """A client acts on the code; a client that only ever sees one cannot.
+
+        `stale_handle` means re-fetch, `ambiguous_locator` means disambiguate,
+        `no_project` means open something. Flattened to `operation_failed` they
+        are one undifferentiated failure and a string to pattern-match.
+        """
+        import socket as _socket
+        import tempfile as _tempfile
+        import time as _time
+        from src.utils import resolve_bridge_ops as rbo
+
+        root = _tempfile.mkdtemp(prefix="bridge_codes_")
+        fake = FakeResolve(timelines=["Cut", "Cut"])
+        operations = rbo.ResolveOperations(fake, media_roots=[root], output_roots=[root])
+        config = {"host": "127.0.0.1", "port": 0, "token": TOKEN, "auth_clock_skew_seconds": 60}
+        bridge = rb.Bridge(fake, config, rbo.make_dispatch(operations))
+        bridge.start()
+        self.addCleanup(bridge.stop)
+
+        cases = [
+            ("get_timeline", {"timeline_name": "Cut"}, "ambiguous_locator"),
+            ("get_timeline", {"timeline_name": "Nope"}, "not_found"),
+            ("call", {"target": "h:dead:1", "method": "GetName"}, "stale_handle"),
+            ("call", {"target": "resolve", "method": "__class__"}, "method_not_allowed"),
+            ("shutdown", {}, "capability_unavailable"),
+        ]
+        for index, (operation, arguments, expected) in enumerate(cases):
+            request = {
+                "protocol": rb.PROTOCOL_VERSION, "id": str(index),
+                "timestamp": int(_time.time()), "nonce": f"c{index:0>23}",
+                "operation": operation, "arguments": arguments,
+            }
+            request["signature"] = rb.sign_request(TOKEN, request)
+            with self.subTest(operation=operation, expected=expected):
+                with _socket.create_connection(("127.0.0.1", bridge.port), timeout=5) as sock:
+                    sock.sendall((json.dumps(request) + "\n").encode())
+                    response = json.loads(sock.makefile("rb").readline().decode())
+                self.assertEqual(response["error"]["code"], expected, response)
 
 
 class InstallerTargetTests(unittest.TestCase):
@@ -923,3 +974,348 @@ class BridgeOptInTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(resolve_connection.connect_resolve(FakeScript()), "native-handle")
         self.assertEqual(calls, [("Resolve",)])
+
+
+class RuntimeSourceValidationTests(unittest.TestCase):
+    """A reload must be refused *before* the running listener is asked to stop."""
+
+    def _runtime(self, **overrides) -> str:
+        import tempfile
+
+        root = tempfile.mkdtemp(prefix="runtime_")
+        for name in rb.RUNTIME_MODULES:
+            body = overrides.get(name, "x = 1\n")
+            if body is not None:
+                with open(os.path.join(root, name), "w", encoding="utf-8") as handle:
+                    handle.write(body)
+        return root
+
+    def test_a_compilable_runtime_reports_no_problems(self) -> None:
+        self.assertEqual(rb.validate_runtime_sources(self._runtime()), [])
+
+    def test_a_syntax_error_is_reported_with_the_module_and_line(self) -> None:
+        problems = rb.validate_runtime_sources(
+            self._runtime(**{"resolve_bridge_ops.py": "def broken(:\n    pass\n"})
+        )
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("resolve_bridge_ops.py", problems[0])
+        self.assertIn("does not compile", problems[0])
+
+    def test_a_missing_module_is_reported_rather_than_ignored(self) -> None:
+        problems = rb.validate_runtime_sources(self._runtime(**{"resolve_bridge.py": None}))
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("cannot be read", problems[0])
+
+    def test_the_real_installed_modules_validate(self) -> None:
+        """The negative control: the guard must pass on the code we actually ship."""
+        self.assertEqual(rb.validate_runtime_sources(str(REPO / "src/utils")), [])
+
+
+class StopRequestTests(unittest.TestCase):
+    """`serve()` has to come back, and say why."""
+
+    def _bridge(self, *, with_lifecycle: bool = True):
+        from src.utils import resolve_bridge_ops as rbo
+
+        import tempfile
+        root = tempfile.mkdtemp(prefix="stop_")
+        fake = FakeResolve()
+        # The launcher's wiring, in miniature: the surface needs a handle on the
+        # bridge, and the bridge needs the surface's dispatch.
+        holder = {}
+        ops = rbo.ResolveOperations(
+            fake, media_roots=[root], output_roots=[root],
+            lifecycle=(lambda mode: holder["bridge"].request_stop(mode) and None) if with_lifecycle else None,
+        )
+        config = {"host": "127.0.0.1", "port": 0, "token": TOKEN, "auth_clock_skew_seconds": 60}
+        holder["bridge"] = rb.Bridge(fake, config, rbo.make_dispatch(ops))
+        return holder["bridge"]
+
+    def test_an_unknown_stop_mode_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self._bridge().request_stop("please")
+
+    def test_serve_returns_the_reason_it_was_stopped(self) -> None:
+        import threading as _threading
+
+        for mode in rb.STOP_MODES:
+            with self.subTest(mode=mode):
+                bridge = self._bridge()
+                self.addCleanup(bridge.stop)
+                model = {"blocking_required": True, "parent_pid": os.getppid()}
+                outcome = {}
+
+                def run(_b=bridge, _m=model, _o=outcome):
+                    _o.update(_b.serve(poll_seconds=0.05, host_model=_m))
+
+                thread = _threading.Thread(target=run)
+                thread.start()
+                for _ in range(200):
+                    if bridge._server is not None:
+                        break
+                    time.sleep(0.01)
+                bridge.request_stop(mode)
+                thread.join(timeout=10)
+                self.assertFalse(thread.is_alive(), "serve() did not return")
+                self.assertEqual(outcome.get("stop_reason"), mode)
+
+    def test_the_in_process_branch_still_returns_immediately(self) -> None:
+        bridge = self._bridge()
+        self.addCleanup(bridge.stop)
+        outcome = bridge.serve(host_model={"blocking_required": False, "parent_pid": os.getpid()})
+        self.assertIsNone(outcome["stop_reason"])
+
+    def test_the_caller_gets_its_reply_before_the_listener_goes_away(self) -> None:
+        """The reason `request_stop` only sets a flag.
+
+        Tearing the socket down inside the handler would lose the reply to the
+        very request that asked for it, so the drain has to hold the listener
+        open until every in-flight handler has written.
+        """
+        import socket as _socket
+        import threading as _threading
+
+        bridge = self._bridge()
+        self.addCleanup(bridge.stop)
+        model = {"blocking_required": True, "parent_pid": os.getppid()}
+        thread = _threading.Thread(target=lambda: bridge.serve(poll_seconds=0.05, host_model=model))
+        thread.start()
+        for _ in range(200):
+            if bridge._server is not None:
+                break
+            time.sleep(0.01)
+        port = bridge.port
+
+        request = signed(TOKEN, timestamp=int(time.time()), nonce="s" * 24, operation="shutdown")
+        with _socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+            sock.sendall((json.dumps(request) + "\n").encode())
+            reply = json.loads(sock.makefile("rb").readline().decode())
+        # The reply arrived even though the request killed the listener.
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["mode"], "exit")
+
+        thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        # ...and the listener really is gone, not merely flagged.
+        with self.assertRaises(OSError):
+            with _socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
+                sock.sendall(b"{}\n")
+                if not sock.makefile("rb").readline():
+                    raise OSError("closed")
+
+
+class LifecycleOperationTests(unittest.TestCase):
+    """Stopping the bridge is an operation on the bridge, not on the project."""
+
+    def _ops(self, lifecycle=None):
+        import tempfile
+        from src.utils import resolve_bridge_ops as rbo
+
+        root = tempfile.mkdtemp(prefix="lifecycle_")
+        return rbo.ResolveOperations(
+            FakeResolve(), media_roots=[root], output_roots=[root], lifecycle=lifecycle
+        )
+
+    def test_lifecycle_operations_are_separate_from_reads_writes_and_proxy(self) -> None:
+        from src.utils import resolve_bridge_ops as rbo
+
+        groups = {
+            "read": set(rbo.ResolveOperations.READ_OPERATIONS),
+            "write": set(rbo.ResolveOperations.WRITE_OPERATIONS),
+            "proxy": set(rbo.ResolveOperations.PROXY_OPERATIONS),
+            "lifecycle": set(rbo.ResolveOperations.LIFECYCLE_OPERATIONS),
+        }
+        for left in groups:
+            for right in groups:
+                if left < right:
+                    self.assertFalse(groups[left] & groups[right], f"{left}/{right} overlap")
+        self.assertEqual(
+            set(rbo.ResolveOperations.OPERATIONS), set().union(*groups.values())
+        )
+        # The property the surface shape test measures must survive the addition:
+        # lifecycle ops touch the bridge, never the project, so counting them as
+        # writes would quietly widen the number that guard is watching.
+        self.assertLess(len(groups["write"]), len(groups["read"]))
+
+    def test_a_bridge_with_no_lifecycle_owner_says_so_rather_than_pretending(self) -> None:
+        from src.utils import resolve_bridge_ops as rbo
+
+        ops = self._ops()
+        self.assertFalse(ops.dispatch("health", {})["lifecycle_available"])
+        for operation in rbo.ResolveOperations.LIFECYCLE_OPERATIONS:
+            with self.subTest(operation=operation):
+                with self.assertRaises(rbo.OperationError) as ctx:
+                    ops.dispatch(operation, {})
+                self.assertEqual(ctx.exception.code, "capability_unavailable")
+
+    def test_each_operation_asks_for_its_own_mode(self) -> None:
+        asked = []
+        ops = self._ops(lifecycle=lambda mode: asked.append(mode) or {"generation": 3})
+        self.assertEqual(ops.dispatch("shutdown", {}), {"stopping": True, "mode": "exit", "generation": 3})
+        self.assertEqual(ops.dispatch("reload", {})["mode"], "reload")
+        self.assertEqual(asked, ["exit", "reload"])
+        self.assertTrue(ops.dispatch("health", {})["lifecycle_available"])
+
+    def test_a_refused_reload_surfaces_as_an_error_the_client_can_act_on(self) -> None:
+        from src.utils import resolve_bridge_ops as rbo
+
+        def lifecycle(mode):
+            raise rbo.OperationError("reload_rejected", "the installed runtime will not compile: boom")
+
+        with self.assertRaises(rbo.OperationError) as ctx:
+            self._ops(lifecycle=lifecycle).dispatch("reload", {})
+        self.assertEqual(ctx.exception.code, "reload_rejected")
+
+    def test_health_exposes_the_session_so_a_reload_can_be_waited_on(self) -> None:
+        first, second = self._ops(), self._ops()
+        self.assertTrue(first.dispatch("health", {})["session"])
+        self.assertNotEqual(
+            first.dispatch("health", {})["session"], second.dispatch("health", {})["session"]
+        )
+
+
+class MethodCacheScopeTests(unittest.TestCase):
+    """Two Resolve builds can be bridged from one process. The harness does that."""
+
+    def _serve(self, methods):
+        import tempfile
+        from src.utils import resolve_bridge_client as rbc
+        from src.utils import resolve_bridge_ops as rbo
+
+        class Build:
+            pass
+
+        for name in methods:
+            setattr(Build, name, lambda self, _n=name: _n)
+        build = Build()
+        root = tempfile.mkdtemp(prefix="cache_")
+        ops = rbo.ResolveOperations(build, media_roots=[root], output_roots=[root])
+        config = {"host": "127.0.0.1", "port": 0, "token": TOKEN, "auth_clock_skew_seconds": 60}
+        bridge = rb.Bridge(build, config, rbo.make_dispatch(ops))
+        bridge.start()
+        self.addCleanup(bridge.stop)
+        transport = rbc.BridgeTransport({**config, "port": bridge.port})
+        return rbc.BridgeProxy(transport, "resolve", type_name="Build")
+
+    def test_one_builds_method_set_never_answers_for_another(self) -> None:
+        """A class-level cache would let the first build define `hasattr` for both.
+
+        Both proxies report type `Build`, so a cache keyed on the type name alone
+        — which is what a shared class attribute amounts to — hands the second
+        bridge the first one's surface. That is the exact question `list_methods`
+        exists to answer honestly.
+        """
+        old = self._serve(["GetProductName"])
+        new = self._serve(["GetProductName", "CreateMagicMask"])
+        self.assertEqual(old.GetProductName(), "GetProductName")
+        self.assertEqual(new.CreateMagicMask(), "CreateMagicMask")
+        with self.assertRaises(AttributeError):
+            getattr(old, "CreateMagicMask")
+
+
+class ReloadLoopTests(unittest.TestCase):
+    """The whole point: new code live without touching Resolve's UI."""
+
+    def test_the_supervisor_loop_swaps_the_surface_under_a_live_client(self) -> None:
+        """Mirrors `scripts/resolve_bridge_launcher.py` end to end.
+
+        A client asks for a reload; `serve()` returns `reload`; the supervisor
+        builds a fresh surface on the same port; the client sees a new session
+        and its old handles are gone. That last part is the contract — a handle
+        surviving into a new object graph is the wrong-target failure the session
+        scoping exists to prevent.
+        """
+        import tempfile
+        import threading as _threading
+        from src.utils import resolve_bridge_client as rbc
+        from src.utils import resolve_bridge_ops as rbo
+
+        root = tempfile.mkdtemp(prefix="reload_")
+        # Port 0 would give the second generation a different port; the real
+        # launcher rebinds the configured one, so pin it the same way.
+        probe = rb.Bridge(FakeResolve(), {"host": "127.0.0.1", "port": 0, "token": TOKEN,
+                                          "auth_clock_skew_seconds": 60}, lambda *_: None)
+        probe.start()
+        port = probe.port
+        probe.stop()
+
+        config = {"host": "127.0.0.1", "port": port, "token": TOKEN, "auth_clock_skew_seconds": 60}
+        generations = []
+        done = _threading.Event()
+
+        def supervisor():
+            while not done.is_set():
+                holder = {}
+                ops = rbo.ResolveOperations(
+                    FakeResolve(), media_roots=[root], output_roots=[root],
+                    lifecycle=lambda mode: holder["bridge"].request_stop(mode) and None,
+                )
+                holder["bridge"] = rb.Bridge(FakeResolve(), config, rbo.make_dispatch(ops))
+                generations.append(ops._session)
+                outcome = holder["bridge"].serve(
+                    poll_seconds=0.05,
+                    host_model={"blocking_required": True, "parent_pid": os.getppid()},
+                )
+                if outcome.get("stop_reason") != "reload":
+                    return
+
+        thread = _threading.Thread(target=supervisor)
+        thread.start()
+        self.addCleanup(done.set)
+        self.addCleanup(thread.join, 10)
+
+        transport = rbc.BridgeTransport(config, timeout=5.0)
+        resolve = rbc.BridgeProxy(transport, "resolve", type_name="Resolve")
+        for _ in range(200):
+            try:
+                first_session = resolve.bridge_health()["session"]
+                break
+            except (rbc.BridgeUnavailable, rbc.BridgeCallError):
+                time.sleep(0.01)
+        else:
+            self.fail("the bridge never came up")
+
+        handle = resolve.GetProjectManager()
+
+        result = resolve.bridge_reload(timeout=15.0)
+        self.assertTrue(result["reloaded"])
+        self.assertNotEqual(result["session"], first_session)
+        self.assertEqual(len(generations), 2, "the supervisor did not build a second surface")
+
+        # A root name still works — it is re-derived, not remembered.
+        self.assertEqual(resolve.GetProductName(), "DaVinci Resolve")
+        # A handle from before does not, and says why.
+        with self.assertRaises(rbc.BridgeCallError) as ctx:
+            handle.GetCurrentProject()
+        self.assertEqual(ctx.exception.code, "stale_handle")
+
+        resolve.bridge_shutdown()
+        thread.join(timeout=10)
+        self.assertFalse(thread.is_alive(), "shutdown did not end the supervisor loop")
+
+
+class LauncherTemplateTests(unittest.TestCase):
+    def test_the_installed_launcher_compiles_before_substitution(self) -> None:
+        """The installer writes this file verbatim; a syntax error ships silently.
+
+        Resolve reports nothing when a Scripts-menu script fails to parse — the
+        same silence as the framework-Python trap — so the check belongs here.
+        """
+        path = REPO / "scripts/resolve_bridge_launcher.py"
+        compile(path.read_text(encoding="utf-8"), str(path), "exec")
+
+    def test_the_launcher_imports_only_what_the_embedded_interpreter_has(self) -> None:
+        import ast
+
+        path = REPO / "scripts/resolve_bridge_launcher.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                imported.add(node.module.split(".")[0])
+        # `resolve_bridge*` come from the installed runtime directory, not a package.
+        allowed = {"base64", "importlib", "os", "sys", "traceback",
+                   "DaVinciResolveScript", "resolve_bridge", "resolve_bridge_ops"}
+        self.assertFalse(imported - allowed, f"launcher imports {imported - allowed}")
