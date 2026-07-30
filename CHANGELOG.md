@@ -2,6 +2,54 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.68.1
+
+Bug fix. A missing tool argument now returns the structured error envelope the
+rest of the surface uses, instead of escaping as a raw `KeyError`.
+
+### Fixed
+
+- **A missing argument reached the client as an unroutable crash.** Actions read
+  `p["track_type"]` directly; when the key was absent the resulting `KeyError`
+  escaped the action, escaped the tool, and arrived as
+  `ToolError: Error executing tool timeline: 'track_type'` — no code, no
+  category, no remediation. Walking the whole surface found **99 of 512 declared
+  actions** failing this way across 16 tools (`timeline`, `graph`, `render`,
+  `media_pool`, `media_storage`, `fusion_comp`, `folder`, `gallery_stills`,
+  `layout_presets`, `project_settings`, `project_manager_*`, `render_presets`,
+  `resolve_control`, `timeline_markers`). They now return, for example:
+
+      {"error": {"message": "'track_type' is required",
+                 "code": "MISSING_TRACK_TYPE", "category": "invalid_input",
+                 "retryable": false, "remediation": "...", "state": {...}}}
+
+  `retryable: false` matters as much as the code: an input error the caller must
+  fix was previously reported through a path that defaulted to retryable, which
+  sends an agent into a loop it cannot win.
+
+  The mechanism is a params dict whose missing keys raise a dedicated
+  `KeyError` subclass, caught at the tool boundary. Catching plain `KeyError`
+  there would have been simpler and wrong — it cannot tell a missing argument
+  from an internal lookup failure on some other dict, so our own bugs would have
+  been relabelled as the caller's mistake. `contracts.validate` remains the
+  preferred tool where a type, range or enum also needs checking, and the actions
+  already using it are unchanged.
+
+### Added
+
+- `tests/test_tool_argument_validation.py` walks **every declared action** with an
+  empty params dict and asserts none leaks a `KeyError`. Reading the source cannot
+  find this class — `p[...]` after a guard is correct and `p[...]` without one is a
+  bug — so the walk executes each branch against a stub Resolve. It fails on the
+  pre-fix tree and runs in 2 s.
+
+### Changed
+
+- `test_doc_tool_counts` counts `@mcp.tool()` decorators from the parsed syntax
+  tree rather than by matching the text. A docstring explaining where the
+  decorator has to sit was counted as a 35th tool; prose that mentions a
+  decorator is not a tool.
+
 ## What's New in v2.68.0
 
 Six engines that let an agent judge its own output before shipping it — audio
