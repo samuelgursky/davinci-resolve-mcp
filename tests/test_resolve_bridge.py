@@ -1608,3 +1608,52 @@ class ServerReachesTheBridgeTests(unittest.TestCase):
             self.assertFalse(server._bridge_requested())
         with mock.patch.dict(os.environ, {"DAVINCI_RESOLVE_BRIDGE": "1"}):
             self.assertTrue(server._bridge_requested())
+
+
+class HandleEvictionTests(unittest.TestCase):
+    """The handle table is bounded, and *which* entry it drops is load-bearing.
+
+    Measured against a 400-item timeline on free 21.0.3.7: 6000 handles minted,
+    a handle touched every round still valid at the end, an untouched one evicted
+    and refusing with `stale_handle`. Long sessions depend on the first half;
+    correctness depends on the second, because a recycled id that resolved to a
+    different object would be a wrong-target edit with nothing to indicate it.
+    """
+
+    def _ops(self, ceiling):
+        import tempfile
+        from src.utils import resolve_bridge_ops as rbo
+
+        root = tempfile.mkdtemp(prefix="evict_")
+        ops = rbo.ResolveOperations(FakeResolve(), media_roots=[root], output_roots=[root])
+        ops.MAX_HANDLES = ceiling
+        return ops
+
+    def _mint(self, ops):
+        return ops.dispatch("call", {"target": "resolve", "method": "GetProjectManager"})["value"]["__handle__"]
+
+    def test_a_handle_in_continuous_use_is_never_the_one_dropped(self) -> None:
+        ops = self._ops(8)
+        warm = self._mint(ops)
+        for _ in range(50):
+            self._mint(ops)
+            # Touching it promotes it, which is the whole point.
+            ops.dispatch("call", {"target": warm, "method": "GetName"})
+        ops.dispatch("call", {"target": warm, "method": "GetName"})  # must not raise
+
+    def test_an_untouched_handle_is_evicted_and_refuses_rather_than_resolving(self) -> None:
+        from src.utils import resolve_bridge_ops as rbo
+
+        ops = self._ops(8)
+        cold = self._mint(ops)
+        for _ in range(50):
+            self._mint(ops)
+        with self.assertRaises(rbo.OperationError) as ctx:
+            ops.dispatch("call", {"target": cold, "method": "GetName"})
+        self.assertEqual(ctx.exception.code, "stale_handle")
+
+    def test_the_table_never_exceeds_its_ceiling(self) -> None:
+        ops = self._ops(8)
+        for _ in range(200):
+            self._mint(ops)
+        self.assertLessEqual(len(ops._handles), 8)

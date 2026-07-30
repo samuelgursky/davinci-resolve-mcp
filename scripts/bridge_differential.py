@@ -188,12 +188,106 @@ def scenario_scale(resolve: Any, _workspace: Path) -> Dict[str, Any]:
     return observations
 
 
+def scenario_handle_pressure(resolve: Any, _workspace: Path) -> Dict[str, Any]:
+    """Push past the 4096-handle ceiling and check what an evicted handle does.
+
+    The table is bounded so a long session cannot pin every enumerated object
+    inside Resolve forever. Eviction is therefore normal, and the property that
+    matters is that a lost handle says `stale_handle` — a client can re-fetch from
+    that. The failure this guards against is an evicted id being reused and
+    silently resolving to a *different* object, which is a wrong-target edit with
+    no error anywhere.
+    """
+    from src.utils import resolve_bridge_client as client
+
+    transport = getattr(resolve, "_transport", None)
+    if transport is None:
+        return {"skipped": "native scripting has no handle table"}
+
+    timeline = resolve.GetProjectManager().GetCurrentProject().GetCurrentTimeline()
+    first_batch = timeline.GetItemListInTrack("video", 1) or []
+    if not first_batch:
+        return {"skipped": "no clip on video track 1"}
+    observations: Dict[str, Any] = {"batch_size": len(first_batch)}
+
+    # Two handles from the same first batch. One is touched every round, the
+    # other is left alone — because access promotes an entry, so "does a handle
+    # survive" has two different answers and only measuring one of them would
+    # report the wrong ceiling.
+    kept_warm, left_cold = first_batch[0], first_batch[-1]
+
+    minted = len(first_batch)
+    rounds = 0
+    started = time.time()
+    while minted < 6000 and rounds < 400 and time.time() - started < 180:
+        minted += len(timeline.GetItemListInTrack("video", 1) or [])
+        rounds += 1
+        try:
+            kept_warm.GetName()
+            observations["warm_valid_at"] = minted
+        except client.BridgeCallError as exc:
+            observations["warm_evicted_at"] = minted
+            observations["warm_code"] = exc.code
+            break
+    observations["handles_minted"] = minted
+    observations["rounds"] = rounds
+    observations["seconds"] = round(time.time() - started, 2)
+
+    try:
+        left_cold.GetName()
+        observations["cold_survived"] = True
+    except client.BridgeCallError as exc:
+        observations["cold_evicted"] = True
+        observations["cold_code"] = exc.code
+        # The property that actually matters: an evicted handle refuses. If a
+        # recycled id resolved to a different object instead, the caller would
+        # edit the wrong clip with nothing to indicate it.
+        observations["cold_refused_cleanly"] = exc.code == "stale_handle"
+    return observations
+
+
 SCENARIOS: Dict[str, Callable[[Any, Path], Dict[str, Any]]] = {
     "render": scenario_render,
     "interchange_export": scenario_interchange_export,
     "set_lut": scenario_set_lut,
     "scale": scenario_scale,
+    "handle_pressure": scenario_handle_pressure,
 }
+
+#: Name of the timeline `--build-timeline` creates. Distinctive so it is obvious
+#: what it is and safe to delete.
+SCALE_TIMELINE = "MCP Bridge Scale Test - delete me"
+
+
+def build_scale_timeline(resolve: Any, items: int) -> Dict[str, Any]:
+    """Create a timeline with `items` clips, so the scale scenario has a subject.
+
+    Writes. Only runs when `--build-timeline` is passed. Doubles as a test of
+    argument encoding depth: `AppendToTimeline` takes a list of dicts each
+    holding a live MediaPoolItem, so the proxy has to send objects back *inside*
+    a nested structure, not merely as a top-level argument.
+    """
+    project = resolve.GetProjectManager().GetCurrentProject()
+    pool = project.GetMediaPool()
+    clips = [c for c in (pool.GetRootFolder().GetClipList() or [])
+             if (c.GetClipProperty("Type") or "") != "Timeline"]
+    if not clips:
+        return {"failed": "the media pool has no clip to append"}
+    source = clips[0]
+    timeline = pool.CreateEmptyTimeline(SCALE_TIMELINE)
+    if not timeline:
+        return {"failed": f"could not create {SCALE_TIMELINE!r} (does it already exist?)"}
+    project.SetCurrentTimeline(timeline)
+    started = time.time()
+    appended = pool.AppendToTimeline(
+        [{"mediaPoolItem": source, "startFrame": 0, "endFrame": 5} for _ in range(items)]
+    )
+    return {
+        "timeline": SCALE_TIMELINE,
+        "requested": items,
+        "appended": len(appended) if isinstance(appended, list) else bool(appended),
+        "seconds": round(time.time() - started, 2),
+    }
 
 
 def run_scenarios(resolve: Any, workspace: Path, only: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -212,12 +306,26 @@ def run_scenarios(resolve: Any, workspace: Path, only: Optional[List[str]] = Non
 
 
 def probe_modal_timeout(resolve: Any, timeout: float) -> Dict[str, Any]:
-    """Does a blocked Resolve time the client out, or hang it forever?
+    """Does a blocked Resolve hang the client, or does it come back?
 
-    Cannot open a dialog from here — that is the point of a modal — so this
-    measures the property that matters when one is open: the client gives up on a
-    bounded schedule and says something actionable, rather than pinning a tool
-    call until the user notices.
+    Measured on free 21.0.3.7 with dialogs genuinely open, and the answer was
+    better than the question assumed: **the bridge is not blocked by modals.**
+    With Project Settings open, and again with a native file-open dialog up,
+    reads and writes both went through — a 400-item enumeration finished in
+    0.17 s. The reason is the host model: a Scripts-menu script is a separate
+    process, so a modal that owns Resolve's UI thread does not own the scripting
+    IPC. The child-process lifecycle was forced on us by a different question and
+    turns out to buy modal immunity as a side effect.
+
+    One difference was observed under the file dialog and is recorded rather than
+    generalised from: `Timeline.SetName` returned None where the same call
+    returns False with no dialog open. A single observation, so treat it as a
+    reason to keep `false_is_error` catching None as well as False, not as a
+    characterisation of every write.
+
+    This probe cannot open a dialog itself, so it verifies the fallback that
+    matters if some future modal *does* block: the client gives up on a bounded
+    schedule with an actionable code rather than pinning a tool call.
     """
     from src.utils import resolve_bridge_client as client
 
@@ -244,6 +352,8 @@ def main() -> int:
     parser.add_argument("--mode", choices=("differential", "coverage", "surface"), default="coverage")
     parser.add_argument("--scenarios", action="store_true", help="run the write scenarios (mutates the project)")
     parser.add_argument("--only", action="append", help="restrict to one scenario; repeatable")
+    parser.add_argument("--build-timeline", type=int, metavar="N",
+                        help=f"create {SCALE_TIMELINE!r} with N clips first (writes)")
     parser.add_argument("--workspace", default=str(Path.home() / "Movies" / "mcp_bridge_test"))
     parser.add_argument("--json", dest="json_path", help="write the full report here")
     arguments = parser.parse_args()
@@ -260,6 +370,9 @@ def main() -> int:
 
     bridge = connect_bridge()
     report["bridge_health"] = bridge.bridge_health()
+    if arguments.build_timeline:
+        report["built"] = build_scale_timeline(bridge, arguments.build_timeline)
+        print("built       : %s" % json.dumps(report["built"], sort_keys=True))
     bridged = bd.run_probes(bridge, surface["safe_to_probe"])
     report["coverage"] = bd.coverage_report(surface, bridged)
     report["modal_timeout"] = probe_modal_timeout(bridge, timeout=5.0)
