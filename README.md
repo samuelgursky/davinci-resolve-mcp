@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.67.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.68.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#server-modes)
@@ -22,7 +22,7 @@ A local browser control panel ships with the server for inspecting Resolve state
 npx davinci-resolve-mcp setup
 ```
 
-Before connecting, open DaVinci Resolve Studio and set **Preferences > General > External scripting using** to **Local**. The npm launcher installs a managed copy under your user application-data directory, then runs the universal Python installer. The installer creates a virtual environment, detects Resolve paths, and can configure Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Zed, Continue, Cline, Roo Code, OpenCode, and JetBrains IDEs.
+Before connecting, open DaVinci Resolve Studio and set **Preferences > General > External scripting using** to **Local**. (On the **free edition** that preference does not help — see [Free edition](#free-edition-in-app-bridge) below.) The npm launcher installs a managed copy under your user application-data directory, then runs the universal Python installer. The installer creates a virtual environment, detects Resolve paths, and can configure Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Zed, Continue, Cline, Roo Code, OpenCode, and JetBrains IDEs.
 
 For source installs:
 
@@ -35,6 +35,31 @@ python install.py
 For platform paths, client-specific config, and manual setup, see [Installation and Configuration](docs/install.md).
 
 The installer and server check the latest GitHub release for MCP updates. Checks are best-effort and throttled; the server never blocks MCP startup for a prompt. The installer can prompt, snooze, ignore a release, disable checks, or apply an opt-in safe auto-update for clean git checkouts.
+
+## Free edition (in-app bridge)
+
+Blackmagic gates *external* scripting to Studio: on the free edition
+`scriptapp("Resolve")` refuses a foreign process, whatever the preference says.
+The **Workspace ▸ Scripts** menu is not gated — a script launched from it is
+handed the live `resolve` object on any edition — so the server can reach the
+free edition through a small script that runs *inside* Resolve and re-exports it
+over an authenticated loopback listener.
+
+```bash
+python scripts/install_resolve_bridge.py
+# restart Resolve, open a project, then: Workspace > Scripts > resolve_bridge
+export DAVINCI_RESOLVE_BRIDGE=1      # opt-in; unset changes nothing
+```
+
+Requires a **framework Python** (python.org). Resolve enumerates `.py` scripts
+only when it finds one — Homebrew, pyenv and conda interpreters are not
+detected, and the script silently never appears in the menu. A Lua canary is
+installed alongside so you can tell that apart from a wrong folder.
+
+Validated on free 21.0.3.7 and Studio 19.1.3.7. This is the documented in-app
+path, not a licence circumvention, but Blackmagic could close it — treat it as a
+supported-until-it-is-not tier. Loopback only, HMAC-signed requests, one-use
+nonces.
 
 ## Local Control Panel
 

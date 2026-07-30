@@ -19,6 +19,26 @@ configured to the Resolve host IP (use `127.0.0.1` on the same machine). The
 server auto-launches Resolve if it is not running, but that first connection can
 take up to 60 seconds.
 
+**Free edition.** Both of those preferences are Studio features; on the free
+edition `scriptapp("Resolve")` refuses a foreign process regardless. A third
+transport reaches it — a script run from **Workspace ▸ Scripts** is handed the
+live `resolve` object on any edition and re-exports it over an authenticated
+loopback listener. Install with `python scripts/install_resolve_bridge.py`, start
+it from that menu, and set `DAVINCI_RESOLVE_BRIDGE=1`. Existing tool call sites
+work unchanged. Two things to know when diagnosing it:
+
+- Resolve lists `.py` scripts only when it can find a **framework Python**
+  (python.org). Homebrew/pyenv/conda are not detected and the script simply never
+  appears, with no error. The installer preflights this and ships a Lua canary,
+  which always lists, so "Python not detected" is distinguishable from "wrong
+  folder".
+- The in-Resolve runtime is a **copy taken at install time**. After changing the
+  repository, re-run the installer and then ask the running bridge to reload —
+  it re-imports from disk in place, so Resolve does not need restarting.
+
+The bridge is a documented in-app path rather than a licence circumvention, but
+Blackmagic could close it; treat it as a supported-until-it-is-not tier.
+
 Network scripting permits remote control of Resolve. Use Local mode when remote
 access is unnecessary; otherwise restrict access with host firewall and network
 controls.

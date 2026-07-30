@@ -2,6 +2,105 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.68.0
+
+Six engines that let an agent judge its own output before shipping it — audio
+loudness, silence calibration, image QC, transcript editing, captions — plus the
+**in-app bridge**, which reaches the **free edition** of DaVinci Resolve, whose
+external scripting API refuses foreign processes entirely.
+
+### Added
+
+- **Audio delivery QC.** Delivery targets carry a named loudness contract
+  (`web`, `podcast`, `ebu_r128`, `atsc_a85`, `ott_dialogue_gated`) and project it
+  into the existing `loudness_qc` vocabulary. Dialogue-gated standards emit no
+  gradeable `integrated` figure — `loudness_qc` measures full-program, so grading
+  a dialogue-gated number against it produces a verdict that means nothing; it
+  travels as advisory metadata with the reason stated. No shipped target names a
+  standard, because a ProRes master has no inherent programme loudness.
+  `render(action='list_loudness_standards')`.
+- **Auto-calibrated silence gate.** `plan_silence_ripple` derives the threshold
+  from each clip's own dynamics instead of a fixed −30 dB. The metric is `astats`
+  **RMS trough** paired with RMS peak: `mean_volume` tracks programme level, and
+  `Noise floor dB` moved 19 dB between two fixtures sharing an identical noise
+  bed purely because one was quieter for longer. Against ground truth the fixed
+  threshold was wrong on all four fixtures. When calibration cannot be trusted
+  the item is **kept whole** rather than stripped — a fixed threshold applied to
+  material it does not suit is not a degraded answer, it is a wrong one.
+- **Image QC.** `media_analysis(action='assess_grade')` gives an agent
+  deterministic grounds to reject its own grade: tonal frame, noise
+  amplification, banding, highlight posterization and clipping growth, with
+  validated **CIEDE2000** (all 33 Sharma/Wu/Dalal reference pairs to 4 dp). A
+  clean grade costs zero tokens; vision is spent only where the numbers cannot
+  settle it. Non-display-referred working spaces are **refused, never guessed** —
+  the right transform depends on camera and project colour management, which a
+  frame cannot tell you.
+- **Word-level transcript editing.** `edit_engine(action='plan_transcript_tighten')`
+  removes fillers, false starts and over-long pauses at word boundaries with a
+  reason per cut, and `search_spoken_content` searches word timings across a
+  whole shoot to build selects. A lexical axis alongside `find_similar`'s
+  semantic-visual one.
+- **Captions.** `media_analysis(action='generate_captions')` emits SRT and WebVTT
+  under broadcast line rules, plus chapters and YouTube description text.
+- **The in-app bridge — live read and write control of the FREE edition.**
+  Opt-in with `DAVINCI_RESOLVE_BRIDGE=1`; unset changes nothing for existing
+  installs. A script launched from Workspace ▸ Scripts is handed the live
+  `resolve` object on any edition and re-exports it over an authenticated
+  loopback listener, which `connect_resolve` uses as a third transport beside
+  Local and Network. Existing call sites need no changes. This is the documented
+  in-app path, not a licence circumvention — but Blackmagic could close it, so
+  treat it as supported-until-it-is-not.
+- **`shutdown` and `reload` for the bridge.** The launcher blocks (correctly — a
+  Scripts-menu script is a child process, so a daemon thread dies the instant it
+  returns), which used to mean a stale in-Resolve copy could only be replaced by
+  quitting Resolve. `reload` re-imports the runtime from disk in place, and
+  refuses before stopping if the new sources will not compile.
+
+### Fixed
+
+- **The bridge was unreachable on the machine it exists for.** `_try_connect`
+  returned on `dvr_script is None` before calling `connect_resolve`, the function
+  that accepts None in bridge mode. Blackmagic's scripting module ships with the
+  *installer*, not the App Store build, so a free-edition-only machine has no
+  `Developer/Scripting/Modules` tree and the import fails. Verified by blocking
+  the import against a healthy live bridge: `get_resolve()` answered None.
+- **Auto-launch started the wrong Resolve, or one nobody asked for.** The macOS
+  path list contained only the installer location, so a free-only machine found
+  nothing and a machine with both always started Studio. In bridge mode it now
+  refuses outright: launching cannot create a listener that only a Scripts-menu
+  run creates.
+- **Interchange export over the bridge was degrading silently.** Resolve's API
+  constants (`EXPORT_AAF`, `AUDIO_SYNC_*`) are plain attributes and `dir()` does
+  not list them — measured on 21.0.3.7, `dir(resolve)` returns 34 names with no
+  `EXPORT_*` among them while the constants read back as real values. The proxy
+  could only call methods, so `hasattr` said False and the server fell through to
+  handing Resolve the bare string `"EXPORT_AAF"`.
+- **The proxy broke every chain longer than one call.** Every live Resolve object
+  reports `type(obj).__name__ == "PyRemoteObject"` — root 34 methods, Project 49,
+  TimelineItem 88, one class name — so caching method sets on it let the first
+  object touched define `hasattr` for everything after. Method sets are now keyed
+  on provenance, and absence is re-verified against the object itself.
+- **Bridge error codes never crossed the transport.** Every surface code was
+  flattened to `operation_failed`, so `stale_handle` (re-fetch) and
+  `ambiguous_locator` (disambiguate) arrived as one undifferentiated failure.
+
+### Validated live
+
+On **DaVinci Resolve 21.0.3.7 (App Store, free, sandboxed)**, with Blackmagic's
+scripting module blocked to reproduce a free-only machine: 34 tools, 583 declared
+actions, **165 read-shaped actions attempted, 145 clean, zero bridge-attributable
+failures**; 109 of the 112 API read methods the tools actually call exercised on
+the live object graph; a render completed to a non-empty file; AAF/DRT/EDL/FCPXML
+all written by `Timeline.Export`; 400 clips appended in 1.23 s and enumerated at
+0.81 ms/item; an evicted handle refusing with `stale_handle` rather than
+resolving to another object; and reads *and* writes continuing to work with a
+native file dialog open, because the bridge runs in its own process.
+
+`scripts/bridge_differential.py --mode differential` diffs the bridge against
+native scripting on one Studio instance. That comparison has **not** been run
+yet, so the evidenced claim is that the bridge carries the surface the tools use
+on the free edition — not that it is byte-identical to native scripting.
+
 ## What's New in v2.67.1
 
 Documentation correction. No code changes — v2.67.0 already ships the correct
