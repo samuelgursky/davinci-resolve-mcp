@@ -7,3 +7,9 @@
 # it, AAF preview honest-refuses (it is never faked); live AAF import into Resolve
 # does not need it (Resolve reads AAF natively).
 pyaaf2>=1.7.0
+
+# mcp — pin below 2.0. server.py imports `mcp.server.fastmcp`, which the 1.x SDK
+# provides. The 2.0.0 major restructured the SDK (no fastmcp module, switched to
+# httpx2) and is incompatible. install.py runs `pip install mcp[cli]` UNPINNED
+# first, so it grabs 2.0.0; this constraint (installed second) pins it back.
+mcp[cli]>=1.29,<2
