@@ -33,6 +33,23 @@ Thin router; depth stays in the kernel.
   `convert` (needs ffmpeg on PATH — GPL, not bundled). Align/loudness-measure not
   yet vendored.
 
+## Live: loudness contracts and the silence gate
+
+- **Named loudness standards** live with the delivery targets, not here:
+  `render(action='list_loudness_standards')` → `web`, `podcast`, `ebu_r128`,
+  `atsc_a85`, `ott_dialogue_gated`. Attach one to a delivery target and hand the
+  emitted `loudness_target.target` to advanced `loudness_qc`. See the delivery
+  skill for why dialogue-gated standards assert true peak only.
+- **`plan_silence_ripple` calibrates its own gate.** Omit `threshold_db` and the
+  threshold is measured from that clip's own dynamics (`astats` trough vs peak),
+  per item, reported in `calibrations[]`. A fixed −30 dB under-detects on quiet
+  location sound and over-cuts a noisy room.
+- When trough and peak are not separated, no threshold distinguishes speech from
+  room: the item is **kept whole** and the reason surfaced, rather than stripped
+  against an unvalidated gate. A −30 dB default applied to a −33 dB programme
+  reads as silent end to end and would remove the entire clip.
+- Pass `threshold_db` explicitly to override; it is honoured untouched.
+
 ## Gotchas
 
 - Timeline audio `SetProperty` (e.g. `Volume`) can return false for some

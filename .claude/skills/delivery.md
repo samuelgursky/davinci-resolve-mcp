@@ -38,6 +38,20 @@ is what you QC the finished file against — do not hand-write a second spec.
 - Bitrate is deliberately unset (Resolve has no bitrate key). Pin quality
   yourself via `settings` if a spec demands it.
 
+- **Programme loudness is a separate projection.** A target names a standard via
+  `overrides: {loudness_standard: "ebu_r128"}`; `resolve_delivery_target` then
+  returns a `loudness_target` alongside `qc_spec`. Hand `loudness_target.target`
+  to advanced `loudness_qc`. `render(action='list_loudness_standards')` lists the
+  five named contracts (`web`, `podcast`, `ebu_r128`, `atsc_a85`,
+  `ott_dialogue_gated`) — cite one, never invent the numbers.
+- No shipped target names a loudness standard by default: a ProRes master has no
+  inherent programme loudness and a broadcast handoff depends on territory.
+  A `loudness_note` tells you when none is pinned.
+- **Dialogue-gated standards emit no gradeable `integrated`.** `loudness_qc`
+  measures full-programme; grading a dialogue-gated figure against that means
+  nothing. The number rides in `meta` for a properly gated meter and only true
+  peak is asserted. This is deliberate, not a missing field.
+
 Use the lower-level path below when you need something no target covers.
 
 ## Live render essentials

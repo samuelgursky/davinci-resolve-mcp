@@ -122,6 +122,7 @@ from src.utils.fusion_group_settings import (
 from src.utils import analysis_runs as _analysis_runs
 from src.utils import brain_edits as _brain_edits
 from src.utils import edit_engine as _edit_engine_mod
+from src.utils import transcript_edit as _transcript_edit_defaults
 from src.utils import media_pool_changes as _media_pool_changes
 from src.utils import timeline_versioning as _timeline_versioning
 from src.utils import project_spec as _project_spec
@@ -15240,6 +15241,7 @@ _RENDER_KERNEL_ACTIONS = [
     "export_render_boundary_report",
     "list_delivery_targets",
     "resolve_delivery_target",
+    "list_loudness_standards",
     "prepare_delivery_job",
 ]
 
@@ -15618,6 +15620,9 @@ def _resolve_delivery_target_live(proj, p: Dict[str, Any]):
 
     fps = _delivery_timeline_fps(proj)
     qc_spec = _delivery_targets.to_qc_spec(target, timeline_fps=fps)
+    # Loudness is a separate projection feeding advanced `loudness_qc`, not a
+    # deliverable_qc field — the mix sets programme loudness, not the render.
+    loudness = _delivery_targets.to_loudness_target(target)
     return (
         {
             "target": target.id,
@@ -15633,7 +15638,35 @@ def _resolve_delivery_target_live(proj, p: Dict[str, Any]):
                 if qc_spec
                 else "This target renders an image sequence; deliverable_qc probes a single file, so it has no QC spec."
             ),
+            "loudness_target": loudness,
+            "loudness_note": (
+                None
+                if loudness
+                else "This target pins no programme loudness. Name one with "
+                "overrides={'loudness_standard': ...}; see render(action='list_loudness_standards')."
+            ),
             "notes": list(target.notes),
+        },
+        None,
+    )
+
+
+def _list_loudness_standards(proj, p: Dict[str, Any]):
+    """Named programme-loudness contracts, so an agent cites one rather than inventing numbers."""
+    return (
+        {
+            "standards": _delivery_targets.list_loudness_standards(),
+            "lra_advisory_lu": _delivery_targets.LRA_ADVISORY_LU,
+            "usage": (
+                "Attach with render(action='resolve_delivery_target', params={'target': ..., "
+                "'overrides': {'loudness_standard': '<id>'}}), then hand the returned "
+                "loudness_target.target to the advanced server's loudness_qc."
+            ),
+            "note": (
+                "Dialogue-gated standards emit no gradeable integrated value: loudness_qc "
+                "measures full-program loudness, so that figure travels in meta for a "
+                "dialogue-gated meter and only true peak is asserted."
+            ),
         },
         None,
     )
@@ -15864,6 +15897,9 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     elif action == "resolve_delivery_target":
         _resolved, _target_err = _resolve_delivery_target_live(proj, p)
         return _target_err if _target_err else _ok(**_resolved)
+    elif action == "list_loudness_standards":
+        _standards, _standards_err = _list_loudness_standards(proj, p)
+        return _standards_err if _standards_err else _ok(**_standards)
     elif action == "prepare_delivery_job":
         return _prepare_delivery_job(proj, p)
     elif action == "set_format_and_codec":
@@ -17288,6 +17324,38 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
 
     if action == "capabilities":
         return _media_analysis_capabilities_for_request(ctx)
+    if action == "assess_grade":
+        # Numeric grade-damage QC. Distinct from advanced `verify_grade`, which
+        # asks whether Resolve applied what was asked; this asks whether the
+        # resulting image is damaged. Free and deterministic — the vision block
+        # in the result says whether a paid second opinion is warranted.
+        from src.utils import image_qc as _image_qc_mod
+
+        try:
+            return _ok(**_image_qc_mod.assess_grade(
+                str(p.get("source_path") or p.get("sourcePath") or ""),
+                time_seconds=float(p.get("time_seconds", p.get("timeSeconds", 0.0)) or 0.0),
+                graded_path=(p.get("graded_path") or p.get("gradedPath")) or None,
+                lut_path=(p.get("lut_path") or p.get("lutPath")) or None,
+                working_space=str(p.get("working_space") or p.get("workingSpace") or "rec709"),
+                cost_tier=str(p.get("cost_tier") or p.get("costTier") or _image_qc_mod.DEFAULT_COST_TIER),
+            ))
+        except _image_qc_mod.ImageQcError as exc:
+            return _err(
+                str(exc),
+                code="IMAGE_QC_REFUSED",
+                category="invalid_input",
+                remediation=(
+                    "Supply exactly one of graded_path or lut_path, and declare a display-referred "
+                    "working_space. Log/scene-referred frames must be converted first — these "
+                    "metrics are undefined on them and will not be guessed at."
+                ),
+            )
+    if action == "image_qc_capabilities":
+        from src.utils import image_qc as _image_qc_mod
+
+        return _ok(**_image_qc_mod.capabilities(), cost_tiers=list(_image_qc_mod.COST_TIERS),
+                   default_cost_tier=_image_qc_mod.DEFAULT_COST_TIER)
     if action == "recheck_capabilities":
         # Re-runs detection (shutil.which / importlib.util.find_spec) so a tool
         # an agent just installed flips from missing → available without the
@@ -18197,6 +18265,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
     return _unknown(action, [
         "capabilities",
         "recheck_capabilities",
+        "assess_grade",
+        "image_qc_capabilities",
         "install_guidance",
         "resolve_output_root",
         "plan",
@@ -18752,6 +18822,71 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             include_audio=str(p.get("include_audio", p.get("includeAudio", True))).strip().lower() not in {"false", "0", "no", "none", "off"},
         )
 
+    if action == "generate_captions":
+        _r, proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        from src.utils import captions as _captions_mod
+        from src.utils import strata as _strata_mod
+
+        conn, clip, clip_err = _strata_mod.resolve_clip(
+            project_root, p.get("clip_ref") or p.get("clipRef") or p.get("clip_id"), require_media=False
+        )
+        if clip_err:
+            return clip_err
+        _words = _strata_mod.read_words(conn, clip["clip_uuid"])
+        _opts = {}
+        for _key, _param in (
+            ("max_chars_per_line", "maxCharsPerLine"), ("max_lines", "maxLines"),
+            ("max_block_seconds", "maxBlockSeconds"), ("min_block_seconds", "minBlockSeconds"),
+            ("min_gap_seconds", "minGapSeconds"), ("pause_break_seconds", "pauseBreakSeconds"),
+        ):
+            _value = p.get(_key, p.get(_param))
+            if _value is not None:
+                _opts[_key] = int(_value) if _key in {"max_chars_per_line", "max_lines"} else float(_value)
+        try:
+            _result = _captions_mod.generate(
+                _words,
+                fmt=str(p.get("format") or p.get("fmt") or "srt").lower(),
+                with_chapters=str(p.get("with_chapters", p.get("withChapters", False))).strip().lower() in {"true", "1", "yes", "on"},
+                **_opts,
+            )
+        except _captions_mod.CaptionError as exc:
+            return _err(str(exc), code="CAPTION_PARAMS_INVALID", category="invalid_input")
+        _result["clip"] = {"clip_uuid": clip["clip_uuid"], "clip_name": clip.get("clip_name")}
+        return _result
+
+    if action == "plan_transcript_tighten":
+        _r, proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        return _edit_engine_mod.plan_transcript_tighten(
+            project_root,
+            clip_ref=p.get("clip_ref") or p.get("clipRef") or p.get("clip_id"),
+            remove_fillers=str(p.get("remove_fillers", p.get("removeFillers", True))).strip().lower() not in {"false", "0", "no", "off"},
+            remove_false_starts=str(p.get("remove_false_starts", p.get("removeFalseStarts", True))).strip().lower() not in {"false", "0", "no", "off"},
+            collapse_pauses=str(p.get("collapse_pauses", p.get("collapsePauses", True))).strip().lower() not in {"false", "0", "no", "off"},
+            max_pause=float(p.get("max_pause", p.get("maxPause", _transcript_edit_defaults.DEFAULT_MAX_PAUSE_S))),
+            handle=float(p.get("handle", _transcript_edit_defaults.DEFAULT_HANDLE_S)),
+            min_cut=float(p.get("min_cut", p.get("minCut", _transcript_edit_defaults.DEFAULT_MIN_CUT_S))),
+        )
+
+    if action == "search_spoken_content":
+        _r, proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        query = p.get("query") or p.get("q")
+        if not isinstance(query, str) or not query.strip():
+            return _err("query is required", code="MISSING_QUERY", category="invalid_input")
+        return _edit_engine_mod.search_spoken_content(
+            project_root,
+            query=query,
+            mode=str(p.get("mode") or "phrase"),
+            context_seconds=float(p.get("context_seconds", p.get("contextSeconds", 1.5))),
+            handle_seconds=float(p.get("handle_seconds", p.get("handleSeconds", 0.5))),
+            max_hits=int(p.get("max_hits", p.get("maxHits", 200))),
+        )
+
     if action == "plan_silence_ripple":
         _r, proj, project_root, err = _project_context(need_resolve=True)
         if err:
@@ -18765,7 +18900,14 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             items=items,
             timeline_name=tl.GetName(),
             timeline_fps=_edit_engine_timeline_fps(tl),
-            threshold_db=float(p.get("threshold_db") if p.get("threshold_db") is not None else p.get("thresholdDb") if p.get("thresholdDb") is not None else _edit_engine_mod.DEFAULT_SILENCE_THRESHOLD_DB),
+            # Omitted => None => the gate is calibrated per item from that
+            # slice's own dynamics. Passing the old fixed default here would
+            # make auto-calibration unreachable through the MCP surface.
+            threshold_db=(
+                float(_th)
+                if (_th := (p.get("threshold_db") if p.get("threshold_db") is not None else p.get("thresholdDb"))) is not None
+                else None
+            ),
             min_strip_frames=float(p.get("min_strip_frames") if p.get("min_strip_frames") is not None else p.get("minStripFrames") if p.get("minStripFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_MIN_STRIP_FRAMES),
             pre_head_frames=float(p.get("pre_head_frames") if p.get("pre_head_frames") is not None else p.get("preHeadFrames") if p.get("preHeadFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_PRE_HEAD_FRAMES),
             post_tail_frames=float(p.get("post_tail_frames") if p.get("post_tail_frames") is not None else p.get("postTailFrames") if p.get("postTailFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_POST_TAIL_FRAMES),
@@ -19344,6 +19486,9 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "plan_tighten",
         "execute_tighten",
         "plan_silence_ripple",
+        "plan_transcript_tighten",
+        "generate_captions",
+        "search_spoken_content",
         "execute_silence_ripple",
         "plan_swap",
         "execute_swap",

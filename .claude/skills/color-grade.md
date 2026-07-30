@@ -62,6 +62,32 @@ apply are the caller's job. Pick by intent:
   `gamut_legal` (broadcast-legal, measurement only).
 - **Verify** — `verify_grade` (intended vs applied → landed/drifted/missing).
 
+## Did the grade damage the image? (`media_analysis assess_grade`)
+
+`verify_grade` asks *did Resolve apply what I asked*. This asks *is the result
+any good* — a grade can land perfectly and still be flat, milky, crunchy or
+banded.
+
+    media_analysis(action='assess_grade', params={
+      source_path, graded_path | lut_path, time_seconds, working_space })
+
+Deterministic numpy on a decoded frame of the **real** result (a rendered file,
+or the source pushed through the LUT by ffmpeg) — never a simulated transform,
+because LUT interpolation and encode rounding are where banding is introduced.
+Returns `acceptable`, `flags` (each with a remedy), the raw measurements, and a
+`grade_shift_delta_e2000` magnitude.
+
+- Flags: `flat`, `milky`, `washed_out`, `noisy`, `clipped`, `posterized`,
+  `banding`. **Read them and reject your own grade** rather than shipping the
+  first look that rendered.
+- **Display-referred only.** ACEScct / S-Log3 / LogC are *refused*, not
+  converted — the right transform depends on camera and project colour
+  management, which a frame cannot tell you. Convert first, then re-run.
+- `vision` in the result says whether a paid second opinion is warranted.
+  Content-dependent flags (`banding` on a real sky gradient, a deliberate
+  `washed_out`) escalate; unambiguous damage does not. A clean grade costs zero
+  tokens.
+
 ## Cross-server gotchas that bite
 
 - **Grade value space.** `drx` `generate`/`merge` default to `space:'ui'`

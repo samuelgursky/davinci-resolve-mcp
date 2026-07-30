@@ -37,6 +37,26 @@ re-derive it here.
   (plan → confirm → execute); tighten variants can carry audio via `keep_ranges`
   mirror / `include_audio`.
 
+## Word-level editing and spoken search (`edit_engine`)
+
+Silence-driven tightening cannot remove an audible "um" mid-phrase or a
+stammered restart. These work on the words instead and are complementary to
+`plan_silence_ripple`, not a replacement.
+
+- **`plan_transcript_tighten(clip_ref)`** — fillers, false starts and long
+  pauses, at word boundaries. Emits the same `keep_ranges` shape the variant
+  assembler already takes, and **every removal states its reason**, so the plan
+  can be argued with rather than only accepted. False starts are a flagged
+  heuristic: tight repeats only, so "no, no, no" as emphasis survives.
+- **`search_spoken_content(query, mode)`** — phrase / all_words / regex across
+  every transcribed clip, returning timestamped hits with context plus
+  `selects` (in/out with handles). A *lexical* axis; `find_similar` is the
+  semantic-visual one. Use both — a shoot should be searchable either way.
+  Deterministic order (clip name, then time), so an identical search gives an
+  identical selects list.
+- Needs `transcript_words`: run transcription, then strata backfill. Both
+  actions say so rather than returning an empty plan.
+
 ## Offline editorial (`editorial` actions)
 
 - `parse_interchange` — EDL / OTIO / XMEML (AAF = an honest refuse, not a fake).

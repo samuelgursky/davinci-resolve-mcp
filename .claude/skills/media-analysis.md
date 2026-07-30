@@ -32,6 +32,18 @@ When using the DaVinci Resolve MCP tools alongside media analysis:
 
 Analysis informs Resolve actions. At no point do we create intermediate files that enter the media pipeline.
 
+## Deliverables from a transcript
+
+- **`generate_captions(clip_ref, format='srt'|'vtt', with_chapters=?)`** — caption
+  blocks under broadcast rules: line-length and lines-per-block caps, max **and
+  min** block duration, breaks at sentence ends then pauses then clauses, timings
+  snapped to spoken words, a minimum inter-block gap, no single-word orphan.
+  Never drops a word to make text fit — it refuses instead.
+- **`assess_grade`** — numeric grade-damage QC on a decoded frame. See the
+  color-grade skill; it is exposed here because it lives beside the other frame
+  analysis. `image_qc_capabilities` reports numpy/ffmpeg availability and the
+  cost tiers.
+
 ## Setup
 
 On first use, ask the user the three setup questions documented in the guide:
