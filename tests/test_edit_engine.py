@@ -333,7 +333,8 @@ class PlanSilenceRippleTests(EditEngineBase):
         with mock.patch.object(edit_engine, "_resolve_media_path", return_value="/media/talk.mp4"), \
              mock.patch.object(edit_engine._silence_ripple_mod, "plan_item_silence_strips", return_value=(strip, keep)):
             plan = edit_engine.plan_silence_ripple(
-                self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0
+                self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0,
+                threshold_db=-30.0,
             )
         self.assertTrue(plan["success"], plan)
         self.assertEqual(plan["kind"], "silence_ripple")
@@ -351,7 +352,8 @@ class PlanSilenceRippleTests(EditEngineBase):
         with mock.patch.object(edit_engine, "_resolve_media_path", return_value="/media/talk.mp4"), \
              mock.patch.object(edit_engine._silence_ripple_mod, "plan_item_silence_strips", return_value=(strip, keep)):
             plan = edit_engine.plan_silence_ripple(
-                self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0
+                self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0,
+                threshold_db=-30.0,
             )
         loaded = edit_engine.load_plan(self.root, plan["plan_id"])
         video = [r for r in loaded["keep_ranges"] if r["track_type"] == "video"]
@@ -393,7 +395,8 @@ class PlanSilenceRippleTests(EditEngineBase):
         with mock.patch.object(edit_engine, "_resolve_media_path", side_effect=resolver), \
              mock.patch.object(edit_engine._silence_ripple_mod, "plan_item_silence_strips", return_value=(strip, keep)):
             plan = edit_engine.plan_silence_ripple(
-                self.root, items=items, timeline_name="TL", timeline_fps=24.0
+                self.root, items=items, timeline_name="TL", timeline_fps=24.0,
+                threshold_db=-30.0,
             )
         self.assertTrue(plan["success"], plan)
         self.assertEqual(plan["lift_count"], 1)
@@ -421,7 +424,8 @@ class PlanSilenceRippleTests(EditEngineBase):
         with mock.patch.object(edit_engine, "_resolve_media_path", return_value="/media/talk.mp4"), \
              mock.patch.object(edit_engine._silence_ripple_mod, "ffmpeg_available", return_value=False):
             plan = edit_engine.plan_silence_ripple(
-                self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0
+                self.root, items=[self._item()], timeline_name="TL", timeline_fps=24.0,
+                threshold_db=-30.0,
             )
         self.assertFalse(plan["success"])
         self.assertIn("ffmpeg", plan["error"])

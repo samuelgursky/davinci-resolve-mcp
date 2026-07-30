@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.utils import analysis_memory, analysis_store, timeline_brain_db
 from src.utils import silence_ripple as _silence_ripple_mod
+from src.utils import transcript_edit as _transcript_edit_mod
 
 PLAN_DIR_NAME = "edit_plans"
 DEFAULT_HANDLE_SECONDS = 0.25
@@ -623,7 +624,7 @@ def plan_silence_ripple(
     items: Sequence[Dict[str, Any]],
     timeline_name: str,
     timeline_fps: float,
-    threshold_db: float = DEFAULT_SILENCE_THRESHOLD_DB,
+    threshold_db: Optional[float] = None,
     min_strip_frames: float = DEFAULT_SILENCE_MIN_STRIP_FRAMES,
     pre_head_frames: float = DEFAULT_SILENCE_PRE_HEAD_FRAMES,
     post_tail_frames: float = DEFAULT_SILENCE_POST_TAIL_FRAMES,
@@ -710,17 +711,39 @@ def plan_silence_ripple(
                 ),
             }
 
+        # An explicit threshold is honoured as given; omitting it calibrates the
+        # gate from this slice's own dynamics. An unusable calibration means no
+        # threshold suits this material — keep the item whole rather than strip
+        # it against a gate that was never validated against the audio.
+        item_threshold = threshold_db
+        calibration = None
+        if item_threshold is None:
+            calibration = _silence_ripple_mod.calibrate_silence_gate(
+                media_path, src_start_sec, src_end_sec
+            )
+            spec["calibration"] = calibration.as_dict()
+            if not calibration.usable:
+                skipped.append({
+                    "item": item.get("item_name"),
+                    "reason": f"silence gate could not be calibrated — kept whole: {calibration.reason}",
+                    "calibration": calibration.as_dict(),
+                })
+                item_specs.append(spec)
+                continue
+            item_threshold = calibration.gate_db
+
         strip_regions, keep_segments = _silence_ripple_mod.plan_item_silence_strips(
             media_path,
             src_start_sec,
             src_end_sec,
-            threshold_db=float(threshold_db),
+            threshold_db=float(item_threshold),
             min_strip_sec=min_strip_sec,
             pre_head_sec=pre_head_sec,
             post_tail_sec=post_tail_sec,
         )
         spec["keep_segments"] = keep_segments
         spec["strip_regions"] = strip_regions
+        spec["threshold_db"] = float(item_threshold)
         item_specs.append(spec)
 
         for strip_start, strip_end in strip_regions:
@@ -739,11 +762,13 @@ def plan_silence_ripple(
                 "source_lift_seconds": [round(strip_start, 3), round(strip_end, 3)],
                 "rationale": (
                     f"Waveform silence {round(strip_start, 2)}s–{round(strip_end, 2)}s "
-                    f"(threshold {threshold_db} dB, min {min_strip_frames} frames)."
+                    f"(threshold {round(float(item_threshold), 1)} dB, min {min_strip_frames} frames)."
                 ),
                 "evidence": {
                     "basis": "ffmpeg_silencedetect",
-                    "threshold_db": threshold_db,
+                    "threshold_db": round(float(item_threshold), 2),
+                    "threshold_source": "explicit" if threshold_db is not None else "calibrated",
+                    "calibration": spec.get("calibration"),
                     "source_gap_seconds": [round(strip_start, 3), round(strip_end, 3)],
                 },
             })
@@ -755,10 +780,16 @@ def plan_silence_ripple(
             "error": "No silence regions found above threshold",
             "skipped": skipped,
             "note": (
-                f"threshold_db={threshold_db}, min_strip_frames={min_strip_frames}; "
-                "items without readable file paths carry no waveform evidence "
-                "(kept whole — see skipped)."
+                f"threshold_db={'auto-calibrated per item' if threshold_db is None else threshold_db}, "
+                f"min_strip_frames={min_strip_frames}; items without readable file paths carry no "
+                "waveform evidence, and items whose gate could not be calibrated were kept whole "
+                "rather than stripped against an unvalidated threshold (both — see skipped)."
             ),
+            "calibrations": [
+                {"item": s["item"].get("item_name"), **s["calibration"]}
+                for s in item_specs
+                if s.get("calibration")
+            ],
         }
 
     lifts.sort(key=lambda l: -l["timeline_start_frame"])
@@ -810,11 +841,17 @@ def plan_silence_ripple(
         ),
         "settings": {
             "threshold_db": threshold_db,
+            "threshold_source": "explicit" if threshold_db is not None else "calibrated_per_item",
             "min_strip_frames": min_strip_frames,
             "pre_head_frames": pre_head_frames,
             "post_tail_frames": post_tail_frames,
             "include_audio": bool(include_audio),
         },
+        "calibrations": [
+            {"item": s["item"].get("item_name"), **s["calibration"]}
+            for s in item_specs
+            if s.get("calibration")
+        ],
     })
     result = {
         "success": True,
@@ -1018,5 +1055,142 @@ def plan_swap(
             "Dry-run plan. Execute with edit_engine(action='execute_swap', "
             "params={plan_id, alternate_index}) — the item is replaced on a "
             "version-archived timeline (lift + positioned append, same slot)."
+        ),
+    }
+
+
+# ── transcript-driven editing (word level) ───────────────────────────────────
+
+
+def plan_transcript_tighten(
+    project_root: str,
+    *,
+    clip_ref: Any,
+    remove_fillers: bool = True,
+    remove_false_starts: bool = True,
+    collapse_pauses: bool = True,
+    max_pause: float = _transcript_edit_mod.DEFAULT_MAX_PAUSE_S,
+    handle: float = _transcript_edit_mod.DEFAULT_HANDLE_S,
+    min_cut: float = _transcript_edit_mod.DEFAULT_MIN_CUT_S,
+) -> Dict[str, Any]:
+    """Word-level tightening for one clip: fillers, false starts, long pauses.
+
+    Complementary to `plan_silence_ripple`, which is silence-driven and cannot
+    touch an audible "um" mid-phrase. Emits `keep_ranges` in the same shape, so
+    the existing variant assembler consumes either without changes.
+    """
+    from src.utils import strata as _strata
+
+    conn, clip, err = _strata.resolve_clip(project_root, clip_ref, require_media=False)
+    if err:
+        return {"success": False, **err}
+    words = _strata.read_words(conn, clip["clip_uuid"])
+    if not words:
+        return {
+            "success": False,
+            "error": "No transcript words for this clip.",
+            "remediation": (
+                "Run media_analysis transcription for the clip, then strata "
+                "backfill_transcript_words, before planning a word-level tighten."
+            ),
+            "clip": {"clip_uuid": clip["clip_uuid"], "clip_name": clip.get("clip_name")},
+        }
+    plan = _transcript_edit_mod.plan_transcript_cuts(
+        words,
+        remove_fillers=remove_fillers,
+        remove_false_starts=remove_false_starts,
+        collapse_pauses=collapse_pauses,
+        max_pause=max_pause,
+        handle=handle,
+        min_cut=min_cut,
+    )
+    plan["clip"] = {
+        "clip_uuid": clip["clip_uuid"],
+        "clip_name": clip.get("clip_name"),
+        "word_count": len(words),
+    }
+    plan["basis"] = "transcript_words"
+    return plan
+
+
+def search_spoken_content(
+    project_root: str,
+    *,
+    query: str,
+    mode: str = "phrase",
+    context_seconds: float = 1.5,
+    handle_seconds: float = 0.5,
+    max_hits: int = 200,
+) -> Dict[str, Any]:
+    """Search the spoken content of every transcribed clip; build selects.
+
+    A different axis from `find_similar`, which retrieves on semantic-visual
+    embedding. This finds *what was said*, which no embedding search surfaces
+    reliably, and returns hits in deterministic order (clip name, then time) so
+    two identical searches produce identical selects.
+    """
+    from src.utils import strata as _strata
+
+    conn = timeline_brain_db.connect(project_root)
+    rows = conn.execute(
+        "SELECT clip_uuid, clip_name, file_path FROM clips ORDER BY clip_name COLLATE NOCASE"
+    ).fetchall()
+    if not rows:
+        return {"success": False, "error": "No clips in the DB — analyze (or db_ingest) first."}
+
+    hits: List[Dict[str, Any]] = []
+    searched: List[str] = []
+    without_speech: List[Dict[str, str]] = []
+    for row in rows:
+        clip = dict(row)
+        words = _strata.read_words(conn, clip["clip_uuid"])
+        if not words:
+            without_speech.append({
+                "clip_uuid": clip["clip_uuid"],
+                "clip_name": clip.get("clip_name"),
+                "reason": "no transcript words",
+            })
+            continue
+        searched.append(clip.get("clip_name") or clip["clip_uuid"])
+        try:
+            found = _transcript_edit_mod.search_words(
+                words, query, mode=mode, context_seconds=context_seconds
+            )
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+        for hit in found:
+            hits.append({
+                **hit,
+                "clip_uuid": clip["clip_uuid"],
+                "clip_name": clip.get("clip_name"),
+                "file_path": clip.get("file_path"),
+            })
+
+    truncated = len(hits) > max_hits
+    hits = hits[:max_hits]
+    selects = [
+        {
+            "clip_uuid": hit["clip_uuid"],
+            "clip_name": hit["clip_name"],
+            "in_seconds": round(max(0.0, hit["start_seconds"] - handle_seconds), 3),
+            "out_seconds": round(hit["end_seconds"] + handle_seconds, 3),
+            "text": hit["text"],
+        }
+        for hit in hits
+    ]
+    return {
+        "success": True,
+        "query": query,
+        "mode": mode,
+        "hit_count": len(hits),
+        "truncated": truncated,
+        "hits": hits,
+        "selects": selects,
+        "handle_seconds": handle_seconds,
+        "clips_searched": searched,
+        "clips_without_speech": without_speech,
+        "note": (
+            "Proposal only — selects are in/out pairs in clip-relative seconds, ordered "
+            "by clip name then time so an identical search yields an identical list."
         ),
     }
