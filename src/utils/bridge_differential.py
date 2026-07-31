@@ -61,6 +61,28 @@ VOLATILE_METHODS = frozenset({
     "IsPlayheadOnVideoFrame",
 })
 
+#: App-global state that **the harness's own probes move**, which is a different
+#: problem from `VOLATILE_METHODS` drifting on its own.
+#:
+#: Measured on Studio 19.1.3.7: the render probes navigate Resolve to the Deliver
+#: page, and the bridge pass runs before the native pass — so the native pass
+#: reads a page the bridge pass changed. That produced a `value_mismatch` on
+#: `GetCurrentPage` (bridge `edit`, native `deliver`) on every run that did not
+#: happen to start on Deliver, and none on the runs that did. Read at the same
+#: instant the two transports always agreed.
+#:
+#: Excusing it unconditionally would throw away a real signal — a bridge that
+#: genuinely reported the wrong page is exactly the bug this harness is for. So
+#: each pass records the page on the way in and on the way out, and the value is
+#: only excused when a pass proves it did not hold still. If both passes were
+#: stable and the values still disagree, that is the transport and it is reported.
+ORDER_SENSITIVE_METHODS = frozenset({"GetCurrentPage"})
+
+#: Key `run_probes` adds for `compare`'s own use rather than as a probe result.
+#: Underscore-prefixed so the diff skips it instead of reading it as a method
+#: that one transport has and the other does not.
+PASS_META_KEY = "_pass_meta"
+
 #: Never invoked by the harness, whatever the enumeration says. These either
 #: change the project, touch the filesystem, or block on UI. The write paths are
 #: exercised by named scenarios instead, where the setup and teardown are
@@ -326,6 +348,19 @@ def probe_one(target: Any, method: str) -> Dict[str, Any]:
     return {"outcome": "returned", "value": normalise(value), "type": describe(value)}
 
 
+def _current_page(resolve: Any) -> Optional[str]:
+    """The page, or None if it cannot be read.
+
+    Never raises: this is bookkeeping around the probes, and a failure here must
+    not take down a pass that is otherwise fine.
+    """
+    try:
+        page = resolve.GetCurrentPage()
+    except Exception:  # noqa: BLE001 - an unreadable page is simply unknown
+        return None
+    return page if isinstance(page, str) else None
+
+
 def run_probes(resolve: Any, methods: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     """Every enumerated safe method, against every object that has it.
 
@@ -333,6 +368,7 @@ def run_probes(resolve: Any, methods: Sequence[str]) -> Dict[str, Dict[str, Any]
     not merely that they did.
     """
     results: Dict[str, Dict[str, Any]] = {}
+    page_before = _current_page(resolve)
     for label, chain in OBJECT_GRAPH:
         target = walk(resolve, chain)
         if target is None:
@@ -342,13 +378,28 @@ def run_probes(resolve: Any, methods: Sequence[str]) -> Dict[str, Dict[str, Any]
             if getattr(target, method, None) is None:
                 continue  # not on this object; absence is reported by the diff
             results[f"{label}.{method}"] = probe_one(target, method)
+    page_after = _current_page(resolve)
+    results[PASS_META_KEY] = {
+        "page_before": page_before,
+        "page_after": page_after,
+        # None on either side means we could not tell, which must not read as
+        # "stable" — an unknown has to disable the value comparison, not enable it.
+        "page_stable": page_before is not None and page_before == page_after,
+    }
     return results
 
 
 def compare(native: Dict[str, Dict[str, Any]], bridged: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Diff two probe runs. Empty `differences` is the pass condition."""
     differences: List[Dict[str, Any]] = []
+    # A pass that moved the page cannot have its page compared by value against
+    # another pass taken at a different moment. Both must have held still.
+    native_meta = native.get(PASS_META_KEY) or {}
+    bridge_meta = bridged.get(PASS_META_KEY) or {}
+    page_held_still = bool(native_meta.get("page_stable")) and bool(bridge_meta.get("page_stable"))
     for key in sorted(set(native) | set(bridged)):
+        if key.startswith("_"):
+            continue  # harness bookkeeping, not a probe result
         left, right = native.get(key), bridged.get(key)
         if left is None or right is None:
             differences.append({
@@ -364,17 +415,32 @@ def compare(native: Dict[str, Dict[str, Any]], bridged: Dict[str, Dict[str, Any]
                 differences.append({"key": key, "kind": "volatile_type_mismatch",
                                     "native": left.get("type"), "bridge": right.get("type")})
             continue
+        if method in ORDER_SENSITIVE_METHODS and not page_held_still:
+            # The harness moved it mid-run, so the two readings are of different
+            # moments. Still hold the transport to returning the same kind of
+            # thing, and say why the value was not compared.
+            if left.get("type") != right.get("type") or left["outcome"] != right["outcome"]:
+                differences.append({"key": key, "kind": "order_sensitive_type_mismatch",
+                                    "native": left.get("type"), "bridge": right.get("type")})
+            continue
         if left != right:
             differences.append({"key": key, "kind": "value_mismatch",
                                 "native": left, "bridge": right})
-    agreed = len(set(native) & set(bridged)) - len(
+    probe_keys = {k for k in set(native) | set(bridged) if not k.startswith("_")}
+    agreed = len({k for k in set(native) & set(bridged) if not k.startswith("_")}) - len(
         [d for d in differences if d["kind"] != "only_one_transport_reached_it"]
     )
     return {
-        "compared": len(set(native) | set(bridged)),
+        "compared": len(probe_keys),
         "agreed": agreed,
         "differences": differences,
         "identical": not differences,
+        # Reported either way. "The page was not compared" is a fact about the
+        # run that a reader needs, and burying it would recreate the silence
+        # this fix exists to end.
+        "page_compared_by_value": page_held_still,
+        "page_native": {k: native_meta.get(k) for k in ("page_before", "page_after")},
+        "page_bridge": {k: bridge_meta.get(k) for k in ("page_before", "page_after")},
     }
 
 
