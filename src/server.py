@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.68.2"
+VERSION = "2.69.0"
 
 import base64
 import os
@@ -124,6 +124,10 @@ from src.utils.fusion_group_settings import (
 from src.utils import analysis_runs as _analysis_runs
 from src.utils import brain_edits as _brain_edits
 from src.utils import edit_engine as _edit_engine_mod
+from src.utils import edit_report as _edit_report_mod
+from src.utils import conform_lint as _conform_lint_mod
+from src.utils import first_impression as _first_impression_mod
+from src.utils import project_journal as _journal_mod
 from src.utils import transcript_edit as _transcript_edit_defaults
 from src.utils import media_pool_changes as _media_pool_changes
 from src.utils import timeline_versioning as _timeline_versioning
@@ -18833,8 +18837,135 @@ def _edit_engine_collect_items(tl, *, track_index: Optional[int] = None) -> List
                 row["audio_track_indices"] = audio_indices
             except Exception:
                 row["audio_track_indices"] = []
+            _edit_engine_add_conform_fields(item, row)
             rows.append(row)
     return rows
+
+
+def _edit_engine_add_conform_fields(item, row: Dict[str, Any]) -> None:
+    """Extra per-item metadata the conform lint needs.
+
+    Best-effort and individually guarded: a field this API does not expose on a
+    given build must leave the rest of the row intact. Absent fields are
+    reported by the lint as *not checked* rather than silently passing, so a
+    missing value degrades coverage honestly instead of manufacturing a clean
+    bill of health.
+    """
+    mpi = None
+    try:
+        mpi = item.GetMediaPoolItem()
+    except Exception:
+        mpi = None
+    if mpi is not None:
+        for key, prop in (
+            ("source_start_timecode", "Start TC"),
+            ("reel_name", "Reel Name"),
+            ("clip_fps", "FPS"),
+        ):
+            try:
+                value = mpi.GetClipProperty(prop)
+            except Exception:
+                continue
+            if value in (None, ""):
+                continue
+            if key == "clip_fps":
+                try:
+                    row[key] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            else:
+                row[key] = value
+    try:
+        fusion_names = [c.GetName() for c in (item.GetFusionCompNameList() or [])] \
+            if _has_method(item, "GetFusionCompNameList") else []
+    except Exception:
+        fusion_names = []
+    effects: List[str] = [n for n in fusion_names if n]
+    for getter in ("GetVersionNameList",):
+        if not _has_method(item, getter):
+            continue
+        try:
+            extra = getattr(item, getter)(0) or []
+            effects.extend(str(e) for e in extra if e)
+        except Exception:
+            pass
+    if effects:
+        row["effects"] = effects
+
+
+def _attach_audit_report(result: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
+    """Give every audit a human-readable form on request (invariant I5).
+
+    Off by default because a rendered report costs tokens on every call and the
+    structured payload is what an agent acts on. But it must always be one
+    parameter away: an audit a human cannot read is an audit they will re-do by
+    hand, which is the cost the tool exists to remove.
+    """
+    if not isinstance(result, dict) or not result.get("success"):
+        return result
+    result["report_available"] = "pass include_report=true for a Markdown report"
+    flag = params.get("include_report", params.get("includeReport", False))
+    if str(flag).strip().lower() in {"true", "1", "yes", "on"}:
+        try:
+            result["report_markdown"] = _edit_report_mod.render_any(result)
+        except Exception as exc:  # a renderer must never break the audit
+            result["report_error"] = f"report rendering failed: {exc}"
+    return result
+
+
+def _edit_engine_collect_audio_items(tl) -> List[Dict[str, Any]]:
+    """Audio-track item boundaries, for split-edit analysis.
+
+    Only the boundaries are needed — a split edit is defined by where the audio
+    cut sits relative to the picture cut, not by what is in the clip.
+    """
+    rows: List[Dict[str, Any]] = []
+    try:
+        track_count = int(tl.GetTrackCount("audio") or 0)
+    except Exception:
+        return rows
+    for index in range(1, track_count + 1):
+        try:
+            items = tl.GetItemListInTrack("audio", index) or []
+        except Exception:
+            continue
+        for item in items:
+            try:
+                rows.append({
+                    "track_index": index,
+                    "item_name": item.GetName(),
+                    "timeline_start_frame": _frame_int(item.GetStart()),
+                    "timeline_end_frame": _frame_int(item.GetEnd()),
+                })
+            except Exception:
+                continue
+    return rows
+
+
+def _edit_engine_marker_beats(tl, fps: float) -> List[float]:
+    """Timeline markers as story beats, in seconds.
+
+    Markers are where an editor has already said "something happens here", which
+    makes them the best available proxy for a story beat. Absent markers are
+    reported by the rhythm criterion as beats-not-supplied rather than as an
+    absence of beats.
+    """
+    beats: List[float] = []
+    try:
+        markers = tl.GetMarkers() or {}
+    except Exception:
+        return beats
+    start = 0
+    try:
+        start = int(tl.GetStartFrame() or 0)
+    except Exception:
+        pass
+    for frame in markers:
+        try:
+            beats.append((float(frame) + start) / (fps or 24.0))
+        except (TypeError, ValueError):
+            continue
+    return sorted(beats)
 
 
 def _edit_engine_timeline_fps(tl) -> float:
@@ -19074,6 +19205,30 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             return _err("plan file failed its fingerprint check — re-plan")
         return {"success": True, "plan": plan}
 
+    if action == "plan_report":
+        # A 340-entry keep_ranges array is not reviewable, and the rational
+        # response to a machine you cannot audit is to re-check it by hand —
+        # which is the cost the tool was supposed to remove. This renders any
+        # plan as Markdown: what changes, why, what was deliberately left alone,
+        # what could NOT be checked, and what needs a human.
+        _r, _proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        plan = _edit_engine_mod.load_plan(project_root, str(p.get("plan_id") or p.get("planId") or ""))
+        if not plan:
+            return _err("plan not found")
+        if plan.get("_corrupt"):
+            return _err("plan file failed its fingerprint check — re-plan")
+        _rows = p.get("max_detail_rows") if p.get("max_detail_rows") is not None else p.get("maxDetailRows")
+        return {
+            "success": True,
+            "plan_id": plan.get("plan_id"),
+            "summary": _edit_report_mod.summarize_for_chat(plan),
+            "report_markdown": _edit_report_mod.render_plan_report(
+                plan, max_detail_rows=int(_rows) if _rows is not None else 25
+            ),
+        }
+
     if action == "plan_selects":
         _r, _proj, project_root, err = _project_context(need_resolve=False)
         if err:
@@ -19155,6 +19310,22 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             min_cut=float(p.get("min_cut", p.get("minCut", _transcript_edit_defaults.DEFAULT_MIN_CUT_S))),
         )
 
+    if action == "rank_takes":
+        _r, proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        refs = p.get("clip_refs") or p.get("clipRefs") or p.get("clip_ids") or []
+        if isinstance(refs, str):
+            refs = [refs]
+        if not isinstance(refs, (list, tuple)) or not refs:
+            return _err("clip_refs is required (a list of clips to compare)",
+                        code="MISSING_CLIP_REFS", category="invalid_input")
+        return _edit_engine_mod.rank_takes(
+            project_root,
+            clip_refs=list(refs),
+            script=p.get("script") if isinstance(p.get("script"), str) else None,
+        )
+
     if action == "search_spoken_content":
         _r, proj, project_root, err = _project_context(need_resolve=False)
         if err:
@@ -19196,6 +19367,332 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             pre_head_frames=float(p.get("pre_head_frames") if p.get("pre_head_frames") is not None else p.get("preHeadFrames") if p.get("preHeadFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_PRE_HEAD_FRAMES),
             post_tail_frames=float(p.get("post_tail_frames") if p.get("post_tail_frames") is not None else p.get("postTailFrames") if p.get("postTailFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_POST_TAIL_FRAMES),
             include_audio=str(p.get("include_audio", p.get("includeAudio", True))).strip().lower() not in {"false", "0", "no", "none", "off"},
+        )
+
+    if action == "rule_of_six_audit":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        tl = (_find_timeline_by_name(proj, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj.GetCurrentTimeline())
+        if not tl:
+            return _err("Timeline not found")
+        _fps = _edit_engine_timeline_fps(tl)
+        return _attach_audit_report(_edit_engine_mod.rule_of_six_audit(
+            items=_edit_engine_collect_items(tl, track_index=p.get("track_index") or p.get("trackIndex")),
+            timeline_name=tl.GetName(),
+            timeline_fps=_fps,
+            story_beats=_edit_engine_marker_beats(tl, _fps),
+        ), p)
+
+    if action == "split_edit_audit":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        tl = (_find_timeline_by_name(proj, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj.GetCurrentTimeline())
+        if not tl:
+            return _err("Timeline not found")
+        return _edit_engine_mod.split_edit_audit(
+            video_items=_edit_engine_collect_items(tl, track_index=p.get("track_index") or p.get("trackIndex")),
+            audio_items=_edit_engine_collect_audio_items(tl),
+            timeline_fps=_edit_engine_timeline_fps(tl),
+        )
+
+    if action == "sound_density_audit":
+        _r, _proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        media = p.get("track_media") or p.get("trackMedia") or {}
+        if not isinstance(media, dict):
+            return _err("track_media must be a mapping of {name: path}",
+                        code="INVALID_TRACK_MEDIA", category="invalid_input")
+        _limit = p.get("stream_limit") if p.get("stream_limit") is not None else p.get("streamLimit")
+        _dur = p.get("duration_seconds") if p.get("duration_seconds") is not None else p.get("durationSeconds")
+        return _attach_audit_report(_edit_engine_mod.sound_density_audit(
+            track_media={str(k): str(v) for k, v in media.items()},
+            stream_limit=float(_limit) if _limit is not None else None,
+            duration_seconds=float(_dur) if _dur is not None else None,
+        ), p)
+
+    if action == "setup_sheet":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        tl = (_find_timeline_by_name(proj, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj.GetCurrentTimeline())
+        if not tl:
+            return _err("Timeline not found")
+        return _attach_audit_report(_edit_engine_mod.setup_sheet(
+            items=_edit_engine_collect_items(tl, track_index=p.get("track_index") or p.get("trackIndex")),
+            timeline_name=tl.GetName(),
+            timeline_fps=_edit_engine_timeline_fps(tl),
+        ), p)
+
+    if action == "first_impression":
+        # Measures nothing. Captures the one perception that cannot be recovered
+        # once the editor has seen the film too many times to feel it fresh.
+        _r, proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        sub = str(p.get("op") or p.get("sub_action") or "").strip().lower()
+        log_id = p.get("log_id") or p.get("logId")
+        if sub == "list":
+            return {"success": True, "logs": _first_impression_mod.list_logs(project_root)}
+        if sub in ("start", "record", "lock", "get") and not log_id:
+            return _err("log_id is required", code="MISSING_LOG_ID", category="invalid_input")
+        if sub == "start":
+            return _first_impression_mod.start_pass(
+                project_root,
+                timeline_name=str(p.get("timeline_name") or p.get("timelineName") or ""),
+                log_id=str(log_id),
+                viewer=p.get("viewer"),
+            )
+        if sub == "record":
+            _t = p.get("time_seconds") if p.get("time_seconds") is not None else p.get("timeSeconds")
+            try:
+                return _first_impression_mod.record(
+                    project_root, log_id=str(log_id),
+                    time_seconds=float(_t or 0.0), text=str(p.get("text") or ""),
+                )
+            except _first_impression_mod.LogLocked as exc:
+                return _err(str(exc), code="LOG_LOCKED", category="invalid_input", retryable=False)
+        if sub == "lock":
+            return _first_impression_mod.lock(project_root, log_id=str(log_id))
+        if sub == "get":
+            log = _first_impression_mod.load(project_root, log_id=str(log_id))
+            return {"success": bool(log), "log": log} if log else _err("log not found")
+        if sub == "diff":
+            first = _first_impression_mod.load(project_root, log_id=str(p.get("first_log_id") or p.get("firstLogId") or ""))
+            later = _first_impression_mod.load(project_root, log_id=str(p.get("later_log_id") or p.get("laterLogId") or ""))
+            if not first or not later:
+                return _err("both first_log_id and later_log_id must name existing logs")
+            return {"success": True, **_first_impression_mod.diff(first, later)}
+        return _err("op must be one of: start, record, lock, get, list, diff",
+                    code="UNKNOWN_OP", category="invalid_input")
+
+    if action == "journal":
+        # The paperwork every craft role keeps and every tool skips: ingest log,
+        # accumulating known issues, session prep, handoff, status.
+        _r, proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        op = str(p.get("op") or p.get("sub_action") or "").strip().lower()
+        if op == "append":
+            return _journal_mod.append(
+                project_root,
+                kind=str(p.get("kind") or "note"),
+                summary=str(p.get("summary") or ""),
+                detail=p.get("detail"),
+                ref=p.get("ref"),
+                data=p.get("data") if isinstance(p.get("data"), dict) else None,
+                timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            )
+        if op == "read":
+            return {"success": True,
+                    "records": _journal_mod.read(project_root, kind=p.get("kind"))}
+        if op == "known_issues":
+            state = _journal_mod.open_issues(project_root)
+            return {"success": True, **state,
+                    "report_markdown": _journal_mod.render_known_issues(project_root)}
+        if op == "ingest_log":
+            return {"success": True,
+                    "report_markdown": _journal_mod.render_ingest_log(project_root)}
+        if op == "session_prep":
+            _f = lambda k: (float(p[k]) if p.get(k) is not None else None)
+            return {"success": True, "report_markdown": _journal_mod.render_session_prep(
+                project_root,
+                session_kind=str(p.get("session_kind") or "colour"),
+                prep_hours=_f("prep_hours"),
+                estimated_hours_saved=_f("estimated_hours_saved"),
+                hourly_rate=_f("hourly_rate"),
+                ready=p.get("ready") if isinstance(p.get("ready"), list) else None,
+                outstanding=p.get("outstanding") if isinstance(p.get("outstanding"), list) else None,
+            )}
+        if op == "handoff":
+            return {"success": True, "report_markdown": _journal_mod.render_handoff(
+                project=str(p.get("project") or (proj.GetName() if proj else "project")),
+                to=str(p.get("to") or "receiving facility"),
+                timeline_name=p.get("timeline_name") or p.get("timelineName"),
+                technical=p.get("technical") if isinstance(p.get("technical"), dict) else None,
+                included=p.get("included") if isinstance(p.get("included"), list) else None,
+                known_issues=[i.get("summary") for i in _journal_mod.open_issues(project_root)["open"]],
+                notes=p.get("notes"),
+            )}
+        if op == "picture_lock":
+            _r2, proj2, _pr, err2 = _project_context(need_resolve=True)
+            if err2:
+                return err2
+            tl = (_find_timeline_by_name(proj2, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj2.GetCurrentTimeline())
+            if not tl:
+                return _err("Timeline not found")
+            return _journal_mod.set_picture_lock(
+                project_root, timeline_name=tl.GetName(),
+                items=_edit_engine_collect_items(tl),
+                timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            )
+        if op == "check_lock":
+            _r2, proj2, _pr, err2 = _project_context(need_resolve=True)
+            if err2:
+                return err2
+            tl = (_find_timeline_by_name(proj2, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj2.GetCurrentTimeline())
+            if not tl:
+                return _err("Timeline not found")
+            return {"success": True, **_journal_mod.check_picture_lock(
+                project_root, timeline_name=tl.GetName(),
+                items=_edit_engine_collect_items(tl),
+            )}
+        if op == "status":
+            _pc = p.get("percent_complete") if p.get("percent_complete") is not None else p.get("percentComplete")
+            return {"success": True, "report_markdown": _journal_mod.render_status(
+                project=str(p.get("project") or (proj.GetName() if proj else "project")),
+                phase=str(p.get("phase") or "unspecified"),
+                percent_complete=float(_pc) if _pc is not None else None,
+                blockers=p.get("blockers") if isinstance(p.get("blockers"), list) else None,
+                next_milestone=p.get("next_milestone") or p.get("nextMilestone"),
+                open_issue_count=len(_journal_mod.open_issues(project_root)["open"]),
+            )}
+        return _err("op must be one of: append, read, known_issues, ingest_log, "
+                    "session_prep, handoff, status, picture_lock, check_lock",
+                    code="UNKNOWN_OP", category="invalid_input")
+
+    if action == "plan_reference_match":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        ref = p.get("reference_media") or p.get("referenceMedia")
+        if not ref:
+            return _err("reference_media is required (path to the graded reference still or clip)",
+                        code="MISSING_REFERENCE", category="invalid_input")
+        tl = (_find_timeline_by_name(proj, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj.GetCurrentTimeline())
+        if not tl:
+            return _err("Timeline not found")
+        _at = p.get("reference_at_seconds") if p.get("reference_at_seconds") is not None else p.get("referenceAtSeconds")
+        _max = p.get("max_items") if p.get("max_items") is not None else p.get("maxItems")
+        return _edit_engine_mod.plan_reference_match(
+            project_root,
+            reference_media=str(ref),
+            reference_at_seconds=float(_at) if _at is not None else 0.0,
+            items=_edit_engine_collect_items(tl, track_index=p.get("track_index") or p.get("trackIndex")),
+            timeline_fps=_edit_engine_timeline_fps(tl),
+            max_items=int(_max) if _max is not None else 200,
+        )
+
+    if action == "plan_string_out":
+        shots = p.get("shots")
+        if not isinstance(shots, list) or not shots:
+            return _err("shots is required: [{name, start_seconds, end_seconds, motion_energy?}]",
+                        code="MISSING_SHOTS", category="invalid_input")
+        return _edit_engine_mod.plan_string_out(
+            shots=shots, order=str(p.get("order") or "chronological"))
+
+    if action == "propose_structure":
+        topics = p.get("topics")
+        if not isinstance(topics, list) or not topics:
+            return _err("topics is required: [{label, total_seconds, clip_count}]",
+                        code="MISSING_TOPICS", category="invalid_input")
+        return _edit_engine_mod.propose_structure(topics=topics)
+
+    if action == "plan_broll":
+        beats = p.get("beats")
+        candidates = p.get("candidates")
+        if not isinstance(beats, list) or not beats:
+            return _err("beats is required: [{start_seconds, end_seconds, text?, protected?}]",
+                        code="MISSING_BEATS", category="invalid_input")
+        if not isinstance(candidates, list) or not candidates:
+            return _err("candidates is required: [{name, duration_seconds, relevance?, beat_index?}]",
+                        code="MISSING_CANDIDATES", category="invalid_input")
+        return _edit_engine_mod.plan_broll(
+            beats=beats, candidates=candidates,
+            allow_reuse=str(p.get("allow_reuse", p.get("allowReuse", False))).strip().lower() in {"true", "1", "yes", "on"},
+        )
+
+    if action == "plan_turnover":
+        dests = p.get("destinations") or p.get("destination")
+        if isinstance(dests, str):
+            dests = [dests]
+        if not isinstance(dests, list) or not dests:
+            return _err("destinations is required: any of sound, vfx, color",
+                        code="MISSING_DESTINATIONS", category="invalid_input")
+        _hf = p.get("handle_frames") if p.get("handle_frames") is not None else p.get("handleFrames")
+        return _edit_engine_mod.plan_turnover(
+            destinations=dests,
+            contents=p.get("contents") if isinstance(p.get("contents"), dict) else {},
+            version=str(p.get("version") or "v01"),
+            handle_frames=int(_hf) if _hf is not None else None,
+        )
+
+    if action == "conform_lint":
+        # The online editor's checklist, run before turnover instead of
+        # discovered after picture lock in someone else's suite.
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        tl = (_find_timeline_by_name(proj, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj.GetCurrentTimeline())
+        if not tl:
+            return _err("Timeline not found")
+        items = _edit_engine_collect_items(tl, track_index=p.get("track_index") or p.get("trackIndex"))
+        return _attach_audit_report(_conform_lint_mod.lint_timeline({
+            "timeline_name": tl.GetName(),
+            "timeline_fps": _edit_engine_timeline_fps(tl),
+            "items": items,
+        }), p)
+
+    if action == "plan_beat_cuts":
+        _r, proj, project_root, err = _project_context(need_resolve=False)
+        if err:
+            return err
+        _fps = p.get("timeline_fps") if p.get("timeline_fps") is not None else p.get("timelineFps")
+        return _edit_engine_mod.plan_beat_cuts(
+            project_root,
+            clip_ref=p.get("clip_ref") or p.get("clipRef"),
+            media_path=p.get("media_path") or p.get("mediaPath"),
+            timeline_fps=float(_fps) if _fps is not None else 24.0,
+            mode=str(p.get("mode") or "phrase"),
+            beats_per_bar=int(p.get("beats_per_bar") or p.get("beatsPerBar") or 4),
+            bars_per_phrase=int(p.get("bars_per_phrase") or p.get("barsPerPhrase") or 8),
+            beat_offset=int(p.get("beat_offset") or p.get("beatOffset") or 0),
+            min_shot_seconds=float(p.get("min_shot_seconds") or p.get("minShotSeconds") or 0.0),
+        )
+
+    if action == "plan_prebalance":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        tl = (_find_timeline_by_name(proj, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj.GetCurrentTimeline())
+        if not tl:
+            return _err("Timeline not found")
+        items = _edit_engine_collect_items(tl, track_index=p.get("track_index") or p.get("trackIndex"))
+        _max = p.get("max_items") if p.get("max_items") is not None else p.get("maxItems")
+        return _edit_engine_mod.plan_prebalance(
+            project_root,
+            items=items,
+            timeline_name=tl.GetName(),
+            timeline_fps=_edit_engine_timeline_fps(tl),
+            max_items=int(_max) if _max is not None else 200,
+        )
+
+    if action == "plan_dead_space_markers":
+        _r, proj, project_root, err = _project_context(need_resolve=True)
+        if err:
+            return err
+        tl = (_find_timeline_by_name(proj, p.get("timeline_name") or p.get("timelineName"))[0] if (p.get("timeline_name") or p.get("timelineName")) else proj.GetCurrentTimeline())
+        if not tl:
+            return _err("Timeline not found")
+        items = _edit_engine_collect_items(tl, track_index=p.get("track_index") or p.get("trackIndex"))
+        return _edit_engine_mod.plan_dead_space_markers(
+            project_root,
+            items=items,
+            timeline_name=tl.GetName(),
+            timeline_fps=_edit_engine_timeline_fps(tl),
+            # Same calibrate-by-default contract as plan_silence_ripple: what you
+            # review here must be what that would remove.
+            threshold_db=(
+                float(_th)
+                if (_th := (p.get("threshold_db") if p.get("threshold_db") is not None else p.get("thresholdDb"))) is not None
+                else None
+            ),
+            tightness=p.get("tightness"),
+            min_strip_frames=float(p.get("min_strip_frames") if p.get("min_strip_frames") is not None else p.get("minStripFrames") if p.get("minStripFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_MIN_STRIP_FRAMES),
+            pre_head_frames=float(p.get("pre_head_frames") if p.get("pre_head_frames") is not None else p.get("preHeadFrames") if p.get("preHeadFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_PRE_HEAD_FRAMES),
+            post_tail_frames=float(p.get("post_tail_frames") if p.get("post_tail_frames") is not None else p.get("postTailFrames") if p.get("postTailFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_POST_TAIL_FRAMES),
         )
 
     if action == "plan_swap":
@@ -19770,7 +20267,23 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "plan_tighten",
         "execute_tighten",
         "plan_silence_ripple",
+        "plan_dead_space_markers",
+        "conform_lint",
+        "rule_of_six_audit",
+        "split_edit_audit",
+        "sound_density_audit",
+        "setup_sheet",
+        "first_impression",
+        "journal",
+        "plan_prebalance",
+        "plan_reference_match",
+        "plan_beat_cuts",
+        "plan_string_out",
+        "propose_structure",
+        "plan_broll",
+        "plan_turnover",
         "plan_transcript_tighten",
+        "rank_takes",
         "generate_captions",
         "search_spoken_content",
         "execute_silence_ripple",
@@ -19778,6 +20291,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "execute_swap",
         "list_plans",
         "get_plan",
+        "plan_report",
     ])
 
 

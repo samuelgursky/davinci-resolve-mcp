@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.68.2-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.69.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#server-modes)
@@ -184,6 +184,47 @@ The open-source servers are complete and fully functional on their own.
 | Audio and Fairlight | Track/item probes, source mapping, guarded audio property writes, voice isolation, auto-sync planning, transcription/subtitle probes |
 | Render and deliver | Format/codec matrix probing, render settings validation, queued job lifecycle checks, guarded Quick Export |
 | Extension authoring | Fuse, DCTL, ACES DCTL, and Resolve-page Lua/Python script lifecycle helpers with safe MCP-marked install/remove |
+
+## Optional Extras
+
+The core install is deliberately small: Python, ffmpeg, and the Resolve scripting
+API. Some features need more, and **each one refuses honestly with its own
+install line rather than degrading into a guess** — a fabricated tempo or an
+invented level produces confident, wrong output, which is worse than no feature.
+
+Run `python scripts/doctor.py` to see which of these you have.
+
+| Extra | Unlocks | Licence |
+|---|---|---|
+| **ffmpeg** on PATH | Silence detection, dead-space markers, level measurement, audio analysis. The single most useful thing to install. | LGPL/GPL — invoked as a subprocess, never bundled |
+| `pip install numpy` | Colour pre-balance, reference-still matching, sound-density audit | BSD |
+| `pip install librosa` | Beat, bar and phrase detection for music-driven cutting | ISC |
+| `pip install -U openai-whisper` | Transcription, and everything word-level built on it | MIT |
+| `pip install open_clip_torch` | Visual similarity and `find_similar` | MIT |
+| `pip install transformers` | CLAP audio embeddings | Apache-2.0 |
+| `pip install opencv-python` | Additional frame analysis | Apache-2.0 |
+
+`media_analysis` action `capabilities` reports the analysis stack in detail and
+tells you what each missing piece would enable.
+
+**Nothing here is bundled.** Model weights carry their own licences separate from
+the code that loads them; check them before commercial use.
+
+## What This Does Not Do
+
+Knowing where a tool stops is worth as much as knowing what it does, and it is
+cheaper to read it here than to discover it mid-project.
+
+| Not supported | Why, and what you get instead |
+|---|---|
+| **Choosing the best take** | Performance is most of what makes a take right, and none of it is measurable from a waveform or a transcript. `rank_takes` ranks *fluency* — fillers, restarts, script coverage — and says so in every response. The take that plays is regularly the least fluent one, because the hesitation is often the acting. Use it to find the clean safety take, not to choose the read. |
+| **Cutting to music** | No beat or downbeat detection yet. Speech-driven tools will read a music bed as one long region and are the wrong instrument for it. |
+| **Judging a cut** | Nothing here has an opinion about whether an edit is good. Every destructive action is plan → review → confirm for that reason. |
+| **Replacing an editor** | The output is a first-pass assembly, in the assistant-editor sense: ingest, sync, organize, string out, flag problems. It is a starting point you cut, not a finished cut. Defaults are deliberately **generous** — a first assembly is supposed to run long, because trimming is fast and visible while recovering discarded material is slow and invisible. |
+| **Modifying your source media** | By design and without exception — see below. |
+
+Anything analyzed but unverifiable is reported as unverified, never folded into
+"fine". An empty result means "nothing found", never "nothing to find".
 
 ## Source Media Safety
 

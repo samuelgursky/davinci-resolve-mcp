@@ -203,5 +203,78 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(te.search_words(self.STREAM, "   ", mode="all_words"), [])
 
 
+class BreathingRoomTests(unittest.TestCase):
+    """A pause is craft or noise depending on where it sits, not how long it is.
+
+    Acoustically these are identical, which is why a silence gate cannot tell
+    them apart and why an automated tighten built on one reads as machine-made:
+
+      "...and that changed everything."  [900 ms]  "The thing is..."
+      "...the thing is"                  [900 ms]  "we had to leave"
+
+    The first is the beat that lets the line land. The second is a stumble.
+    """
+
+    PAUSE = dict(max_pause=0.6, handle=0.15, min_cut=0.15)
+
+    def _beat_and_stumble(self):
+        # 0.9 s gap after a full stop, and a 0.9 s gap mid-phrase.
+        return words(
+            ("everything.", 0.0, 1.0),
+            ("The", 1.9, 2.1),
+            ("thing", 2.1, 2.5),
+            ("is", 2.5, 2.7),
+            ("we", 3.6, 3.8),
+            ("left", 3.8, 4.2),
+        )
+
+    def test_a_beat_after_a_full_stop_is_preserved(self) -> None:
+        cuts = te.detect_long_pauses(self._beat_and_stumble(), **self.PAUSE)
+        positions = [c["pause_position"] for c in cuts]
+        self.assertNotIn("sentence_final", positions)
+
+    def test_the_same_gap_mid_phrase_is_removed(self) -> None:
+        cuts = te.detect_long_pauses(self._beat_and_stumble(), **self.PAUSE)
+        self.assertEqual([c["pause_position"] for c in cuts], ["intra_clause"])
+
+    def test_old_behaviour_removes_both_indiscriminately(self) -> None:
+        """Pins what preserve_breathing_room=False means, and what we moved off."""
+        cuts = te.detect_long_pauses(
+            self._beat_and_stumble(), preserve_breathing_room=False, **self.PAUSE
+        )
+        self.assertEqual(len(cuts), 2)
+
+    def test_a_genuinely_dead_hole_after_a_full_stop_is_still_cut(self) -> None:
+        """Breathing room is a longer threshold, not an exemption."""
+        stream = words(("everything.", 0.0, 1.0), ("Then", 5.0, 5.4))
+        cuts = te.detect_long_pauses(stream, **self.PAUSE)
+        self.assertEqual(len(cuts), 1)
+        self.assertEqual(cuts[0]["pause_position"], "sentence_final")
+
+    def test_clause_breaks_sit_between_the_two(self) -> None:
+        self.assertLess(
+            te.CLAUSE_PAUSE_MULTIPLIER, te.BREATHING_ROOM_MULTIPLIER
+        )
+        self.assertGreater(te.CLAUSE_PAUSE_MULTIPLIER, 1.0)
+        self.assertEqual(
+            te.classify_pause({"word": "however,"}, None)["position"], "clause_final"
+        )
+
+    def test_unpunctuated_transcript_is_flagged_not_silently_stripped(self) -> None:
+        """Without punctuation every pause looks intra-clause. Say so."""
+        stream = words(("the", 0.0, 0.3), ("thing", 1.5, 1.9))
+        self.assertFalse(te.transcript_is_punctuated(stream))
+        cuts = te.detect_long_pauses(stream, **self.PAUSE)
+        self.assertEqual(cuts[0]["pause_position"], "unpunctuated")
+        self.assertEqual(cuts[0]["confidence"], "low")
+        self.assertIn("review", cuts[0]["classification_reason"])
+
+    def test_every_pause_carries_a_reason(self) -> None:
+        """Reason-per-cut is the house contract; classification must honour it."""
+        for cut in te.detect_long_pauses(self._beat_and_stumble(), **self.PAUSE):
+            self.assertTrue(cut["classification_reason"].strip())
+            self.assertIn("threshold_seconds", cut)
+
+
 if __name__ == "__main__":
     unittest.main()

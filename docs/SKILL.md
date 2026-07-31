@@ -850,11 +850,191 @@ clip-count readback plus `brain_edits` rationale rows.
   min_strip_frames?, pre_head_frames?, post_tail_frames?, include_audio?)` —
   waveform silence strips via ffmpeg `silencedetect`, mirroring Resolve's
   *Clip → Audio Operations → Ripple Delete Silence* (defaults: −30 dB,
-  10-frame minimum strip, 0 pre-head, 1 post-tail frame). Items without
+  10-frame minimum strip, 2 pre-head, 4 post-tail frames — guard bands that
+  keep the cut off the outgoing word's decay and the incoming word's attack).
+  Items without
   readable file paths ride along whole (reported in `skipped`), so the
   variant never silently loses content. `execute_silence_ripple(plan_id)`
   assembles a tightened VARIANT timeline from keep ranges — same safety model
   as `execute_tighten` (original untouched, confirm token, audio mirroring).
+- `plan_dead_space_markers(timeline_name?, track_index?, threshold_db?,
+  tightness?, min_strip_frames?, pre_head_frames?, post_tail_frames?)` —
+  **review before you cut.** Finds dead space with the *same* calibrated gate as
+  `plan_silence_ripple` but proposes Resolve **markers** instead of an edit, so
+  an editor can look at every gap, delete the markers they disagree with, and
+  only then tighten. Reach for this whenever the ask is "show me the gaps
+  first" — it is the review gate, and without it an agent will invent its own
+  detection and mark the wrong spots. Red = confident; **Yellow = the gate only
+  just cleared its separation floor, so speech and room are close together and
+  the call deserves a second look.** Nothing is written: pair the returned
+  marker specs with `timeline_markers`. Items in `skipped` were *not* analyzed
+  and are explicitly **not** certified clean.
+  `tightness` (`generous` default | `balanced` | `tight`) scales the guard bands
+  and the minimum gap length — see below.
+- `plan_report(plan_id, max_detail_rows?)` — **render any plan as a reviewable
+  Markdown report.** A 340-entry `keep_ranges` array is not reviewable, and the
+  rational response to a machine you cannot audit is to re-check it by hand,
+  which is the cost the tool was meant to remove. The report states: what would
+  change (in **timecode**, with a reason per cut), what was **deliberately left
+  alone** (invisible in the output, and the half people distrust most), what
+  could **not** be verified (never folded into "fine"), and what **needs a
+  human**. Returns both `report_markdown` and a one-line `summary` for chat.
+  Every plan kind renders, including ones this renderer does not know about.
+- `rank_takes(clip_refs[], script?)` — rank several clips of the same material by
+  **measurable fluency**: filler density, stammered restarts, longest clean run,
+  and (with a `script`) how much of the intended line got said. **It ranks
+  fluency, not quality, and says so in every response.** Performance is most of
+  what makes a take right and none of it is measurable here — the take that
+  plays is regularly the least fluent one, because the hesitation is often the
+  acting. Use it to find the clean safety take or skip the warm-ups, never to
+  choose the read. Clips without transcripts are listed in `unavailable`
+  (**absent from the ranking, not last in it**), and takes too short to score
+  are flagged rather than dropped.
+- `plan_beat_cuts(clip_ref | media_path, mode?, beats_per_bar?, bars_per_phrase?,
+  beat_offset?, min_shot_seconds?, timeline_fps?)` — **cut points from the music's
+  own pulse**, for footage with no speech. The speech tools find edit points in
+  words and pauses; music has neither, and pointing a silence gate at it makes
+  engine noise read as content and quiet read as dead space. `mode`: `beat` (every
+  beat — relentless), `bar` (downbeats), **`phrase` (default)** — music resolves at
+  phrase boundaries, which is what makes a cut feel inevitable rather than merely
+  synchronised. Frame-snapped. **Downbeats are inferred, not detected** (the first
+  beat is assumed to start a bar) — a track with a pickup needs `beat_offset`, and
+  that is the first thing to check if cuts feel consistently one beat early.
+  Reports its own tracking confidence. Requires the optional `librosa` extra
+  (`pip install librosa`, ISC) and **honest-refuses without it** rather than
+  inventing a tempo. Returns cut POINTS, not an assembly.
+- `plan_prebalance(timeline_name?, track_index?, max_items?)` — **neutral technical
+  pre-balance**, the assistant colorist's highest-leverage pass. Measures black and
+  white points per channel off a mid-shot frame, groups by setup, picks a hero, and
+  proposes one bypassable **`ASST: Balance`** node per clip. Black balance on the
+  parade first, then white point. **Midtones are deliberately left warm** — skin
+  belongs near 11 o'clock on the vectorscope, and neutralizing midtones is the
+  fastest way to make everyone grey. Curves, vignettes, saturation, qualifiers and
+  windows are **refused in code**, not merely discouraged. Clipped highlights and
+  crushed shadows are flagged as `ASST: TECH/CREATIVE` markers, never silently
+  fixed. It has scopes and no eyes: numeric balance is defensible, look development
+  is not, and it cannot know the dim shot was dim on purpose.
+- `rule_of_six_audit(timeline_name?, track_index?)` — audits a timeline against
+  the **Rule of Six** — the classical weighted cut criteria — and is loud about
+  what it cannot see. Those weights
+  are inverted against measurability: **everything computable is the bottom 26%**.
+  So **emotion (51%) and story (23%) appear in every response as `NOT_ASSESSED`
+  and cannot be suppressed**, criteria this build does not compute report
+  `NOT_IMPLEMENTED` (never a pass), and coverage is stated outright — *"1 of 6
+  criteria assessed, covering 10% of the decision."* **There is deliberately no
+  composite score**; averaging 26% into one number implies it describes the cut.
+  Findings order by scope ("movie first, scene second, moment third")
+  then by criterion weight — never by volume, so a rhythm problem (10%) always
+  outranks a screen-geography one (5%). Rhythm is implemented: metronomic runs
+  are flagged, and a pattern break landing on a marker is reported as **craft,
+  not a finding** — the break is where meaning lives. Cuts/min is compared to
+  the 14–16 commonly observed in dialogue, explicitly **descriptive not
+  prescriptive**.
+- `split_edit_audit(timeline_name?, track_index?)` — **sound leads picture**.
+  The ear is faster than the eye, so the classical advice is to treat the cut as
+  a sound event first. Classifies every join: **L-cut** (audio edit later — outgoing
+  sound lingers), **J-cut** (audio earlier — incoming sound pulls forward), or
+  straight. A picture cut with no nearby audio edit is reported as **unpaired,
+  not straight** — sound running continuously across a join is a *stronger* form
+  of sound carrying picture. Flags a timeline where every join is straight: that
+  is where the NLE puts audio edits by default, and a dialogue sequence with no
+  split edits anywhere is usually one nobody has listened to yet. **No correct
+  ratio is suggested and none exists** — a montage, a two-hander and an
+  interview all want different distributions.
+- `sound_density_audit(track_media, stream_limit?, duration_seconds?)` — the
+  **two-and-a-half rule**: an audience follows roughly 2.5 simultaneous sound
+  streams before the rest becomes texture. The distinction that makes this usable
+  is **competing vs. layered** — a music bed under dialogue is one stream plus
+  texture, not two competitors, and a version that counted active tracks would
+  flag every mixed timeline ever made. A stream within 12 dB of the loudest
+  counts as competing; further under counts as a bed. **2.5 is a long-standing
+  observation in sound editing, not a measured constant** — it is a parameter and its provenance
+  travels with every result. Pass rendered stems for a true reading; source clips
+  give a reading of the sources, and the response says which it got.
+- `setup_sheet(timeline_name?, track_index?)` — **the wall of stills**: one
+  representative frame per *setup*, not per shot, so twenty images stand for the
+  whole film instead of two hundred reproducing the timeline at higher
+  resolution. Frame taken from the middle of that setup's longest usage (heads
+  and tails catch fades, slates and handles); ordered by **first appearance** so
+  the sheet reads in the direction the film does. Grouping is reel-name-else-
+  folder — a stated proxy for lighting setup, which Resolve does not expose.
+- `first_impression(op=start|record|lock|get|list|diff, …)` — the editor is the
+  only person who gets to be a first-time audience, and that perception is
+  destroyed by the second viewing. Captures timestamped reactions during a first
+  pass and then **seals them**. `record` on a locked log raises; **there is
+  deliberately no unlock** — an impression that can be revised later is
+  worthless, because by then what changed is the viewer, not the film. Free text,
+  **no schema and no sentiment scoring** — the words are the artifact. `diff`
+  reports whether a later pass **revisited** each reaction and explicitly refuses
+  to claim anything was *fixed*.
+- `plan_reference_match(reference_media, reference_at_seconds?, timeline_name?, max_items?)`
+  — match clips to a **graded reference still**, the way a colorist actually
+  communicates ("make it look like this one"). Reuses `prebalance.validate_plan`
+  rather than reimplementing the guardrails, so this path cannot permit what the
+  neutral path forbids. **END POINTS ONLY, stated in every response** — it puts
+  a shot in the reference's tonal neighbourhood and does **not** transfer the
+  reference's grade; curves, vignettes and secondaries stay where they are.
+  Matching across dissimilar subject matter (night exterior vs white cyc) is
+  reported as **low confidence** rather than delivered with a straight face.
+- `plan_string_out(shots, order?)` — assembly for footage that does not talk.
+  Speechless material is cut from **shots and motion**, not silence: point a
+  speech gate at motorsport and engine noise reads as content while a quiet
+  straight reads as dead space. `order`: `chronological` (default) or
+  `activity`. **Unmeasured motion is never treated as static**, a locked-off
+  shot is described rather than penalised, and ranking by movement is a
+  measurement not an edit — the most important shot may rank last. Returns a
+  string-out, never a cut.
+- `propose_structure(topics)` — **no-script mode**. Orders topics by coverage,
+  which measures what was *shot* and not what matters, and says so.
+  `requires_approval` is always true: a structure inferred from clustering is a
+  hypothesis about what the piece is, and the decision least safe to take
+  silently.
+- `plan_broll(beats, candidates, allow_reuse?)` — place B-roll against A-roll
+  beats. **Placement only: relevance is whatever your matcher said and is never
+  re-scored here**, because whether a shot illustrates a line is not something
+  this can see. Cutaways sit *inside* a beat rather than straddling one; a beat
+  marked `protected` is never covered; an explicit `beat_index` is honoured
+  there or not at all, never silently moved somewhere it fits better.
+- `plan_turnover(destinations, contents, version?, handle_frames?)` — validate
+  **sound / VFX / colour turnover manifests** against spec. Per-destination
+  handle floors (sound 48 frames, picture 8 — crossfades and room tone reach
+  past the picture cut), and a **timecode-burned picture reference is required
+  in all three**, its absence a blocker: without one the receiving editor cannot
+  verify anything against your intent. Includes the burn-in spec (both source
+  *and* record timecode). **Manifests, not exports** — an export that runs
+  perfectly and omits the textless is still a failed turnover, and rendering
+  needs a live Resolve.
+- `journal(op=append|read|known_issues|ingest_log|session_prep|handoff|status|
+  picture_lock|check_lock, …)` — the paperwork every craft role keeps and every
+  tool skips. **Append-only:** resolving an issue appends a resolution and never
+  deletes the issue, so the one nobody got round to is still there when someone
+  asks why a shot shipped soft. `session_prep` carries open issues plus the value
+  figures (prep hours, hours saved, rate) because the prep has to justify itself
+  in the next budget round. `handoff` prints missing fields as **NOT STATED**
+  rather than omitting them — a handoff that silently drops the frame rate reads
+  as complete and the gap surfaces after work has started. `picture_lock` records
+  a fingerprint of the cut and `check_lock` reports drift; the fingerprint hashes
+  the **edit points**, not just counts and totals, so shots redistributed inside
+  an unchanged runtime — exactly what a trim pass produces — still trip it.
+- **All audits accept `include_report=true`** for a Markdown rendering (what
+  changed, what was deliberately left alone, what could not be verified, what
+  needs a human). Off by default because rendering costs tokens on every call;
+  every audit advertises it in `report_available`.
+- `conform_lint(timeline_name?, track_index?)` — **the online editor's checklist,
+  run before turnover** instead of discovered after picture lock in someone else's
+  suite. Blockers: frame-rate mismatch, offline media, two sources claiming one
+  source timecode (misnamed cards — the most common reason a relink fails).
+  Warnings: items buried under opaque layers, track overlaps, missing reel names,
+  and effects that will not survive interchange (Premiere's *Scale to Frame Size*
+  is the classic — its sizing data does not reach Resolve at all). It reports, it
+  does not fix, and **checks that could not run for want of data are listed in
+  `not_checked`** rather than counted as passes.
+- Plans now carry a **`handle_report`**: keep ranges that leave too little source
+  media at a join for a dissolve, a slip or an audio crossfade. Picture floor 8
+  frames, audio 48 — audio is far larger because crossfades and room tone reach
+  past the picture cut. It reports rather than blocks (cutting to the head of a
+  clip is often unavoidable), but **an unverified handle is never reported as a
+  passing one**.
 - `plan_swap(timeline_start_frame | item_name, kind="visual"|"text",
   limit?)` — alternates for one timeline item via the similarity index,
   filtered to shots long enough to fill the slot exactly.

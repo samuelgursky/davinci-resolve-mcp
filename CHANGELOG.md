@@ -2,6 +2,147 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.69.0
+
+The free edition is documented as reachable, silence ripple stops clipping
+speech at the cut, and the editorial surface grows a set of review-first
+planners: dead-space markers, craft-aware cut points, conform QC, colour
+pre-balance, beat detection, turnover manifests, and a project journal.
+
+Two themes run through the additions. **Nothing new executes** — every planner
+proposes and reports, and the existing plan → confirm → execute path is
+unchanged. And **unverified is never reported as clean**: an item that could not
+be analysed, a check that could not run, a handle that could not be measured and
+a take with no transcript are each reported as such rather than folded into a
+passing result.
+
+### Changed
+
+- **`plan_silence_ripple` guard bands are now 2 pre-head / 4 post-tail frames**
+  (previously 0 and 1 — effectively none). This changes default output for any
+  caller that does not pass explicit handles.
+
+  The old defaults cut exactly on `silencedetect`'s gate crossings, which are not
+  word boundaries. `s` is marked when amplitude falls below the gate, but a
+  word's decay and the room reverb after it stay audible below it, so cutting
+  from `s` clipped the release. `e` is marked when amplitude rises back above the
+  gate, and a soft attack (s, f, th, or any unstressed syllable) crosses later
+  than the word actually begins, so `e` sat *inside* the next word and cutting up
+  to it ate the onset.
+
+  The onset guard is the larger of the two because that is the asymmetry users
+  hear: reviewers of the first public tutorial for this project independently
+  reported that "the first split seconds of your clips are trimmed so the audio
+  is a bit cut off". At 24 fps the new guards are 83 ms and 167 ms; at 30 fps,
+  67 ms and 133 ms — both inside the range dialogue editors use by hand.
+
+  Pass `pre_head_frames` / `post_tail_frames` explicitly to restore the previous
+  behaviour.
+
+### Fixed
+
+- **The docs told free-edition users the door was closed.** v2.68.0 shipped the
+  in-app bridge, which reaches the free edition through the ungated
+  **Workspace > Scripts** menu, but README's Requirements section still said "the
+  free edition does not support external scripting" 195 lines below the section
+  documenting the bridge, and `docs/install.md` said the same with no mention of
+  the bridge at all. The claim is true about *external* scripting and false as
+  users read it — the first large public tutorial for this project pinned a
+  correction telling viewers the method "REQUIRES the Studio Version".
+
+  README, `docs/install.md`, `install.py` and the MCP server's own `instructions`
+  now state the limit and the remedy together. `install.py` also grew the branch
+  it was missing: Resolve running, healthy interpreter, no connection is the
+  free-edition signature, and it used to print "Not running — start Resolve".
+
+### Added
+
+**Editorial**
+
+- `edit_engine.plan_dead_space_markers` — **the review gate.** Finds dead space
+  with the same calibrated detection as `plan_silence_ripple`, but proposes
+  Resolve markers instead of assembling a variant, so an editor can see every
+  gap before agreeing to lose it. Red = confident; yellow = the gate only just
+  cleared its separation floor. Items that could not be analysed are reported
+  and are explicitly **not** certified clean.
+- `tightness` (`generous` default | `balanced` | `tight`) on the dead-space
+  planner. The default is deliberately the loosest: a first assembly is meant to
+  run long, because trimming is fast and visible while recovering material the
+  machine discarded is slow and invisible. Guard bands are floored regardless of
+  preset — `tight` removes more *gaps*, never more *speech*.
+- Syntactic pause classification in `plan_transcript_tighten`. A pause after a
+  full stop must be markedly longer before it is proposed for removal than the
+  acoustically identical pause mid-phrase; the first is usually breathing room
+  and the second usually is not. Unpunctuated transcripts are flagged low
+  confidence rather than treated as all-removable.
+- `edit_engine.rank_takes` — ranks takes on **measurable fluency** (fillers,
+  restarts, script coverage) and states in every response that fluency is not
+  quality. It never names a best take.
+- `edit_engine.plan_beat_cuts` — beat, bar and phrase cut points for
+  music-driven cutting, frame-snapped. Requires the optional `librosa` extra and
+  honest-refuses without it.
+- `edit_engine.plan_string_out` / `propose_structure` — assembly for footage
+  with no speech, from shots and motion rather than silence; and a no-script
+  mode that proposes a structure and requires approval.
+- `edit_engine.plan_broll` — places B-roll against A-roll beats. Placement only:
+  relevance is the caller's and is never re-scored, protected beats are never
+  covered, and an explicit beat choice is honoured or refused, never moved.
+- `edit_engine.rule_of_six_audit` and `split_edit_audit` — audits against the
+  classical weighted cut criteria, and J/L-cut classification. The audit is
+  explicit that the two heaviest criteria are not measurable and reports its own
+  coverage; there is deliberately no composite score.
+
+**Finishing and colour**
+
+- `edit_engine.conform_lint` — the online editor's pre-turnover checklist:
+  frame-rate mismatch, offline media, duplicate source timecode, buried layers,
+  fragile effects, missing reel names, duplicate usage. Checks that could not run
+  are listed in `not_checked`.
+- `edit_engine.plan_prebalance` and `plan_reference_match` — neutral technical
+  pre-balance, and matching to a graded reference still. Curves, vignettes,
+  saturation, qualifiers and windows are refused **in code**; midtones are left
+  warm by design. Reference matching is end-points-only and says so.
+- `edit_engine.plan_turnover` — sound / VFX / colour turnover manifests with
+  per-destination handle floors and a timecode-burned picture reference required
+  in all three. Manifests, not exports.
+- Plans now carry a `handle_report`: keep ranges that leave too little source
+  media at a join for a dissolve, a slip or an audio crossfade.
+
+**Reporting**
+
+- `edit_engine.plan_report` and `include_report` on every audit — Markdown
+  renderings covering what would change (in timecode, with a reason per cut),
+  what was deliberately left alone, what could not be verified, and what needs a
+  human. Off by default for token cost; every audit advertises it.
+- `journal` — ingest log, append-only known issues, session-prep summary with
+  value figures, technical handoff document, status summary, and a picture-lock
+  fingerprint with drift detection.
+- `first_impression` — timestamped capture of a first viewing, sealed once
+  locked. There is deliberately no unlock.
+
+**Documentation**
+
+- **Optional extras are now documented up front** — README and `docs/install.md`
+  list what each extra unlocks and under which licence, and `scripts/doctor.py`
+  reports which are present. Four of the features added in this release need
+  `numpy` or `librosa`; they refuse honestly with the install line, but a user
+  reading the README previously had no way to know before hitting the refusal.
+  "Setup too hard" was one of the loudest complaints this release answers, and
+  shipping features behind an undocumented `pip install` is the same failure.
+
+**Guards**
+
+- `tests/test_free_edition_docs_drift.py` — a guard that does not forbid stating
+  the free-edition limitation, but requires that any file stating it also names
+  the bridge. Broad enough to catch a new phrasing rather than only the sentences
+  fixed here, and it asserts the remedy exists (the README anchor and the
+  installer script the docs promise).
+- `tests/test_attribution_drift.py` — keeps named third parties out of the
+  committed tree entirely. Stores SHA-256 digests rather than the names it
+  forbids, so the guard is not itself the one file containing them.
+- `resolve-advanced` now carries an MIT `LICENSE` in its published tarball, and
+  the three vendored workspaces declare `"license": "MIT"`.
+
 ## What's New in v2.68.2
 
 Bug fixes. The server no longer opens a second DaVinci Resolve, and a failed

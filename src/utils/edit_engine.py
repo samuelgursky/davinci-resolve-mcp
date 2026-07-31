@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.utils import analysis_memory, analysis_store, timeline_brain_db
+from src.utils import edit_handles as _edit_handles_mod
 from src.utils import silence_ripple as _silence_ripple_mod
 from src.utils import transcript_edit as _transcript_edit_mod
 
@@ -665,11 +667,19 @@ def plan_silence_ripple(
         clip_row = None
         clip_fps = fps
         resolve_clip_id = None
+        source_total_frames = None
         if clip_uuid:
             clip_row = conn.execute("SELECT * FROM clips WHERE clip_uuid = ?", (clip_uuid,)).fetchone()
             if clip_row:
                 clip_fps = _clip_fps(dict(clip_row))
                 resolve_clip_id = dict(clip_row).get("resolve_clip_id")
+                # Needed to tell a keep range that ends mid-clip (has handles)
+                # from one that runs to the last frame (has none). Absent length
+                # means unverified, which is reported as such rather than
+                # assumed clean — see edit_handles.
+                _dur = dict(clip_row).get("duration_seconds")
+                if isinstance(_dur, (int, float)) and _dur > 0:
+                    source_total_frames = int(round(float(_dur) * clip_fps))
         resolve_clip_id = resolve_clip_id or item.get("media_ref")
         if not resolve_clip_id:
             skipped.append({
@@ -688,6 +698,7 @@ def plan_silence_ripple(
             "resolve_clip_id": resolve_clip_id,
             "src_start_sec": src_start_sec,
             "src_end_sec": src_end_sec,
+            "source_total_frames": source_total_frames,
             # Default: ride along whole. Overwritten below when waveform
             # evidence is available for this item.
             "keep_segments": [(src_start_sec, src_end_sec)],
@@ -826,8 +837,21 @@ def plan_silence_ripple(
     removed_frames = sum(l["timeline_end_frame"] - l["timeline_start_frame"] for l in lifts)
     audio_keep_range_count = sum(1 for r in keep_ranges if r.get("track_type") == "audio")
     video_keep_range_count = len(keep_ranges) - audio_keep_range_count
+
+    # A tighten optimizes for removing silence and knows nothing about the media
+    # colour, VFX and sound need either side of a join. Surface it at plan time
+    # rather than letting it be discovered after picture lock.
+    handle_report = _edit_handles_mod.check_keep_range_handles(
+        keep_ranges,
+        source_bounds={
+            spec["resolve_clip_id"]: spec["source_total_frames"]
+            for spec in item_specs
+            if spec.get("resolve_clip_id") and spec.get("source_total_frames")
+        },
+    )
     plan = save_plan(project_root, {
         "kind": "silence_ripple",
+        "handle_report": handle_report,
         "timeline_name": timeline_name,
         "timeline_fps": fps,
         "lifts": lifts,
@@ -867,6 +891,7 @@ def plan_silence_ripple(
         "audio_keep_range_count": audio_keep_range_count,
         "include_audio": bool(include_audio),
         "skipped": skipped,
+        "handle_report": handle_report,
         "note": (
             "Dry-run plan. Execute with edit_engine(action='execute_silence_ripple', "
             "params={plan_id}) — a tightened VARIANT timeline is assembled from "
@@ -882,6 +907,217 @@ def plan_silence_ripple(
             "Check the threshold before executing; execution will refuse this plan."
         )
     return result
+
+
+# ── E2b: dead space, marked for review ───────────────────────────────────────
+
+#: Resolve marker colours. Red reads as "look here" and is what editors reach
+#: for when asking to be shown something before agreeing to it.
+DEAD_SPACE_MARKER_COLOR = "Red"
+DEAD_SPACE_UNCERTAIN_MARKER_COLOR = "Yellow"
+
+#: Separation above the usability floor below which a gate is "usable but only
+#: just". Speech and room are close together at that point, so the detection is
+#: correct-in-principle and worth a human's eye before it is acted on.
+MARGINAL_SEPARATION_MARGIN_DB = 6.0
+
+
+def _calibration_is_marginal(calibration) -> bool:
+    """True when a calibrated gate barely cleared its own credibility floor.
+
+    Returns False for an explicit caller-supplied threshold (nothing was
+    calibrated, so there is no confidence to report) and for digital silence
+    (unambiguous by construction).
+    """
+    if calibration is None or not getattr(calibration, "usable", False):
+        return False
+    separation = getattr(calibration, "separation_db", None)
+    if separation is None or not math.isfinite(separation):
+        return False
+    floor = _silence_ripple_mod.MIN_SEPARATION_DB
+    return separation < floor + MARGINAL_SEPARATION_MARGIN_DB
+
+
+def plan_dead_space_markers(
+    project_root: str,
+    *,
+    items: Sequence[Dict[str, Any]],
+    timeline_name: str,
+    timeline_fps: float,
+    threshold_db: Optional[float] = None,
+    tightness: Optional[str] = None,
+    min_strip_frames: float = DEFAULT_SILENCE_MIN_STRIP_FRAMES,
+    pre_head_frames: float = DEFAULT_SILENCE_PRE_HEAD_FRAMES,
+    post_tail_frames: float = DEFAULT_SILENCE_POST_TAIL_FRAMES,
+) -> Dict[str, Any]:
+    """Find dead space and propose MARKERS for a human to review — cut nothing.
+
+    Why this exists as its own verb rather than a flag on `plan_silence_ripple`:
+
+    An editor asked to be shown the gaps before agreeing to lose them — "mark
+    all the spots with dead space with a red marker so I can review, and then
+    I'll approve" — which is the review gate this project's own guidance
+    recommends. There was no tool for it. `plan_silence_ripple` is calibrated
+    and correct but its output is a tightened *variant timeline*, and
+    `media_analysis`'s marker plan marks *shots on a clip*, not dead space on a
+    timeline. With nothing to call, an agent asked to do this improvises its own
+    detection and places markers by hand — which is exactly what happened, and
+    the markers landed on "pretty random spots" while missing the obvious gaps.
+
+    The detection here is deliberately the *same* calibrated gate as the ripple
+    path, so what you review is what you would get. The difference is only that
+    this proposes an annotation instead of an edit.
+    """
+    if not items:
+        return {"success": False, "error": "No timeline items supplied"}
+    fps = float(timeline_fps) if timeline_fps and float(timeline_fps) > 0 else 24.0
+
+    try:
+        scaled = _silence_ripple_mod.apply_tightness(
+            tightness=tightness,
+            pre_head_frames=pre_head_frames,
+            post_tail_frames=post_tail_frames,
+            min_strip_frames=min_strip_frames,
+        )
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+
+    min_strip_sec = _silence_ripple_mod.frames_to_seconds(scaled["min_strip_frames"], fps)
+    pre_head_sec = _silence_ripple_mod.frames_to_seconds(scaled["pre_head_frames"], fps)
+    post_tail_sec = _silence_ripple_mod.frames_to_seconds(scaled["post_tail_frames"], fps)
+    conn = timeline_brain_db.connect(project_root)
+
+    markers: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    calibrations: List[Dict[str, Any]] = []
+    total_dead_frames = 0
+
+    for item_index, item in enumerate(items):
+        try:
+            tl_start = int(item["timeline_start_frame"])
+            tl_end = int(item["timeline_end_frame"])
+            src_start_frame = int(item.get("source_start_frame") or 0)
+        except (KeyError, TypeError, ValueError):
+            skipped.append({"item": item.get("item_name"), "reason": "missing frame fields"})
+            continue
+
+        clip_uuid = analysis_store.resolve_clip_uuid(conn, item.get("media_ref"))
+        if not clip_uuid:
+            clip_uuid = analysis_store.resolve_clip_uuid(conn, item.get("media_path"))
+        clip_fps = fps
+        if clip_uuid:
+            clip_row = conn.execute(
+                "SELECT * FROM clips WHERE clip_uuid = ?", (clip_uuid,)
+            ).fetchone()
+            if clip_row:
+                clip_fps = _clip_fps(dict(clip_row))
+
+        src_start_sec = src_start_frame / clip_fps
+        src_end_sec = src_start_sec + (tl_end - tl_start) / fps
+
+        media_path = _resolve_media_path(conn, item)
+        if not media_path:
+            skipped.append({
+                "item": item.get("item_name"),
+                "reason": "no readable media file path — not analyzed, and therefore NOT marked clean",
+            })
+            continue
+        if not _silence_ripple_mod.ffmpeg_available():
+            return {
+                "success": False,
+                "error": (
+                    "ffmpeg not found on PATH — waveform silence detection "
+                    "requires ffmpeg (see media_analysis capabilities)"
+                ),
+            }
+
+        item_threshold = threshold_db
+        calibration = None
+        if item_threshold is None:
+            calibration = _silence_ripple_mod.calibrate_silence_gate(
+                media_path, src_start_sec, src_end_sec
+            )
+            calibrations.append({"item": item.get("item_name"), **calibration.as_dict()})
+            if not calibration.usable:
+                # Not markable is not the same as no dead space. Saying nothing
+                # here would read as "this item is clean", which is a lie by
+                # omission on exactly the material most likely to need review.
+                skipped.append({
+                    "item": item.get("item_name"),
+                    "reason": f"silence gate could not be calibrated — NOT analyzed: {calibration.reason}",
+                    "calibration": calibration.as_dict(),
+                })
+                continue
+            item_threshold = calibration.gate_db
+
+        strip_regions, _keep = _silence_ripple_mod.plan_item_silence_strips(
+            media_path,
+            src_start_sec,
+            src_end_sec,
+            threshold_db=float(item_threshold),
+            min_strip_sec=min_strip_sec,
+            pre_head_sec=pre_head_sec,
+            post_tail_sec=post_tail_sec,
+        )
+
+        for strip_start, strip_end in strip_regions:
+            marker_start = tl_start + int(round((strip_start - src_start_sec) * fps))
+            marker_end = tl_start + int(round((strip_end - src_start_sec) * fps))
+            duration = max(1, marker_end - marker_start)
+            total_dead_frames += duration
+            seconds = round(duration / fps, 2)
+            # A gate that only just cleared the separation floor is a usable
+            # gate, not a confident one — speech and room are nearly the same
+            # level here, so these regions deserve a second look rather than the
+            # same red as an unambiguous hole. Yellow says "probably, check me".
+            uncertain = _calibration_is_marginal(calibration)
+            markers.append({
+                "timeline_start_frame": marker_start,
+                "duration_frames": duration,
+                "color": DEAD_SPACE_UNCERTAIN_MARKER_COLOR if uncertain else DEAD_SPACE_MARKER_COLOR,
+                "name": f"Dead space {seconds}s",
+                "note": (
+                    f"{seconds}s below {round(float(item_threshold), 1)} dB in "
+                    f"{item.get('item_name') or 'item'} "
+                    f"({'auto-calibrated' if threshold_db is None else 'explicit'} gate, "
+                    f"tightness={scaled['tightness']}). "
+                    f"Guards: {scaled['pre_head_frames']:.0f} frames kept before, "
+                    f"{scaled['post_tail_frames']:.0f} after, so speech either side is untouched."
+                ),
+                "item_name": item.get("item_name"),
+                "item_index": item_index,
+                "source_gap_seconds": [round(strip_start, 3), round(strip_end, 3)],
+                "evidence": {
+                    "basis": "ffmpeg_silencedetect",
+                    "threshold_db": round(float(item_threshold), 2),
+                    "threshold_source": "explicit" if threshold_db is not None else "calibrated",
+                },
+            })
+
+    skipped = _dedupe_skipped(skipped)
+    markers.sort(key=lambda m: m["timeline_start_frame"])
+
+    return {
+        "success": True,
+        "kind": "dead_space_markers",
+        "timeline_name": timeline_name,
+        "timeline_fps": fps,
+        "tightness": scaled["tightness"],
+        "marker_count": len(markers),
+        "total_dead_seconds": round(total_dead_frames / fps, 2),
+        "markers": markers,
+        "calibrations": calibrations,
+        "skipped": skipped,
+        "analyzed_item_count": len(items) - len(skipped),
+        "note": (
+            "Review-only. NOTHING is cut and no marker has been written yet — write "
+            "them with timeline_markers, delete the ones you disagree with, then "
+            "tighten. Detection is the same calibrated gate as "
+            "plan_silence_ripple, so what you see marked here is what that would "
+            "remove at this tightness. Items in `skipped` were NOT analyzed and are "
+            "not certified clean."
+        ),
+    }
 
 
 # ── E3: swap alternates ──────────────────────────────────────────────────────
@@ -1062,6 +1298,394 @@ def plan_swap(
 # ── transcript-driven editing (word level) ───────────────────────────────────
 
 
+def rule_of_six_audit(
+    *,
+    items: Sequence[Dict[str, Any]],
+    timeline_name: str,
+    timeline_fps: float,
+    story_beats: Optional[Sequence[float]] = None,
+) -> Dict[str, Any]:
+    """Audit a timeline against the Rule of Six.
+
+    Computes what is computable (currently rhythm, 10%) and abstains loudly on
+    emotion (51%) and story (23%), which are not measurable and never will be.
+    Criteria this build does not yet compute report `NOT_IMPLEMENTED` — never a
+    pass.
+    """
+    from src.utils import rhythm_audit as _rhythm
+    from src.utils import rule_of_six as _six
+
+    if not items:
+        return {"success": False, "error": "No timeline items supplied"}
+    fps = float(timeline_fps) if timeline_fps and float(timeline_fps) > 0 else 24.0
+
+    rhythm = _rhythm.assess(items, fps=fps, story_beats=story_beats or [])
+    audit = _six.audit(
+        timeline_name=timeline_name,
+        criterion_results={"rhythm": rhythm},
+        findings=rhythm.get("findings") or [],
+    )
+    audit["rhythm"] = {
+        "shot_count": len(rhythm.get("shots") or []),
+        "cut_density": rhythm.get("cut_density"),
+        "motivated_breaks": rhythm.get("motivated_breaks") or [],
+        "beats_supplied": rhythm.get("beats_supplied", 0),
+    }
+    return audit
+
+
+def sound_density_audit(
+    *,
+    track_media: Mapping[str, str],
+    stream_limit: Optional[float] = None,
+    duration_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
+    """The two-and-a-half rule over a set of audio stems.
+
+    **Honest limit:** this measures the files it is given, so it is only as
+    timeline-accurate as those files are. Rendered stems (dialogue / music /
+    effects) give a true reading; raw source clips give a reading of the sources,
+    which is useful for spotting a crowded mix but is not the timeline. The
+    result says which it got.
+    """
+    from src.utils import sound_density as _density
+
+    if not track_media:
+        return {
+            "success": False,
+            "error": "No audio supplied.",
+            "remediation": (
+                "Pass track_media as {name: path} — ideally rendered stems "
+                "(dialogue/music/effects). Counting tracks without measuring them "
+                "cannot tell a competing stream from a bed, and guessing would make "
+                "every mixed timeline fail."
+            ),
+        }
+
+    measured = _density.measure_track_levels(
+        dict(track_media), duration_seconds=duration_seconds
+    )
+    if not measured.get("success"):
+        return measured
+
+    kwargs: Dict[str, Any] = {}
+    if stream_limit is not None:
+        kwargs["stream_limit"] = float(stream_limit)
+    result = _density.audit(measured["samples"], **kwargs)
+    result["measured_streams"] = sorted(track_media)
+    result["source_caveat"] = (
+        "Measured from the supplied files. If these are rendered stems this is the "
+        "timeline; if they are source clips it is a reading of the sources, not of "
+        "the mix."
+    )
+    return result
+
+
+def setup_sheet(
+    *,
+    items: Sequence[Dict[str, Any]],
+    timeline_name: str,
+    timeline_fps: float,
+) -> Dict[str, Any]:
+    """One representative frame per camera setup, ordered by first appearance."""
+    from src.utils import setup_sheet as _sheet
+
+    fps = float(timeline_fps) if timeline_fps and float(timeline_fps) > 0 else 24.0
+    result = _sheet.select_representatives(items, fps=fps)
+    result["timeline_name"] = timeline_name
+    return result
+
+
+def split_edit_audit(
+    *,
+    video_items: Sequence[Dict[str, Any]],
+    audio_items: Sequence[Dict[str, Any]],
+    timeline_fps: float,
+) -> Dict[str, Any]:
+    """Sound leads picture: classify every join as L-cut, J-cut or straight."""
+    from src.utils import split_edits as _split
+
+    fps = float(timeline_fps) if timeline_fps and float(timeline_fps) > 0 else 24.0
+    return _split.audit(video_items, audio_items, fps=fps)
+
+
+def plan_beat_cuts(
+    project_root: str,
+    *,
+    clip_ref: Any = None,
+    media_path: Optional[str] = None,
+    timeline_fps: float = 24.0,
+    mode: str = "phrase",
+    beats_per_bar: int = 4,
+    bars_per_phrase: int = 8,
+    beat_offset: int = 0,
+    min_shot_seconds: float = 0.0,
+) -> Dict[str, Any]:
+    """Cut points from the music's own pulse, for footage with no speech.
+
+    The speech tools here find edit points in words and pauses. Music has
+    neither, and pointing a silence gate at it produces exactly the failure a
+    motorsport editor predicted before trying it: engine noise reads as content,
+    quiet reads as dead space, and the cuts land nowhere near the music.
+    """
+    from src.utils import beat_detection as _beats
+
+    path = media_path
+    if not path and clip_ref is not None:
+        conn = timeline_brain_db.connect(project_root)
+        path = _resolve_media_path(conn, {"media_ref": clip_ref, "media_path": clip_ref})
+    if not path:
+        return {
+            "success": False,
+            "error": "Supply media_path, or a clip_ref that resolves to readable media.",
+        }
+
+    detected = _beats.detect_beats(path)
+    if not detected.get("success"):
+        return detected
+
+    try:
+        plan = _beats.plan_beat_cuts(
+            detected["beats"],
+            fps=float(timeline_fps) if timeline_fps else 24.0,
+            mode=mode,
+            beats_per_bar=int(beats_per_bar),
+            bars_per_phrase=int(bars_per_phrase),
+            beat_offset=int(beat_offset),
+            min_shot_seconds=float(min_shot_seconds),
+        )
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+
+    plan["media_path"] = path
+    plan["tempo_bpm"] = detected["tempo_bpm"]
+    plan["detection_confidence"] = detected["confidence"]
+    if detected["confidence"]["band"] == "low":
+        plan["warning"] = (
+            "Beat tracking confidence is LOW — " + detected["confidence"]["reason"]
+            + ". Check several cuts against the music before assembling."
+        )
+    return plan
+
+
+def plan_prebalance(
+    project_root: str,
+    *,
+    items: Sequence[Dict[str, Any]],
+    timeline_name: str,
+    timeline_fps: float,
+    max_items: int = 200,
+) -> Dict[str, Any]:
+    """Measure levels per timeline item and propose a neutral pre-balance.
+
+    Grouping proxy: Resolve does not expose "lighting setup", so items are
+    grouped by reel name where present and by containing folder otherwise —
+    both usually track a camera roll, which usually tracks a setup. It is a
+    proxy and the result says so; a colorist regrouping by eye will beat it.
+    """
+    from src.utils import prebalance as _prebalance
+
+    if not items:
+        return {"success": False, "error": "No timeline items supplied"}
+    fps = float(timeline_fps) if timeline_fps and float(timeline_fps) > 0 else 24.0
+    conn = timeline_brain_db.connect(project_root)
+
+    clips: List[Dict[str, Any]] = []
+    unreadable: List[Dict[str, Any]] = []
+    for item in items[:max_items]:
+        media_path = _resolve_media_path(conn, item)
+        name = item.get("item_name") or "(unnamed)"
+        start = item.get("timeline_start_frame") or 0
+        end = item.get("timeline_end_frame") or start
+        duration = max(0.0, (end - start) / fps)
+        if not media_path:
+            unreadable.append({"clip": name, "reason": "no readable media path — NOT measured"})
+            continue
+        # Sample the middle of the used range: heads and tails catch fades,
+        # slates and handles, none of which represent the shot.
+        source_start = float(item.get("source_start_frame") or 0) / fps
+        reading = _prebalance.measure_frame_levels(media_path, source_start + duration / 2.0)
+        if not reading.get("success"):
+            unreadable.append({"clip": name, "reason": reading.get("error") or "levels unreadable"})
+            continue
+        setup = item.get("reel_name") or os.path.basename(os.path.dirname(media_path)) or "ungrouped"
+        clips.append({
+            "name": name,
+            "duration_seconds": round(duration, 2),
+            "setup": setup,
+            "levels": reading["levels"],
+        })
+
+    if not clips:
+        return {
+            "success": False,
+            "error": "No timeline items could be measured.",
+            "unreadable": unreadable,
+            "remediation": "Check media is online and ffmpeg is on PATH.",
+        }
+
+    result = _prebalance.plan_prebalance(clips)
+    result["timeline_name"] = timeline_name
+    result["grouping_basis"] = "reel name where present, else containing folder (a PROXY for lighting setup)"
+    if unreadable:
+        result.setdefault("unanalyzed", []).extend(unreadable)
+    if len(items) > max_items:
+        result["truncated"] = (
+            f"Measured the first {max_items} of {len(items)} items. The remainder "
+            "were NOT measured and are not certified balanced — raise max_items."
+        )
+    return result
+
+
+def plan_reference_match(
+    project_root: str,
+    *,
+    reference_media: str,
+    reference_at_seconds: float = 0.0,
+    items: Sequence[Dict[str, Any]],
+    timeline_fps: float,
+    max_items: int = 200,
+) -> Dict[str, Any]:
+    """Match timeline clips to a graded reference still.
+
+    Same measurement path as `plan_prebalance`, aimed at a reference instead of
+    at neutral. END POINTS ONLY — it does not transfer the reference's grade.
+    """
+    from src.utils import prebalance as _prebalance
+    from src.utils import reference_match as _refmatch
+
+    if not items:
+        return {"success": False, "error": "No timeline items supplied"}
+    reference = _prebalance.measure_frame_levels(reference_media, reference_at_seconds)
+    if not reference.get("success"):
+        return {"success": False, "error": f"reference unreadable: {reference.get('error')}"}
+
+    fps = float(timeline_fps) if timeline_fps and float(timeline_fps) > 0 else 24.0
+    conn = timeline_brain_db.connect(project_root)
+    targets: List[Dict[str, Any]] = []
+    for item in items[:max_items]:
+        media_path = _resolve_media_path(conn, item)
+        name = item.get("item_name") or "(unnamed)"
+        if not media_path:
+            targets.append({"name": name})
+            continue
+        start = item.get("timeline_start_frame") or 0
+        end = item.get("timeline_end_frame") or start
+        source_start = float(item.get("source_start_frame") or 0) / fps
+        reading = _prebalance.measure_frame_levels(
+            media_path, source_start + max(0.0, (end - start) / fps) / 2.0
+        )
+        targets.append({"name": name, "levels": reading.get("levels")} if reading.get("success")
+                       else {"name": name})
+
+    result = _refmatch.plan_reference_match(
+        reference["levels"], targets, reference_name=os.path.basename(reference_media)
+    )
+    if len(items) > max_items:
+        result["truncated"] = (
+            f"Measured the first {max_items} of {len(items)} items; the remainder "
+            "were NOT matched and are not certified matched."
+        )
+    return result
+
+
+def plan_string_out(
+    *,
+    shots: Sequence[Dict[str, Any]],
+    order: str = "chronological",
+) -> Dict[str, Any]:
+    """String-out for footage with no speech — shots and motion, not silence."""
+    from src.utils import shot_assembly as _assembly
+    return _assembly.plan_string_out(shots, order=order)
+
+
+def propose_structure(*, topics: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """No-script mode: propose an order, require approval, cut nothing."""
+    from src.utils import shot_assembly as _assembly
+    return _assembly.propose_structure(topics)
+
+
+def plan_broll(
+    *,
+    beats: Sequence[Dict[str, Any]],
+    candidates: Sequence[Dict[str, Any]],
+    allow_reuse: bool = False,
+) -> Dict[str, Any]:
+    """Place B-roll against A-roll beats. Relevance is the caller's, not ours."""
+    from src.utils import broll_placement as _broll
+    return _broll.place(beats, candidates, allow_reuse=allow_reuse)
+
+
+def plan_turnover(
+    *,
+    destinations: Sequence[str],
+    contents: Mapping[str, Any],
+    version: str = "v01",
+    handle_frames: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Validate turnover manifests against their specs. Exports nothing."""
+    from src.utils import turnover as _turnover
+    return _turnover.plan_turnover(
+        destinations, contents, version=version, handle_frames=handle_frames
+    )
+
+
+def rank_takes(
+    project_root: str,
+    *,
+    clip_refs: Sequence[Any],
+    script: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Rank several clips as takes of the same material, by measurable fluency.
+
+    Clips with no transcript are reported, not silently dropped — "not ranked"
+    and "ranked last" are different facts and an editor needs to know which.
+    """
+    from src.utils import strata as _strata
+    from src.utils import take_ranking as _take_ranking
+
+    if not clip_refs:
+        return {"success": False, "error": "No clip_refs supplied"}
+
+    takes: List[Dict[str, Any]] = []
+    unavailable: List[Dict[str, Any]] = []
+    for ref in clip_refs:
+        conn, clip, err = _strata.resolve_clip(project_root, ref, require_media=False)
+        if err:
+            unavailable.append({"clip_ref": ref, "reason": err.get("error") or "clip not found"})
+            continue
+        words = _strata.read_words(conn, clip["clip_uuid"])
+        if not words:
+            unavailable.append({
+                "clip_ref": ref,
+                "clip_name": clip.get("clip_name"),
+                "reason": "no transcript words — NOT ranked (run transcription first)",
+            })
+            continue
+        takes.append({"label": clip.get("clip_name") or str(ref), "words": words})
+
+    if not takes:
+        return {
+            "success": False,
+            "error": "None of the supplied clips have transcript words to rank.",
+            "unavailable": unavailable,
+            "remediation": (
+                "Run media_analysis transcription for these clips, then strata "
+                "backfill_transcript_words, before ranking takes."
+            ),
+        }
+
+    result = _take_ranking.rank_takes(takes, script=script)
+    result["unavailable"] = unavailable
+    if unavailable:
+        result["note"] = (
+            f"{len(unavailable)} of {len(clip_refs)} clips could not be ranked "
+            "(no transcript) and are listed in `unavailable` — they are absent "
+            "from the ranking, not last in it. " + str(result.get("note") or "")
+        )
+    return result
+
+
 def plan_transcript_tighten(
     project_root: str,
     *,
@@ -1110,6 +1734,14 @@ def plan_transcript_tighten(
         "word_count": len(words),
     }
     plan["basis"] = "transcript_words"
+    # I3: a word-level tighten breaks a turnover exactly like a waveform-driven
+    # one does. Deciding the cut from a transcript rather than a waveform does
+    # not give sound anything to crossfade with.
+    duration = clip.get("duration_seconds")
+    plan["handle_report"] = _edit_handles_mod.check_seconds_ranges(
+        plan.get("keep_ranges") or [],
+        source_duration_seconds=float(duration) if isinstance(duration, (int, float)) and duration else None,
+    )
     return plan
 
 

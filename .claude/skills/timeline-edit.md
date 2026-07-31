@@ -37,6 +37,24 @@ re-derive it here.
   (plan → confirm → execute); tighten variants can carry audio via `keep_ranges`
   mirror / `include_audio`.
 
+## Show the gaps before cutting them (`edit_engine`)
+
+- **`plan_dead_space_markers(timeline_name?, tightness?)`** — the review gate.
+  Same calibrated detection as `plan_silence_ripple`, but it proposes **markers**
+  instead of assembling a variant, so a human sees every gap before agreeing to
+  lose it. **Use this whenever the ask is "mark the dead space so I can review
+  and approve"** — that is a request for this verb, not for a tighten. Red =
+  confident, Yellow = the gate only just cleared its separation floor. Nothing
+  is written; pair the marker specs with `timeline_markers`.
+- **`tightness`** on the dead-space planner: `generous` (default) | `balanced` |
+  `tight`. Default is deliberately the loosest. A first assembly is supposed to
+  be long — trimming a generous cut is fast and visible, while recovering
+  material the machine already discarded is slow and invisible. Move to `tight`
+  only when the editor asks for it.
+- Guard bands are floored regardless of tightness: a removed gap always leaves
+  frames before it (the outgoing word's decay) and after it (the incoming word's
+  attack). `tight` removes *more gaps*, never *more speech*.
+
 ## Word-level editing and spoken search (`edit_engine`)
 
 Silence-driven tightening cannot remove an audible "um" mid-phrase or a

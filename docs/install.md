@@ -16,6 +16,27 @@ This guide covers Resolve requirements, the universal installer, supported MCP c
   set to **Local**, or **Network** with `RESOLVE_SCRIPT_HOST` set to the Resolve
   host IP (`127.0.0.1` when Resolve and the MCP run on the same machine)
 
+### Optional extras
+
+The core install needs only Python, ffmpeg and the Resolve scripting API.
+Several features need an additional package and **refuse with the install line
+rather than guessing** if it is absent:
+
+| Extra | Unlocks | Licence |
+|---|---|---|
+| **ffmpeg** on PATH | silence detection, dead-space markers, level measurement | LGPL/GPL, subprocess only |
+| `numpy` | `plan_prebalance`, `plan_reference_match`, `sound_density_audit` | BSD |
+| `librosa` | `plan_beat_cuts` (beat / bar / phrase detection) | ISC |
+| `openai-whisper` | transcription and the word-level tools built on it | MIT |
+| `open_clip_torch` | visual similarity, `find_similar` | MIT |
+| `transformers` | CLAP audio embeddings | Apache-2.0 |
+| `opencv-python` | additional frame analysis | Apache-2.0 |
+
+`python scripts/doctor.py` reports which are present. `media_analysis`
+`capabilities` covers the analysis stack in more detail.
+
+Model weights carry their own licences, separate from the code that loads them.
+
 > **Python 3.13 / 3.14:** these are **allowed** — setup will use them and warn.
 > Python 3.14 is verified working against DaVinci Resolve Studio 20.3.2. On
 > *older* Resolve builds the scripting bridge may fail to load on 3.13+

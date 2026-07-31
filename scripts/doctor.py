@@ -203,6 +203,121 @@ print(json.dumps(payload))
     return payload
 
 
+def detect_edition(probe: dict[str, Any]) -> str | None:
+    """"Studio" / "Free" from the connected product name, or None if unknown.
+
+    Only knowable when something answered. Guessing from an install path would
+    be wrong on any machine running both, which is common — the sandboxed free
+    edition and a direct-download Studio coexist happily.
+    """
+    product = str(probe.get("product") or "")
+    if not product:
+        return None
+    return "Studio" if "studio" in product.lower() else "Free"
+
+
+def bridge_checks(probe: dict[str, Any]) -> list[dict[str, str]]:
+    """Report the free-edition in-app bridge as a first-class path.
+
+    The bridge shipped in v2.68.0 and nothing in the diagnostics mentioned it,
+    so a free-edition user running doctor saw a wall of failures and no way
+    through — which is precisely the conclusion the docs used to push them to.
+    """
+    results: list[dict[str, str]] = []
+    installer = REPO / "scripts" / "install_resolve_bridge.py"
+    enabled = os.environ.get("DAVINCI_RESOLVE_BRIDGE", "").strip().lower() not in ("", "0", "false", "no", "off")
+
+    installed_at: list[str] = []
+    try:
+        sys.path.insert(0, str(REPO / "scripts"))
+        import install_resolve_bridge as _bridge  # type: ignore
+
+        for folder in _bridge.script_targets():
+            if (folder / "resolve_bridge.py").exists():
+                installed_at.append(str(folder))
+    except Exception:
+        # Never let a diagnostic tool be the thing that crashes.
+        installed_at = []
+
+    if installed_at:
+        check(results, "OK", "Free-edition bridge", f"installed: {installed_at[0]}")
+    elif installer.exists():
+        check(
+            results, "INFO", "Free-edition bridge",
+            "not installed. Only needed on the FREE edition (Studio uses external "
+            f"scripting directly). Install: {PYTHON} {installer}",
+        )
+    else:
+        check(results, "WARN", "Free-edition bridge", f"installer missing: {installer}")
+
+    edition = detect_edition(probe)
+    if edition:
+        check(results, "OK", "Resolve edition", edition)
+    elif installed_at or enabled:
+        check(results, "INFO", "Resolve edition",
+              "unknown — nothing answered, so the edition cannot be read")
+
+    if enabled:
+        connected = bool(probe.get("resolve_connected"))
+        check(
+            results, "OK" if connected else "WARN", "DAVINCI_RESOLVE_BRIDGE",
+            "set — the bridge is the only transport tried"
+            + ("" if connected else ". Nothing answered: in Resolve run "
+               "Workspace > Scripts > resolve_bridge (a saved project must be open)."),
+        )
+    elif installed_at:
+        check(
+            results, "INFO", "DAVINCI_RESOLVE_BRIDGE",
+            "not set — the bridge is installed but will not be used. "
+            "export DAVINCI_RESOLVE_BRIDGE=1 to enable it.",
+        )
+    return results
+
+
+#: Optional extras and what each unlocks. Absent is INFO, never FAIL — the core
+#: install is deliberately small and every feature below refuses honestly with
+#: its own install line rather than degrading into a guess.
+OPTIONAL_EXTRAS = (
+    ("numpy", "colour pre-balance, reference-still matching, sound-density audit", "pip install numpy"),
+    ("librosa", "beat / bar / phrase detection for music-driven cutting", "pip install librosa"),
+    ("whisper", "transcription, and the word-level tools built on it", "pip install -U openai-whisper"),
+    ("open_clip", "visual similarity and find_similar", "pip install open_clip_torch"),
+    ("transformers", "CLAP audio embeddings", "pip install transformers"),
+    ("cv2", "additional frame analysis", "pip install opencv-python"),
+)
+
+
+def extras_checks() -> list[dict[str, str]]:
+    """Report which optional extras are installed and what each would unlock.
+
+    Absence is informational. The point is that a user should not have to
+    discover an extra by hitting a refusal mid-workflow — "setup too hard" was
+    one of the loudest complaints this release set out to answer, and shipping
+    features behind an undocumented `pip install` is the same failure.
+    """
+    import importlib.util
+
+    results: list[dict[str, str]] = []
+    missing: list[str] = []
+    for module, unlocks, install in OPTIONAL_EXTRAS:
+        try:
+            present = importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            present = False
+        if present:
+            check(results, "OK", f"Extra: {module}", unlocks)
+        else:
+            missing.append(module)
+            check(results, "INFO", f"Extra: {module}", f"not installed — {unlocks} ({install})")
+    if missing:
+        check(
+            results, "INFO", "Optional extras",
+            f"{len(missing)} of {len(OPTIONAL_EXTRAS)} absent. None are required; each "
+            "feature refuses with its install line rather than guessing.",
+        )
+    return results
+
+
 def collect(
     resolve_host: str | None = None,
     resolve_timeout: float | None = None,
@@ -240,16 +355,27 @@ def collect(
                 str(probe["connection_error"]),
             )
         else:
+            # This is also exactly what the free edition looks like: the module
+            # imports fine and scriptapp refuses, because Blackmagic gates
+            # *external* scripting to Studio. Sending someone to toggle a
+            # preference that cannot help them is a dead end, so name the bridge
+            # here too.
             check(
                 results,
                 "WARN",
                 "Resolve scripting connection",
-                "Module import worked, but scriptapp returned no object. Use "
-                "External scripting = Local, or Network with --resolve-host "
-                "set to the Resolve host IP, then restart Resolve.",
+                "Module import worked, but scriptapp returned no object. On Studio: "
+                "External scripting = Local, or Network with --resolve-host set to "
+                "the Resolve host IP, then restart Resolve. On the FREE edition "
+                "external scripting is gated off entirely — use the in-app bridge "
+                "(see 'Free-edition bridge' below).",
             )
     else:
         check(results, "FAIL", "DaVinciResolveScript import", str(probe.get("error")))
+
+    results.extend(bridge_checks(probe))
+
+    results.extend(extras_checks())
 
     check(results, "OK", "MCP server version", version_from_server())
     check(results, "OK", "MCP git head", git_head())

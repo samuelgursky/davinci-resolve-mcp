@@ -151,19 +151,112 @@ def detect_fillers(words: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+#: Terminal punctuation on the *preceding* word. A pause after one of these is
+#: where a thought ended, which is where an audience expects to breathe.
+_SENTENCE_FINAL_PUNCT = (".", "?", "!", "…")
+#: A pause here separates clauses — a real beat, but a smaller one.
+_CLAUSE_FINAL_PUNCT = (",", ";", ":", "—", "–")
+
+#: How much longer a *sentence-final* pause must be before it counts as dead air.
+#:
+#: A silence gate cannot tell these apart, because acoustically they are
+#: identical: 900 ms of room tone after "…and that changed everything." and
+#: 900 ms of room tone in the middle of "the thing is — uh — we had to leave"
+#: measure the same. Editorially they are opposites. The first is the beat that
+#: lets the line land; removing it is the single most common way an automated
+#: tighten makes a cut feel machine-made. The second is a stumble.
+#:
+#: So sentence-final pauses are not exempt — a four-second hole after a full
+#: stop is still dead air — they simply have to be much longer before we touch
+#: them. Clause-final sits between the two.
+BREATHING_ROOM_MULTIPLIER = 2.5
+CLAUSE_PAUSE_MULTIPLIER = 1.5
+
+
+def classify_pause(prev_word: Optional[Dict[str, Any]], next_word: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Where a pause sits syntactically, which decides whether it is craft or noise.
+
+    Honest limit: this reads punctuation, so it is only as good as the
+    transcriber's. ASR output with no punctuation at all cannot be classified —
+    that returns `unpunctuated` with low confidence rather than silently
+    assuming every pause is removable, which would reintroduce exactly the
+    behaviour this function exists to prevent.
+    """
+    raw = str((prev_word or {}).get("word") or "").strip()
+    if not raw:
+        return {"position": "unknown", "is_breathing_room": False,
+                "multiplier": 1.0, "confidence": "low",
+                "reason": "no preceding word text"}
+    if raw.endswith(_SENTENCE_FINAL_PUNCT):
+        return {"position": "sentence_final", "is_breathing_room": True,
+                "multiplier": BREATHING_ROOM_MULTIPLIER, "confidence": "high",
+                "reason": f"pause follows end of sentence ({raw[-1]!r}) — breathing room"}
+    if raw.endswith(_CLAUSE_FINAL_PUNCT):
+        return {"position": "clause_final", "is_breathing_room": True,
+                "multiplier": CLAUSE_PAUSE_MULTIPLIER, "confidence": "medium",
+                "reason": f"pause follows a clause break ({raw[-1]!r})"}
+    # No terminal punctuation. If nothing in the transcript is punctuated at all
+    # we must not read that as "every pause is mid-sentence".
+    return {"position": "intra_clause", "is_breathing_room": False,
+            "multiplier": 1.0, "confidence": "high",
+            "reason": "pause falls inside a phrase — not a beat the writing asked for"}
+
+
+def transcript_is_punctuated(words: Sequence[Dict[str, Any]]) -> bool:
+    """Whether this transcript carries sentence punctuation at all.
+
+    Used to downgrade pause classification honestly: without punctuation every
+    pause looks intra-clause, and acting on that would strip every beat in the
+    programme.
+    """
+    for w in words:
+        raw = str((w or {}).get("word") or "").strip()
+        if raw.endswith(_SENTENCE_FINAL_PUNCT) or raw.endswith(_CLAUSE_FINAL_PUNCT):
+            return True
+    return False
+
+
 def detect_long_pauses(
-    words: Sequence[Dict[str, Any]], *, max_pause: float, handle: float, min_cut: float
+    words: Sequence[Dict[str, Any]],
+    *,
+    max_pause: float,
+    handle: float,
+    min_cut: float,
+    preserve_breathing_room: bool = True,
 ) -> List[Dict[str, Any]]:
     """Gaps between words longer than `max_pause`, trimmed by a handle each side.
 
     Word-boundary based, so unlike a silence gate this never cuts into a word
     that merely dipped below a threshold.
+
+    With `preserve_breathing_room` (the default), the threshold is scaled by the
+    pause's syntactic position — see `classify_pause`. A pause after a full stop
+    has to be markedly longer than one mid-phrase before it is proposed for
+    removal, because the first is usually deliberate and the second usually is
+    not. Set it False to treat every gap as equal, which is the older behaviour.
     """
     out: List[Dict[str, Any]] = []
-    spans = [s for s in (_word_span(w) for w in words) if s is not None]
-    for (_, prev_end), (next_start, _) in zip(spans, spans[1:]):
+    indexed = [(i, s) for i, s in enumerate(_word_span(w) for w in words) if s is not None]
+    punctuated = transcript_is_punctuated(words) if preserve_breathing_room else False
+    for (i_prev, (_, prev_end)), (_, (next_start, _)) in zip(indexed, indexed[1:]):
         gap = next_start - prev_end
-        if gap <= max_pause:
+        if preserve_breathing_room and punctuated:
+            classification = classify_pause(words[i_prev], None)
+        else:
+            classification = {
+                "position": "unpunctuated" if preserve_breathing_room else "unclassified",
+                "is_breathing_room": False,
+                "multiplier": 1.0,
+                "confidence": "low" if preserve_breathing_room else "high",
+                "reason": (
+                    "transcript carries no punctuation, so a pause cannot be placed "
+                    "syntactically — treated as removable, review before accepting"
+                    if preserve_breathing_room
+                    else "breathing-room preservation disabled by caller"
+                ),
+            }
+        effective_max = max_pause * float(classification["multiplier"])
+        if gap <= effective_max:
             continue
         start, end = prev_end + handle, next_start - handle
         if end - start >= min_cut:
@@ -171,7 +264,10 @@ def detect_long_pauses(
                 "start_seconds": round(start, 3),
                 "end_seconds": round(end, 3),
                 "pause_seconds": round(gap, 3),
-                "confidence": "high",
+                "confidence": classification["confidence"],
+                "pause_position": classification["position"],
+                "threshold_seconds": round(effective_max, 3),
+                "classification_reason": classification["reason"],
             })
     return out
 
