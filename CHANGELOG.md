@@ -2,6 +2,49 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.69.1
+
+Bug fix. The Studio bridge differential no longer reports the Deliver page its
+own render probes navigated to as a transport difference.
+
+### Fixed
+
+- **A clean bridge produced a red result on any run that did not start on
+  Deliver.** Run live on Studio 19.1.3.7, the differential reported
+  `resolve.GetCurrentPage` as a `value_mismatch` — bridge `edit`, native
+  `deliver` — and it reproduced on command: start on Edit, one difference; start
+  on Deliver, none. The transport was never involved. The harness's own render
+  probes navigate Resolve to the Deliver page, and the bridge pass runs before
+  the native pass, so the native pass read a page the bridge pass had moved. Read
+  at the same instant the two transports always agreed.
+
+  Adding the method to `VOLATILE_METHODS` would have turned red green and thrown
+  away the signal — a bridge that genuinely reports the wrong page is exactly
+  what this harness exists to catch. Instead each pass now records the page on
+  the way in and on the way out, and the value is compared **only when both
+  passes prove it held still**. If both were stable and the values still
+  disagree, that is the transport, and it is reported as before. A page that
+  cannot be read counts as unknown rather than stable, so an unreadable page
+  disables the comparison instead of quietly restoring the false positive.
+
+  `page_compared_by_value` and both passes' before/after values now ride in the
+  report either way. "The page was not compared" is a fact about the run, and
+  burying it would recreate the silence this fixes.
+
+### Added
+
+- `tests/test_bridge_differential.py` — the module's first tests, 13 of them,
+  including the one that matters: a stable page that genuinely disagrees must
+  still be reported, or the fix is a mute button rather than a fix. The absence
+  of any coverage here is why the false positive shipped.
+
+### Validation
+
+- Static checks and the full unit suite: 2243 → 2256 tests, pyflakes clean.
+- Live Resolve validation on Studio 19.1.3.7 after the fix: 142 probes, 0
+  differences, 110/112 read methods, started from the Edit page that previously
+  failed.
+
 ## What's New in v2.69.0
 
 The free edition is documented as reachable, silence ripple stops clipping
