@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.utils import bridge_differential as bd  # noqa: E402
 from src.utils import headless_differential as hd  # noqa: E402
+from src.utils.project_cleanup import save_project_if_safe  # noqa: E402
 
 PAGES = ("media", "cut", "edit", "fusion", "color", "fairlight", "deliver")
 
@@ -141,7 +142,7 @@ class Fixture:
             # ledger exists for.
             self.incumbent = incumbent.GetName()
             notes["incumbent_name"] = self.incumbent
-            notes["saved_incumbent"] = bool(self.pm.SaveProject())
+            notes["saved_incumbent"] = save_project_if_safe(self.pm)
         self.project = self.pm.CreateProject(self.name)
         notes["created_project"] = bool(self.project)
         if not self.project:
@@ -186,7 +187,7 @@ class Fixture:
         """
         notes: Dict[str, Any] = {}
         try:
-            self.pm.SaveProject()
+            save_project_if_safe(self.pm)
             # CloseProject first: it releases the session lock, and switching
             # away with LoadProject does not — measured, DeleteProject then
             # returns False no matter how often it is retried.

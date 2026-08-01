@@ -325,9 +325,9 @@ values, or automation-hostile modal prompts.
 
 - **Object:** `ProjectManager`
 - **Signature:** `() -> bool`
-- **Behavior:** Returns False for the default, never-saved project named 'Untitled Project' — it has no location to save to, and there is no SaveProjectAs to give it one. Returns True on any named project. This is the one case where the failure matters: in the GUI, the following LoadProject/CloseProject then raises a 'save changes?' modal that no script can dismiss, so the standard 'save before switching' defence fails exactly when it is needed. Headless returns the same False and switches anyway, because there is no dialog to raise.
-- **Workaround / current handling:** Check the return. If it is False, do not switch projects in a GUI session — the switch will block on a dialog. Either run headless (resolve_control runtime_mode / launch headless=true), or have the user name and save the project first.
-- **Tags:** project, modal, headless, silent-failure, unreliable-return
+- **Behavior:** On the default, never-saved project named 'Untitled Project' this call CANNOT succeed — the project has no location and there is no SaveProjectAs to give it one — and the two modes fail differently. In the GUI it returns False. HEADLESS IT BLOCKS FOREVER: measured on a cold -nogui boot with the database verified attached immediately beforehand, no return after 45s, the client parked in Fusion::RemoteApp::WaitPkt. Resolve wants a Save-As dialog and waits for an answer that cannot arrive. It also degrades the instance: after the hung call was interrupted, SaveProject began returning None instantly on that instance. On a named project it is fine in both modes.
+- **Workaround / current handling:** Guard it: only call SaveProject when GetCurrentProject().GetName() != 'Untitled Project'. There is nothing to save on the default project and the call cannot succeed, so skipping it loses nothing. Do NOT reach for headless to dodge the GUI's save dialog — headless turns that dialog into an unbounded hang that no human can clear.
+- **Tags:** project, modal, headless, hang, silent-failure, unreliable-return
 
 ### GalleryStillAlbum.ExportStills
 

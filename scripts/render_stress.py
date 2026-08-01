@@ -56,6 +56,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.utils import resolve_runtime as rr  # noqa: E402
+from src.utils.project_cleanup import save_project_if_safe  # noqa: E402
 
 CRASH_ARCHIVE = Path(
     os.path.expanduser(
@@ -228,7 +229,11 @@ class StressRun:
         pm = self.resolve.GetProjectManager()
         incumbent = pm.GetCurrentProject()
         self.incumbent = incumbent.GetName() if incumbent else None
-        pm.SaveProject()
+        # Guarded: SaveProject BLOCKS FOREVER headless on the never-saved
+        # 'Untitled Project', which is exactly the project a fresh headless
+        # boot is sitting on. This call hung two stress runs before it was
+        # traced.
+        save_project_if_safe(pm)
         if not pm.CreateProject(self.project_name):
             raise RuntimeError(f"could not create {self.project_name}")
         pm.LoadProject(self.project_name)
@@ -416,7 +421,7 @@ class StressRun:
         notes: Dict[str, Any] = {}
         try:
             pm = self.resolve.GetProjectManager()
-            pm.SaveProject()
+            save_project_if_safe(pm)
             # Order matters, and both steps are load-bearing:
             #   1. CloseProject releases the session's lock. Switching away with
             #      LoadProject does NOT — measured: DeleteProject then returns

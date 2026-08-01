@@ -173,21 +173,23 @@ def launch_command(headless: bool) -> Optional[List[str]]:
 #: to already know to read.
 MODE_GUIDANCE = {
     True: (
-        "Headless: no dialog can be raised, so project switches and closes cannot "
-        "wedge on a 'save changes?' prompt. Capability is identical to the GUI — "
-        "every page, render, export, Gallery, Fusion and colour surface probed "
-        "behaves the same. Capability is NOT stability: that probe rendered 2 "
-        "seconds of H.264, and long renders, JPEG 2000/DCP decode and ProRes-in-"
-        "MXF writes are untested, with a field report of crashes on write "
-        "completion. Short renders yes; qualify a long-form or professional-"
-        "container delivery before relying on it."
+        "Headless: NOT modal-immune — it cannot display a dialog but still tries "
+        "to raise one, and the call then never returns. Measured: "
+        "ProjectManager.SaveProject() on the never-saved 'Untitled Project' "
+        "blocks forever headless where the GUI returns False. Guard every save "
+        "with project_cleanup.save_project_if_safe. Capability is otherwise "
+        "identical to the GUI across 238 probed observations, but that is a "
+        "capability result, not a stability one: long renders, JPEG 2000/DCP "
+        "decode and ProRes-in-MXF writes are untested, with a field report of "
+        "crashes on write completion."
     ),
     False: (
-        "GUI: a modal dialog can block any call indefinitely and no script can "
-        "dismiss it. Before LoadProject or CloseProject, save the outgoing "
-        "project — and note that ProjectManager.SaveProject() returns False for "
-        "the never-saved default 'Untitled Project', which is exactly when the "
-        "prompt appears."
+        "GUI: a modal dialog can block any call until a human clicks it. Before "
+        "LoadProject or CloseProject, save the outgoing project via "
+        "project_cleanup.save_project_if_safe — SaveProject() returns False for "
+        "the never-saved default 'Untitled Project', which is exactly the project "
+        "that raises the prompt. Switching to headless does NOT avoid this; there "
+        "the same call blocks forever instead."
     ),
     None: (
         "Mode unknown: assume a GUI is present and take the careful path around "

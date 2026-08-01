@@ -17,6 +17,50 @@ import time
 from typing import Any, Dict, Optional
 
 
+#: The name Resolve gives the project it opens when it has nothing else to open.
+#: It has never been saved and has no location, so it cannot be saved.
+UNSAVED_DEFAULT_PROJECT = "Untitled Project"
+
+
+def save_project_if_safe(pm: Any) -> Dict[str, Any]:
+    """`SaveProject()`, unless the current project is the one that hangs on it.
+
+    `ProjectManager.SaveProject()` cannot succeed on the never-saved default
+    `Untitled Project` — no location, and no `SaveProjectAs` to give it one. The
+    two modes fail differently, and one of them is fatal:
+
+      - GUI: returns False.
+      - Headless: **blocks forever.** Measured on a cold `-nogui` boot with the
+        database verified attached immediately beforehand — no return after 45
+        seconds, client parked in `Fusion::RemoteApp::WaitPkt`. Resolve wants a
+        Save-As dialog and waits for an answer that cannot arrive. Interrupting
+        it degrades the instance further.
+
+    So the guard is not politeness, it is the difference between a no-op and a
+    dead unattended session. Skipping the save costs nothing: there is nothing
+    to save on a project that has never had a location.
+
+    Returns ``{saved, skipped, project, reason}``.
+    """
+    try:
+        project = pm.GetCurrentProject()
+    except Exception as exc:
+        return {"saved": False, "skipped": True, "project": None, "reason": repr(exc)}
+    if project is None:
+        return {"saved": False, "skipped": True, "project": None, "reason": "no current project"}
+    try:
+        name = project.GetName()
+    except Exception as exc:
+        return {"saved": False, "skipped": True, "project": None, "reason": repr(exc)}
+    if name == UNSAVED_DEFAULT_PROJECT:
+        return {"saved": False, "skipped": True, "project": name,
+                "reason": "never-saved default project; SaveProject hangs on it headless"}
+    try:
+        return {"saved": bool(pm.SaveProject()), "skipped": False, "project": name, "reason": ""}
+    except Exception as exc:
+        return {"saved": False, "skipped": False, "project": name, "reason": repr(exc)}
+
+
 def delete_project_safely(
     pm: Any,
     name: str,

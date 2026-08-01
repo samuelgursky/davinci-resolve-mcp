@@ -71,7 +71,13 @@ class RuntimeModeTests(unittest.TestCase):
     def test_guidance_travels_with_the_mode(self) -> None:
         with mock.patch.object(rr.subprocess, "run", return_value=_ps(self.HEADLESS)):
             described = rr.describe()
-        self.assertIn("no dialog", described["guidance"])
+        # This assertion used to require the guidance to say headless raises "no
+        # dialog". Measured later: headless is NOT modal-immune — it cannot
+        # display a dialog but still tries to raise one, and SaveProject on the
+        # never-saved default project then blocks forever where the GUI returns
+        # False. The guidance now has to warn, not reassure.
+        self.assertIn("NOT modal-immune", described["guidance"])
+        self.assertIn("save_project_if_safe", described["guidance"])
         with mock.patch.object(rr.subprocess, "run", return_value=_ps(self.GUI)):
             described = rr.describe()
         self.assertIn("SaveProject", described["guidance"])

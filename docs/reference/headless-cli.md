@@ -210,26 +210,54 @@ Verified working, identically to the GUI:
 - **Ordinary editorial.** Markers, tracks, track names, clip properties, media
   pool folders, project settings, playhead timecode.
 
-### The modal asymmetry — the reason to prefer headless
+### The modal trap — and why headless is WORSE, not immune
 
-`ProjectManager.SaveProject()` returns **False** for the default, never-saved
-project named `Untitled Project`. It has no location to save to, and the API
-offers no `SaveProjectAs`. On a project that has a real name it returns True.
+**An earlier version of this page claimed headless was immune to modal dialogs
+and therefore the safer mode. That was wrong, and it was the most consequential
+error in the study.** Headless is not immune. It cannot *display* a dialog, but
+it still tries to raise one — and the call then never returns.
 
-That matters because of what happens next. `LoadProject()` and `CloseProject()`
-close the outgoing project, and in the **GUI** an outgoing project with unsaved
-changes raises a "save changes?" dialog. No script can dismiss it. The session
-stops until a human clicks, and the standard defence — call `SaveProject()`
-first — is exactly the call that silently returns False in the one case where
-you needed it.
+`ProjectManager.SaveProject()` on the default, never-saved project named
+`Untitled Project`:
 
-Headless returns the same False and then **switches anyway**, because there is
-no dialog to raise. The same instruction sequence that wedges a GUI session
-completes headless.
+| | GUI | headless |
+| --- | --- | --- |
+| result | returns `False` | **blocks forever** |
+| observed | immediate | no return after 45s; client parked in `Fusion::RemoteApp::WaitPkt` |
+| recoverable by | a human clicking the dialog | nothing — the client must be killed |
 
-This is the strongest argument for running agent workloads headless, and it
-generalises past project switching to every confirmation Resolve can put on
-screen.
+Measured on a cold headless boot with the database verified attached
+immediately before the call, so nothing else was wrong with the instance.
+
+The project has no location to save to and the API offers no `SaveProjectAs`, so
+Resolve wants a Save-As dialog. With a UI it can ask and move on. Without one it
+waits for an answer that can never arrive.
+
+**This inverts the usual advice.** The standard defence against losing work on a
+project switch — "call `SaveProject()` first" — is the exact call that hangs a
+headless session, and it hangs on precisely the project that made you want to
+call it. In the GUI the same situation costs a human one click; headless it
+costs the run.
+
+It also degrades: after a hung `SaveProject` was interrupted, the same instance
+began returning `None` from `SaveProject` instantly, and in other runs reached
+the no-database wedge described below. So the first hang is not the end of it.
+
+**The rule:** never call `SaveProject()` in a headless session without first
+checking that the current project is not the never-saved `Untitled Project`.
+Check `GetCurrentProject().GetName()` and skip the save — there is nothing to
+save, and the call cannot succeed.
+
+```python
+project = pm.GetCurrentProject()
+if project is not None and project.GetName() != "Untitled Project":
+    pm.SaveProject()          # safe: it has a location
+# else: nothing to save, and calling it headless blocks forever
+```
+
+Name-matching is a blunt guard — a real project deliberately named
+"Untitled Project" would be skipped — but skipping a save on a named project
+costs nothing here, while calling it on the default one costs the session.
 
 ### Detecting headless
 

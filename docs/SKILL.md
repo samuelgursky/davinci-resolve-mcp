@@ -239,15 +239,30 @@ without qualifying it on that footage and codec first, and keep a GUI fallback
 for those. Never tell a user headless is "safe for renders" on the strength of
 the capability matrix alone.
 
-The difference runs the other way, and it is the one that matters to an agent:
+**Headless is NOT immune to modal dialogs — it is worse.** It cannot *display* a
+dialog, but Resolve still tries to raise one, and the call then never returns.
 
-**A GUI Resolve can raise a modal dialog that no script can dismiss. Headless
-cannot.** The common trigger is switching projects: `LoadProject` and
-`CloseProject` close the outgoing project, and if it has unsaved changes the GUI
-prompts. Worse, the obvious defence fails — `ProjectManager.SaveProject()`
-returns `False` for the default never-saved project named `Untitled Project`,
-which is exactly the project that triggers the prompt. Headless returns the same
-`False` and switches anyway.
+The canonical case, measured on a cold `-nogui` boot:
+`ProjectManager.SaveProject()` on the default never-saved project named
+`Untitled Project` **blocks forever** headless (no return after 45s, client
+parked in `Fusion::RemoteApp::WaitPkt`), where the GUI merely returns `False`.
+The project has no location and there is no `SaveProjectAs`, so Resolve wants a
+Save-As dialog and waits for an answer that can never arrive. In the GUI a human
+clears it in one click; headless nothing can.
+
+**Never call `SaveProject()` without checking the project name first:**
+
+```python
+project = pm.GetCurrentProject()
+if project is not None and project.GetName() != "Untitled Project":
+    pm.SaveProject()      # safe: it has a location
+# else: nothing to save, and headless this call blocks forever
+```
+
+`src/utils/project_cleanup.py:save_project_if_safe(pm)` does exactly this — use
+it rather than calling `SaveProject` directly. And do **not** reach for headless
+to dodge the GUI's save dialog; that trade makes a one-click interruption into a
+dead session.
 
 Rules:
 
