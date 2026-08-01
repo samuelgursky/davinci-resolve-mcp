@@ -1,0 +1,179 @@
+{
+  "metadata": {
+    "recorded_at": "2026-08-01T22:46:09+00:00",
+    "headless": false,
+    "iterations_requested": 10,
+    "duration_seconds": 45,
+    "format": "mov",
+    "codec": "Apple ProRes 422 HQ"
+  },
+  "setup": {
+    "project": "RENDER_STRESS_20260801_184213",
+    "source": "/var/folders/8s/yx2lqvx55l10wgw_m9dk6lvm0000gn/T/render_stress_2vc6bfo6/j2k_source.mxf",
+    "source_codec": "JPEG 2000",
+    "source_format": "MXF OP1A",
+    "source_resolution": "1998x1080",
+    "clips_on_timeline": 11,
+    "timeline_frames": 1045,
+    "render_format": "mov",
+    "render_codec": "ProRes422HQ"
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "job": true,
+      "start_rendering": true,
+      "elapsed_seconds": 21.8,
+      "peak_rss_mb": 2096.2,
+      "rss_samples": 22,
+      "output_files": [
+        "stress_001.mov"
+      ],
+      "output_bytes": 553050011,
+      "job_status": "Complete",
+      "outcome": "complete"
+    },
+    {
+      "iteration": 2,
+      "job": true,
+      "start_rendering": true,
+      "elapsed_seconds": 21.6,
+      "peak_rss_mb": 2099.0,
+      "rss_samples": 22,
+      "output_files": [
+        "stress_002.mov"
+      ],
+      "output_bytes": 553050011,
+      "job_status": "Complete",
+      "outcome": "complete"
+    },
+    {
+      "iteration": 3,
+      "job": true,
+      "start_rendering": true,
+      "elapsed_seconds": 21.6,
+      "peak_rss_mb": 2100.1,
+      "rss_samples": 22,
+      "output_files": [
+        "stress_003.mov"
+      ],
+      "output_bytes": 553050011,
+      "job_status": "Complete",
+      "outcome": "complete"
+    },
+    {
+      "iteration": 4,
+      "job": true,
+      "start_rendering": true,
+      "elapsed_seconds": 22.7,
+      "peak_rss_mb": 2100.2,
+      "rss_samples": 22,
+      "output_files": [
+        "stress_004.mov"
+      ],
+      "output_bytes": 553050011,
+      "job_status": "Complete",
+      "outcome": "complete"
+    },
+    {
+      "iteration": 5,
+      "job": true,
+      "start_rendering": true,
+      "elapsed_seconds": 22.9,
+      "peak_rss_mb": 2100.0,
+      "rss_samples": 23,
+      "output_files": [
+        "stress_005.mov"
+      ],
+      "output_bytes": 553050011,
+      "job_status": "Complete",
+      "outcome": "complete"
+    },
+    {
+      "iteration": 6,
+      "job": true,
+      "start_rendering": true,
+      "elapsed_seconds": 22.6,
+      "peak_rss_mb": 2100.9,
+      "rss_samples": 23,
+      "output_files": [
+        "stress_006.mov"
+      ],
+      "output_bytes": 553050011,
+      "job_status": "Complete",
+      "outcome": "complete"
+    },
+    {
+      "iteration": 7,
+      "job": true,
+      "start_rendering": true,
+      "elapsed_seconds": 24.2,
+      "peak_rss_mb": 2100.8,
+      "rss_samples": 17,
+      "output_files": [
+        "stress_007.mov"
+      ],
+      "output_bytes": 553050011,
+      "job_status": "Complete",
+      "outcome": "complete"
+    },
+    {
+      "iteration": 8,
+      "job": true,
+      "start_rendering": true,
+      "elapsed_seconds": 23.0,
+      "peak_rss_mb": 2105.0,
+      "rss_samples": 20,
+      "output_files": [
+        "stress_008.mov"
+      ],
+      "output_bytes": 553050011,
+      "job_status": "Complete",
+      "outcome": "complete"
+    },
+    {
+      "iteration": 9,
+      "job": true,
+      "start_rendering": true,
+      "elapsed_seconds": 22.8,
+      "peak_rss_mb": 2104.8,
+      "rss_samples": 19,
+      "output_files": [
+        "stress_009.mov"
+      ],
+      "output_bytes": 553050011,
+      "job_status": "Complete",
+      "outcome": "complete"
+    },
+    {
+      "iteration": 10,
+      "job": true,
+      "start_rendering": true,
+      "elapsed_seconds": 22.7,
+      "peak_rss_mb": 2104.1,
+      "rss_samples": 22,
+      "output_files": [
+        "stress_010.mov"
+      ],
+      "output_bytes": 553050011,
+      "job_status": "Complete",
+      "outcome": "complete"
+    }
+  ],
+  "teardown": {
+    "closed": true,
+    "restored_incumbent": true,
+    "deleted": true
+  },
+  "summary": {
+    "completed": 10,
+    "deaths": 0,
+    "crash_blocks_captured": 0,
+    "first_death_iteration": null,
+    "peak_rss_mb": 2105.0,
+    "rss_first_to_last": [
+      2096.2,
+      2104.1
+    ]
+  }
+}

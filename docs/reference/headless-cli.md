@@ -111,6 +111,50 @@ Confirming a crash on the real job still needs the real job — same source and
 preset, both modes, `ResolveDebug.txt` kept from each. The harness narrows where
 to look; it does not replace that.
 
+### First stress results (2026-08-01, Studio 19.1.3.7)
+
+10 renders per leg, 1045-frame J2K timeline, ProRes 422 HQ QuickTime, ~553 MB
+per render.
+
+| | GUI | headless |
+| --- | --- | --- |
+| iterations completed | 10 / 10 | **0 — hung during setup** |
+| process deaths | 0 | 0 (hung, did not die) |
+| crash blocks captured | 0 | 0 |
+| render time first → last | 21.8s → 22.7s | — |
+| peak RSS first → last | 2096 MB → 2104 MB | — |
+
+**The GUI leg is clean.** Ten consecutive ProRes renders, no crash, no leak (8 MB
+of RSS drift across the run), no degradation in render time. Nothing in the
+write-completion path failed with a UI present.
+
+**The headless leg never rendered.** Twice, the harness connected, reported
+`headless=True`, and then blocked forever in `Fusion::RemoteApp::WaitPkt` during
+project setup — before generating any media. In both cases a second client
+found `GetCurrentDatabase()` returning `None` on the same instance.
+
+What is and is not established:
+
+- **Established:** a headless instance can reach a state where scripted project
+  work hangs indefinitely, and that state coincides with a null current
+  database. Reproduced twice.
+- **Established:** it is not inherent to headless. An earlier headless session
+  the same day created a project, rendered, exported five interchange formats,
+  and tore down cleanly.
+- **Not established:** the trigger. Both hangs happened when headless was
+  started *after* other heavy Resolve activity — once after force-killing a
+  wedged instance, once immediately after a 10-render GUI leg and a clean
+  `Quit()`. That is a suggestive pattern, not a cause.
+- **Not established:** whether the null database is cause or symptom. The
+  reading was taken from a second client while the first was blocked, so it may
+  reflect the block rather than explain it.
+
+So the honest state of the stability question is: **the GUI path is measured
+clean at this scale, and the headless path has a real, reproducible failure that
+is not yet pinned down.** That is consistent with the field report of headless
+instability, and it is a reason to keep a GUI fallback for deliveries until the
+trigger is understood.
+
 ## Verified
 
 ### Launch and teardown
