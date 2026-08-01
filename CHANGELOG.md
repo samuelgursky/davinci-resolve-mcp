@@ -2,6 +2,79 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.69.2
+
+Community bug-fix bundle: #100, #101 and #102, plus the installer half of #104.
+The headline is that a fresh clone had stopped working entirely.
+
+### Fixed
+
+- **A fresh install produced a server that could not start** (issue #103, PR
+  #101 by @Mastaish). `install.py` installed `mcp[cli]` with no upper bound, and
+  the MCP Python SDK published 2.0.0 — which restructured the package and
+  dropped `mcp.server.fastmcp`, the module `src/server.py` imports. Every clone
+  after that release died at import, surfacing to the user as nothing more
+  informative than "Server disconnected".
+
+  The contributed fix caps the SDK in `requirements.txt`, which `install.py`
+  installs second. That works, but the unpinned first call still downloads 2.x
+  and its `httpx2` tree before downgrading it, and the fix evaporates silently
+  if the install order ever changes — so the cap is now on the `pip install`
+  call as well. `McpSdkPinTest` guards both sites, reading the actual string
+  literals rather than matching text: `install.py` discusses `mcp[cli]` in prose
+  too, and a first cut of that guard was satisfied by a comment. It is
+  conditional on `server.py` still importing `mcp.server.fastmcp`, so it retires
+  itself when the server is ported to the 2.x layout instead of blocking it.
+
+- **The Advanced (Node) suite was not running at all on Node 20+** (PR #102 by
+  @double2tea). `node --test` resolves a bare directory argument as a module
+  entry point on Node 20 and later, so the suite exited with `MODULE_NOT_FOUND`
+  at 4 failures and 0 passes — a shape that reads more like a broken checkout
+  than 731 skipped tests. Explicit test-file globs restore the full run on 18,
+  20 and 22 alike.
+
+- **`RESOLVE_SCRIPT_API` / `RESOLVE_SCRIPT_LIB` were silently overwritten** (PR
+  #100 by @abbc400). `get_resolve_paths()` returned only platform defaults, and
+  `src/server.py` writes those straight back into `os.environ` — so a client
+  that had correctly pointed at a Resolve installed outside `/Applications` had
+  its setting discarded at import. Every other signal looked healthy (Resolve
+  running, external scripting Local, `fuscript` listening) while `scriptapp()`
+  returned `None`. The override now wins, but only when the path exists, so a
+  stale variable cannot shadow a working default install.
+
+- **The bridge installer wrote to a tree Resolve did not read** (issue #104,
+  reported by @RananjayRaj). Which script tree the free App Store build scans is
+  not decidable from outside Resolve: this installer was measured on a machine
+  where the documented Blackmagic Design tree listed, and #104 reports the exact
+  opposite on the same 21.0.3.7 build — the documented tree listed nothing, not
+  even the Lua canary (which rules out the framework-Python explanation and
+  points at the folder), while the Fusion standalone tree listed everything with
+  no restart.
+
+  Rather than pick a winner from two contradictory measurements, both container
+  trees now receive the files, documented path first. This stays inside the
+  sandbox: outside a container that path really is Fusion's own tree and is
+  still not targeted.
+
+- **`--probe-only` reported success on a machine with no Resolve installed**
+  (also #104). A container outlives the app that created it, and the container's
+  existence is precisely what makes the installer target it — so a stale
+  container from an uninstalled Resolve produced a clean success listing files
+  that had genuinely been written and would never be read. The installer now
+  warns when no app bundle can be found, honoring `RESOLVE_APP` as
+  `scripts/doctor.py` already does. It warns rather than refuses: not every
+  legitimate install location can be enumerated, and refusing wrongly would
+  block a working install.
+
+### Validation
+
+- Offline suite 2237 → 2247 (six new installer-target tests, one pin guard).
+  Advanced Node suite 731 tests / 701 pass on Node 18.
+- The new guards were verified to fail against the pre-fix code, not merely to
+  pass against the fix.
+- No DaVinci Resolve scripting behavior changed; the path-resolution change is
+  env-var-gated with defaults unchanged. Live Resolve validation not required.
+
 ## What's New in v2.69.1
 
 Bug fix. The Studio bridge differential no longer reports the Deliver page its
