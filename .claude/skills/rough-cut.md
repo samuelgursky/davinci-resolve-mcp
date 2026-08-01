@@ -65,7 +65,9 @@ clip yields 80 frames at 2160x3840. Reading those individually to satisfy
 
 Tile them instead. `scripts/contact_sheet.py` burns frame index, timestamp and
 `selection_reason` onto each tile, so per-frame findings stay reportable by
-index. Roughly a 15x saving with no loss of coverage.
+index. Roughly a 15x saving with no loss of coverage. It needs Pillow
+(`pip install Pillow`) — the repo treats Pillow as optional elsewhere, but this
+script hard-fails without it rather than silently producing nothing.
 
 Ask for **short clips per subject** rather than 20-35 minute takes when the
 shooter can choose. `adaptive_capped` tops out at 80 frames per clip, so a
@@ -90,7 +92,18 @@ wrong result rather than an error.
 | Phone footage carries a `rotation` flag | Stored 3840x2160, displays 2160x3840 | Check `rotation` in ffprobe; Resolve honours it. **Do not reframe** — it is already vertical |
 | Phone footage is **VFR** | `avg_frame_rate` differs per clip and from `r_frame_rate` | Match the timeline to what Resolve conforms to (its reported clip FPS), not to `r_frame_rate` |
 | `timelinePlaybackFrameRate` is read-only | `set_setting` returns False for every value form, before and after a timeline exists | No API path. Ask the user to set it in Master Settings during setup (step 2), not at handover |
-| Fusion comps built via API never render | Nodes report success and read back correctly; output unchanged | No scripted path to burn text over a clip. Don't attempt it. `delete_comp` also fails — rebuild the timeline to clear one |
+| A Fusion comp attached to a **media clip** via the API never renders | Every call succeeds and the whole graph reads back correctly — comp count 1, `MediaOut1.Input` wired, `StyledText` returning what you set — while the output is the untouched source | Don't build comps on clips. Fusion **titles** inserted as their own timeline clip DO render, and their `Text+` is settable via `fusion_comp set_text_plus` |
+
+The last two rows are recorded in the `api_truth` ledger and
+`docs/reference/api-limitations.md`; query them at runtime with
+`resolve_control api_truth "fusion"`. The ledger is the canonical copy — this
+table is the narrative version.
+
+On burning text over picture specifically: the title route above renders, but
+the API cannot choose a destination track (issue #74 — `Insert*IntoTimeline`
+takes no `trackIndex` and always lands on V1), so overlaying text onto an
+existing clip's track is not reachable end-to-end. Treat text as a request for
+the user's UI pass, not something to attempt and half-deliver.
 
 Destructive ops auto-archive the timeline, so several edits leave
 `*_archived_vNN` timelines behind. Clean them up before handing over.

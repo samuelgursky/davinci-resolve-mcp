@@ -108,6 +108,35 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
+        "symbol": "Project.SetSetting('timelinePlaybackFrameRate')",
+        "object": "Project",
+        "reality": "Returns False for every value form tried (string, int, "
+                   "float), both before and after a timeline exists, so the "
+                   "playback frame rate cannot be set from the API at all. "
+                   "Reported by a community contributor against Resolve Studio "
+                   "while assembling a vertical timeline (PR #99).",
+        "recommended": "Ask the user to set it in Project Settings > Master "
+                       "Settings > Playback frame rate as a SETUP step, before "
+                       "any timeline exists. Read it back to confirm; do not "
+                       "report it as set on the strength of the call alone.",
+        "tags": ["project-settings", "silent-failure", "timeline"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "MediaPool.CreateTimelineFromClips",
+        "object": "MediaPool",
+        "reality": "Fails with a bare 'Failed to create timeline from clip_infos' "
+                   "— naming nothing actionable — when the Media Pool's CURRENT "
+                   "folder is not the folder holding the clips, even though every "
+                   "clip_id passed is valid and resolvable. Reported against "
+                   "Resolve Studio in PR #99.",
+        "recommended": "Call MediaPool.SetCurrentFolder() to the clips' bin "
+                       "before creating the timeline (media_pool "
+                       "set_current_folder). Valid ids are not sufficient.",
+        "tags": ["media-pool", "timeline", "unhelpful-error"],
+        "submit": "bug",
+    },
+    {
         "symbol": "TimelineItem.AddFusionComp / LoadFusionCompByName",
         "object": "TimelineItem (media-backed clip)",
         "reality": "A Fusion composition created on a media clip through the API "

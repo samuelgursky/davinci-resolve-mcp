@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 20 missing capabilities, 14 bugs / unreliable behaviors.
+**Totals:** 21 missing capabilities, 15 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -40,6 +40,13 @@ Python bridge fabricates a callable for any attribute name (see the
 
 Functionality that exists in the Resolve UI but has no scripting API
 equivalent, blocking full automation.
+
+### Project.SetSetting('timelinePlaybackFrameRate')
+
+- **Object:** `Project`
+- **Behavior:** Returns False for every value form tried (string, int, float), both before and after a timeline exists, so the playback frame rate cannot be set from the API at all. Reported by a community contributor against Resolve Studio while assembling a vertical timeline (PR #99).
+- **Workaround / current handling:** Ask the user to set it in Project Settings > Master Settings > Playback frame rate as a SETUP step, before any timeline exists. Read it back to confirm; do not report it as set on the strength of the call alone.
+- **Tags:** project-settings, silent-failure, timeline
 
 ### Timeline.GetTimelineByName
 
@@ -229,6 +236,13 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Returns False (no deletion) when the target project is, or recently was, the current project, and is flaky on the first attempt — so a single bool() call leaves the project undeleted with no useful error.
 - **Workaround / current handling:** Load/close away from the target first, then retry; use src/utils/project_cleanup.py:delete_project_safely.
 - **Tags:** unreliable-return, project, flaky
+
+### MediaPool.CreateTimelineFromClips
+
+- **Object:** `MediaPool`
+- **Behavior:** Fails with a bare 'Failed to create timeline from clip_infos' — naming nothing actionable — when the Media Pool's CURRENT folder is not the folder holding the clips, even though every clip_id passed is valid and resolvable. Reported against Resolve Studio in PR #99.
+- **Workaround / current handling:** Call MediaPool.SetCurrentFolder() to the clips' bin before creating the timeline (media_pool set_current_folder). Valid ids are not sufficient.
+- **Tags:** media-pool, timeline, unhelpful-error
 
 ### TimelineItem.AddFusionComp / LoadFusionCompByName
 
