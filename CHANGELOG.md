@@ -2,6 +2,45 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.69.3
+
+Ships the v2.69.2 bundle, which never reached npm. Same fixes, plus the one that
+stopped it publishing.
+
+### Fixed
+
+- **The offline guard failed the publish workflow instead of guarding it.**
+  `tests/__init__.py` installs the guard before any test module loads, and the
+  guard imports `src.server` — which imports `anyio`. The publish workflow
+  installs only pyflakes, by design: the static drift guards are pure AST
+  readers that deliberately run without the runtime stack. So every module
+  argument raised at import, six of them turned into six `_FailedTest` errors,
+  and the npm publish failed with what looked like six broken guards rather than
+  one missing package.
+
+  This shipped in v2.69.1's tail (the guard moved under `unittest` after that
+  tag was cut), so v2.69.2 was the first release to run it and the first to fail.
+
+  A missing third-party package now skips the swap: if `src.server` cannot be
+  imported there is no live-Resolve entry point to neuter, so the guard is
+  vacuously satisfied. The skip is narrow on purpose — a `ModuleNotFoundError`
+  naming something under `src/`, or any non-import error, still propagates.
+  Swallowing those would leave the static guards silently vacuous, which is a
+  worse failure than the one being fixed since it fails open.
+
+### Added
+
+- `tests/test_offline_guard.py` — five tests, including the two that matter:
+  a broken import inside `src/` must still raise, and a non-import error must
+  never be swallowed. A skip that fails open would be indistinguishable from a
+  passing suite.
+
+### Validation
+
+- Offline suite 2247 → 2252. Reproduced the CI failure locally against an
+  interpreter without `anyio` (six errors before, clean after), rather than
+  inferring it from the workflow log.
+
 ## What's New in v2.69.2
 
 Community bug-fix bundle: #100, #101 and #102, plus the installer half of #104.
