@@ -220,13 +220,24 @@ that don't recognize the field ignore it — the flow is unchanged for them.
 
 ## Headless Resolve (`-nogui`)
 
-Resolve runs without a UI, and **it is the safer mode for agent work**. Measured
-across 238 paired observations on Studio 19.1.3.7 (see
+Resolve runs without a UI, and it is **capability-identical** to a GUI session.
+Measured across 238 paired observations on Studio 19.1.3.7 (see
 `docs/reference/headless-cli.md` and the regenerable
 `docs/reference/headless-capability-matrix.md`): **zero** capabilities work with
 a UI and fail without one. Pages, render-to-disk, AAF/EDL/XML/DRT/OTIO export,
 `ExportCurrentFrameAsStill`, Fusion comps, colour groups, layout presets and all
 ordinary editorial behave identically.
+
+**Capability is not stability, and the two must not be conflated.** That probe
+rendered 2 seconds of 640×360 H.264. Long renders, heavy source decode (JPEG
+2000 out of DCP MXF), professional container writes (ProRes into MXF), and
+repeated jobs in one session are all **untested** — and there is a field report
+of headless crashing *on completion of writes* for exactly that class of job.
+Use headless freely for orchestration, edit, conform, analysis and short
+renders. Do not promise it for a long-form or professional-container delivery
+without qualifying it on that footage and codec first, and keep a GUI fallback
+for those. Never tell a user headless is "safe for renders" on the strength of
+the capability matrix alone.
 
 The difference runs the other way, and it is the one that matters to an agent:
 

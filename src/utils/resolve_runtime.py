@@ -176,7 +176,11 @@ MODE_GUIDANCE = {
         "Headless: no dialog can be raised, so project switches and closes cannot "
         "wedge on a 'save changes?' prompt. Capability is identical to the GUI — "
         "every page, render, export, Gallery, Fusion and colour surface probed "
-        "behaves the same."
+        "behaves the same. Capability is NOT stability: that probe rendered 2 "
+        "seconds of H.264, and long renders, JPEG 2000/DCP decode and ProRes-in-"
+        "MXF writes are untested, with a field report of crashes on write "
+        "completion. Short renders yes; qualify a long-form or professional-"
+        "container delivery before relying on it."
     ),
     False: (
         "GUI: a modal dialog can block any call indefinitely and no script can "

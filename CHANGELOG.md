@@ -20,9 +20,17 @@ AAF/EDL/FCPXML/DRT/OTIO export, `ExportCurrentFrameAsStill`, `GrabStill`, Fusion
 comp create/delete, colour groups, and even UI layout presets all behave
 identically headless.
 
-The one difference runs the other way, and it is the one an agent cares about:
-**a GUI Resolve can raise a modal dialog no script can dismiss; headless
-cannot.** The trigger is project switching, and the obvious defence fails —
+**Scope, stated up front:** that is a result about *capability* and about
+modals. It is **not** a stability result. The probe's render was 2 seconds of
+640×360 H.264; long renders, JPEG 2000 decode out of DCP MXF, ProRes-into-MXF
+writes and repeated jobs in one session are all untested, and there is a field
+report of headless crashing *on completion of writes* for exactly that class of
+job. The docs and the runtime guidance say so rather than letting the matrix
+be read as a blanket endorsement.
+
+The one difference actually found runs the other way, and it is the one an agent
+cares about: **a GUI Resolve can raise a modal dialog no script can dismiss;
+headless cannot.** The trigger is project switching, and the obvious defence fails —
 `ProjectManager.SaveProject()` returns `False` for the default never-saved
 `Untitled Project`, which is exactly the project that raises the prompt.
 Headless returns the same `False` and switches anyway.
