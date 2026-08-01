@@ -73,6 +73,38 @@ conform, analysis and short renders. Qualify it on your own footage and codecs
 before trusting it with a long-form or professional-container delivery, and keep
 a GUI fallback for those.**
 
+### Differencing the two modes exhaustively
+
+`scripts/mode_matrix.py` is the second-generation differential, and it exists
+because the first one **could not have found the `SaveProject` hang**. That
+harness called everything in one process with no timeouts, so a call that never
+returns simply ended the run; its clean report of "zero mode-dependent failures"
+was partly a description of what it was able to survive.
+
+Three changes make exhaustive comparison possible:
+
+- **`hang` is a first-class verdict.** A call that returns `False` is
+  survivable; one that never returns takes the session with it and degrades the
+  instance afterwards. Collapsing them into "failed" hides the worse bug.
+- **Supervisor and worker are separate processes.** The worker streams one
+  flushed JSONL result per probe, in catalogue order. When it dies, the
+  supervisor knows the first unrecorded probe was in flight, records it as
+  `hang`, restarts Resolve, waits for health, and resumes after it. A hang costs
+  one probe and one restart, not the run. Nothing in-process can do this: a
+  Python signal handler cannot preempt a thread parked in fusionscript's
+  `pthread_cond_wait`, which is why the alarm-based approach only ever worked by
+  luck.
+- **State is part of each probe.** `SaveProject` is harmless on a named project
+  and fatal on the never-saved default, so probes declare which project must be
+  current. A catalogue that only ever ran against a well-formed scratch project
+  is exactly what reported no differences the first time.
+
+Phase breadcrumbs distinguish a hang in a probe's own call from a hang while
+reaching its state — a real distinction, since setting up the "untitled" state
+means closing a project, and closing a *modified* project raises the GUI save
+dialog. Without the breadcrumb that dialog was attributed to the probe that
+never got to run.
+
 ### Stressing it without production assets
 
 `scripts/render_stress.py` closes most of that gap before real footage is
@@ -378,25 +410,44 @@ headless and network scripting compose.
 ## Corrections to earlier notes
 
 A 2026-07-03 working note recorded Gallery `ExportStills` and
-`export_frame_as_still` as **headless-only failures**, "CONFIRMED working in GUI
-mode". Re-measured here:
+`export_frame_as_still` as **headless-only failures**. Settling this took three
+attempts, and the sequence is worth keeping because each wrong answer was
+confidently held:
 
-- `ExportCurrentFrameAsStill` works **headless**, returning True and writing a
-  non-empty PNG. The earlier note is wrong about this one. The likeliest
-  explanation is the environment note recorded in the same session: a render
-  node was holding a competing Resolve instance, so failures attributed to
-  headless were plausibly attributable to the contention instead.
-- `ExportStills` fails in **both** modes — returned False for every format
-  (jpg, png, tif, dpx, drx) with no file written. So it is not a headless
-  failure at all. The remaining hypothesis, from the same working note, is that
-  it requires the Gallery panel to be *visible*, which no `-nogui` session and
-  no panel-closed GUI session can satisfy. **Unresolved**: confirming it needs a
-  GUI run with Workspace > Gallery open.
+1. The original note: headless-only failure.
+2. A hand-written test found it failing in the GUI too, and "corrected" the note.
+   That test was bad — its `GrabStill` had returned `False`, so `ExportStills`
+   was handed nothing to export and its `False` said nothing about anything.
+3. Two proper sweeps then showed GUI `True/2 files` versus headless `False/0`,
+   which looked like a clean confirmation of the original note.
+4. Four controlled sweeps (2 per mode, same catalogue version) showed it
+   returning `False` in **all four**, both modes — with `GrabStill` succeeding
+   in all four.
 
-The general lesson is the one the api_truth ledger already encodes: a failure
-observed once, in a session with a known confound, is a hypothesis rather than a
-fact. This page is regenerable — rerun the differential rather than trusting it
-after a Resolve upgrade.
+**The answer is that it is panel-dependent, not mode-dependent.** The variable
+that changed between the one GUI success and the four failures is whether the
+Gallery panel was visible on the Color page — restored workspace state, which
+the harness does not control. Headless can never satisfy it; a GUI session
+satisfies it only sometimes. So *in practice* it never works headless, but
+"headless" is not the cause and switching to a GUI session is not a fix.
+
+`ExportCurrentFrameAsStill`, by contrast, worked in all four runs in both modes.
+Use it.
+
+Two methodological lessons, both learned the hard way here:
+
+- **A negative result needs its preconditions verified as carefully as a
+  positive one.** Step 2 above was a confident correction built on an
+  unverified precondition.
+- **One run per mode reports noise as findings.** Before repetition was added,
+  `app.keyframe_mode` was reported as `headless_degraded` in one comparison and
+  `gui_degraded` in another — it returns `0` and `None` in *both* modes
+  depending on the run. The comparison now requires a probe to be internally
+  consistent within a mode before it may be called a difference between modes,
+  and reports the rest as `flaky`.
+
+This page is regenerable — rerun the sweeps rather than trusting it after a
+Resolve upgrade.
 
 ## Reproducing
 

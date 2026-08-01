@@ -1,1301 +1,2783 @@
 {
-  "gui_metadata": {
-    "label": "gui",
-    "recorded_at": "2026-08-01T19:48:27+00:00",
-    "version": "19.1.3.7",
-    "product": "DaVinci Resolve Studio",
-    "process_argv": [
-      "95215",
-      "/Applications/DaVinci",
-      "Resolve/DaVinci",
-      "Resolve.app/Contents/MacOS/Resolve"
-    ],
-    "nogui_in_argv": false,
-    "connect_seconds": 0.05,
-    "surface_methods": 112,
-    "elapsed_seconds": 164.29
-  },
-  "headless_metadata": {
-    "label": "headless",
-    "recorded_at": "2026-08-01T19:52:03+00:00",
-    "version": "19.1.3.7",
-    "product": "DaVinci Resolve Studio",
-    "process_argv": [
-      "6853",
-      "/Applications/DaVinci",
-      "Resolve/DaVinci",
-      "Resolve.app/Contents/MacOS/Resolve",
-      "-nogui"
-    ],
-    "nogui_in_argv": true,
-    "connect_seconds": 0.04,
-    "surface_methods": 112,
-    "elapsed_seconds": 510.75
-  },
   "counts": {
-    "parity": 233,
+    "parity": 85,
+    "flaky": 0,
+    "hang_headless": 0,
+    "hang_gui": 0,
     "headless_degraded": 0,
     "gui_degraded": 0,
-    "both_failed": 4,
-    "divergent": 1,
+    "both_hang": 0,
+    "both_failed": 7,
+    "divergent": 0,
     "untested": 0
   },
   "findings": [
     {
-      "name": "add_color_group",
+      "probe": "app.current_page",
       "verdict": "parity",
-      "key": "color::add_color_group"
-    },
-    {
-      "name": "assign_to_group",
-      "verdict": "parity",
-      "key": "color::assign_to_group"
-    },
-    {
-      "name": "delete_color_group",
-      "verdict": "parity",
-      "key": "color::delete_color_group"
-    },
-    {
-      "name": "node_graph",
-      "verdict": "parity",
-      "key": "color::node_graph"
-    },
-    {
-      "name": "num_nodes",
-      "verdict": "parity",
-      "key": "color::num_nodes"
-    },
-    {
-      "name": "read_node_label",
-      "verdict": "parity",
-      "key": "color::read_node_label"
-    },
-    {
-      "name": "read_node_lut",
-      "verdict": "parity",
-      "key": "color::read_node_lut"
-    },
-    {
-      "name": "set_node_enabled",
-      "verdict": "parity",
-      "key": "color::set_node_enabled"
-    },
-    {
-      "name": "tools_in_node",
-      "verdict": "parity",
-      "key": "color::tools_in_node"
-    },
-    {
-      "name": "created_project",
-      "verdict": "parity",
-      "key": "fixture::created_project"
-    },
-    {
-      "name": "created_timeline",
-      "verdict": "parity",
-      "key": "fixture::created_timeline"
-    },
-    {
-      "name": "imported_clips",
-      "verdict": "parity",
-      "key": "fixture::imported_clips"
-    },
-    {
-      "name": "incumbent_name",
-      "verdict": "parity",
-      "key": "fixture::incumbent_name"
-    },
-    {
-      "name": "loaded_project",
-      "verdict": "parity",
-      "key": "fixture::loaded_project"
-    },
-    {
-      "name": "saved_incumbent",
-      "verdict": "both_failed",
-      "gui": false,
-      "headless": false,
-      "key": "fixture::saved_incumbent"
-    },
-    {
-      "name": "timeline_item",
-      "verdict": "parity",
-      "key": "fixture::timeline_item"
-    },
-    {
-      "name": "export_current_frame",
-      "verdict": "parity",
-      "key": "frame_export::export_current_frame"
-    },
-    {
-      "name": "frame_file_written",
-      "verdict": "parity",
-      "key": "frame_export::frame_file_written"
-    },
-    {
-      "name": "add_fusion_comp",
-      "verdict": "parity",
-      "key": "fusion::add_fusion_comp"
-    },
-    {
-      "name": "comp_count_after",
-      "verdict": "parity",
-      "key": "fusion::comp_count_after"
-    },
-    {
-      "name": "comp_count_before",
-      "verdict": "parity",
-      "key": "fusion::comp_count_before"
-    },
-    {
-      "name": "comp_names",
-      "verdict": "parity",
-      "key": "fusion::comp_names"
-    },
-    {
-      "name": "current_comp",
-      "verdict": "parity",
-      "key": "fusion::current_comp"
-    },
-    {
-      "name": "delete_fusion_comp",
-      "verdict": "both_failed",
-      "gui": false,
-      "headless": false,
-      "key": "fusion::delete_fusion_comp"
-    },
-    {
-      "name": "fusion_handle",
-      "verdict": "parity",
-      "key": "fusion::fusion_handle"
-    },
-    {
-      "name": "album_count",
-      "verdict": "parity",
-      "key": "gallery::album_count"
-    },
-    {
-      "name": "current_album",
-      "verdict": "parity",
-      "key": "gallery::current_album"
-    },
-    {
-      "name": "export_produced_files",
-      "verdict": "parity",
-      "key": "gallery::export_produced_files"
-    },
-    {
-      "name": "export_stills",
-      "verdict": "both_failed",
-      "gui": false,
-      "headless": false,
-      "key": "gallery::export_stills"
-    },
-    {
-      "name": "gallery_handle",
-      "verdict": "parity",
-      "key": "gallery::gallery_handle"
-    },
-    {
-      "name": "grab_still",
-      "verdict": "parity",
-      "key": "gallery::grab_still"
-    },
-    {
-      "name": "delete_layout_preset",
-      "verdict": "parity",
-      "key": "layout_presets::delete_layout_preset"
-    },
-    {
-      "name": "export_layout_preset",
-      "verdict": "parity",
-      "key": "layout_presets::export_layout_preset"
-    },
-    {
-      "name": "layout_preset_bytes",
-      "verdict": "parity",
-      "reason": "both wrote a non-empty file",
-      "key": "layout_presets::layout_preset_bytes"
-    },
-    {
-      "name": "load_layout_preset",
-      "verdict": "parity",
-      "key": "layout_presets::load_layout_preset"
-    },
-    {
-      "name": "save_layout_preset",
-      "verdict": "parity",
-      "key": "layout_presets::save_layout_preset"
-    },
-    {
-      "name": "add_subfolder",
-      "verdict": "parity",
-      "key": "media_pool::add_subfolder"
-    },
-    {
-      "name": "clip_count",
-      "verdict": "parity",
-      "key": "media_pool::clip_count"
-    },
-    {
-      "name": "clip_property_resolution",
-      "verdict": "parity",
-      "key": "media_pool::clip_property_resolution"
-    },
-    {
-      "name": "delete_subfolder",
-      "verdict": "parity",
-      "key": "media_pool::delete_subfolder"
-    },
-    {
-      "name": "mounted_volume_count",
-      "verdict": "parity",
-      "key": "media_pool::mounted_volume_count"
-    },
-    {
-      "name": "root_folder",
-      "verdict": "parity",
-      "key": "media_pool::root_folder"
-    },
-    {
-      "name": "set_clip_color",
-      "verdict": "parity",
-      "key": "media_pool::set_clip_color"
-    },
-    {
-      "name": "set_current_folder",
-      "verdict": "parity",
-      "key": "media_pool::set_current_folder"
-    },
-    {
-      "name": "open_color",
-      "verdict": "parity",
-      "key": "pages::open_color"
-    },
-    {
-      "name": "open_cut",
-      "verdict": "parity",
-      "key": "pages::open_cut"
-    },
-    {
-      "name": "open_deliver",
-      "verdict": "parity",
-      "key": "pages::open_deliver"
-    },
-    {
-      "name": "open_edit",
-      "verdict": "parity",
-      "key": "pages::open_edit"
-    },
-    {
-      "name": "open_fairlight",
-      "verdict": "parity",
-      "key": "pages::open_fairlight"
-    },
-    {
-      "name": "open_fusion",
-      "verdict": "parity",
-      "key": "pages::open_fusion"
-    },
-    {
-      "name": "open_media",
-      "verdict": "parity",
-      "key": "pages::open_media"
-    },
-    {
-      "name": "reads_back_color",
-      "verdict": "parity",
-      "key": "pages::reads_back_color"
-    },
-    {
-      "name": "reads_back_cut",
-      "verdict": "parity",
-      "key": "pages::reads_back_cut"
-    },
-    {
-      "name": "reads_back_deliver",
-      "verdict": "parity",
-      "key": "pages::reads_back_deliver"
-    },
-    {
-      "name": "reads_back_edit",
-      "verdict": "parity",
-      "key": "pages::reads_back_edit"
-    },
-    {
-      "name": "reads_back_fairlight",
-      "verdict": "parity",
-      "key": "pages::reads_back_fairlight"
-    },
-    {
-      "name": "reads_back_fusion",
-      "verdict": "parity",
-      "key": "pages::reads_back_fusion"
-    },
-    {
-      "name": "reads_back_media",
-      "verdict": "parity",
-      "key": "pages::reads_back_media"
-    },
-    {
-      "name": "current_timecode",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "playhead::current_timecode"
-    },
-    {
-      "name": "current_video_item",
-      "verdict": "parity",
-      "key": "playhead::current_video_item"
-    },
-    {
-      "name": "set_current_timecode",
-      "verdict": "parity",
-      "key": "playhead::set_current_timecode"
-    },
-    {
-      "name": "start_timecode_shape",
-      "verdict": "parity",
-      "key": "playhead::start_timecode_shape"
-    },
-    {
-      "name": "read_frame_rate",
-      "verdict": "parity",
-      "key": "project_settings::read_frame_rate"
-    },
-    {
-      "name": "read_output_res",
-      "verdict": "parity",
-      "key": "project_settings::read_output_res"
-    },
-    {
-      "name": "set_output_res",
-      "verdict": "parity",
-      "key": "project_settings::set_output_res"
-    },
-    {
-      "name": "setting_count",
-      "verdict": "parity",
-      "key": "project_settings::setting_count"
-    },
-    {
-      "name": "add_render_job",
-      "verdict": "parity",
-      "key": "render::add_render_job"
-    },
-    {
-      "name": "codec_count_mp4",
-      "verdict": "parity",
-      "key": "render::codec_count_mp4"
-    },
-    {
-      "name": "delete_render_job",
-      "verdict": "parity",
-      "key": "render::delete_render_job"
-    },
-    {
-      "name": "format_count",
-      "verdict": "parity",
-      "key": "render::format_count"
-    },
-    {
-      "name": "render_job_count",
-      "verdict": "parity",
-      "key": "render::render_job_count"
-    },
-    {
-      "name": "render_produced_files",
-      "verdict": "parity",
-      "key": "render::render_produced_files"
-    },
-    {
-      "name": "render_status",
-      "verdict": "parity",
-      "key": "render::render_status"
-    },
-    {
-      "name": "set_format_codec",
-      "verdict": "parity",
-      "key": "render::set_format_codec"
-    },
-    {
-      "name": "set_render_settings",
-      "verdict": "parity",
-      "key": "render::set_render_settings"
-    },
-    {
-      "name": "start_rendering",
-      "verdict": "parity",
-      "key": "render::start_rendering"
-    },
-    {
-      "name": "<unreachable>",
-      "verdict": "both_failed",
       "gui": {
-        "outcome": "unreachable"
+        "probe": "app.current_page",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'edit'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
       },
       "headless": {
-        "outcome": "unreachable"
+        "probe": "app.current_page",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'edit'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
       },
-      "key": "surface::color_group.<unreachable>"
+      "reason": "app-global state the sweep itself moves; compared by outcome only",
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
     },
     {
-      "name": "GetAlbumName",
-      "verdict": "parity",
-      "key": "surface::gallery.GetAlbumName"
-    },
-    {
-      "name": "GetCurrentStillAlbum",
-      "verdict": "parity",
-      "key": "surface::gallery.GetCurrentStillAlbum"
-    },
-    {
-      "name": "GetGalleryPowerGradeAlbums",
-      "verdict": "parity",
-      "key": "surface::gallery.GetGalleryPowerGradeAlbums"
-    },
-    {
-      "name": "GetGalleryStillAlbums",
-      "verdict": "parity",
-      "key": "surface::gallery.GetGalleryStillAlbums"
-    },
-    {
-      "name": "GetLabel",
-      "verdict": "parity",
-      "key": "surface::gallery_still_album.GetLabel"
-    },
-    {
-      "name": "GetStills",
-      "verdict": "parity",
-      "key": "surface::gallery_still_album.GetStills"
-    },
-    {
-      "name": "GetClipMatteList",
-      "verdict": "parity",
-      "key": "surface::media_pool.GetClipMatteList"
-    },
-    {
-      "name": "GetCurrentFolder",
-      "verdict": "parity",
-      "key": "surface::media_pool.GetCurrentFolder"
-    },
-    {
-      "name": "GetRootFolder",
-      "verdict": "parity",
-      "key": "surface::media_pool.GetRootFolder"
-    },
-    {
-      "name": "GetSelectedClips",
-      "verdict": "parity",
-      "key": "surface::media_pool.GetSelectedClips"
-    },
-    {
-      "name": "GetTimelineMatteList",
-      "verdict": "parity",
-      "key": "surface::media_pool.GetTimelineMatteList"
-    },
-    {
-      "name": "GetUniqueId",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::media_pool.GetUniqueId"
-    },
-    {
-      "name": "GetAudioMapping",
-      "verdict": "parity",
-      "key": "surface::media_pool_item.GetAudioMapping"
-    },
-    {
-      "name": "GetClipColor",
-      "verdict": "parity",
-      "key": "surface::media_pool_item.GetClipColor"
-    },
-    {
-      "name": "GetClipProperty",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::media_pool_item.GetClipProperty"
-    },
-    {
-      "name": "GetFlagList",
-      "verdict": "parity",
-      "key": "surface::media_pool_item.GetFlagList"
-    },
-    {
-      "name": "GetMarkInOut",
-      "verdict": "parity",
-      "key": "surface::media_pool_item.GetMarkInOut"
-    },
-    {
-      "name": "GetMarkerByCustomData",
-      "verdict": "parity",
-      "key": "surface::media_pool_item.GetMarkerByCustomData"
-    },
-    {
-      "name": "GetMarkerCustomData",
-      "verdict": "parity",
-      "key": "surface::media_pool_item.GetMarkerCustomData"
-    },
-    {
-      "name": "GetMarkers",
-      "verdict": "parity",
-      "key": "surface::media_pool_item.GetMarkers"
-    },
-    {
-      "name": "GetMediaId",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::media_pool_item.GetMediaId"
-    },
-    {
-      "name": "GetMetadata",
-      "verdict": "parity",
-      "key": "surface::media_pool_item.GetMetadata"
-    },
-    {
-      "name": "GetName",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::media_pool_item.GetName"
-    },
-    {
-      "name": "GetThirdPartyMetadata",
-      "verdict": "parity",
-      "key": "surface::media_pool_item.GetThirdPartyMetadata"
-    },
-    {
-      "name": "GetUniqueId",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::media_pool_item.GetUniqueId"
-    },
-    {
-      "name": "GetFileList",
-      "verdict": "parity",
-      "key": "surface::media_storage.GetFileList"
-    },
-    {
-      "name": "GetMountedVolumeList",
-      "verdict": "parity",
-      "key": "surface::media_storage.GetMountedVolumeList"
-    },
-    {
-      "name": "GetSubFolderList",
-      "verdict": "parity",
-      "key": "surface::media_storage.GetSubFolderList"
-    },
-    {
-      "name": "GetColorGroupsList",
-      "verdict": "parity",
-      "key": "surface::project.GetColorGroupsList"
-    },
-    {
-      "name": "GetCurrentRenderFormatAndCodec",
-      "verdict": "divergent",
+      "probe": "app.fusion_current_comp",
+      "verdict": "both_failed",
       "gui": {
-        "outcome": "returned",
-        "value": {
-          "codec": "H264",
-          "format": "mp4"
-        },
-        "type": "dict[2]"
+        "probe": "app.fusion_current_comp",
+        "category": "app",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
       },
       "headless": {
-        "outcome": "returned",
-        "value": {
-          "codec": "H264",
-          "format": "mov"
-        },
-        "type": "dict[2]"
+        "probe": "app.fusion_current_comp",
+        "category": "app",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
       },
-      "reason": "both succeeded, values differ",
-      "key": "surface::project.GetCurrentRenderFormatAndCodec"
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
     },
     {
-      "name": "GetCurrentRenderMode",
+      "probe": "app.fusion_handle",
       "verdict": "parity",
-      "key": "surface::project.GetCurrentRenderMode"
-    },
-    {
-      "name": "GetCurrentTimeline",
-      "verdict": "parity",
-      "key": "surface::project.GetCurrentTimeline"
-    },
-    {
-      "name": "GetGallery",
-      "verdict": "parity",
-      "key": "surface::project.GetGallery"
-    },
-    {
-      "name": "GetMediaPool",
-      "verdict": "parity",
-      "key": "surface::project.GetMediaPool"
-    },
-    {
-      "name": "GetName",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::project.GetName"
-    },
-    {
-      "name": "GetPresetList",
-      "verdict": "parity",
-      "key": "surface::project.GetPresetList"
-    },
-    {
-      "name": "GetQuickExportRenderPresets",
-      "verdict": "parity",
-      "key": "surface::project.GetQuickExportRenderPresets"
-    },
-    {
-      "name": "GetRenderCodecs",
-      "verdict": "parity",
-      "key": "surface::project.GetRenderCodecs"
-    },
-    {
-      "name": "GetRenderFormats",
-      "verdict": "parity",
-      "key": "surface::project.GetRenderFormats"
-    },
-    {
-      "name": "GetRenderJobList",
-      "verdict": "parity",
-      "key": "surface::project.GetRenderJobList"
-    },
-    {
-      "name": "GetRenderJobStatus",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::project.GetRenderJobStatus"
-    },
-    {
-      "name": "GetRenderPresetList",
-      "verdict": "parity",
-      "key": "surface::project.GetRenderPresetList"
-    },
-    {
-      "name": "GetRenderResolutions",
-      "verdict": "parity",
-      "key": "surface::project.GetRenderResolutions"
-    },
-    {
-      "name": "GetSetting",
-      "verdict": "parity",
-      "key": "surface::project.GetSetting"
-    },
-    {
-      "name": "GetTimelineByIndex",
-      "verdict": "parity",
-      "key": "surface::project.GetTimelineByIndex"
-    },
-    {
-      "name": "GetTimelineCount",
-      "verdict": "parity",
-      "key": "surface::project.GetTimelineCount"
-    },
-    {
-      "name": "GetUniqueId",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::project.GetUniqueId"
-    },
-    {
-      "name": "IsRenderingInProgress",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::project.IsRenderingInProgress"
-    },
-    {
-      "name": "GetCurrentDatabase",
-      "verdict": "parity",
-      "key": "surface::project_manager.GetCurrentDatabase"
-    },
-    {
-      "name": "GetCurrentFolder",
-      "verdict": "parity",
-      "key": "surface::project_manager.GetCurrentFolder"
-    },
-    {
-      "name": "GetCurrentProject",
-      "verdict": "parity",
-      "key": "surface::project_manager.GetCurrentProject"
-    },
-    {
-      "name": "GetDatabaseList",
-      "verdict": "parity",
-      "key": "surface::project_manager.GetDatabaseList"
-    },
-    {
-      "name": "GetFolderListInCurrentFolder",
-      "verdict": "parity",
-      "key": "surface::project_manager.GetFolderListInCurrentFolder"
-    },
-    {
-      "name": "GetProjectListInCurrentFolder",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::project_manager.GetProjectListInCurrentFolder"
-    },
-    {
-      "name": "GetCurrentPage",
-      "verdict": "parity",
-      "reason": "Headless has no page; None is correct, not a failure.",
       "gui": {
-        "outcome": "returned",
-        "value": "edit",
-        "type": "str"
+        "probe": "app.fusion_handle",
+        "category": "app",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
       },
       "headless": {
-        "outcome": "returned",
-        "value": "edit",
-        "type": "str"
+        "probe": "app.fusion_handle",
+        "category": "app",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
       },
-      "expected_difference": true,
-      "key": "surface::resolve.GetCurrentPage"
-    },
-    {
-      "name": "GetKeyframeMode",
-      "verdict": "parity",
-      "key": "surface::resolve.GetKeyframeMode"
-    },
-    {
-      "name": "GetMediaStorage",
-      "verdict": "parity",
-      "key": "surface::resolve.GetMediaStorage"
-    },
-    {
-      "name": "GetProductName",
-      "verdict": "parity",
-      "key": "surface::resolve.GetProductName"
-    },
-    {
-      "name": "GetProjectManager",
-      "verdict": "parity",
-      "key": "surface::resolve.GetProjectManager"
-    },
-    {
-      "name": "GetVersion",
-      "verdict": "parity",
-      "key": "surface::resolve.GetVersion"
-    },
-    {
-      "name": "GetVersionString",
-      "verdict": "parity",
-      "key": "surface::resolve.GetVersionString"
-    },
-    {
-      "name": "GetClipList",
-      "verdict": "parity",
-      "key": "surface::root_folder.GetClipList"
-    },
-    {
-      "name": "GetIsFolderStale",
-      "verdict": "parity",
-      "key": "surface::root_folder.GetIsFolderStale"
-    },
-    {
-      "name": "GetName",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::root_folder.GetName"
-    },
-    {
-      "name": "GetSubFolderList",
-      "verdict": "parity",
-      "key": "surface::root_folder.GetSubFolderList"
-    },
-    {
-      "name": "GetUniqueId",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::root_folder.GetUniqueId"
-    },
-    {
-      "name": "GetCurrentClipThumbnailImage",
-      "verdict": "parity",
-      "key": "surface::timeline.GetCurrentClipThumbnailImage"
-    },
-    {
-      "name": "GetCurrentTimecode",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::timeline.GetCurrentTimecode"
-    },
-    {
-      "name": "GetCurrentVideoItem",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::timeline.GetCurrentVideoItem"
-    },
-    {
-      "name": "GetEndFrame",
-      "verdict": "parity",
-      "key": "surface::timeline.GetEndFrame"
-    },
-    {
-      "name": "GetIsTrackEnabled",
-      "verdict": "parity",
-      "key": "surface::timeline.GetIsTrackEnabled"
-    },
-    {
-      "name": "GetIsTrackLocked",
-      "verdict": "parity",
-      "key": "surface::timeline.GetIsTrackLocked"
-    },
-    {
-      "name": "GetItemListInTrack",
-      "verdict": "parity",
-      "key": "surface::timeline.GetItemListInTrack"
-    },
-    {
-      "name": "GetMarkInOut",
-      "verdict": "parity",
-      "key": "surface::timeline.GetMarkInOut"
-    },
-    {
-      "name": "GetMarkerByCustomData",
-      "verdict": "parity",
-      "key": "surface::timeline.GetMarkerByCustomData"
-    },
-    {
-      "name": "GetMarkerCustomData",
-      "verdict": "parity",
-      "key": "surface::timeline.GetMarkerCustomData"
-    },
-    {
-      "name": "GetMarkers",
-      "verdict": "parity",
-      "key": "surface::timeline.GetMarkers"
-    },
-    {
-      "name": "GetMediaPoolItem",
-      "verdict": "parity",
-      "key": "surface::timeline.GetMediaPoolItem"
-    },
-    {
-      "name": "GetName",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::timeline.GetName"
-    },
-    {
-      "name": "GetNodeGraph",
-      "verdict": "parity",
-      "key": "surface::timeline.GetNodeGraph"
-    },
-    {
-      "name": "GetSetting",
-      "verdict": "parity",
-      "key": "surface::timeline.GetSetting"
-    },
-    {
-      "name": "GetStartFrame",
-      "verdict": "parity",
-      "key": "surface::timeline.GetStartFrame"
-    },
-    {
-      "name": "GetStartTimecode",
-      "verdict": "parity",
-      "key": "surface::timeline.GetStartTimecode"
-    },
-    {
-      "name": "GetTrackCount",
-      "verdict": "parity",
-      "key": "surface::timeline.GetTrackCount"
-    },
-    {
-      "name": "GetTrackName",
-      "verdict": "parity",
-      "key": "surface::timeline.GetTrackName"
-    },
-    {
-      "name": "GetTrackSubType",
-      "verdict": "parity",
-      "key": "surface::timeline.GetTrackSubType"
-    },
-    {
-      "name": "GetUniqueId",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::timeline.GetUniqueId"
-    },
-    {
-      "name": "GetClipColor",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetClipColor"
-    },
-    {
-      "name": "GetClipEnabled",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetClipEnabled"
-    },
-    {
-      "name": "GetColorGroup",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetColorGroup"
-    },
-    {
-      "name": "GetCurrentVersion",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetCurrentVersion"
-    },
-    {
-      "name": "GetDuration",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetDuration"
-    },
-    {
-      "name": "GetEnd",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetEnd"
-    },
-    {
-      "name": "GetFlagList",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetFlagList"
-    },
-    {
-      "name": "GetFusionCompByIndex",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetFusionCompByIndex"
-    },
-    {
-      "name": "GetFusionCompByName",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetFusionCompByName"
-    },
-    {
-      "name": "GetFusionCompCount",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetFusionCompCount"
-    },
-    {
-      "name": "GetFusionCompNameList",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetFusionCompNameList"
-    },
-    {
-      "name": "GetIsColorOutputCacheEnabled",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetIsColorOutputCacheEnabled"
-    },
-    {
-      "name": "GetIsFusionOutputCacheEnabled",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetIsFusionOutputCacheEnabled"
-    },
-    {
-      "name": "GetLUT",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetLUT"
-    },
-    {
-      "name": "GetLeftOffset",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetLeftOffset"
-    },
-    {
-      "name": "GetLinkedItems",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetLinkedItems"
-    },
-    {
-      "name": "GetMarkerByCustomData",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetMarkerByCustomData"
-    },
-    {
-      "name": "GetMarkerCustomData",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetMarkerCustomData"
-    },
-    {
-      "name": "GetMarkers",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetMarkers"
-    },
-    {
-      "name": "GetMediaPoolItem",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetMediaPoolItem"
-    },
-    {
-      "name": "GetName",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::timeline_item.GetName"
-    },
-    {
-      "name": "GetNodeGraph",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetNodeGraph"
-    },
-    {
-      "name": "GetNodeLabel",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetNodeLabel"
-    },
-    {
-      "name": "GetNumNodes",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetNumNodes"
-    },
-    {
-      "name": "GetProperty",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetProperty"
-    },
-    {
-      "name": "GetRightOffset",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetRightOffset"
-    },
-    {
-      "name": "GetSelectedTakeIndex",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetSelectedTakeIndex"
-    },
-    {
-      "name": "GetSourceAudioChannelMapping",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetSourceAudioChannelMapping"
-    },
-    {
-      "name": "GetSourceEndFrame",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetSourceEndFrame"
-    },
-    {
-      "name": "GetSourceEndTime",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetSourceEndTime"
-    },
-    {
-      "name": "GetSourceStartFrame",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetSourceStartFrame"
-    },
-    {
-      "name": "GetSourceStartTime",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetSourceStartTime"
-    },
-    {
-      "name": "GetStart",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetStart"
-    },
-    {
-      "name": "GetStereoConvergenceValues",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetStereoConvergenceValues"
-    },
-    {
-      "name": "GetStereoLeftFloatingWindowParams",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetStereoLeftFloatingWindowParams"
-    },
-    {
-      "name": "GetStereoRightFloatingWindowParams",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetStereoRightFloatingWindowParams"
-    },
-    {
-      "name": "GetTakeByIndex",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetTakeByIndex"
-    },
-    {
-      "name": "GetTakesCount",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetTakesCount"
-    },
-    {
-      "name": "GetTrackTypeAndIndex",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetTrackTypeAndIndex"
-    },
-    {
-      "name": "GetUniqueId",
-      "verdict": "parity",
-      "reason": "session-variant; compared by type",
-      "key": "surface::timeline_item.GetUniqueId"
-    },
-    {
-      "name": "GetVersionNameList",
-      "verdict": "parity",
-      "key": "surface::timeline_item.GetVersionNameList"
-    },
-    {
-      "name": "GetLUT",
-      "verdict": "parity",
-      "key": "surface::timeline_item_node_graph.GetLUT"
-    },
-    {
-      "name": "GetNodeCacheMode",
-      "verdict": "parity",
-      "key": "surface::timeline_item_node_graph.GetNodeCacheMode"
-    },
-    {
-      "name": "GetNodeLabel",
-      "verdict": "parity",
-      "key": "surface::timeline_item_node_graph.GetNodeLabel"
-    },
-    {
-      "name": "GetNumNodes",
-      "verdict": "parity",
-      "key": "surface::timeline_item_node_graph.GetNumNodes"
-    },
-    {
-      "name": "GetToolsInNode",
-      "verdict": "parity",
-      "key": "surface::timeline_item_node_graph.GetToolsInNode"
-    },
-    {
-      "name": "GetLUT",
-      "verdict": "parity",
-      "key": "surface::timeline_node_graph.GetLUT"
-    },
-    {
-      "name": "GetNodeCacheMode",
-      "verdict": "parity",
-      "key": "surface::timeline_node_graph.GetNodeCacheMode"
-    },
-    {
-      "name": "GetNodeLabel",
-      "verdict": "parity",
-      "key": "surface::timeline_node_graph.GetNodeLabel"
-    },
-    {
-      "name": "GetNumNodes",
-      "verdict": "parity",
-      "key": "surface::timeline_node_graph.GetNumNodes"
-    },
-    {
-      "name": "GetToolsInNode",
-      "verdict": "parity",
-      "key": "surface::timeline_node_graph.GetToolsInNode"
-    },
-    {
-      "name": "closed",
-      "verdict": "parity",
-      "key": "teardown::closed"
-    },
-    {
-      "name": "deleted",
-      "verdict": "parity",
-      "key": "teardown::deleted"
-    },
-    {
-      "name": "add_marker",
-      "verdict": "parity",
-      "key": "timeline_edit::add_marker"
-    },
-    {
-      "name": "add_track",
-      "verdict": "parity",
-      "key": "timeline_edit::add_track"
-    },
-    {
-      "name": "delete_marker",
-      "verdict": "parity",
-      "key": "timeline_edit::delete_marker"
-    },
-    {
-      "name": "delete_track",
-      "verdict": "parity",
-      "key": "timeline_edit::delete_track"
-    },
-    {
-      "name": "marker_count",
-      "verdict": "parity",
-      "key": "timeline_edit::marker_count"
-    },
-    {
-      "name": "read_track_name",
-      "verdict": "parity",
-      "key": "timeline_edit::read_track_name"
-    },
-    {
-      "name": "read_zoom",
-      "verdict": "parity",
-      "key": "timeline_edit::read_zoom"
-    },
-    {
-      "name": "set_track_name",
-      "verdict": "parity",
-      "key": "timeline_edit::set_track_name"
-    },
-    {
-      "name": "set_zoom",
-      "verdict": "parity",
-      "key": "timeline_edit::set_zoom"
-    },
-    {
-      "name": "track_count_after_add",
-      "verdict": "parity",
-      "key": "timeline_edit::track_count_after_add"
-    },
-    {
-      "name": "track_count_video",
-      "verdict": "parity",
-      "key": "timeline_edit::track_count_video"
-    },
-    {
-      "name": "export_aaf",
-      "verdict": "parity",
-      "key": "timeline_export::export_aaf"
-    },
-    {
-      "name": "export_aaf_bytes",
-      "verdict": "parity",
-      "reason": "both wrote a non-empty file",
-      "key": "timeline_export::export_aaf_bytes"
-    },
-    {
-      "name": "export_drt",
-      "verdict": "parity",
-      "key": "timeline_export::export_drt"
-    },
-    {
-      "name": "export_drt_bytes",
-      "verdict": "parity",
-      "reason": "both wrote a non-empty file",
-      "key": "timeline_export::export_drt_bytes"
-    },
-    {
-      "name": "export_edl",
-      "verdict": "parity",
-      "key": "timeline_export::export_edl"
-    },
-    {
-      "name": "export_edl_bytes",
-      "verdict": "parity",
-      "reason": "both wrote a non-empty file",
-      "key": "timeline_export::export_edl_bytes"
-    },
-    {
-      "name": "export_fcpxml",
-      "verdict": "parity",
-      "key": "timeline_export::export_fcpxml"
-    },
-    {
-      "name": "export_fcpxml_bytes",
-      "verdict": "parity",
-      "reason": "both wrote a non-empty file",
-      "key": "timeline_export::export_fcpxml_bytes"
-    },
-    {
-      "name": "export_otio",
-      "verdict": "parity",
-      "key": "timeline_export::export_otio"
-    },
-    {
-      "name": "export_otio_bytes",
-      "verdict": "parity",
-      "reason": "both wrote a non-empty file",
-      "key": "timeline_export::export_otio_bytes"
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.keyframe_mode",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "app.keyframe_mode",
+        "category": "app",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "app.keyframe_mode",
+        "category": "app",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.media_storage",
+      "verdict": "parity",
+      "gui": {
+        "probe": "app.media_storage",
+        "category": "app",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "app.media_storage",
+        "category": "app",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.mounted_volumes",
+      "verdict": "parity",
+      "gui": {
+        "probe": "app.mounted_volumes",
+        "category": "app",
+        "outcome": "ok",
+        "value": "13",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "app.mounted_volumes",
+        "category": "app",
+        "outcome": "ok",
+        "value": "13",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.product_name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "app.product_name",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'DaVinci Resolve Studio'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "app.product_name",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'DaVinci Resolve Studio'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.version_string",
+      "verdict": "parity",
+      "gui": {
+        "probe": "app.version_string",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'19.1.3.7'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "app.version_string",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'19.1.3.7'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "audio.add_delete_track",
+      "verdict": "parity",
+      "gui": {
+        "probe": "audio.add_delete_track",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.05,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "audio.add_delete_track",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.04,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "audio.set_track_name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "audio.set_track_name",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "audio.set_track_name",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "audio.track_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "audio.track_count",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "audio.track_count",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.group_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.group_roundtrip",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "color.group_roundtrip",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.node_graph",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.node_graph",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "color.node_graph",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.node_label",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.node_label",
+        "category": "color",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "color.node_label",
+        "category": "color",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.node_lut",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.node_lut",
+        "category": "color",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "color.node_lut",
+        "category": "color",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.num_nodes",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.num_nodes",
+        "category": "color",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "color.num_nodes",
+        "category": "color",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.reset_all_grades",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.reset_all_grades",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "color.reset_all_grades",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.set_cdl",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.set_cdl",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "color.set_cdl",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.set_node_enabled",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.set_node_enabled",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "color.set_node_enabled",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.tools_in_node",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.tools_in_node",
+        "category": "color",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "color.tools_in_node",
+        "category": "color",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "export.aaf",
+      "verdict": "parity",
+      "gui": {
+        "probe": "export.aaf",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.02,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "export.aaf",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "export.drt",
+      "verdict": "parity",
+      "gui": {
+        "probe": "export.drt",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.06,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "export.drt",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.01,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "export.edl",
+      "verdict": "parity",
+      "gui": {
+        "probe": "export.edl",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "export.edl",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "export.fcpxml",
+      "verdict": "parity",
+      "gui": {
+        "probe": "export.fcpxml",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "export.fcpxml",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "export.otio",
+      "verdict": "parity",
+      "gui": {
+        "probe": "export.otio",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "export.otio",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "fusion.add_delete_comp",
+      "verdict": "parity",
+      "gui": {
+        "probe": "fusion.add_delete_comp",
+        "category": "fusion",
+        "outcome": "ok",
+        "value": "'True/False'",
+        "seconds": 0.13,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "fusion.add_delete_comp",
+        "category": "fusion",
+        "outcome": "ok",
+        "value": "'True/False'",
+        "seconds": 0.12,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "fusion.comp_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "fusion.comp_count",
+        "category": "fusion",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "fusion.comp_count",
+        "category": "fusion",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "gallery.album_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "gallery.album_count",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "gallery.album_count",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "gallery.export_current_frame",
+      "verdict": "parity",
+      "gui": {
+        "probe": "gallery.export_current_frame",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.04,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "gallery.export_current_frame",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.04,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "gallery.export_stills",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "gallery.export_stills",
+        "category": "gallery",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.05,
+        "mode": "gui",
+        "detail": "",
+        "note": "fails in BOTH modes without a visible Gallery panel",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "gallery.export_stills",
+        "category": "gallery",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.07,
+        "mode": "headless",
+        "detail": "",
+        "note": "fails in BOTH modes without a visible Gallery panel",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "gallery.handle",
+      "verdict": "parity",
+      "gui": {
+        "probe": "gallery.handle",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "gallery.handle",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.duration",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.duration",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "48",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "item.duration",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "48",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.flag_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.flag_roundtrip",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "item.flag_roundtrip",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.left_offset",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.left_offset",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "item.left_offset",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.marker_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.marker_roundtrip",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "item.marker_roundtrip",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.media_pool_item",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.media_pool_item",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "item.media_pool_item",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.name",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "'probe_source.mov'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "item.name",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "'probe_source.mov'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.set_clip_color",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.set_clip_color",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "item.set_clip_color",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.set_zoom_property",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.set_zoom_property",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "'True/1.25'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "item.set_zoom_property",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "'True/1.25'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "layout.delete_preset",
+      "verdict": "parity",
+      "gui": {
+        "probe": "layout.delete_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "layout.delete_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "layout.export_preset",
+      "verdict": "parity",
+      "gui": {
+        "probe": "layout.export_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "layout.export_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "layout.load_preset",
+      "verdict": "parity",
+      "gui": {
+        "probe": "layout.load_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.2,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "layout.load_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "layout.save_preset",
+      "verdict": "parity",
+      "gui": {
+        "probe": "layout.save_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "layout.save_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "lifecycle.create_project",
+      "verdict": "parity",
+      "gui": {
+        "probe": "lifecycle.create_project",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 3.3,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "lifecycle.create_project",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 4.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "lifecycle.delete_after_close_releases_lock",
+      "verdict": "parity",
+      "gui": {
+        "probe": "lifecycle.delete_after_close_releases_lock",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "'without_close=False/with_close=False'",
+        "seconds": 3.83,
+        "mode": "gui",
+        "detail": "",
+        "note": "LoadProject-away does NOT release the lock; CloseProject does",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "lifecycle.delete_after_close_releases_lock",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "'without_close=False/with_close=False'",
+        "seconds": 4.64,
+        "mode": "headless",
+        "detail": "",
+        "note": "LoadProject-away does NOT release the lock; CloseProject does",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "lifecycle.load_and_close",
+      "verdict": "parity",
+      "gui": {
+        "probe": "lifecycle.load_and_close",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "'True/True/False'",
+        "seconds": 3.3,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "lifecycle.load_and_close",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "'True/True/False'",
+        "seconds": 4.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_color",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_color",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/color'",
+        "seconds": 0.06,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "page.open_color",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/color'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_cut",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_cut",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/cut'",
+        "seconds": 0.05,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "page.open_cut",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/cut'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_deliver",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_deliver",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/deliver'",
+        "seconds": 0.03,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "page.open_deliver",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/deliver'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_edit",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_edit",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/edit'",
+        "seconds": 0.05,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "page.open_edit",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/edit'",
+        "seconds": 0.03,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_fairlight",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_fairlight",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/fairlight'",
+        "seconds": 0.04,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "page.open_fairlight",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/fairlight'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_fusion",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_fusion",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/fusion'",
+        "seconds": 1.1,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "page.open_fusion",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/fusion'",
+        "seconds": 0.16,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_media",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_media",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/media'",
+        "seconds": 0.06,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "page.open_media",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/media'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.current_database",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.current_database",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "{'DbType': 'Disk', 'DbName': 'Local Database'}",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pm.current_database",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "{'DbType': 'Disk', 'DbName': 'Local Database'}",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.current_folder",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.current_folder",
+        "category": "project_manager",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pm.current_folder",
+        "category": "project_manager",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.current_project_name_on_untitled",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.current_project_name_on_untitled",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "'Untitled Project'",
+        "seconds": 0.05,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pm.current_project_name_on_untitled",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "'Untitled Project'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.database_list",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.database_list",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "2",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pm.database_list",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "2",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.export_project",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.export_project",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.08,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pm.export_project",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.06,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.folder_list",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.folder_list",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pm.folder_list",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.project_list_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.project_list_count",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pm.project_list_count",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.save_named_project",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.save_named_project",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.15,
+        "mode": "gui",
+        "detail": "",
+        "note": "the control for save_untitled_project: must work in both modes",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pm.save_named_project",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "the control for save_untitled_project: must work in both modes",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.add_subfolder",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pool.add_subfolder",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.03,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pool.add_subfolder",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.append_to_timeline",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "pool.append_to_timeline",
+        "category": "media_pool",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pool.append_to_timeline",
+        "category": "media_pool",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.clip_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pool.clip_count",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "2",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pool.clip_count",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "2",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.clip_marker_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pool.clip_marker_roundtrip",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "'None/0'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pool.clip_marker_roundtrip",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "'None/0'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.clip_resolution",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "pool.clip_resolution",
+        "category": "media_pool",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pool.clip_resolution",
+        "category": "media_pool",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.root_folder",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pool.root_folder",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pool.root_folder",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.set_clip_color",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "pool.set_clip_color",
+        "category": "media_pool",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pool.set_clip_color",
+        "category": "media_pool",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.set_clip_metadata",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pool.set_clip_metadata",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "'None/None'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "pool.set_clip_metadata",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "'None/None'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "project.read_frame_rate",
+      "verdict": "parity",
+      "gui": {
+        "probe": "project.read_frame_rate",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "24.0",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "project.read_frame_rate",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "24.0",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "project.set_colour_science",
+      "verdict": "parity",
+      "gui": {
+        "probe": "project.set_colour_science",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'True/davinciYRGB'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "project.set_colour_science",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'True/davinciYRGB'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "project.set_resolution",
+      "verdict": "parity",
+      "gui": {
+        "probe": "project.set_resolution",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'True/1920'",
+        "seconds": 0.01,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "project.set_resolution",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'True/1920'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "project.setting_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "project.setting_count",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "project.setting_count",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "project.unique_id_shape",
+      "verdict": "parity",
+      "gui": {
+        "probe": "project.unique_id_shape",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'str'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "project.unique_id_shape",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'str'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.codec_count_mov",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.codec_count_mov",
+        "category": "render",
+        "outcome": "ok",
+        "value": "63",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "render.codec_count_mov",
+        "category": "render",
+        "outcome": "ok",
+        "value": "63",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.format_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.format_count",
+        "category": "render",
+        "outcome": "ok",
+        "value": "20",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "render.format_count",
+        "category": "render",
+        "outcome": "ok",
+        "value": "20",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.job_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.job_roundtrip",
+        "category": "render",
+        "outcome": "ok",
+        "value": "'1/True'",
+        "seconds": 0.13,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "render.job_roundtrip",
+        "category": "render",
+        "outcome": "ok",
+        "value": "'1/True'",
+        "seconds": 0.13,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.preset_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.preset_count",
+        "category": "render",
+        "outcome": "ok",
+        "value": "31",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "render.preset_count",
+        "category": "render",
+        "outcome": "ok",
+        "value": "31",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.set_format_codec",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.set_format_codec",
+        "category": "render",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.03,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "render.set_format_codec",
+        "category": "render",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.01,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.to_disk",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.to_disk",
+        "category": "render",
+        "outcome": "ok",
+        "value": "'Complete/1'",
+        "seconds": 1.3,
+        "mode": "gui",
+        "detail": "",
+        "note": "the delivery path end to end; the only probe that writes real pixels",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "render.to_disk",
+        "category": "render",
+        "outcome": "ok",
+        "value": "'Complete/1'",
+        "seconds": 1.29,
+        "mode": "headless",
+        "detail": "",
+        "note": "the delivery path end to end; the only probe that writes real pixels",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.add_delete_track",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.add_delete_track",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.02,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.add_delete_track",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.01,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.current_video_item",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.current_video_item",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.current_video_item",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.duplicate",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "timeline.duplicate",
+        "category": "timeline",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "TypeError: 'NoneType' object is not callable",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.duplicate",
+        "category": "timeline",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "TypeError: 'NoneType' object is not callable",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.grab_still",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.grab_still",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.12,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.grab_still",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.08,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.marker_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.marker_roundtrip",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/1'",
+        "seconds": 0.09,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.marker_roundtrip",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/1'",
+        "seconds": 0.03,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'PROBE_TL'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'PROBE_TL'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.set_current_timecode",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.set_current_timecode",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.set_current_timecode",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.set_name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.set_name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.02,
+        "mode": "gui",
+        "detail": "",
+        "note": "documented to fail on the ACTIVE timeline",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.set_name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "documented to fail on the ACTIVE timeline",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.set_track_name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.set_track_name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/PROBE_TRACK'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.set_track_name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/PROBE_TRACK'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.start_timecode",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.start_timecode",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'01:00:00:00'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.start_timecode",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'01:00:00:00'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.track_count_video",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.track_count_video",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.track_count_video",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.track_enable_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.track_enable_roundtrip",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.02,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "headless": {
+        "probe": "timeline.track_enable_roundtrip",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.01,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v3-61b7128e7651"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
     }
-  ]
+  ],
+  "probe_count": 92,
+  "runs": {
+    "gui": 2,
+    "headless": 2
+  },
+  "generated_at": "2026-08-01T23:55:48+00:00"
 }

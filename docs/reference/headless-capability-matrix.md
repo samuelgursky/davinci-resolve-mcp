@@ -1,41 +1,40 @@
-# Headless (-nogui) capability differential
+# GUI vs headless probe matrix
 
-- GUI run: 2026-08-01T19:48:27+00:00 — 19.1.3.7
-- Headless run: 2026-08-01T19:52:03+00:00 — 19.1.3.7
+92 probes, 2 GUI run(s) x 2 headless run(s).
 
 | verdict | count |
 | --- | --- |
-| parity | 233 |
+| parity | 85 |
+| flaky | 0 |
+| hang_headless | 0 |
+| hang_gui | 0 |
 | headless_degraded | 0 |
 | gui_degraded | 0 |
-| both_failed | 4 |
-| divergent | 1 |
+| both_hang | 0 |
+| both_failed | 7 |
+| divergent | 0 |
 | untested | 0 |
 
-## Coverage
+## Coverage by category
 
-What was actually exercised, so the parity count above is reviewable rather than merely large.
+| category | probes | parity | hang_headless | headless_degraded | gui_degraded | divergent | untested |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| app | 8 | 6 | 0 | 0 | 0 | 0 | 0 |
+| audio | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
+| color | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
+| fusion | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| gallery | 4 | 3 | 0 | 0 | 0 | 0 | 0 |
+| interchange | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
+| layout | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
+| lifecycle | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
+| media_pool | 8 | 5 | 0 | 0 | 0 | 0 | 0 |
+| pages | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
+| project_manager | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
+| project_settings | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
+| render | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
+| timeline | 12 | 11 | 0 | 0 | 0 | 0 | 0 |
+| timeline_item | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 
-| group | observations | parity | headless_degraded | gui_degraded | both_failed | divergent |
-| --- | --- | --- | --- | --- | --- | --- |
-| color | 9 | 9 | 0 | 0 | 0 | 0 |
-| fixture | 7 | 6 | 0 | 0 | 1 | 0 |
-| frame_export | 2 | 2 | 0 | 0 | 0 | 0 |
-| fusion | 7 | 6 | 0 | 0 | 1 | 0 |
-| gallery | 6 | 5 | 0 | 0 | 1 | 0 |
-| layout_presets | 5 | 5 | 0 | 0 | 0 | 0 |
-| media_pool | 8 | 8 | 0 | 0 | 0 | 0 |
-| pages | 14 | 14 | 0 | 0 | 0 | 0 |
-| playhead | 4 | 4 | 0 | 0 | 0 | 0 |
-| project_settings | 4 | 4 | 0 | 0 | 0 | 0 |
-| render | 10 | 10 | 0 | 0 | 0 | 0 |
-| surface | 139 | 137 | 0 | 0 | 1 | 1 |
-| teardown | 2 | 2 | 0 | 0 | 0 | 0 |
-| timeline_edit | 11 | 11 | 0 | 0 | 0 | 0 |
-| timeline_export | 10 | 10 | 0 | 0 | 0 | 0 |
+## Mode-dependent findings
 
-## Findings
-
-| observation | verdict | GUI | headless | note |
-| --- | --- | --- | --- | --- |
-| `surface::project.GetCurrentRenderFormatAndCodec` | divergent | {'outcome': 'returned', 'value': {'codec': 'H264', 'format'… | {'outcome': 'returned', 'value': {'codec': 'H264', 'format'… | both succeeded, values differ |
+None: every probe that ran in both modes agreed.

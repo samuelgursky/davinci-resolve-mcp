@@ -101,12 +101,14 @@ API_TRUTH: List[Dict[str, Any]] = [
         "reality": "Returns False (no deletion) when the target project is, or "
                    "recently was, the current project, and is flaky on the first "
                    "attempt — so a single bool() call leaves the project undeleted "
-                   "with no useful error. The release mechanism is specifically "
-                   "CloseProject: switching away with LoadProject does NOT release "
-                   "the session's lock, and the delete then fails permanently — "
-                   "measured, six retries a second apart all returned False, "
-                   "while the same delete after a CloseProject succeeded on the "
-                   "first attempt.",
+                   "with no useful error. CloseProject reliably releases it: a "
+                   "delete that had failed six times in a row, a second apart, "
+                   "succeeded on the first attempt after one. Switching away with "
+                   "LoadProject is NOT reliable — it left the delete failing "
+                   "permanently after a heavily-used project, yet succeeded for a "
+                   "project that had only been created and loaded. Whatever "
+                   "distinguishes the two (modification? an open timeline?) is "
+                   "not established, so LoadProject-away cannot be depended on.",
         "recommended": "CloseProject the target FIRST (that is what releases it), "
                        "then LoadProject some named project so the session is not "
                        "left on the unsaveable 'Untitled Project' fallback, then "
@@ -774,20 +776,30 @@ API_TRUTH: List[Dict[str, Any]] = [
         "symbol": "GalleryStillAlbum.ExportStills",
         "object": "GalleryStillAlbum",
         "signature": "(galleryStills, folderPath, filePrefix, format) -> bool",
-        "reality": "Returns False and writes nothing for every documented format "
-                   "(jpg, png, tif, dpx, drx) in BOTH GUI and headless sessions, "
-                   "given a still that GrabStill() just returned. Previously "
-                   "recorded here as a headless-only failure; re-measuring in "
-                   "both modes showed it fails either way, so headless is not the "
-                   "cause. The cause documented in docs/SKILL.md is that it needs "
-                   "the Gallery panel visible on the Color page — which the "
-                   "measured GUI session did not have, and which no headless "
-                   "session can ever have. Project.ExportCurrentFrameAsStill, by "
-                   "contrast, works in both modes and writes a real file.",
-        "recommended": "Use Project.ExportCurrentFrameAsStill for pixels, or "
-                       "drp.extract_node_graphs for grades. Do not treat an "
-                       "ExportStills failure as a reason to switch to a GUI "
-                       "session; it fails there too.",
+        "reality": "PANEL-dependent, not mode-dependent — and the distinction "
+                   "took three revisions of this entry to pin down, so the "
+                   "evidence is recorded rather than summarised. Across four "
+                   "controlled 92-probe sweeps (2 GUI, 2 headless, 2026-08-01) it "
+                   "returned False and wrote nothing in ALL FOUR, while "
+                   "Timeline.GrabStill() succeeded in all four — so it is not "
+                   "being handed an empty still. In one earlier GUI session it "
+                   "DID work, returning True and writing 2 files. The variable "
+                   "that differed is not the mode: it is whether the Gallery "
+                   "panel was visible on the Color page, which depends on the "
+                   "restored workspace layout and which the harness does not "
+                   "control. A headless session can never satisfy it, so in "
+                   "practice the call never works headless; a GUI session "
+                   "satisfies it only sometimes. "
+                   "Project.ExportCurrentFrameAsStill worked in all four runs in "
+                   "both modes.",
+        "recommended": "Do not use ExportStills unattended in either mode — a "
+                       "GUI session is not sufficient, only a GUI session with "
+                       "the Gallery panel open. Use "
+                       "Project.ExportCurrentFrameAsStill for pixels (verified in "
+                       "both modes, four for four) or drp.extract_node_graphs for "
+                       "grades. If ExportStills must be used, have the user open "
+                       "Workspace > Gallery first and verify the written files "
+                       "rather than trusting the return.",
         "tags": ["gallery", "stills", "headless", "unreliable-return"],
         "submit": "bug",
     },
