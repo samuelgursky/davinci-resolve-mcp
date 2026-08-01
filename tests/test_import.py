@@ -2,6 +2,7 @@
 
 import ast
 import json
+import unittest
 from pathlib import Path
 
 
@@ -82,42 +83,51 @@ def test_install_syntax():
     assert _parse(PROJECT_ROOT / "install.py") is not None
 
 
-def test_mcp_sdk_pinned_below_2_everywhere():
+class McpSdkPinTest(unittest.TestCase):
     """Both install sites must cap the MCP SDK while server.py imports 1.x.
 
-    SDK 2.0.0 dropped `mcp.server.fastmcp`. install.py installs mcp[cli]
-    directly AND from requirements.txt; a cap on only one of them still lets a
-    fresh install resolve to 2.x (see issue #103). This guard is deliberately
-    conditional on server.py's import, so it retires itself the moment the
-    server is ported to the 2.x layout rather than blocking that port.
+    A TestCase rather than a bare function on purpose: the rest of this module
+    is pytest-style, but `unittest discover` does not collect bare functions,
+    and this guard protects a regression that broke every fresh install (#103).
+    It has to be reachable from both runners.
     """
-    server_src = (PROJECT_ROOT / "src" / "server.py").read_text()
-    if "from mcp.server.fastmcp import" not in server_src:
-        return  # ported to 2.x; the cap is no longer required
 
-    # String literals only — install.py discusses mcp[cli] in prose comments
-    # too, and a comment must not be able to satisfy (or fail) this guard.
-    specs = [
-        node.value
-        for node in ast.walk(_parse(PROJECT_ROOT / "install.py"))
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and node.value.startswith("mcp[cli]")
-    ]
-    specs += [
-        line.strip()
-        for line in (PROJECT_ROOT / "requirements.txt").read_text().splitlines()
-        if line.strip().startswith("mcp[cli]")
-    ]
-    assert len(specs) >= 2, (
-        f"expected mcp[cli] pinned in both install.py and requirements.txt, "
-        f"found {specs}"
-    )
-    for spec in specs:
-        assert "<2" in spec, (
-            f"'{spec}' installs mcp[cli] without a <2 cap; SDK 2.0 removed "
-            "mcp.server.fastmcp and breaks server.py at import (issue #103)"
+    def test_mcp_sdk_pinned_below_2_everywhere(self):
+        # SDK 2.0.0 dropped `mcp.server.fastmcp`. install.py installs mcp[cli]
+        # directly AND from requirements.txt; a cap on only one of them still
+        # lets a fresh install resolve to 2.x. Conditional on server.py's
+        # import so the guard retires itself when the server is ported to the
+        # 2.x layout, rather than blocking that port.
+        server_src = (PROJECT_ROOT / "src" / "server.py").read_text()
+        if "from mcp.server.fastmcp import" not in server_src:
+            self.skipTest("server.py no longer imports mcp.server.fastmcp")
+
+        # String literals only — install.py discusses mcp[cli] in prose
+        # comments too, and a comment must not be able to satisfy (or fail)
+        # this guard.
+        specs = [
+            node.value
+            for node in ast.walk(_parse(PROJECT_ROOT / "install.py"))
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.startswith("mcp[cli]")
+        ]
+        specs += [
+            line.strip()
+            for line in (PROJECT_ROOT / "requirements.txt").read_text().splitlines()
+            if line.strip().startswith("mcp[cli]")
+        ]
+        self.assertGreaterEqual(
+            len(specs), 2,
+            f"expected mcp[cli] pinned in both install.py and requirements.txt, "
+            f"found {specs}",
         )
+        for spec in specs:
+            self.assertIn(
+                "<2", spec,
+                f"'{spec}' installs mcp[cli] without a <2 cap; SDK 2.0 removed "
+                "mcp.server.fastmcp and breaks server.py at import (issue #103)",
+            )
 
 
 def test_npm_package_metadata():
