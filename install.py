@@ -796,9 +796,14 @@ def install_dependencies(venv_path, project_dir):
 
     print(f"  Installing dependencies...")
 
-    # Install MCP SDK
+    # Install MCP SDK. The upper bound is load-bearing: SDK 2.0.0 restructured
+    # the package and dropped `mcp.server.fastmcp`, which src/server.py imports.
+    # requirements.txt carries the same constraint, but it is installed second —
+    # pinning here too means we never download 2.x (and its httpx2 tree) only to
+    # downgrade it, and the fix does not depend on install ordering. Lift both
+    # together when server.py is ported to the 2.x layout.
     subprocess.run(
-        [str(pip), "install", "-q", "mcp[cli]"],
+        [str(pip), "install", "-q", "mcp[cli]>=1.29,<2"],
         check=True, capture_output=True
     )
 
