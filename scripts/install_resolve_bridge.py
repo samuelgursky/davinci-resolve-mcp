@@ -53,11 +53,26 @@ _SCRIPTS_SUFFIX = "Library/Application Support/Blackmagic Design/DaVinci Resolve
 #: `<container>/Data/Library/Application Support/Fusion/Scripts/Utility` appeared
 #: under Workspace ▸ Scripts, as did one in
 #: `<container>/Data/Documents/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility`.
-#: So Lite scans more locations than the README documents. That changes nothing
-#: about *where to install* — the documented paths work, and each extra target is
-#: another chance for the App Management prompt to stall the copy — but the reason
-#: to prefer them is that they are documented, not that the others are dead.
+#: So Lite scans more locations than the README documents.
+#:
+#: **Second correction (issue #104), same version, opposite result:** on another
+#: free 21.0.3.7 App Store install the documented tree listed *nothing* — not
+#: even the Lua canary, which rules out the Python-detection explanation and
+#: points at the folder — while the Fusion standalone tree listed all four files
+#: with no restart. Two machines, same build, contradictory results.
+#:
+#: We cannot tell them apart from outside Resolve, so we stop trying to pick a
+#: winner and install to BOTH container trees. The documented path stays first
+#: (it is the one Blackmagic commits to), the standalone tree is the fallback
+#: that demonstrably works where the documented one silently does not. The cost
+#: is one extra App Management prompt; the cost of guessing wrong is a bridge
+#: that never appears and gives the user nothing to diagnose.
 _SANDBOX_MARKER = "com.blackmagic-design."
+
+#: Scanned by Lite in addition to `_SCRIPTS_SUFFIX`, inside the container only.
+#: NOT used outside a sandbox: on a normal install this is genuinely Fusion's
+#: own tree and has nothing to do with Resolve.
+_SANDBOX_FALLBACK_SUFFIX = "Library/Application Support/Fusion/Scripts/Utility"
 #: Containers that are not Resolve (RAW Player, Speed Test, the IO XPC helper).
 _NON_RESOLVE_CONTAINERS = ("BlackmagicRaw", "IOXPC")
 
@@ -73,7 +88,9 @@ def script_targets() -> list[Path]:
 
     Sandboxed containers are included because the App Store build cannot see the
     normal per-user path — that isolation is exactly what lets the free edition
-    coexist with a direct-download Studio install.
+    coexist with a direct-download Studio install. Each container contributes
+    TWO targets (see the module comment on issue #104): the documented tree
+    first, then the Fusion standalone tree that Lite also scans.
     """
     home = Path.home()
     candidates = [
@@ -87,6 +104,7 @@ def script_targets() -> list[Path]:
         for entry in sorted(containers.iterdir()):
             if _is_resolve_container(entry) and (entry / "Data").is_dir():
                 sandboxed.append(entry / "Data" / _SCRIPTS_SUFFIX)
+                sandboxed.append(entry / "Data" / _SANDBOX_FALLBACK_SUFFIX)
 
     usable: list[Path] = []
     for path in candidates:
@@ -96,6 +114,51 @@ def script_targets() -> list[Path]:
     # Sandboxed: the container's existence is the signal; the tree gets created.
     usable.extend(sandboxed)
     return list(dict.fromkeys(usable))
+
+
+#: Where a Resolve app bundle actually lives. The App Store build installs flat
+#: into /Applications; the direct download uses its own folder. RESOLVE_APP
+#: overrides both, matching scripts/doctor.py.
+_APP_BUNDLE_CANDIDATES = (
+    "/Applications/DaVinci Resolve/DaVinci Resolve.app",
+    "/Applications/DaVinci Resolve.app",
+    "/Applications/DaVinci Resolve Studio.app",
+)
+
+
+def installed_app_bundles() -> list[str]:
+    """Resolve app bundles present on this machine."""
+    override = os.environ.get("RESOLVE_APP")
+    candidates = (override,) + _APP_BUNDLE_CANDIDATES if override else _APP_BUNDLE_CANDIDATES
+    return [path for path in candidates if path and Path(path).is_dir()]
+
+
+def stale_container_warning(targets: list[Path]) -> str | None:
+    """Are we about to install into a container left by an *uninstalled* Resolve?
+
+    A container outlives the app that created it — uninstalling Resolve leaves
+    the whole `~/Library/Containers/com.blackmagic-design.*` tree behind. Since
+    a container's existence is what makes us target it, the installer would
+    otherwise report a clean success on a machine with no Resolve at all, and
+    the user would go hunting through the Scripts menu of an app they do not
+    have (issue #104). Warn rather than refuse: we cannot enumerate every place
+    an app bundle might legitimately live, and being wrong in the refusing
+    direction blocks a working install.
+    """
+    if not any("Containers" in str(target) for target in targets):
+        return None
+    if installed_app_bundles():
+        return None
+    return (
+        "Installed into a sandbox container, but no DaVinci Resolve app bundle "
+        "was found on this machine. A container OUTLIVES the app that created "
+        "it, so this is what an uninstalled Resolve looks like — the files were "
+        "written, but nothing will ever read them. Checked: "
+        + ", ".join(_APP_BUNDLE_CANDIDATES)
+        + ". If Resolve is installed somewhere else, re-run with RESOLVE_APP "
+        "set to its .app bundle to silence this. If it is not installed, "
+        "install it first, then re-run."
+    )
 
 
 #: Resolve enumerates `.py` scripts in Workspace > Scripts only when it finds a
@@ -233,6 +296,8 @@ def install(*, probe_only: bool, port: int, rotate: bool) -> dict:
             launcher_path.write_text(launcher, encoding="utf-8")
             installed.append(str(launcher_path))
     result = {"installed": installed, "probe_only": probe_only, "python": python_preflight()}
+    stale = stale_container_warning(targets)
+    result["warnings"] = [stale] if stale else []
     if not probe_only:
         loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         result["config"] = {"path": str(CONFIG_PATH),
@@ -256,6 +321,11 @@ def main() -> int:
     if not result["python"]["resolve_will_list_python_scripts"]:
         print("!" * 72)
         print("WARNING: " + result["python"]["advice"])
+        print("!" * 72)
+        print()
+    for warning in result["warnings"]:
+        print("!" * 72)
+        print("WARNING: " + warning)
         print("!" * 72)
         print()
     print("Next:")

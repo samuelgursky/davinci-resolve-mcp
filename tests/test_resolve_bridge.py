@@ -573,17 +573,20 @@ class BridgeIntegrationTests(unittest.TestCase):
 
 
 class InstallerTargetTests(unittest.TestCase):
-    """Where the bridge gets installed — corrected against a real App Store build.
+    """Where the bridge gets installed — corrected against real App Store builds.
 
     A sandboxed container is a virtualized HOME, so Resolve's documented per-user
-    path applies *unchanged* beneath `<container>/Data/`. Two traps were hit for
-    real and are pinned here:
+    path applies *unchanged* beneath `<container>/Data/`. Three traps were hit
+    for real and are pinned here:
 
-    1. `<container>/Data/Library/Application Support/Fusion/Scripts/Utility`
-       exists and is pre-scaffolded — but it is Fusion's standalone tree, not
-       Resolve's, and Resolve does not scan it.
+    1. Which container tree Lite actually scans is not decidable from outside
+       Resolve: on one free 21.0.3.7 install the documented tree listed and on
+       another it listed nothing while the Fusion standalone tree worked
+       (issue #104). Both are targeted; the documented one goes first.
     2. Resolve does not create its own tree until a script is installed, so
        requiring the target to pre-exist skips the free edition entirely.
+    3. A container outlives the app that created it, so its existence is not
+       proof the edition is installed.
     """
 
     def setUp(self) -> None:
@@ -609,20 +612,98 @@ class InstallerTargetTests(unittest.TestCase):
         expected = container / "Data" / self.installer._SCRIPTS_SUFFIX
         self.assertIn(expected, targets, f"container skipped because its tree is absent: {targets}")
 
-    def test_the_fusion_standalone_tree_is_not_mistaken_for_resolves(self) -> None:
+    def test_both_container_trees_are_targeted_documented_one_first(self) -> None:
+        """Issue #104: the documented tree silently listed nothing on a real
+        free 21.0.3.7 App Store install while the Fusion standalone tree worked,
+        the exact opposite of the machine this installer was first measured on.
+        Neither is reliably detectable from outside Resolve, so install to both
+        rather than guess — but keep the documented path first, since that is
+        the one Blackmagic actually commits to."""
         import pathlib
         import tempfile
         from unittest import mock
 
         home = pathlib.Path(tempfile.mkdtemp(prefix="fake_home_"))
         container = home / "Library/Containers/com.blackmagic-design.DaVinciResolveLite"
-        # The decoy, pre-scaffolded exactly as a real install has it.
-        (container / "Data/Library/Application Support/Fusion/Scripts/Utility").mkdir(parents=True)
+        (container / "Data").mkdir(parents=True)
         with mock.patch.object(pathlib.Path, "home", staticmethod(lambda: home)):
             targets = self.installer.script_targets()
-        for target in targets:
-            if "Containers" in str(target):
-                self.assertIn("Blackmagic Design", str(target), f"decoy path selected: {target}")
+
+        documented = container / "Data" / self.installer._SCRIPTS_SUFFIX
+        fallback = container / "Data" / self.installer._SANDBOX_FALLBACK_SUFFIX
+        self.assertIn(documented, targets)
+        self.assertIn(fallback, targets, f"standalone tree not targeted: {targets}")
+        self.assertLess(
+            targets.index(documented), targets.index(fallback),
+            "the documented tree must be installed first",
+        )
+
+    def test_the_fusion_standalone_tree_is_only_targeted_inside_a_container(self) -> None:
+        """Outside a sandbox this really is Fusion's own tree and has nothing to
+        do with Resolve — the dual-target fix must not leak out of the
+        container."""
+        import pathlib
+        import tempfile
+        from unittest import mock
+
+        home = pathlib.Path(tempfile.mkdtemp(prefix="fake_home_"))
+        (home / self.installer._SANDBOX_FALLBACK_SUFFIX).mkdir(parents=True)
+        with mock.patch.object(pathlib.Path, "home", staticmethod(lambda: home)):
+            targets = self.installer.script_targets()
+        self.assertNotIn(
+            home / self.installer._SANDBOX_FALLBACK_SUFFIX, targets,
+            f"Fusion's standalone tree targeted outside a container: {targets}",
+        )
+
+    def test_a_container_with_no_app_bundle_warns_instead_of_reporting_success(self) -> None:
+        """Issue #104: uninstalling Resolve leaves the container behind, and the
+        container's existence is what makes us target it — so --probe-only
+        reported a clean success on a machine with no Resolve at all."""
+        import pathlib
+        from unittest import mock
+
+        targets = [pathlib.Path("/Users/x/Library/Containers/com.blackmagic-design.DaVinciResolveLite/Data/x")]
+        with mock.patch.object(self.installer, "installed_app_bundles", lambda: []):
+            warning = self.installer.stale_container_warning(targets)
+        self.assertIsNotNone(warning, "a stale container reported success")
+        self.assertIn("outlives", warning.lower())
+
+    def test_no_stale_warning_when_an_app_bundle_is_present(self) -> None:
+        import pathlib
+        from unittest import mock
+
+        targets = [pathlib.Path("/Users/x/Library/Containers/com.blackmagic-design.DaVinciResolveLite/Data/x")]
+        with mock.patch.object(
+            self.installer, "installed_app_bundles",
+            lambda: ["/Applications/DaVinci Resolve.app"],
+        ):
+            self.assertIsNone(self.installer.stale_container_warning(targets))
+
+    def test_no_stale_warning_without_container_targets(self) -> None:
+        """A normal install has no container in play; the app-bundle check is
+        specific to the sandbox case and must not fire on Studio."""
+        import pathlib
+        from unittest import mock
+
+        with mock.patch.object(self.installer, "installed_app_bundles", lambda: []):
+            self.assertIsNone(
+                self.installer.stale_container_warning(
+                    [pathlib.Path("/Library/Application Support/Blackmagic Design/x")]
+                )
+            )
+
+    def test_resolve_app_env_var_overrides_the_bundle_search(self) -> None:
+        """Consistent with scripts/doctor.py, which already honors RESOLVE_APP —
+        an install on an external volume must be able to silence the warning."""
+        import os
+        import tempfile
+        from unittest import mock
+
+        bundle = tempfile.mkdtemp(prefix="DaVinci Resolve.app")
+        with mock.patch.dict(os.environ, {"RESOLVE_APP": bundle}):
+            self.assertIn(bundle, self.installer.installed_app_bundles())
+        with mock.patch.dict(os.environ, {"RESOLVE_APP": "/nope/missing.app"}):
+            self.assertNotIn("/nope/missing.app", self.installer.installed_app_bundles())
 
     def test_non_resolve_blackmagic_containers_are_ignored(self) -> None:
         import pathlib
