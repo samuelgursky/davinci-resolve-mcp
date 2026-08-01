@@ -125,6 +125,7 @@ class Fixture:
         self.timeline: Any = None
         self.item: Any = None
         self.clip: Any = None
+        self.incumbent: Optional[str] = None
 
     def build(self) -> Dict[str, Any]:
         notes: Dict[str, Any] = {}
@@ -138,7 +139,8 @@ class Fixture:
             # SaveProject lives on ProjectManager, not Project — one of the
             # "methods live on objects you wouldn't expect" cases the api_truth
             # ledger exists for.
-            notes["incumbent_name"] = incumbent.GetName()
+            self.incumbent = incumbent.GetName()
+            notes["incumbent_name"] = self.incumbent
             notes["saved_incumbent"] = bool(self.pm.SaveProject())
         self.project = self.pm.CreateProject(self.name)
         notes["created_project"] = bool(self.project)
@@ -170,17 +172,32 @@ class Fixture:
         return notes
 
     def teardown(self) -> Dict[str, Any]:
+        """Hand the session back on a *named* project, never on the fallback.
+
+        Closing the scratch project drops Resolve onto a fresh, never-saved
+        `Untitled Project`. That project cannot be saved — `SaveProject()`
+        returns False for it — so the next close or switch raises a modal the
+        user has to dismiss by hand. This harness did that to a live GUI session:
+        it finished cleanly and left the application prompting.
+
+        Loading the incumbent *first* closes the scratch project (just saved, so
+        silent) and never rests on the fallback at all. Delete afterwards, when
+        nothing is holding it.
+        """
         notes: Dict[str, Any] = {}
         try:
             self.pm.SaveProject()
+            # CloseProject first: it releases the session lock, and switching
+            # away with LoadProject does not — measured, DeleteProject then
+            # returns False no matter how often it is retried.
             notes["closed"] = bool(self.pm.CloseProject(self.project))
+            # Then land on a named project, so the session is not left on the
+            # unsaveable `Untitled Project` fallback.
+            if self.incumbent and self.incumbent != self.name:
+                notes["restored_incumbent"] = bool(self.pm.LoadProject(self.incumbent))
         except Exception as exc:
             notes["close_error"] = repr(exc)
         try:
-            # DeleteProject has been observed to fail while the session still
-            # holds a lock on what it just closed. Recorded, not asserted: a
-            # leftover scratch project is a nuisance, a raised teardown is a lost
-            # run.
             notes["deleted"] = bool(self.pm.DeleteProject(self.name))
         except Exception as exc:
             notes["delete_error"] = repr(exc)

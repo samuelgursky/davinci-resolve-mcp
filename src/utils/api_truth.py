@@ -715,6 +715,24 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
+        "symbol": "ProjectManager.DeleteProject",
+        "object": "ProjectManager",
+        "signature": "(projectName) -> bool",
+        "reality": "Returns False for any project the session has loaded, until "
+                   "that project is released with CloseProject. Switching away "
+                   "with LoadProject does NOT release it — the delete then fails "
+                   "permanently and retrying never helps. After an explicit "
+                   "CloseProject the same delete succeeds on the first attempt.",
+        "recommended": "Teardown order is SaveProject -> CloseProject(scratch) -> "
+                       "LoadProject(some named project) -> DeleteProject(scratch). "
+                       "The LoadProject step is not optional either: CloseProject "
+                       "drops the session onto the never-saved 'Untitled Project' "
+                       "fallback, which cannot be saved, so the next close or "
+                       "switch raises a modal a human must clear.",
+        "tags": ["project", "lifecycle", "session-lock", "unreliable-return"],
+        "submit": "bug",
+    },
+    {
         "symbol": "Resolve.GetCurrentPage",
         "object": "Resolve",
         "signature": "() -> string",

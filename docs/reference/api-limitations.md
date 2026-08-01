@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 21 missing capabilities, 17 bugs / unreliable behaviors.
+**Totals:** 21 missing capabilities, 18 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -320,6 +320,14 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Returns False for the default, never-saved project named 'Untitled Project' — it has no location to save to, and there is no SaveProjectAs to give it one. Returns True on any named project. This is the one case where the failure matters: in the GUI, the following LoadProject/CloseProject then raises a 'save changes?' modal that no script can dismiss, so the standard 'save before switching' defence fails exactly when it is needed. Headless returns the same False and switches anyway, because there is no dialog to raise.
 - **Workaround / current handling:** Check the return. If it is False, do not switch projects in a GUI session — the switch will block on a dialog. Either run headless (resolve_control runtime_mode / launch headless=true), or have the user name and save the project first.
 - **Tags:** project, modal, headless, silent-failure, unreliable-return
+
+### ProjectManager.DeleteProject
+
+- **Object:** `ProjectManager`
+- **Signature:** `(projectName) -> bool`
+- **Behavior:** Returns False for any project the session has loaded, until that project is released with CloseProject. Switching away with LoadProject does NOT release it — the delete then fails permanently and retrying never helps. After an explicit CloseProject the same delete succeeds on the first attempt.
+- **Workaround / current handling:** Teardown order is SaveProject -> CloseProject(scratch) -> LoadProject(some named project) -> DeleteProject(scratch). The LoadProject step is not optional either: CloseProject drops the session onto the never-saved 'Untitled Project' fallback, which cannot be saved, so the next close or switch raises a modal a human must clear.
+- **Tags:** project, lifecycle, session-lock, unreliable-return
 
 ### GalleryStillAlbum.ExportStills
 
