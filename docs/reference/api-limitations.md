@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 20 missing capabilities, 13 bugs / unreliable behaviors.
+**Totals:** 20 missing capabilities, 14 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -229,6 +229,13 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Returns False (no deletion) when the target project is, or recently was, the current project, and is flaky on the first attempt — so a single bool() call leaves the project undeleted with no useful error.
 - **Workaround / current handling:** Load/close away from the target first, then retry; use src/utils/project_cleanup.py:delete_project_safely.
 - **Tags:** unreliable-return, project, flaky
+
+### TimelineItem.AddFusionComp / LoadFusionCompByName
+
+- **Object:** `TimelineItem (media-backed clip)`
+- **Behavior:** A Fusion composition created on a media clip through the API is never applied at render. AddFusionComp() returns the comp, AddTool/Connect/SetInput all succeed, and the whole graph reads back correctly (GetCompCount 1, MediaOut1.Input wired to the new tool, StyledText returning the value just set) — but the rendered output is byte-for-byte the untouched source media. Verified live on Studio 19.1.3.7 with the strongest form of the test: MediaOut1 fed ONLY by a Text+, with no path from MediaIn at all, still rendered the unmodified clip. LoadFusionCompByName on the sole comp does not activate it either. Contrast InsertFusionTitleIntoTimeline, whose comp DOES render — text set via SetInput('StyledText') appears in the output — so this is specific to comps attached to media-backed clips, not to Fusion through the API generally.
+- **Workaround / current handling:** For text or effects over picture, insert a Fusion title/generator as its own timeline clip and set its Text+ (fusion_comp set_text_plus), rather than attaching a comp to the media clip. Note the destination track cannot be chosen from the API (see the Track Selector entry), so overlaying onto an existing clip's track is not currently reachable end-to-end. Building the comp in the Fusion page UI works; only the API-created comp is ignored.
+- **Tags:** fusion, silent-failure, render
 
 ### Composition.Paste
 

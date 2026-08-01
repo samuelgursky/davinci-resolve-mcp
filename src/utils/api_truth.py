@@ -108,6 +108,34 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
+        "symbol": "TimelineItem.AddFusionComp / LoadFusionCompByName",
+        "object": "TimelineItem (media-backed clip)",
+        "reality": "A Fusion composition created on a media clip through the API "
+                   "is never applied at render. AddFusionComp() returns the comp, "
+                   "AddTool/Connect/SetInput all succeed, and the whole graph "
+                   "reads back correctly (GetCompCount 1, MediaOut1.Input wired "
+                   "to the new tool, StyledText returning the value just set) — "
+                   "but the rendered output is byte-for-byte the untouched source "
+                   "media. Verified live on Studio 19.1.3.7 with the strongest "
+                   "form of the test: MediaOut1 fed ONLY by a Text+, with no path "
+                   "from MediaIn at all, still rendered the unmodified clip. "
+                   "LoadFusionCompByName on the sole comp does not activate it "
+                   "either. Contrast InsertFusionTitleIntoTimeline, whose comp "
+                   "DOES render — text set via SetInput('StyledText') appears in "
+                   "the output — so this is specific to comps attached to "
+                   "media-backed clips, not to Fusion through the API generally.",
+        "recommended": "For text or effects over picture, insert a Fusion title/"
+                       "generator as its own timeline clip and set its Text+ "
+                       "(fusion_comp set_text_plus), rather than attaching a comp "
+                       "to the media clip. Note the destination track cannot be "
+                       "chosen from the API (see the Track Selector entry), so "
+                       "overlaying onto an existing clip's track is not currently "
+                       "reachable end-to-end. Building the comp in the Fusion page "
+                       "UI works; only the API-created comp is ignored.",
+        "tags": ["fusion", "silent-failure", "render"],
+        "submit": "bug",
+    },
+    {
         "symbol": "Composition.Paste",
         "object": "Fusion Composition",
         "reality": "Passing tool.SaveSettings()'s in-memory table to Paste() / "
