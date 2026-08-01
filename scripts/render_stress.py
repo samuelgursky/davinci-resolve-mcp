@@ -74,7 +74,16 @@ DEFAULT_API = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/De
 # ── connection ───────────────────────────────────────────────────────────────
 
 
-def connect(timeout: float = 120.0) -> Optional[Any]:
+def connect(timeout: float = 420.0) -> Optional[Any]:
+    """Wait for a scriptable Resolve.
+
+    The timeout is generous on purpose. A clean headless boot is scriptable in
+    under 3 seconds, but a boot *after an unclean shutdown* took 2 minutes 5
+    seconds to start its script server — measured, after force-killing a wedged
+    instance. A 90-second wait concluded "headless will not start" fifteen
+    seconds before it did, which is exactly the false negative that leads a
+    supervisor to launch a second instance on top of a starting one.
+    """
     os.environ.pop("DAVINCI_RESOLVE_BRIDGE", None)
     api = os.environ.get("RESOLVE_SCRIPT_API", DEFAULT_API)
     modules = str(Path(api) / "Modules")
@@ -244,13 +253,34 @@ class StressRun:
         # Repeat the clip until the timeline reaches the requested duration. The
         # decode path is per-frame, so N copies of a short clip stresses it the
         # same as one long clip while keeping the scratch bounded.
+        #
+        # NOT via CreateTimelineFromClips([clip] * n): that call **deduplicates
+        # repeated references to the same MediaPoolItem**. Passing one clip 15
+        # times built a 96-frame timeline — one copy — and reported no error, so
+        # every "60 second" render in the first run was actually 4 seconds. The
+        # harness looked like it was working and was testing almost nothing.
+        # AppendToTimeline with explicit clipInfo dicts appends each instance.
         frames = int(clip.GetClipProperty("Frames") or 0)
         fps = float(clip.GetClipProperty("FPS") or self.args.fps)
         want = max(1, int(round(self.args.duration * fps / max(frames, 1))))
-        timeline = pool.CreateTimelineFromClips("STRESS_TL", [clip] * want)
+        timeline = pool.CreateEmptyTimeline("STRESS_TL")
         if timeline is None:
-            raise RuntimeError("could not build the stress timeline")
+            raise RuntimeError("could not create the stress timeline")
         project.SetCurrentTimeline(timeline)
+        # endFrame is EXCLUSIVE-adjacent in this API: the last frame index is
+        # frames - 1, and passing `frames` appends nothing.
+        appended = pool.AppendToTimeline(
+            [{"mediaPoolItem": clip, "startFrame": 0, "endFrame": max(frames - 1, 0)}] * want
+        )
+        if not appended:
+            raise RuntimeError("AppendToTimeline appended nothing")
+        built = timeline.GetEndFrame() - timeline.GetStartFrame()
+        # Assert the timeline is the length that was asked for. The whole failure
+        # above was a silent short-build that no check would have caught.
+        if built < want * max(frames - 1, 1) * 0.9:
+            raise RuntimeError(
+                f"timeline short-built: wanted ~{want * frames} frames, got {built}"
+            )
 
         codecs = project.GetRenderCodecs(self.args.format) or {}
         # GetRenderCodecs returns {description: id} and rejects the description.
@@ -452,9 +482,9 @@ def main() -> int:
         return 4
 
     observed = rr.runtime_mode()
-    print(f"stressing: headless={observed['headless']} pid={run.pid}")
+    print(f"stressing: headless={observed['headless']} pid={run.pid}", flush=True)
     setup = run.build_project()
-    print(json.dumps(setup, indent=2))
+    print(json.dumps(setup, indent=2), flush=True)
 
     for index in range(1, args.iterations + 1):
         record = run.render_once(index)
@@ -462,12 +492,12 @@ def main() -> int:
         flag = " CRASH" if record.get("crash_captured") else ""
         print(f"  [{index:3d}/{args.iterations}] {record.get('outcome'):16} "
               f"{record.get('elapsed_seconds')}s  peak_rss={record.get('peak_rss_mb')}MB  "
-              f"bytes={record.get('output_bytes')}{flag}")
+              f"bytes={record.get('output_bytes')}{flag}", flush=True)
         if record["outcome"] == "resolve_died":
             if not run.recover():
                 print("  Resolve died and was not recovered; stopping.")
                 break
-            print("  recovered; continuing")
+            print("  recovered; continuing", flush=True)
 
     report = {
         "metadata": {

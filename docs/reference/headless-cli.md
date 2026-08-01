@@ -73,9 +73,43 @@ conform, analysis and short renders. Qualify it on your own footage and codecs
 before trusting it with a long-form or professional-container delivery, and keep
 a GUI fallback for those.**
 
-Settling it needs the actual job run both ways with the log kept — one
-DCP→ProRes MXF render headless, one in the GUI, same source and preset,
-`ResolveDebug.txt` preserved from each. Anything short of that is inference.
+### Stressing it without production assets
+
+`scripts/render_stress.py` closes most of that gap before real footage is
+available. It renders repeatedly in one session and watches for the things that
+distinguish *causes* rather than merely recording that something died:
+
+- `crash_archive.txt` is bracketed per iteration, so a stack is attached to the
+  render that produced it. Resolve appends every crash to one growing file with
+  no timestamps, so without the bracket "did this render crash" is guesswork.
+- The Resolve PID is watched from outside, so a hard exit is a recorded result
+  instead of a hung harness.
+- Resident memory is sampled through each render. A leak and a teardown bug both
+  present as "it crashes eventually"; the RSS curve separates them.
+- `--restart-on-crash` continues past the first death, because failing on
+  iteration 2 and failing on iteration 40 are different findings.
+
+The synthetic source is JPEG 2000 in MXF OP1A at 12-bit 1998×1080, written by
+ffmpeg. Resolve identifies it as `JPEG 2000 / MXF OP1A / 12 bit` — the decode
+path a DCP video track file takes. `--source` swaps in real media later with
+nothing else changing.
+
+One thing to get right about the target: **this build offers ProRes in no MXF
+flavour.** `GetRenderCodecs` returns ProRes only under `mov`; neither
+`mxf_op1a` (76 codecs) nor `mxf` (47) lists it. So "MXF to ProRes" means
+J2K-MXF in, ProRes-QuickTime out, and a harness that tried to render ProRes into
+MXF would fail for that reason rather than for any reason worth reporting.
+
+```bash
+python scripts/render_stress.py --mode headless --iterations 20 --duration 60 \
+    --restart-on-crash --report headless.json
+python scripts/render_stress.py --mode gui --iterations 20 --duration 60 \
+    --restart-on-crash --report gui.json
+```
+
+Confirming a crash on the real job still needs the real job — same source and
+preset, both modes, `ResolveDebug.txt` kept from each. The harness narrows where
+to look; it does not replace that.
 
 ## Verified
 
@@ -163,6 +197,47 @@ the `resolve` handle to decide whether it has a UI is guessing.
 The only reliable signal is the process's own argument vector — `-nogui` in the
 command line of the running `…/Contents/MacOS/Resolve`. That is what
 `src/utils/resolve_runtime.py` reads.
+
+### The wedge: a Resolve with no database attached
+
+The most dangerous failure state found so far, because every cheap health check
+passes through it.
+
+After an unclean shutdown, a headless instance came back up **attached to no
+project database**. It accepted scripting connections. `GetProductName`,
+`GetVersionString`, `GetCurrentPage` and `GetCurrentProject` all answered
+normally. And yet:
+
+- `CreateProject` and `LoadProject` returned `False` — indefinitely, not flakily.
+- `SaveProject` returned `None`.
+- Some calls never returned at all: the client sat in
+  `Fusion::RemoteApp::WaitPkt` forever while a *different* client got instant
+  answers from the same instance.
+- It did not recover. Only a restart cleared it.
+
+**The tell is `ProjectManager.GetCurrentDatabase()` returning `None`.** Healthy
+looks like `{"DbType": "Disk", "DbName": "Local Database"}`.
+`resolve_control(action="runtime_mode")` reports this as `database_attached`,
+and flips its guidance to `WEDGED:` when it is false. Check it before doing work
+in an unattended session — a liveness check that only proves the API answers
+will sail straight past this.
+
+Two related observations from the same episode:
+
+- **Slow startup is not a hang.** That instance took **2 minutes 5 seconds** to
+  start its script server, against under 3 seconds for a clean boot, sitting at
+  0% CPU in an idle Qt run loop the whole time. A 90-second readiness timeout
+  gave up 15 seconds early. Allow at least 5 minutes before declaring a launch
+  failed, and never start a second instance on a timeout — that converts a slow
+  start into singleton contention.
+- **A stale database entry costs startup time every boot.** This machine's
+  `~/Library/Preferences/Blackmagic Design/DaVinci Resolve/dblist.conf` lists a
+  disk database whose path no longer exists, and each start logs
+  `Cannot connect to <name> database: path not found`. Worth pruning on any
+  machine that runs Resolve unattended.
+
+- **Killing a scripting client mid-render can wedge the instance it was driving.**
+  Prefer letting a render finish, or `Quit()`, over killing the client.
 
 ### Singleton rules
 

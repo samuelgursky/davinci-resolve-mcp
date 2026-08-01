@@ -101,10 +101,18 @@ API_TRUTH: List[Dict[str, Any]] = [
         "reality": "Returns False (no deletion) when the target project is, or "
                    "recently was, the current project, and is flaky on the first "
                    "attempt — so a single bool() call leaves the project undeleted "
-                   "with no useful error.",
-        "recommended": "Load/close away from the target first, then retry; use "
-                       "src/utils/project_cleanup.py:delete_project_safely.",
-        "tags": ["unreliable-return", "project", "flaky"],
+                   "with no useful error. The release mechanism is specifically "
+                   "CloseProject: switching away with LoadProject does NOT release "
+                   "the session's lock, and the delete then fails permanently — "
+                   "measured, six retries a second apart all returned False, "
+                   "while the same delete after a CloseProject succeeded on the "
+                   "first attempt.",
+        "recommended": "CloseProject the target FIRST (that is what releases it), "
+                       "then LoadProject some named project so the session is not "
+                       "left on the unsaveable 'Untitled Project' fallback, then "
+                       "delete. Use src/utils/project_cleanup.py:delete_project_safely, "
+                       "which does exactly that.",
+        "tags": ["unreliable-return", "project", "flaky", "session-lock"],
         "submit": "bug",
     },
     {
@@ -121,6 +129,31 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "report it as set on the strength of the call alone.",
         "tags": ["project-settings", "silent-failure", "timeline"],
         "submit": "missing",
+    },
+    {
+        "symbol": "ProjectManager.GetCurrentDatabase",
+        "object": "ProjectManager",
+        "signature": "() -> {DbType, DbName}",
+        "reality": "Returns None when Resolve has come up without attaching to a "
+                   "project database — a state it reaches after an unclean "
+                   "shutdown, and does not recover from on its own. In that state "
+                   "the application looks entirely healthy: it accepts scripting "
+                   "connections, and GetProductName, GetVersionString, "
+                   "GetCurrentPage and GetCurrentProject all answer normally. But "
+                   "CreateProject and LoadProject return False indefinitely, "
+                   "SaveProject returns None, and some calls block forever in "
+                   "the scripting transport rather than returning at all. "
+                   "Observed headless on Studio 19.1.3.7 after force-killing a "
+                   "wedged instance; the replacement took 2m05s to become "
+                   "scriptable and came up with no database.",
+        "recommended": "Treat a non-None GetCurrentDatabase() as the liveness "
+                       "check, not a successful connection — every cheaper check "
+                       "passes in the wedged state. `resolve_control "
+                       "runtime_mode` reports `database_attached` for exactly "
+                       "this. There is no repair: quit and restart Resolve.",
+        "tags": ["project", "database", "headless", "silent-failure", "startup"],
+        "mitigation": ["runtime_mode"],
+        "submit": "bug",
     },
     {
         "symbol": "MediaPool.CreateTimelineFromClips",
@@ -712,24 +745,6 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "launch headless=true), or have the user name and save the "
                        "project first.",
         "tags": ["project", "modal", "headless", "silent-failure", "unreliable-return"],
-        "submit": "bug",
-    },
-    {
-        "symbol": "ProjectManager.DeleteProject",
-        "object": "ProjectManager",
-        "signature": "(projectName) -> bool",
-        "reality": "Returns False for any project the session has loaded, until "
-                   "that project is released with CloseProject. Switching away "
-                   "with LoadProject does NOT release it — the delete then fails "
-                   "permanently and retrying never helps. After an explicit "
-                   "CloseProject the same delete succeeds on the first attempt.",
-        "recommended": "Teardown order is SaveProject -> CloseProject(scratch) -> "
-                       "LoadProject(some named project) -> DeleteProject(scratch). "
-                       "The LoadProject step is not optional either: CloseProject "
-                       "drops the session onto the never-saved 'Untitled Project' "
-                       "fallback, which cannot be saved, so the next close or "
-                       "switch raises a modal a human must clear.",
-        "tags": ["project", "lifecycle", "session-lock", "unreliable-return"],
         "submit": "bug",
     },
     {

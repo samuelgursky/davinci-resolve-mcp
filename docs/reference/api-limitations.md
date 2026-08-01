@@ -233,9 +233,17 @@ values, or automation-hostile modal prompts.
 
 - **Object:** `ProjectManager`
 - **Signature:** `(projectName) -> bool`
-- **Behavior:** Returns False (no deletion) when the target project is, or recently was, the current project, and is flaky on the first attempt — so a single bool() call leaves the project undeleted with no useful error.
-- **Workaround / current handling:** Load/close away from the target first, then retry; use src/utils/project_cleanup.py:delete_project_safely.
-- **Tags:** unreliable-return, project, flaky
+- **Behavior:** Returns False (no deletion) when the target project is, or recently was, the current project, and is flaky on the first attempt — so a single bool() call leaves the project undeleted with no useful error. The release mechanism is specifically CloseProject: switching away with LoadProject does NOT release the session's lock, and the delete then fails permanently — measured, six retries a second apart all returned False, while the same delete after a CloseProject succeeded on the first attempt.
+- **Workaround / current handling:** CloseProject the target FIRST (that is what releases it), then LoadProject some named project so the session is not left on the unsaveable 'Untitled Project' fallback, then delete. Use src/utils/project_cleanup.py:delete_project_safely, which does exactly that.
+- **Tags:** unreliable-return, project, flaky, session-lock
+
+### ProjectManager.GetCurrentDatabase
+
+- **Object:** `ProjectManager`
+- **Signature:** `() -> {DbType, DbName}`
+- **Behavior:** Returns None when Resolve has come up without attaching to a project database — a state it reaches after an unclean shutdown, and does not recover from on its own. In that state the application looks entirely healthy: it accepts scripting connections, and GetProductName, GetVersionString, GetCurrentPage and GetCurrentProject all answer normally. But CreateProject and LoadProject return False indefinitely, SaveProject returns None, and some calls block forever in the scripting transport rather than returning at all. Observed headless on Studio 19.1.3.7 after force-killing a wedged instance; the replacement took 2m05s to become scriptable and came up with no database.
+- **Workaround / current handling:** Treat a non-None GetCurrentDatabase() as the liveness check, not a successful connection — every cheaper check passes in the wedged state. `resolve_control runtime_mode` reports `database_attached` for exactly this. There is no repair: quit and restart Resolve.
+- **Tags:** project, database, headless, silent-failure, startup
 
 ### MediaPool.CreateTimelineFromClips
 
@@ -320,14 +328,6 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Returns False for the default, never-saved project named 'Untitled Project' — it has no location to save to, and there is no SaveProjectAs to give it one. Returns True on any named project. This is the one case where the failure matters: in the GUI, the following LoadProject/CloseProject then raises a 'save changes?' modal that no script can dismiss, so the standard 'save before switching' defence fails exactly when it is needed. Headless returns the same False and switches anyway, because there is no dialog to raise.
 - **Workaround / current handling:** Check the return. If it is False, do not switch projects in a GUI session — the switch will block on a dialog. Either run headless (resolve_control runtime_mode / launch headless=true), or have the user name and save the project first.
 - **Tags:** project, modal, headless, silent-failure, unreliable-return
-
-### ProjectManager.DeleteProject
-
-- **Object:** `ProjectManager`
-- **Signature:** `(projectName) -> bool`
-- **Behavior:** Returns False for any project the session has loaded, until that project is released with CloseProject. Switching away with LoadProject does NOT release it — the delete then fails permanently and retrying never helps. After an explicit CloseProject the same delete succeeds on the first attempt.
-- **Workaround / current handling:** Teardown order is SaveProject -> CloseProject(scratch) -> LoadProject(some named project) -> DeleteProject(scratch). The LoadProject step is not optional either: CloseProject drops the session onto the never-saved 'Untitled Project' fallback, which cannot be saved, so the next close or switch raises a modal a human must clear.
-- **Tags:** project, lifecycle, session-lock, unreliable-return
 
 ### GalleryStillAlbum.ExportStills
 

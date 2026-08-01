@@ -13158,7 +13158,30 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     # runtime_mode reads the operating system, not Resolve, so it answers even
     # when nothing is running — which is exactly when an agent needs it.
     if action == "runtime_mode":
-        return _ok(**_resolve_runtime.describe())
+        payload = _resolve_runtime.describe()
+        # If something IS running, add the one reading that distinguishes a
+        # healthy instance from a wedged one. A Resolve can come up attached to
+        # NO database: it answers GetProductName, GetVersionString and
+        # GetCurrentPage normally, so every liveness check passes, while
+        # CreateProject and LoadProject return False forever and SaveProject
+        # returns None. Observed after an unclean shutdown, and it does not
+        # recover on its own — only a restart clears it.
+        if payload.get("running"):
+            try:
+                r = _try_connect() and resolve
+                database = r.GetProjectManager().GetCurrentDatabase() if r else None
+            except Exception:
+                database = None
+            payload["database"] = database
+            payload["database_attached"] = bool(database)
+            if payload.get("determinable") and not database:
+                payload["guidance"] = (
+                    "WEDGED: Resolve is running and answers version queries, but no "
+                    "database is attached — CreateProject/LoadProject will return "
+                    "False indefinitely and SaveProject returns None. This does not "
+                    "recover; quit and restart Resolve before doing any work."
+                ) + " || " + payload["guidance"]
+        return _ok(**payload)
 
     # launch works even when Resolve is not connected
     if action == "launch":

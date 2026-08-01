@@ -42,17 +42,25 @@ def delete_project_safely(
         except Exception:
             current = None
         if current == name:
-            switched = False
+            # CloseProject ALWAYS, and first. It is what releases the session's
+            # lock on the project; switching away with LoadProject does not, and
+            # DeleteProject then returns False permanently — retries never help.
+            # Measured on Studio 19.1.3.7: after a LoadProject-away, six retries
+            # a second apart all failed; after a CloseProject the same delete
+            # succeeded on the first attempt.
+            try:
+                project = pm.GetCurrentProject()
+                if project is not None:
+                    pm.CloseProject(project)
+            except Exception:
+                pass
+            # Then land on a named project if one was named. CloseProject drops
+            # the session onto a fresh, never-saved "Untitled Project" that
+            # cannot be saved, so the next close or switch raises a modal no
+            # script can dismiss. That is a wedged application, not a tidy-up.
             if switch_to and switch_to != name:
                 try:
-                    switched = bool(pm.LoadProject(switch_to))
-                except Exception:
-                    switched = False
-            if not switched:
-                try:
-                    project = pm.GetCurrentProject()
-                    if project is not None:
-                        pm.CloseProject(project)
+                    pm.LoadProject(switch_to)
                 except Exception:
                     pass
 

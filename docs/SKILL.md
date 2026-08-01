@@ -252,7 +252,14 @@ which is exactly the project that triggers the prompt. Headless returns the same
 Rules:
 
 - **Check the mode before any project switch.** `resolve_control(action="runtime_mode")`
-  → `{running, headless, instances, guidance}`. It needs no connection.
+  → `{running, headless, instances, database_attached, guidance}`. It needs no
+  connection.
+- **`database_attached: false` means the instance is WEDGED — stop and restart it.**
+  Resolve can come up with no project database attached. It accepts connections
+  and answers product, version, page and current-project queries normally, so
+  every ordinary liveness check passes, while `CreateProject`/`LoadProject`
+  return False forever, `SaveProject` returns None, and some calls never return
+  at all. It does not recover on its own. Do not retry; quit and relaunch.
 - **`headless` may be `null`.** That means "cannot be determined", not "has a UI".
   Treat `null` like `false` — take the careful path — but do not report it as fact.
 - **There is no API tell.** A headless instance returns a real page from

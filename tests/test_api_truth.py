@@ -1,5 +1,6 @@
 """Tests for the behaviorally-verified API truth ledger and its lookup action."""
 import unittest
+from collections import Counter
 
 import src.server as s
 from src.utils.api_truth import lookup_api_truth, API_TRUTH
@@ -55,6 +56,21 @@ class LookupTest(unittest.TestCase):
             self.assertIn("reality", e)
             self.assertIn("recommended", e)
             self.assertIsInstance(e.get("tags", []), list)
+
+    def test_no_duplicate_symbols(self):
+        """One symbol, one entry.
+
+        A second entry for a symbol that already had one is easy to add — the
+        ledger is long, and a new finding about a call feels like a new fact
+        rather than an amendment to an old one. It is worse than untidy:
+        `lookup_api_truth` returns both, so an agent reads two accounts of the
+        same call and has no way to tell which is current. Nearly shipped for
+        `ProjectManager.DeleteProject`, where the right move was to sharpen the
+        existing entry with the newly measured mechanism.
+        """
+        counts = Counter(e["symbol"] for e in API_TRUTH)
+        duplicates = sorted(symbol for symbol, n in counts.items() if n > 1)
+        self.assertEqual(duplicates, [], f"duplicate api_truth symbols: {duplicates}")
 
 
 class ApiTruthActionTest(unittest.TestCase):
