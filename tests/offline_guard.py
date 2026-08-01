@@ -35,13 +35,54 @@ _INSTALLED_FLAG = "_offline_guard_installed"
 #: The originals, kept for `uninstall`.
 _originals: dict = {}
 
+#: Set when `src.server` could not be imported because a third-party runtime
+#: dependency is absent. Read by tests that need to tell "guard installed" apart
+#: from "there was nothing to guard".
+SKIPPED_REASON: str | None = None
+
+
+def _import_server():
+    """Import `src.server`, or return None when its runtime deps are absent.
+
+    The static guard tests are pure AST readers and deliberately run without the
+    runtime stack installed — the publish workflow installs only pyflakes. But
+    `tests/__init__.py` calls `install()` before *any* test module loads, so an
+    ImportError here does not fail one test, it fails the whole run: six module
+    arguments produced six `_FailedTest` errors and took the npm publish down
+    with them.
+
+    Narrowly scoped on purpose. A missing third-party package means there is no
+    live Resolve entry point to neuter, so the guard is vacuously satisfied and
+    skipping is honest. A failure originating inside `src/` is a real breakage
+    and still raises — swallowing that would hide exactly the class of bug the
+    static guards exist to catch.
+    """
+    global SKIPPED_REASON
+    try:
+        from src import server
+    except ModuleNotFoundError as exc:
+        missing = (exc.name or "").split(".")[0]
+        if missing in ("src", "tests", ""):
+            raise
+        SKIPPED_REASON = (
+            f"src.server not importable: no module named {missing!r}. The "
+            "offline guard has nothing to swap; this is expected when running "
+            "the static guards without the runtime stack installed."
+        )
+        return None
+    SKIPPED_REASON = None
+    return server
+
 
 def install() -> bool:
     """Swap the live-Resolve entry points for offline stand-ins.
 
-    Returns True if this call did the swap, False if it was already in place.
+    Returns True if this call did the swap, False if it was already in place or
+    there was nothing to swap (see `_import_server`).
     """
-    from src import server
+    server = _import_server()
+    if server is None:
+        return False
 
     if getattr(server, _INSTALLED_FLAG, False):
         return False
@@ -88,7 +129,9 @@ def install() -> bool:
 
 def uninstall() -> None:
     """Restore the originals. Safe to call when nothing was installed."""
-    from src import server
+    server = _import_server()
+    if server is None:
+        return
 
     if not getattr(server, _INSTALLED_FLAG, False):
         return
@@ -107,6 +150,8 @@ def clear_cached_handle() -> None:
     attribute is truthy), so a test that installs one leaves it cached for every
     test after it, which then never reaches the code it meant to exercise.
     """
-    from src import server
+    server = _import_server()
+    if server is None:
+        return
 
     server.resolve = None
