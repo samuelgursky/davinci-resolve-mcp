@@ -218,6 +218,50 @@ respect this hint pass it as `tool_choice={type:"tool", name:"media_analysis"}`
 on the next API turn, hard-locking the agent into the correct next call. Hosts
 that don't recognize the field ignore it — the flow is unchanged for them.
 
+## Headless Resolve (`-nogui`)
+
+Resolve runs without a UI, and **it is the safer mode for agent work**. Measured
+across 238 paired observations on Studio 19.1.3.7 (see
+`docs/reference/headless-cli.md` and the regenerable
+`docs/reference/headless-capability-matrix.md`): **zero** capabilities work with
+a UI and fail without one. Pages, render-to-disk, AAF/EDL/XML/DRT/OTIO export,
+`ExportCurrentFrameAsStill`, Fusion comps, colour groups, layout presets and all
+ordinary editorial behave identically.
+
+The difference runs the other way, and it is the one that matters to an agent:
+
+**A GUI Resolve can raise a modal dialog that no script can dismiss. Headless
+cannot.** The common trigger is switching projects: `LoadProject` and
+`CloseProject` close the outgoing project, and if it has unsaved changes the GUI
+prompts. Worse, the obvious defence fails — `ProjectManager.SaveProject()`
+returns `False` for the default never-saved project named `Untitled Project`,
+which is exactly the project that triggers the prompt. Headless returns the same
+`False` and switches anyway.
+
+Rules:
+
+- **Check the mode before any project switch.** `resolve_control(action="runtime_mode")`
+  → `{running, headless, instances, guidance}`. It needs no connection.
+- **`headless` may be `null`.** That means "cannot be determined", not "has a UI".
+  Treat `null` like `false` — take the careful path — but do not report it as fact.
+- **There is no API tell.** A headless instance returns a real page from
+  `GetCurrentPage()` and identical product/version strings. Anything that
+  inspects the `resolve` handle to guess the mode is guessing. `runtime_mode`
+  reads the process argv, which is the only place `-nogui` appears.
+- **Launching:** `resolve_control(action="launch", params={"headless": true})`,
+  or set `DAVINCI_RESOLVE_HEADLESS=1` to make auto-launch headless. Launching
+  the other mode while an instance is already running returns
+  `RESOLVE_MODE_CONFLICT` rather than starting a second one — two Resolves fight
+  the singleton and have been observed to crash-loop rather than fail cleanly.
+- **`instances` > 1 is a fault to report**, not a state to work around. Check for
+  a render node before starting anything.
+- Teardown is `resolve_control(action="quit")`; it discards the open project
+  without prompting, which is what a batch process wants.
+
+The one thing headless genuinely cannot do is anything that needs a *visible
+panel* — `ExportStills` being the known case, and it fails in a panel-closed GUI
+too.
+
 ## Local Control Panel
 
 If the user asks to open, launch, or inspect the Resolve MCP control panel, run
@@ -1850,7 +1894,9 @@ timeline item returns `False` in Resolve. Use `get_node_graph` without a
 
 **Gallery export requires the Gallery panel visible** — `ExportStills` only works
 if the Gallery panel is open in the Resolve UI on the Color page. Instruct the
-user to open it via Workspace menu if export fails.
+user to open it via Workspace menu if export fails. Measured to fail in *both*
+GUI (panel closed) and headless sessions, so a failure is not a reason to switch
+modes. For pixels use `Project.ExportCurrentFrameAsStill`, which works in both.
 
 **Python version** — the only hard requirement is Python **3.10+** (the MCP SDK
 floor). There is no upper cap: 3.13/3.14 are accepted, and Python 3.14 is verified

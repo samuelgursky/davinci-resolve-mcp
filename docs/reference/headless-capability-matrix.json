@@ -1,0 +1,1301 @@
+{
+  "gui_metadata": {
+    "label": "gui",
+    "recorded_at": "2026-08-01T19:48:27+00:00",
+    "version": "19.1.3.7",
+    "product": "DaVinci Resolve Studio",
+    "process_argv": [
+      "95215",
+      "/Applications/DaVinci",
+      "Resolve/DaVinci",
+      "Resolve.app/Contents/MacOS/Resolve"
+    ],
+    "nogui_in_argv": false,
+    "connect_seconds": 0.05,
+    "surface_methods": 112,
+    "elapsed_seconds": 164.29
+  },
+  "headless_metadata": {
+    "label": "headless",
+    "recorded_at": "2026-08-01T19:52:03+00:00",
+    "version": "19.1.3.7",
+    "product": "DaVinci Resolve Studio",
+    "process_argv": [
+      "6853",
+      "/Applications/DaVinci",
+      "Resolve/DaVinci",
+      "Resolve.app/Contents/MacOS/Resolve",
+      "-nogui"
+    ],
+    "nogui_in_argv": true,
+    "connect_seconds": 0.04,
+    "surface_methods": 112,
+    "elapsed_seconds": 510.75
+  },
+  "counts": {
+    "parity": 233,
+    "headless_degraded": 0,
+    "gui_degraded": 0,
+    "both_failed": 4,
+    "divergent": 1,
+    "untested": 0
+  },
+  "findings": [
+    {
+      "name": "add_color_group",
+      "verdict": "parity",
+      "key": "color::add_color_group"
+    },
+    {
+      "name": "assign_to_group",
+      "verdict": "parity",
+      "key": "color::assign_to_group"
+    },
+    {
+      "name": "delete_color_group",
+      "verdict": "parity",
+      "key": "color::delete_color_group"
+    },
+    {
+      "name": "node_graph",
+      "verdict": "parity",
+      "key": "color::node_graph"
+    },
+    {
+      "name": "num_nodes",
+      "verdict": "parity",
+      "key": "color::num_nodes"
+    },
+    {
+      "name": "read_node_label",
+      "verdict": "parity",
+      "key": "color::read_node_label"
+    },
+    {
+      "name": "read_node_lut",
+      "verdict": "parity",
+      "key": "color::read_node_lut"
+    },
+    {
+      "name": "set_node_enabled",
+      "verdict": "parity",
+      "key": "color::set_node_enabled"
+    },
+    {
+      "name": "tools_in_node",
+      "verdict": "parity",
+      "key": "color::tools_in_node"
+    },
+    {
+      "name": "created_project",
+      "verdict": "parity",
+      "key": "fixture::created_project"
+    },
+    {
+      "name": "created_timeline",
+      "verdict": "parity",
+      "key": "fixture::created_timeline"
+    },
+    {
+      "name": "imported_clips",
+      "verdict": "parity",
+      "key": "fixture::imported_clips"
+    },
+    {
+      "name": "incumbent_name",
+      "verdict": "parity",
+      "key": "fixture::incumbent_name"
+    },
+    {
+      "name": "loaded_project",
+      "verdict": "parity",
+      "key": "fixture::loaded_project"
+    },
+    {
+      "name": "saved_incumbent",
+      "verdict": "both_failed",
+      "gui": false,
+      "headless": false,
+      "key": "fixture::saved_incumbent"
+    },
+    {
+      "name": "timeline_item",
+      "verdict": "parity",
+      "key": "fixture::timeline_item"
+    },
+    {
+      "name": "export_current_frame",
+      "verdict": "parity",
+      "key": "frame_export::export_current_frame"
+    },
+    {
+      "name": "frame_file_written",
+      "verdict": "parity",
+      "key": "frame_export::frame_file_written"
+    },
+    {
+      "name": "add_fusion_comp",
+      "verdict": "parity",
+      "key": "fusion::add_fusion_comp"
+    },
+    {
+      "name": "comp_count_after",
+      "verdict": "parity",
+      "key": "fusion::comp_count_after"
+    },
+    {
+      "name": "comp_count_before",
+      "verdict": "parity",
+      "key": "fusion::comp_count_before"
+    },
+    {
+      "name": "comp_names",
+      "verdict": "parity",
+      "key": "fusion::comp_names"
+    },
+    {
+      "name": "current_comp",
+      "verdict": "parity",
+      "key": "fusion::current_comp"
+    },
+    {
+      "name": "delete_fusion_comp",
+      "verdict": "both_failed",
+      "gui": false,
+      "headless": false,
+      "key": "fusion::delete_fusion_comp"
+    },
+    {
+      "name": "fusion_handle",
+      "verdict": "parity",
+      "key": "fusion::fusion_handle"
+    },
+    {
+      "name": "album_count",
+      "verdict": "parity",
+      "key": "gallery::album_count"
+    },
+    {
+      "name": "current_album",
+      "verdict": "parity",
+      "key": "gallery::current_album"
+    },
+    {
+      "name": "export_produced_files",
+      "verdict": "parity",
+      "key": "gallery::export_produced_files"
+    },
+    {
+      "name": "export_stills",
+      "verdict": "both_failed",
+      "gui": false,
+      "headless": false,
+      "key": "gallery::export_stills"
+    },
+    {
+      "name": "gallery_handle",
+      "verdict": "parity",
+      "key": "gallery::gallery_handle"
+    },
+    {
+      "name": "grab_still",
+      "verdict": "parity",
+      "key": "gallery::grab_still"
+    },
+    {
+      "name": "delete_layout_preset",
+      "verdict": "parity",
+      "key": "layout_presets::delete_layout_preset"
+    },
+    {
+      "name": "export_layout_preset",
+      "verdict": "parity",
+      "key": "layout_presets::export_layout_preset"
+    },
+    {
+      "name": "layout_preset_bytes",
+      "verdict": "parity",
+      "reason": "both wrote a non-empty file",
+      "key": "layout_presets::layout_preset_bytes"
+    },
+    {
+      "name": "load_layout_preset",
+      "verdict": "parity",
+      "key": "layout_presets::load_layout_preset"
+    },
+    {
+      "name": "save_layout_preset",
+      "verdict": "parity",
+      "key": "layout_presets::save_layout_preset"
+    },
+    {
+      "name": "add_subfolder",
+      "verdict": "parity",
+      "key": "media_pool::add_subfolder"
+    },
+    {
+      "name": "clip_count",
+      "verdict": "parity",
+      "key": "media_pool::clip_count"
+    },
+    {
+      "name": "clip_property_resolution",
+      "verdict": "parity",
+      "key": "media_pool::clip_property_resolution"
+    },
+    {
+      "name": "delete_subfolder",
+      "verdict": "parity",
+      "key": "media_pool::delete_subfolder"
+    },
+    {
+      "name": "mounted_volume_count",
+      "verdict": "parity",
+      "key": "media_pool::mounted_volume_count"
+    },
+    {
+      "name": "root_folder",
+      "verdict": "parity",
+      "key": "media_pool::root_folder"
+    },
+    {
+      "name": "set_clip_color",
+      "verdict": "parity",
+      "key": "media_pool::set_clip_color"
+    },
+    {
+      "name": "set_current_folder",
+      "verdict": "parity",
+      "key": "media_pool::set_current_folder"
+    },
+    {
+      "name": "open_color",
+      "verdict": "parity",
+      "key": "pages::open_color"
+    },
+    {
+      "name": "open_cut",
+      "verdict": "parity",
+      "key": "pages::open_cut"
+    },
+    {
+      "name": "open_deliver",
+      "verdict": "parity",
+      "key": "pages::open_deliver"
+    },
+    {
+      "name": "open_edit",
+      "verdict": "parity",
+      "key": "pages::open_edit"
+    },
+    {
+      "name": "open_fairlight",
+      "verdict": "parity",
+      "key": "pages::open_fairlight"
+    },
+    {
+      "name": "open_fusion",
+      "verdict": "parity",
+      "key": "pages::open_fusion"
+    },
+    {
+      "name": "open_media",
+      "verdict": "parity",
+      "key": "pages::open_media"
+    },
+    {
+      "name": "reads_back_color",
+      "verdict": "parity",
+      "key": "pages::reads_back_color"
+    },
+    {
+      "name": "reads_back_cut",
+      "verdict": "parity",
+      "key": "pages::reads_back_cut"
+    },
+    {
+      "name": "reads_back_deliver",
+      "verdict": "parity",
+      "key": "pages::reads_back_deliver"
+    },
+    {
+      "name": "reads_back_edit",
+      "verdict": "parity",
+      "key": "pages::reads_back_edit"
+    },
+    {
+      "name": "reads_back_fairlight",
+      "verdict": "parity",
+      "key": "pages::reads_back_fairlight"
+    },
+    {
+      "name": "reads_back_fusion",
+      "verdict": "parity",
+      "key": "pages::reads_back_fusion"
+    },
+    {
+      "name": "reads_back_media",
+      "verdict": "parity",
+      "key": "pages::reads_back_media"
+    },
+    {
+      "name": "current_timecode",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "playhead::current_timecode"
+    },
+    {
+      "name": "current_video_item",
+      "verdict": "parity",
+      "key": "playhead::current_video_item"
+    },
+    {
+      "name": "set_current_timecode",
+      "verdict": "parity",
+      "key": "playhead::set_current_timecode"
+    },
+    {
+      "name": "start_timecode_shape",
+      "verdict": "parity",
+      "key": "playhead::start_timecode_shape"
+    },
+    {
+      "name": "read_frame_rate",
+      "verdict": "parity",
+      "key": "project_settings::read_frame_rate"
+    },
+    {
+      "name": "read_output_res",
+      "verdict": "parity",
+      "key": "project_settings::read_output_res"
+    },
+    {
+      "name": "set_output_res",
+      "verdict": "parity",
+      "key": "project_settings::set_output_res"
+    },
+    {
+      "name": "setting_count",
+      "verdict": "parity",
+      "key": "project_settings::setting_count"
+    },
+    {
+      "name": "add_render_job",
+      "verdict": "parity",
+      "key": "render::add_render_job"
+    },
+    {
+      "name": "codec_count_mp4",
+      "verdict": "parity",
+      "key": "render::codec_count_mp4"
+    },
+    {
+      "name": "delete_render_job",
+      "verdict": "parity",
+      "key": "render::delete_render_job"
+    },
+    {
+      "name": "format_count",
+      "verdict": "parity",
+      "key": "render::format_count"
+    },
+    {
+      "name": "render_job_count",
+      "verdict": "parity",
+      "key": "render::render_job_count"
+    },
+    {
+      "name": "render_produced_files",
+      "verdict": "parity",
+      "key": "render::render_produced_files"
+    },
+    {
+      "name": "render_status",
+      "verdict": "parity",
+      "key": "render::render_status"
+    },
+    {
+      "name": "set_format_codec",
+      "verdict": "parity",
+      "key": "render::set_format_codec"
+    },
+    {
+      "name": "set_render_settings",
+      "verdict": "parity",
+      "key": "render::set_render_settings"
+    },
+    {
+      "name": "start_rendering",
+      "verdict": "parity",
+      "key": "render::start_rendering"
+    },
+    {
+      "name": "<unreachable>",
+      "verdict": "both_failed",
+      "gui": {
+        "outcome": "unreachable"
+      },
+      "headless": {
+        "outcome": "unreachable"
+      },
+      "key": "surface::color_group.<unreachable>"
+    },
+    {
+      "name": "GetAlbumName",
+      "verdict": "parity",
+      "key": "surface::gallery.GetAlbumName"
+    },
+    {
+      "name": "GetCurrentStillAlbum",
+      "verdict": "parity",
+      "key": "surface::gallery.GetCurrentStillAlbum"
+    },
+    {
+      "name": "GetGalleryPowerGradeAlbums",
+      "verdict": "parity",
+      "key": "surface::gallery.GetGalleryPowerGradeAlbums"
+    },
+    {
+      "name": "GetGalleryStillAlbums",
+      "verdict": "parity",
+      "key": "surface::gallery.GetGalleryStillAlbums"
+    },
+    {
+      "name": "GetLabel",
+      "verdict": "parity",
+      "key": "surface::gallery_still_album.GetLabel"
+    },
+    {
+      "name": "GetStills",
+      "verdict": "parity",
+      "key": "surface::gallery_still_album.GetStills"
+    },
+    {
+      "name": "GetClipMatteList",
+      "verdict": "parity",
+      "key": "surface::media_pool.GetClipMatteList"
+    },
+    {
+      "name": "GetCurrentFolder",
+      "verdict": "parity",
+      "key": "surface::media_pool.GetCurrentFolder"
+    },
+    {
+      "name": "GetRootFolder",
+      "verdict": "parity",
+      "key": "surface::media_pool.GetRootFolder"
+    },
+    {
+      "name": "GetSelectedClips",
+      "verdict": "parity",
+      "key": "surface::media_pool.GetSelectedClips"
+    },
+    {
+      "name": "GetTimelineMatteList",
+      "verdict": "parity",
+      "key": "surface::media_pool.GetTimelineMatteList"
+    },
+    {
+      "name": "GetUniqueId",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::media_pool.GetUniqueId"
+    },
+    {
+      "name": "GetAudioMapping",
+      "verdict": "parity",
+      "key": "surface::media_pool_item.GetAudioMapping"
+    },
+    {
+      "name": "GetClipColor",
+      "verdict": "parity",
+      "key": "surface::media_pool_item.GetClipColor"
+    },
+    {
+      "name": "GetClipProperty",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::media_pool_item.GetClipProperty"
+    },
+    {
+      "name": "GetFlagList",
+      "verdict": "parity",
+      "key": "surface::media_pool_item.GetFlagList"
+    },
+    {
+      "name": "GetMarkInOut",
+      "verdict": "parity",
+      "key": "surface::media_pool_item.GetMarkInOut"
+    },
+    {
+      "name": "GetMarkerByCustomData",
+      "verdict": "parity",
+      "key": "surface::media_pool_item.GetMarkerByCustomData"
+    },
+    {
+      "name": "GetMarkerCustomData",
+      "verdict": "parity",
+      "key": "surface::media_pool_item.GetMarkerCustomData"
+    },
+    {
+      "name": "GetMarkers",
+      "verdict": "parity",
+      "key": "surface::media_pool_item.GetMarkers"
+    },
+    {
+      "name": "GetMediaId",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::media_pool_item.GetMediaId"
+    },
+    {
+      "name": "GetMetadata",
+      "verdict": "parity",
+      "key": "surface::media_pool_item.GetMetadata"
+    },
+    {
+      "name": "GetName",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::media_pool_item.GetName"
+    },
+    {
+      "name": "GetThirdPartyMetadata",
+      "verdict": "parity",
+      "key": "surface::media_pool_item.GetThirdPartyMetadata"
+    },
+    {
+      "name": "GetUniqueId",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::media_pool_item.GetUniqueId"
+    },
+    {
+      "name": "GetFileList",
+      "verdict": "parity",
+      "key": "surface::media_storage.GetFileList"
+    },
+    {
+      "name": "GetMountedVolumeList",
+      "verdict": "parity",
+      "key": "surface::media_storage.GetMountedVolumeList"
+    },
+    {
+      "name": "GetSubFolderList",
+      "verdict": "parity",
+      "key": "surface::media_storage.GetSubFolderList"
+    },
+    {
+      "name": "GetColorGroupsList",
+      "verdict": "parity",
+      "key": "surface::project.GetColorGroupsList"
+    },
+    {
+      "name": "GetCurrentRenderFormatAndCodec",
+      "verdict": "divergent",
+      "gui": {
+        "outcome": "returned",
+        "value": {
+          "codec": "H264",
+          "format": "mp4"
+        },
+        "type": "dict[2]"
+      },
+      "headless": {
+        "outcome": "returned",
+        "value": {
+          "codec": "H264",
+          "format": "mov"
+        },
+        "type": "dict[2]"
+      },
+      "reason": "both succeeded, values differ",
+      "key": "surface::project.GetCurrentRenderFormatAndCodec"
+    },
+    {
+      "name": "GetCurrentRenderMode",
+      "verdict": "parity",
+      "key": "surface::project.GetCurrentRenderMode"
+    },
+    {
+      "name": "GetCurrentTimeline",
+      "verdict": "parity",
+      "key": "surface::project.GetCurrentTimeline"
+    },
+    {
+      "name": "GetGallery",
+      "verdict": "parity",
+      "key": "surface::project.GetGallery"
+    },
+    {
+      "name": "GetMediaPool",
+      "verdict": "parity",
+      "key": "surface::project.GetMediaPool"
+    },
+    {
+      "name": "GetName",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::project.GetName"
+    },
+    {
+      "name": "GetPresetList",
+      "verdict": "parity",
+      "key": "surface::project.GetPresetList"
+    },
+    {
+      "name": "GetQuickExportRenderPresets",
+      "verdict": "parity",
+      "key": "surface::project.GetQuickExportRenderPresets"
+    },
+    {
+      "name": "GetRenderCodecs",
+      "verdict": "parity",
+      "key": "surface::project.GetRenderCodecs"
+    },
+    {
+      "name": "GetRenderFormats",
+      "verdict": "parity",
+      "key": "surface::project.GetRenderFormats"
+    },
+    {
+      "name": "GetRenderJobList",
+      "verdict": "parity",
+      "key": "surface::project.GetRenderJobList"
+    },
+    {
+      "name": "GetRenderJobStatus",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::project.GetRenderJobStatus"
+    },
+    {
+      "name": "GetRenderPresetList",
+      "verdict": "parity",
+      "key": "surface::project.GetRenderPresetList"
+    },
+    {
+      "name": "GetRenderResolutions",
+      "verdict": "parity",
+      "key": "surface::project.GetRenderResolutions"
+    },
+    {
+      "name": "GetSetting",
+      "verdict": "parity",
+      "key": "surface::project.GetSetting"
+    },
+    {
+      "name": "GetTimelineByIndex",
+      "verdict": "parity",
+      "key": "surface::project.GetTimelineByIndex"
+    },
+    {
+      "name": "GetTimelineCount",
+      "verdict": "parity",
+      "key": "surface::project.GetTimelineCount"
+    },
+    {
+      "name": "GetUniqueId",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::project.GetUniqueId"
+    },
+    {
+      "name": "IsRenderingInProgress",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::project.IsRenderingInProgress"
+    },
+    {
+      "name": "GetCurrentDatabase",
+      "verdict": "parity",
+      "key": "surface::project_manager.GetCurrentDatabase"
+    },
+    {
+      "name": "GetCurrentFolder",
+      "verdict": "parity",
+      "key": "surface::project_manager.GetCurrentFolder"
+    },
+    {
+      "name": "GetCurrentProject",
+      "verdict": "parity",
+      "key": "surface::project_manager.GetCurrentProject"
+    },
+    {
+      "name": "GetDatabaseList",
+      "verdict": "parity",
+      "key": "surface::project_manager.GetDatabaseList"
+    },
+    {
+      "name": "GetFolderListInCurrentFolder",
+      "verdict": "parity",
+      "key": "surface::project_manager.GetFolderListInCurrentFolder"
+    },
+    {
+      "name": "GetProjectListInCurrentFolder",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::project_manager.GetProjectListInCurrentFolder"
+    },
+    {
+      "name": "GetCurrentPage",
+      "verdict": "parity",
+      "reason": "Headless has no page; None is correct, not a failure.",
+      "gui": {
+        "outcome": "returned",
+        "value": "edit",
+        "type": "str"
+      },
+      "headless": {
+        "outcome": "returned",
+        "value": "edit",
+        "type": "str"
+      },
+      "expected_difference": true,
+      "key": "surface::resolve.GetCurrentPage"
+    },
+    {
+      "name": "GetKeyframeMode",
+      "verdict": "parity",
+      "key": "surface::resolve.GetKeyframeMode"
+    },
+    {
+      "name": "GetMediaStorage",
+      "verdict": "parity",
+      "key": "surface::resolve.GetMediaStorage"
+    },
+    {
+      "name": "GetProductName",
+      "verdict": "parity",
+      "key": "surface::resolve.GetProductName"
+    },
+    {
+      "name": "GetProjectManager",
+      "verdict": "parity",
+      "key": "surface::resolve.GetProjectManager"
+    },
+    {
+      "name": "GetVersion",
+      "verdict": "parity",
+      "key": "surface::resolve.GetVersion"
+    },
+    {
+      "name": "GetVersionString",
+      "verdict": "parity",
+      "key": "surface::resolve.GetVersionString"
+    },
+    {
+      "name": "GetClipList",
+      "verdict": "parity",
+      "key": "surface::root_folder.GetClipList"
+    },
+    {
+      "name": "GetIsFolderStale",
+      "verdict": "parity",
+      "key": "surface::root_folder.GetIsFolderStale"
+    },
+    {
+      "name": "GetName",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::root_folder.GetName"
+    },
+    {
+      "name": "GetSubFolderList",
+      "verdict": "parity",
+      "key": "surface::root_folder.GetSubFolderList"
+    },
+    {
+      "name": "GetUniqueId",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::root_folder.GetUniqueId"
+    },
+    {
+      "name": "GetCurrentClipThumbnailImage",
+      "verdict": "parity",
+      "key": "surface::timeline.GetCurrentClipThumbnailImage"
+    },
+    {
+      "name": "GetCurrentTimecode",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::timeline.GetCurrentTimecode"
+    },
+    {
+      "name": "GetCurrentVideoItem",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::timeline.GetCurrentVideoItem"
+    },
+    {
+      "name": "GetEndFrame",
+      "verdict": "parity",
+      "key": "surface::timeline.GetEndFrame"
+    },
+    {
+      "name": "GetIsTrackEnabled",
+      "verdict": "parity",
+      "key": "surface::timeline.GetIsTrackEnabled"
+    },
+    {
+      "name": "GetIsTrackLocked",
+      "verdict": "parity",
+      "key": "surface::timeline.GetIsTrackLocked"
+    },
+    {
+      "name": "GetItemListInTrack",
+      "verdict": "parity",
+      "key": "surface::timeline.GetItemListInTrack"
+    },
+    {
+      "name": "GetMarkInOut",
+      "verdict": "parity",
+      "key": "surface::timeline.GetMarkInOut"
+    },
+    {
+      "name": "GetMarkerByCustomData",
+      "verdict": "parity",
+      "key": "surface::timeline.GetMarkerByCustomData"
+    },
+    {
+      "name": "GetMarkerCustomData",
+      "verdict": "parity",
+      "key": "surface::timeline.GetMarkerCustomData"
+    },
+    {
+      "name": "GetMarkers",
+      "verdict": "parity",
+      "key": "surface::timeline.GetMarkers"
+    },
+    {
+      "name": "GetMediaPoolItem",
+      "verdict": "parity",
+      "key": "surface::timeline.GetMediaPoolItem"
+    },
+    {
+      "name": "GetName",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::timeline.GetName"
+    },
+    {
+      "name": "GetNodeGraph",
+      "verdict": "parity",
+      "key": "surface::timeline.GetNodeGraph"
+    },
+    {
+      "name": "GetSetting",
+      "verdict": "parity",
+      "key": "surface::timeline.GetSetting"
+    },
+    {
+      "name": "GetStartFrame",
+      "verdict": "parity",
+      "key": "surface::timeline.GetStartFrame"
+    },
+    {
+      "name": "GetStartTimecode",
+      "verdict": "parity",
+      "key": "surface::timeline.GetStartTimecode"
+    },
+    {
+      "name": "GetTrackCount",
+      "verdict": "parity",
+      "key": "surface::timeline.GetTrackCount"
+    },
+    {
+      "name": "GetTrackName",
+      "verdict": "parity",
+      "key": "surface::timeline.GetTrackName"
+    },
+    {
+      "name": "GetTrackSubType",
+      "verdict": "parity",
+      "key": "surface::timeline.GetTrackSubType"
+    },
+    {
+      "name": "GetUniqueId",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::timeline.GetUniqueId"
+    },
+    {
+      "name": "GetClipColor",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetClipColor"
+    },
+    {
+      "name": "GetClipEnabled",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetClipEnabled"
+    },
+    {
+      "name": "GetColorGroup",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetColorGroup"
+    },
+    {
+      "name": "GetCurrentVersion",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetCurrentVersion"
+    },
+    {
+      "name": "GetDuration",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetDuration"
+    },
+    {
+      "name": "GetEnd",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetEnd"
+    },
+    {
+      "name": "GetFlagList",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetFlagList"
+    },
+    {
+      "name": "GetFusionCompByIndex",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetFusionCompByIndex"
+    },
+    {
+      "name": "GetFusionCompByName",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetFusionCompByName"
+    },
+    {
+      "name": "GetFusionCompCount",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetFusionCompCount"
+    },
+    {
+      "name": "GetFusionCompNameList",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetFusionCompNameList"
+    },
+    {
+      "name": "GetIsColorOutputCacheEnabled",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetIsColorOutputCacheEnabled"
+    },
+    {
+      "name": "GetIsFusionOutputCacheEnabled",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetIsFusionOutputCacheEnabled"
+    },
+    {
+      "name": "GetLUT",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetLUT"
+    },
+    {
+      "name": "GetLeftOffset",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetLeftOffset"
+    },
+    {
+      "name": "GetLinkedItems",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetLinkedItems"
+    },
+    {
+      "name": "GetMarkerByCustomData",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetMarkerByCustomData"
+    },
+    {
+      "name": "GetMarkerCustomData",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetMarkerCustomData"
+    },
+    {
+      "name": "GetMarkers",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetMarkers"
+    },
+    {
+      "name": "GetMediaPoolItem",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetMediaPoolItem"
+    },
+    {
+      "name": "GetName",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::timeline_item.GetName"
+    },
+    {
+      "name": "GetNodeGraph",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetNodeGraph"
+    },
+    {
+      "name": "GetNodeLabel",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetNodeLabel"
+    },
+    {
+      "name": "GetNumNodes",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetNumNodes"
+    },
+    {
+      "name": "GetProperty",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetProperty"
+    },
+    {
+      "name": "GetRightOffset",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetRightOffset"
+    },
+    {
+      "name": "GetSelectedTakeIndex",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetSelectedTakeIndex"
+    },
+    {
+      "name": "GetSourceAudioChannelMapping",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetSourceAudioChannelMapping"
+    },
+    {
+      "name": "GetSourceEndFrame",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetSourceEndFrame"
+    },
+    {
+      "name": "GetSourceEndTime",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetSourceEndTime"
+    },
+    {
+      "name": "GetSourceStartFrame",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetSourceStartFrame"
+    },
+    {
+      "name": "GetSourceStartTime",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetSourceStartTime"
+    },
+    {
+      "name": "GetStart",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetStart"
+    },
+    {
+      "name": "GetStereoConvergenceValues",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetStereoConvergenceValues"
+    },
+    {
+      "name": "GetStereoLeftFloatingWindowParams",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetStereoLeftFloatingWindowParams"
+    },
+    {
+      "name": "GetStereoRightFloatingWindowParams",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetStereoRightFloatingWindowParams"
+    },
+    {
+      "name": "GetTakeByIndex",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetTakeByIndex"
+    },
+    {
+      "name": "GetTakesCount",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetTakesCount"
+    },
+    {
+      "name": "GetTrackTypeAndIndex",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetTrackTypeAndIndex"
+    },
+    {
+      "name": "GetUniqueId",
+      "verdict": "parity",
+      "reason": "session-variant; compared by type",
+      "key": "surface::timeline_item.GetUniqueId"
+    },
+    {
+      "name": "GetVersionNameList",
+      "verdict": "parity",
+      "key": "surface::timeline_item.GetVersionNameList"
+    },
+    {
+      "name": "GetLUT",
+      "verdict": "parity",
+      "key": "surface::timeline_item_node_graph.GetLUT"
+    },
+    {
+      "name": "GetNodeCacheMode",
+      "verdict": "parity",
+      "key": "surface::timeline_item_node_graph.GetNodeCacheMode"
+    },
+    {
+      "name": "GetNodeLabel",
+      "verdict": "parity",
+      "key": "surface::timeline_item_node_graph.GetNodeLabel"
+    },
+    {
+      "name": "GetNumNodes",
+      "verdict": "parity",
+      "key": "surface::timeline_item_node_graph.GetNumNodes"
+    },
+    {
+      "name": "GetToolsInNode",
+      "verdict": "parity",
+      "key": "surface::timeline_item_node_graph.GetToolsInNode"
+    },
+    {
+      "name": "GetLUT",
+      "verdict": "parity",
+      "key": "surface::timeline_node_graph.GetLUT"
+    },
+    {
+      "name": "GetNodeCacheMode",
+      "verdict": "parity",
+      "key": "surface::timeline_node_graph.GetNodeCacheMode"
+    },
+    {
+      "name": "GetNodeLabel",
+      "verdict": "parity",
+      "key": "surface::timeline_node_graph.GetNodeLabel"
+    },
+    {
+      "name": "GetNumNodes",
+      "verdict": "parity",
+      "key": "surface::timeline_node_graph.GetNumNodes"
+    },
+    {
+      "name": "GetToolsInNode",
+      "verdict": "parity",
+      "key": "surface::timeline_node_graph.GetToolsInNode"
+    },
+    {
+      "name": "closed",
+      "verdict": "parity",
+      "key": "teardown::closed"
+    },
+    {
+      "name": "deleted",
+      "verdict": "parity",
+      "key": "teardown::deleted"
+    },
+    {
+      "name": "add_marker",
+      "verdict": "parity",
+      "key": "timeline_edit::add_marker"
+    },
+    {
+      "name": "add_track",
+      "verdict": "parity",
+      "key": "timeline_edit::add_track"
+    },
+    {
+      "name": "delete_marker",
+      "verdict": "parity",
+      "key": "timeline_edit::delete_marker"
+    },
+    {
+      "name": "delete_track",
+      "verdict": "parity",
+      "key": "timeline_edit::delete_track"
+    },
+    {
+      "name": "marker_count",
+      "verdict": "parity",
+      "key": "timeline_edit::marker_count"
+    },
+    {
+      "name": "read_track_name",
+      "verdict": "parity",
+      "key": "timeline_edit::read_track_name"
+    },
+    {
+      "name": "read_zoom",
+      "verdict": "parity",
+      "key": "timeline_edit::read_zoom"
+    },
+    {
+      "name": "set_track_name",
+      "verdict": "parity",
+      "key": "timeline_edit::set_track_name"
+    },
+    {
+      "name": "set_zoom",
+      "verdict": "parity",
+      "key": "timeline_edit::set_zoom"
+    },
+    {
+      "name": "track_count_after_add",
+      "verdict": "parity",
+      "key": "timeline_edit::track_count_after_add"
+    },
+    {
+      "name": "track_count_video",
+      "verdict": "parity",
+      "key": "timeline_edit::track_count_video"
+    },
+    {
+      "name": "export_aaf",
+      "verdict": "parity",
+      "key": "timeline_export::export_aaf"
+    },
+    {
+      "name": "export_aaf_bytes",
+      "verdict": "parity",
+      "reason": "both wrote a non-empty file",
+      "key": "timeline_export::export_aaf_bytes"
+    },
+    {
+      "name": "export_drt",
+      "verdict": "parity",
+      "key": "timeline_export::export_drt"
+    },
+    {
+      "name": "export_drt_bytes",
+      "verdict": "parity",
+      "reason": "both wrote a non-empty file",
+      "key": "timeline_export::export_drt_bytes"
+    },
+    {
+      "name": "export_edl",
+      "verdict": "parity",
+      "key": "timeline_export::export_edl"
+    },
+    {
+      "name": "export_edl_bytes",
+      "verdict": "parity",
+      "reason": "both wrote a non-empty file",
+      "key": "timeline_export::export_edl_bytes"
+    },
+    {
+      "name": "export_fcpxml",
+      "verdict": "parity",
+      "key": "timeline_export::export_fcpxml"
+    },
+    {
+      "name": "export_fcpxml_bytes",
+      "verdict": "parity",
+      "reason": "both wrote a non-empty file",
+      "key": "timeline_export::export_fcpxml_bytes"
+    },
+    {
+      "name": "export_otio",
+      "verdict": "parity",
+      "key": "timeline_export::export_otio"
+    },
+    {
+      "name": "export_otio_bytes",
+      "verdict": "parity",
+      "reason": "both wrote a non-empty file",
+      "key": "timeline_export::export_otio_bytes"
+    }
+  ]
+}

@@ -2,6 +2,71 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.70.0
+
+Headless (`-nogui`) Resolve, measured rather than assumed — and the finding
+reverses this project's working belief about it.
+
+### The measurement
+
+A GUI run and a `-nogui` run of the same Resolve Studio 19.1.3.7 were probed
+identically and differenced: 139 read-only API probes plus 13 write scenarios
+covering pages, media pool, timeline editing, colour, Fusion comps, Gallery,
+render-to-disk, interchange export, layout presets, playhead and project
+settings. 238 paired observations.
+
+**Zero capabilities worked with a UI and failed without one.** Render to disk,
+AAF/EDL/FCPXML/DRT/OTIO export, `ExportCurrentFrameAsStill`, `GrabStill`, Fusion
+comp create/delete, colour groups, and even UI layout presets all behave
+identically headless.
+
+The one difference runs the other way, and it is the one an agent cares about:
+**a GUI Resolve can raise a modal dialog no script can dismiss; headless
+cannot.** The trigger is project switching, and the obvious defence fails —
+`ProjectManager.SaveProject()` returns `False` for the default never-saved
+`Untitled Project`, which is exactly the project that raises the prompt.
+Headless returns the same `False` and switches anyway.
+
+Two earlier notes are corrected: `ExportCurrentFrameAsStill` was recorded as a
+headless-only failure and works headless; `ExportStills` was recorded the same
+way and fails in *both* modes (its documented cause is Gallery panel visibility,
+which no headless session and no panel-closed GUI session can satisfy).
+
+### Added
+
+- `resolve_control(action="runtime_mode")` — is Resolve up, and does it have a
+  UI? Answers with no connection needed, and carries the mode-specific guidance
+  with it. **There is no API tell**: a headless instance returns a real page from
+  `GetCurrentPage()` and identical product/version strings, so this reads the
+  process argv, which is the only place `-nogui` appears. `headless` is `null`
+  when undeterminable — never read that as `false`.
+- `resolve_control(action="launch", params={"headless": true})`, plus
+  `DAVINCI_RESOLVE_HEADLESS=1` to make auto-launch headless. Launching the other
+  mode while an instance is running returns `RESOLVE_MODE_CONFLICT` instead of
+  starting a second one that would fight the singleton.
+- `src/utils/resolve_runtime.py` — mode detection and launch-command
+  construction. Headless launch runs the binary inside the app bundle, because
+  `open -a` hands the argument list to LaunchServices, which discards `-nogui`
+  and gives you a window with no error.
+- `scripts/resolve_headless.py` — batch/CI entry point: `status`, `guard`,
+  `start`, `stop`, and `run -- <cmd>` which only stops what it started.
+- `scripts/headless_differential.py` + `src/utils/headless_differential.py` —
+  the harness that produced the above, rerunnable after a Resolve upgrade.
+- `docs/reference/headless-cli.md` — verified flags, environment variables,
+  launch/teardown recipes, singleton rules, and the flags found in the
+  application binary but deliberately *not* exercised.
+- `docs/reference/headless-capability-matrix.md` — the generated differential.
+- Three `api_truth` entries: the `SaveProject`/modal trap, the absence of any
+  headless API tell, and the corrected `ExportStills` reality.
+
+### Validation
+
+- Offline suite 2280 → 2305 (`tests/test_headless_runtime.py`, 25 tests).
+- Live: full differential recorded in both modes on Resolve Studio 19.1.3.7,
+  scratch project created and deleted per run, GUI session restored afterwards.
+  Measured teardown 2.1s via `Quit()`, headless boot to scriptable under 3s,
+  scripting listener on TCP 15000 in both modes.
+
 ## What's New in v2.69.3
 
 Ships the v2.69.2 bundle, which never reached npm. Same fixes, plus the one that

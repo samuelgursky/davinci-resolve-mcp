@@ -693,6 +693,65 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["render", "deliver", "audio", "unsupported"],
         "submit": "missing",
     },
+    {
+        "symbol": "ProjectManager.SaveProject",
+        "object": "ProjectManager",
+        "signature": "() -> bool",
+        "reality": "Returns False for the default, never-saved project named "
+                   "'Untitled Project' — it has no location to save to, and there "
+                   "is no SaveProjectAs to give it one. Returns True on any named "
+                   "project. This is the one case where the failure matters: in "
+                   "the GUI, the following LoadProject/CloseProject then raises a "
+                   "'save changes?' modal that no script can dismiss, so the "
+                   "standard 'save before switching' defence fails exactly when "
+                   "it is needed. Headless returns the same False and switches "
+                   "anyway, because there is no dialog to raise.",
+        "recommended": "Check the return. If it is False, do not switch projects "
+                       "in a GUI session — the switch will block on a dialog. "
+                       "Either run headless (resolve_control runtime_mode / "
+                       "launch headless=true), or have the user name and save the "
+                       "project first.",
+        "tags": ["project", "modal", "headless", "silent-failure", "unreliable-return"],
+        "submit": "bug",
+    },
+    {
+        "symbol": "Resolve.GetCurrentPage",
+        "object": "Resolve",
+        "signature": "() -> string",
+        "reality": "A headless (-nogui) instance answers with a real page name, "
+                   "not None, and OpenPage() succeeds and reads back for all "
+                   "seven pages with no UI present. Nothing on the scripting API "
+                   "distinguishes a headless Resolve from one with a window — "
+                   "product name, version, layout presets, Gallery handles and "
+                   "Fusion comps all behave identically (Studio 19.1.3.7, 238 "
+                   "paired observations, zero headless-only failures).",
+        "recommended": "Do not infer headlessness from any API reading. Use "
+                       "resolve_control runtime_mode, which reads -nogui out of "
+                       "the process argv — the only place it is visible.",
+        "tags": ["headless", "page", "detection"],
+        "mitigation": ["runtime_mode", "resolve_runtime.is_headless"],
+    },
+    {
+        "symbol": "GalleryStillAlbum.ExportStills",
+        "object": "GalleryStillAlbum",
+        "signature": "(galleryStills, folderPath, filePrefix, format) -> bool",
+        "reality": "Returns False and writes nothing for every documented format "
+                   "(jpg, png, tif, dpx, drx) in BOTH GUI and headless sessions, "
+                   "given a still that GrabStill() just returned. Previously "
+                   "recorded here as a headless-only failure; re-measuring in "
+                   "both modes showed it fails either way, so headless is not the "
+                   "cause. The cause documented in docs/SKILL.md is that it needs "
+                   "the Gallery panel visible on the Color page — which the "
+                   "measured GUI session did not have, and which no headless "
+                   "session can ever have. Project.ExportCurrentFrameAsStill, by "
+                   "contrast, works in both modes and writes a real file.",
+        "recommended": "Use Project.ExportCurrentFrameAsStill for pixels, or "
+                       "drp.extract_node_graphs for grades. Do not treat an "
+                       "ExportStills failure as a reason to switch to a GUI "
+                       "session; it fails there too.",
+        "tags": ["gallery", "stills", "headless", "unreliable-return"],
+        "submit": "bug",
+    },
 ]
 
 

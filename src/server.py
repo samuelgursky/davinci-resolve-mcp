@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.69.3"
+VERSION = "2.70.0"
 
 import base64
 import os
@@ -105,6 +105,7 @@ from src.utils.media_analysis_jobs import (
 )
 from src.utils.platform import get_resolve_paths, get_resolve_plugin_paths
 from src.utils.resolve_connection import connect_resolve
+from src.utils import resolve_runtime as _resolve_runtime
 from src.utils.lut_paths import master_lut_dir, ensure_lut_in_master
 from src.utils import fuse_templates, dctl_templates, script_templates
 from src.utils.timeline_title_text import (
@@ -855,18 +856,16 @@ def _try_connect():
             resolve = None
             return None
 
-#: macOS puts the two editions in different places, and only the first was ever
-#: checked — so an auto-launch on a machine with both would start Studio even
-#: when the free edition was the one in use. Ordered installer-first to keep the
-#: previous behaviour where Studio is present.
-_MACOS_RESOLVE_APPS = (
-    "/Applications/DaVinci Resolve/DaVinci Resolve.app",  # installer / Studio
-    "/Applications/DaVinci Resolve.app",                  # App Store, free
-)
+def _launch_resolve(headless: Optional[bool] = None):
+    """Launch DaVinci Resolve and wait for it to become available.
 
-
-def _launch_resolve():
-    """Launch DaVinci Resolve and wait for it to become available."""
+    `headless=None` defers to the DAVINCI_RESOLVE_HEADLESS environment variable.
+    A headless launch is capability-identical to a GUI one (see
+    docs/reference/headless-cli.md) and immune to the modal dialogs that
+    otherwise wedge an agent-driven session, so it is the better default for
+    unattended work — but it stays opt-in, because starting an invisible
+    application on a workstation is not something to do behind the user's back.
+    """
     if _bridge_requested():
         # Launching cannot produce a bridge. The listener only exists once
         # someone runs Workspace > Scripts > resolve_bridge inside an already
@@ -878,28 +877,17 @@ def _launch_resolve():
             "launching the application cannot start it."
         )
         return False
-    sys_name = platform.system().lower()
-    if sys_name == "darwin":
-        app_path = next((p for p in _MACOS_RESOLVE_APPS if os.path.exists(p)), None)
-        if app_path is None:
-            logger.error("DaVinci Resolve not found in %s", list(_MACOS_RESOLVE_APPS))
-            return False
-        subprocess.Popen(["open", app_path], stdin=subprocess.DEVNULL)
-    elif sys_name == "windows":
-        app_path = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"
-        if not os.path.exists(app_path):
-            logger.error(f"DaVinci Resolve not found at {app_path}")
-            return False
-        subprocess.Popen([app_path], stdin=subprocess.DEVNULL)
-    elif sys_name == "linux":
-        app_path = "/opt/resolve/bin/resolve"
-        if not os.path.exists(app_path):
-            logger.error(f"DaVinci Resolve not found at {app_path}")
-            return False
-        subprocess.Popen([app_path], stdin=subprocess.DEVNULL)
-    else:
+    if headless is None:
+        headless = _resolve_runtime.prefers_headless()
+    command = _resolve_runtime.launch_command(bool(headless))
+    if command is None:
+        logger.error("DaVinci Resolve not found on this platform's known install paths")
         return False
-    logger.info("Launched DaVinci Resolve, waiting for it to respond...")
+    subprocess.Popen(command, stdin=subprocess.DEVNULL)
+    logger.info(
+        "Launched DaVinci Resolve (%s), waiting for it to respond...",
+        "headless" if headless else "with UI",
+    )
     for i in range(30):
         time.sleep(2)
         if _try_connect():
@@ -907,16 +895,6 @@ def _launch_resolve():
             return True
     logger.warning("Resolve did not respond within 60s after launch")
     return False
-
-#: Process names that mean a DaVinci Resolve application is already running.
-#: Deliberately not the full path: the App Store build lives at
-#: `/Applications/DaVinci Resolve.app` and the installer build inside
-#: `/Applications/DaVinci Resolve/`, and either one counts.
-_RESOLVE_PROCESS_PATTERNS = (
-    "DaVinci Resolve.app/Contents/MacOS/Resolve",   # macOS, both editions
-    "Resolve.exe",                                  # Windows
-    "/opt/resolve/bin/resolve",                     # Linux
-)
 
 
 def resolve_is_running() -> Optional[bool]:
@@ -926,17 +904,7 @@ def resolve_is_running() -> Optional[bool]:
     unanswerable question never silently becomes "nothing is running" — which is
     the answer that leads to launching something.
     """
-    try:
-        if platform.system().lower() == "windows":
-            out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=10, check=False)
-        else:
-            out = subprocess.run(["ps", "-Ao", "command="], capture_output=True, text=True, timeout=10, check=False)
-        if out.returncode != 0 and not out.stdout:
-            return None
-        listing = out.stdout or ""
-    except Exception:  # pragma: no cover - defensive; an unknown answer is None
-        return None
-    return any(pattern in listing for pattern in _RESOLVE_PROCESS_PATTERNS)
+    return _resolve_runtime.runtime_mode()["running"]
 
 
 def get_resolve():
@@ -1017,7 +985,11 @@ def _not_connected_error():
             remediation="On Studio: Preferences > General > 'External scripting using' = Local. "
                         "On the free edition: install the in-app bridge, run "
                         "Workspace > Scripts > resolve_bridge, and set DAVINCI_RESOLVE_BRIDGE=1.",
-            state={"resolve_running": True, "bridge_enabled": False},
+            # Which Resolve is refusing matters to the reader: a headless render
+            # worker and the editor the user is looking at warrant different
+            # responses, and the in-app bridge is not an option for the former.
+            state={"resolve_running": True, "bridge_enabled": False,
+                   "headless": _resolve_runtime.is_headless()},
         )
     return _err(
         "DaVinci Resolve is not running and could not be started.",
@@ -13074,7 +13046,18 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     """App-level DaVinci Resolve operations.
 
     Actions:
-      launch() -> {success, message}  — Launch DaVinci Resolve if not running. Call this FIRST if any tool returns a 'Not connected' error.
+      launch(headless?) -> {success, message, running, headless, guidance}
+        — Launch DaVinci Resolve if not running. Call this FIRST if any tool returns
+          a 'Not connected' error. headless=true starts it with no UI (-nogui):
+          capability-identical to the GUI and immune to the modal dialogs that can
+          block a script indefinitely. Errors rather than starting a second instance
+          if one is already running in the other mode.
+      runtime_mode() -> {running, headless, instances, guidance}
+        — Is Resolve up, and does it have a UI? Answers with no connection needed.
+          headless is null when it cannot be determined — do NOT read that as false.
+          There is no way to tell from the scripting API itself; this reads the
+          process argv. Consult before any LoadProject/CloseProject: with a UI,
+          an unsaved outgoing project raises a dialog no script can dismiss.
       get_version() -> {product, version, version_string, mcp: {version, update, update_decision}}
         — mcp.update_decision piggybacks the cached update check: if its action is
           "notify" or "prompt", mention the available MCP update to the user ONCE
@@ -13172,11 +13155,35 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         clear_update_prompt_preferences(project_dir, env=_setup_update_env())
         return _ok(**_mcp_update_status_payload())
 
+    # runtime_mode reads the operating system, not Resolve, so it answers even
+    # when nothing is running — which is exactly when an agent needs it.
+    if action == "runtime_mode":
+        return _ok(**_resolve_runtime.describe())
+
     # launch works even when Resolve is not connected
     if action == "launch":
+        headless = p.get("headless")
+        if headless is not None:
+            # An explicit request has to survive the "already running" shortcut
+            # in get_resolve: connecting to the GUI instance someone asked to
+            # replace with a headless one is not what was asked for.
+            mode = _resolve_runtime.runtime_mode()
+            if mode["running"] and bool(headless) != bool(mode["headless"]):
+                return _err(
+                    "DaVinci Resolve is already running in the other mode.",
+                    code="RESOLVE_MODE_CONFLICT", category="not_connected", retryable=False,
+                    reason="Only one Resolve can run at a time; a second instance fights the "
+                           "singleton and has been observed to crash-loop rather than fail cleanly.",
+                    remediation="Quit the running instance first (resolve_control quit), then "
+                                "launch again with the mode you want.",
+                    state=mode,
+                )
+            if not mode["running"]:
+                _launch_resolve(headless=bool(headless))
         r = get_resolve()  # auto-launches if not running
         if r is not None:
-            return _ok(message="DaVinci Resolve is running and connected.")
+            return _ok(message="DaVinci Resolve is running and connected.",
+                       **_resolve_runtime.describe())
         return _not_connected_error()
 
     r = get_resolve()  # auto-launches if not running
@@ -13228,7 +13235,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             return missing
         r.DisableBackgroundTasksForCurrentResolveSession()
         return _ok()
-    return _unknown(action, ["launch","get_version","api_truth","verification_stats","job_status","list_jobs","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","verification_stats","job_status","list_jobs","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────

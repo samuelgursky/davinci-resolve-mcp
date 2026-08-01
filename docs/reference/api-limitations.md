@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 21 missing capabilities, 15 bugs / unreliable behaviors.
+**Totals:** 21 missing capabilities, 17 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -312,3 +312,19 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Normalize both arguments through the live maps before calling: src.utils.render_ids.render_format_id_from_formats and render_codec_id_from_codecs accept a description or an id and return the id.
 - **Reference:** [issue #59](https://github.com/samuelgursky/davinci-resolve-mcp/issues/59)
 - **Tags:** render, deliver, silent-failure, id-vs-label
+
+### ProjectManager.SaveProject
+
+- **Object:** `ProjectManager`
+- **Signature:** `() -> bool`
+- **Behavior:** Returns False for the default, never-saved project named 'Untitled Project' — it has no location to save to, and there is no SaveProjectAs to give it one. Returns True on any named project. This is the one case where the failure matters: in the GUI, the following LoadProject/CloseProject then raises a 'save changes?' modal that no script can dismiss, so the standard 'save before switching' defence fails exactly when it is needed. Headless returns the same False and switches anyway, because there is no dialog to raise.
+- **Workaround / current handling:** Check the return. If it is False, do not switch projects in a GUI session — the switch will block on a dialog. Either run headless (resolve_control runtime_mode / launch headless=true), or have the user name and save the project first.
+- **Tags:** project, modal, headless, silent-failure, unreliable-return
+
+### GalleryStillAlbum.ExportStills
+
+- **Object:** `GalleryStillAlbum`
+- **Signature:** `(galleryStills, folderPath, filePrefix, format) -> bool`
+- **Behavior:** Returns False and writes nothing for every documented format (jpg, png, tif, dpx, drx) in BOTH GUI and headless sessions, given a still that GrabStill() just returned. Previously recorded here as a headless-only failure; re-measuring in both modes showed it fails either way, so headless is not the cause. The cause documented in docs/SKILL.md is that it needs the Gallery panel visible on the Color page — which the measured GUI session did not have, and which no headless session can ever have. Project.ExportCurrentFrameAsStill, by contrast, works in both modes and writes a real file.
+- **Workaround / current handling:** Use Project.ExportCurrentFrameAsStill for pixels, or drp.extract_node_graphs for grades. Do not treat an ExportStills failure as a reason to switch to a GUI session; it fails there too.
+- **Tags:** gallery, stills, headless, unreliable-return

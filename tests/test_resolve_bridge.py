@@ -1682,9 +1682,12 @@ class ServerReachesTheBridgeTests(unittest.TestCase):
     def test_both_macos_editions_are_candidates_for_auto_launch(self) -> None:
         """Only the installer path was checked, so a free-only machine found nothing
         — and a machine with both always got Studio."""
-        server = self._server_module()
-        self.assertIn("/Applications/DaVinci Resolve.app", server._MACOS_RESOLVE_APPS)
-        self.assertIn("/Applications/DaVinci Resolve/DaVinci Resolve.app", server._MACOS_RESOLVE_APPS)
+        from src.utils import resolve_runtime
+
+        self.assertIn("/Applications/DaVinci Resolve.app", resolve_runtime.MACOS_RESOLVE_APPS)
+        self.assertIn(
+            "/Applications/DaVinci Resolve/DaVinci Resolve.app", resolve_runtime.MACOS_RESOLVE_APPS
+        )
 
     def test_bridge_requested_reads_the_environment_at_call_time(self) -> None:
         from unittest import mock
@@ -1841,8 +1844,9 @@ class NeverLaunchARunningResolveTests(unittest.TestCase):
         launch.assert_called_once()
 
     def test_detection_covers_both_macos_editions_and_the_other_platforms(self) -> None:
-        server = self._server()
-        patterns = server._RESOLVE_PROCESS_PATTERNS
+        from src.utils import resolve_runtime
+
+        patterns = resolve_runtime.RESOLVE_PROCESS_PATTERNS
         # The App Store build is `/Applications/DaVinci Resolve.app/...` and the
         # installer build `/Applications/DaVinci Resolve/DaVinci Resolve.app/...`;
         # one pattern has to match both, or the edition that is running is missed.
@@ -1860,7 +1864,12 @@ class NeverLaunchARunningResolveTests(unittest.TestCase):
 
         server = self._server()
         detect = self._detector(server)
-        with mock.patch.object(server.subprocess, "run", side_effect=OSError("no ps")):
+        from src.utils import resolve_runtime
+
+        # The process listing moved into resolve_runtime when headless detection
+        # needed the *argv*, not just the presence, of a running Resolve.
+        # Patching server.subprocess here would have passed while testing nothing.
+        with mock.patch.object(resolve_runtime.subprocess, "run", side_effect=OSError("no ps")):
             self.assertIsNone(detect())
 
     def test_detection_finds_a_running_resolve_in_a_process_listing(self) -> None:
@@ -1868,12 +1877,14 @@ class NeverLaunchARunningResolveTests(unittest.TestCase):
 
         server = self._server()
         detect = self._detector(server)
+        from src.utils import resolve_runtime
+
         listing = mock.Mock(returncode=0,
                             stdout="/Applications/DaVinci Resolve.app/Contents/MacOS/Resolve\nfinder\n")
-        with mock.patch.object(server.subprocess, "run", return_value=listing):
+        with mock.patch.object(resolve_runtime.subprocess, "run", return_value=listing):
             self.assertTrue(detect())
         empty = mock.Mock(returncode=0, stdout="finder\nDock\n")
-        with mock.patch.object(server.subprocess, "run", return_value=empty):
+        with mock.patch.object(resolve_runtime.subprocess, "run", return_value=empty):
             self.assertFalse(detect())
 
 
