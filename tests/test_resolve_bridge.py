@@ -1675,6 +1675,30 @@ class NeverLaunchARunningResolveTests(unittest.TestCase):
     kept picking the wrong one.
     """
 
+    def setUp(self) -> None:
+        """Start from no cached handle, whatever ran before.
+
+        `get_resolve` returns `server.resolve` early whenever the cached handle
+        still answers — before it consults `_try_connect`, which is what these
+        tests mock. So a handle left behind by an earlier test makes every
+        assertion below measure that handle instead of the decision under test.
+        It happened for real: under `python -m unittest discover`, where the
+        pytest fixture that clears this never runs, an earlier test connected to
+        a running Resolve and these three then asserted against a live
+        `PyRemoteObject`.
+
+        Cleared here rather than only in the fixture, so the tests hold under
+        either runner and in any order.
+        """
+        server = self._server()
+        self._cached_resolve = server.resolve
+        server.resolve = None
+
+    def tearDown(self) -> None:
+        # Restore rather than blank it: leaving state better than we found it is
+        # what let this bug travel between modules in the first place.
+        self._server().resolve = self._cached_resolve
+
     def _server(self):
         import importlib
 
