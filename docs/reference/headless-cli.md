@@ -32,46 +32,152 @@ wedges.
 **That is a claim about capability and about modals. It is not a claim about
 stability.** See the next section before pointing a long delivery at it.
 
-## What this did NOT measure
+## What is and is not measured about stability
 
-The probe's render was a 2-second 640×360 H.264 to a temp directory. That
-exercises the delivery *path*; it does not exercise a delivery *workload*.
-Nothing here measures:
+Measured, and clean: **10 consecutive ProRes 422 HQ renders in one headless
+session**, from a 1045-frame JPEG 2000 / MXF OP1A / 12-bit source — the decode
+path a DCP video track file takes — with no crash, no death, and no leak. See
+the stress table below. That covers repeated jobs in one session, heavy source
+decode, and the encoder teardown at the end of every write, ten times over.
 
-- **Sustained encode over hours.** Memory growth, thermal behaviour, and
-  codec-library state after thousands of frames are all untested.
-- **Heavy source decode.** JPEG 2000 out of DCP MXF is a far harder decode path
-  than the probe's synthetic H.264, and runs through different libraries.
-- **Professional container writes.** ProRes into MXF, and the muxer/encoder
-  teardown at the end of a write, are untested. The probe wrote H.264 into MP4.
-- **Repeated jobs in one session.** The probe rendered once and quit.
+Still **not** measured:
 
-**Field report, unreproduced here:** rendering ProRes from DCP sources has
-crashed *on completion of writes* in headless sessions on this machine. That is
-exactly the encoder/muxer-teardown path the probe never touched, and it is not
-contradicted by anything above.
+- **Sustained encode over hours.** Ten 45-second renders is not a feature-length
+  delivery. Thermal behaviour and codec-library state over thousands of frames
+  remain untested.
+- **The operator's actual footage, codec settings and durations.**
+- **ProRes into MXF** — not because it was skipped, but because this build does
+  not offer it: `GetRenderCodecs` returns ProRes only under `mov`.
 
-What the logs can and cannot say about it: every crash session retained in
-`~/Library/Application Support/Blackmagic Design/DaVinci Resolve/logs/LogArchive`
-(2026-07-17 through 2026-08-01) is a **GUI** session, and the only headless
-session retained is the probe's, which did not crash. But the archive keeps only
-about five sessions per rotation, so this is a short window that very likely
-does not include the DCP renders at all — **absence of headless crashes in it is
-not evidence that headless does not crash.**
+**Field report:** rendering ProRes from DCP sources has crashed *on completion of
+writes* in headless sessions on this machine. The stress leg above exercises that
+same teardown path ten times without a failure, so the write-completion path is
+not trivially broken headless — but ten short renders cannot disprove a fault
+that appears on a long one, and this does not.
 
-A per-session GUI/headless marker, if you need to classify logs yourself:
-`Show splash screen` appears in GUI sessions and never in headless ones.
+Note what changed here. An earlier version of this page reported the headless
+stress leg as hanging reproducibly at 0/10, which read as evidence for headless
+instability. It was not: the harness was calling `SaveProject()` on the
+never-saved `Untitled Project`, which blocks the whole application. **A harness
+bug had been sitting in the "headless is unstable" column.** Once guarded, the
+leg ran straight through on the first attempt.
 
-Comparing every WARN and ERROR between the known-headless and known-GUI sessions
-turned up **nothing headless-specific**. In particular `Encoder audio was not
-flushed` — the most suggestive warning for a write-completion crash — appears in
-both modes, and more often in the GUI ones. So it is not a headless marker and
-should not be read as one.
+Two artefacts worth keeping from the log investigation:
 
-**Practical rule until this is settled: use headless for orchestration, edit,
-conform, analysis and short renders. Qualify it on your own footage and codecs
-before trusting it with a long-form or professional-container delivery, and keep
-a GUI fallback for those.**
+- A per-session GUI/headless marker for classifying logs after the fact:
+  `Show splash screen` appears in GUI sessions and never in headless ones.
+- A full WARN/ERROR diff between known-headless and known-GUI sessions found
+  **nothing headless-specific**. In particular `Encoder audio was not flushed` —
+  the most suggestive warning for a write-completion crash — occurs in both
+  modes, and more often in the GUI ones. It is not a headless marker.
+
+**Practical rule:** headless is qualified for orchestration, edit, conform,
+analysis and renders of this scale. Qualify it on your own footage before a
+long-form or professional-container delivery, and keep a GUI fallback for those.
+
+### Differencing the two modes exhaustively
+
+`scripts/mode_matrix.py` is the second-generation differential, and it exists
+because the first one **could not have found the `SaveProject` hang**. That
+harness called everything in one process with no timeouts, so a call that never
+returns simply ended the run; its clean report of "zero mode-dependent failures"
+was partly a description of what it was able to survive.
+
+Three changes make exhaustive comparison possible:
+
+- **`hang` is a first-class verdict.** A call that returns `False` is
+  survivable; one that never returns takes the session with it and degrades the
+  instance afterwards. Collapsing them into "failed" hides the worse bug.
+- **Supervisor and worker are separate processes.** The worker streams one
+  flushed JSONL result per probe, in catalogue order. When it dies, the
+  supervisor knows the first unrecorded probe was in flight, records it as
+  `hang`, restarts Resolve, waits for health, and resumes after it. A hang costs
+  one probe and one restart, not the run. Nothing in-process can do this: a
+  Python signal handler cannot preempt a thread parked in fusionscript's
+  `pthread_cond_wait`, which is why the alarm-based approach only ever worked by
+  luck.
+- **State is part of each probe.** `SaveProject` is harmless on a named project
+  and fatal on the never-saved default, so probes declare which project must be
+  current. A catalogue that only ever ran against a well-formed scratch project
+  is exactly what reported no differences the first time.
+
+Phase breadcrumbs distinguish a hang in a probe's own call from a hang while
+reaching its state — a real distinction, since setting up the "untitled" state
+means closing a project, and closing a *modified* project raises the GUI save
+dialog. Without the breadcrumb that dialog was attributed to the probe that
+never got to run.
+
+### Stressing it without production assets
+
+`scripts/render_stress.py` closes most of that gap before real footage is
+available. It renders repeatedly in one session and watches for the things that
+distinguish *causes* rather than merely recording that something died:
+
+- `crash_archive.txt` is bracketed per iteration, so a stack is attached to the
+  render that produced it. Resolve appends every crash to one growing file with
+  no timestamps, so without the bracket "did this render crash" is guesswork.
+- The Resolve PID is watched from outside, so a hard exit is a recorded result
+  instead of a hung harness.
+- Resident memory is sampled through each render. A leak and a teardown bug both
+  present as "it crashes eventually"; the RSS curve separates them.
+- `--restart-on-crash` continues past the first death, because failing on
+  iteration 2 and failing on iteration 40 are different findings.
+
+The synthetic source is JPEG 2000 in MXF OP1A at 12-bit 1998×1080, written by
+ffmpeg. Resolve identifies it as `JPEG 2000 / MXF OP1A / 12 bit` — the decode
+path a DCP video track file takes. `--source` swaps in real media later with
+nothing else changing.
+
+One thing to get right about the target: **this build offers ProRes in no MXF
+flavour.** `GetRenderCodecs` returns ProRes only under `mov`; neither
+`mxf_op1a` (76 codecs) nor `mxf` (47) lists it. So "MXF to ProRes" means
+J2K-MXF in, ProRes-QuickTime out, and a harness that tried to render ProRes into
+MXF would fail for that reason rather than for any reason worth reporting.
+
+```bash
+python scripts/render_stress.py --mode headless --iterations 20 --duration 60 \
+    --restart-on-crash --report headless.json
+python scripts/render_stress.py --mode gui --iterations 20 --duration 60 \
+    --restart-on-crash --report gui.json
+```
+
+Confirming a crash on the real job still needs the real job — same source and
+preset, both modes, `ResolveDebug.txt` kept from each. The harness narrows where
+to look; it does not replace that.
+
+### Stress results: both modes, 10 ProRes renders each
+
+10 renders per leg, 1045-frame JPEG 2000 timeline, ProRes 422 HQ QuickTime,
+~553 MB per render, identical parameters.
+
+| | GUI | headless |
+| --- | --- | --- |
+| completed | 10 / 10 | **10 / 10** |
+| process deaths | 0 | **0** |
+| crash blocks captured | 0 | **0** |
+| bytes per render | 553,050,011 | 553,050,011 (identical) |
+| render time mean | 22.6s | **21.5s** |
+| render time first → last | 21.8 → 22.7s | 21.4 → 22.4s |
+| peak RSS first → last | 2096 → 2104 MB | **2002 → 2010 MB** |
+
+**Headless is clean, and marginally better than the GUI on both axes** — about
+1.1s faster per render and ~95 MB lighter throughout. No leak in either mode:
+8 MB of RSS drift across ten renders, which is noise. Output is byte-identical.
+
+An earlier version of this page reported the headless leg as "hung during setup,
+0/10, reproducibly". That was true at the time and the cause was **not** render
+instability: the harness was hitting `SaveProject()` on the never-saved
+`Untitled Project`, which blocks the whole application (see the modal trap
+above). Once that was guarded, the leg ran straight through on the first
+attempt. A harness bug had been sitting in the "headless is unstable" column.
+
+**What this still does not settle:** the field report of crashes on completion of
+writes during DCP→ProRes delivery. This is 10 renders of ~45 seconds each from
+synthetic J2K. It exercises the decode and encode paths and the teardown at the
+end of every write, ten times, without a single failure — but it is not hours of
+sustained encode, and it is not the operator's footage, codec settings or
+durations. Treat it as "the write-completion path is not trivially broken
+headless", not as a clearance for long-form delivery.
 
 ### Differencing the two modes exhaustively
 

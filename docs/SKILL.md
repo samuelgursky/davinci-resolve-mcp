@@ -228,16 +228,14 @@ a UI and fail without one. Pages, render-to-disk, AAF/EDL/XML/DRT/OTIO export,
 `ExportCurrentFrameAsStill`, Fusion comps, colour groups, layout presets and all
 ordinary editorial behave identically.
 
-**Capability is not stability, and the two must not be conflated.** That probe
-rendered 2 seconds of 640×360 H.264. Long renders, heavy source decode (JPEG
-2000 out of DCP MXF), professional container writes (ProRes into MXF), and
-repeated jobs in one session are all **untested** — and there is a field report
-of headless crashing *on completion of writes* for exactly that class of job.
-Use headless freely for orchestration, edit, conform, analysis and short
-renders. Do not promise it for a long-form or professional-container delivery
-without qualifying it on that footage and codec first, and keep a GUI fallback
-for those. Never tell a user headless is "safe for renders" on the strength of
-the capability matrix alone.
+**Capability is not stability, but stability is now partly measured too.** Ten
+consecutive ProRes 422 HQ renders in one headless session, from a JPEG 2000 /
+MXF OP1A source, completed with no crash, no death and no leak — marginally
+faster and ~95 MB lighter than the same ten renders with a UI. What remains
+untested is *sustained* encode over hours and the operator's own footage and
+codec settings. Use headless freely for orchestration, edit, conform, analysis
+and renders of that scale; qualify it on real footage before promising a
+long-form or professional-container delivery, and keep a GUI fallback there.
 
 **Headless is NOT immune to modal dialogs — it is worse.** It cannot *display* a
 dialog, but Resolve still tries to raise one, and the call then never returns.
