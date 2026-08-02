@@ -465,6 +465,46 @@ ps -Ao pid=,command= | grep "MacOS/Resolve" | grep -v grep
 An empty result is the only safe state. If a render node manages Resolve on this
 machine, turn it off first.
 
+## The expanded sweep: 105 probes, still no real mode differences
+
+The catalogue grew from 92 to 105 probes, adding the surfaces most likely to
+behave differently without a UI: long-running and Studio-AI operations
+(`TranscribeAudio`, `AutoSyncAudio`, `CreateSubtitlesFromAudio`, proxy
+link/unlink), editorial constructs (compound clips, Fusion clips, take
+selectors, nested timelines, clip linking) and project-level delivery
+(render presets, burn-in presets, `ArchiveProject`, multi-job render queues).
+
+Result across 2 GUI × 2 headless runs: **86 parity, 14 both-failed, 0 flaky, and
+5 apparent mode differences that all evaporated under isolation.**
+
+### Not API-reachable at all
+
+Worth stating because their absence is easy to mistake for a headless problem:
+**retimes/speed changes, transitions, and multicam have no scripting API** in
+this reference. Nothing can round-trip what cannot be created. `CreateCompoundClip`
+and `CreateFusionClip` are documented but raise `TypeError` on 19.1.3 — present
+in the docs, absent from this build.
+
+### Five false findings, and the rule they produced
+
+A full sweep reported `editorial.nested_timeline` and `editorial.set_clips_linked`
+as `headless_degraded`, and take selectors, multi-job queues and render presets
+as `divergent`. Re-run with `--only` against a fresh fixture, **all five are
+identical in both modes.**
+
+The cause is ordering. Probes run in catalogue order against one shared fixture,
+so a probe near the end carries ~90 destructive probes' worth of accumulated
+state, and the two modes drift apart for reasons unrelated to the mode. The
+report now carries that warning inline, and the rule is simple:
+
+**An actionable finding from a full sweep is a hypothesis. Re-run it with
+`--only` in both modes before believing it.**
+
+That is the third distinct class of false positive this study has produced —
+after single-run flake (fixed by requiring repetition) and mixing catalogue
+versions (fixed by fingerprinting). Every one of them looked like a real
+headless bug first.
+
 ## Rendered pixels are identical
 
 The strongest result in this study, and the one everything else was missing.

@@ -34,7 +34,7 @@ CATALOGUE: List[Probe] = []
 #: change made one probe look flaky within a mode when it had simply been
 #: recorded two ways. The fingerprint below makes that mistake refuse rather
 #: than mislead.
-CATALOGUE_VERSION = 3
+CATALOGUE_VERSION = 4
 
 
 def combine(ok: Any, detail: Any) -> Any:
@@ -641,3 +641,156 @@ def fingerprint() -> str:
     names = ",".join(sorted(p.name for p in CATALOGUE))
     digest = hashlib.sha256(names.encode()).hexdigest()[:12]
     return f"v{CATALOGUE_VERSION}-{digest}"
+
+
+# ── long-running / AI / media-management surfaces ────────────────────────────
+#
+# These are the surfaces most likely to behave differently without a UI: they
+# either spawn background work, need Studio AI models, or write large files.
+# Generous timeouts, because a slow op misreported as a hang is a false finding
+# and this catalogue's whole point is not producing those.
+
+
+@probe("longop.transcribe_audio", "longop", timeout=300, needs=("clip",), destructive=True,
+       note="Studio AI; may need a language model present")
+def _probe_longop_transcribe_audio(ctx):
+    ok = ctx.clip.TranscribeAudio()
+    if ok:
+        try:
+            ctx.clip.ClearTranscription()
+        except Exception:
+            pass
+    return ok
+
+
+@probe("longop.auto_sync_audio", "longop", timeout=180, needs=("project",), destructive=True,
+       note="needs >= 2 pool items, at least one video and one audio")
+def _probe_longop_auto_sync_audio(ctx):
+    clips = ctx.project.GetMediaPool().GetRootFolder().GetClipList() or []
+    if len(clips) < 2:
+        return None
+    return ctx.project.GetMediaPool().AutoSyncAudio(clips[:2])
+
+
+@probe("longop.create_subtitles_from_audio", "longop", timeout=300, needs=("timeline",),
+       destructive=True, note="Studio AI; enum-keyed settings dict")
+def _probe_longop_subtitles(ctx):
+    return ctx.timeline.CreateSubtitlesFromAudio()
+
+
+@probe("longop.link_unlink_proxy", "longop", timeout=120, needs=("clip",), destructive=True)
+def _probe_longop_proxy(ctx):
+    path = ctx.clip.GetClipProperty("File Path")
+    linked = ctx.clip.LinkProxyMedia(path) if path else None
+    unlinked = ctx.clip.UnlinkProxyMedia()
+    return f"{linked}/{unlinked}"
+
+
+# ── editorial constructs ─────────────────────────────────────────────────────
+
+
+@probe("editorial.compound_clip", "editorial", timeout=180, needs=("timeline", "item"),
+       destructive=True)
+def _probe_editorial_compound(ctx):
+    items = ctx.timeline.GetItemListInTrack("video", 1) or []
+    if not items:
+        return None
+    made = ctx.project.GetMediaPool().CreateCompoundClip(
+        items[:1], {"name": "PROBE_COMPOUND"})
+    return bool(made)
+
+
+@probe("editorial.fusion_clip", "editorial", timeout=180, needs=("timeline",), destructive=True)
+def _probe_editorial_fusion_clip(ctx):
+    items = ctx.timeline.GetItemListInTrack("video", 1) or []
+    if not items:
+        return None
+    return bool(ctx.project.GetMediaPool().CreateFusionClip(items[:1]))
+
+
+@probe("editorial.take_selector", "editorial", timeout=180, needs=("item", "clip"),
+       destructive=True)
+def _probe_editorial_takes(ctx):
+    added = ctx.item.AddTake(ctx.clip)
+    count = ctx.item.GetTakesCount()
+    selected = ctx.item.SelectTakeByIndex(1) if count else None
+    finalized = ctx.item.FinalizeTake() if count else None
+    return f"{added}/{count}/{selected}/{finalized}"
+
+
+@probe("editorial.nested_timeline", "editorial", timeout=180, needs=("project", "timeline"),
+       destructive=True)
+def _probe_editorial_nested(ctx):
+    """A timeline appended into another timeline — the nesting an edit loop uses."""
+    pool = ctx.project.GetMediaPool()
+    outer = pool.CreateEmptyTimeline("PROBE_OUTER")
+    if outer is None:
+        return False
+    # Timelines appear in the media pool as clips; that is how one is nested.
+    nested = [c for c in (pool.GetRootFolder().GetClipList() or [])
+              if (c.GetClipProperty("Type") or "") == "Timeline"]
+    if not nested:
+        return None
+    ctx.project.SetCurrentTimeline(outer)
+    appended = pool.AppendToTimeline([{"mediaPoolItem": nested[0]}])
+    count = len(outer.GetItemListInTrack("video", 1) or [])
+    ctx.project.SetCurrentTimeline(ctx.timeline)
+    return f"{bool(appended)}/{count}"
+
+
+@probe("editorial.set_clips_linked", "editorial", timeout=90, needs=("timeline",),
+       destructive=True)
+def _probe_editorial_linked(ctx):
+    items = ctx.timeline.GetItemListInTrack("video", 1) or []
+    if not items:
+        return None
+    off = ctx.timeline.SetClipsLinked(items[:1], False)
+    ctx.timeline.SetClipsLinked(items[:1], True)
+    return off
+
+
+# ── project-level / delivery presets ─────────────────────────────────────────
+
+
+@probe("projectlevel.render_preset_roundtrip", "projectlevel", timeout=120, needs=("project",),
+       destructive=True)
+def _probe_projectlevel_render_preset(ctx):
+    saved = ctx.project.SaveAsNewRenderPreset("PROBE_RENDER_PRESET")
+    deleted = ctx.project.DeleteRenderPreset("PROBE_RENDER_PRESET") if saved else None
+    return f"{saved}/{deleted}"
+
+
+@probe("projectlevel.export_burn_in_preset", "projectlevel", timeout=120, destructive=True)
+def _probe_projectlevel_burnin(ctx):
+    path = ctx.work / "burnin.preset"
+    ok = ctx.resolve.ExportBurnInPreset("Default", str(path))
+    return combine(ok, path.exists() and path.stat().st_size > 0)
+
+
+@probe("projectlevel.archive_project", "projectlevel", timeout=600, destructive=True,
+       note="writes a .dra bundle; media excluded to keep it small")
+def _probe_projectlevel_archive(ctx):
+    target = ctx.work / "archive"
+    target.mkdir(exist_ok=True)
+    ok = ctx.pm.ArchiveProject(ctx.project_name, str(target / "probe.dra"),
+                               False, False, False)
+    produced = len(list(target.rglob("*"))) if target.exists() else 0
+    return combine(ok, produced)
+
+
+@probe("projectlevel.multi_job_queue", "projectlevel", timeout=180, needs=("project", "timeline"),
+       destructive=True)
+def _probe_projectlevel_multi_job(ctx):
+    """Three queued jobs — a delivery queue is rarely one render."""
+    ids = []
+    for index in range(3):
+        ctx.project.SetRenderSettings({"TargetDir": str(ctx.work),
+                                       "CustomName": f"queue_{index}",
+                                       "SelectAllFrames": True})
+        job = ctx.project.AddRenderJob()
+        if job:
+            ids.append(job)
+    count = len(ctx.project.GetRenderJobList() or [])
+    for job in ids:
+        ctx.project.DeleteRenderJob(job)
+    return f"{len(ids)}/{count}"

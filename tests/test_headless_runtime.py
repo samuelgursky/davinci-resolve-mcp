@@ -61,6 +61,26 @@ class RuntimeModeTests(unittest.TestCase):
         with mock.patch.object(rr.subprocess, "run", return_value=_ps(appstore)):
             self.assertTrue(rr.is_headless())
 
+    def test_a_mere_mention_of_the_path_is_not_an_instance(self) -> None:
+        """A shell running a script that *names* Resolve is not Resolve.
+
+        The original substring test counted exactly that as a second instance,
+        which made `instances` wrong and made a launch refuse with "a Resolve is
+        running in the other mode" — observed against a real `zsh -c` command
+        line that happened to contain both the executable path and `-nogui`.
+        """
+        shell = ("/bin/zsh -c eval 'nohup \"" + self.GUI + "\" -nogui > /tmp/x.log'")
+        with mock.patch.object(rr.subprocess, "run", return_value=_ps(f"{shell}\nfinder\n")):
+            mode = rr.runtime_mode()
+        self.assertFalse(mode["running"], "a shell mentioning the path is not an instance")
+        self.assertEqual(mode["instances"], 0)
+
+    def test_flags_do_not_prevent_recognition(self) -> None:
+        for command in (self.GUI, self.HEADLESS, self.GUI + " -nogui -fastmode"):
+            with self.subTest(command=command):
+                with mock.patch.object(rr.subprocess, "run", return_value=_ps(command)):
+                    self.assertTrue(rr.runtime_mode()["running"], command)
+
     def test_a_second_instance_is_counted(self) -> None:
         """Two Resolves is a conflict to report, not a mode to average."""
         with mock.patch.object(rr.subprocess, "run", return_value=_ps(f"{self.GUI}\n{self.HEADLESS}\n")):

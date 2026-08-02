@@ -96,12 +96,21 @@ def health(timeout: float = 420.0) -> Optional[Dict[str, Any]]:
                              env=scripting_env(), capture_output=True, text=True,
                              timeout=timeout + 60)
     except subprocess.TimeoutExpired:
+        print("  health: timed out waiting for a database", file=sys.stderr)
         return None
     if out.returncode != 0:
+        # Say WHY. "no healthy Resolve" with no reason sent this investigation
+        # looking at Resolve twice when the probe subprocess had simply failed to
+        # start — an unhelpful error of exactly the kind this study keeps finding
+        # in the API it is measuring.
+        detail = (out.stderr or out.stdout or "").strip().splitlines()
+        print(f"  health: probe exited {out.returncode}"
+              + (f": {detail[-1][:200]}" if detail else " with no output"), file=sys.stderr)
         return None
     try:
         return json.loads(out.stdout.strip().splitlines()[-1])
     except Exception:
+        print(f"  health: unparseable output {out.stdout.strip()[:200]!r}", file=sys.stderr)
         return None
 
 

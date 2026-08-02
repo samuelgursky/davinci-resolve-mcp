@@ -83,12 +83,41 @@ def _process_lines() -> Optional[List[str]]:
         return None
 
 
+def _is_resolve_command(line: str) -> bool:
+    """Is this command line a Resolve *executable*, not merely a mention of one?
+
+    A plain substring test matches any process whose command line happens to
+    contain the path — including a shell running a script that references it.
+    Observed: a `zsh -c '... /Applications/DaVinci Resolve/.../Resolve -nogui ...'`
+    was counted as a second Resolve instance, which made `instances` wrong and
+    made a launch refuse with "a Resolve is running in the other mode".
+
+    A real Resolve command line is the executable path, optionally followed by
+    flags. So strip trailing flag tokens and require what remains to *end* with
+    the pattern. That survives the spaces in "DaVinci Resolve.app" (no splitting
+    on whitespace) while rejecting a path buried mid-command.
+    """
+    text = line.strip()
+    while True:
+        stripped = text.rstrip()
+        cut = stripped.rfind(" -")
+        if cut == -1:
+            break
+        candidate = stripped[:cut].rstrip()
+        # Only treat the tail as a flag if dropping it still leaves a plausible
+        # path; otherwise a directory named " -something" would be eaten.
+        if not candidate:
+            break
+        text = candidate
+    return any(text.endswith(pattern) for pattern in RESOLVE_PROCESS_PATTERNS)
+
+
 def resolve_processes() -> Optional[List[str]]:
     """Command lines of running Resolve applications, or None if undeterminable."""
     lines = _process_lines()
     if lines is None:
         return None
-    return [line for line in lines if any(p in line for p in RESOLVE_PROCESS_PATTERNS)]
+    return [line for line in lines if _is_resolve_command(line)]
 
 
 def runtime_mode() -> Dict[str, Any]:

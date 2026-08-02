@@ -305,6 +305,21 @@ def render_markdown(matrix: Dict[str, Any], *, title: str = "GUI vs headless pro
     if not acted:
         lines.append("None: every probe that ran in both modes agreed.")
         return "\n".join(lines) + "\n"
+    lines += [
+        "> **Re-verify every row below in isolation before believing it.** Probes run in "
+        "catalogue order against one shared fixture, so a probe near the end has ~90 "
+        "destructive probes' worth of accumulated state behind it, and the two modes can "
+        "drift apart for reasons that have nothing to do with the mode. Measured: five "
+        "findings here — nested timelines, clip linking, take selectors, multi-job queues "
+        "and render presets — all reproduced as mode differences in a full sweep and all "
+        "came out **identical** when re-run with `--only`. Isolation is the test:",
+        "",
+        "> ```",
+        "> python scripts/mode_matrix.py run --mode gui      --out iso_gui.jsonl  --only <probe>",
+        "> python scripts/mode_matrix.py run --mode headless --out iso_hl.jsonl   --only <probe>",
+        "> ```",
+        "",
+    ]
     lines += ["| probe | verdict | GUI | headless | note |", "| --- | --- | --- | --- | --- |"]
     for f in acted:
         lines.append("| `{p}` | {v} | {g} | {h} | {r} |".format(

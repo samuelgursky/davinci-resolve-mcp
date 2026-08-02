@@ -1,14 +1,14 @@
 {
   "counts": {
-    "parity": 85,
+    "parity": 86,
     "flaky": 0,
     "hang_headless": 0,
     "hang_gui": 0,
-    "headless_degraded": 0,
+    "headless_degraded": 2,
     "gui_degraded": 0,
     "both_hang": 0,
-    "both_failed": 7,
-    "divergent": 0,
+    "both_failed": 14,
+    "divergent": 3,
     "untested": 0
   },
   "findings": [
@@ -24,7 +24,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "app.current_page",
@@ -35,7 +35,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "reason": "app-global state the sweep itself moves; compared by outcome only",
       "runs": {
@@ -55,7 +55,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "app.fusion_current_comp",
@@ -66,7 +66,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -85,7 +85,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "app.fusion_handle",
@@ -96,7 +96,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -115,7 +115,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "app.keyframe_mode",
@@ -126,7 +126,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -145,7 +145,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "app.media_storage",
@@ -156,7 +156,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -175,7 +175,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "app.mounted_volumes",
@@ -186,7 +186,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -205,7 +205,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "app.product_name",
@@ -216,7 +216,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -235,7 +235,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "app.version_string",
@@ -246,7 +246,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -265,7 +265,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "audio.add_delete_track",
@@ -276,7 +276,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -295,7 +295,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "audio.set_track_name",
@@ -306,7 +306,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -325,7 +325,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "audio.track_count",
@@ -336,7 +336,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -355,7 +355,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "color.group_roundtrip",
@@ -366,7 +366,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -385,7 +385,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "color.node_graph",
@@ -396,7 +396,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -415,7 +415,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "color.node_label",
@@ -426,7 +426,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -445,7 +445,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "color.node_lut",
@@ -456,7 +456,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -475,7 +475,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "color.num_nodes",
@@ -486,7 +486,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -505,7 +505,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "color.reset_all_grades",
@@ -516,7 +516,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -535,7 +535,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "color.set_cdl",
@@ -546,7 +546,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -565,7 +565,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "color.set_node_enabled",
@@ -576,7 +576,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -595,7 +595,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "color.tools_in_node",
@@ -606,8 +606,161 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "editorial.compound_clip",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "editorial.compound_clip",
+        "category": "editorial",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "TypeError: 'NoneType' object is not callable",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "editorial.compound_clip",
+        "category": "editorial",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "editorial.fusion_clip",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "editorial.fusion_clip",
+        "category": "editorial",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "TypeError: 'NoneType' object is not callable",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "editorial.fusion_clip",
+        "category": "editorial",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "editorial.nested_timeline",
+      "verdict": "headless_degraded",
+      "gui": {
+        "probe": "editorial.nested_timeline",
+        "category": "editorial",
+        "outcome": "ok",
+        "value": "'True/1'",
+        "seconds": 0.3,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "editorial.nested_timeline",
+        "category": "editorial",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "AttributeError: 'NoneType' object has no attribute 'CreateEmptyTimeline'",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "succeeded with a UI, failed without one",
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "editorial.set_clips_linked",
+      "verdict": "headless_degraded",
+      "gui": {
+        "probe": "editorial.set_clips_linked",
+        "category": "editorial",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.01,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "editorial.set_clips_linked",
+        "category": "editorial",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "succeeded with a UI, failed without one",
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "editorial.take_selector",
+      "verdict": "divergent",
+      "gui": {
+        "probe": "editorial.take_selector",
+        "category": "editorial",
+        "outcome": "ok",
+        "value": "'False/0/None/None'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "editorial.take_selector",
+        "category": "editorial",
+        "outcome": "ok",
+        "value": "'None/None/None/None'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "both returned, values differ",
       "runs": {
         "gui": 2,
         "headless": 2
@@ -621,11 +774,11 @@
         "category": "interchange",
         "outcome": "ok",
         "value": "'True/True'",
-        "seconds": 0.02,
+        "seconds": 0.03,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "export.aaf",
@@ -636,7 +789,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -651,11 +804,11 @@
         "category": "interchange",
         "outcome": "ok",
         "value": "'True/True'",
-        "seconds": 0.06,
+        "seconds": 0.01,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "export.drt",
@@ -666,7 +819,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -685,7 +838,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "export.edl",
@@ -696,7 +849,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -715,7 +868,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "export.fcpxml",
@@ -726,7 +879,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -745,7 +898,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "export.otio",
@@ -756,7 +909,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -771,11 +924,11 @@
         "category": "fusion",
         "outcome": "ok",
         "value": "'True/False'",
-        "seconds": 0.13,
+        "seconds": 0.12,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "fusion.add_delete_comp",
@@ -786,7 +939,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -805,7 +958,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "fusion.comp_count",
@@ -816,7 +969,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -835,7 +988,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "gallery.album_count",
@@ -846,7 +999,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -865,7 +1018,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "gallery.export_current_frame",
@@ -876,7 +1029,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -895,18 +1048,18 @@
         "mode": "gui",
         "detail": "",
         "note": "fails in BOTH modes without a visible Gallery panel",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "gallery.export_stills",
         "category": "gallery",
         "outcome": "false",
         "value": "False",
-        "seconds": 0.07,
+        "seconds": 0.04,
         "mode": "headless",
         "detail": "",
         "note": "fails in BOTH modes without a visible Gallery panel",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -925,7 +1078,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "gallery.handle",
@@ -936,7 +1089,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -955,7 +1108,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "item.duration",
@@ -966,7 +1119,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -985,7 +1138,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "item.flag_roundtrip",
@@ -996,7 +1149,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1015,7 +1168,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "item.left_offset",
@@ -1026,7 +1179,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1045,7 +1198,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "item.marker_roundtrip",
@@ -1056,7 +1209,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1075,7 +1228,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "item.media_pool_item",
@@ -1086,7 +1239,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1105,7 +1258,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "item.name",
@@ -1116,7 +1269,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1135,7 +1288,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "item.set_clip_color",
@@ -1146,7 +1299,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1161,11 +1314,11 @@
         "category": "timeline_item",
         "outcome": "ok",
         "value": "'True/1.25'",
-        "seconds": 0.0,
+        "seconds": 0.01,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "item.set_zoom_property",
@@ -1176,7 +1329,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1191,11 +1344,11 @@
         "category": "layout",
         "outcome": "ok",
         "value": "True",
-        "seconds": 0.0,
+        "seconds": 0.01,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "layout.delete_preset",
@@ -1206,7 +1359,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1225,7 +1378,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "layout.export_preset",
@@ -1236,7 +1389,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1251,11 +1404,11 @@
         "category": "layout",
         "outcome": "ok",
         "value": "True",
-        "seconds": 0.2,
+        "seconds": 0.18,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "layout.load_preset",
@@ -1266,7 +1419,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1285,7 +1438,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "layout.save_preset",
@@ -1296,7 +1449,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1311,22 +1464,22 @@
         "category": "lifecycle",
         "outcome": "ok",
         "value": "True",
-        "seconds": 3.3,
+        "seconds": 3.21,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "lifecycle.create_project",
         "category": "lifecycle",
         "outcome": "ok",
         "value": "True",
-        "seconds": 4.02,
+        "seconds": 3.97,
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1341,22 +1494,22 @@
         "category": "lifecycle",
         "outcome": "ok",
         "value": "'without_close=False/with_close=False'",
-        "seconds": 3.83,
+        "seconds": 3.75,
         "mode": "gui",
         "detail": "",
         "note": "LoadProject-away does NOT release the lock; CloseProject does",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "lifecycle.delete_after_close_releases_lock",
         "category": "lifecycle",
         "outcome": "ok",
         "value": "'without_close=False/with_close=False'",
-        "seconds": 4.64,
+        "seconds": 4.57,
         "mode": "headless",
         "detail": "",
         "note": "LoadProject-away does NOT release the lock; CloseProject does",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1371,22 +1524,142 @@
         "category": "lifecycle",
         "outcome": "ok",
         "value": "'True/True/False'",
-        "seconds": 3.3,
+        "seconds": 3.23,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "lifecycle.load_and_close",
         "category": "lifecycle",
         "outcome": "ok",
         "value": "'True/True/False'",
-        "seconds": 4.0,
+        "seconds": 4.02,
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "longop.auto_sync_audio",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "longop.auto_sync_audio",
+        "category": "longop",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "needs >= 2 pool items, at least one video and one audio",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "longop.auto_sync_audio",
+        "category": "longop",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "AttributeError: 'NoneType' object has no attribute 'GetRootFolder'",
+        "note": "needs >= 2 pool items, at least one video and one audio",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "longop.create_subtitles_from_audio",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "longop.create_subtitles_from_audio",
+        "category": "longop",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "Studio AI; enum-keyed settings dict",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "longop.create_subtitles_from_audio",
+        "category": "longop",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "Studio AI; enum-keyed settings dict",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "longop.link_unlink_proxy",
+      "verdict": "parity",
+      "gui": {
+        "probe": "longop.link_unlink_proxy",
+        "category": "longop",
+        "outcome": "ok",
+        "value": "'None/None'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "longop.link_unlink_proxy",
+        "category": "longop",
+        "outcome": "ok",
+        "value": "'None/None'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "longop.transcribe_audio",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "longop.transcribe_audio",
+        "category": "longop",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "Studio AI; may need a language model present",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "longop.transcribe_audio",
+        "category": "longop",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "Studio AI; may need a language model present",
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1401,11 +1674,11 @@
         "category": "pages",
         "outcome": "ok",
         "value": "'True/color'",
-        "seconds": 0.06,
+        "seconds": 0.12,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "page.open_color",
@@ -1416,7 +1689,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1431,11 +1704,11 @@
         "category": "pages",
         "outcome": "ok",
         "value": "'True/cut'",
-        "seconds": 0.05,
+        "seconds": 0.04,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "page.open_cut",
@@ -1446,7 +1719,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1461,11 +1734,11 @@
         "category": "pages",
         "outcome": "ok",
         "value": "'True/deliver'",
-        "seconds": 0.03,
+        "seconds": 0.04,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "page.open_deliver",
@@ -1476,7 +1749,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1491,11 +1764,11 @@
         "category": "pages",
         "outcome": "ok",
         "value": "'True/edit'",
-        "seconds": 0.05,
+        "seconds": 0.07,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "page.open_edit",
@@ -1506,7 +1779,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1521,11 +1794,11 @@
         "category": "pages",
         "outcome": "ok",
         "value": "'True/fairlight'",
-        "seconds": 0.04,
+        "seconds": 0.05,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "page.open_fairlight",
@@ -1536,7 +1809,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1551,11 +1824,11 @@
         "category": "pages",
         "outcome": "ok",
         "value": "'True/fusion'",
-        "seconds": 1.1,
+        "seconds": 1.37,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "page.open_fusion",
@@ -1566,7 +1839,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1581,22 +1854,22 @@
         "category": "pages",
         "outcome": "ok",
         "value": "'True/media'",
-        "seconds": 0.06,
+        "seconds": 0.12,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "page.open_media",
         "category": "pages",
         "outcome": "ok",
         "value": "'True/media'",
-        "seconds": 0.02,
+        "seconds": 0.03,
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1615,7 +1888,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pm.current_database",
@@ -1626,7 +1899,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1645,7 +1918,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pm.current_folder",
@@ -1656,7 +1929,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1671,11 +1944,11 @@
         "category": "project_manager",
         "outcome": "ok",
         "value": "'Untitled Project'",
-        "seconds": 0.05,
+        "seconds": 0.0,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pm.current_project_name_on_untitled",
@@ -1686,7 +1959,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1705,7 +1978,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pm.database_list",
@@ -1716,7 +1989,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1731,22 +2004,22 @@
         "category": "project_manager",
         "outcome": "ok",
         "value": "'True/True'",
-        "seconds": 0.08,
+        "seconds": 0.02,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pm.export_project",
         "category": "project_manager",
         "outcome": "ok",
         "value": "'True/True'",
-        "seconds": 0.06,
+        "seconds": 0.02,
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1765,7 +2038,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pm.folder_list",
@@ -1776,7 +2049,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1795,7 +2068,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pm.project_list_count",
@@ -1806,7 +2079,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1821,11 +2094,11 @@
         "category": "project_manager",
         "outcome": "ok",
         "value": "True",
-        "seconds": 0.15,
+        "seconds": 0.02,
         "mode": "gui",
         "detail": "",
         "note": "the control for save_untitled_project: must work in both modes",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pm.save_named_project",
@@ -1836,7 +2109,7 @@
         "mode": "headless",
         "detail": "",
         "note": "the control for save_untitled_project: must work in both modes",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1851,11 +2124,11 @@
         "category": "media_pool",
         "outcome": "ok",
         "value": "True",
-        "seconds": 0.03,
+        "seconds": 0.04,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pool.add_subfolder",
@@ -1866,7 +2139,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1881,11 +2154,11 @@
         "category": "media_pool",
         "outcome": "false",
         "value": "False",
-        "seconds": 0.0,
+        "seconds": 0.07,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pool.append_to_timeline",
@@ -1896,7 +2169,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1915,7 +2188,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pool.clip_count",
@@ -1926,7 +2199,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1945,7 +2218,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pool.clip_marker_roundtrip",
@@ -1956,7 +2229,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -1975,7 +2248,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pool.clip_resolution",
@@ -1986,7 +2259,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2005,7 +2278,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pool.root_folder",
@@ -2016,7 +2289,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2035,7 +2308,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pool.set_clip_color",
@@ -2046,7 +2319,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2065,7 +2338,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "pool.set_clip_metadata",
@@ -2076,7 +2349,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2095,7 +2368,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "project.read_frame_rate",
@@ -2106,7 +2379,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2125,7 +2398,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "project.set_colour_science",
@@ -2136,7 +2409,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2151,11 +2424,11 @@
         "category": "project_settings",
         "outcome": "ok",
         "value": "'True/1920'",
-        "seconds": 0.01,
+        "seconds": 0.0,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "project.set_resolution",
@@ -2166,7 +2439,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2185,7 +2458,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "project.setting_count",
@@ -2196,7 +2469,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2215,7 +2488,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "project.unique_id_shape",
@@ -2226,8 +2499,130 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "projectlevel.archive_project",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "projectlevel.archive_project",
+        "category": "projectlevel",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "writes a .dra bundle; media excluded to keep it small",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "projectlevel.archive_project",
+        "category": "projectlevel",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "writes a .dra bundle; media excluded to keep it small",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "projectlevel.export_burn_in_preset",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "projectlevel.export_burn_in_preset",
+        "category": "projectlevel",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "projectlevel.export_burn_in_preset",
+        "category": "projectlevel",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "projectlevel.multi_job_queue",
+      "verdict": "divergent",
+      "gui": {
+        "probe": "projectlevel.multi_job_queue",
+        "category": "projectlevel",
+        "outcome": "ok",
+        "value": "'3/3'",
+        "seconds": 0.41,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "projectlevel.multi_job_queue",
+        "category": "projectlevel",
+        "outcome": "ok",
+        "value": "'0/0'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "both returned, values differ",
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "projectlevel.render_preset_roundtrip",
+      "verdict": "divergent",
+      "gui": {
+        "probe": "projectlevel.render_preset_roundtrip",
+        "category": "projectlevel",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.07,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "projectlevel.render_preset_roundtrip",
+        "category": "projectlevel",
+        "outcome": "ok",
+        "value": "'None/None'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "both returned, values differ",
       "runs": {
         "gui": 2,
         "headless": 2
@@ -2245,7 +2640,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "render.codec_count_mov",
@@ -2256,7 +2651,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2275,7 +2670,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "render.format_count",
@@ -2286,7 +2681,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2301,11 +2696,11 @@
         "category": "render",
         "outcome": "ok",
         "value": "'1/True'",
-        "seconds": 0.13,
+        "seconds": 0.14,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "render.job_roundtrip",
@@ -2316,7 +2711,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2335,7 +2730,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "render.preset_count",
@@ -2346,7 +2741,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2365,7 +2760,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "render.set_format_codec",
@@ -2376,7 +2771,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2391,22 +2786,22 @@
         "category": "render",
         "outcome": "ok",
         "value": "'Complete/1'",
-        "seconds": 1.3,
+        "seconds": 1.36,
         "mode": "gui",
         "detail": "",
         "note": "the delivery path end to end; the only probe that writes real pixels",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "render.to_disk",
         "category": "render",
         "outcome": "ok",
         "value": "'Complete/1'",
-        "seconds": 1.29,
+        "seconds": 1.28,
         "mode": "headless",
         "detail": "",
         "note": "the delivery path end to end; the only probe that writes real pixels",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2425,7 +2820,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.add_delete_track",
@@ -2436,7 +2831,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2455,7 +2850,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.current_video_item",
@@ -2466,7 +2861,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2485,7 +2880,7 @@
         "mode": "gui",
         "detail": "TypeError: 'NoneType' object is not callable",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.duplicate",
@@ -2496,7 +2891,7 @@
         "mode": "headless",
         "detail": "TypeError: 'NoneType' object is not callable",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2511,22 +2906,22 @@
         "category": "timeline",
         "outcome": "ok",
         "value": "True",
-        "seconds": 0.12,
+        "seconds": 0.11,
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.grab_still",
         "category": "timeline",
         "outcome": "ok",
         "value": "True",
-        "seconds": 0.08,
+        "seconds": 0.07,
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2545,7 +2940,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.marker_roundtrip",
@@ -2556,7 +2951,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2575,7 +2970,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.name",
@@ -2586,7 +2981,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2605,7 +3000,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.set_current_timecode",
@@ -2616,7 +3011,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2631,11 +3026,11 @@
         "category": "timeline",
         "outcome": "ok",
         "value": "True",
-        "seconds": 0.02,
+        "seconds": 0.0,
         "mode": "gui",
         "detail": "",
         "note": "documented to fail on the ACTIVE timeline",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.set_name",
@@ -2646,7 +3041,7 @@
         "mode": "headless",
         "detail": "",
         "note": "documented to fail on the ACTIVE timeline",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2665,7 +3060,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.set_track_name",
@@ -2676,7 +3071,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2695,7 +3090,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.start_timecode",
@@ -2706,7 +3101,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2725,7 +3120,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.track_count_video",
@@ -2736,7 +3131,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2755,7 +3150,7 @@
         "mode": "gui",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "headless": {
         "probe": "timeline.track_enable_roundtrip",
@@ -2766,7 +3161,7 @@
         "mode": "headless",
         "detail": "",
         "note": "",
-        "catalogue": "v3-61b7128e7651"
+        "catalogue": "v4-fa0daa777032"
       },
       "runs": {
         "gui": 2,
@@ -2774,10 +3169,10 @@
       }
     }
   ],
-  "probe_count": 92,
+  "probe_count": 105,
   "runs": {
     "gui": 2,
     "headless": 2
   },
-  "generated_at": "2026-08-01T23:55:48+00:00"
+  "generated_at": "2026-08-02T12:04:34+00:00"
 }
