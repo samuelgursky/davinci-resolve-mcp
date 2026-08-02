@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 21 missing capabilities, 18 bugs / unreliable behaviors.
+**Totals:** 21 missing capabilities, 20 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -244,6 +244,22 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Returns None when Resolve has come up without attaching to a project database — a state it reaches after an unclean shutdown, and does not recover from on its own. In that state the application looks entirely healthy: it accepts scripting connections, and GetProductName, GetVersionString, GetCurrentPage and GetCurrentProject all answer normally. But CreateProject and LoadProject return False indefinitely, SaveProject returns None, and some calls block forever in the scripting transport rather than returning at all. Observed headless on Studio 19.1.3.7 after force-killing a wedged instance; the replacement took 2m05s to become scriptable and came up with no database.
 - **Workaround / current handling:** Treat a non-None GetCurrentDatabase() as the liveness check, not a successful connection — every cheaper check passes in the wedged state. `resolve_control runtime_mode` reports `database_attached` for exactly this. There is no repair: quit and restart Resolve.
 - **Tags:** project, database, headless, silent-failure, startup
+
+### MediaPool.ImportTimelineFromFile
+
+- **Object:** `MediaPool`
+- **Signature:** `(filePath, {importOptions}) -> Timeline`
+- **Behavior:** Returns None — no error, no exception — when the requested `timelineName` already exists. Measured: importing one file three times with the same name succeeded once and returned None twice. An iterative loop that reuses a fixed name therefore works exactly once and then silently does nothing. DRT ignores importOptions entirely (timelineName, importSourceClips and sourceClipsFolders are all invalid for it): the timeline is named after the FILE, repeats auto-uniquify ('iter', 'iter 2', 'iter 3'), and because importSourceClips cannot be disabled each DRT import adds another copy of the source media to the pool. OTIO is the one format that will NOT relink from the pool — with importSourceClips=False its timeline rebuilds with correct structure and every item OFFLINE, in both GUI and headless.
+- **Workaround / current handling:** For a repeatable loop use FCP7 XML or AAF with a UNIQUE timelineName per iteration plus importSourceClips=False and sourceClipsFolders=[root] — verified frame-exact over five consecutive imports with no media duplicated. Use DRT for one-shot hand-offs only. For OTIO, pass importSourceClips=True with a sourceClipsPath. See docs/guides/headless-edit-loop.md.
+- **Tags:** timeline, import, interchange, silent-failure, conform
+
+### Timeline.Export(EXPORT_FCPXML_1_10)
+
+- **Object:** `Timeline`
+- **Signature:** `(fileName, EXPORT_FCPXML_1_10, EXPORT_NONE) -> bool`
+- **Behavior:** Returns True and creates a BUNDLE DIRECTORY at the given path containing `Info.fcpxml`, rather than a file — the `.fcpxmld` shape Final Cut uses. Two consequences bite immediately: a `stat().st_size` check reads the directory inode (96 bytes here) and concludes the export is empty, and ImportTimelineFromFile on that path fails because it is a directory. Every other EXPORT_* type in this build writes a plain file, so code that treats them uniformly gets this one wrong. Pointed at the inner member, the format round-trips frame-exactly in both modes.
+- **Workaround / current handling:** After exporting, check `Path(p).is_dir()` and import `next(Path(p).glob('*.fcpxml'))` instead. Do not size-check the export path itself.
+- **Tags:** timeline, export, interchange, fcpxml, silent-failure
 
 ### MediaPool.CreateTimelineFromClips
 

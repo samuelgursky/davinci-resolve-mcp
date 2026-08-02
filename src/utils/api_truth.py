@@ -158,6 +158,54 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
+        "symbol": "MediaPool.ImportTimelineFromFile",
+        "object": "MediaPool",
+        "signature": "(filePath, {importOptions}) -> Timeline",
+        "reality": "Returns None — no error, no exception — when the requested "
+                   "`timelineName` already exists. Measured: importing one file "
+                   "three times with the same name succeeded once and returned "
+                   "None twice. An iterative loop that reuses a fixed name "
+                   "therefore works exactly once and then silently does nothing. "
+                   "DRT ignores importOptions entirely (timelineName, "
+                   "importSourceClips and sourceClipsFolders are all invalid for "
+                   "it): the timeline is named after the FILE, repeats "
+                   "auto-uniquify ('iter', 'iter 2', 'iter 3'), and because "
+                   "importSourceClips cannot be disabled each DRT import adds "
+                   "another copy of the source media to the pool. OTIO is the one "
+                   "format that will NOT relink from the pool — with "
+                   "importSourceClips=False its timeline rebuilds with correct "
+                   "structure and every item OFFLINE, in both GUI and headless.",
+        "recommended": "For a repeatable loop use FCP7 XML or AAF with a UNIQUE "
+                       "timelineName per iteration plus importSourceClips=False "
+                       "and sourceClipsFolders=[root] — verified frame-exact over "
+                       "five consecutive imports with no media duplicated. Use DRT "
+                       "for one-shot hand-offs only. For OTIO, pass "
+                       "importSourceClips=True with a sourceClipsPath. See "
+                       "docs/guides/headless-edit-loop.md.",
+        "tags": ["timeline", "import", "interchange", "silent-failure", "conform"],
+        "submit": "bug",
+    },
+    {
+        "symbol": "Timeline.Export(EXPORT_FCPXML_1_10)",
+        "object": "Timeline",
+        "signature": "(fileName, EXPORT_FCPXML_1_10, EXPORT_NONE) -> bool",
+        "reality": "Returns True and creates a BUNDLE DIRECTORY at the given "
+                   "path containing `Info.fcpxml`, rather than a file — the "
+                   "`.fcpxmld` shape Final Cut uses. Two consequences bite "
+                   "immediately: a `stat().st_size` check reads the directory "
+                   "inode (96 bytes here) and concludes the export is empty, and "
+                   "ImportTimelineFromFile on that path fails because it is a "
+                   "directory. Every other EXPORT_* type in this build writes a "
+                   "plain file, so code that treats them uniformly gets this one "
+                   "wrong. Pointed at the inner member, the format round-trips "
+                   "frame-exactly in both modes.",
+        "recommended": "After exporting, check `Path(p).is_dir()` and import "
+                       "`next(Path(p).glob('*.fcpxml'))` instead. Do not size-"
+                       "check the export path itself.",
+        "tags": ["timeline", "export", "interchange", "fcpxml", "silent-failure"],
+        "submit": "bug",
+    },
+    {
         "symbol": "MediaPool.CreateTimelineFromClips",
         "object": "MediaPool",
         "reality": "Fails with a bare 'Failed to create timeline from clip_infos' "
