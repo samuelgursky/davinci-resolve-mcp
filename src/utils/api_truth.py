@@ -186,6 +186,68 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
+        "symbol": "Timeline.Export / ImportTimelineFromFile (format fidelity)",
+        "object": "Timeline",
+        "reality": "The formats are NOT interchangeable, and which one is right "
+                   "depends on the job — measured identically in GUI and "
+                   "headless. On a rich cut (2 video tracks, audio, per-item "
+                   "transform, colours, flags, item and timeline markers) only "
+                   "DRT kept everything. FCP7 XML kept the cut, tracks and most "
+                   "of the transform, losing only FlipX. AAF kept the cut and "
+                   "tracks but RESET THE WHOLE TRANSFORM to defaults. FCPXML 1.10 "
+                   "silently dropped an audio track (2v2a in, 2v1a out). OTIO "
+                   "lost the source association. EDL collapsed to 1v1a. "
+                   "But with media MOVED and sourceClipsPath given, the ranking "
+                   "inverts: FCP7 XML, AAF and FCPXML 1.10 relinked 3/3 and stayed "
+                   "frame-exact, while DRT relinked 0/3 (sourceClipsPath is not "
+                   "valid for DRT, so it cannot be told where the media went), EDL "
+                   "relinked 0/3, and OTIO's import returned None outright.",
+        "recommended": "Pick per job: DRT for full fidelity with media in place; "
+                       "FCP7 XML or AAF for an iterative loop or any conform where "
+                       "media may move; never DRT/OTIO/EDL for a relink. Note the "
+                       "cut stays frame-exact even when relinking fails, so a "
+                       "failed relink leaves a correct offline timeline rather "
+                       "than a wrong one. See docs/guides/headless-edit-loop.md.",
+        "tags": ["timeline", "export", "import", "interchange", "conform"],
+    },
+    {
+        "symbol": "BMD_RESOLVE_*_DIR environment variables",
+        "object": "Resolve",
+        "reality": "BMD_RESOLVE_CONFIG_DIR / SUPPORT_DIR / LUT_DIR genuinely "
+                   "isolate an instance — a launch with them set builds a private "
+                   "config.dat plus its own Resolve Project Library, Fairlight, "
+                   "DolbyVision and easyDCP trees, and the resulting instance sees "
+                   "ZERO of the machine's real projects. They do NOT defeat the "
+                   "single-instance guard: started while another Resolve was "
+                   "running, the second process created its private tree and then "
+                   "exited silently, logging nothing. So isolated instances are "
+                   "possible and PARALLEL instances are not. A fresh config also "
+                   "omits `System.Scripting.Mode = 1`, so an isolated instance is "
+                   "unreachable by scripting until that line is appended to its "
+                   "config.dat (plain ASCII) — until then it runs, opens no "
+                   "listener, and looks exactly like a hang. "
+                   "BMD_RESOLVE_LOGS_DIR only partly takes: LogArchive/ and "
+                   "gpudetect.bin appear there, the main log does not.",
+        "recommended": "Use for a CI/render worker that must not see or lock the "
+                       "operator's projects. Seed the scripting preference after "
+                       "the first boot. Do not expect to run two at once. Recipe "
+                       "in docs/reference/headless-cli.md.",
+        "tags": ["headless", "isolation", "singleton", "ci", "startup"],
+    },
+    {
+        "symbol": "Resolve -fastmode",
+        "object": "Resolve",
+        "reality": "Starts a process that stays alive at 0% CPU and never opens "
+                   "the scripting listener — port 15000 is not bound at all, and "
+                   "it was still unreachable after two minutes. Exercised in an "
+                   "isolated sandbox on Studio 19.1.3.7.",
+        "recommended": "Not usable for automation; do not pass it. (`-activate` "
+                       "and `-deactivate` remain deliberately unexercised: their "
+                       "adjacent strings show they mutate this machine's Studio "
+                       "licence activation.)",
+        "tags": ["headless", "cli-flags"],
+    },
+    {
         "symbol": "Timeline.Export(EXPORT_FCPXML_1_10)",
         "object": "Timeline",
         "signature": "(fileName, EXPORT_FCPXML_1_10, EXPORT_NONE) -> bool",

@@ -10,10 +10,23 @@ the raw runs are in `docs/reference/evidence/`.
 
 ## The short answer
 
-**Mode does not matter.** All six interchange formats round-trip
-frame-accurately in headless exactly as they do in the GUI — see
-[roundtrip-fidelity.md](../reference/roundtrip-fidelity.md). Choose a format on
-its other properties, not on whether you have a UI.
+**Mode does not matter.** Every result below is byte-identical between GUI and
+`-nogui` — the flat round trip, the complex-cut round trip, and the moved-media
+relink. Choose a format on its properties, never on whether you have a UI.
+
+**There is no single best format.** Three measurements pull in different
+directions, and the right choice depends on which one you are up against:
+
+| what you need | format | why |
+| --- | --- | --- |
+| **Full fidelity**, media staying put | **DRT** | the only format that kept *everything*: transforms, colours, flags, item and timeline markers |
+| **Iterative loop**, media staying put | **FCP7 XML** or AAF | no media duplication, controllable timeline name — DRT has neither |
+| **Media has MOVED** (real conform) | **FCP7 XML**, AAF, FCPXML 1.10 | the only three that relink. **DRT, OTIO and EDL all fail** |
+
+The trap is that DRT looks like the obvious choice — it is native and it is the
+only format that survives a rich cut intact — and it is the *worst* choice for
+both of the other two jobs. It re-imports its media every time, and it cannot
+relink media that has moved at all.
 
 **For an iterative loop, use FCP7 XML (or AAF) with:**
 
@@ -91,6 +104,54 @@ Every other format relinks against the existing pool. OTIO does not: with
 `reuse_pool` the timeline rebuilds with correct structure and **all four items
 offline**, in both modes. With `importSourceClips: True` and a `sourceClipsPath`
 it links correctly. If you want OTIO, re-import the sources.
+
+## What each format actually keeps
+
+The flat single-track round trip found every format frame-exact — because a flat
+cut of untouched clips gives them nothing to disagree about. On a real cut (two
+video tracks, audio, a per-item transform, clip colours, flags, item and timeline
+markers) they diverge sharply. Identical in both modes:
+
+| format | cut | tracks | transform | colour | flags | item markers | timeline markers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **drt** | kept | kept | **kept** | **kept** | kept | **kept** | kept |
+| fcpxml_1_10 | kept | **lost an audio track** | kept | lost | kept | lost | lost |
+| fcp7xml | kept | kept | lost **only FlipX** | lost | kept | lost | lost |
+| aaf | kept | kept | **lost: all reset to defaults** | lost | kept | lost | kept |
+| otio | **lost: source** | kept | kept | lost | lost | kept | kept |
+| edl | **lost** | **1v1a** | n/a | lost | lost | lost | lost |
+
+Two details worth having:
+
+- **AAF resets the entire transform to defaults**, while **FCP7 XML preserves
+  zoom, pan and rotation exactly** and drops only `FlipX`. A whole-dict
+  comparison called both "lost", which is the same word for "carries geometry"
+  and "does not". Crop comes back as 39.999936 against 40.0 — that is unit
+  round-tripping, not loss.
+- **FCPXML 1.10 silently drops an audio track** (2v2a in, 2v1a out).
+
+## Relinking media that has moved
+
+The test that matters for conform: build the cut, export it, **rename the media
+directory** so every baked-in path is dead, then import in a fresh project with
+`sourceClipsPath` pointing at the new location. Identical in both modes:
+
+| format | relinked | cut still frame-exact |
+| --- | --- | --- |
+| fcp7xml | **3/3** | yes |
+| aaf | **3/3** | yes |
+| fcpxml_1_10 | **3/3** | yes |
+| drt | **0/3** — items stay pointing at the dead path | yes (but offline) |
+| edl | **0/3** | yes (but offline) |
+| otio | **import returned None** — fails outright | — |
+
+`sourceClipsPath` is not valid for DRT, so DRT has no mechanism to be told where
+the media went. EDL carries reel names rather than paths and did not resolve
+either. OTIO did not merely fail to relink — the import returned `None`.
+
+Note that "frame-exact" stays true even where nothing relinked: the *cut*
+survives offline. That is worth knowing, because it means a failed relink leaves
+a correct timeline you can relink by other means, rather than a wrong one.
 
 ## Format selection
 

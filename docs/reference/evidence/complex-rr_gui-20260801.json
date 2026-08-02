@@ -1,0 +1,808 @@
+{
+  "metadata": {
+    "mode": "gui",
+    "headless": false,
+    "recorded_at": "2026-08-02T00:56:15+00:00",
+    "version": "19.1.3.7"
+  },
+  "formats": {
+    "drt": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_drt.drt",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_drt.drt",
+        "bytes": 19709
+      },
+      "import": {
+        "imported": true,
+        "name": "rr_drt",
+        "described": {
+          "cut": [
+            {
+              "track": 1,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 2,
+              "start": 86496,
+              "duration": 47,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "tracks": {
+            "video": 2,
+            "audio": 2,
+            "audio_items": 3
+          },
+          "transform": [
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.35,
+              "Pan": 96.0,
+              "RotationAngle": 12.0,
+              "CropLeft": 40.0,
+              "FlipX": true
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            }
+          ],
+          "colour": [
+            "Orange",
+            "",
+            "",
+            ""
+          ],
+          "flags": [
+            [
+              "Blue"
+            ],
+            [],
+            [
+              "Blue"
+            ],
+            []
+          ],
+          "markers": [
+            1,
+            0,
+            0,
+            0
+          ],
+          "timeline_markers": 1,
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          }
+        }
+      },
+      "dimensions": {
+        "cut": "kept",
+        "tracks": "kept",
+        "linkage": "kept",
+        "transform": "kept",
+        "colour": "kept",
+        "flags": "kept",
+        "markers": "kept",
+        "timeline_markers": "kept"
+      }
+    },
+    "fcpxml_1_10": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_fcpxml_1_10.fcpxml",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_fcpxml_1_10.fcpxml/Info.fcpxml",
+        "bytes": 3187
+      },
+      "import": {
+        "imported": true,
+        "name": "RR_fcpxml_1_10_a",
+        "described": {
+          "cut": [
+            {
+              "track": 1,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 2,
+              "start": 86496,
+              "duration": 47,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "tracks": {
+            "video": 2,
+            "audio": 1,
+            "audio_items": 3
+          },
+          "transform": [
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.35,
+              "Pan": 96.00001200000001,
+              "RotationAngle": 12.0,
+              "CropLeft": 39.99996000000001,
+              "FlipX": true
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            }
+          ],
+          "colour": [
+            "",
+            "",
+            "",
+            ""
+          ],
+          "flags": [
+            [
+              "Blue"
+            ],
+            [],
+            [
+              "Blue"
+            ],
+            []
+          ],
+          "markers": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "timeline_markers": 0,
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          }
+        }
+      },
+      "dimensions": {
+        "cut": "kept",
+        "tracks": "lost:2v1a!=2v2a",
+        "linkage": "kept",
+        "transform": "kept",
+        "colour": "lost",
+        "flags": "kept",
+        "markers": "lost",
+        "timeline_markers": "lost"
+      }
+    },
+    "fcp7xml": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_fcp7xml.xml",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_fcp7xml.xml",
+        "bytes": 39522
+      },
+      "import": {
+        "imported": true,
+        "name": "RR_fcp7xml_a",
+        "described": {
+          "cut": [
+            {
+              "track": 1,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 2,
+              "start": 86496,
+              "duration": 47,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "tracks": {
+            "video": 2,
+            "audio": 2,
+            "audio_items": 3
+          },
+          "transform": [
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": -0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.35,
+              "Pan": 96.0,
+              "RotationAngle": 12.0,
+              "CropLeft": 39.999936000000005,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": -0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": -0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            }
+          ],
+          "colour": [
+            "",
+            "",
+            "",
+            ""
+          ],
+          "flags": [
+            [
+              "Blue"
+            ],
+            [],
+            [
+              "Blue"
+            ],
+            []
+          ],
+          "markers": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "timeline_markers": 0,
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          }
+        }
+      },
+      "dimensions": {
+        "cut": "kept",
+        "tracks": "kept",
+        "linkage": "kept",
+        "transform": "lost:FlipX",
+        "colour": "lost",
+        "flags": "kept",
+        "markers": "lost",
+        "timeline_markers": "lost"
+      }
+    },
+    "aaf": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_aaf.aaf",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_aaf.aaf",
+        "bytes": 319488
+      },
+      "import": {
+        "imported": true,
+        "name": "RR_aaf_a",
+        "described": {
+          "cut": [
+            {
+              "track": 1,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 2,
+              "start": 86496,
+              "duration": 47,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "tracks": {
+            "video": 2,
+            "audio": 2,
+            "audio_items": 3
+          },
+          "transform": [
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            }
+          ],
+          "colour": [
+            "",
+            "",
+            "",
+            ""
+          ],
+          "flags": [
+            [
+              "Blue"
+            ],
+            [],
+            [
+              "Blue"
+            ],
+            []
+          ],
+          "markers": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "timeline_markers": 1,
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          }
+        }
+      },
+      "dimensions": {
+        "cut": "kept",
+        "tracks": "kept",
+        "linkage": "kept",
+        "transform": "lost:all",
+        "colour": "lost",
+        "flags": "kept",
+        "markers": "lost",
+        "timeline_markers": "kept"
+      }
+    },
+    "otio": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_otio.otio",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_otio.otio",
+        "bytes": 83288
+      },
+      "import": {
+        "imported": true,
+        "name": "RR_otio_a",
+        "described": {
+          "cut": [
+            {
+              "track": 1,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": null
+            },
+            {
+              "track": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": null
+            },
+            {
+              "track": 1,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": null
+            },
+            {
+              "track": 2,
+              "start": 86496,
+              "duration": 47,
+              "left_offset": 0,
+              "source": null
+            }
+          ],
+          "tracks": {
+            "video": 2,
+            "audio": 2,
+            "audio_items": 3
+          },
+          "transform": [
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.35,
+              "Pan": 96.0,
+              "RotationAngle": 12.0,
+              "CropLeft": 40.0,
+              "FlipX": true
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            }
+          ],
+          "colour": [
+            "",
+            "",
+            "",
+            ""
+          ],
+          "flags": [
+            [],
+            [],
+            [],
+            []
+          ],
+          "markers": [
+            1,
+            0,
+            0,
+            0
+          ],
+          "timeline_markers": 1,
+          "linkage": {
+            "linked": 0,
+            "offline": 4
+          }
+        }
+      },
+      "dimensions": {
+        "cut": "lost:source",
+        "tracks": "kept",
+        "linkage": "offline:4",
+        "transform": "kept",
+        "colour": "lost",
+        "flags": "lost",
+        "markers": "kept",
+        "timeline_markers": "kept"
+      }
+    },
+    "edl": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_edl.edl",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports_rich/rr_edl.edl",
+        "bytes": 395
+      },
+      "import": {
+        "imported": true,
+        "name": "RR_edl_a",
+        "described": {
+          "cut": [
+            {
+              "track": 1,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            }
+          ],
+          "tracks": {
+            "video": 1,
+            "audio": 1,
+            "audio_items": 3
+          },
+          "transform": [
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            },
+            {
+              "ZoomX": 1.0,
+              "Pan": 0.0,
+              "RotationAngle": 0.0,
+              "CropLeft": 0.0,
+              "FlipX": false
+            }
+          ],
+          "colour": [
+            "",
+            "",
+            ""
+          ],
+          "flags": [
+            [
+              "Blue"
+            ],
+            [],
+            [
+              "Blue"
+            ]
+          ],
+          "markers": [
+            0,
+            0,
+            0
+          ],
+          "timeline_markers": 0,
+          "linkage": {
+            "linked": 3,
+            "offline": 0
+          }
+        }
+      },
+      "dimensions": {
+        "cut": "lost",
+        "tracks": "lost:1v1a!=2v2a",
+        "linkage": "kept",
+        "transform": "lost:item-count",
+        "colour": "lost",
+        "flags": "lost",
+        "markers": "lost",
+        "timeline_markers": "lost"
+      }
+    }
+  },
+  "setup": {
+    "project": "RICHRT_20260801_205615",
+    "applied": {
+      "transform": {
+        "ZoomX": true,
+        "Pan": true,
+        "RotationAngle": true,
+        "CropLeft": true,
+        "FlipX": true
+      },
+      "colour": true,
+      "flag": true,
+      "item_marker": true,
+      "timeline_marker": true
+    },
+    "reference": {
+      "cut": [
+        {
+          "track": 1,
+          "start": 86400,
+          "duration": 191,
+          "left_offset": 0,
+          "source": "rt_source_1.mov"
+        },
+        {
+          "track": 1,
+          "start": 86591,
+          "duration": 47,
+          "left_offset": 24,
+          "source": "rt_source_2.mov"
+        },
+        {
+          "track": 1,
+          "start": 86638,
+          "duration": 47,
+          "left_offset": 48,
+          "source": "rt_source_1.mov"
+        },
+        {
+          "track": 2,
+          "start": 86496,
+          "duration": 47,
+          "left_offset": 0,
+          "source": "rt_source_2.mov"
+        }
+      ],
+      "tracks": {
+        "video": 2,
+        "audio": 2,
+        "audio_items": 3
+      },
+      "transform": [
+        {
+          "ZoomX": 1.0,
+          "Pan": 0.0,
+          "RotationAngle": 0.0,
+          "CropLeft": 0.0,
+          "FlipX": false
+        },
+        {
+          "ZoomX": 1.35,
+          "Pan": 96.0,
+          "RotationAngle": 12.0,
+          "CropLeft": 40.0,
+          "FlipX": true
+        },
+        {
+          "ZoomX": 1.0,
+          "Pan": 0.0,
+          "RotationAngle": 0.0,
+          "CropLeft": 0.0,
+          "FlipX": false
+        },
+        {
+          "ZoomX": 1.0,
+          "Pan": 0.0,
+          "RotationAngle": 0.0,
+          "CropLeft": 0.0,
+          "FlipX": false
+        }
+      ],
+      "colour": [
+        "Orange",
+        "",
+        "",
+        ""
+      ],
+      "flags": [
+        [
+          "Blue"
+        ],
+        [],
+        [
+          "Blue"
+        ],
+        []
+      ],
+      "markers": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "timeline_markers": 1,
+      "linkage": {
+        "linked": 4,
+        "offline": 0
+      }
+    },
+    "dimensions_landed": {
+      "transform": true,
+      "colour": true,
+      "flags": true,
+      "markers": true,
+      "timeline_markers": true,
+      "tracks": true
+    }
+  },
+  "teardown": {
+    "closed": true,
+    "restored": true,
+    "deleted": true
+  }
+}

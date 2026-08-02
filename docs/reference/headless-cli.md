@@ -359,6 +359,68 @@ ps -Ao pid=,command= | grep "MacOS/Resolve" | grep -v grep
 An empty result is the only safe state. If a render node manages Resolve on this
 machine, turn it off first.
 
+## Isolated instances: yes. Parallel instances: no.
+
+The `BMD_RESOLVE_*_DIR` variables found in the binary **do work**, and they
+isolate more thoroughly than expected — but they do not defeat the singleton.
+
+**Measured, launching a second `-nogui` instance with isolated directories while
+one was already running:** the second process started, created a complete
+private tree — `config/config.dat`, `support/Resolve Project Library`,
+`support/Fairlight`, `support/DolbyVision`, `support/easyDCP` — and then **exited
+silently**, logging nothing beyond two log4cxx lines. The first instance was
+unharmed and kept port 15000. So **parallel headless workers on one machine are
+not possible this way.** That closes the biggest open architectural question on
+this list, in the negative.
+
+**Running alone, the same isolated instance works completely** — its own
+database with **zero projects**, entirely separate from the user's 242. That is
+still valuable: a CI or render worker that cannot see, lock, or damage the
+operator's projects.
+
+One non-obvious step is required. A fresh config does **not** enable external
+scripting, so an isolated instance starts unreachable — it runs, opens no
+listener, and looks like a hang. The user's own config has
+`System.Scripting.Mode = 1`; a fresh one has no such key. `config.dat` is plain
+ASCII, so seeding it is a one-liner:
+
+```bash
+ISO=/path/to/isolated
+mkdir -p "$ISO"/{config,support,logs,lut}
+
+# One boot to generate the default config, then enable external scripting.
+BMD_RESOLVE_CONFIG_DIR="$ISO/config" BMD_RESOLVE_SUPPORT_DIR="$ISO/support" \
+BMD_RESOLVE_LOGS_DIR="$ISO/logs"     BMD_RESOLVE_LUT_DIR="$ISO/lut" \
+  "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/MacOS/Resolve" -nogui &
+sleep 30; pkill -f "MacOS/Resolve"; sleep 8
+echo "System.Scripting.Mode = 1" >> "$ISO/config/config.dat"
+
+# Now it is scriptable, with its own empty project library.
+BMD_RESOLVE_CONFIG_DIR="$ISO/config" BMD_RESOLVE_SUPPORT_DIR="$ISO/support" \
+BMD_RESOLVE_LOGS_DIR="$ISO/logs"     BMD_RESOLVE_LUT_DIR="$ISO/lut" \
+  "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/MacOS/Resolve" -nogui &
+```
+
+`BMD_RESOLVE_LOGS_DIR` is the one that did not fully take: the isolated tree got
+`LogArchive/` and `gpudetect.bin` but no main log.
+
+## `-fastmode`: starts, and is not scriptable
+
+Exercised in the isolated sandbox. `Resolve -nogui -fastmode` starts a process
+that stays alive at 0% CPU and **never opens the scripting listener** — port
+15000 is not bound at all, and it was still unreachable after two minutes.
+Whatever it is for, it is not usable for automation. Do not use it.
+
+## Deliberately NOT exercised
+
+`-activate` and `-deactivate` are left untested **on purpose**, not by omission.
+The strings beside them ("License activated successfully.", "An activation
+already exists on this machine.", "License deactivated successfully.") say
+plainly that they mutate this machine's Studio licence activation. Running
+`-deactivate` to find out what it does could cost the operator their activation,
+and no finding here is worth that. If licence automation is ever needed, test it
+on a machine whose activation is expendable.
+
 ## Present but not exercised
 
 Read out of the application binary's argument table, adjacent to `-nogui` in the
