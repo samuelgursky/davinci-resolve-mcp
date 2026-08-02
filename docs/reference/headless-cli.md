@@ -465,6 +465,79 @@ ps -Ao pid=,command= | grep "MacOS/Resolve" | grep -v grep
 An empty result is the only safe state. If a render node manages Resolve on this
 machine, turn it off first.
 
+## Rendered pixels are identical
+
+The strongest result in this study, and the one everything else was missing.
+Every earlier comparison was of structure and return values; none of them could
+have caught a headless render that completes, produces a file of the right
+length in the right codec, and contains the wrong image.
+
+Five timelines rendered in each mode to ProRes 422 HQ, compared **after
+decoding** with ffmpeg `framemd5` so container metadata cannot influence the
+result:
+
+| effect | changed the picture? | pixels across modes |
+| --- | --- | --- |
+| plain | — | **identical** |
+| transform (zoom/pan/rotate) | yes | **identical** |
+| CDL grade | yes | **identical** |
+| 3D LUT | yes | **identical** |
+| Fusion comp (MediaIn→Blur→MediaOut) | yes | **identical** |
+
+The middle column is the control that makes the result mean anything. If a grade
+did not change the picture relative to plain, then "the modes agree" would only
+mean both rendered the same ungraded image. Every treatment is proven to have
+changed the output first — which took two corrections to achieve:
+
+- **`SetLUT` silently refused an absolute path.** It returns False and reads
+  back an empty string for a LUT Resolve has not "discovered". The first run
+  recorded `applied: False` and rendered pixels identical to plain, which would
+  have been written up as "LUT survives headless" — a pass produced by a grade
+  that never happened. Staging the LUT into the master LUT directory
+  (`src/utils/lut_paths.py:ensure_lut_in_master`) and referencing it relatively
+  fixes it.
+- **An empty Fusion comp cannot change anything**, so adding one and finding the
+  pixels unchanged proves nothing about whether Fusion reaches the renderer.
+
+## Fusion comps DO render from the API — if the graph is rooted
+
+Correcting this repository's own note, which said a comp created on a media clip
+through the API is "never applied at render".
+
+A comp wired `MediaIn → Blur → MediaOut`, created entirely through the API on an
+ordinary media clip, **renders in both modes**: PSNR between the plain and
+Fusion renders of the same timeline is 22.7 dB (identical would be infinite) and
+the file shrinks 22.5 MB → 14.8 MB, exactly as a blur should.
+
+The distinguishing factor appears to be whether MediaOut descends from MediaIn.
+The original observation — a MediaOut fed only by a Text+ with no MediaIn path,
+rendering the untouched clip — was not re-measured and stands for that
+configuration.
+
+A related failure worth knowing: a first attempt wired only `MediaOut → Blur`,
+leaving the Blur with no source. That did not silently bypass the comp — the
+**render job came back `Failed` with an 887-byte file.** An unrooted graph can
+take the render down.
+
+## Network scripting reaches a headless instance
+
+Confirmed rather than assumed: `scriptapp("Resolve", "127.0.0.1")` and the repo's
+`connect_resolve` with `RESOLVE_SCRIPT_HOST` both connect to a `-nogui` instance
+and see its database and all 242 projects. Headless and network scripting
+compose.
+
+`fuscript -p Resolve` also **discovers** a headless instance over the network,
+reporting hostname, IP, version and platform with no Python involved — useful
+for a supervisor checking what is running. Its script-execution forms (`-x` and a
+script file, Lua or py3) printed only the interpreter banner and produced no
+output in this build; not pursued further.
+
+**The in-app bridge cannot work headless.** The bridge listener only exists once
+someone runs Workspace > Scripts > resolve_bridge *inside* Resolve, and that menu
+requires a UI. Since external scripting is Studio-only, this means **the free
+edition cannot be driven headless at all** — the bridge is its only transport,
+and headless is the one mode where the bridge cannot be started.
+
 ## Isolated instances: yes. Parallel instances: no.
 
 The `BMD_RESOLVE_*_DIR` variables found in the binary **do work**, and they
