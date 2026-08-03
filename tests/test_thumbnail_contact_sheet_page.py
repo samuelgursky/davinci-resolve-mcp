@@ -67,6 +67,15 @@ class ContactSheetPageSwitchTest(unittest.TestCase):
         self.assertFalse(out.get("success"))
         self.assertIn("Color page", out["samples"][0]["error"])
 
+    def test_uncapturable_page_never_switches_so_restore_cannot_strand_on_color(self):
+        # GetCurrentPage can return None; switching then would skip the restore
+        # and leave the user on the Color page. The helper must not switch at all.
+        resolve = _FakeResolve(page=None)
+        out = _run(resolve)
+        self.assertFalse(out.get("success"))
+        self.assertEqual(resolve.opened, [])
+        self.assertIn("Color page", out["samples"][0]["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

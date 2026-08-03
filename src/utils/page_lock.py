@@ -77,3 +77,39 @@ def open_page_serialized(resolve, page):
     """Switch Resolve to `page` under the page lock. Returns OpenPage's result."""
     with page_lock():
         return resolve.OpenPage(page)
+
+
+@contextmanager
+def color_page_for_thumbnails(resolve):
+    """Hold the Color page for the block, restoring the user's page after.
+
+    GetCurrentClipThumbnailImage returns data only "for current media in the
+    Color Page" (docs/reference/resolve_scripting_api.txt) — on every other
+    page it silently returns None. Yields True when Resolve is on the Color
+    page for the block. If the current page can't be captured (GetCurrentPage
+    returned None or raised), no switch is attempted, so a skipped restore can
+    never strand the user on the Color page.
+
+    Switching to Color is not free in the GUI: besides the visible page flash,
+    Resolve may start cache/render work for the current clip.
+    """
+    original = None
+    try:
+        original = resolve.GetCurrentPage() if resolve else None
+    except Exception:
+        original = None
+    with page_lock():
+        on_color = original == "color"
+        if original and not on_color:
+            try:
+                on_color = bool(resolve.OpenPage("color"))
+            except Exception:
+                pass
+        try:
+            yield on_color
+        finally:
+            if original and original != "color":
+                try:
+                    resolve.OpenPage(original)
+                except Exception:
+                    pass

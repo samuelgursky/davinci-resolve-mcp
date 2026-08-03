@@ -48,7 +48,11 @@ from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
 from src.utils.contracts import validate as _validate_params
 from src.utils.cut_ir import build_cut_list as _build_cut_list
-from src.utils.page_lock import open_page_serialized as _open_page_serialized, page_lock as _page_lock
+from src.utils.page_lock import (
+    color_page_for_thumbnails as _color_page_for_thumbnails,
+    open_page_serialized as _open_page_serialized,
+    page_lock as _page_lock,
+)
 from src.utils.proc import safe_run
 from src.utils.readback import verify_by_readback, verification_stats as _verification_stats
 from src.utils.render_ids import (
@@ -5513,23 +5517,12 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
         original_timecode = tl.GetCurrentTimecode()
     except Exception:
         pass
-    # GetCurrentClipThumbnailImage only returns data while Resolve is on the
-    # Color page; on any other page every frame silently yields None. Switch
-    # there for the sampling loop and restore the user's page afterwards.
-    r = get_resolve()
-    original_page = None
-    try:
-        original_page = r.GetCurrentPage() if r else None
-    except Exception:
-        pass
+    # GetCurrentClipThumbnailImage only returns data "for current media in the
+    # Color Page" (docs/reference/resolve_scripting_api.txt); on any other page
+    # every frame silently yields None. Switch there for the sampling loop and
+    # restore the user's page afterwards.
     sampled = []
-    with _page_lock():
-        on_color = original_page == "color"
-        if r and not on_color:
-            try:
-                on_color = bool(r.OpenPage("color"))
-            except Exception:
-                pass
+    with _color_page_for_thumbnails(get_resolve()) as on_color:
         try:
             for sample in samples:
                 timecode, tc_err = _timeline_frame_id_to_timecode(tl, _marker_display_frame(tl, sample["frame"]))
@@ -5558,11 +5551,6 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
             if original_timecode:
                 try:
                     tl.SetCurrentTimecode(original_timecode)
-                except Exception:
-                    pass
-            if r and original_page and original_page != "color":
-                try:
-                    r.OpenPage(original_page)
                 except Exception:
                     pass
     sheet_samples = [sample for sample in sampled if sample.get("thumbnail_rgb")]
