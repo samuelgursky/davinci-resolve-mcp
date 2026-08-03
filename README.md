@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.70.2-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.70.3-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#server-modes)
@@ -58,10 +58,15 @@ menu. A Lua canary is installed alongside so you can tell that apart from a
 wrong folder.
 
 Validated on free 21.0.3.7 and Studio 19.1.3.7, both macOS. The Windows paths
-added in v2.70.1 (issue #106) shipped unverified; a report on free 21.0.1.11
-(issue #109) has since shown the bridge installing, listing and serving from
-`%PROGRAMDATA%` on Windows, so that path is now confirmed rather than assumed.
-`%APPDATA%` remains untested. Reports welcome.
+added in v2.70.1 (issue #106) shipped unverified; reports on free 21.0.1.11
+(issue #109) and free 21.0.3.7 (issue #112) have since shown the bridge
+installing, listing and serving from **both** `%PROGRAMDATA%` and `%APPDATA%` on
+Windows 11, so those paths are now confirmed rather than assumed.
+
+Note that the bridge holds its port for as long as it serves. Before v2.70.3 a
+Windows bridge could outlive Resolve and block the next session's listener; if
+you are on an older build and a bridge stops answering, check for a stale
+`fuscript.exe` still holding the port.
 
 This is the documented in-app path, not a licence circumvention, but Blackmagic
 could close it — treat it as a supported-until-it-is-not tier. Loopback only,

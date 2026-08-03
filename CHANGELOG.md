@@ -2,6 +2,77 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.70.3
+
+The free-edition bridge could never notice Resolve exiting on Windows, so it
+orphaned itself and blocked the next session. Reported in issue #112 by
+@ZontarLives, with a self-contained repro.
+
+### The bug
+
+`serve()` detected host exit with a single test:
+
+```python
+if os.getppid() != expected_parent:
+    break
+```
+
+That is a POSIX signal. When a parent dies, POSIX reparents the orphan to init
+and the value changes. **Windows does not reparent** — the parent pid is a
+static field in the process record, so `os.getppid()` returns the dead parent's
+pid forever and the check can never fire.
+
+The consequence is not a cosmetic leak. The orphaned `fuscript.exe` keeps port
+49632 and keeps accepting connections while holding a dead `resolve` handle, so
+the next Resolve session's bridge cannot bind, and the client sees:
+
+```
+bridge_timeout: Resolve did not answer in time - check for an open modal dialog,
+which blocks its scripting API entirely
+```
+
+against a socket that `Get-NetTCPConnection` reports as healthily `LISTENING`.
+Every surface-level check passes and the suggested cause is a red herring, which
+is what made it expensive to diagnose.
+
+### The fix
+
+Liveness is now asked directly instead of inferred from a pid changing:
+
+- `parent_has_exited()` keeps the reparent test as the fast path where it works,
+  then checks whether the parent pid still resolves to a live process, then
+  whether that process still name-matches `PARENT_MARKERS`. The last step also
+  catches pid reuse, which the old check would have misread as "Resolve exited".
+- On Windows liveness comes from `OpenProcess` + `WaitForSingleObject` via
+  `ctypes`. Only "no such process" counts as death: access-denied and every
+  other error are *unknown*, and unknown never ends the session — the module's
+  standing rule is that a bridge which exits early is worse than one that
+  lingers.
+- `_process_name()` gained a Windows branch (`QueryFullProcessImageNameW`). It
+  previously tried `/proc` then `ps`, so it returned an empty string on every
+  Windows machine. `scripts/resolve_bridge_probe.py` gets the same treatment.
+
+Binding failures now name the likely cause and the way out, rather than
+surfacing a bare "address already in use" that sends people to check firewalls.
+
+The Windows branch is injectable so it is tested off Windows — a constant
+`getppid` plus a simulated liveness answer. The platform difference is precisely
+what kept this invisible to everyone developing on macOS or Linux.
+
+### Also confirmed
+
+`%APPDATA%` now joins `%PROGRAMDATA%` as a verified Windows bridge location; the
+#112 report served reads from it against free 21.0.3.7. README and `docs/SKILL.md`
+updated, along with guidance that a bridge which stops answering while
+`LISTENING` is a stale process rather than a modal dialog.
+
+### Also in this release
+
+Two offline guard tests built their "not a temp path" target from `os.getcwd()`,
+which failed — and wrote a real `look.cube` into the working directory — whenever
+the suite ran from a directory under `/tmp`. `tests/_paths.py` makes them
+independent of where the suite runs.
+
 ## What's New in v2.70.2
 
 The control panel could never reach the free edition, even with a perfectly

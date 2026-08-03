@@ -33,11 +33,17 @@ work unchanged. Two things to know when diagnosing it:
   Lua canary, which always lists, so "Python not detected" is distinguishable
   from "wrong folder". The preflight is macOS-only — off macOS Resolve finds
   Python by other means, and running the check there was a false alarm (#106).
-- **Windows: `%PROGRAMDATA%` confirmed, `%APPDATA%` still not.** Both script
-  folders have been targeted since v2.70.1; a free 21.0.1.11 report (#109) has
-  since shown Resolve listing and serving the bridge from `%PROGRAMDATA%`. If a
-  user reports the menu entry missing on Windows, ask whether the Lua canary
-  lists — that separates "wrong folder" from "Python not detected" there too.
+- **Windows: both script folders confirmed.** `%PROGRAMDATA%` (#109) and
+  `%APPDATA%` (#112) have each been shown serving the bridge on Windows 11 free
+  builds. If a user reports the menu entry missing on Windows, ask whether the
+  Lua canary lists — that separates "wrong folder" from "Python not detected".
+- **A bridge that stops answering while its socket is `LISTENING` is a stale
+  process, not a modal dialog.** Before v2.70.3 the Windows bridge could never
+  detect Resolve exiting (`os.getppid()` does not change there), so it outlived
+  Resolve holding the port and answering with a dead handle — and the
+  `bridge_timeout` message blamed a modal dialog. On any build, the way out is
+  the `shutdown` operation (`BridgeClient.bridge_shutdown()`); killing the
+  process is the fallback, not the first move.
 - The **control panel connects over the bridge too** (fixed in v2.70.2). It runs
   as a separate process with its own connector, so a panel that reports "Resolve
   unavailable" while tool calls work is a panel-side bug, not a broken bridge.
