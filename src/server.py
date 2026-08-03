@@ -17017,12 +17017,20 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     Actions:
       get_name(clip_id) -> {name}
       get_metadata(clip_id, key?) -> {metadata}
-        — key: one string, or a list of strings to get just that subset
+        — key: one string, or a list of strings to get just that subset.
+          Missing keys: the list form maps them to null (distinguishing
+          absent from empty); the string form returns Resolve's "".
       set_metadata(clip_id, key, value) OR set_metadata(clip_id, metadata) -> {success}
       get_third_party_metadata(clip_id, key?) -> {metadata}
+        — key: one string, or a list of strings to get just that subset.
+          Missing keys: the list form maps them to null (distinguishing
+          absent from empty); the string form returns Resolve's "".
       set_third_party_metadata(clip_id, key, value) -> {success}
       get_media_id(clip_id) -> {media_id}
       get_clip_property(clip_id, key?) -> {properties}
+        — key: one string, or a list of strings to get just that subset.
+          Missing keys: the list form maps them to null (distinguishing
+          absent from empty); the string form returns Resolve's "".
       set_clip_property(clip_id, key, value) -> {success}
       get_clip_color(clip_id) -> {color}
       set_clip_color(clip_id, color) -> {success}
