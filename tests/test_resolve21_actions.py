@@ -440,5 +440,79 @@ class MissingExtrasStringReturnTest(unittest.TestCase):
         self.assertEqual(message, self.SPEECH_MSG)
 
 
+class RemoveMotionBlurStringReturnTest(unittest.TestCase):
+    """RemoveMotionBlur is in the same family and fails both ways.
+
+    It needs the AI Motion Deblur Extra like its siblings need theirs, so absent
+    the pack its return can be an error string rather than the documented
+    MediaPoolItem / list of pairs. That reproduced BOTH bugs this PR fixes, in
+    the one action that renders new media:
+
+      - media_pool_item: `if new_clip:` passed, `_clip_file_size` swallowed its
+        own AttributeError, and the string reached `.GetName()` and raised —
+        `generate_speech`'s crash verbatim.
+      - folder: iterating a string yields characters, the pair-unpack raised,
+        `except Exception: continue` ate it, and the action returned
+        `{"success": True, "created": []}` with a true success in the ledger.
+
+    Both were live-tested with the Extra INSTALLED, so the absent-pack return
+    was never observed — which is exactly why they were missed.
+    """
+
+    DEBLUR_MSG = "Required Package, 'AI Motion Deblur' is not Installed."
+
+    def setUp(self):
+        self.clip = Clip21()
+        self.folder = Folder21()
+        self.mp = MediaPoolStub(folder=self.folder, clip=self.clip)
+        self._orig_get_mp = compound._get_mp
+        self._orig_find_clip = compound._find_clip
+        compound._get_mp = lambda: (None, None, self.mp, None)
+        compound._find_clip = lambda root, cid: self.clip
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_root = compound._ai_ledger_root
+        compound._ai_ledger_root = lambda: self._tmp.name
+        compound._CONFIRM_TOKENS.clear()
+
+    def tearDown(self):
+        compound._get_mp = self._orig_get_mp
+        compound._find_clip = self._orig_find_clip
+        compound._ai_ledger_root = self._orig_root
+        compound._CONFIRM_TOKENS.clear()
+        self._tmp.cleanup()
+
+    def _confirmed(self, tool, action, params):
+        pending = tool(action, params)
+        return tool(action, dict(params, confirm_token=pending["confirm_token"]))
+
+    def test_clip_string_return_does_not_raise_attributeerror(self):
+        self.clip.RemoveMotionBlur = lambda *a: self.DEBLUR_MSG
+        out = self._confirmed(compound.media_pool_item, "remove_motion_blur", {"clip_id": "c1"})
+        self.assertFalse(out.get("success"))
+        self.assertEqual(out.get("error"), self.DEBLUR_MSG)
+
+    def test_folder_string_return_is_not_reported_as_success(self):
+        self.folder.RemoveMotionBlur = lambda *a: self.DEBLUR_MSG
+        out = self._confirmed(compound.folder, "remove_motion_blur",
+                              {"deblur_option": {"UseExtremeMode": True}})
+        self.assertFalse(out.get("success"),
+                         msg="created:[] alongside success:true was the silent lie")
+        self.assertEqual(out.get("created"), [])
+        self.assertEqual(out.get("error"), self.DEBLUR_MSG)
+
+    def test_a_working_extra_is_unaffected(self):
+        # The installed-pack path must behave exactly as before.
+        out = self._confirmed(compound.folder, "remove_motion_blur",
+                              {"deblur_option": {"UseExtremeMode": True}})
+        self.assertTrue(out["success"])
+        self.assertEqual(len(out["created"]), 1)
+        self.assertNotIn("error", out)
+
+        compound._CONFIRM_TOKENS.clear()
+        out = self._confirmed(compound.media_pool_item, "remove_motion_blur", {"clip_id": "c1"})
+        self.assertTrue(out["success"])
+        self.assertNotIn("error", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17106,11 +17106,18 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         if blocked:
             return blocked
         with _ai_ledger_timed("remove_motion_blur") as _rec:
+            # RemoveMotionBlur needs the AI Motion Deblur Extra, so it belongs to
+            # the same family as the methods above: absent the pack, the return
+            # can be an error STRING rather than the documented list. Iterating a
+            # string yields characters, the pair-unpack raises, `except Exception`
+            # swallows it, and the action reported success:true with created:[]
+            # — a silent lie in the confirm-gated path that renders new media.
             result = f.RemoveMotionBlur(deblur)
-            _rec.success = bool(result)
+            ok, message = _ai_result(result)
+            _rec.success = ok
             created = []
             total_bytes = 0
-            for pair in (result or []):
+            for pair in (result or []) if ok else []:
                 try:
                     orig, new = pair
                     path, nbytes = _clip_file_size(new)
@@ -17124,7 +17131,10 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
             if created:
                 _rec.output_path = created[0].get("output_path")
                 _rec.output_bytes = total_bytes or None
-        return {"success": bool(result), "created": created}
+        payload = {"success": ok, "created": created}
+        if message:
+            payload["error"] = message
+        return payload
     return _unknown(action, ["get_clips","get_name","get_subfolders","is_stale","get_unique_id","export","transcribe_audio","clear_transcription","perform_audio_classification","clear_audio_classification","analyze_for_intellisearch","analyze_for_slate","remove_motion_blur"])
 
 
@@ -17504,14 +17514,19 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if blocked:
             return blocked
         with _ai_ledger_timed("remove_motion_blur", clip_id=p.get("clip_id")) as _rec:
+            # Same shape as generate_speech: a MediaPoolItem return, and an error
+            # STRING when the AI Motion Deblur Extra is absent. `_clip_file_size`
+            # swallows its own AttributeError, so the string survived to
+            # `.GetName()` and raised there instead.
             new_clip = clip.RemoveMotionBlur(deblur)
-            _rec.success = bool(new_clip)
-            if new_clip:
+            ok, message = _ai_result(new_clip)
+            _rec.success = ok
+            if ok:
                 path, nbytes = _clip_file_size(new_clip)
                 _rec.output_path = path
                 _rec.output_bytes = nbytes
-        if not new_clip:
-            return {"success": False}
+        if not ok:
+            return {"success": False, "error": message} if message else {"success": False}
         return {"success": True, "new": new_clip.GetName(), "new_id": new_clip.GetUniqueId(),
                 "output_path": _rec.output_path, "output_bytes": _rec.output_bytes}
     elif action == "get_audio_mapping":
