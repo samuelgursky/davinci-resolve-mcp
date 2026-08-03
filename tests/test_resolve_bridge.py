@@ -2350,6 +2350,50 @@ class ParentExitDetectionTests(unittest.TestCase):
                 ))
 
 
+class ListenerLivenessTests(unittest.TestCase):
+    """`is_alive()` on the serve thread is a narrower question than it looks.
+
+    `serve_forever()` keeps its thread alive, so thread-aliveness does not
+    establish that the socket is still open. A bridge was reported lingering
+    with nothing listening on its port while its serve loop kept polling
+    (issue #112). That combination is still unexplained, but a process running
+    with no listener is useless either way, so the exit condition now asks the
+    socket directly.
+    """
+
+    def _bridge(self):
+        return rb.Bridge(
+            object(),
+            {"host": "127.0.0.1", "port": 0, "token": TOKEN, "auth_clock_skew_seconds": 60},
+            lambda op, args: {},
+        )
+
+    def test_a_started_bridge_reports_a_live_listener(self):
+        bridge = self._bridge().start()
+        try:
+            self.assertTrue(bridge._listener_is_live())
+        finally:
+            bridge.stop()
+
+    def test_a_stopped_bridge_reports_a_dead_listener(self):
+        bridge = self._bridge().start()
+        bridge.stop()
+        self.assertFalse(bridge._listener_is_live())
+
+    def test_a_closed_socket_is_detected_while_the_thread_still_runs(self):
+        bridge = self._bridge().start()
+        try:
+            self.assertTrue(bridge._thread.is_alive())
+            bridge._server.socket.close()  # thread keeps running; socket does not
+            self.assertFalse(bridge._listener_is_live(),
+                             "a closed socket must not read as a live listener")
+        finally:
+            try:
+                bridge.stop()
+            except Exception:
+                pass
+
+
 class BridgePortConflictTests(unittest.TestCase):
     """A stale bridge holding the port must say so, not fail opaquely."""
 

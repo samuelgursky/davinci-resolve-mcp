@@ -233,7 +233,7 @@ def _windows_process_name(pid: int) -> str:  # pragma: no cover - exercised on W
         import ctypes
         from ctypes import wintypes
 
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = _win_kernel32()
         handle = kernel32.OpenProcess(_WIN_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
         if not handle:
             return ""
@@ -257,6 +257,32 @@ _WIN_WAIT_TIMEOUT = 0x102
 _WIN_ERROR_INVALID_PARAMETER = 87
 
 
+def _win_kernel32():  # pragma: no cover - exercised on Windows
+    """kernel32 with prototypes declared.
+
+    Undeclared, ctypes treats the returned HANDLE as a 32-bit `c_int` while a
+    Win64 HANDLE is 64 bits. That is safe here by documented contract — Windows
+    keeps handle values within 32 bits for 32/64-bit interop, and observed
+    values are in the low thousands — but relying on it silently means the next
+    reader has to re-derive that argument, so declare the signatures instead.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)
+    ]
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
 def _process_is_alive(pid: int) -> Optional[bool]:
     """True / False / None when it genuinely cannot be determined.
 
@@ -270,7 +296,7 @@ def _process_is_alive(pid: int) -> Optional[bool]:
         try:
             import ctypes
 
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32 = _win_kernel32()
             access = _WIN_SYNCHRONIZE | _WIN_PROCESS_QUERY_LIMITED_INFORMATION
             handle = kernel32.OpenProcess(access, False, int(pid))
             if not handle:
@@ -656,6 +682,24 @@ class Bridge:
     def port(self) -> int:
         return self._server.server_address[1] if self._server else self.config["port"]
 
+    def _listener_is_live(self) -> bool:
+        """Is the socket still open, not merely: is the thread still running?
+
+        `serve_forever()` keeps a thread alive, so `is_alive()` answers a
+        narrower question than it appears to. A bridge was reported lingering
+        with nothing listening on its port while its serve loop kept polling
+        (issue #112) — that combination is unexplained, but a process still
+        running with no listener is useless either way, so the exit condition
+        asks about the socket directly rather than inferring it from the thread.
+        """
+        server = self._server
+        if server is None:
+            return False
+        try:
+            return server.fileno() >= 0
+        except Exception:
+            return False
+
     def serve(self, *, poll_seconds: float = 1.0, host_model: Optional[Dict[str, Any]] = None,
               parent_exited: Optional[Callable[[int, str], bool]] = None) -> Dict[str, Any]:
         """Start, then block or return according to the detected host model.
@@ -684,7 +728,7 @@ class Bridge:
                 if self._stop_event.is_set():
                     reason = self._stop_mode or "exit"
                     break
-                if self._thread is None or not self._thread.is_alive():
+                if self._thread is None or not self._thread.is_alive() or not self._listener_is_live():
                     reason = "listener_died"
                     break
                 if host_exited(expected_parent, expected_name):
