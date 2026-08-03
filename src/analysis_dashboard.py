@@ -11953,9 +11953,33 @@ def _serialize_resolve(func):
     return wrapper
 
 
+def _bridge_requested() -> bool:
+    """Has the operator asked for the in-app bridge?
+
+    Read at call time rather than at import, so a panel started before the
+    variable was set still honours it.
+    """
+    try:
+        from src.utils import resolve_bridge_client
+
+        return resolve_bridge_client.bridge_enabled()
+    except Exception:  # pragma: no cover - the client is optional
+        return False
+
+
 def _connect_resolve_read_only() -> Tuple[Any, Optional[str]]:
     global _RESOLVE_ENV_READY
     with _RESOLVE_API_LOCK:
+        # Blackmagic's module ships with the *installer*, not the App Store
+        # build, so a free-edition machine has no Developer/Scripting/Modules
+        # tree and both the environment setup and the import fail. Returning
+        # here made the control panel unreachable on exactly the configuration
+        # the bridge exists for: the MCP server connects fine over the bridge
+        # while the panel — a separate process with its own connector — reports
+        # "Resolve unavailable". `connect_resolve` accepts None in bridge mode,
+        # and this returned before ever calling it (server.py:_try_connect
+        # carries the same guard for the same reason).
+        bridge_on = _bridge_requested()
         # Environment + sys.path setup is pure overhead and never goes stale, so
         # run it once per process rather than on every connection.
         if not _RESOLVE_ENV_READY:
@@ -11968,18 +11992,39 @@ def _connect_resolve_read_only() -> Tuple[Any, Optional[str]]:
                         sys.path.append(candidate)
                 _RESOLVE_ENV_READY = True
             except Exception as exc:
-                return None, f"Resolve scripting API unavailable: {exc}"
+                if not bridge_on:
+                    return None, f"Resolve scripting API unavailable: {exc}"
+        dvr_script = None
         try:
-            import DaVinciResolveScript as dvr_script  # type: ignore
+            import DaVinciResolveScript as _dvr_script  # type: ignore
+
+            dvr_script = _dvr_script
         except Exception as exc:
-            return None, f"Resolve scripting API unavailable: {exc}"
+            if not bridge_on:
+                return None, f"Resolve scripting API unavailable: {exc}"
         try:
             resolve = connect_resolve(dvr_script)
         except Exception as exc:
             return None, f"Resolve connection failed: {exc}"
         if resolve is None:
-            return None, "DaVinci Resolve is not connected. Open Resolve Studio with a project loaded."
+            return None, _not_connected_message(bridge_on)
         return resolve, None
+
+
+def _not_connected_message(bridge_on: bool) -> str:
+    """Name the fix that applies, rather than assuming Studio.
+
+    The old text sent every reader to "open Resolve Studio", which is wrong
+    advice for a free-edition user — the edition external scripting refuses by
+    design, and the one the bridge exists to reach.
+    """
+    if bridge_on:
+        return ("The in-app bridge is enabled but not answering. In Resolve, run "
+                "Workspace > Scripts > resolve_bridge; launching Resolve cannot start it.")
+    return ("DaVinci Resolve is not connected. On Studio, enable Preferences > General > "
+            "'External scripting using' = Local. On the free edition, install the in-app "
+            "bridge, run Workspace > Scripts > resolve_bridge, and set "
+            "DAVINCI_RESOLVE_BRIDGE=1.")
 
 
 @_serialize_resolve
