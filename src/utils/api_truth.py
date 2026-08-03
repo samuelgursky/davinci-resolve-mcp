@@ -819,7 +819,10 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "after the False, deleted cleanly on retry).",
         "recommended": "Treat a False return as advisory: re-list the track and "
                        "check whether the items are actually gone; if still "
-                       "present, retry the identical call once before failing.",
+                       "present, retry the identical call once before failing. "
+                       "The MCP delete_clips tool does not yet implement this "
+                       "readback-and-retry — call sites are currently "
+                       "unguarded.",
         "tags": ["unreliable-return", "flaky", "timeline", "edit"],
         "submit": "bug",
     },
@@ -855,6 +858,7 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "source frame and re-check. Always finish with "
                        "detect_gaps_overlaps.",
         "tags": ["timeline", "edit", "off-by-one", "mixed-fps"],
+        "submit": "bug",
     },
     {
         "symbol": "MediaPool.ImportMedia (current-folder destination only)",
@@ -867,6 +871,7 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "set_current_folder), import, then restore the previous "
                        "current folder if it matters.",
         "tags": ["media-pool", "import"],
+        "submit": "missing",
     },
     {
         "symbol": "Graph.SetLUT (master-LUT-dir-only resolution)",
