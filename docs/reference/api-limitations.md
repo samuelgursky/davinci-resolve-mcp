@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 22 missing capabilities, 20 bugs / unreliable behaviors.
+**Totals:** 22 missing capabilities, 21 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -326,6 +326,14 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** After writing 'Reel Name', read it back with GetClipProperty('Reel Name') and refuse to report success on mismatch; surface the project-setting gate to the caller (server._verify_clip_property_writeback).
 - **Reference:** [issue #77](https://github.com/samuelgursky/davinci-resolve-mcp/issues/77)
 - **Tags:** unreliable-return, silent-failure, metadata, reel-name
+
+### Timeline.DeleteClips (flaky first attempt)
+
+- **Object:** `Timeline`
+- **Signature:** `([TimelineItem], ripple) -> bool`
+- **Behavior:** Can return False on the first call even when every item in the list is a valid, present TimelineItem; an identical immediate retry succeeds. Same failure shape as ProjectManager.DeleteProject. Observed on Studio 21.0 during a cut-video edit session (items confirmed still present after the False, deleted cleanly on retry).
+- **Workaround / current handling:** Treat a False return as advisory: re-list the track and check whether the items are actually gone; if still present, retry the identical call once before failing.
+- **Tags:** unreliable-return, flaky, timeline, edit
 
 ### Graph.SetLUT (master-LUT-dir-only resolution)
 

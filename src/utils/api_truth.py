@@ -808,6 +808,67 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["timeline", "edit", "off-by-one", "readback"],
     },
     {
+        "symbol": "Timeline.DeleteClips (flaky first attempt)",
+        "object": "Timeline",
+        "signature": "([TimelineItem], ripple) -> bool",
+        "reality": "Can return False on the first call even when every item in "
+                   "the list is a valid, present TimelineItem; an identical "
+                   "immediate retry succeeds. Same failure shape as "
+                   "ProjectManager.DeleteProject. Observed on Studio 21.0 during "
+                   "a cut-video edit session (items confirmed still present "
+                   "after the False, deleted cleanly on retry).",
+        "recommended": "Treat a False return as advisory: re-list the track and "
+                       "check whether the items are actually gone; if still "
+                       "present, retry the identical call once before failing.",
+        "tags": ["unreliable-return", "flaky", "timeline", "edit"],
+        "submit": "bug",
+    },
+    {
+        "symbol": "Timeline.DeleteClips (linked audio not deleted)",
+        "object": "Timeline",
+        "signature": "([TimelineItem], ripple) -> bool",
+        "reality": "Deleting video items does NOT delete their linked audio "
+                   "items — the UI's linked-selection behavior does not apply "
+                   "to the API, which deletes exactly the items passed. The "
+                   "orphaned audio stays on its track and collides with any "
+                   "later append into the same record range.",
+        "recommended": "When deleting a video item that has linked audio, list "
+                       "the audio track(s) (timeline get_items, track_type "
+                       "'audio'), find the overlapping linked items, and pass "
+                       "their IDs in the same delete. Verify with "
+                       "detect_gaps_overlaps across both track types.",
+        "tags": ["timeline", "edit", "audio", "silent-failure"],
+    },
+    {
+        "symbol": "MediaPool.AppendToTimeline with mixed-fps sources (duration floor)",
+        "object": "MediaPool",
+        "signature": "([{mediaPoolItem, startFrame, endFrame, recordFrame, ...}]) -> [TimelineItem]",
+        "reality": "start/endFrame are in SOURCE frames. When the source fps "
+                   "differs from the timeline fps (e.g. 24.0 or 29.97 source in "
+                   "a 23.976 timeline), Resolve converts the source range to "
+                   "timeline frames by flooring — so a range planned to fill an "
+                   "exact record slot lands one frame short, leaving a 1-frame "
+                   "gap before the next clip.",
+        "recommended": "Plan durations in timeline frames "
+                       "(floor(src_frames * timeline_fps / source_fps)); if the "
+                       "floored duration misses the slot, extend endFrame by a "
+                       "source frame and re-check. Always finish with "
+                       "detect_gaps_overlaps.",
+        "tags": ["timeline", "edit", "off-by-one", "mixed-fps"],
+    },
+    {
+        "symbol": "MediaPool.ImportMedia (current-folder destination only)",
+        "object": "MediaPool",
+        "signature": "([paths] | [clipInfos]) -> [MediaPoolItem]",
+        "reality": "Imports always land in the CURRENT media pool folder; the "
+                   "call has no destination-folder parameter, and passing an "
+                   "unrecognized one to the MCP tool is silently ignored.",
+        "recommended": "SetCurrentFolder to the target bin first (media_pool "
+                       "set_current_folder), import, then restore the previous "
+                       "current folder if it matters.",
+        "tags": ["media-pool", "import"],
+    },
+    {
         "symbol": "Graph.SetLUT (master-LUT-dir-only resolution)",
         "object": "Graph",
         "signature": "(nodeIndex, lutPath) -> bool",

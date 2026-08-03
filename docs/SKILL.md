@@ -1307,7 +1307,12 @@ Key actions:
   instead of walking tracks by hand. Filters may be passed inline or as a
   `filters` dict; a mistyped filter name is rejected rather than silently
   matching everything. Returns `{clips, match_count, total_clips}`.
-- `delete_clips(clip_ids, ripple?)` — IDs are unique IDs from `get_items`
+- `delete_clips(clip_ids, ripple?)` — IDs are unique IDs from `get_items`.
+  Two verified quirks (see `api_truth`): the call can return `success: false`
+  on the first attempt with valid IDs — re-list and retry once before failing;
+  and deleting a video item does NOT delete its linked audio — pass the linked
+  audio item IDs explicitly, then `detect_gaps_overlaps` across both track
+  types.
 - `duplicate_clips(clip_ids?, selected?, target_track_index?, track_offset?, placement?, record_frame?, record_frame_offset?, copy_properties?, include_linked?)` —
   duplicate existing video timeline items by re-appending the same Media Pool
   item with the same source trim; `selected=True` uses Resolve's selected/current
@@ -1722,6 +1727,14 @@ media_pool(action="append_to_timeline", params={"clip_infos": [
   {"clip_id": "<uuid>", "start_frame": 0, "end_frame": 100, "record_frame": 1200, "track_index": 4}
 ]})
 ```
+
+Mixed-fps caution: `start_frame`/`end_frame` are SOURCE frames, and a source
+whose fps differs from the timeline's rounds DOWN on conversion — a 24.0 or
+29.97 clip appended into a 23.976 timeline can land one frame short of its
+slot. Plan durations in timeline frames, extend `end_frame` by a source frame
+when the floor misses, and finish with `detect_gaps_overlaps` (see
+`api_truth`). `import_media` always lands in the CURRENT bin — call
+`set_current_folder` first; there is no destination parameter.
 
 ### 4. Inspect and annotate timeline items
 
