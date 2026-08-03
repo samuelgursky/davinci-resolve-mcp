@@ -8,12 +8,12 @@ Complete Resolve scripting API coverage, live-test status, and method-by-method 
 |--------|-------|
 | MCP Tools | **34** compound (default) / **341** granular |
 | Kernel Actions | **136** guarded MCP workflow actions across 9 compound tools |
-| API Methods Covered | **337/337** (100%) |
-| Methods Live Tested | **332/337** (98.5%) |
-| Live Test Pass Rate | **332/332** (100%) |
+| API Methods Covered | **349/349** (100%) |
+| Methods Live Tested | **338/349** (96.8%) |
+| Live Test Pass Rate | **338/338** (100%) |
 | API Object Classes | 13 |
 | Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio + Resolve 21.0.2 Studio |
-| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21.0 additions are version-guarded and live-tested on 21.0.2 (see the Resolve 21 delta row below — three of them need AI Extras packs and stay untested without one) |
+| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21.0 additions are version-guarded and live-tested on 21.0.2 (see the Resolve 21 delta row below — five wrappers need AI Extras packs and stay untested without one, and one is deliberately not executed) |
 
 ## API Coverage
 
@@ -81,7 +81,24 @@ guard, so it never goes stale.
 
 ## Test Results
 
-Baseline testing was performed against **DaVinci Resolve 19.1.3 Studio** on macOS with live API calls (no mocks). Resolve 20 additions were revalidated live against **DaVinci Resolve 20.3.2 Studio**.
+Baseline testing was performed against **DaVinci Resolve 19.1.3 Studio** on macOS with live API calls (no mocks). Resolve 20 additions were revalidated live against **DaVinci Resolve 20.3.2 Studio**, Resolve 21 additions against **Studio 21.0.2.4**.
+
+**Counting convention.** Every figure on this page is derived from the rows of
+the [Complete API Reference](#complete-api-reference) tables — that table is the
+source, these summaries are downstream of it:
+
+- **API Methods Covered** = the number of rows. One row per method per object
+  class, so `PerformAudioClassification` on both `Folder` and `MediaPoolItem`
+  counts twice, because they are two wrappers that can fail independently.
+- **Methods Live Tested** = rows marked ✅ or ⚠️ — the call was made against a
+  live Resolve and the result observed.
+- **Untested** = rows marked ☁️ or 🔬. A method that could not be executed is
+  never counted as a pass: a missing Extras pack tells you nothing about the
+  wrapper, so counting it as tested would overstate coverage in exactly the
+  place the risk is highest.
+- **The phase table below counts methods, not test cases**, which is why its
+  Total equals Methods Live Tested rather than the number of assertions run.
+
 
 | Phase | Tests | Pass Rate | Scope |
 |-------|-------|-----------|-------|
@@ -91,8 +108,8 @@ Baseline testing was performed against **DaVinci Resolve 19.1.3 Studio** on macO
 | Phase 4 | 10/10 | 100% | AI/ML methods, Fusion clips, stereo, gallery stills |
 | Phase 5 | 6/6 | 100% | Scene cuts, subtitles from audio, graph node cache/tools/enable |
 | Resolve 20 delta | 12/12 | 100% | Resolve 20.0-20.2.2 scripting additions live-tested on 20.3.2 |
-| Resolve 21 delta | 8/9 | 89% | Resolve 21.0 scripting additions live-tested on Studio 21.0.2.4 (`tests/live_resolve21_validation.py`) |
-| **Total** | **339/340** | **99.7%** | **98.5% of current API methods tested live** |
+| Resolve 21 delta | 7/7 | 100% | Resolve 21.0 additions that could be executed, live-tested on Studio 21.0.2.4 (`tests/live_resolve21_validation.py`). The other 6 need an AI Extras pack or are unsafe to run — counted as untested, not as passes |
+| **Total** | **338/338** | **100%** | **96.8% of the 349 covered methods tested live** |
 
 #### Resolve 21 delta detail
 
@@ -113,7 +130,10 @@ marked 🔬 rather than ⚠️.
 | `Project.GenerateSpeech` | 🔬 | Requires AI Speech Generator; returned an error **string**, not a MediaPoolItem |
 | `Resolve.DisableBackgroundTasksForCurrentResolveSession` | 🔬 | Present in `dir()`; **not executed** — session-wide, returns None, and has no `Enable...` counterpart, so there is no undo short of restarting Resolve |
 
-### Untested Methods (5 of 336)
+### Untested Methods (11 of 349)
+
+Every ☁️ and 🔬 row from the reference tables, listed here so the count is
+checkable rather than asserted.
 
 | Method | Reason | Help Wanted |
 |--------|--------|-------------|
@@ -122,6 +142,18 @@ marked 🔬 rather than ⚠️.
 | `PM.ImportCloudProject` | Requires DaVinci Resolve cloud infrastructure | Yes |
 | `PM.RestoreCloudProject` | Requires DaVinci Resolve cloud infrastructure | Yes |
 | `TL.AnalyzeDolbyVision` | Requires HDR/Dolby Vision content | Yes |
+| `Folder.AnalyzeForIntellisearch` | Requires the AI IntelliSearch Extra | Yes |
+| `MPI.AnalyzeForIntellisearch` | Requires the AI IntelliSearch Extra | Yes |
+| `Folder.AnalyzeForSlate` | Requires the AI Slate ID Extra | Yes |
+| `MPI.AnalyzeForSlate` | Requires the AI Slate ID Extra | Yes |
+| `Project.GenerateSpeech` | Requires the AI Speech Generator Extra | Yes |
+| `Resolve.DisableBackgroundTasksForCurrentResolveSession` | Deliberately not executed: session-wide, returns `None`, and has no `Enable...` counterpart, so there is no undo short of restarting Resolve | No |
+
+The five AI Extras rows are untested for want of a downloadable pack, not because
+the wrappers are suspect — a report from anyone who has the packs installed would
+close them. The last one is a decision rather than a gap: it is reachable, and
+running it during a validation sweep would disable background tasks for every
+project open in that Resolve instance.
 
 ---
 
@@ -161,6 +193,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 20 | `GetKeyframeMode()` | ✅ | Returns keyframe mode |
 | 21 | `SetKeyframeMode(keyframeMode)` | ⚠️ | API accepts; mode must match valid enum |
 | 22 | `GetFairlightPresets()` | ✅ | Resolve 20.3.2 live test returns preset map |
+| 23 | `DisableBackgroundTasksForCurrentResolveSession()` | 🔬 | Resolve 21.0. Present in `dir()`; **not executed** — session-wide, returns `None`, no `Enable...` counterpart, so no undo short of restarting Resolve |
 
 ### ProjectManager
 
@@ -239,6 +272,8 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 41 | `AddColorGroup(groupName)` | ✅ | Returns ColorGroup object |
 | 42 | `DeleteColorGroup(colorGroup)` | ✅ | Deletes color group |
 | 43 | `ApplyFairlightPresetToCurrentTimeline(presetName)` | ⚠️ | Resolve 20.3.2 live test accepts call; returns `False` without a named preset |
+| 44 | `GenerateSpeech({speechGenerationSettings}, timecode)` | 🔬 | Resolve 21.0. Requires the AI Speech Generator Extra; without it returns an error **string**, not a MediaPoolItem |
+| 45 | `ResetIntellisearchAnalysis()` | ✅ | Resolve 21.0.2 live test returns `True` |
 
 ### MediaStorage
 
@@ -294,8 +329,13 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 4 | `GetIsFolderStale()` | ✅ | Returns `False` |
 | 5 | `GetUniqueId()` | ✅ | Returns UUID string |
 | 6 | `Export(filePath)` | ✅ | Exports DRB file |
-| 7 | `TranscribeAudio()` | ✅ | Starts audio transcription |
+| 7 | `TranscribeAudio({useSpeakerDetection})` | ✅ | Starts audio transcription. Resolve 21.0 added the optional `useSpeakerDetection` argument: it is accepted, but `True` and `False` produced identical transcripts on a deliberately two-voice clip (21.0.2.4) — the method passes, the parameter has no observable effect |
 | 8 | `ClearTranscription()` | ✅ | Clears transcription |
+| 9 | `PerformAudioClassification()` | ✅ | Resolve 21.0.2 live test returns `True`; `Category` clip property goes `""` → `Dialogue` |
+| 10 | `ClearAudioClassification()` | ✅ | Resolve 21.0.2 live test returns `True`; `Category` resets to `Uncategorized`, not `""` |
+| 11 | `AnalyzeForIntellisearch(identifyFaces, isBetterMode)` | 🔬 | Resolve 21.0. Requires the AI IntelliSearch Extra; without it returns an error **string**, not `False` |
+| 12 | `AnalyzeForSlate(markerColor)` | 🔬 | Resolve 21.0. Requires the AI Slate ID Extra. Documented `resolve.MARKER_*` constants do not exist on the handle |
+| 13 | `RemoveMotionBlur({deblurOption})` | ✅ | Resolve 21.0.2 live test returns original→new pairs; source media unchanged. Requires the AI Motion Deblur Extra |
 
 ### MediaPoolItem
 
@@ -327,7 +367,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 24 | `UnlinkProxyMedia()` | ✅ | Unlinks proxy media |
 | 25 | `ReplaceClip(filePath)` | ✅ | Replaces clip source |
 | 26 | `GetUniqueId()` | ✅ | Returns UUID string |
-| 27 | `TranscribeAudio()` | ✅ | Starts audio transcription |
+| 27 | `TranscribeAudio({useSpeakerDetection})` | ✅ | Starts audio transcription. Resolve 21.0 added the optional `useSpeakerDetection` argument: it is accepted, but `True` and `False` produced identical transcripts on a deliberately two-voice clip (21.0.2.4) — the method passes, the parameter has no observable effect |
 | 28 | `ClearTranscription()` | ✅ | Clears transcription |
 | 29 | `GetAudioMapping()` | ✅ | Returns JSON audio mapping |
 | 30 | `GetMarkInOut()` | ✅ | Returns mark in/out dict |
@@ -337,6 +377,11 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 34 | `LinkFullResolutionMedia(filePath)` | ⚠️ | Resolve 20.3.2 live test accepts call; full-res relink returns `False` without a matching proxy/full-res fixture |
 | 35 | `ReplaceClipPreserveSubClip(filePath)` | ✅ | Resolve 20.3.2 live test replaces clip while preserving subclip metadata |
 | 36 | `MonitorGrowingFile()` | ✅ | Resolve 20.3.2 live test enables growing-file monitoring |
+| 37 | `PerformAudioClassification()` | ✅ | Resolve 21.0.2 live test returns `True`; `Category` clip property goes `""` → `Dialogue` |
+| 38 | `ClearAudioClassification()` | ✅ | Resolve 21.0.2 live test returns `True`; `Category` resets to `Uncategorized`, not `""` |
+| 39 | `AnalyzeForIntellisearch(identifyFaces, isBetterMode)` | 🔬 | Resolve 21.0. Requires the AI IntelliSearch Extra; without it returns an error **string**, not `False` |
+| 40 | `AnalyzeForSlate(markerColor)` | 🔬 | Resolve 21.0. Requires the AI Slate ID Extra. Documented `resolve.MARKER_*` constants do not exist on the handle |
+| 41 | `RemoveMotionBlur({deblurOption})` | ✅ | Resolve 21.0.2 live test returns the new MediaPoolItem; source media path unchanged. Requires the AI Motion Deblur Extra |
 
 ### Timeline
 
