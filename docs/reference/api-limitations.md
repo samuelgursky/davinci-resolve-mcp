@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 22 missing capabilities, 20 bugs / unreliable behaviors.
+**Totals:** 23 missing capabilities, 22 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -192,6 +192,14 @@ equivalent, blocking full automation.
 - **Workaround / current handling:** Delete and recreate the folder with the desired name, or rename in the Resolve UI.
 - **Tags:** missing-method, media-pool, folder
 
+### MediaPool.ImportMedia (current-folder destination only)
+
+- **Object:** `MediaPool`
+- **Signature:** `([paths] | [clipInfos]) -> [MediaPoolItem]`
+- **Behavior:** Imports always land in the CURRENT media pool folder; the call has no destination-folder parameter, and passing an unrecognized one to the MCP tool is silently ignored.
+- **Workaround / current handling:** SetCurrentFolder to the target bin first (media_pool set_current_folder), import, then restore the previous current folder if it matters.
+- **Tags:** media-pool, import
+
 ### Project.SetCurrentRenderFormatAndCodec
 
 - **Object:** `Project`
@@ -326,6 +334,22 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** After writing 'Reel Name', read it back with GetClipProperty('Reel Name') and refuse to report success on mismatch; surface the project-setting gate to the caller (server._verify_clip_property_writeback).
 - **Reference:** [issue #77](https://github.com/samuelgursky/davinci-resolve-mcp/issues/77)
 - **Tags:** unreliable-return, silent-failure, metadata, reel-name
+
+### Timeline.DeleteClips (flaky first attempt)
+
+- **Object:** `Timeline`
+- **Signature:** `([TimelineItem], ripple) -> bool`
+- **Behavior:** Can return False on the first call even when every item in the list is a valid, present TimelineItem; an identical immediate retry succeeded in the one observed instance. Observed on Studio 21.0 during a cut-video edit session (items confirmed still present after the False, deleted cleanly on retry). CAUSE NOT ESTABLISHED — one instance is not evidence of randomness, and it may well have a state precondition. ProjectManager.DeleteProject looked superficially identical and turned out to have a specific trigger that retrying does NOT clear (it failed six times a second apart, then succeeded first time after CloseProject), so do not assume a retry is the answer here either.
+- **Workaround / current handling:** Treat a False return as advisory: re-list the track and check whether the items are actually gone; if still present, retry the identical call once before failing. The MCP delete_clips tool does not yet implement this readback-and-retry — call sites are currently unguarded.
+- **Tags:** unreliable-return, flaky, timeline, edit
+
+### MediaPool.AppendToTimeline with mixed-fps sources (duration floor)
+
+- **Object:** `MediaPool`
+- **Signature:** `([{mediaPoolItem, startFrame, endFrame, recordFrame, ...}]) -> [TimelineItem]`
+- **Behavior:** start/endFrame are in SOURCE frames. When the source fps differs from the timeline fps (e.g. 24.0 or 29.97 source in a 23.976 timeline), Resolve converts the source range to timeline frames by flooring — so a range planned to fill an exact record slot lands one frame short, leaving a 1-frame gap before the next clip.
+- **Workaround / current handling:** Plan durations in timeline frames (floor(src_frames * timeline_fps / source_fps)); if the floored duration misses the slot, extend endFrame by a source frame and re-check. Always finish with detect_gaps_overlaps.
+- **Tags:** timeline, edit, off-by-one, mixed-fps
 
 ### Graph.SetLUT (master-LUT-dir-only resolution)
 
