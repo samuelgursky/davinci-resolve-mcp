@@ -2,6 +2,64 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.70.4
+
+Three silent-failure fixes from community reports, plus the Windows bridge
+follow-ups from #112's live confirmation.
+
+### Thumbnails silently failed off the Color page (#110, @billcarroll)
+
+`Timeline.GetCurrentClipThumbnailImage` returns data only while Resolve is on
+the Color page — Blackmagic's own reference documents it as returning data "for
+current media in the Color Page". `thumbnail_contact_sheet` (and
+`marker_thumbnail_review`, which routes through it) reported "No thumbnail
+available at frame" for every sample from any other page, which reads as an
+empty timeline rather than a page requirement.
+
+A shared `color_page_for_thumbnails` context manager in `page_lock.py` switches
+under the existing page lock and restores the previous page after. The granular
+server's thumbnail tool shares it and gained a real error message in place of a
+bare `{"success": false}`. Where the current page cannot be read, no switch is
+attempted at all, so a skipped restore can never strand the user on Color.
+
+### probe_media_pool truncated silently, and good script runs reported failure (#108, @billcarroll)
+
+`_folder_probe` reported `subfolder_count` from the list it had *expanded*, so
+at the default depth every unexpanded folder looked like an empty leaf. In the
+field, a drive-rename relink sweep trusted `subfolder_count: 0` and skipped
+about 40 populated bins and 573 clips. The count is now the real
+`GetSubFolderList()` length at every level, and folders carry `truncated: true`
+at the cutoff so a walker can descend.
+
+Separately, `fusionscript`'s RemoteApp thread can SIGSEGV during interpreter
+teardown *after* a spawned script has finished its work, turning exit 0 into
+-11 and a successful run into `success: false`. Scripts now run via `runpy` and
+hard-exit before teardown. The guard catches `SystemExit`, so a script ending in
+`sys.exit(0)` cannot reopen the race, and repoints `sys.path[0]` at the script's
+directory — under `-c` it points at the server's cwd, which would break sibling
+imports and let stray files shadow real modules. The cost of `os._exit` (atexit
+handlers skipped, non-daemon threads not joined) is documented on the action.
+
+### Bridge: a dead listener no longer reads as a live one (#112)
+
+`serve()` treated "the serve thread is alive" as "the bridge is serving".
+`serve_forever()` keeps its thread alive, so that is a narrower question than it
+appears, and a bridge was reported lingering with nothing on its port while the
+serve loop kept polling. That divergence is not explained here, but a process
+running with no listener is useless either way, so the exit condition now asks
+the socket directly.
+
+The Win32 prototypes are declared rather than relying on ctypes' default
+int-sized handle. The default is safe by documented contract, but the reporter
+had to derive that from Microsoft's interop documentation to rule out
+truncation; declaring the signatures spares the next reader the exercise.
+
+**The v2.70.3 Windows fix is now confirmed on real hardware.** ZontarLives ran a
+same-machine control: on v2.70.2 the bridge outlived Resolve indefinitely; on
+v2.70.3 it exits 0.23s after. `_process_is_alive` returned `None` for pid 4
+(System), confirming that access-denied reads as unknown rather than death
+against a genuinely protected process.
+
 ## What's New in v2.70.3
 
 The free-edition bridge could never notice Resolve exiting on Windows, so it
