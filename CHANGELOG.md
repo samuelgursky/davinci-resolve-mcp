@@ -2,6 +2,59 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.70.2
+
+The control panel could never reach the free edition, even with a perfectly
+healthy in-app bridge. Reported in issue #109 by @alpaolo.
+
+### The bug
+
+The panel runs as a separate process from the MCP server and has its own Resolve
+connector. That connector returned as soon as `import DaVinciResolveScript`
+failed:
+
+```python
+try:
+    import DaVinciResolveScript as dvr_script
+except Exception as exc:
+    return None, f"Resolve scripting API unavailable: {exc}"
+```
+
+On the free edition that import is exactly what fails — Blackmagic's module ships
+with the installer, not the App Store build, so there is no
+`Developer/Scripting/Modules` tree to import from. The panel returned there,
+before ever calling `connect_resolve`, whose entire purpose is that it accepts
+`None` in bridge mode:
+
+> `dvr_script` may be None in bridge mode: the bridge does not need Blackmagic's
+> module at all, which is precisely why it reaches editions the module cannot.
+
+So the reporter saw the bridge listening, the MCP server connected, and the panel
+insisting "Resolve unavailable" — all at the same time, all correct.
+
+`_try_connect` in `src/server.py` already carried this guard, with a comment
+recording the same diagnosis from when it bit the server. The panel's connector
+was missed. That makes it the third connector overlooked when a transport was
+added, after the network-scripting one in v2.64.0.
+
+### The fix
+
+The panel now consults the bridge first and treats both the environment setup and
+the module import as optional when it is enabled — the same ordering the MCP
+server uses.
+
+The not-connected message no longer assumes Studio. It used to send every reader
+to "open Resolve Studio with a project loaded", which is poor advice for a
+free-edition user, since free is the one edition external scripting refuses by
+design. It now names the fix that fits the situation, and says something
+different depending on whether the bridge is enabled.
+
+### Windows bridge: `%PROGRAMDATA%` now confirmed
+
+v2.70.1 shipped Windows script paths unverified. The #109 report was made on free
+21.0.1.11 with the bridge installed, listed and serving from `%PROGRAMDATA%`, so
+that half is now confirmed rather than assumed. `%APPDATA%` remains untested.
+
 ## What's New in v2.70.1
 
 Windows support for the free-edition in-app bridge, and the end of doctor.py's

@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.70.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.70.2-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#server-modes)
@@ -57,11 +57,11 @@ interpreters are not detected, and the script silently never appears in the
 menu. A Lua canary is installed alongside so you can tell that apart from a
 wrong folder.
 
-Validated on free 21.0.3.7 and Studio 19.1.3.7, both macOS. **Windows paths were
-added in v2.70.1 (issue #106) and have not yet been confirmed on Windows
-hardware** — the installer targets the `%APPDATA%` and `%PROGRAMDATA%` script
-folders Blackmagic documents, but whether Resolve lists the bridge from them is
-unverified. Reports welcome.
+Validated on free 21.0.3.7 and Studio 19.1.3.7, both macOS. The Windows paths
+added in v2.70.1 (issue #106) shipped unverified; a report on free 21.0.1.11
+(issue #109) has since shown the bridge installing, listing and serving from
+`%PROGRAMDATA%` on Windows, so that path is now confirmed rather than assumed.
+`%APPDATA%` remains untested. Reports welcome.
 
 This is the documented in-app path, not a licence circumvention, but Blackmagic
 could close it — treat it as a supported-until-it-is-not tier. Loopback only,
