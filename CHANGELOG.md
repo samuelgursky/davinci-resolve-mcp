@@ -2,6 +2,48 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.71.1
+
+`Timeline.DeleteClips` can lie about whether it worked. #111 recorded four
+behaviours from a live edit session; #114 mitigates the first of them. Both by
+@billcarroll.
+
+### DeleteClips readback-and-retry
+
+`Timeline.DeleteClips` can return `False` on a first call even when every item
+passed is a valid, present `TimelineItem`, with an identical retry succeeding.
+`_timeline_delete_clips_verified` reads the tracks back on a `False` and retries
+once if the items are still there. All four timeline call sites route through
+it: the `delete_clips` action, `lift_range`, `duplicate_clips` and `copy_range`.
+
+The readback is deliberately **tri-state**. A walk that raised, enumerated no
+track at all, or covered items whose unique ID cannot be read is `unknown`, not
+`absent` — so an unverifiable delete is never reported as success, and never
+spends a second destructive call buying information it cannot read. An earlier
+draft collapsed unknown into absent, which turned a failed delete into a
+reported success; that is the exact silent-lie class this series exists to
+remove, so it is worth naming.
+
+The `ripple=True` non-idempotence of a retry is recorded in the docstring rather
+than claimed to be solved: if the first call deleted some items and left others,
+the retry passes the original list back in, stale handles included. It could not
+be made to misbehave against a fake.
+
+### Four edit-session behaviours recorded
+
+- **`DeleteClips` flaky first attempt.** The entry states plainly that the cause
+  is **unknown**, and specifically that this is *not* the
+  `ProjectManager.DeleteProject` shape — that one has an identified mechanism
+  which retrying does not clear, whereas a single retry cleared this in the one
+  instance seen. One observation is not a mechanism.
+- **`DeleteClips` leaves linked audio.** The API deletes exactly the items
+  passed; the UI's linked-selection behaviour does not apply, so orphaned audio
+  collides with later appends.
+- **`AppendToTimeline` mixed-fps duration floor.** Source-to-timeline frame
+  conversion rounds down, landing a planned range one frame short.
+- **`ImportMedia` current-folder only.** No destination parameter; imports land
+  in the current bin.
+
 ## What's New in v2.71.0
 
 Keyed metadata getters honor a list of keys, and `delete_timelines` names the
