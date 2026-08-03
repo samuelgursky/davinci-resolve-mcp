@@ -2,6 +2,36 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.71.0
+
+Keyed metadata getters honor a list of keys, and `delete_timelines` names the
+parameter it wants. Reported and fixed by @billcarroll in #113, from live
+cataloguing work.
+
+### Keyed getters silently returned everything
+
+Resolve's keyed getters take one string. Handed a list they ignore it and return
+the full dict, so a caller asking for three fields silently received all of them
+with no signal that the request had been dropped — the kind of thing that reads
+as working until someone counts.
+
+`get_metadata`, `get_third_party_metadata` and `get_clip_property` now share a
+`_keyed_get` helper that subsets locally, since there is no batch getter to
+delegate to. An empty or non-string list is a clear error rather than a silent
+superset.
+
+Missing keys deliberately report differently through the two forms: the list
+form maps them to `null`, which separates "absent" from "present but empty"; the
+string form still returns Resolve's `""`. All three actions document both the
+list form and that divergence.
+
+### `delete_timelines` leaked a KeyError
+
+Called with `timeline_names`, or without `timeline_ids` at all, it raised a bare
+`KeyError('timeline_ids')`. It now returns a proper error naming the expected
+parameter, and when `timeline_names` was passed it says explicitly that
+timelines are matched by unique ID rather than by name.
+
 ## What's New in v2.70.4
 
 Three silent-failure fixes from community reports, plus the Windows bridge
