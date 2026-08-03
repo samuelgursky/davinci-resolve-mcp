@@ -2,6 +2,48 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.72.1
+
+Documentation only. The API coverage page stated its method counts in four
+places and they disagreed; the cause turned out to be structural rather than
+clerical.
+
+### The Resolve 21 surface was never counted
+
+None of the Resolve 21 methods appeared in the Complete API Reference tables —
+the tables the `API Methods Covered` denominator counts — although the server
+has wrapped, released and live-tested them since v2.28.1. So `337/337 (100%)`
+described a surface that excluded nine methods across four classes, and the
+`336 → 337` bump for `ResetIntellisearchAnalysis` added one to a count whose
+table did not list it.
+
+Thirteen rows added, one per method per object class, since a wrapper on
+`Folder` and one on `MediaPoolItem` can fail independently. Signatures taken
+from the bundled 21.0.2 scripting reference. `TranscribeAudio` was already
+listed — its Resolve 21 change is the optional `useSpeakerDetection` argument,
+accepted but producing identical transcripts either way — so those rows are
+annotated rather than duplicated.
+
+Every summary figure is now derived from the tables: **349 covered, 338 live
+tested, 11 untested**.
+
+### The counting convention is now written down
+
+Two of the three disagreements came from it being implicit:
+
+- A method that could not be executed is **not** counted as a pass. The old
+  "Resolve 21 delta 8/9" counted Extras-blocked methods as passes, contradicting
+  the prose directly above it and overstating coverage exactly where the risk is
+  highest.
+- The phase table counts **methods, not assertions**, which is why its Total
+  equals Methods Live Tested. That ambiguity is what made two figures look
+  independently wrong.
+
+`tests/test_api_coverage_arithmetic.py` derives all four figures from the
+reference tables and fails if any disagrees, so the tables stay the single
+source. It was checked against both drift shapes: a hand-edited summary figure,
+and a row removed from a table.
+
 ## What's New in v2.72.0
 
 Resolve 21's AI methods report a missing Extras pack as an error *string*, not
