@@ -35,6 +35,26 @@ PARENT_MARKERS = ("resolve", "fuscript", "fusion")
 
 def process_name(pid):
     """Best-effort process name; empty string when it cannot be read."""
+    if os.name == "nt":
+        # Windows has neither /proc nor ps, so the probe reported an empty
+        # parent name on every Windows machine (issue #112).
+        try:
+            import ctypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            handle = kernel32.OpenProcess(0x1000, False, int(pid))
+            if not handle:
+                return ""
+            try:
+                size = ctypes.c_ulong(260)
+                buf = ctypes.create_unicode_buffer(size.value)
+                if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                    return ""
+                return os.path.basename(buf.value)
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return ""
     try:  # Linux
         with open("/proc/%d/comm" % pid) as handle:
             return handle.read().strip()

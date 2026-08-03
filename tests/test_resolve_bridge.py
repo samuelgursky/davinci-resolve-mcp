@@ -281,6 +281,11 @@ class StdlibOnlyTests(unittest.TestCase):
             "hashlib", "hmac", "json", "os", "re", "socket", "socketserver",
             "stat", "sys", "threading", "time", "collections", "typing",
             "subprocess", "__future__",
+            # ctypes reads Win32 process liveness (issue #112). Core stdlib, and
+            # every use is inside a function under try/except, so an interpreter
+            # built without it degrades to "liveness unknown" — which the module
+            # already treats as "keep serving" — rather than failing to import.
+            "ctypes",
         }
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Import):
@@ -728,7 +733,10 @@ class InstallerTargetTests(unittest.TestCase):
 
         probe = pathlib.Path(__file__).resolve().parents[1] / "scripts/resolve_bridge_probe.py"
         tree = ast.parse(probe.read_text(encoding="utf-8"))
-        allowed = {"json", "os", "subprocess", "sys", "time", "DaVinciResolveScript"}
+        # ctypes: same reasoning as the bridge's own allowlist — core stdlib,
+        # imported inside a function under try/except, and the only way to read
+        # a process name on Windows (issue #112).
+        allowed = {"ctypes", "json", "os", "subprocess", "sys", "time", "DaVinciResolveScript"}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -2241,3 +2249,130 @@ class NotConnectedRetryabilityTests(unittest.TestCase):
             error = server._not_connected_error()["error"]
         self.assertEqual(error["code"], "RESOLVE_NOT_RUNNING")
         self.assertTrue(error["retryable"])
+
+
+class ParentExitDetectionTests(unittest.TestCase):
+    """serve() must notice Resolve leaving on Windows, where pids never change.
+
+    `os.getppid() != expected_parent` is a POSIX signal: an orphan is reparented
+    and the value changes. Windows does not reparent, so getppid() returns the
+    dead parent's pid forever and that check can never fire. The bridge outlived
+    Resolve, kept port 49632 and answered with a dead handle, so the next
+    session could not bind and the client saw a timeout against a LISTENING
+    socket (issue #112).
+
+    These simulate Windows off Windows — a constant getppid plus an injected
+    liveness answer — because the platform difference is exactly what made the
+    original bug invisible to everyone developing on macOS or Linux.
+    """
+
+    WINDOWS_PPID = 22584
+
+    def _windows_getppid(self):
+        """Windows: the value never changes, alive or dead."""
+        return lambda: self.WINDOWS_PPID
+
+    def test_constant_ppid_still_detects_a_dead_parent(self):
+        exited = rb.parent_has_exited(
+            self.WINDOWS_PPID, "Resolve.exe",
+            getppid=self._windows_getppid(),
+            is_alive=lambda pid: False,
+            name_of=lambda pid: "",
+        )
+        self.assertTrue(exited, "a dead parent must be detected without reparenting")
+
+    def test_a_live_parent_keeps_the_bridge_serving(self):
+        exited = rb.parent_has_exited(
+            self.WINDOWS_PPID, "Resolve.exe",
+            getppid=self._windows_getppid(),
+            is_alive=lambda pid: True,
+            name_of=lambda pid: "Resolve.exe",
+        )
+        self.assertFalse(exited)
+
+    def test_undeterminable_liveness_is_never_read_as_death(self):
+        # The module's standing rule: a bridge that exits early is worse than
+        # one that lingers. Access-denied and friends must not end the session.
+        exited = rb.parent_has_exited(
+            self.WINDOWS_PPID, "Resolve.exe",
+            getppid=self._windows_getppid(),
+            is_alive=lambda pid: None,
+            name_of=lambda pid: "",
+        )
+        self.assertFalse(exited)
+
+    def test_pid_reuse_by_a_non_resolve_process_counts_as_exited(self):
+        # The reparent check would call this "still running" — the pid is alive
+        # and unchanged — but it is a different program wearing the same number.
+        exited = rb.parent_has_exited(
+            self.WINDOWS_PPID, "Resolve.exe",
+            getppid=self._windows_getppid(),
+            is_alive=lambda pid: True,
+            name_of=lambda pid: "notepad.exe",
+        )
+        self.assertTrue(exited)
+
+    def test_an_unrecognisable_parent_name_is_not_evidence_of_death(self):
+        """The sandbox case: parent name unreadable or not marker-shaped.
+
+        `_host_model` documents that `ps` on another process is blocked under
+        the App Store sandbox, so a legitimate Resolve child routinely sees an
+        empty or non-matching parent name. Reading that as pid reuse would kill
+        the bridge on its first poll — on the exact edition it exists for.
+        Caught against a real live process whose parent was /bin/zsh.
+        """
+        for expected, current in (("", "zsh"), ("/bin/zsh", "zsh"), ("python3.11", "python3.11")):
+            with self.subTest(expected=expected, current=current):
+                self.assertFalse(rb.parent_has_exited(
+                    self.WINDOWS_PPID, expected,
+                    getppid=self._windows_getppid(),
+                    is_alive=lambda pid: True,
+                    name_of=lambda pid, c=current: c,
+                ))
+
+    def test_reparenting_is_still_the_fast_path_on_posix(self):
+        exited = rb.parent_has_exited(
+            self.WINDOWS_PPID, "Resolve",
+            getppid=lambda: 1,          # reparented to init
+            is_alive=lambda pid: True,  # not even consulted
+            name_of=lambda pid: "Resolve",
+        )
+        self.assertTrue(exited)
+
+    def test_a_live_resolve_named_parent_is_accepted_by_marker(self):
+        for name in ("Resolve.exe", "fuscript.exe", "Fusion"):
+            with self.subTest(name=name):
+                self.assertFalse(rb.parent_has_exited(
+                    self.WINDOWS_PPID, "Resolve.exe",
+                    getppid=self._windows_getppid(),
+                    is_alive=lambda pid: True,
+                    name_of=lambda pid, n=name: n,
+                ))
+
+
+class BridgePortConflictTests(unittest.TestCase):
+    """A stale bridge holding the port must say so, not fail opaquely."""
+
+    def test_bind_failure_names_the_orphan_and_the_way_out(self):
+        import socket
+
+        holder = socket.socket()
+        holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(1)
+        port = holder.getsockname()[1]
+        try:
+            bridge = rb.Bridge(
+                object(),
+                {"host": "127.0.0.1", "port": port, "token": TOKEN,
+                 "auth_clock_skew_seconds": 60},
+                lambda op, args: {},
+            )
+            with self.assertRaises(rb.BridgeConfigError) as caught:
+                bridge.start()
+        finally:
+            holder.close()
+        message = str(caught.exception)
+        self.assertIn("still running from an earlier Resolve session", message)
+        self.assertIn("shutdown", message)
+        self.assertIn(str(port), message)

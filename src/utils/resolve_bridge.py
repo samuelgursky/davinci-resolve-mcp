@@ -204,6 +204,8 @@ def _host_model(
 
 def _process_name(pid: int) -> str:
     """Best-effort process name; empty string when it cannot be read."""
+    if os.name == "nt":
+        return _windows_process_name(pid)
     try:  # Linux
         with open(f"/proc/{pid}/comm", "r", encoding="utf-8") as handle:
             return handle.read().strip()
@@ -219,6 +221,126 @@ def _process_name(pid: int) -> str:
         return (out.stdout or "").strip()
     except Exception:  # pragma: no cover - defensive
         return ""
+
+
+def _windows_process_name(pid: int) -> str:  # pragma: no cover - exercised on Windows
+    """Image name for a pid via Win32, or "" when it cannot be read.
+
+    ctypes rather than `tasklist`: the bridge polls this, and spawning a console
+    process every second inside Resolve is both slow and visible.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(_WIN_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return ""
+        try:
+            size = wintypes.DWORD(260)
+            buf = ctypes.create_unicode_buffer(size.value)
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                return ""
+            return os.path.basename(buf.value)
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return ""
+
+
+# Win32 constants used for parent-liveness detection.
+_WIN_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_WIN_SYNCHRONIZE = 0x00100000
+_WIN_WAIT_OBJECT_0 = 0x0
+_WIN_WAIT_TIMEOUT = 0x102
+_WIN_ERROR_INVALID_PARAMETER = 87
+
+
+def _process_is_alive(pid: int) -> Optional[bool]:
+    """True / False / None when it genuinely cannot be determined.
+
+    `None` matters: this module's standing rule is that a bridge which exits
+    early is worse than one that lingers, so an undeterminable answer must not
+    be allowed to read as "the parent died".
+    """
+    if not pid or pid <= 0:
+        return None
+    if os.name == "nt":  # pragma: no cover - exercised on Windows
+        try:
+            import ctypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            access = _WIN_SYNCHRONIZE | _WIN_PROCESS_QUERY_LIMITED_INFORMATION
+            handle = kernel32.OpenProcess(access, False, int(pid))
+            if not handle:
+                # Only "no such process" is proof of death. Access-denied and
+                # everything else are unknown — a bridge must not quit because
+                # it could not open a handle.
+                return False if ctypes.get_last_error() == _WIN_ERROR_INVALID_PARAMETER else None
+            try:
+                status = kernel32.WaitForSingleObject(handle, 0)
+                if status == _WIN_WAIT_OBJECT_0:
+                    return False  # signalled == exited
+                if status == _WIN_WAIT_TIMEOUT:
+                    return True
+                return None
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return None
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    except OSError:
+        return None
+
+
+def parent_has_exited(expected_pid: int, expected_name: str = "",
+                      *, getppid: Callable[[], int] = os.getppid,
+                      is_alive: Callable[[int], Optional[bool]] = _process_is_alive,
+                      name_of: Callable[[int], str] = _process_name) -> bool:
+    """Has the Resolve that launched this script gone away?
+
+    `os.getppid() != expected_pid` is the POSIX signal — an orphan is reparented
+    to init, so the value changes. **Windows does not reparent.** The parent pid
+    is a static field in the process record, so `getppid()` returns the dead
+    parent's pid forever and a check written that way can never fire: the bridge
+    outlives Resolve, keeps its port, and answers with a dead handle. The next
+    session's bridge then cannot bind, and the client sees a timeout against a
+    socket that is `LISTENING` — every surface-level check passes (issue #112).
+
+    So liveness is asked directly, and reparenting is kept as the fast path
+    where it works. The name check additionally catches pid reuse, which the
+    reparent test would misread as "Resolve exited".
+
+    Unknown liveness is never treated as death, per the module's standing rule.
+    """
+    try:
+        if getppid() != expected_pid:
+            return True
+    except Exception:  # pragma: no cover - defensive
+        pass
+    alive = is_alive(expected_pid)
+    if alive is False:
+        return True
+    if alive is None:
+        return False
+    # Pid reuse: the number is alive but now belongs to something else. Only
+    # usable when the ORIGINAL name looked like Resolve — otherwise there is no
+    # baseline to have drifted from. `_host_model` documents that the parent
+    # name is routinely empty or non-matching under the App Store sandbox, where
+    # `ps` on another process is blocked; treating that as death would kill the
+    # bridge on its first poll, on the exact edition it exists for.
+    if expected_name and any(m in expected_name.lower() for m in PARENT_MARKERS):
+        current = (name_of(expected_pid) or "").lower()
+        if current and not any(marker in current for marker in PARENT_MARKERS):
+            return True
+    return False
 
 
 def probe_host_model() -> Dict[str, Any]:
@@ -502,7 +624,23 @@ class Bridge:
         return held == MAX_CONCURRENT_CONNECTIONS
 
     def start(self) -> "Bridge":
-        self._server = _Server((self.config["host"], self.config["port"]), self)
+        host, port = self.config["host"], self.config["port"]
+        try:
+            self._server = _Server((host, port), self)
+        except OSError as exc:
+            # An orphaned bridge from a previous session is the likely cause,
+            # and a bare "address already in use" sends people looking at
+            # firewalls. Say what is actually holding the port and how to clear
+            # it — the alternative is a LISTENING socket answering with a dead
+            # Resolve handle, which reads as a broken install (issue #112).
+            raise BridgeConfigError(
+                f"cannot listen on {host}:{port} — {exc}. Another bridge is probably still "
+                "running from an earlier Resolve session. Ask it to stop (send the `shutdown` "
+                "operation, or `resolve_bridge_client.BridgeClient(...).bridge_shutdown()`), or "
+                "end the stale process: Windows `Get-NetTCPConnection -LocalPort "
+                f"{port} | Select-Object OwningProcess` then `Stop-Process -Id <pid>`; "
+                f"macOS/Linux `lsof -ti tcp:{port} | xargs kill`."
+            ) from exc
         self._thread = threading.Thread(target=self._server.serve_forever, name="ResolveBridge", daemon=True)
         self._thread.start()
         return self
@@ -518,7 +656,8 @@ class Bridge:
     def port(self) -> int:
         return self._server.server_address[1] if self._server else self.config["port"]
 
-    def serve(self, *, poll_seconds: float = 1.0, host_model: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def serve(self, *, poll_seconds: float = 1.0, host_model: Optional[Dict[str, Any]] = None,
+              parent_exited: Optional[Callable[[int, str], bool]] = None) -> Dict[str, Any]:
         """Start, then block or return according to the detected host model.
 
         Returns immediately in-process (the caller keeps a reference alive);
@@ -535,6 +674,10 @@ class Bridge:
             model["stop_reason"] = None
             return model
         expected_parent = model["parent_pid"]
+        expected_name = model.get("parent_name") or ""
+        # Injectable so the Windows branch is testable off Windows — the bug
+        # this replaced was invisible on the maintainer's platform.
+        host_exited = parent_exited or parent_has_exited
         reason = "resolve_exited"
         try:
             while True:
@@ -544,7 +687,7 @@ class Bridge:
                 if self._thread is None or not self._thread.is_alive():
                     reason = "listener_died"
                     break
-                if os.getppid() != expected_parent:
+                if host_exited(expected_parent, expected_name):
                     break
                 # Waiting on the event rather than joining the thread makes a
                 # requested stop immediate instead of up to `poll_seconds` late.
