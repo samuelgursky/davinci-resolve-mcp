@@ -3795,6 +3795,81 @@ def _timeline_item_ids(items):
     return ids
 
 
+def _timeline_items_presence(tl, items):
+    """Are these timeline items still on the timeline? present/absent/unknown.
+
+    'absent' is a positive finding: every item was identifiable and a
+    completed track walk did not see any of them. A walk that raised, that
+    could not enumerate a single track, or items whose unique ID cannot be
+    read all yield 'unknown' — the readback saw nothing, which is not the
+    same as nothing being there. Callers must never treat 'unknown' as
+    verified-gone.
+    """
+    target_ids = []
+    unreadable_item = False
+    for item in items:
+        item_id = _safe_timeline_item_id(item)
+        if item_id:
+            target_ids.append(item_id)
+        else:
+            unreadable_item = True
+    target_ids = set(target_ids)
+
+    tracks_walked = 0
+    walk_failed = False
+    for track_type in ("video", "audio", "subtitle"):
+        try:
+            track_count = int(tl.GetTrackCount(track_type) or 0)
+        except Exception:
+            walk_failed = True
+            continue
+        for index in range(1, track_count + 1):
+            try:
+                track_items = tl.GetItemListInTrack(track_type, index) or []
+            except Exception:
+                walk_failed = True
+                continue
+            tracks_walked += 1
+            for track_item in track_items:
+                # A sighting is definitive even if another track failed.
+                if _safe_timeline_item_id(track_item) in target_ids:
+                    return "present"
+
+    if walk_failed or tracks_walked == 0 or unreadable_item or not target_ids:
+        return "unknown"
+    return "absent"
+
+
+def _timeline_delete_clips_verified(tl, items, ripple):
+    """Timeline.DeleteClips with readback-and-retry.
+
+    api_truth 'Timeline.DeleteClips (flaky first attempt)': the call can
+    return False while every item is still present, and an identical retry
+    then succeeds. On a False, read the tracks back:
+
+      absent  -> the delete landed despite the False; report success.
+      present -> retry the identical call once, then read back again.
+      unknown -> report failure and do NOT retry. An unverifiable delete must
+                 not be claimed as success, and a retry whose outcome we
+                 equally cannot read is a second destructive call bought with
+                 no information.
+
+    ripple=True caveat: a retry is not idempotent in principle. If the first
+    call deleted some items and left others, the readback reports 'present'
+    for the survivors and the retry passes the original list back in — stale
+    handles to already-deleted items included. That could not be made to
+    misbehave against a fake; it is recorded, not resolved.
+    """
+    if bool(tl.DeleteClips(items, ripple)):
+        return True
+    presence = _timeline_items_presence(tl, items)
+    if presence != "present":
+        return presence == "absent"
+    if bool(tl.DeleteClips(items, ripple)):
+        return True
+    return _timeline_items_presence(tl, items) == "absent"
+
+
 def _timeline_items_by_ids(tl, ids, track_types=("video", "audio", "subtitle")):
     ids_set = {str(item_id) for item_id in ids if item_id is not None}
     found = []
@@ -4168,7 +4243,7 @@ def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_source
                 seen_delete_ids.add(item_id)
         if delete_items:
             try:
-                out["deleted_sources"] = bool(tl.DeleteClips(delete_items, bool(p.get("ripple", False))))
+                out["deleted_sources"] = _timeline_delete_clips_verified(tl, delete_items, bool(p.get("ripple", False)))
                 out["deleted_source_ids"] = _timeline_item_ids(delete_items)
             except Exception as exc:
                 out["deleted_sources"] = False
@@ -4283,7 +4358,7 @@ def _timeline_copy_range_impl(proj, tl, p: Dict[str, Any], *, overwrite: bool = 
                     if existing_start < dest_end and existing_end > dest_start:
                         delete_targets.append(existing)
         if delete_targets:
-            deleted = bool(tl.DeleteClips(delete_targets, False))
+            deleted = _timeline_delete_clips_verified(tl, delete_targets, False)
 
     results = []
     for track_type, source_track, item, overlap_start, overlap_end in items:
@@ -4376,7 +4451,7 @@ def _timeline_lift_range_impl(tl, p: Dict[str, Any]):
         return {"success": True, "deleted": 0, "range": {"start": start, "end": end}}
     deleted_ids = _timeline_item_ids(delete_items)
     return {
-        "success": bool(tl.DeleteClips(delete_items, bool(p.get("ripple", False)))),
+        "success": _timeline_delete_clips_verified(tl, delete_items, bool(p.get("ripple", False))),
         "deleted": len(delete_items),
         "deleted_ids": deleted_ids,
         "range": {"start": start, "end": end},
@@ -20773,7 +20848,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
             blocked = _consume_confirm_token(action="timeline.delete_clips_ripple", params=p)
             if blocked:
                 return blocked
-        return {"success": bool(tl.DeleteClips(found, ripple))}
+        return {"success": _timeline_delete_clips_verified(tl, found, ripple)}
     elif action == "set_clips_linked":
         ids_set = set(p["clip_ids"])
         found = []
