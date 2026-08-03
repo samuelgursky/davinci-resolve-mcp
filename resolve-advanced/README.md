@@ -173,6 +173,25 @@ status + install hints):
 Missing features fail with a clear, actionable message rather than crashing; the server logs a one-line
 "needs setup" summary to stderr at startup.
 
+> **Pinning the AAF interpreter.** `aaf_probe.py` runs under `AAF_PROBE_PYTHON`, falling back to
+> `PYTHON` and then plain `python3` on PATH. `install.py` sets that pin **only inside the `mcpServers`
+> JSON entry it writes**, so a host that spawns this advanced server some other way must pin it itself —
+> otherwise the reader resolves a `python3` without `pyaaf2` and honest-refuses every AAF.
+
+### AAF multi-layer reading — what it does and does not tell you
+Avid exports a multi-layer video timeline as a `NestedScope` segment holding one nested `Sequence` per
+layer; those layers are traversed and numbered `V1..Vn`. Each parsed sequence also carries an
+`unhandled` map (component class → count) so a structural miss is visible rather than arriving as a
+plausible-looking short event list. Three limits are deliberate:
+
+- **Motion Control retimes are flagged, not quantified** — `effect: "Motion Control"` with `speed: 100`,
+  because the ratio is not recoverable offline. Reading `speed` alone reports them as full speed.
+- **Effect-only layers produce no events.** A layer wrapping `ScopeReference` (subtitle burns, blends,
+  mattes) applies to what shows through from below and references no media of its own. OTIO materializes
+  such layers as tracks of gaps, so its track count can exceed the number of layers with media.
+- **Only `NestedScope` layers are numbered.** Non-nested slots keep the flat `V`/`A` label, which is what
+  `editorial.mjs`'s `track === 'A'` audio-follows-video heuristic reads.
+
 ## Provenance & license
 Vendored libraries are clean offline format-interop and deterministic compute code: no secrets, no
 external service coupling, no network calls, no LLM dependency. Where a feature can take a second

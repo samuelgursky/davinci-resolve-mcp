@@ -94,11 +94,21 @@ export async function parseAAF(contentOrPath) {
 
 /**
  * Enumerate the sequences inside an AAF for the picker.
+ *
+ * `unhandled` is carried through deliberately: a structural miss in the probe
+ * (a component class it cannot walk) otherwise looks identical to a genuinely
+ * empty timeline, and the caller would gate on a successful parse and conform
+ * nothing. A NestedScope — Avid's multi-layer video stack — used to land in
+ * exactly that hole: eventCount 0 alongside ok:true. Absent means clean.
  * @param {string} contentOrPath absolute .aaf path
- * @returns {Promise<Array<{id:string,name:string,eventCount:number}>>}
+ * @returns {Promise<Array<{id:string,name:string,eventCount:number,unhandled?:Object}>>}
  */
 export async function listAafSequences(contentOrPath) {
   const aafPath = resolveAafPath(contentOrPath);
   const { sequences } = await runProbe(aafPath);
-  return (sequences || []).map((s) => ({ id: String(s.id), name: String(s.name), eventCount: Number(s.eventCount || 0) }));
+  return (sequences || []).map((s) => {
+    const out = { id: String(s.id), name: String(s.name), eventCount: Number(s.eventCount || 0) };
+    if (s.unhandled && Object.keys(s.unhandled).length) out.unhandled = s.unhandled;
+    return out;
+  });
 }

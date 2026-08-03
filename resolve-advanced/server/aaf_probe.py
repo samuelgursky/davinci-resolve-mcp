@@ -11,6 +11,7 @@ trusting, so the Node server shells out to this helper, which uses the pure-Pyth
       "ok": true,
       "sequences": [
         { "id": <mob-id str>, "name": <str>, "eventCount": <int>,
+          "unhandled": { "<ComponentClass>": <int>, ... },
           "events": [ {normalized-event}, ... ] }
       ]
     }
@@ -24,6 +25,24 @@ Honest-refuse discipline (no fake parses):
   * exit 2  → bad invocation
 Per-sequence event extraction is best-effort and defensive: if a component can't
 be decoded we still report the sequence with its clip count — we never fabricate.
+
+`unhandled` is the teeth behind that promise. A structural miss (a component class
+this walker does not model) used to be swallowed silently, so a whole multi-layer
+timeline could come back as `ok:true` with `eventCount: 0` — indistinguishable from
+an genuinely empty sequence, and worse than an honest refusal because downstream
+consumers gate on `ok`. Every component we skip is now counted by class name and
+reported per sequence, so a miss is VISIBLE without changing the exit-code contract.
+
+Segment model (Avid Media Composer picture turnovers):
+  * NestedScope  — a multi-layer video track. Its `.slots` are the layers (V1..Vn);
+                   it has NO `.components`. Layers are PARALLEL, so each layer's
+                   record position restarts at 0.
+  * Sequence     — ordered `.components`, laid end to end.
+  * OperationGroup — effect wrapper. Its `.segments` are the effect INPUTS, and the
+                   primary input is usually a nested Sequence (not a bare SourceClip).
+  * Selector     — an enabled/disabled layer variant; the live one is `Selected`.
+  * ScopeReference — "show the NestedScope layer beneath me": real record time, no
+                   clip of this layer's own. Treated as a gap, like Filler.
 """
 
 import json
@@ -38,24 +57,88 @@ def _fps_from_edit_rate(edit_rate):
         return None
 
 
-def _source_name(clip):
-    """Best-effort human name for a SourceClip: referenced mob name, else clip name.
+# How far to chase the mob reference chain looking for a named mob (see _source_name).
+_MAX_MOB_CHASE = 8
 
-    pyaaf2 returns the class name (e.g. "SourceClip") for an unset `.name`, so treat a value
-    equal to the object's type name as absent rather than reporting it as a real source.
+
+def _usable_name(obj):
+    """A real name, or None. pyaaf2 returns the CLASS NAME for an unset `.name`, so a
+    value equal to the object's type name means "absent", not a source called SourceClip."""
+    try:
+        v = getattr(obj, "name", None)
+    except Exception:
+        return None
+    if not v:
+        return None
+    text = str(v).strip()
+    if not text or text == type(obj).__name__:
+        return None
+    return text
+
+
+def _find_source_clip(segment, depth=0):
+    """First SourceClip inside an arbitrary segment tree (bounded)."""
+    if segment is None or depth > 8:
+        return None
+    cls = type(segment).__name__
+    if cls == "SourceClip":
+        return segment
+    if cls == "Selector":
+        return _find_source_clip(_selector_selected(segment), depth + 1)
+    if cls == "Sequence":
+        children = getattr(segment, "components", None) or []
+    elif cls == "OperationGroup":
+        children = getattr(segment, "segments", None) or []
+    elif cls == "NestedScope":
+        children = _nested_layers(segment)
+    else:
+        return None
+    for child in children:
+        found = _find_source_clip(child, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def _source_name(clip):
+    """Best-effort human name for a SourceClip: the nearest NAMED mob it references.
+
+    Avid does not point a timeline SourceClip straight at a MasterMob. Subclips, group
+    clips and motion-effect sources go through one or more UNNAMED intermediate
+    CompositionMobs, so stopping at `clip.mob.name` yields nothing for the majority of
+    a real turnover's clips. Chase the reference chain — mob → its slot's SourceClip →
+    that clip's mob — until a mob actually carries a name (typically the MasterMob, e.g.
+    "A001C001_240101_AB01.new.01"). Bounded and cycle-guarded.
     """
-    cls = type(clip).__name__
-    for getter in (
-        lambda c: getattr(c, "mob", None) and c.mob.name,
-        lambda c: getattr(c, "name", None),
-    ):
+    current = clip
+    seen = set()
+    for _ in range(_MAX_MOB_CHASE):
         try:
-            v = getter(clip)
-            if v and str(v) != cls:
-                return str(v)
+            mob = getattr(current, "mob", None)
         except Exception:
-            pass
-    return "UNKNOWN"
+            mob = None
+        if mob is None:
+            break
+        try:
+            key = str(getattr(mob, "mob_id", "") or id(mob))
+        except Exception:
+            key = str(id(mob))
+        if key in seen:
+            break  # reference cycle — stop rather than spin
+        seen.add(key)
+        name = _usable_name(mob)
+        if name:
+            return name
+        nxt = None
+        for slot in getattr(mob, "slots", None) or []:
+            nxt = _find_source_clip(getattr(slot, "segment", None))
+            if nxt is not None:
+                break
+        if nxt is None:
+            break
+        current = nxt
+    # No named mob anywhere in the chain — fall back to the clip's own name.
+    return _usable_name(clip) or "UNKNOWN"
 
 
 def _emit_source_clip(clip, *, index, track, rec, fps, transition=None):
@@ -84,89 +167,212 @@ def _emit_source_clip(clip, *, index, track, rec, fps, transition=None):
     return event, length
 
 
-def _walk_sequence(segment, *, track, fps, start_index):
-    """
-    Walk a Sequence's components into normalized events. Handles SourceClip,
-    Filler (gap), Transition (annotates the following clip), and OperationGroup
-    (effect wrapper — descends to the inner source clip, flags a possible retime).
-    """
-    import aaf2  # noqa: F401  (guaranteed present by the caller)
+# Depth guard: AAF nesting is a graph and a malformed file could cycle. Real Avid
+# turnovers nest ~4 deep (NestedScope > Sequence > Selector > OperationGroup > Sequence).
+_MAX_DEPTH = 24
 
-    events = []
-    rec = 0
-    idx = start_index
-    pending_transition = None
 
-    components = getattr(segment, "components", None)
+def _length(obj):
+    try:
+        return int(getattr(obj, "length", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _note_unhandled(state, cls):
+    """Record a component class we could not turn into events. See module docstring."""
+    state["unhandled"][cls] = state["unhandled"].get(cls, 0) + 1
+
+
+def _nested_layers(scope):
+    """The parallel layers of a NestedScope.
+
+    pyaaf2 hands back the layer Segments directly for this class, but tolerate a
+    slot-like wrapper (`.segment`) too so we work across pyaaf2 versions.
+    """
+    layers = []
+    for item in getattr(scope, "slots", []) or []:
+        inner = getattr(item, "segment", None)
+        layers.append(inner if inner is not None else item)
+    return layers
+
+
+def _selector_selected(comp):
+    """The live variant of a Selector (Avid enabled/disabled layer variants).
+
+    This is the AAF `Selected` PROPERTY — pyaaf2 does not expose it as a `.selected`
+    python attribute, so read it via getvalue()/[] first and only then fall back.
+    """
+    for getter in (
+        lambda c: c.getvalue("Selected"),
+        lambda c: c["Selected"].value,
+        lambda c: getattr(c, "selected", None),
+    ):
+        try:
+            v = getter(comp)
+            if v is not None:
+                return v
+        except Exception:
+            pass
+    return None
+
+
+def _operation_name(comp):
+    try:
+        return str(getattr(getattr(comp, "operation", None), "name", "") or "")
+    except Exception:
+        return ""
+
+
+def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
+    """
+    Emit normalized events for ONE segment placed at record position `rec`.
+
+    Appends to `state["events"]` (indices from the monotonic `state["idx"]`) and
+    counts anything it cannot model into `state["unhandled"]`.
+
+    Returns the number of RECORD frames this segment occupies, so a caller laying
+    components end to end can advance. Container classes return their own declared
+    length rather than the sum of what we managed to decode — a partial decode must
+    not silently slide every later clip earlier on the timeline.
+    """
+    cls = type(segment).__name__
+    declared = _length(segment)
+
+    if depth > _MAX_DEPTH:
+        _note_unhandled(state, cls)
+        return declared
+
+    if cls == "SourceClip":
+        ev, length = _emit_source_clip(
+            segment, index=state["idx"], track=track, rec=rec, fps=fps, transition=transition
+        )
+        state["events"].append(ev)
+        state["idx"] += 1
+        return length
+
+    if cls in ("Filler", "ScopeReference"):
+        # Filler = a real gap. ScopeReference = "the NestedScope layer beneath shows
+        # through here" — real record time, but no clip of THIS layer's own.
+        return declared
+
+    if cls == "Sequence":
+        return _walk_components(segment, track=track, fps=fps, rec=rec, state=state, depth=depth + 1, transition=transition)
+
+    if cls == "NestedScope":
+        # Layers are parallel in time: every one starts at this segment's own rec.
+        for layer in _nested_layers(segment):
+            _walk_segment(layer, track=track, fps=fps, rec=rec, state=state, depth=depth + 1, transition=transition)
+        return declared
+
+    if cls == "Selector":
+        selected = _selector_selected(segment)
+        if selected is None:
+            _note_unhandled(state, cls)
+        else:
+            _walk_segment(selected, track=track, fps=fps, rec=rec, state=state, depth=depth + 1, transition=transition)
+        return declared
+
+    if cls == "OperationGroup":
+        # Effect wrapper (retime, paint, resize, blend, matte key...). Its `.segments`
+        # are the effect INPUTS, and the primary is usually a nested Sequence, NOT a
+        # bare SourceClip — only descending to a direct SourceClip finds nothing.
+        #
+        # EVERY input is walked, not just the primary: an SBlend B-side or a matte
+        # key's fill/key are real referenced media that a conform has to relink, and
+        # dropping them is the same data loss this walker exists to prevent. They share
+        # the primary's record span (that is what a blend IS), so they intentionally
+        # overlap it on the same track label. Callers already cannot assume events are
+        # non-overlapping — parallel NestedScope layers overlap by construction.
+        before = len(state["events"])
+        for inp in getattr(segment, "segments", None) or []:
+            _walk_segment(inp, track=track, fps=fps, rec=rec, state=state, depth=depth + 1, transition=transition)
+        op_name = _operation_name(segment)
+        if op_name and ("speed" in op_name.lower() or "motion" in op_name.lower()):
+            # We can detect that a retime is present but not reliably its ratio
+            # offline; flag it honestly rather than fake a speed number.
+            for ev in state["events"][before:]:
+                ev["effect"] = op_name
+        return declared
+
+    # Unknown component — advance by its declared length, don't fake an event, and
+    # make the miss loud so it cannot masquerade as an empty timeline.
+    _note_unhandled(state, cls)
+    return declared
+
+
+def _walk_components(sequence, *, track, fps, rec, state, depth, transition=None):
+    """Lay a Sequence's components end to end. Returns the record length consumed."""
+    start = rec
+    pending_transition = transition
+    components = getattr(sequence, "components", None)
     if components is None:
-        # Not a sequence (e.g. a lone SourceClip filling the whole slot).
-        components = [segment]
-
+        components = [sequence]
     for comp in components:
         cls = type(comp).__name__
         try:
             if cls == "Transition":
-                dur = int(getattr(comp, "length", 0) or 0)
-                pending_transition = {"type": "dissolve", "duration": dur}
-                # A transition overlaps neighbours; it does not advance rec on its own.
+                # A transition overlaps its neighbours; it does not advance rec itself.
+                pending_transition = {"type": "dissolve", "duration": _length(comp)}
                 continue
-            if cls == "Filler":
-                rec += int(getattr(comp, "length", 0) or 0)
-                pending_transition = None
-                continue
-            if cls == "OperationGroup":
-                # Effect wrapper (speed, etc.). Descend to the first inner SourceClip.
-                inner = None
-                for seg in getattr(comp, "segments", []) or []:
-                    if type(seg).__name__ == "SourceClip":
-                        inner = seg
-                        break
-                op_name = ""
-                try:
-                    op_name = str(getattr(getattr(comp, "operation", None), "name", "") or "")
-                except Exception:
-                    op_name = ""
-                if inner is not None:
-                    ev, length = _emit_source_clip(
-                        inner, index=idx, track=track, rec=rec, fps=fps, transition=pending_transition
-                    )
-                    # We can detect that an effect is present but not reliably its ratio
-                    # offline; flag it honestly rather than fake a speed number.
-                    if "speed" in op_name.lower() or "motion" in op_name.lower():
-                        ev["effect"] = op_name or "OperationGroup"
-                    events.append(ev)
-                    rec += length
-                    idx += 1
-                else:
-                    rec += int(getattr(comp, "length", 0) or 0)
-                pending_transition = None
-                continue
-            if cls == "SourceClip":
-                ev, length = _emit_source_clip(
-                    comp, index=idx, track=track, rec=rec, fps=fps, transition=pending_transition
-                )
-                events.append(ev)
-                rec += length
-                idx += 1
-                pending_transition = None
-                continue
-            # Unknown component — advance by its length if it has one, don't fake an event.
-            rec += int(getattr(comp, "length", 0) or 0)
+            rec += _walk_segment(
+                comp, track=track, fps=fps, rec=rec, state=state, depth=depth, transition=pending_transition
+            )
             pending_transition = None
         except Exception:
-            # Never let one bad component abort the whole sequence; skip it honestly.
+            # Never let one bad component abort the whole sequence — but say so.
+            _note_unhandled(state, cls)
             pending_transition = None
             continue
-    return events
+    return rec - start
+
+
+def _walk_slot(segment, *, prefix, fps, state):
+    """
+    Walk one mob slot's top-level segment into `state`.
+
+    A NestedScope slot is a multi-layer track: each layer gets its own numbered label
+    (V1..Vn / A1..An) and restarts at record 0, because layers are parallel, not
+    sequential. A plain (single-layer) slot keeps the flat "V"/"A" label.
+    """
+    if type(segment).__name__ == "NestedScope":
+        for n, layer in enumerate(_nested_layers(segment), start=1):
+            _walk_segment(layer, track=f"{prefix}{n}", fps=fps, rec=0, state=state, depth=1)
+        return
+    _walk_segment(segment, track=prefix, fps=fps, rec=0, state=state, depth=0)
+
+
+# Slot media kinds that carry no editorial cuts. Matched on MEDIA KIND, not on the
+# segment's class name: Avid wraps timecode slots in a Pulldown (segment class
+# "Pulldown", media_kind "Timecode"), so a class-name-only skip let them through and
+# they polluted both the events and the unhandled counter.
+_NON_EDITORIAL_KINDS = frozenset(
+    {"timecode", "edgecode", "descriptivemetadata", "soundmastertrack"}
+)
+
+
+def _norm_kind(value):
+    try:
+        return "".join(str(value or "").split()).lower()
+    except Exception:
+        return ""
+
+
+def _slot_media_kind(slot):
+    """Media kind of a slot, falling back to its segment's."""
+    for owner in (slot, getattr(slot, "segment", None)):
+        kind = _norm_kind(getattr(owner, "media_kind", None))
+        if kind:
+            return kind
+    return ""
+
+
+def _is_editorial_slot(slot):
+    return _slot_media_kind(slot) not in _NON_EDITORIAL_KINDS
 
 
 def _media_kind_to_track(slot):
-    kind = ""
-    try:
-        kind = str(getattr(slot, "media_kind", "") or "")
-    except Exception:
-        kind = ""
-    return "A" if kind.lower().startswith("sound") else "V"
+    return "A" if _slot_media_kind(slot).startswith("sound") else "V"
 
 
 def probe(path):
@@ -191,26 +397,31 @@ def probe(path):
                 name = getattr(mob, "name", None)
             except Exception:
                 name = None
-            events = []
-            idx = 1
+            # `idx` is monotonic across the WHOLE mob, every slot and every nested layer.
+            state = {"idx": 1, "events": [], "unhandled": {}}
             for slot in getattr(mob, "slots", []) or []:
-                # Skip non-editorial slots (timecode / edgecode) — count only picture/sound.
                 seg = getattr(slot, "segment", None)
                 if seg is None:
                     continue
-                seg_cls = type(seg).__name__
-                if seg_cls in ("Timecode", "EdgeCode"):
+                # Skip non-editorial slots by MEDIA KIND (timecode/edgecode/descriptive
+                # metadata/sound master) — see _NON_EDITORIAL_KINDS.
+                if not _is_editorial_slot(slot):
                     continue
-                track = _media_kind_to_track(slot)
-                fps = _fps_from_edit_rate(getattr(slot, "edit_rate", None))
-                slot_events = _walk_sequence(seg, track=track, fps=fps, start_index=idx)
-                events.extend(slot_events)
-                idx += len(slot_events)
+                _walk_slot(
+                    seg,
+                    prefix=_media_kind_to_track(slot),
+                    fps=_fps_from_edit_rate(getattr(slot, "edit_rate", None)),
+                    state=state,
+                )
+            events = state["events"]
             sequences.append(
                 {
                     "id": mob_id or (str(name) if name else f"seq{len(sequences) + 1}"),
                     "name": str(name) if name else f"Sequence {len(sequences) + 1}",
                     "eventCount": len(events),
+                    # Component classes we could not model, by name+count. Empty {} means
+                    # a structurally complete read; non-empty means events are INCOMPLETE.
+                    "unhandled": dict(sorted(state["unhandled"].items())),
                     "events": events,
                 }
             )

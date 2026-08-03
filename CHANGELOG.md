@@ -2,6 +2,57 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.73.0
+
+The offline AAF reader could not read a multi-layer Avid timeline, and said so
+in the worst possible way: `ok: true` with an empty event list, indistinguishable
+from an empty timeline. Any caller gating on a successful parse would proceed to
+conform nothing.
+
+### Fixed
+
+- **AAF: multi-layer timelines returned zero events while reporting success.**
+  Avid exports a multi-layer video timeline as a `NestedScope` segment, which the
+  offline reader never traversed — `NestedScope` carries `.slots`, not
+  `.components`, so the whole timeline fell through the walker's lone-`SourceClip`
+  fallback and emitted nothing. Two further drops sat on the same path and had to
+  be fixed with it: `OperationGroup.segments` holds a nested `Sequence` rather than
+  a direct `SourceClip`, so effect-wrapped clips — the majority of any real
+  turnover — were dropped even once `NestedScope` was traversed; and source-name
+  resolution stopped one mob hop short of the MasterMob, because Avid routes
+  timeline clips through an unnamed intermediate `CompositionMob`, resolving most
+  clips to `UNKNOWN`. `Selector` segments are now followed (via the AAF `Selected`
+  property — pyaaf2 does not expose it as an attribute), and non-editorial slots
+  are skipped by media kind rather than segment class, so `Pulldown`-wrapped
+  timecode tracks no longer leak through as editorial.
+
+  Verified against a real 83-minute Avid picture turnover: **0 → 878 events**
+  across 5 layers, **0 `UNKNOWN` sources** (779 distinct camera rolls), no
+  unhandled component classes, ~1.5 s.
+
+### Added
+
+- AAF probe and `listAafSequences` now report an `unhandled` map (component class
+  → count) per sequence. A structural miss is visible instead of masquerading as
+  an empty timeline.
+
+### Known limitations, stated deliberately
+
+- **Motion Control retimes are flagged, not quantified.** They carry
+  `effect: "Motion Control"` with `speed: 100`, because the ratio is not
+  recoverable offline. A consumer reading `speed` alone will treat them as full
+  speed. Pre-existing behaviour, preserved on purpose — flag over fabricate.
+- **Effect-only layers correctly produce no events.** Layers that wrap
+  `ScopeReference` (subtitle burns, blends, mattes) apply to what shows through
+  from below and reference no media of their own. OTIO reports such layers as
+  tracks of gaps, so its track count can exceed the number of layers with media;
+  "6 layers" is not "6 layers with media". Events were not fabricated to make the
+  counts match.
+- **Only `NestedScope` layers are numbered `V1..Vn`.** Non-nested slots keep the
+  flat `V`/`A` label, a deliberate scope limit that keeps the blast radius off
+  simple AAFs — notably `editorial.mjs`'s `track === 'A'` audio-follows-video
+  heuristic, which reads that label.
+
 ## What's New in v2.72.1
 
 Documentation only. The API coverage page stated its method counts in four
