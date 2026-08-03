@@ -355,6 +355,26 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
+        "symbol": "Timeline.GetCurrentClipThumbnailImage (Color page only)",
+        "object": "Timeline",
+        "signature": "() -> {width, height, format, data} | None",
+        "reality": "Returns thumbnail data only while Resolve is on the Color "
+                   "page — the reference documents it as returning data 'for "
+                   "current media in the Color Page'. On every other page it "
+                   "silently returns None for every frame, indistinguishable "
+                   "from 'no thumbnail exists', with no error naming the page "
+                   "requirement.",
+        "recommended": "Switch to the Color page under the page lock before "
+                       "reading and restore the user's page after "
+                       "(src/utils/page_lock.py:color_page_for_thumbnails does "
+                       "exactly this); when the switch fails (headless), name "
+                       "the Color-page requirement in the error instead of "
+                       "reporting a missing thumbnail.",
+        "tags": ["timeline", "thumbnail", "silent-failure", "page-dependent"],
+        "submit": "missing",
+        "mitigation": ["color_page_for_thumbnails", "_timeline_thumbnail_contact_sheet"],
+    },
+    {
         "symbol": "Timeline.GetTimelineByName",
         "object": "Project",
         "reality": "Does not exist. Timelines are looked up by index.",

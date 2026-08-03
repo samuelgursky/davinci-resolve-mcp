@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.0
 
-**Totals:** 21 missing capabilities, 20 bugs / unreliable behaviors.
+**Totals:** 22 missing capabilities, 20 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -47,6 +47,14 @@ equivalent, blocking full automation.
 - **Behavior:** Returns False for every value form tried (string, int, float), both before and after a timeline exists, so the playback frame rate cannot be set from the API at all. Reported by a community contributor against Resolve Studio while assembling a vertical timeline (PR #99).
 - **Workaround / current handling:** Ask the user to set it in Project Settings > Master Settings > Playback frame rate as a SETUP step, before any timeline exists. Read it back to confirm; do not report it as set on the strength of the call alone.
 - **Tags:** project-settings, silent-failure, timeline
+
+### Timeline.GetCurrentClipThumbnailImage (Color page only)
+
+- **Object:** `Timeline`
+- **Signature:** `() -> {width, height, format, data} | None`
+- **Behavior:** Returns thumbnail data only while Resolve is on the Color page — the reference documents it as returning data 'for current media in the Color Page'. On every other page it silently returns None for every frame, indistinguishable from 'no thumbnail exists', with no error naming the page requirement.
+- **Workaround / current handling:** Switch to the Color page under the page lock before reading and restore the user's page after (src/utils/page_lock.py:color_page_for_thumbnails does exactly this); when the switch fails (headless), name the Color-page requirement in the error instead of reporting a missing thumbnail.
+- **Tags:** timeline, thumbnail, silent-failure, page-dependent
 
 ### Timeline.GetTimelineByName
 

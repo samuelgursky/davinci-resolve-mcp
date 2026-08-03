@@ -2,6 +2,8 @@
 
 from src.granular.common import *  # noqa: F401,F403
 
+from src.utils.page_lock import color_page_for_thumbnails
+
 resolve = ResolveProxy()
 
 @mcp.resource("resolve://timelines")
@@ -930,6 +932,9 @@ def timeline_get_current_video_item() -> Dict[str, Any]:
 def timeline_get_current_clip_thumbnail(width: int = 320, height: int = 180) -> Dict[str, Any]:
     """Get thumbnail image data for the current clip.
 
+    Switches to the Color page for the read (GetCurrentClipThumbnailImage only
+    returns data there) and restores the previous page after.
+
     Args:
         width: Thumbnail width. Default: 320.
         height: Thumbnail height. Default: 180.
@@ -937,10 +942,19 @@ def timeline_get_current_clip_thumbnail(width: int = 320, height: int = 180) -> 
     _, tl, err = _get_timeline()
     if err:
         return err
-    result = tl.GetCurrentClipThumbnailImage()
+    with color_page_for_thumbnails(resolve) as on_color:
+        result = tl.GetCurrentClipThumbnailImage()
     if result:
-        return {"success": True, "has_data": bool(result)}
-    return {"success": False}
+        return {"success": True, "has_data": True}
+    return {
+        "success": False,
+        "error": (
+            "No thumbnail available for the current clip"
+            if on_color
+            else "No thumbnail: GetCurrentClipThumbnailImage requires the "
+            "Color page and automatic switching failed (headless or page locked)"
+        ),
+    }
 
 
 @mcp.tool()
