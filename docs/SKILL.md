@@ -1330,7 +1330,10 @@ Key actions:
 - `apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?)` — apply a
   normalized CDL and/or copy a source grade to multiple video items
 - `thumbnail_contact_sheet` / `marker_thumbnail_review` — sample Resolve-rendered
-  thumbnails under the project analysis root for visual verification
+  thumbnails under the project analysis root for visual verification. Resolve
+  only serves these thumbnails on the Color page; the tool switches there
+  automatically and restores the previous page, so a brief page flash in the GUI
+  is expected
 - `edit_kernel_capabilities` — report supported, partially supported, and
   unsupported timeline edit kernel behavior
 - `probe_edit_kernel_item(clip_ids? selected? timeline_item?)` — read-only
