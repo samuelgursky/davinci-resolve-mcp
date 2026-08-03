@@ -10877,9 +10877,10 @@ def _folder_probe(folder, depth: int = 1):
     clips = []
     for clip in (folder.GetClipList() or []):
         clips.append(_media_pool_item_summary(clip))
+    subs = folder.GetSubFolderList() or []
     subfolders = []
     if depth > 0:
-        for sub in (folder.GetSubFolderList() or []):
+        for sub in subs:
             subfolders.append(_folder_probe(sub, depth - 1))
     stale = None
     try:
@@ -10892,8 +10893,11 @@ def _folder_probe(folder, depth: int = 1):
         "stale": stale,
         "clip_count": len(clips),
         "clips": clips,
-        "subfolder_count": len(subfolders),
+        # True count even below the depth cutoff — reporting len(subfolders)
+        # here made unexpanded folders look like empty leaves.
+        "subfolder_count": len(subs),
         "subfolders": subfolders,
+        "truncated": len(subs) > len(subfolders),
     }
 
 
@@ -16449,6 +16453,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       import_folder(path, source_clips_path?) -> {success}
       ingest_capabilities() -> {supported, partially_supported, unsupported}
       probe_media_pool(depth?) -> {media_pool_id, methods, root, current_folder, selected_clips}
+        depth defaults to 1, max 4. Folders below the cutoff have truncated:true
+        and a real subfolder_count; re-probe deeper or use folder.get_subfolders.
       probe_ingest_item(clip_ids? selected?) -> {items, count}
       safe_import_media(paths, target_folder?, dry_run?) -> {success, imported, clips}
       safe_import_sequence(FilePath|file_path|pattern, StartIndex?, EndIndex?, target_folder?, dry_run?) -> {success, imported, clips}

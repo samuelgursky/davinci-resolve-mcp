@@ -7,6 +7,7 @@ from src.server import (
     _check_proxy_media_compatibility,
     _copy_clip_annotations,
     _copy_metadata,
+    _folder_probe,
     _link_proxy_checked,
     _media_pool_ingest_capabilities,
     _media_pool_item_probe,
@@ -211,6 +212,29 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
         self.assertEqual(probe["root"]["clip_count"], 1)
         self.assertEqual(probe["root"]["subfolder_count"], 1)
         self.assertEqual(probe["selected_clips"][0]["id"], "clip-1")
+
+    def test_folder_probe_reports_true_subfolder_count_beyond_depth(self):
+        # Regression: at the depth cutoff the probe used to report
+        # subfolder_count from the (empty) expanded list, making populated
+        # folders look like empty leaves — a relink sweep then skipped them.
+        mid = FolderStub(
+            name="01-iabc-yt",
+            unique_id="folder-2",
+            subfolders=[
+                FolderStub(name="01-Media", unique_id="folder-3"),
+                FolderStub(name="02-Timelines", unique_id="folder-4"),
+                FolderStub(name="03-Exports", unique_id="folder-5"),
+            ],
+        )
+        root = FolderStub(subfolders=[mid])
+
+        probe = _folder_probe(root, depth=1)
+
+        self.assertFalse(probe["truncated"])
+        child = probe["subfolders"][0]
+        self.assertEqual(child["subfolder_count"], 3)
+        self.assertEqual(child["subfolders"], [])
+        self.assertTrue(child["truncated"])
 
     def test_probe_ingest_items_supports_selected_items(self):
         probe = _media_pool_probe_ingest_items(MediaPoolStub(), {"selected": True})
