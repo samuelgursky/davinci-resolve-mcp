@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.70.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.70.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#server-modes)
@@ -51,15 +51,21 @@ python scripts/install_resolve_bridge.py
 export DAVINCI_RESOLVE_BRIDGE=1      # opt-in; unset changes nothing
 ```
 
-Requires a **framework Python** (python.org). Resolve enumerates `.py` scripts
-only when it finds one — Homebrew, pyenv and conda interpreters are not
-detected, and the script silently never appears in the menu. A Lua canary is
-installed alongside so you can tell that apart from a wrong folder.
+On **macOS**, this requires a **framework Python** (python.org). Resolve
+enumerates `.py` scripts only when it finds one — Homebrew, pyenv and conda
+interpreters are not detected, and the script silently never appears in the
+menu. A Lua canary is installed alongside so you can tell that apart from a
+wrong folder.
 
-Validated on free 21.0.3.7 and Studio 19.1.3.7. This is the documented in-app
-path, not a licence circumvention, but Blackmagic could close it — treat it as a
-supported-until-it-is-not tier. Loopback only, HMAC-signed requests, one-use
-nonces.
+Validated on free 21.0.3.7 and Studio 19.1.3.7, both macOS. **Windows paths were
+added in v2.70.1 (issue #106) and have not yet been confirmed on Windows
+hardware** — the installer targets the `%APPDATA%` and `%PROGRAMDATA%` script
+folders Blackmagic documents, but whether Resolve lists the bridge from them is
+unverified. Reports welcome.
+
+This is the documented in-app path, not a licence circumvention, but Blackmagic
+could close it — treat it as a supported-until-it-is-not tier. Loopback only,
+HMAC-signed requests, one-use nonces.
 
 ## Local Control Panel
 

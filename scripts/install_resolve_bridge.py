@@ -3,9 +3,9 @@
     python scripts/install_resolve_bridge.py --probe-only    # settle the host model first
     python scripts/install_resolve_bridge.py                 # probe + bridge launcher
 
-Deploys to every applicable macOS/Linux location, including the sandboxed App
-Store container used by the free edition — which is why the free edition can be
-installed alongside a direct-download Studio without either disturbing the other.
+Deploys to every applicable macOS/Windows/Linux location, including the sandboxed
+App Store container used by the free edition — which is why the free edition can
+be installed alongside a direct-download Studio without either disturbing the other.
 
 Nothing is started here. Resolve must be restarted after installing so it
 re-scans the Scripts folders, and the script is then run from
@@ -76,6 +76,56 @@ _SANDBOX_FALLBACK_SUFFIX = "Library/Application Support/Fusion/Scripts/Utility"
 #: Containers that are not Resolve (RAW Player, Speed Test, the IO XPC helper).
 _NON_RESOLVE_CONTAINERS = ("BlackmagicRaw", "IOXPC")
 
+#: Windows Scripts/Utility trees, per Blackmagic's own README
+#: (docs/reference/resolve_scripting_api.txt, "Specific user"/"All users").
+#: Two traps, both live in those two lines:
+#:
+#: 1. The per-user tree carries a `Support` segment that the all-users tree does
+#:    NOT. They are not one layout under two roots, and deriving one from the
+#:    other lands in a folder Resolve never scans.
+#: 2. The README writes the per-user root as `%APPDATA%\Roaming\...`, which is
+#:    wrong — `%APPDATA%` already IS `...\AppData\Roaming`, so following it
+#:    literally yields `AppData\Roaming\Roaming\...`. The paths below drop the
+#:    doubled segment; both were confirmed present and writable on the Windows 11
+#:    machine in issue #106.
+_WINDOWS_USER_SCRIPTS_SUFFIX = (
+    "Blackmagic Design/DaVinci Resolve/Support/Fusion/Scripts/Utility"
+)
+_WINDOWS_ALL_USERS_SCRIPTS_SUFFIX = "Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility"
+
+
+#: The product folder both Windows trees hang off. Its existence is the "Resolve
+#: is installed" signal — see `_windows_script_candidates`.
+_WINDOWS_PRODUCT_ROOT = "Blackmagic Design/DaVinci Resolve"
+
+
+def _windows_script_candidates() -> list[Path]:
+    """Scripts/Utility trees Resolve scans on Windows (issue #106).
+
+    Gated on the *product* folder, not the Scripts/Utility tree, for the same
+    reason the sandbox branch is: Resolve does not create its `Fusion/Scripts`
+    tree until a script is installed, so requiring the target to pre-exist skips
+    a fresh free-edition install — the one build the bridge exists for. The
+    product folder is created on first launch, so it answers "is Resolve
+    installed" without demanding a folder only we will ever create.
+
+    Per-user first: it is the one a non-elevated account can actually write,
+    while `%PROGRAMDATA%` typically needs an elevated prompt. Ordering it first
+    means the target that will succeed is also the one reported first.
+    """
+    candidates: list[Path] = []
+    for env_var, suffix in (
+        ("APPDATA", _WINDOWS_USER_SCRIPTS_SUFFIX),
+        ("PROGRAMDATA", _WINDOWS_ALL_USERS_SCRIPTS_SUFFIX),
+    ):
+        root = os.environ.get(env_var)
+        if not root:
+            continue
+        target = Path(root) / suffix
+        if target.is_dir() or (Path(root) / _WINDOWS_PRODUCT_ROOT).is_dir():
+            candidates.append(target)
+    return candidates
+
 
 def _is_resolve_container(path: Path) -> bool:
     if not path.name.startswith(_SANDBOX_MARKER):
@@ -91,28 +141,40 @@ def script_targets() -> list[Path]:
     coexist with a direct-download Studio install. Each container contributes
     TWO targets (see the module comment on issue #104): the documented tree
     first, then the Fusion standalone tree that Lite also scans.
+
+    Windows has no sandbox and no `~/Library`, so it gets its own candidate list
+    (issue #106) — without one this returned empty on every Windows machine and
+    the installer exited with "Is Resolve installed?" on a working install.
+    Those candidates arrive pre-vetted, like the sandboxed ones: they are gated
+    on Resolve's product folder rather than on the Scripts tree, which Resolve
+    does not create until a script is installed.
     """
     home = Path.home()
-    candidates = [
-        home / _SCRIPTS_SUFFIX,
-        Path("/") / _SCRIPTS_SUFFIX,
-        home / ".local/share/DaVinciResolve/Fusion/Scripts/Utility",
-    ]
-    containers = home / "Library/Containers"
-    sandboxed: list[Path] = []
-    if containers.is_dir():
-        for entry in sorted(containers.iterdir()):
-            if _is_resolve_container(entry) and (entry / "Data").is_dir():
-                sandboxed.append(entry / "Data" / _SCRIPTS_SUFFIX)
-                sandboxed.append(entry / "Data" / _SANDBOX_FALLBACK_SUFFIX)
+    # Pre-vetted targets, whose tree gets created rather than being required.
+    vetted: list[Path] = []
+    candidates: list[Path] = []
+    if sys.platform == "win32":
+        vetted.extend(_windows_script_candidates())
+    else:
+        candidates = [
+            home / _SCRIPTS_SUFFIX,
+            Path("/") / _SCRIPTS_SUFFIX,
+            home / ".local/share/DaVinciResolve/Fusion/Scripts/Utility",
+        ]
+        containers = home / "Library/Containers"
+        if containers.is_dir():
+            for entry in sorted(containers.iterdir()):
+                if _is_resolve_container(entry) and (entry / "Data").is_dir():
+                    # The container's existence is the signal; the tree gets created.
+                    vetted.append(entry / "Data" / _SCRIPTS_SUFFIX)
+                    vetted.append(entry / "Data" / _SANDBOX_FALLBACK_SUFFIX)
 
     usable: list[Path] = []
     for path in candidates:
         # Non-sandboxed: the install created the tree, so require it.
         if path.is_dir() or (path.parent.is_dir() and os.access(path.parent, os.W_OK)):
             usable.append(path)
-    # Sandboxed: the container's existence is the signal; the tree gets created.
-    usable.extend(sandboxed)
+    usable.extend(vetted)
     return list(dict.fromkeys(usable))
 
 
@@ -197,7 +259,23 @@ def framework_pythons() -> list[str]:
 
 
 def python_preflight() -> dict:
-    """Will Resolve list the Python probe we are about to install?"""
+    """Will Resolve list the Python probe we are about to install?
+
+    The framework-Python trap is **macOS-only**: `/Library/Frameworks/...` does
+    not exist on Windows or Linux, where Resolve finds Python by other means (the
+    registry, or the system interpreter). Running the macOS check there always
+    found nothing and emitted the macOS remediation — telling the Windows 11 user
+    in issue #106, who had a working python.org 3.12, to go install the Python
+    they already had. Report "no known reason it will not list" off macOS rather
+    than a false alarm; the Lua canary still ships either way, so a genuine
+    enumeration problem remains diagnosable.
+    """
+    if sys.platform != "darwin":
+        return {
+            "framework_pythons": [],
+            "resolve_will_list_python_scripts": True,
+            "advice": None,
+        }
     frameworks = framework_pythons()
     return {
         "framework_pythons": frameworks,
@@ -256,53 +334,93 @@ def install(*, probe_only: bool, port: int, rotate: bool) -> dict:
             "No writable DaVinci Resolve Scripts/Utility folder found. Is Resolve installed?"
         )
     installed: list[str] = []
+    # A target can be real, scanned by Resolve, and still unwritable — the
+    # Windows all-users tree under %PROGRAMDATA% needs elevation, and Windows
+    # `os.access(W_OK)` reports the read-only flag rather than the ACL, so the
+    # filter above cannot screen it out. One un-writable target must not abort an
+    # install that already succeeded into the per-user tree, so failures are
+    # collected and only a clean sweep is fatal.
+    skipped: list[tuple[str, str]] = []
     for target in targets:
-        target.mkdir(mode=0o700, parents=True, exist_ok=True)
-        for probe in ("resolve_bridge_probe.py", "resolve_capability_probe.py"):
-            shutil.copy2(REPO / "scripts" / probe, target / probe)
-            installed.append(str(target / probe))
-        # Lua always enumerates; Python only with a framework install. The canary
-        # makes "Python not detected" distinguishable from "wrong folder".
-        canary = target / "resolve_bridge_canary.lua"
-        canary.write_text(_LUA_CANARY, encoding="utf-8")
-        installed.append(str(canary))
-        if not probe_only:
-            runtime = target.parents[1] / ".davinci_mcp_runtime"
-            runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
-            for module in ("resolve_bridge.py", "resolve_bridge_ops.py"):
-                shutil.copy2(REPO / "src/utils" / module, runtime / module)
-                installed.append(str(runtime / module))
-            # A sandboxed (App Store) build cannot read ~/.config at all — inside
-            # the container `~` IS the container, so an absolute real-home path is
-            # unreachable by construction (measured: "Operation not permitted").
-            # The runtime dir is already inside the container, so the config goes
-            # beside the modules. Same token, so the out-of-sandbox client still
-            # authenticates against ~/.config.
-            runtime_config = runtime / "bridge.json"
-            shutil.copy2(CONFIG_PATH, runtime_config)
-            os.chmod(runtime_config, 0o600)
-            installed.append(str(runtime_config))
-            # The launcher IS the menu entry. Without it the modules sit in the
-            # runtime dir with nothing able to start them.
-            launcher_source = (REPO / "scripts/resolve_bridge_launcher.py").read_text(encoding="utf-8")
-            launcher = launcher_source.replace(
-                "@@RUNTIME_ROOT_B64@@",
-                base64.urlsafe_b64encode(str(runtime).encode("utf-8")).decode("ascii"),
-            ).replace(
-                "@@CONFIG_PATH_B64@@",
-                base64.urlsafe_b64encode(str(CONFIG_PATH).encode("utf-8")).decode("ascii"),
-            )
-            launcher_path = target / "resolve_bridge.py"
-            launcher_path.write_text(launcher, encoding="utf-8")
-            installed.append(str(launcher_path))
+        try:
+            target.mkdir(mode=0o700, parents=True, exist_ok=True)
+            _install_to(target, probe_only=probe_only, installed=installed)
+        except OSError as exc:
+            skipped.append((str(target), str(exc)))
+    if not installed:
+        raise SystemExit(
+            "Found DaVinci Resolve Scripts/Utility folders but could not write to "
+            "any of them:\n"
+            + "\n".join(f"  {path}: {reason}" for path, reason in skipped)
+            + "\nRe-run from an account that can write these folders (on Windows, "
+            "the %PROGRAMDATA% tree needs an elevated prompt; the per-user "
+            "%APPDATA% tree does not)."
+        )
     result = {"installed": installed, "probe_only": probe_only, "python": python_preflight()}
     stale = stale_container_warning(targets)
     result["warnings"] = [stale] if stale else []
+    if skipped:
+        result["warnings"].append(
+            "Skipped "
+            + str(len(skipped))
+            + " unwritable Scripts/Utility folder(s): "
+            + "; ".join(f"{path} ({reason})" for path, reason in skipped)
+            + ". This is harmless as long as the bridge appears under "
+            "Workspace > Scripts."
+        )
+    result["skipped"] = [path for path, _ in skipped]
     if not probe_only:
         loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         result["config"] = {"path": str(CONFIG_PATH),
                             **{k: v for k, v in loaded.items() if k != "token"}}
     return result
+
+
+def _install_to(target: Path, *, probe_only: bool, installed: list[str]) -> None:
+    """Place the probes, canary and (unless probe-only) the bridge into `target`.
+
+    Raises OSError if the target turns out to be unwritable; `install()` treats
+    that as a skip rather than a failure so one un-writable tree cannot abort an
+    install that succeeded elsewhere.
+    """
+    for probe in ("resolve_bridge_probe.py", "resolve_capability_probe.py"):
+        shutil.copy2(REPO / "scripts" / probe, target / probe)
+        installed.append(str(target / probe))
+    # Lua always enumerates; Python only with a framework install. The canary
+    # makes "Python not detected" distinguishable from "wrong folder".
+    canary = target / "resolve_bridge_canary.lua"
+    canary.write_text(_LUA_CANARY, encoding="utf-8")
+    installed.append(str(canary))
+    if probe_only:
+        return
+    runtime = target.parents[1] / ".davinci_mcp_runtime"
+    runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for module in ("resolve_bridge.py", "resolve_bridge_ops.py"):
+        shutil.copy2(REPO / "src/utils" / module, runtime / module)
+        installed.append(str(runtime / module))
+    # A sandboxed (App Store) build cannot read ~/.config at all — inside
+    # the container `~` IS the container, so an absolute real-home path is
+    # unreachable by construction (measured: "Operation not permitted").
+    # The runtime dir is already inside the container, so the config goes
+    # beside the modules. Same token, so the out-of-sandbox client still
+    # authenticates against ~/.config.
+    runtime_config = runtime / "bridge.json"
+    shutil.copy2(CONFIG_PATH, runtime_config)
+    os.chmod(runtime_config, 0o600)
+    installed.append(str(runtime_config))
+    # The launcher IS the menu entry. Without it the modules sit in the
+    # runtime dir with nothing able to start them.
+    launcher_source = (REPO / "scripts/resolve_bridge_launcher.py").read_text(encoding="utf-8")
+    launcher = launcher_source.replace(
+        "@@RUNTIME_ROOT_B64@@",
+        base64.urlsafe_b64encode(str(runtime).encode("utf-8")).decode("ascii"),
+    ).replace(
+        "@@CONFIG_PATH_B64@@",
+        base64.urlsafe_b64encode(str(CONFIG_PATH).encode("utf-8")).decode("ascii"),
+    )
+    launcher_path = target / "resolve_bridge.py"
+    launcher_path.write_text(launcher, encoding="utf-8")
+    installed.append(str(launcher_path))
 
 
 def main() -> int:

@@ -48,26 +48,96 @@ if not PYTHON.exists():
 SERVER = REPO / "src" / "server.py"
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
 CODEX_CONFIG = CODEX_HOME / "config.toml"
+#: Where Resolve installs itself, per platform. Mirrors install.py's
+#: RESOLVE_PATHS — kept in step by tests/test_doctor_paths.py, because these
+#: being macOS-only is exactly the bug that made doctor useless off macOS.
+#:
+#: doctor used to hardcode the Darwin values. Run standalone on Windows (i.e.
+#: without the env vars the npm/install.py flow injects) it then reported four
+#: FAILs naming a `.app` bundle and `fusionscript.so` on a machine that had
+#: neither — while install.py detected the very same install correctly, which is
+#: what made it so confusing to diagnose (issue #106). Linux had the same bug.
+_RESOLVE_PATH_CANDIDATES: dict[str, dict[str, tuple[str, ...]]] = {
+    "darwin": {
+        "app": ("/Applications/DaVinci Resolve/DaVinci Resolve.app",),
+        "api": ("/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting",),
+        "lib": ("/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so",),
+    },
+    "win32": {
+        "app": (r"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe",),
+        "api": (
+            r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting",
+            r"C:\Program Files\Blackmagic Design\DaVinci Resolve\Developer\Scripting",
+        ),
+        "lib": (r"C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll",),
+    },
+    "linux": {
+        "app": ("/opt/resolve/bin/resolve",),
+        "api": (
+            "/opt/resolve/Developer/Scripting",
+            "/opt/resolve/libs/Fusion/Developer/Scripting",
+        ),
+        "lib": (
+            "/opt/resolve/libs/Fusion/fusionscript.so",
+            "/opt/resolve/bin/fusionscript.so",
+        ),
+    },
+}
+
+
+def _platform_key(platform: str | None = None) -> str:
+    """Which candidate set applies. Unknown platforms fall back to Linux."""
+    platform = platform if platform is not None else sys.platform
+    if platform == "darwin":
+        return "darwin"
+    if platform == "win32":
+        return "win32"
+    return "linux"
+
+
+def _resolve_default(kind: str, platform: str | None = None) -> str:
+    """First candidate of `kind` that exists, else the first (so the FAIL line
+    names the canonical location rather than an arbitrary miss)."""
+    candidates = _RESOLVE_PATH_CANDIDATES[_platform_key(platform)][kind]
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return candidate
+    return candidates[0]
+
+
+def _default_claude_config() -> Path:
+    """Claude Desktop's config path, MSIX-aware on Windows (issue #93).
+
+    Claude Desktop for Windows ships as an MSIX package whose %APPDATA% writes
+    are virtualized into a per-package container, so the documented
+    %APPDATA%\\Claude path is a decoy the app never reads. Mirrors
+    install.py's windows_claude_desktop_config().
+    """
+    if sys.platform == "win32":
+        local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+        try:
+            packages = sorted((local / "Packages").glob("Claude_*"))
+        except OSError:
+            packages = []
+        for pkg in packages:
+            virtual = pkg / "LocalCache" / "Roaming" / "Claude"
+            if virtual.is_dir():
+                return virtual / "claude_desktop_config.json"
+        appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
+        return appdata / "Claude" / "claude_desktop_config.json"
+    if sys.platform == "darwin":
+        return Path("~/Library/Application Support/Claude/claude_desktop_config.json").expanduser()
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return xdg / "Claude" / "claude_desktop_config.json"
+
+
 CLAUDE_CONFIG = Path(
-    os.environ.get(
-        "CLAUDE_DESKTOP_CONFIG",
-        "~/Library/Application Support/Claude/claude_desktop_config.json",
-    )
+    os.environ.get("CLAUDE_DESKTOP_CONFIG", _default_claude_config())
 ).expanduser()
-RESOLVE_APP = Path(os.environ.get("RESOLVE_APP", "/Applications/DaVinci Resolve/DaVinci Resolve.app"))
-RESOLVE_API = Path(
-    os.environ.get(
-        "RESOLVE_SCRIPT_API",
-        "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting",
-    )
-)
+RESOLVE_APP = Path(os.environ.get("RESOLVE_APP", _resolve_default("app")))
+RESOLVE_API = Path(os.environ.get("RESOLVE_SCRIPT_API", _resolve_default("api")))
 RESOLVE_MODULES = Path(os.environ.get("RESOLVE_SCRIPT_MODULES", RESOLVE_API / "Modules"))
-RESOLVE_LIB = Path(
-    os.environ.get(
-        "RESOLVE_SCRIPT_LIB",
-        "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so",
-    )
-)
+RESOLVE_LIB = Path(os.environ.get("RESOLVE_SCRIPT_LIB", _resolve_default("lib")))
 
 
 def run(cmd: list[str], timeout: int = 12) -> dict[str, Any]:

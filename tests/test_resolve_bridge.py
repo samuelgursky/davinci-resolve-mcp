@@ -760,22 +760,48 @@ class InstallerTargetTests(unittest.TestCase):
         self.assertEqual(tuple(rb.PARENT_MARKERS), probe_markers)
 
     def test_framework_python_detection_drives_the_preflight(self) -> None:
-        """Resolve lists .py scripts only with a framework Python — silently."""
+        """Resolve lists .py scripts only with a framework Python — silently.
+
+        Pinned to darwin explicitly: the check is macOS-only, so on a Linux or
+        Windows runner an unpinned version of this test would assert the very
+        false alarm the platform gate exists to suppress.
+        """
+        import sys as _sys
         from unittest import mock
 
-        with mock.patch.object(self.installer, "framework_pythons", lambda: []):
+        with mock.patch.object(_sys, "platform", "darwin"), \
+                mock.patch.object(self.installer, "framework_pythons", lambda: []):
             preflight = self.installer.python_preflight()
         self.assertFalse(preflight["resolve_will_list_python_scripts"])
         self.assertIn("python.org", preflight["advice"])
         self.assertIn("silently", preflight["advice"])
 
-        with mock.patch.object(
+        with mock.patch.object(_sys, "platform", "darwin"), mock.patch.object(
             self.installer, "framework_pythons",
             lambda: ["/Library/Frameworks/Python.framework/Versions/3.11"],
         ):
             preflight = self.installer.python_preflight()
         self.assertTrue(preflight["resolve_will_list_python_scripts"])
         self.assertIsNone(preflight["advice"])
+
+    def test_the_framework_python_alarm_is_macos_only(self) -> None:
+        """`/Library/Frameworks` does not exist off macOS, so the check found
+        nothing there and emitted the macOS remediation regardless — telling the
+        Windows 11 user in issue #106, who had a working python.org 3.12, to
+        install the Python they already had. Linux had the same false alarm."""
+        import sys as _sys
+        from unittest import mock
+
+        for platform in ("win32", "linux"):
+            with self.subTest(platform=platform):
+                with mock.patch.object(_sys, "platform", platform), \
+                        mock.patch.object(self.installer, "framework_pythons", lambda: []):
+                    preflight = self.installer.python_preflight()
+                self.assertIsNone(
+                    preflight["advice"],
+                    f"macOS framework-Python advice leaked onto {platform}",
+                )
+                self.assertTrue(preflight["resolve_will_list_python_scripts"])
 
     def test_homebrew_python_does_not_count_as_a_framework_install(self) -> None:
         # The exact trap: three Homebrew interpreters on PATH and Resolve sees none.
@@ -788,6 +814,210 @@ class InstallerTargetTests(unittest.TestCase):
         # from "wrong folder" — the ambiguity that cost four restarts.
         self.assertIn("framework Python", self.installer._LUA_CANARY)
         self.assertIn("print(", self.installer._LUA_CANARY)
+
+    # ── Windows (issue #106) ────────────────────────────────────────────────
+    #
+    # `script_targets()` enumerated only macOS and Linux candidates, so `usable`
+    # came back empty on every Windows machine and `install()` exited with "Is
+    # Resolve installed?" on a working free-edition install — leaving Windows
+    # free-edition users with no route to the bridge at all.
+    #
+    # NOT covered here, and not coverable from macOS: whether Resolve on Windows
+    # actually *scans* these folders. The reporter confirmed both exist and are
+    # writable; issue #104 is precedent that "the folder exists" and "Resolve
+    # reads it" are different claims. These tests pin path construction only.
+
+    def _fake_windows_roots(self) -> tuple[str, str]:
+        """%APPDATA% and %PROGRAMDATA% for a machine where Resolve is installed
+        but has never had a script installed — i.e. no Fusion/Scripts tree yet,
+        which is what a fresh free-edition install looks like."""
+        import pathlib
+        import tempfile
+
+        roots = []
+        for prefix in ("appdata_", "programdata_"):
+            root = pathlib.Path(tempfile.mkdtemp(prefix=prefix))
+            (root / self.installer._WINDOWS_PRODUCT_ROOT).mkdir(parents=True)
+            roots.append(str(root))
+        return roots[0], roots[1]
+
+    def _windows_targets(self, appdata: str, programdata: str) -> list:
+        import os
+        import sys as _sys
+        from unittest import mock
+
+        env = {"APPDATA": appdata, "PROGRAMDATA": programdata}
+        with mock.patch.object(_sys, "platform", "win32"), \
+                mock.patch.dict(os.environ, env):
+            return self.installer.script_targets()
+
+    def test_windows_targets_both_documented_script_trees(self) -> None:
+        appdata, programdata = self._fake_windows_roots()
+        targets = self._windows_targets(appdata, programdata)
+
+        joined = [str(t) for t in targets]
+        self.assertTrue(joined, "no Windows targets: the installer cannot run at all")
+        self.assertTrue(
+            any(t.startswith(appdata) for t in joined),
+            f"per-user %APPDATA% tree not targeted: {joined}",
+        )
+        self.assertTrue(
+            any(t.startswith(programdata) for t in joined),
+            f"all-users %PROGRAMDATA% tree not targeted: {joined}",
+        )
+
+    def test_windows_targets_the_per_user_tree_first(self) -> None:
+        """%PROGRAMDATA% needs elevation and %APPDATA% does not, so the target
+        that will actually succeed on a normal account must be tried first."""
+        appdata, programdata = self._fake_windows_roots()
+        joined = [str(t) for t in self._windows_targets(appdata, programdata)]
+        first_user = next(i for i, t in enumerate(joined) if t.startswith(appdata))
+        first_all = next(i for i, t in enumerate(joined) if t.startswith(programdata))
+        self.assertLess(first_user, first_all, f"all-users tree tried first: {joined}")
+
+    def test_only_the_windows_per_user_tree_carries_the_support_segment(self) -> None:
+        """The asymmetry is real and load-bearing: Blackmagic's README puts
+        `Support` in the per-user path and NOT in the all-users one. Deriving
+        either from the other lands in a folder Resolve never scans."""
+        self.assertIn("Support/Fusion/Scripts", self.installer._WINDOWS_USER_SCRIPTS_SUFFIX)
+        self.assertNotIn("Support", self.installer._WINDOWS_ALL_USERS_SCRIPTS_SUFFIX)
+        self.assertIn("Fusion/Scripts/Utility", self.installer._WINDOWS_ALL_USERS_SCRIPTS_SUFFIX)
+
+    def test_windows_paths_do_not_double_the_roaming_segment(self) -> None:
+        """Blackmagic's README writes the per-user root as `%APPDATA%\\Roaming\\...`,
+        but %APPDATA% already IS `...\\AppData\\Roaming`. Following it literally
+        yields `AppData\\Roaming\\Roaming\\...` — a real folder name, silently
+        never scanned. Transcribing the README verbatim reintroduces #106."""
+        appdata, programdata = self._fake_windows_roots()
+        joined = [str(t) for t in self._windows_targets(appdata, programdata)]
+        self.assertFalse(
+            [t for t in joined if "Roaming/Roaming" in t or "Roaming\\Roaming" in t],
+            f"the README's doubled Roaming segment was copied verbatim: {joined}",
+        )
+
+    def test_windows_paths_never_leak_onto_macos(self) -> None:
+        """The Windows branch is additive: macOS and Linux behavior is untouched,
+        which is what makes this safe to ship without a Windows machine to test on."""
+        import pathlib
+        import sys as _sys
+        import tempfile
+        from unittest import mock
+
+        home = pathlib.Path(tempfile.mkdtemp(prefix="fake_home_"))
+        with mock.patch.object(_sys, "platform", "darwin"), \
+                mock.patch.object(pathlib.Path, "home", staticmethod(lambda: home)):
+            targets = [str(t) for t in self.installer.script_targets()]
+        self.assertFalse(
+            [t for t in targets if "Blackmagic Design/DaVinci Resolve/Support" in t],
+            f"a Windows-only path was targeted on macOS: {targets}",
+        )
+
+    def test_windows_targets_a_resolve_that_has_no_scripts_tree_yet(self) -> None:
+        """Resolve does not create `Fusion/Scripts` until a script is installed,
+        so gating on that tree — or on its parent being writable — skips a fresh
+        free-edition install, which is the one build the bridge exists for. Same
+        trap as the sandboxed container on macOS; the product folder is the
+        signal instead. `_fake_windows_roots` builds exactly this shape."""
+        appdata, programdata = self._fake_windows_roots()
+        targets = self._windows_targets(appdata, programdata)
+        self.assertTrue(
+            targets, "a Resolve install with no Scripts tree yet was skipped entirely"
+        )
+        for target in targets:
+            self.assertFalse(target.exists(), "test no longer covers the create case")
+
+    def test_every_target_anchors_the_runtime_dir_beside_fusion(self) -> None:
+        """`install()` places the runtime at `target.parents[1]`, so every
+        Scripts/Utility suffix must end `Fusion/Scripts/Utility`. The Windows
+        per-user path is a segment deeper than the macOS one (it carries
+        `Support`), which is exactly the kind of difference that would silently
+        anchor the runtime one level off and leave the launcher importing
+        nothing."""
+        suffixes = [
+            self.installer._SCRIPTS_SUFFIX,
+            self.installer._SANDBOX_FALLBACK_SUFFIX,
+            self.installer._WINDOWS_USER_SCRIPTS_SUFFIX,
+            self.installer._WINDOWS_ALL_USERS_SCRIPTS_SUFFIX,
+        ]
+        for suffix in suffixes:
+            with self.subTest(suffix=suffix):
+                self.assertTrue(
+                    suffix.endswith("Fusion/Scripts/Utility"),
+                    f"runtime would anchor off-by-one for {suffix}",
+                )
+
+    def test_windows_skips_roots_where_resolve_is_not_installed(self) -> None:
+        """The flip side: without the product folder there is no Resolve, and
+        creating a Scripts tree under a bare %APPDATA% would litter the machine
+        and report a success that nothing will ever read (the #104 failure)."""
+        import pathlib
+        import tempfile
+
+        empty = str(pathlib.Path(tempfile.mkdtemp(prefix="no_resolve_")))
+        self.assertEqual(self._windows_targets(empty, empty), [])
+
+    def test_windows_candidates_are_skipped_when_the_env_vars_are_absent(self) -> None:
+        """%APPDATA%/%PROGRAMDATA% are effectively always set on Windows, but an
+        unset one must drop that candidate rather than build a path from None."""
+        import os
+        import sys as _sys
+        from unittest import mock
+
+        with mock.patch.object(_sys, "platform", "win32"), \
+                mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(self.installer._windows_script_candidates(), [])
+
+    def _unwritable_dir(self) -> "object":
+        """A directory whose children cannot be created."""
+        import os
+        import pathlib
+        import tempfile
+
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores mode bits, so nothing is unwritable")
+        parent = pathlib.Path(tempfile.mkdtemp(prefix="readonly_"))
+        os.chmod(parent, 0o500)
+        self.addCleanup(os.chmod, parent, 0o700)
+        return parent / "Utility"
+
+    def test_an_unwritable_target_does_not_abort_the_whole_install(self) -> None:
+        """The Windows all-users tree under %PROGRAMDATA% needs elevation, and
+        Windows `os.access(W_OK)` reports the read-only flag rather than the ACL
+        — so it cannot be screened out in advance. Without this, adding that
+        candidate would make the installer crash on every non-elevated Windows
+        account *after* it had already succeeded into the per-user tree."""
+        import pathlib
+        import tempfile
+        from unittest import mock
+
+        good = pathlib.Path(tempfile.mkdtemp(prefix="writable_")) / "Utility"
+        bad = self._unwritable_dir()
+        with mock.patch.object(self.installer, "script_targets", lambda: [good, bad]):
+            result = self.installer.install(probe_only=True, port=49632, rotate=False)
+
+        self.assertTrue(
+            (good / "resolve_bridge_probe.py").exists(),
+            "the writable target was not installed to",
+        )
+        self.assertEqual(result["skipped"], [str(bad)])
+        self.assertTrue(
+            any("unwritable" in w for w in result["warnings"]),
+            f"the skip was silent: {result['warnings']}",
+        )
+
+    def test_install_fails_only_when_every_target_is_unwritable(self) -> None:
+        """A total failure must still be fatal — and must say which folders and
+        why, rather than the old "Is Resolve installed?" on a machine where it
+        demonstrably is."""
+        from unittest import mock
+
+        bad = self._unwritable_dir()
+        with mock.patch.object(self.installer, "script_targets", lambda: [bad]):
+            with self.assertRaises(SystemExit) as caught:
+                self.installer.install(probe_only=True, port=49632, rotate=False)
+        message = str(caught.exception)
+        self.assertIn(str(bad), message)
+        self.assertIn("could not write", message)
 
 
 class ObservedHostModelTests(unittest.TestCase):

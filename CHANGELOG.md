@@ -2,6 +2,92 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.70.1
+
+Windows support for the free-edition in-app bridge, and the end of doctor.py's
+macOS-only path assumptions. Reported in issue #106 by @kacemmosbah8-afk.
+
+### The bug
+
+`script_targets()` in `scripts/install_resolve_bridge.py` enumerated macOS and
+Linux candidates only. There was no Windows branch at all, so the candidate list
+came back empty on every Windows machine and the installer exited with:
+
+```
+No writable DaVinci Resolve Scripts/Utility folder found. Is Resolve installed?
+```
+
+on installs where Resolve was demonstrably present. Since the in-app bridge is
+the *only* route to the free edition — external scripting is Studio-gated by
+Blackmagic — Windows free-edition users had no working path to this server at
+all. The bridge shipped in v2.68.0; it has been macOS/Linux-only that whole time.
+
+Windows now targets the two Scripts/Utility trees Blackmagic documents, per-user
+first because `%PROGRAMDATA%` typically needs an elevated prompt:
+
+- `%APPDATA%\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility`
+- `%PROGRAMDATA%\Blackmagic Design\DaVinci Resolve\Fusion\Scripts\Utility`
+
+Three traps came out of implementing that, each now pinned by a test:
+
+- **The per-user tree carries a `Support` segment the all-users tree does not.**
+  They are not one layout under two roots; deriving either from the other lands
+  in a folder Resolve never scans.
+- **Blackmagic's own README writes the per-user root as `%APPDATA%\Roaming\...`,
+  which is wrong** — `%APPDATA%` already *is* `...\AppData\Roaming`. Transcribing
+  it verbatim yields `AppData\Roaming\Roaming\...`: a real, creatable folder that
+  is silently never read.
+- **Resolve does not create its `Fusion\Scripts` tree until a script is
+  installed**, so gating on that tree existing — or on its parent being writable
+  — skips a fresh free-edition install, the exact build the bridge exists for.
+  The candidates are gated on Resolve's product folder instead, mirroring how the
+  macOS sandbox container is handled.
+
+`install()` no longer aborts when one target is unwritable. The `%PROGRAMDATA%`
+tree needs elevation, and Windows `os.access(W_OK)` reports the read-only flag
+rather than the ACL, so it cannot be screened out in advance — without this, the
+newly added candidate would have crashed the installer on every non-elevated
+Windows account *after* it had already succeeded into the per-user tree. Skips
+are reported in `warnings`; only a clean sweep is fatal, and that error now names
+the folders and the reason instead of asking whether Resolve is installed.
+
+### The macOS framework-Python alarm was firing off macOS
+
+`python_preflight()` looked for a framework Python under `/Library/Frameworks`,
+a path that cannot exist on Windows or Linux — so it always found nothing and
+emitted the macOS remediation, telling the reporter (running a working python.org
+3.12.9) to install the Python they already had. Linux had the same false alarm.
+The check is now macOS-only. The Lua canary still ships everywhere, so a genuine
+enumeration failure stays diagnosable.
+
+### doctor.py was macOS-only too
+
+`scripts/doctor.py` hardcoded macOS defaults for `RESOLVE_APP`,
+`RESOLVE_SCRIPT_API` and `RESOLVE_SCRIPT_LIB`. Run standalone — that is, without
+the environment variables the npm/`install.py` flow injects — it reported four
+`[FAIL]` lines naming a `.app` bundle and `fusionscript.so` on a Windows 11
+machine that had neither, while `install.py` detected that same install
+correctly. Two tables describing one thing, one of them platform-blind. Linux was
+equally affected.
+
+doctor now selects per-platform candidates, and picks the first that exists so
+the reported path matches reality. macOS values are byte-identical to before.
+A new `tests/test_doctor_paths.py` drift guard asserts every path doctor names
+also appears in `install.py`'s `RESOLVE_PATHS`, so the two cannot diverge again.
+Claude Desktop's config path is now MSIX-aware on Windows as well, matching the
+issue #93 fix that `install.py` already had.
+
+### Scope — what is and is not verified
+
+The path construction is unit-tested, and a simulated Windows run exercises the
+installer end to end. **No Windows hardware has confirmed that Resolve actually
+lists the bridge from these folders.** The reporter verified the folders exist
+and are writable; issue #104 is precedent that "the folder exists" and "Resolve
+reads it" are different claims. The README and `docs/SKILL.md` say so plainly
+rather than implying Windows is a supported, tested tier.
+
+Suite: 2312 → 2336.
+
 ## What's New in v2.70.0
 
 Headless (`-nogui`) Resolve, measured rather than assumed — and the finding

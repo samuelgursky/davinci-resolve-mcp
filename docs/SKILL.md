@@ -27,11 +27,17 @@ loopback listener. Install with `python scripts/install_resolve_bridge.py`, star
 it from that menu, and set `DAVINCI_RESOLVE_BRIDGE=1`. Existing tool call sites
 work unchanged. Two things to know when diagnosing it:
 
-- Resolve lists `.py` scripts only when it can find a **framework Python**
-  (python.org). Homebrew/pyenv/conda are not detected and the script simply never
-  appears, with no error. The installer preflights this and ships a Lua canary,
-  which always lists, so "Python not detected" is distinguishable from "wrong
-  folder".
+- On macOS, Resolve lists `.py` scripts only when it can find a **framework
+  Python** (python.org). Homebrew/pyenv/conda are not detected and the script
+  simply never appears, with no error. The installer preflights this and ships a
+  Lua canary, which always lists, so "Python not detected" is distinguishable
+  from "wrong folder". The preflight is macOS-only — off macOS Resolve finds
+  Python by other means, and running the check there was a false alarm (#106).
+- **Windows is unconfirmed.** The `%APPDATA%`/`%PROGRAMDATA%` script folders are
+  targeted as of v2.70.1, but no Windows machine has verified that Resolve lists
+  the bridge from them. If a user reports the menu entry missing on Windows, ask
+  whether the Lua canary lists — that separates "wrong folder" from "Python not
+  detected" there too.
 - The in-Resolve runtime is a **copy taken at install time**. After changing the
   repository, re-run the installer and then ask the running bridge to reload —
   it re-imports from disk in place, so Resolve does not need restarting.
