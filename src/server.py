@@ -3795,42 +3795,79 @@ def _timeline_item_ids(items):
     return ids
 
 
-def _timeline_items_still_present(tl, items):
-    """True if any of the items' unique IDs are still on the timeline.
+def _timeline_items_presence(tl, items):
+    """Are these timeline items still on the timeline? present/absent/unknown.
 
-    Returns True when no item exposes a usable ID — an unverifiable delete
-    must not be reported as verified-gone.
+    'absent' is a positive finding: every item was identifiable and a
+    completed track walk did not see any of them. A walk that raised, that
+    could not enumerate a single track, or items whose unique ID cannot be
+    read all yield 'unknown' — the readback saw nothing, which is not the
+    same as nothing being there. Callers must never treat 'unknown' as
+    verified-gone.
     """
-    target_ids = set(_timeline_item_ids(items))
-    if not target_ids:
-        return True
+    target_ids = []
+    unreadable_item = False
+    for item in items:
+        item_id = _safe_timeline_item_id(item)
+        if item_id:
+            target_ids.append(item_id)
+        else:
+            unreadable_item = True
+    target_ids = set(target_ids)
+
+    tracks_walked = 0
+    walk_failed = False
     for track_type in ("video", "audio", "subtitle"):
-        for index in range(1, _timeline_track_count(tl, track_type) + 1):
+        try:
+            track_count = int(tl.GetTrackCount(track_type) or 0)
+        except Exception:
+            walk_failed = True
+            continue
+        for index in range(1, track_count + 1):
             try:
                 track_items = tl.GetItemListInTrack(track_type, index) or []
             except Exception:
-                track_items = []
-            for item in track_items:
-                if _safe_timeline_item_id(item) in target_ids:
-                    return True
-    return False
+                walk_failed = True
+                continue
+            tracks_walked += 1
+            for track_item in track_items:
+                # A sighting is definitive even if another track failed.
+                if _safe_timeline_item_id(track_item) in target_ids:
+                    return "present"
+
+    if walk_failed or tracks_walked == 0 or unreadable_item or not target_ids:
+        return "unknown"
+    return "absent"
 
 
 def _timeline_delete_clips_verified(tl, items, ripple):
     """Timeline.DeleteClips with readback-and-retry.
 
-    api_truth 'Timeline.DeleteClips (flaky first attempt)': the first call can
-    return False with valid, present items while an identical retry succeeds.
-    On False, re-list the tracks — if the items are gone the delete worked;
-    if any survive, retry the identical call once.
+    api_truth 'Timeline.DeleteClips (flaky first attempt)': the call can
+    return False while every item is still present, and an identical retry
+    then succeeds. On a False, read the tracks back:
+
+      absent  -> the delete landed despite the False; report success.
+      present -> retry the identical call once, then read back again.
+      unknown -> report failure and do NOT retry. An unverifiable delete must
+                 not be claimed as success, and a retry whose outcome we
+                 equally cannot read is a second destructive call bought with
+                 no information.
+
+    ripple=True caveat: a retry is not idempotent in principle. If the first
+    call deleted some items and left others, the readback reports 'present'
+    for the survivors and the retry passes the original list back in — stale
+    handles to already-deleted items included. That could not be made to
+    misbehave against a fake; it is recorded, not resolved.
     """
     if bool(tl.DeleteClips(items, ripple)):
         return True
-    if not _timeline_items_still_present(tl, items):
-        return True
+    presence = _timeline_items_presence(tl, items)
+    if presence != "present":
+        return presence == "absent"
     if bool(tl.DeleteClips(items, ripple)):
         return True
-    return not _timeline_items_still_present(tl, items)
+    return _timeline_items_presence(tl, items) == "absent"
 
 
 def _timeline_items_by_ids(tl, ids, track_types=("video", "audio", "subtitle")):
