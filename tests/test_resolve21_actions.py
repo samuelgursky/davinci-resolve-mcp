@@ -382,5 +382,63 @@ class Resolve21CapabilityDetectionTest(unittest.TestCase):
         self.assertTrue(cm["transcribe_audio"])  # legacy still has transcription
 
 
+class MissingExtrasStringReturnTest(unittest.TestCase):
+    """Resolve reports a missing AI Extras pack as an error STRING, not False.
+
+    Verified live on Studio 21.0.2.4 with only AI Motion Deblur installed:
+    AnalyzeForIntellisearch returned "Required package 'AI Intellisearch -
+    Faster' is not installed." and GenerateSpeech returned "Required Package,
+    'AI Speech Generator' is not Installed.". Both are truthy, so a bare
+    bool() reported success for work that never ran, and GenerateSpeech's
+    string reached .GetName() and raised AttributeError.
+    """
+
+    INTELLISEARCH_MSG = "Required package 'AI Intellisearch - Faster' is not installed."
+    SPEECH_MSG = "Required Package, 'AI Speech Generator' is not Installed."
+
+    def setUp(self):
+        self.clip = Clip21()
+        self.mp = MediaPoolStub(folder=Folder21(), clip=self.clip)
+        self._orig_get_mp = compound._get_mp
+        self._orig_find_clip = compound._find_clip
+        compound._get_mp = lambda: (None, None, self.mp, None)
+        compound._find_clip = lambda root, cid: self.clip
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_root = compound._ai_ledger_root
+        compound._ai_ledger_root = lambda: self._tmp.name
+
+    def tearDown(self):
+        compound._get_mp = self._orig_get_mp
+        compound._find_clip = self._orig_find_clip
+        compound._ai_ledger_root = self._orig_root
+        self._tmp.cleanup()
+
+    def test_ai_result_treats_string_as_failure(self):
+        self.assertEqual(compound._ai_result(self.INTELLISEARCH_MSG),
+                         (False, self.INTELLISEARCH_MSG))
+        self.assertEqual(compound._ai_result(True), (True, None))
+        self.assertEqual(compound._ai_result(False), (False, None))
+        self.assertEqual(compound._ai_result(None), (False, None))
+
+    def test_ai_result_payload_surfaces_the_reason(self):
+        payload = compound._ai_result_payload(self.INTELLISEARCH_MSG)
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"], self.INTELLISEARCH_MSG)
+        self.assertNotIn("error", compound._ai_result_payload(True))
+
+    def test_intellisearch_string_return_is_not_reported_as_success(self):
+        self.clip.AnalyzeForIntellisearch = lambda *a: self.INTELLISEARCH_MSG
+        out = compound.media_pool_item("analyze_for_intellisearch", {"clip_id": "c1"})
+        self.assertFalse(out.get("success"),
+                         msg="a missing-Extras string must not read as success")
+        self.assertEqual(out.get("error"), self.INTELLISEARCH_MSG)
+
+    def test_generate_speech_string_return_does_not_raise(self):
+        """The string must not reach .GetName() — that raised AttributeError."""
+        ok, message = compound._ai_result(self.SPEECH_MSG)
+        self.assertFalse(ok)
+        self.assertEqual(message, self.SPEECH_MSG)
+
+
 if __name__ == "__main__":
     unittest.main()

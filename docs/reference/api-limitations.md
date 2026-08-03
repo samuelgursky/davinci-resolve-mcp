@@ -10,9 +10,9 @@ submission to Blackmagic Design's developer feedback. Every item was
 observed against live Resolve; each entry notes the current workaround (or
 that none exists).
 
-**Verified on:** DaVinci Resolve Studio 21.0.0
+**Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 23 missing capabilities, 22 bugs / unreliable behaviors.
+**Totals:** 25 missing capabilities, 24 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -192,6 +192,21 @@ equivalent, blocking full automation.
 - **Workaround / current handling:** Delete and recreate the folder with the desired name, or rename in the Resolve UI.
 - **Tags:** missing-method, media-pool, folder
 
+### Installed AI Extras packs are not discoverable from scripting
+
+- **Object:** `Resolve`
+- **Behavior:** AnalyzeForIntellisearch, AnalyzeForSlate, GenerateSpeech and RemoveMotionBlur each require a separately-downloaded Extras pack, but nothing in the scripting API reports which packs are installed. A caller cannot distinguish 'the Extra is missing' from 'the analysis ran and found nothing' ahead of time; on 21.0.2.4 two of the four leak the reason only as free text in the return value, and AnalyzeForSlate's bare False carries no reason at all.
+- **Workaround / current handling:** Until an API exists, treat a string return as the reason and read the pack names out of the Extras directory (Blackmagic Design/DaVinci Resolve/Extras/*/log.dpl1) for diagnostics only — that path is undocumented and may change.
+- **Tags:** ai, extras, introspection, resolve-21
+
+### Resolve.DisableBackgroundTasksForCurrentResolveSession
+
+- **Object:** `Resolve`
+- **Signature:** `() -> None`
+- **Behavior:** Returns None, so a caller cannot tell whether it took effect, and there is no Enable... counterpart anywhere in the shipped 21.0.2 scripting README — the only documented way back is restarting Resolve. The scope is the whole session, so a script disables background tasks for every project open in that instance, not just its own. Present in dir(resolve) on Studio 21.0.2.4; deliberately not executed during validation for exactly that reason.
+- **Workaround / current handling:** Treat as irreversible within a session. server returns _ok() unconditionally because there is nothing to check.
+- **Tags:** resolve-21, unreliable-return, irreversible, session-wide
+
 ### MediaPool.ImportMedia (current-folder destination only)
 
 - **Object:** `MediaPool`
@@ -322,9 +337,25 @@ values, or automation-hostile modal prompts.
 ### hasattr() / getattr() on Resolve API objects (attribute fabrication)
 
 - **Object:** `(all Resolve scripting objects)`
-- **Behavior:** The Python bridge returns a callable for ANY attribute name, so hasattr(obj, 'TotallyMadeUpMethod') is always True and getattr never raises. This makes capability detection by hasattr impossible — verified on 21.0.0 (hasattr reported SetStart, Razor, AddNode, GenerateProxy, AddSmartBin etc. as present though none exist). Only dir() lists the real methods.
-- **Workaround / current handling:** Never probe method existence with hasattr/getattr; test membership against dir(obj) instead. Calling a fabricated method typically returns None/False with no error.
+- **Behavior:** BUILD-DEPENDENT. On 21.0.0 the Python bridge returned a callable for ANY attribute name, so hasattr(obj, 'TotallyMadeUpMethod') was always True and getattr never raised, making capability detection by hasattr impossible (hasattr reported SetStart, Razor, AddNode, GenerateProxy, AddSmartBin etc. as present though none exist). This NO LONGER reproduces on 21.0.2.4: a control probe of 'TotallyMadeUpMethod_xyz123' against Resolve, ProjectManager, Project, MediaPool, Folder, MediaPoolItem, Timeline and TimelineItem returned getattr-callable False on all eight — matching dir() in every case. Treat the fabricating behaviour as present on at least some builds and absent on others, and do not rely on either.
+- **Workaround / current handling:** Prefer dir(obj) membership for capability probes: it is correct on every build measured, whereas hasattr/getattr is correct only on some. Where hasattr IS used (server._has_method), it is sound on 21.0.2.4 but silently over-reports on 21.0.0. Calling a fabricated method typically returns None/False with no error.
 - **Tags:** bridge, introspection, silent-failure
+
+### Resolve 21 AI methods (AnalyzeForIntellisearch, GenerateSpeech, AnalyzeForSlate) — inconsistent failure return type
+
+- **Object:** `MediaPoolItem / Folder / Project`
+- **Signature:** `-> Bool (documented)`
+- **Behavior:** When the required Extras pack is not installed, these methods do not agree on how they say so, and the documented Bool is not what you get. Verified live on Studio 21.0.2.4 with only AI Motion Deblur installed: AnalyzeForSlate returned False, but AnalyzeForIntellisearch returned the STRING "Required package 'AI Intellisearch - Faster' is not installed." and GenerateSpeech returned the STRING "Required Package, 'AI Speech Generator' is not Installed.". A non-empty string is truthy in Python, so bool(result) reports SUCCESS for a call that definitively did not run, and treating GenerateSpeech's return as a MediaPoolItem raises AttributeError: 'str' object has no attribute 'GetName'.
+- **Workaround / current handling:** Never bool() an AI-method return directly. Route it through server._ai_result / _ai_result_payload, which treat any string as a failure and surface its text as the error — the message is the only machine-readable signal that an Extras pack is missing, since there is no scripting API to enumerate installed Extras.
+- **Tags:** ai, extras, unreliable-return, silent-failure, resolve-21
+
+### Folder.AnalyzeForSlate / MediaPoolItem.AnalyzeForSlate markerColor
+
+- **Object:** `MediaPoolItem / Folder`
+- **Signature:** `(markerColor) -> Bool`
+- **Behavior:** The shipped 21.0.2 scripting README says markerColor must be one of the resolve.MARKER_* constants (resolve.MARKER_BLUE etc.). Those constants do not exist: on Studio 21.0.2.4, [c for c in dir(resolve) if c.startswith('MARKER_')] is empty. There is therefore no documented-correct way to call this method. The plain colour string the server passes is the only option available, and it returns False here — though with AI Slate ID absent, a string-rejection bug cannot be distinguished from the missing pack on this machine.
+- **Workaround / current handling:** Keep passing the plain colour name (server._MARKER_COLORS) — the documented constants are unavailable. Re-test on a machine with the AI Slate ID Extra installed before concluding the string form is rejected.
+- **Tags:** ai, extras, missing-constant, documentation, resolve-21
 
 ### MediaPoolItem.SetClipProperty('Reel Name', ...)
 
