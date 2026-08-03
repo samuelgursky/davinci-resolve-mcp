@@ -1,4 +1,3 @@
-import os
 import tempfile
 import unittest
 
@@ -16,6 +15,7 @@ from src.server import (
     _safe_set_render_settings,
     _validate_render_settings_action,
 )
+from tests._paths import NON_TEMP_EXISTING_DIR
 
 
 class RenderProjectStub:
@@ -152,8 +152,13 @@ class RenderDeliverProbeTest(unittest.TestCase):
         self.assertEqual(project.resolution_queries[0], ("mov", "ProRes422LT"))
 
     def test_validate_render_settings_requires_temp_target_when_requested(self):
+        # Not os.getcwd() — under a worktree in /tmp that IS a temp target and
+        # the guard correctly permits it. The directory has to exist, or the
+        # validator reports "does not exist" and never reaches the temp check.
+        # See tests/_paths.py.
         result = _validate_render_settings_action(
-            {"settings": {"TargetDir": os.getcwd(), "SelectAllFrames": True}, "require_temp_target": True}
+            {"settings": {"TargetDir": NON_TEMP_EXISTING_DIR, "SelectAllFrames": True},
+             "require_temp_target": True}
         )
 
         self.assertFalse(result["valid"])

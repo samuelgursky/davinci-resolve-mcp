@@ -14,6 +14,7 @@ from src.server import (
     _safe_set_cdl,
     _validate_cdl_payload,
 )
+from tests._paths import non_temp_path
 
 
 class GraphStub:
@@ -197,10 +198,17 @@ class ColorGradeProbeTest(unittest.TestCase):
         self.assertEqual(result["source"], "color_group_pre")
 
     def test_safe_export_lut_requires_temp_path(self):
-        result = _safe_export_lut(ItemStub(), {"path": os.path.join(os.getcwd(), "look.cube")})
+        # Not os.getcwd(): under a worktree in /tmp the cwd IS a temp path, so
+        # the guard permits the export, this assertion fails, and a real
+        # look.cube lands in the working directory. See tests/_paths.py.
+        path = non_temp_path("look.cube")
+        result = _safe_export_lut(ItemStub(), {"path": path})
 
         self.assertIn("error", result)
         self.assertIn("system temp", (result["error"].get("message","") if isinstance(result["error"], dict) else result["error"]))
+        # The refusal must happen before anything touches the filesystem.
+        self.assertFalse(os.path.exists(path))
+        self.assertFalse(os.path.exists(os.path.dirname(path)))
 
     def test_safe_export_lut_writes_temp_file(self):
         path = os.path.join(tempfile.mkdtemp(), "look.cube")

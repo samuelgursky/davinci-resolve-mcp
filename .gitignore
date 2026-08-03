@@ -110,6 +110,18 @@ docs/_design/
 .davinci-resolve-mcp-analysis/
 davinci-resolve-mcp-analysis/
 
+# Export artifacts at the repo root. Backstop only: tests must not write into
+# the working directory at all (see tests/_paths.py), but a guard-rejection
+# test that stops rejecting writes a real file, and one such look.cube reached
+# a PR before anyone noticed. Root-anchored so genuine fixtures under tests/
+# and docs/ are unaffected.
+/*.cube
+/*.dctl
+/*.drx
+/*.mov
+/*.mp4
+/*.wav
+
 # Local scratch / personal tooling attached to this project.
 # Holds design docs, calibration references, release-notes drafts, the screenshot
 # capture script, and one-off repro scripts. Never shipped. See local/README.md.
