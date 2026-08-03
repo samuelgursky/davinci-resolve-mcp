@@ -16606,11 +16606,18 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
 
         return _run_maybe_background("media_pool.import_timeline", p, _work)
     elif action == "delete_timelines":
+        ids = p.get("timeline_ids")
+        if not isinstance(ids, list) or not ids:
+            hint = (" ('timeline_names' is not supported — timelines are matched"
+                    " by unique ID, e.g. from timeline.get_unique_id)"
+                    if "timeline_names" in p else "")
+            return _err("delete_timelines requires 'timeline_ids', a non-empty"
+                        " list of timeline unique IDs" + hint)
         count = proj.GetTimelineCount()
         timelines = []
         for i in range(1, count + 1):
             tl = proj.GetTimelineByIndex(i)
-            if tl and tl.GetUniqueId() in p["timeline_ids"]:
+            if tl and tl.GetUniqueId() in ids:
                 timelines.append(tl)
         if not timelines:
             return _err("No timelines found")
@@ -16986,6 +16993,22 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
 # TOOL 13: media_pool_item
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _keyed_get(getter, key):
+    """Resolve's keyed getters take one string key; passed a list they silently
+    ignore it and return the full dict. Subset it ourselves instead.
+
+    Returns (value, error) — exactly one is non-None unless value is legitimately
+    empty."""
+    if isinstance(key, list):
+        if not key or not all(isinstance(k, str) for k in key):
+            return None, _err("'key' must be a string or a non-empty list of strings")
+        full = getter("")
+        if not isinstance(full, dict):
+            full = {}
+        return {k: full.get(k) for k in key}, None
+    return getter(key), None
+
+
 @mcp.tool()
 @_guard_missing_params
 def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -16994,6 +17017,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     Actions:
       get_name(clip_id) -> {name}
       get_metadata(clip_id, key?) -> {metadata}
+        — key: one string, or a list of strings to get just that subset
       set_metadata(clip_id, key, value) OR set_metadata(clip_id, metadata) -> {success}
       get_third_party_metadata(clip_id, key?) -> {metadata}
       set_third_party_metadata(clip_id, key, value) -> {success}
@@ -17160,7 +17184,10 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     if action == "get_name":
         return {"name": clip.GetName()}
     elif action == "get_metadata":
-        return {"metadata": _ser(clip.GetMetadata(p.get("key", "")))}
+        value, key_err = _keyed_get(clip.GetMetadata, p.get("key", ""))
+        if key_err:
+            return key_err
+        return {"metadata": _ser(value)}
     elif action == "set_metadata":
         if "metadata" in p:
             ok = bool(clip.SetMetadata(p["metadata"]))
@@ -17176,13 +17203,19 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
                 return silent
         return {"success": ok}
     elif action == "get_third_party_metadata":
-        return {"metadata": _ser(clip.GetThirdPartyMetadata(p.get("key", "")))}
+        value, key_err = _keyed_get(clip.GetThirdPartyMetadata, p.get("key", ""))
+        if key_err:
+            return key_err
+        return {"metadata": _ser(value)}
     elif action == "set_third_party_metadata":
         return {"success": bool(clip.SetThirdPartyMetadata(p["key"], p["value"]))}
     elif action == "get_media_id":
         return {"media_id": clip.GetMediaId()}
     elif action == "get_clip_property":
-        return {"properties": _ser(clip.GetClipProperty(p.get("key", "")))}
+        value, key_err = _keyed_get(clip.GetClipProperty, p.get("key", ""))
+        if key_err:
+            return key_err
+        return {"properties": _ser(value)}
     elif action == "set_clip_property":
         ok = bool(clip.SetClipProperty(p["key"], p["value"]))
         if ok:
