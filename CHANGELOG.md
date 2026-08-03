@@ -2,6 +2,57 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.72.0
+
+Resolve 21's AI methods report a missing Extras pack as an error *string*, not
+the documented bool — and a non-empty string is truthy. Live-validated against
+Studio 21.0.2.4 by @AghisSs in #107.
+
+### The trap
+
+The methods do not agree on how they refuse. With only AI Motion Deblur
+installed:
+
+| Method | Return when the pack is absent |
+|---|---|
+| `AnalyzeForSlate` | `False` |
+| `AnalyzeForIntellisearch` | `"Required package 'AI Intellisearch - Faster' is not installed."` |
+| `GenerateSpeech` | `"Required Package, 'AI Speech Generator' is not Installed."` |
+
+So `bool(result)` reported **success for analysis that never ran** across eight
+call sites, and `generate_speech` let the string past its guard into
+`.GetName()`, raising `AttributeError: 'str' object has no attribute 'GetName'`.
+
+`_ai_result` / `_ai_result_payload` now treat any string as a failure and
+surface its text as the error. That message is the only machine-readable signal
+that a pack is missing, since nothing in the scripting API enumerates installed
+Extras.
+
+`remove_motion_blur` is routed through the same helper. It needs the AI Motion
+Deblur Extra like its siblings and reproduced *both* failures — the
+`AttributeError` on the clip path, and a silent `success: true` with
+`created: []` in the confirm-gated folder path that renders new media. Both were
+live-tested with the Extra installed, so the absent-pack return was never
+observable.
+
+### Also
+
+- `project_settings("reset_intellisearch_analysis")` — documented in the 21.0.2
+  scripting README and present in `dir(project)`, but absent from the copy the
+  repo bundled, so it was never wrapped.
+- A live validation harness for the Resolve 21 delta, source-safe: synthetic
+  media in a temp dir, disposable project, teardown that restores the
+  originally-open project.
+- `api_truth` entries for the string-return bug, the undiscoverable Extras gap,
+  and `AnalyzeForSlate`'s documented `resolve.MARKER_*` constants, which do not
+  exist on the handle at all.
+- The `hasattr` attribute-fabrication entry is scoped as **unresolved**. The
+  21.0.2.4 control probe used an invented name, while the 21.0.0 evidence it
+  overturns used real method names borrowed from other object types — so it does
+  not refute the original record. `_has_method` is what every `_requires_method`
+  version gate is built on, and a gate that silently passes is the failure this
+  ledger exists to prevent.
+
 ## What's New in v2.71.1
 
 `Timeline.DeleteClips` can lie about whether it worked. #111 recorded four
