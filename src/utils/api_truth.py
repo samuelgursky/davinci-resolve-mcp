@@ -26,7 +26,7 @@ When you add or change a ``submit``-tagged entry, regenerate the report
 """
 from typing import Any, Dict, List, Optional
 
-VERIFIED_ON = "DaVinci Resolve Studio 21.0.0"
+VERIFIED_ON = "DaVinci Resolve Studio 21.0.2"
 
 # Each entry: symbol, object, reality, recommended, tags. `signature` optional.
 API_TRUTH: List[Dict[str, Any]] = [
@@ -717,17 +717,142 @@ API_TRUTH: List[Dict[str, Any]] = [
     {
         "symbol": "hasattr() / getattr() on Resolve API objects (attribute fabrication)",
         "object": "(all Resolve scripting objects)",
-        "reality": "The Python bridge returns a callable for ANY attribute name, so "
-                   "hasattr(obj, 'TotallyMadeUpMethod') is always True and getattr "
-                   "never raises. This makes capability detection by hasattr "
-                   "impossible — verified on 21.0.0 (hasattr reported SetStart, "
-                   "Razor, AddNode, GenerateProxy, AddSmartBin etc. as present "
-                   "though none exist). Only dir() lists the real methods.",
-        "recommended": "Never probe method existence with hasattr/getattr; test "
-                       "membership against dir(obj) instead. Calling a fabricated "
-                       "method typically returns None/False with no error.",
+        "reality": "UNRESOLVED — the two measurements do not test the same thing. "
+                   "On 21.0.0 the bridge was recorded as returning a callable for "
+                   "ANY attribute name, making capability detection by hasattr "
+                   "impossible; the evidence was REAL API method names borrowed from "
+                   "other object types (SetStart, Razor, AddNode, GenerateProxy, "
+                   "AddSmartBin reported present on objects that do not have them). "
+                   "A 21.0.2.4 control probe of the invented name "
+                   "'TotallyMadeUpMethod_xyz123' returned getattr-callable False on "
+                   "all eight object types, matching dir() in every case. That does "
+                   "NOT refute the 21.0.0 record: if the bridge resolves any name "
+                   "known to the RemoteObject method table rather than literally any "
+                   "string, an invented name is correctly rejected on both builds and "
+                   "the probe never exercised the failing case. Re-running the probe "
+                   "with those five real names is what would settle it; until then, "
+                   "assume fabrication is possible.",
+        "recommended": "Use dir(obj) membership for capability probes. It is correct "
+                       "on every build measured, and it is the only form not affected "
+                       "by whichever way this resolves. server._has_method uses "
+                       "hasattr/getattr and so may over-report on builds where "
+                       "fabrication is live — that is the case _requires_method gates "
+                       "guard, so it matters most exactly where it is least tested. "
+                       "Calling a fabricated method typically returns None/False with "
+                       "no error.",
         "tags": ["bridge", "introspection", "silent-failure"],
         "submit": "bug",
+    },
+    {
+        "symbol": "Resolve 21 AI methods (AnalyzeForIntellisearch, GenerateSpeech, "
+                  "AnalyzeForSlate) — inconsistent failure return type",
+        "object": "MediaPoolItem / Folder / Project",
+        "signature": "-> Bool (documented)",
+        "reality": "When the required Extras pack is not installed, these methods do "
+                   "not agree on how they say so, and the documented Bool is not what "
+                   "you get. Verified live on Studio 21.0.2.4 with only AI Motion "
+                   "Deblur installed: AnalyzeForSlate returned False, but "
+                   "AnalyzeForIntellisearch returned the STRING \"Required package 'AI "
+                   "Intellisearch - Faster' is not installed.\" and GenerateSpeech "
+                   "returned the STRING \"Required Package, 'AI Speech Generator' is "
+                   "not Installed.\". A non-empty string is truthy in Python, so "
+                   "bool(result) reports SUCCESS for a call that definitively did not "
+                   "run, and treating GenerateSpeech's return as a MediaPoolItem "
+                   "raises AttributeError: 'str' object has no attribute 'GetName'.",
+        "recommended": "Never bool() an AI-method return directly. Route it through "
+                       "server._ai_result / _ai_result_payload, which treat any string "
+                       "as a failure and surface its text as the error — the message is "
+                       "the only machine-readable signal that an Extras pack is "
+                       "missing, since there is no scripting API to enumerate "
+                       "installed Extras.",
+        "tags": ["ai", "extras", "unreliable-return", "silent-failure", "resolve-21"],
+        "submit": "bug",
+        "mitigation": ["_ai_result", "_ai_result_payload"],
+    },
+    {
+        "symbol": "Installed AI Extras packs are not discoverable from scripting",
+        "object": "Resolve",
+        "reality": "AnalyzeForIntellisearch, AnalyzeForSlate, GenerateSpeech and "
+                   "RemoveMotionBlur each require a separately-downloaded Extras pack, "
+                   "but nothing in the scripting API reports which packs are installed. "
+                   "A caller cannot distinguish 'the Extra is missing' from 'the "
+                   "analysis ran and found nothing' ahead of time; on 21.0.2.4 two of "
+                   "the four leak the reason only as free text in the return value, and "
+                   "AnalyzeForSlate's bare False carries no reason at all.",
+        "recommended": "Until an API exists, treat a string return as the reason and "
+                       "read the pack names out of the Extras directory "
+                       "(Blackmagic Design/DaVinci Resolve/Extras/*/log.dpl1) for "
+                       "diagnostics only — that path is undocumented and may change.",
+        "tags": ["ai", "extras", "introspection", "resolve-21"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Folder.AnalyzeForSlate / MediaPoolItem.AnalyzeForSlate markerColor",
+        "object": "MediaPoolItem / Folder",
+        "signature": "(markerColor) -> Bool",
+        "reality": "The shipped 21.0.2 scripting README says markerColor must be one of "
+                   "the resolve.MARKER_* constants (resolve.MARKER_BLUE etc.). Those "
+                   "constants do not exist: on Studio 21.0.2.4, "
+                   "[c for c in dir(resolve) if c.startswith('MARKER_')] is empty. "
+                   "There is therefore no documented-correct way to call this method. "
+                   "The plain colour string the server passes is the only option "
+                   "available, and it returns False here — though with AI Slate ID "
+                   "absent, a string-rejection bug cannot be distinguished from the "
+                   "missing pack on this machine.",
+        "recommended": "Keep passing the plain colour name (server._MARKER_COLORS) — "
+                       "the documented constants are unavailable. Re-test on a machine "
+                       "with the AI Slate ID Extra installed before concluding the "
+                       "string form is rejected.",
+        # Deliberately NOT tagged `enum`: that tag denotes the issue-#70 class,
+        # where plain strings are rejected and a resolver must translate them
+        # into live enum constants. Here the documented constants do not exist
+        # on the handle at all, so there is nothing to resolve — the defect is
+        # in the documentation, not in a missing resolver.
+        "tags": ["ai", "extras", "missing-constant", "documentation", "resolve-21"],
+        "submit": "bug",
+    },
+    {
+        "symbol": "Project.ResetIntellisearchAnalysis",
+        "object": "Project",
+        "signature": "() -> Bool",
+        "reality": "Documented in the scripting README shipped with Resolve 21.0.2 "
+                   "(dated 26 May 2026) but absent from the 5 May 2026 copy the repo "
+                   "bundled, so it was missing from the coverage tables. Present in "
+                   "dir(project) and returns True on Studio 21.0.2.4.",
+        "recommended": "Exposed as project_settings('reset_intellisearch_analysis').",
+        "tags": ["resolve-21", "documentation"],
+    },
+    {
+        "symbol": "Resolve.DisableBackgroundTasksForCurrentResolveSession",
+        "object": "Resolve",
+        "signature": "() -> None",
+        "reality": "Returns None, so a caller cannot tell whether it took effect, and "
+                   "there is no Enable... counterpart anywhere in the shipped 21.0.2 "
+                   "scripting README — the only documented way back is restarting "
+                   "Resolve. The scope is the whole session, so a script disables "
+                   "background tasks for every project open in that instance, not just "
+                   "its own. Present in dir(resolve) on Studio 21.0.2.4; deliberately "
+                   "not executed during validation for exactly that reason.",
+        "recommended": "Treat as irreversible within a session. server returns _ok() "
+                       "unconditionally because there is nothing to check.",
+        "tags": ["resolve-21", "unreliable-return", "irreversible", "session-wide"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "MediaPoolItem.PerformAudioClassification / ClearAudioClassification",
+        "object": "MediaPoolItem / Folder",
+        "signature": "() -> Bool",
+        "reality": "Both work without any Extras pack and the effect is observable, "
+                   "which is unusual for this family. Verified on Studio 21.0.2.4 "
+                   "against a synthetic speech clip: PerformAudioClassification "
+                   "returned True and set the clip property 'Category' from '' to "
+                   "'Dialogue' (also surfacing Category/Subcategory in GetMetadata); "
+                   "ClearAudioClassification returned True and reset 'Category' to "
+                   "'Uncategorized' — note the cleared state is 'Uncategorized', NOT "
+                   "the original empty string.",
+        "recommended": "Read back GetClipProperty('Category'); treat both '' and "
+                       "'Uncategorized' as unclassified.",
+        "tags": ["ai", "audio", "resolve-21", "readback"],
     },
     {
         "symbol": "subprocess inheriting stdin under the MCP stdio server",

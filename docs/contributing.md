@@ -67,7 +67,8 @@ davinci-resolve-mcp/
 │   ├── resolve_mcp_server.py    # Thin full-server entrypoint — 341 tools
 │   ├── granular/                # Modular full-server implementation
 │   └── utils/                   # Platform detection, Resolve connection helpers
-├── tests/                       # 5-phase live API test suite + Resolve 20 delta (331/331 pass)
+├── tests/                       # offline suite (test_*.py) + live harnesses (live_*.py):
+│                                # 5-phase live API suite + Resolve 20/21 deltas
 ├── docs/
 │   ├── README.md                 # Documentation index
 │   ├── SKILL.md                  # AI assistant operating reference

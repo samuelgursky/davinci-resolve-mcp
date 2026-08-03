@@ -382,5 +382,137 @@ class Resolve21CapabilityDetectionTest(unittest.TestCase):
         self.assertTrue(cm["transcribe_audio"])  # legacy still has transcription
 
 
+class MissingExtrasStringReturnTest(unittest.TestCase):
+    """Resolve reports a missing AI Extras pack as an error STRING, not False.
+
+    Verified live on Studio 21.0.2.4 with only AI Motion Deblur installed:
+    AnalyzeForIntellisearch returned "Required package 'AI Intellisearch -
+    Faster' is not installed." and GenerateSpeech returned "Required Package,
+    'AI Speech Generator' is not Installed.". Both are truthy, so a bare
+    bool() reported success for work that never ran, and GenerateSpeech's
+    string reached .GetName() and raised AttributeError.
+    """
+
+    INTELLISEARCH_MSG = "Required package 'AI Intellisearch - Faster' is not installed."
+    SPEECH_MSG = "Required Package, 'AI Speech Generator' is not Installed."
+
+    def setUp(self):
+        self.clip = Clip21()
+        self.mp = MediaPoolStub(folder=Folder21(), clip=self.clip)
+        self._orig_get_mp = compound._get_mp
+        self._orig_find_clip = compound._find_clip
+        compound._get_mp = lambda: (None, None, self.mp, None)
+        compound._find_clip = lambda root, cid: self.clip
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_root = compound._ai_ledger_root
+        compound._ai_ledger_root = lambda: self._tmp.name
+
+    def tearDown(self):
+        compound._get_mp = self._orig_get_mp
+        compound._find_clip = self._orig_find_clip
+        compound._ai_ledger_root = self._orig_root
+        self._tmp.cleanup()
+
+    def test_ai_result_treats_string_as_failure(self):
+        self.assertEqual(compound._ai_result(self.INTELLISEARCH_MSG),
+                         (False, self.INTELLISEARCH_MSG))
+        self.assertEqual(compound._ai_result(True), (True, None))
+        self.assertEqual(compound._ai_result(False), (False, None))
+        self.assertEqual(compound._ai_result(None), (False, None))
+
+    def test_ai_result_payload_surfaces_the_reason(self):
+        payload = compound._ai_result_payload(self.INTELLISEARCH_MSG)
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error"], self.INTELLISEARCH_MSG)
+        self.assertNotIn("error", compound._ai_result_payload(True))
+
+    def test_intellisearch_string_return_is_not_reported_as_success(self):
+        self.clip.AnalyzeForIntellisearch = lambda *a: self.INTELLISEARCH_MSG
+        out = compound.media_pool_item("analyze_for_intellisearch", {"clip_id": "c1"})
+        self.assertFalse(out.get("success"),
+                         msg="a missing-Extras string must not read as success")
+        self.assertEqual(out.get("error"), self.INTELLISEARCH_MSG)
+
+    def test_generate_speech_string_return_does_not_raise(self):
+        """The string must not reach .GetName() — that raised AttributeError."""
+        ok, message = compound._ai_result(self.SPEECH_MSG)
+        self.assertFalse(ok)
+        self.assertEqual(message, self.SPEECH_MSG)
+
+
+class RemoveMotionBlurStringReturnTest(unittest.TestCase):
+    """RemoveMotionBlur is in the same family and fails both ways.
+
+    It needs the AI Motion Deblur Extra like its siblings need theirs, so absent
+    the pack its return can be an error string rather than the documented
+    MediaPoolItem / list of pairs. That reproduced BOTH bugs this PR fixes, in
+    the one action that renders new media:
+
+      - media_pool_item: `if new_clip:` passed, `_clip_file_size` swallowed its
+        own AttributeError, and the string reached `.GetName()` and raised —
+        `generate_speech`'s crash verbatim.
+      - folder: iterating a string yields characters, the pair-unpack raised,
+        `except Exception: continue` ate it, and the action returned
+        `{"success": True, "created": []}` with a true success in the ledger.
+
+    Both were live-tested with the Extra INSTALLED, so the absent-pack return
+    was never observed — which is exactly why they were missed.
+    """
+
+    DEBLUR_MSG = "Required Package, 'AI Motion Deblur' is not Installed."
+
+    def setUp(self):
+        self.clip = Clip21()
+        self.folder = Folder21()
+        self.mp = MediaPoolStub(folder=self.folder, clip=self.clip)
+        self._orig_get_mp = compound._get_mp
+        self._orig_find_clip = compound._find_clip
+        compound._get_mp = lambda: (None, None, self.mp, None)
+        compound._find_clip = lambda root, cid: self.clip
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_root = compound._ai_ledger_root
+        compound._ai_ledger_root = lambda: self._tmp.name
+        compound._CONFIRM_TOKENS.clear()
+
+    def tearDown(self):
+        compound._get_mp = self._orig_get_mp
+        compound._find_clip = self._orig_find_clip
+        compound._ai_ledger_root = self._orig_root
+        compound._CONFIRM_TOKENS.clear()
+        self._tmp.cleanup()
+
+    def _confirmed(self, tool, action, params):
+        pending = tool(action, params)
+        return tool(action, dict(params, confirm_token=pending["confirm_token"]))
+
+    def test_clip_string_return_does_not_raise_attributeerror(self):
+        self.clip.RemoveMotionBlur = lambda *a: self.DEBLUR_MSG
+        out = self._confirmed(compound.media_pool_item, "remove_motion_blur", {"clip_id": "c1"})
+        self.assertFalse(out.get("success"))
+        self.assertEqual(out.get("error"), self.DEBLUR_MSG)
+
+    def test_folder_string_return_is_not_reported_as_success(self):
+        self.folder.RemoveMotionBlur = lambda *a: self.DEBLUR_MSG
+        out = self._confirmed(compound.folder, "remove_motion_blur",
+                              {"deblur_option": {"UseExtremeMode": True}})
+        self.assertFalse(out.get("success"),
+                         msg="created:[] alongside success:true was the silent lie")
+        self.assertEqual(out.get("created"), [])
+        self.assertEqual(out.get("error"), self.DEBLUR_MSG)
+
+    def test_a_working_extra_is_unaffected(self):
+        # The installed-pack path must behave exactly as before.
+        out = self._confirmed(compound.folder, "remove_motion_blur",
+                              {"deblur_option": {"UseExtremeMode": True}})
+        self.assertTrue(out["success"])
+        self.assertEqual(len(out["created"]), 1)
+        self.assertNotIn("error", out)
+
+        compound._CONFIRM_TOKENS.clear()
+        out = self._confirmed(compound.media_pool_item, "remove_motion_blur", {"clip_id": "c1"})
+        self.assertTrue(out["success"])
+        self.assertNotIn("error", out)
+
+
 if __name__ == "__main__":
     unittest.main()

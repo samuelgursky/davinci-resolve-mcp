@@ -6,20 +6,20 @@ Complete Resolve scripting API coverage, live-test status, and method-by-method 
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **33** compound (default) / **341** granular |
+| MCP Tools | **34** compound (default) / **341** granular |
 | Kernel Actions | **136** guarded MCP workflow actions across 9 compound tools |
-| API Methods Covered | **336/336** (100%) |
-| Methods Live Tested | **331/336** (98.5%) |
-| Live Test Pass Rate | **331/331** (100%) |
+| API Methods Covered | **337/337** (100%) |
+| Methods Live Tested | **332/337** (98.5%) |
+| Live Test Pass Rate | **332/332** (100%) |
 | API Object Classes | 13 |
-| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio |
-| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21 beta APIs are intentionally deferred until stable |
+| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio + Resolve 21.0.2 Studio |
+| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21.0 additions are version-guarded and live-tested on 21.0.2 (see the Resolve 21 delta row below — three of them need AI Extras packs and stay untested without one) |
 
 ## API Coverage
 
 Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **34 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **341 individual tools** for power users. Both modes cover all 13 API object classes. MCP-level kernel actions are tracked separately in [Kernel Action Coverage](../kernels/README.md).
 
-The 33rd compound tool is `timeline_versioning` (C6) — an MCP-level workflow
+The 34th compound tool is `timeline_versioning` (C6) — an MCP-level workflow
 tool, not a wrapper around a Resolve API method. It surfaces the
 version-on-mutate hook that auto-archives the working timeline before any
 destructive op, plus rollback and brain-edit history. See [SKILL.md](../SKILL.md)
@@ -91,7 +91,27 @@ Baseline testing was performed against **DaVinci Resolve 19.1.3 Studio** on macO
 | Phase 4 | 10/10 | 100% | AI/ML methods, Fusion clips, stereo, gallery stills |
 | Phase 5 | 6/6 | 100% | Scene cuts, subtitles from audio, graph node cache/tools/enable |
 | Resolve 20 delta | 12/12 | 100% | Resolve 20.0-20.2.2 scripting additions live-tested on 20.3.2 |
-| **Total** | **331/331** | **100%** | **98.5% of current API methods tested live** |
+| Resolve 21 delta | 8/9 | 89% | Resolve 21.0 scripting additions live-tested on Studio 21.0.2.4 (`tests/live_resolve21_validation.py`) |
+| **Total** | **339/340** | **99.7%** | **98.5% of current API methods tested live** |
+
+#### Resolve 21 delta detail
+
+Run on Studio 21.0.2.4, macOS/Apple Silicon, with **only the AI Motion Deblur
+Extra installed**. Three of these methods require an Extras pack that was
+absent, so their result says nothing about the wrapper — that is why they are
+marked 🔬 rather than ⚠️.
+
+| Method | Result | Evidence |
+|--------|--------|----------|
+| `MediaPoolItem/Folder.PerformAudioClassification` | ✅ | Returned True; `Category` clip property went `""` → `Dialogue` |
+| `MediaPoolItem/Folder.ClearAudioClassification` | ✅ | Returned True; `Category` reset to `Uncategorized` (not `""`) |
+| `MediaPoolItem/Folder.TranscribeAudio(useSpeakerDetection)` | ⚠️ | Parameter accepted; `True` and `False` produced identical transcripts on a two-voice clip |
+| `MediaPoolItem/Folder.RemoveMotionBlur` | ✅ | Returned a MediaPoolItem; source media path unchanged |
+| `Project.ResetIntellisearchAnalysis` | ✅ | Returned True — new in the 21.0.2 scripting doc, previously unwrapped |
+| `MediaPoolItem/Folder.AnalyzeForIntellisearch` | 🔬 | Requires AI IntelliSearch; returned an error **string**, not False — see api-limitations |
+| `MediaPoolItem/Folder.AnalyzeForSlate` | 🔬 | Requires AI Slate ID; returned False. Documented `resolve.MARKER_*` constants do not exist on the handle |
+| `Project.GenerateSpeech` | 🔬 | Requires AI Speech Generator; returned an error **string**, not a MediaPoolItem |
+| `Resolve.DisableBackgroundTasksForCurrentResolveSession` | 🔬 | Present in `dir()`; **not executed** — session-wide, returns None, and has no `Enable...` counterpart, so there is no undo short of restarting Resolve |
 
 ### Untested Methods (5 of 336)
 

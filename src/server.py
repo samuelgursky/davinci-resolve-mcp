@@ -1784,6 +1784,36 @@ def _requires_method(obj, method_name, min_version):
         return None
     return _err(f"{method_name} requires DaVinci Resolve {min_version}+")
 
+def _ai_result(returned):
+    """Normalize a Resolve 21 AI-method return into (ok, message).
+
+    The AI methods do not agree on how they report a missing Extras pack, and
+    one of the two shapes is a trap. Verified live on Studio 21.0.2.4 with only
+    AI Motion Deblur installed:
+
+      - `AnalyzeForSlate`  -> False
+      - `AnalyzeForIntellisearch` -> "Required package 'AI Intellisearch -
+        Faster' is not installed."
+      - `GenerateSpeech`   -> "Required Package, 'AI Speech Generator' is not
+        Installed."
+
+    A non-empty string is truthy, so `bool(returned)` reports success for a call
+    that definitively did not run, and treating the return as a MediaPoolItem
+    raises AttributeError. Route every AI return through here instead: a string
+    is always a failure, and its text is the reason worth surfacing.
+    """
+    if isinstance(returned, str):
+        return False, returned.strip() or None
+    return bool(returned), None
+
+def _ai_result_payload(returned):
+    """`{"success": ...}` plus the Resolve-supplied reason when there is one."""
+    ok, message = _ai_result(returned)
+    payload = {"success": ok}
+    if message:
+        payload["error"] = message
+    return payload
+
 def _is_truncated(text):
     """True if a transcription preview was cut off.
 
@@ -15459,6 +15489,7 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
       delete_color_group(name) -> {success}
       apply_fairlight_preset(preset_name) -> {success}
       generate_speech(speech_generation_settings, timecode?) -> {success, new, new_id}  — Resolve 21+, AI Speech Generator; creates new audio media (confirm-gated)
+      reset_intellisearch_analysis() -> {success}  — Resolve 21+; clears the project's IntelliSearch analysis data
     """
     p = _params(params)
     _, proj, err = _check()
@@ -15557,16 +15588,29 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
             return blocked
         with _ai_ledger_timed("generate_speech") as _rec:
             new_item = proj.GenerateSpeech(settings, timecode)
-            _rec.success = bool(new_item)
-            if new_item:
+            # GenerateSpeech returns an error STRING when the AI Speech Generator
+            # Extra is absent (verified on Studio 21.0.2.4), not a MediaPoolItem.
+            # A bare truthiness test lets that string through to .GetName() and
+            # raises AttributeError, so normalize before touching the result.
+            ok, message = _ai_result(new_item)
+            _rec.success = ok
+            if ok:
                 path, nbytes = _clip_file_size(new_item)
                 _rec.output_path = path
                 _rec.output_bytes = nbytes
-        if not new_item:
-            return {"success": False}
+        if not ok:
+            return {"success": False, "error": message} if message else {"success": False}
         return {"success": True, "new": new_item.GetName(), "new_id": new_item.GetUniqueId(),
                 "output_path": _rec.output_path, "output_bytes": _rec.output_bytes}
-    return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","project_summary","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset","generate_speech"])
+    elif action == "reset_intellisearch_analysis":
+        missing = _requires_method(proj, "ResetIntellisearchAnalysis", "21.0")
+        if missing:
+            return missing
+        with _ai_ledger_timed("reset_intellisearch_analysis") as _rec:
+            result = _ai_result_payload(proj.ResetIntellisearchAnalysis())
+            _rec.success = result["success"]
+        return result
+    return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","project_summary","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset","generate_speech","reset_intellisearch_analysis"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -17006,17 +17050,17 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         if missing:
             return missing
         with _ai_ledger_timed("perform_audio_classification") as _rec:
-            ok = bool(f.PerformAudioClassification())
-            _rec.success = ok
-        return {"success": ok}
+            result = _ai_result_payload(f.PerformAudioClassification())
+            _rec.success = result["success"]
+        return result
     elif action == "clear_audio_classification":
         missing = _requires_method(f, "ClearAudioClassification", "21.0")
         if missing:
             return missing
         with _ai_ledger_timed("clear_audio_classification") as _rec:
-            ok = bool(f.ClearAudioClassification())
-            _rec.success = ok
-        return {"success": ok}
+            result = _ai_result_payload(f.ClearAudioClassification())
+            _rec.success = result["success"]
+        return result
     elif action == "analyze_for_intellisearch":
         missing = _requires_method(f, "AnalyzeForIntellisearch", "21.0")
         if missing:
@@ -17024,9 +17068,9 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         identify_faces = bool(_first_param(p, "identify_faces", "identifyFaces", default=False))
         is_better_mode = bool(_first_param(p, "is_better_mode", "isBetterMode", default=False))
         with _ai_ledger_timed("analyze_for_intellisearch") as _rec:
-            ok = bool(f.AnalyzeForIntellisearch(identify_faces, is_better_mode))
-            _rec.success = ok
-        return {"success": ok}
+            result = _ai_result_payload(f.AnalyzeForIntellisearch(identify_faces, is_better_mode))
+            _rec.success = result["success"]
+        return result
     elif action == "analyze_for_slate":
         missing = _requires_method(f, "AnalyzeForSlate", "21.0")
         if missing:
@@ -17035,9 +17079,9 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         if marker_color not in _MARKER_COLORS:
             return _err(f"Invalid marker_color {marker_color!r}. Valid colors: {', '.join(_MARKER_COLORS)}")
         with _ai_ledger_timed("analyze_for_slate") as _rec:
-            ok = bool(f.AnalyzeForSlate(marker_color))
-            _rec.success = ok
-        return {"success": ok}
+            result = _ai_result_payload(f.AnalyzeForSlate(marker_color))
+            _rec.success = result["success"]
+        return result
     elif action == "remove_motion_blur":
         missing = _requires_method(f, "RemoveMotionBlur", "21.0")
         if missing:
@@ -17062,11 +17106,18 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         if blocked:
             return blocked
         with _ai_ledger_timed("remove_motion_blur") as _rec:
+            # RemoveMotionBlur needs the AI Motion Deblur Extra, so it belongs to
+            # the same family as the methods above: absent the pack, the return
+            # can be an error STRING rather than the documented list. Iterating a
+            # string yields characters, the pair-unpack raises, `except Exception`
+            # swallows it, and the action reported success:true with created:[]
+            # — a silent lie in the confirm-gated path that renders new media.
             result = f.RemoveMotionBlur(deblur)
-            _rec.success = bool(result)
+            ok, message = _ai_result(result)
+            _rec.success = ok
             created = []
             total_bytes = 0
-            for pair in (result or []):
+            for pair in (result or []) if ok else []:
                 try:
                     orig, new = pair
                     path, nbytes = _clip_file_size(new)
@@ -17080,7 +17131,10 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
             if created:
                 _rec.output_path = created[0].get("output_path")
                 _rec.output_bytes = total_bytes or None
-        return {"success": bool(result), "created": created}
+        payload = {"success": ok, "created": created}
+        if message:
+            payload["error"] = message
+        return payload
     return _unknown(action, ["get_clips","get_name","get_subfolders","is_stale","get_unique_id","export","transcribe_audio","clear_transcription","perform_audio_classification","clear_audio_classification","analyze_for_intellisearch","analyze_for_slate","remove_motion_blur"])
 
 
@@ -17404,17 +17458,17 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if missing:
             return missing
         with _ai_ledger_timed("perform_audio_classification", clip_id=p.get("clip_id")) as _rec:
-            ok = bool(clip.PerformAudioClassification())
-            _rec.success = ok
-        return {"success": ok}
+            result = _ai_result_payload(clip.PerformAudioClassification())
+            _rec.success = result["success"]
+        return result
     elif action == "clear_audio_classification":
         missing = _requires_method(clip, "ClearAudioClassification", "21.0")
         if missing:
             return missing
         with _ai_ledger_timed("clear_audio_classification", clip_id=p.get("clip_id")) as _rec:
-            ok = bool(clip.ClearAudioClassification())
-            _rec.success = ok
-        return {"success": ok}
+            result = _ai_result_payload(clip.ClearAudioClassification())
+            _rec.success = result["success"]
+        return result
     elif action == "analyze_for_intellisearch":
         missing = _requires_method(clip, "AnalyzeForIntellisearch", "21.0")
         if missing:
@@ -17422,9 +17476,9 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         identify_faces = bool(_first_param(p, "identify_faces", "identifyFaces", default=False))
         is_better_mode = bool(_first_param(p, "is_better_mode", "isBetterMode", default=False))
         with _ai_ledger_timed("analyze_for_intellisearch", clip_id=p.get("clip_id")) as _rec:
-            ok = bool(clip.AnalyzeForIntellisearch(identify_faces, is_better_mode))
-            _rec.success = ok
-        return {"success": ok}
+            result = _ai_result_payload(clip.AnalyzeForIntellisearch(identify_faces, is_better_mode))
+            _rec.success = result["success"]
+        return result
     elif action == "analyze_for_slate":
         missing = _requires_method(clip, "AnalyzeForSlate", "21.0")
         if missing:
@@ -17433,9 +17487,9 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if marker_color not in _MARKER_COLORS:
             return _err(f"Invalid marker_color {marker_color!r}. Valid colors: {', '.join(_MARKER_COLORS)}")
         with _ai_ledger_timed("analyze_for_slate", clip_id=p.get("clip_id")) as _rec:
-            ok = bool(clip.AnalyzeForSlate(marker_color))
-            _rec.success = ok
-        return {"success": ok}
+            result = _ai_result_payload(clip.AnalyzeForSlate(marker_color))
+            _rec.success = result["success"]
+        return result
     elif action == "remove_motion_blur":
         missing = _requires_method(clip, "RemoveMotionBlur", "21.0")
         if missing:
@@ -17460,14 +17514,19 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if blocked:
             return blocked
         with _ai_ledger_timed("remove_motion_blur", clip_id=p.get("clip_id")) as _rec:
+            # Same shape as generate_speech: a MediaPoolItem return, and an error
+            # STRING when the AI Motion Deblur Extra is absent. `_clip_file_size`
+            # swallows its own AttributeError, so the string survived to
+            # `.GetName()` and raised there instead.
             new_clip = clip.RemoveMotionBlur(deblur)
-            _rec.success = bool(new_clip)
-            if new_clip:
+            ok, message = _ai_result(new_clip)
+            _rec.success = ok
+            if ok:
                 path, nbytes = _clip_file_size(new_clip)
                 _rec.output_path = path
                 _rec.output_bytes = nbytes
-        if not new_clip:
-            return {"success": False}
+        if not ok:
+            return {"success": False, "error": message} if message else {"success": False}
         return {"success": True, "new": new_clip.GetName(), "new_id": new_clip.GetUniqueId(),
                 "output_path": _rec.output_path, "output_bytes": _rec.output_bytes}
     elif action == "get_audio_mapping":
