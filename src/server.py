@@ -20470,7 +20470,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       set_mark_in_out(mark_in, mark_out, type?) -> {success}
       clear_mark_in_out(type?) -> {success}
       convert_to_stereo() -> {success}
-      get_items_in_track(track_type, track_index|index) -> {items}  — full serialization of each item
+      get_items_in_track(track_type, track_index|index) -> {items}  — alias of get_items
       get_voice_isolation_state(track_index) -> {isEnabled, amount}
       set_voice_isolation_state(track_index, state) -> {success}
       extract_source_frame_ranges(handles?, gap_max?, skip_extensions?) -> {timeline_name, frame_ranges, occurrences, ...}
@@ -20675,7 +20675,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return {"name": tl.GetTrackName(p["track_type"], p["index"])}
     elif action == "set_track_name":
         return {"success": bool(tl.SetTrackName(p["track_type"], p["index"], p["name"]))}
-    elif action == "get_items":
+    elif action in {"get_items", "get_items_in_track"}:
         track_type, track_index, err = _track_selector(p)
         if err:
             return _err(err)
@@ -20914,11 +20914,6 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return {"success": bool(tl.ClearMarkInOut(p.get("type", "all")))}
     elif action == "convert_to_stereo":
         return {"success": bool(tl.ConvertTimelineToStereo())}
-    elif action == "get_items_in_track":
-        track_type, track_index, err = _track_selector(p)
-        if err:
-            return _err(err)
-        return {"items": _ser(tl.GetItemListInTrack(track_type, track_index))}
     elif action == "get_voice_isolation_state":
         missing = _requires_method(tl, "GetVoiceIsolationState", "20.1")
         if missing:
@@ -22265,9 +22260,9 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
             "example": 'timeline(action="get_items", params={"track_type": "video", "index": 1})',
         },
         "get_items_in_track": {
-            "summary": "List items on one track with full per-item serialization.",
+            "summary": "Alias of get_items: list items on one track (name/id/start/end/duration).",
             "params": "track_type (video|audio|subtitle), track_index|index (1-based)",
-            "returns": "{items}",
+            "returns": "{items: [{name, id, start, end, duration}]}",
             "example": 'timeline(action="get_items_in_track", params={"track_type": "audio", "track_index": 1})',
         },
         "duplicate_clips": {
