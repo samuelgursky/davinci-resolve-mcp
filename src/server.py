@@ -10891,9 +10891,10 @@ def _folder_probe(folder, depth: int = 1):
     clips = []
     for clip in (folder.GetClipList() or []):
         clips.append(_media_pool_item_summary(clip))
+    subs = folder.GetSubFolderList() or []
     subfolders = []
     if depth > 0:
-        for sub in (folder.GetSubFolderList() or []):
+        for sub in subs:
             subfolders.append(_folder_probe(sub, depth - 1))
     stale = None
     try:
@@ -10906,8 +10907,11 @@ def _folder_probe(folder, depth: int = 1):
         "stale": stale,
         "clip_count": len(clips),
         "clips": clips,
-        "subfolder_count": len(subfolders),
+        # True count even below the depth cutoff — reporting len(subfolders)
+        # here made unexpanded folders look like empty leaves.
+        "subfolder_count": len(subs),
         "subfolders": subfolders,
+        "truncated": len(subs) > len(subfolders),
     }
 
 
@@ -16463,6 +16467,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       import_folder(path, source_clips_path?) -> {success}
       ingest_capabilities() -> {supported, partially_supported, unsupported}
       probe_media_pool(depth?) -> {media_pool_id, methods, root, current_folder, selected_clips}
+        depth defaults to 1, max 4. Folders below the cutoff have truncated:true
+        and a real subfolder_count; re-probe deeper or use folder.get_subfolders.
       probe_ingest_item(clip_ids? selected?) -> {items, count}
       safe_import_media(paths, target_folder?, dry_run?) -> {success, imported, clips}
       safe_import_sequence(FilePath|file_path|pattern, StartIndex?, EndIndex?, target_folder?, dry_run?) -> {success, imported, clips}
@@ -25572,11 +25578,44 @@ def _python_env_for_resolve() -> Dict[str, str]:
     return env
 
 
+# fusionscript's RemoteApp thread keeps dispatching packets from Resolve while
+# the interpreter tears down at exit, and can SIGSEGV *after* the script has
+# finished — turning a successful run into exit code -11 / success:false.
+# Run the script via runpy and hard-exit before teardown so the exit code is
+# truthful. SystemExit must be caught here: uncaught, a plain sys.exit(0) at
+# the end of a script would take the normal teardown path and reopen the
+# segfault window. sys.path[0] is pointed at the script's directory to mimic
+# `python script.py` (under -c it points at the server's cwd, which both
+# breaks sibling imports and lets stray files there shadow real modules).
+# Cost of os._exit: atexit handlers never run and non-daemon threads are not
+# joined — documented in script_plugin's execute action.
+_PY_SCRIPT_EXIT_GUARD = (
+    "import os, runpy, sys, traceback\n"
+    "sys.argv = sys.argv[1:]\n"
+    "sys.path[0] = os.path.dirname(os.path.abspath(sys.argv[0]))\n"
+    "code = 0\n"
+    "try:\n"
+    "    runpy.run_path(sys.argv[0], run_name='__main__')\n"
+    "except SystemExit as e:\n"
+    "    if isinstance(e.code, int):\n"
+    "        code = e.code\n"
+    "    elif e.code is not None:\n"
+    "        print(e.code, file=sys.stderr)\n"
+    "        code = 1\n"
+    "except BaseException:\n"
+    "    traceback.print_exc()\n"
+    "    code = 1\n"
+    "sys.stdout.flush()\n"
+    "sys.stderr.flush()\n"
+    "os._exit(code)\n"
+)
+
+
 def _execute_python_script(path: str, args: List[str],
                             timeout: int) -> Dict[str, Any]:
     # Ensure Resolve is running so the script can connect.
     get_resolve()
-    cmd = [sys.executable, path] + [str(a) for a in args]
+    cmd = [sys.executable, "-c", _PY_SCRIPT_EXIT_GUARD, path] + [str(a) for a in args]
     try:
         result = safe_run(cmd, env=_python_env_for_resolve(),
                           capture_output=True, text=True, timeout=timeout)
@@ -26254,6 +26293,10 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         — args: list of CLI args for the Python subprocess (Python only).
         — timeout: seconds (default 120 for execute, 60 for run_inline).
         — Auto-launches Resolve if not running.
+        — Python scripts hard-exit after the script body (guards against
+          fusionscript's segfault-at-exit race), so atexit handlers do not
+          run and non-daemon threads are not joined. Do cleanup inline or
+          in try/finally, not in atexit.
       run_inline(source, language, timeout?) -> {success, stdout?, stderr?, result?}
         — Python: writes to temp file with `resolve`/`project`/`mp`/`timeline`
           pre-bound, runs as subprocess, captures stdout/stderr.
