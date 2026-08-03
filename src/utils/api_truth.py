@@ -825,12 +825,10 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "so do not assume a retry is the answer here either.",
         "recommended": "Treat a False return as advisory: re-list the track and "
                        "check whether the items are actually gone; if still "
-                       "present, retry the identical call once before failing. "
-                       "The MCP delete_clips tool does not yet implement this "
-                       "readback-and-retry — call sites are currently "
-                       "unguarded.",
+                       "present, retry the identical call once before failing.",
         "tags": ["unreliable-return", "flaky", "timeline", "edit"],
         "submit": "bug",
+        "mitigation": ["_timeline_delete_clips_verified", "_timeline_items_still_present"],
     },
     {
         "symbol": "Timeline.DeleteClips (linked audio not deleted)",
