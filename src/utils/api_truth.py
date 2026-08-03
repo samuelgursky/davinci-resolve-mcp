@@ -813,10 +813,16 @@ API_TRUTH: List[Dict[str, Any]] = [
         "signature": "([TimelineItem], ripple) -> bool",
         "reality": "Can return False on the first call even when every item in "
                    "the list is a valid, present TimelineItem; an identical "
-                   "immediate retry succeeds. Same failure shape as "
-                   "ProjectManager.DeleteProject. Observed on Studio 21.0 during "
-                   "a cut-video edit session (items confirmed still present "
-                   "after the False, deleted cleanly on retry).",
+                   "immediate retry succeeded in the one observed instance. "
+                   "Observed on Studio 21.0 during a cut-video edit session "
+                   "(items confirmed still present after the False, deleted "
+                   "cleanly on retry). CAUSE NOT ESTABLISHED — one instance is "
+                   "not evidence of randomness, and it may well have a state "
+                   "precondition. ProjectManager.DeleteProject looked "
+                   "superficially identical and turned out to have a specific "
+                   "trigger that retrying does NOT clear (it failed six times a "
+                   "second apart, then succeeded first time after CloseProject), "
+                   "so do not assume a retry is the answer here either.",
         "recommended": "Treat a False return as advisory: re-list the track and "
                        "check whether the items are actually gone; if still "
                        "present, retry the identical call once before failing. "
