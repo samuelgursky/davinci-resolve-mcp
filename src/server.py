@@ -25564,11 +25564,26 @@ def _python_env_for_resolve() -> Dict[str, str]:
     return env
 
 
+# fusionscript's RemoteApp thread keeps dispatching packets from Resolve while
+# the interpreter tears down at exit, and can SIGSEGV *after* the script has
+# finished — turning a successful run into exit code -11 / success:false.
+# Run the script via runpy and hard-exit before teardown so the exit code is
+# truthful; on any exception the normal traceback + nonzero exit still happen.
+_PY_SCRIPT_EXIT_GUARD = (
+    "import os, runpy, sys\n"
+    "sys.argv = sys.argv[1:]\n"
+    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+    "sys.stdout.flush()\n"
+    "sys.stderr.flush()\n"
+    "os._exit(0)\n"
+)
+
+
 def _execute_python_script(path: str, args: List[str],
                             timeout: int) -> Dict[str, Any]:
     # Ensure Resolve is running so the script can connect.
     get_resolve()
-    cmd = [sys.executable, path] + [str(a) for a in args]
+    cmd = [sys.executable, "-c", _PY_SCRIPT_EXIT_GUARD, path] + [str(a) for a in args]
     try:
         result = safe_run(cmd, env=_python_env_for_resolve(),
                           capture_output=True, text=True, timeout=timeout)
