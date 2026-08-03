@@ -49,6 +49,16 @@ class GetItemsSelectorTest(unittest.TestCase):
         tl.GetItemListInTrack.assert_called_once_with("audio", 1)
         self.assertIn("items", out)
 
+    def test_get_items_in_track_serializes_items(self):
+        """Regression: the action used to hand each item to _ser, which has no
+        TimelineItem branch and fell through to str(obj) — callers got a list of
+        opaque object reprs, not item data."""
+        out, _ = _dispatch("get_items_in_track", {"track_type": "video", "index": 1}, [_item()])
+        self.assertEqual(
+            out["items"],
+            [{"name": "clip", "id": "ti-1", "start": 0, "end": 100, "duration": 100}],
+        )
+
     def test_missing_index_error_names_both_aliases(self):
         from tests._error_envelope_helpers import err_message
         out, _ = _dispatch("get_items_in_track", {"track_type": "audio"})

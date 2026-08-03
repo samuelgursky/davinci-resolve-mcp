@@ -40,6 +40,18 @@ headless-only failure and works headless; `ExportStills` was recorded the same
 way and fails in *both* modes (its documented cause is Gallery panel visibility,
 which no headless session and no panel-closed GUI session can satisfy).
 
+### Fixed
+
+- **`timeline(action="get_items_in_track")` returned object reprs, not items.**
+  The handler passed `GetItemListInTrack`'s result to `_ser`, which has no
+  TimelineItem branch and falls through to `str(obj)`, so callers got
+  `["<PyRemoteObject at 0x…>", …]` instead of clip data. The docstring's claim of
+  "full serialization of each item" was never true. The sibling `get_items`
+  takes the same params through the same `_track_selector` and calls the same API
+  method, so the two are now one handler and `get_items_in_track` is documented
+  as its alias — there was no richer per-item serializer to preserve. Thanks
+  [@billcarroll](https://github.com/billcarroll) (#105).
+
 ### Added
 
 - `resolve_control(action="runtime_mode")` — is Resolve up, and does it have a
