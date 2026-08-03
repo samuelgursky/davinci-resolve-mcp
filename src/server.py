@@ -25568,14 +25568,32 @@ def _python_env_for_resolve() -> Dict[str, str]:
 # the interpreter tears down at exit, and can SIGSEGV *after* the script has
 # finished — turning a successful run into exit code -11 / success:false.
 # Run the script via runpy and hard-exit before teardown so the exit code is
-# truthful; on any exception the normal traceback + nonzero exit still happen.
+# truthful. SystemExit must be caught here: uncaught, a plain sys.exit(0) at
+# the end of a script would take the normal teardown path and reopen the
+# segfault window. sys.path[0] is pointed at the script's directory to mimic
+# `python script.py` (under -c it points at the server's cwd, which both
+# breaks sibling imports and lets stray files there shadow real modules).
+# Cost of os._exit: atexit handlers never run and non-daemon threads are not
+# joined — documented in script_plugin's execute action.
 _PY_SCRIPT_EXIT_GUARD = (
-    "import os, runpy, sys\n"
+    "import os, runpy, sys, traceback\n"
     "sys.argv = sys.argv[1:]\n"
-    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+    "sys.path[0] = os.path.dirname(os.path.abspath(sys.argv[0]))\n"
+    "code = 0\n"
+    "try:\n"
+    "    runpy.run_path(sys.argv[0], run_name='__main__')\n"
+    "except SystemExit as e:\n"
+    "    if isinstance(e.code, int):\n"
+    "        code = e.code\n"
+    "    elif e.code is not None:\n"
+    "        print(e.code, file=sys.stderr)\n"
+    "        code = 1\n"
+    "except BaseException:\n"
+    "    traceback.print_exc()\n"
+    "    code = 1\n"
     "sys.stdout.flush()\n"
     "sys.stderr.flush()\n"
-    "os._exit(0)\n"
+    "os._exit(code)\n"
 )
 
 
@@ -26261,6 +26279,10 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         — args: list of CLI args for the Python subprocess (Python only).
         — timeout: seconds (default 120 for execute, 60 for run_inline).
         — Auto-launches Resolve if not running.
+        — Python scripts hard-exit after the script body (guards against
+          fusionscript's segfault-at-exit race), so atexit handlers do not
+          run and non-daemon threads are not joined. Do cleanup inline or
+          in try/finally, not in atexit.
       run_inline(source, language, timeout?) -> {success, stdout?, stderr?, result?}
         — Python: writes to temp file with `resolve`/`project`/`mp`/`timeline`
           pre-bound, runs as subprocess, captures stdout/stderr.

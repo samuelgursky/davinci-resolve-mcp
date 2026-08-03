@@ -791,6 +791,46 @@ class TestPythonScriptExitGuard(unittest.TestCase):
         self.assertEqual(r['exit_code'], 3)
         self.assertIn('hello', r['stdout'])
 
+    @unittest.skipUnless(os.name == 'posix', 'SIGSEGV via os.kill is POSIX-only')
+    def test_sys_exit_zero_plus_segfault_at_exit_still_succeeds(self):
+        # sys.exit(0) raises SystemExit; if the guard let it propagate, the
+        # interpreter would take the normal teardown path and the simulated
+        # fusionscript crash would flip the run to exit -11.
+        r = self._run(
+            "import atexit, os, signal, sys\n"
+            "atexit.register(lambda: os.kill(os.getpid(), signal.SIGSEGV))\n"
+            "print('work done')\n"
+            "sys.exit(0)\n"
+        )
+        self.assertTrue(r['success'], r)
+        self.assertEqual(r['exit_code'], 0)
+        self.assertIn('work done', r['stdout'])
+
+    def test_script_directory_is_on_sys_path_for_sibling_imports(self):
+        from src.server import _execute_python_script
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, 'helper.py'), 'w') as f:
+                f.write("VALUE = 'from-sibling'\n")
+            path = os.path.join(d, 'main.py')
+            with open(path, 'w') as f:
+                f.write("import helper\nprint(helper.VALUE)\n")
+            with patch('src.server.get_resolve', return_value=None):
+                r = _execute_python_script(path, [], timeout=30)
+        self.assertTrue(r['success'], r)
+        self.assertIn('from-sibling', r['stdout'])
+
+    def test_exception_gives_traceback_and_exit_1(self):
+        r = self._run("raise ValueError('boom')\n")
+        self.assertFalse(r['success'])
+        self.assertEqual(r['exit_code'], 1)
+        self.assertIn('ValueError: boom', r['stderr'])
+
+    def test_sys_exit_message_lands_on_stderr_with_exit_1(self):
+        r = self._run("import sys\nsys.exit('bad input')\n")
+        self.assertFalse(r['success'])
+        self.assertEqual(r['exit_code'], 1)
+        self.assertIn('bad input', r['stderr'])
+
 
 if __name__ == '__main__':
     unittest.main()
