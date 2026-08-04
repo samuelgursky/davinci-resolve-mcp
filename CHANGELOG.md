@@ -2,6 +2,69 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.76.0
+
+Three AAF conform-fidelity fixes found by placing a full 83-minute Avid turnover and
+cross-checking it against Resolve's own native import of the same file.
+
+### Fixed
+
+- **AAF transitions did not subtract from record advancement.** In the AAF Edit
+  Protocol a Transition does not occupy record time, it *overlaps* its neighbours:
+  `sequence length == sum(components) − sum(transitions)`. The walker annotated the
+  clip after a dissolve but never rewound the record position, so **every later event
+  on that track was late by the cumulative transition time** — silent, track-local,
+  and invisible on any timeline without a dissolve. On a real turnover a single
+  59-frame dissolve put 651 subsequent V1 events 59 frames past Resolve's native
+  import of the same AAF (probe 566/2586/2652 vs native 507/2527/2593); the fixed
+  probe reproduces the native positions exactly. The independent cross-check: each
+  layer's walked length used to overshoot its own DECLARED length by exactly that
+  layer's transition sum (V1 +59, V6 +77, dissolve-free layers +0) — with the
+  subtraction, walked equals declared on every layer. A leading transition clamps at
+  the sequence start rather than producing a negative record position.
+
+### Added
+
+- **Sequence start timecode.** `list_sequences` and `parse_interchange` now report
+  `startTimecode`, `startFrame`, `startTimecodeFps` and `startTimecodeDrop` per AAF
+  sequence. A conform that places events without it builds at Resolve's default
+  01:00:00:00 while the AAF starts at 00:59:50:00 — every clip ten seconds out, and
+  only visible against a linked picture reference. Avid writes one timecode slot *per
+  common rate* (a real turnover carried seven — 86160@24, 89750@25, 107592@30-drop,
+  107700@30, 215400@60, all naming the same instant), so the slot matching the
+  editorial edit rate is chosen and the rate the frame number is expressed in is always
+  reported. An AAF with no timecode slot emits explicit nulls, never a guessed start.
+- **Per-clip geometry** — the Avid transform parameters behind Resolve's "Use sizing
+  information" import option. Clips wrapped in `PaintResize_v2`, `SpatialAdapter` or
+  `FlipHoriz_2` carry a `geometry` list in application order (innermost first: 84 of
+  the fixture's clips nest a SpatialAdapter inside a PaintResize, so a single field
+  would have dropped a stage). Scale is emitted as a percent — proven, not assumed,
+  because 212 of 285 resize groups sit at exactly 100 — and the source/framing
+  rectangles yield the unit-free `reformatScaleX/Y` (0.744792 on the fixture: a 2.39:1
+  source letterboxed into a 16:9 framing). Parameters whose units the fixture does
+  *not* pin down — position, crop, and the absolute rectangle unit — pass through raw
+  under Avid's own names rather than being reinterpreted into a normalized field that
+  might ship an inversion, the lesson from `SpeedRatio` being stored as the inverse of
+  play rate. Animated parameters are named in `varying` and carry no single value.
+
+### Documentation
+
+- `api_truth`: **`TimelineItem.GetSourceStartFrame` reads one frame off on some
+  items** while `GetLeftOffset` is exact on the same items — so a conform that
+  verifies placement with `GetSourceStartFrame` reports phantom off-by-one drift on
+  correctly placed clips, and would hide a real one-frame error just as easily.
+  `docs/reference/api-limitations.md` regenerated.
+- The two timeline kernels no longer describe AAF as an honest refuse; it has parsed
+  via pyaaf2 since v2.73.x.
+
+### Validation
+
+- 2391 Python unit tests, 505 Node advanced tests (40 in the AAF suite, up from 26).
+- All release static checks and drift guards green.
+- Verified offline against a real 878-event multi-layer Avid picture turnover.
+- No Resolve scripting behavior changed — `aaf_probe.py` never touches the Resolve
+  API — so no live Resolve validation was required.
+
 ## What's New in v2.75.0
 
 The offline AAF reader now recovers retime ratios instead of only flagging them.
