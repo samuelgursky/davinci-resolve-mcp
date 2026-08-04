@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.74.0
+
+### Added
+
+- **`drp-format/set-framerate` — relabel a `.drp` timeline frame rate in place.**
+  `setTimelineFrameRate(drpInput, targetFps)` rewrites the timeline
+  `<FrameRate>` blob(s) to a new fps while leaving every clip's integer
+  Start/Duration/In/Out and every clip-level `<MediaFrameRate>` untouched — a
+  relabel, not a retime. Use it to fix a contaminated rate tag (e.g. an export
+  step that stamped 23.976 onto a 24.000 timeline whose frames are correct).
+  Offline-only by necessity: Resolve locks a timeline's frame rate once the
+  timeline exists, so an imported `.drp` can never be relabelled through
+  Resolve itself. `readTimelineFrameRates(drpInput)` reports the current
+  rate(s) without modifying anything. Both are exported from the `drp-format`
+  index; five node:test cases cover relabel, `MediaFrameRate` isolation,
+  idempotence, and input validation.
+
+### Fixed
+
+- Corrected a garbled doc comment in `drx-parameters/index.js`.
+
 ## What's New in v2.73.2
 
 Two honesty fixes in the conform path, both found by running a real 83-minute
