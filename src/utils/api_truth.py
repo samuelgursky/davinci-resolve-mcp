@@ -517,6 +517,24 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "missing",
     },
     {
+        "symbol": "TimelineItem.GetSourceStartFrame",
+        "object": "TimelineItem",
+        "signature": "() -> int",
+        "reality": "Reads back one frame off on some items. Measured while verifying a "
+                   "constructed timeline against the clipInfos it was built from: for "
+                   "4/4 items GetLeftOffset returned exactly the startFrame that was "
+                   "sent, while GetSourceStartFrame disagreed by 1 on some of the same "
+                   "items. The two are supposed to describe the same edit point, so a "
+                   "conform that verifies placement with GetSourceStartFrame reports "
+                   "phantom off-by-one drift on correctly placed clips — and would hide "
+                   "a real one-frame error just as easily.",
+        "recommended": "Verify source-side placement with GetLeftOffset, which is exact. "
+                       "Treat GetSourceStartFrame as approximate, and never diff it "
+                       "against a sent startFrame to decide whether a clip landed right.",
+        "tags": ["off-by-one", "unreliable-return", "timeline", "conform", "verify"],
+        "submit": "bug",
+    },
+    {
         "symbol": "Razor / blade / split a timeline item",
         "object": "Timeline / TimelineItem",
         "reality": "There is no method to split/cut/blade a clip at a given frame. "

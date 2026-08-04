@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 25 missing capabilities, 24 bugs / unreliable behaviors.
+**Totals:** 25 missing capabilities, 25 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -333,6 +333,14 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Returns None and pops a modal 'Save Current Project' dialog when the current unsaved/Untitled project blocks the switch. SaveProject() on an Untitled project re-triggers the same modal.
 - **Workaround / current handling:** CloseProject(current) to discard the untitled project without a prompt, then CreateProject; restore with LoadProject afterward.
 - **Tags:** project, modal, silent-failure
+
+### TimelineItem.GetSourceStartFrame
+
+- **Object:** `TimelineItem`
+- **Signature:** `() -> int`
+- **Behavior:** Reads back one frame off on some items. Measured while verifying a constructed timeline against the clipInfos it was built from: for 4/4 items GetLeftOffset returned exactly the startFrame that was sent, while GetSourceStartFrame disagreed by 1 on some of the same items. The two are supposed to describe the same edit point, so a conform that verifies placement with GetSourceStartFrame reports phantom off-by-one drift on correctly placed clips — and would hide a real one-frame error just as easily.
+- **Workaround / current handling:** Verify source-side placement with GetLeftOffset, which is exact. Treat GetSourceStartFrame as approximate, and never diff it against a sent startFrame to decide whether a clip landed right.
+- **Tags:** off-by-one, unreliable-return, timeline, conform, verify
 
 ### hasattr() / getattr() on Resolve API objects (attribute fabrication)
 

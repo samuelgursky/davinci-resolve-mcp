@@ -79,17 +79,55 @@ export function resolveAafPath(contentOrPath) {
 }
 
 /**
+ * Per-sequence summary WITHOUT its events — the picker row, plus the sequence-level facts
+ * a conform needs before it places anything.
+ *
+ * `startTimecode`/`startFrame` are carried deliberately: an AAF that starts at 00:59:50:00
+ * built against Resolve's default 01:00:00:00 start puts every clip ten seconds out, and
+ * the misalignment only shows up against a linked picture reference. They are null (not
+ * absent) when the AAF has no timecode slot — an explicit "no start timecode here" rather
+ * than a guess. `startFrame` is expressed at `startTimecodeFps`.
+ */
+function sequenceSummary(s) {
+  const out = {
+    id: String(s.id),
+    name: String(s.name),
+    eventCount: Number(s.eventCount || 0),
+    startTimecode: s.startTimecode ?? null,
+    startFrame: s.startFrame ?? null,
+    startTimecodeFps: s.startTimecodeFps ?? null,
+    startTimecodeDrop: s.startTimecodeDrop ?? null,
+  };
+  if (s.unhandled && Object.keys(s.unhandled).length) out.unhandled = s.unhandled;
+  return out;
+}
+
+/**
  * Parse an AAF into a FLAT normalized-event list (mirrors parseEDL/parseOTIO/parseXMEML output),
- * concatenating every top-level sequence. Use listAafSequences() when you need per-sequence split.
+ * concatenating every top-level sequence. Use listAafSequences() when you need per-sequence split,
+ * or parseAafDocument() when you also need the sequence-level start timecode.
  * @param {string} contentOrPath absolute .aaf path
  * @returns {Promise<Array>} normalized events
  */
 export async function parseAAF(contentOrPath) {
+  return (await parseAafDocument(contentOrPath)).events;
+}
+
+/**
+ * Parse an AAF into flat events PLUS the per-sequence summaries they came from.
+ *
+ * parseAAF() flattens every sequence into one event list, which drops the sequence-level
+ * start timecode with it — so a caller that needs to know where the timeline starts had
+ * to re-run the probe. This returns both from a single probe run.
+ * @param {string} contentOrPath absolute .aaf path
+ * @returns {Promise<{events: Array, sequences: Array}>}
+ */
+export async function parseAafDocument(contentOrPath) {
   const aafPath = resolveAafPath(contentOrPath);
   const { sequences } = await runProbe(aafPath);
   const events = [];
   for (const seq of sequences || []) for (const ev of seq.events || []) events.push(ev);
-  return events;
+  return { events, sequences: (sequences || []).map(sequenceSummary) };
 }
 
 /**
@@ -101,14 +139,10 @@ export async function parseAAF(contentOrPath) {
  * nothing. A NestedScope — Avid's multi-layer video stack — used to land in
  * exactly that hole: eventCount 0 alongside ok:true. Absent means clean.
  * @param {string} contentOrPath absolute .aaf path
- * @returns {Promise<Array<{id:string,name:string,eventCount:number,unhandled?:Object}>>}
+ * @returns {Promise<Array<{id:string,name:string,eventCount:number,startTimecode:?string,startFrame:?number,unhandled?:Object}>>}
  */
 export async function listAafSequences(contentOrPath) {
   const aafPath = resolveAafPath(contentOrPath);
   const { sequences } = await runProbe(aafPath);
-  return (sequences || []).map((s) => {
-    const out = { id: String(s.id), name: String(s.name), eventCount: Number(s.eventCount || 0) };
-    if (s.unhandled && Object.keys(s.unhandled).length) out.unhandled = s.unhandled;
-    return out;
-  });
+  return (sequences || []).map(sequenceSummary);
 }

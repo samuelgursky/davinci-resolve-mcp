@@ -101,7 +101,8 @@ files and the project DB.
   grades across a re-conform (pairs with the color kernel's `drx grade_transfer`).
 - **`offline_ref`** — offline-reference clips have **no scripting API** but live
   inside `.drp`/`.drt` as `<OfflineClip>` entries; patch them here.
-- **`editorial`** — `parse_interchange` (EDL/OTIO/XMEML; **AAF = honest refuse**),
+- **`editorial`** — `parse_interchange` (EDL/OTIO/XMEML natively; **AAF via pyaaf2**,
+  multi-layer Avid turnovers included — honest refuse only when pyaaf2 is absent),
   `turnover_changelist` (moved/retimed/replaced/new/gone with timing guards),
   `conform_manifest`, `marker_roundtrip`.
 - **`drt` / `project_db`** — timeline file authoring and DB patching.

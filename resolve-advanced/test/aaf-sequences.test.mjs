@@ -34,6 +34,10 @@ const OK_SEQS = {
       id: 'urn:mob:1',
       name: 'EP012 CONFORM',
       eventCount: 2,
+      startTimecode: '00:59:50:00',
+      startFrame: 86160,
+      startTimecodeFps: 24,
+      startTimecodeDrop: false,
       events: [
         { index: 1, track: 'V', source: 'A001', srcIn: 0, srcOut: 48, recIn: 0, recOut: 48, speed: 100, reverse: false, transition: null, fps: 24 },
         { index: 2, track: 'V', source: 'B002', srcIn: 0, srcOut: 24, recIn: 48, recOut: 72, speed: 100, reverse: false, transition: null, fps: 24 },
@@ -70,6 +74,36 @@ test('list_sequences aaf → per-sequence [{id,name,eventCount}] for the picker'
       ['EP012 BONUS', 0],
     ],
   );
+});
+
+test('the sequence START TIMECODE survives the bridge on both entry points', async () => {
+  // A conform that places events without it builds the timeline at Resolve's default
+  // 01:00:00:00 while the AAF starts at 00:59:50:00 — every clip ten seconds out, and
+  // only visible against a linked picture reference.
+  process.env.AAF_PROBE_PYTHON = STUB_OK;
+  try {
+    const list = await editorialTool.handler({ action: 'list_sequences', args: { path: FAKE_AAF } });
+    assert.deepEqual(
+      list.sequences.map((s) => [s.startTimecode, s.startFrame, s.startTimecodeFps, s.startTimecodeDrop]),
+      [
+        ['00:59:50:00', 86160, 24, false],
+        [null, null, null, null], // a sequence with no timecode slot says so explicitly
+      ],
+    );
+    // parse_interchange flattens events across sequences, which cannot express a
+    // per-sequence start — so it carries the summaries alongside.
+    const parsed = await editorialTool.handler({ action: 'parse_interchange', args: { format: 'aaf', content: FAKE_AAF } });
+    assert.equal(parsed.count, 2);
+    assert.deepEqual(
+      parsed.sequences.map((s) => [s.name, s.startTimecode, s.startFrame]),
+      [
+        ['EP012 CONFORM', '00:59:50:00', 86160],
+        ['EP012 BONUS', null, null],
+      ],
+    );
+  } finally {
+    delete process.env.AAF_PROBE_PYTHON;
+  }
 });
 
 test('AAF honest-refuses when pyaaf2 is unavailable (no fake parse)', async () => {
@@ -544,6 +578,366 @@ print(json.dumps(state))
       ['A002', 100, 1.0, true, 100, 180],
     ],
   );
+});
+
+// ── Transitions subtract from record advancement ──────────────────────────────
+// AAF Edit Protocol: a Transition OVERLAPS its neighbours rather than occupying record
+// time of its own, so sequence length == sum(components) - sum(transitions). The walker
+// annotated the following clip but never rewound `rec`, leaving every later event on
+// that track late by the CUMULATIVE transition time. On a real Avid turnover a single
+// 59-frame dissolve put 651 subsequent V1 events 59 frames past Resolve's own native
+// import of the same file — silent, track-local, invisible without a dissolve.
+
+test('aaf_probe: a transition pulls every LATER event earlier by its duration', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+seq = mk("Sequence", components=[
+    clip("A001", 100), mk("Transition", length=20), clip("A002", 50), clip("A003", 30),
+])
+state = new_state()
+walked = ap._walk_segment(seq, track="V", fps=24, rec=0, state=state, depth=0)
+print(json.dumps({"events": state["events"], "walked": walked}))
+`);
+  assert.deepEqual(
+    out.events.map((e) => [e.source, e.recIn, e.recOut]),
+    [
+      ['A001', 0, 100],
+      ['A002', 80, 130], // rewound by the 20f dissolve — it overlaps A001's tail
+      ['A003', 130, 160], // and every later cut inherits the shift
+    ],
+  );
+  // The declared-length cross-check: 100 + 50 + 30 - 20.
+  assert.equal(out.walked, 160, 'sequence length == sum(components) - sum(transitions)');
+  // The clip AFTER the transition is still the one annotated with it.
+  assert.deepEqual(out.events[1].transition, { type: 'dissolve', duration: 20 });
+  assert.equal(out.events[0].transition, null);
+  assert.equal(out.events[2].transition, null);
+});
+
+test('aaf_probe: transitions are PER-TRACK — a dissolve on one layer never moves another', { skip: PY ? false : 'python3 not available' }, () => {
+  // The measured failure mode was track-local: V1's dissolve shifted only V1, so a
+  // conform checked on any other track looked perfectly aligned.
+  const out = runWalker(`
+layers = [
+    mk("Sequence", components=[clip("A001", 100), mk("Transition", length=30), clip("A002", 100)]),
+    mk("Sequence", components=[clip("B001", 100), clip("B002", 100)]),
+    mk("Sequence", components=[clip("C001", 40), mk("Transition", length=10), clip("C002", 40), mk("Transition", length=5), clip("C003", 40)]),
+]
+state = new_state()
+ap._walk_slot(mk("NestedScope", length=200, slots=layers), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  assert.deepEqual(
+    out.events.map((e) => [e.track, e.source, e.recIn]),
+    [
+      ['V1', 'A001', 0],
+      ['V1', 'A002', 70], // shifted by V1's own 30f dissolve
+      ['V2', 'B001', 0],
+      ['V2', 'B002', 100], // untouched — no dissolve on this layer
+      ['V3', 'C001', 0],
+      ['V3', 'C002', 30], // -10
+      ['V3', 'C003', 65], // -10 -5, cumulative down the track
+    ],
+  );
+});
+
+test('aaf_probe: a transition at the head clamps instead of going negative', { skip: PY ? false : 'python3 not available' }, () => {
+  // A leading transition has no preceding material to overlap. Malformed, but a
+  // negative record position would be a worse lie than the file that produced it.
+  const out = runWalker(`
+seq = mk("Sequence", components=[mk("Transition", length=25), clip("A001", 50), clip("A002", 10)])
+state = new_state()
+walked = ap._walk_segment(seq, track="V", fps=24, rec=0, state=state, depth=0)
+print(json.dumps({"events": state["events"], "walked": walked}))
+`);
+  assert.deepEqual(
+    out.events.map((e) => [e.source, e.recIn, e.recOut]),
+    [
+      ['A001', 0, 50],
+      ['A002', 50, 60],
+    ],
+  );
+  assert.equal(out.walked, 60, 'the clamp does not let the rewind escape the sequence start');
+  assert.deepEqual(out.events[0].transition, { type: 'dissolve', duration: 25 });
+});
+
+test('aaf_probe: back-to-back clips are unaffected by the subtraction', { skip: PY ? false : 'python3 not available' }, () => {
+  // The regression guard in the other direction: a dissolve-free track must still lay
+  // components strictly end to end.
+  const out = runWalker(`
+seq = mk("Sequence", components=[clip("A001", 40), clip("A002", 60), mk("Filler", length=10), clip("A003", 25)])
+state = new_state()
+walked = ap._walk_segment(seq, track="V", fps=24, rec=0, state=state, depth=0)
+print(json.dumps({"events": state["events"], "walked": walked}))
+`);
+  assert.deepEqual(
+    out.events.map((e) => [e.source, e.recIn, e.recOut]),
+    [
+      ['A001', 0, 40],
+      ['A002', 40, 100],
+      ['A003', 110, 135],
+    ],
+  );
+  assert.equal(out.walked, 135);
+  assert.deepEqual(
+    out.events.map((e) => e.transition),
+    [null, null, null],
+  );
+});
+
+// ── Sequence start timecode ───────────────────────────────────────────────────
+// Avid writes one Timecode slot PER COMMON RATE, all naming the same wall-clock start
+// (a real turnover carried seven: 86160@24, 89750@25, 107592@30drop, 107700@30,
+// 215400@60 — every one of them 00:59:50:00). They agree on the string and disagree on
+// the frame number, so picking "the first one" hands back a frame count in a rate the
+// rest of the parse never uses.
+
+test('aaf_probe: the timecode slot matching the EDIT RATE wins, not the first one', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+def tc(start, fps, drop=False):
+    return mk("Timecode", start=start, fps=fps, drop=drop, media_kind="Timecode")
+def slot(seg, kind="Timecode"):
+    return mk("TimelineMobSlot", media_kind=kind, segment=seg)
+# Same wall-clock start (00:59:50:00) expressed at five different rates, with the
+# 25fps slot deliberately FIRST so "take the first" would pick the wrong frame count.
+slots = [slot(tc(89750, 25)), slot(tc(86160, 24)), slot(tc(107592, 30, True)),
+         slot(tc(107700, 30)), slot(tc(215400, 60)),
+         slot(mk("NestedScope", length=10, slots=[]), kind="Picture")]
+m = mk("CompositionMob", slots=slots)
+print(json.dumps({
+    "at24": ap._sequence_start_timecode(m, 23.976024),
+    "at25": ap._sequence_start_timecode(m, 25.0),
+    "at30": ap._sequence_start_timecode(m, 29.97),
+    "at60": ap._sequence_start_timecode(m, 59.94),
+    "no_rate_hint": ap._sequence_start_timecode(m, None),
+}))
+`);
+  // Every slot names the same instant; only the frame number and rate differ.
+  assert.deepEqual(out.at24, { startTimecode: '00:59:50:00', startFrame: 86160, startTimecodeFps: 24, startTimecodeDrop: false });
+  assert.deepEqual(out.at25, { startTimecode: '00:59:50:00', startFrame: 89750, startTimecodeFps: 25, startTimecodeDrop: false });
+  // 29.97 drop-frame renumbers, so the SAME instant is a different frame count and
+  // prints with a ';' separator.
+  assert.deepEqual(out.at30, { startTimecode: '00:59:50;00', startFrame: 107592, startTimecodeFps: 30, startTimecodeDrop: true });
+  assert.deepEqual(out.at60, { startTimecode: '00:59:50:00', startFrame: 215400, startTimecodeFps: 60, startTimecodeDrop: false });
+  // With no editorial rate to match, fall back to the first readable slot — and say
+  // which rate the frame number is in, so the mismatch cannot hide.
+  assert.deepEqual(out.no_rate_hint, { startTimecode: '00:59:50:00', startFrame: 89750, startTimecodeFps: 25, startTimecodeDrop: false });
+});
+
+test('aaf_probe: a timecode slot wrapped in a Pulldown is still found', { skip: PY ? false : 'python3 not available' }, () => {
+  // Avid wraps the rate-converted views in a Pulldown, and pyaaf2 exposes the wrapped
+  // segment as the InputSegment PROPERTY — not as an attribute.
+  const out = runWalker(`
+def tc(start, fps, drop=False):
+    return mk("Timecode", start=start, fps=fps, drop=drop, media_kind="Timecode")
+def pulldown_prop(inner):
+    p = mk("Pulldown", media_kind="Timecode")
+    type(p).__getitem__ = lambda self, k, _i=inner: mk("Prop", value=_i) if k == "InputSegment" else None
+    return p
+def pulldown_getvalue(inner):
+    p = mk("Pulldown", media_kind="Timecode")
+    p.getvalue = lambda k, _i=inner: _i if k == "InputSegment" else None
+    return p
+def slot(seg): return mk("TimelineMobSlot", media_kind="Timecode", segment=seg)
+print(json.dumps({
+    "prop": ap._sequence_start_timecode(mk("CompositionMob", slots=[slot(pulldown_prop(tc(86160, 24)))]), 24),
+    "getvalue": ap._sequence_start_timecode(mk("CompositionMob", slots=[slot(pulldown_getvalue(tc(86160, 24)))]), 24),
+    "in_sequence": ap._sequence_start_timecode(mk("CompositionMob", slots=[slot(mk("Sequence", components=[tc(86160, 24)]))]), 24),
+}))
+`);
+  for (const key of ['prop', 'getvalue', 'in_sequence']) {
+    assert.equal(out[key].startTimecode, '00:59:50:00', `${key} unwraps to the Timecode component`);
+    assert.equal(out[key].startFrame, 86160);
+  }
+});
+
+test('aaf_probe: an AAF with no timecode slot emits nulls, never a guessed 01:00:00:00', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+picture = mk("TimelineMobSlot", media_kind="Picture", segment=mk("NestedScope", length=10, slots=[]))
+# An unreadable Timecode (no usable start) must not become a fabricated zero either.
+broken = mk("TimelineMobSlot", media_kind="Timecode", segment=mk("Timecode", start=None, fps=24, drop=False))
+print(json.dumps({
+    "none": ap._sequence_start_timecode(mk("CompositionMob", slots=[picture]), 24),
+    "broken": ap._sequence_start_timecode(mk("CompositionMob", slots=[picture, broken]), 24),
+    "zero_is_real": ap._sequence_start_timecode(
+        mk("CompositionMob", slots=[mk("TimelineMobSlot", media_kind="Timecode", segment=mk("Timecode", start=0, fps=24, drop=False))]), 24),
+}))
+`);
+  const nulls = { startTimecode: null, startFrame: null, startTimecodeFps: null, startTimecodeDrop: null };
+  assert.deepEqual(out.none, nulls, 'no timecode slot → explicit nulls, not an omitted key');
+  assert.deepEqual(out.broken, nulls, 'an unreadable timecode is absent, not zero');
+  // A genuine 00:00:00:00 start is data, not a missing value — it must survive.
+  assert.deepEqual(out.zero_is_real, { startTimecode: '00:00:00:00', startFrame: 0, startTimecodeFps: 24, startTimecodeDrop: false });
+});
+
+test('aaf_probe: drop-frame timecode renumbers rather than rescaling', { skip: PY ? false : 'python3 not available' }, () => {
+  // Drop-frame skips two frame NUMBERS a minute (four at 60) except every tenth minute.
+  // It never drops a picture frame, so the same frame count means a later wall clock.
+  const out = runWalker(`
+cases = [(0, 30, True), (1799, 30, True), (1800, 30, True), (17982, 30, True), (107592, 30, True),
+         (107592, 30, False), (86160, 24, False), (0, 24, False), (215400, 60, False),
+         (215184, 60, True), (86400*24, 24, False)]
+print(json.dumps([[f, r, d, ap._frames_to_timecode(f, r, d)] for f, r, d in cases]))
+`);
+  assert.deepEqual(out, [
+    [0, 30, true, '00:00:00;00'],
+    [1799, 30, true, '00:00:59;29'], // minute 0 drops nothing — all 1800 labels are used
+    [1800, 30, true, '00:01:00;02'], // ...then ;00 and ;01 of minute 1 do not exist
+    [17982, 30, true, '00:10:00;00'], // the tenth minute drops nothing — back in step
+    [107592, 30, true, '00:59:50;00'],
+    [107592, 30, false, '00:59:46:12'], // same frames, non-drop → an earlier clock
+    [86160, 24, false, '00:59:50:00'],
+    [0, 24, false, '00:00:00:00'],
+    [215400, 60, false, '00:59:50:00'],
+    [215184, 60, true, '00:59:50;00'], // 60-family drops FOUR numbers a minute
+    [86400 * 24, 24, false, '00:00:00:00'], // 24h wraps rather than printing hour 24
+  ]);
+});
+
+// ── Per-clip geometry (Avid transform OperationGroups) ─────────────────────────
+// The data behind Resolve's "Use sizing information" import option. Census of a real
+// 878-event Avid turnover: PaintResize_v2 (285) carries scale/position/crop,
+// SpatialAdapter (90) carries the source and framing rectangles, FlipHoriz_2 (10) is a
+// flip. Scale is PROVEN to be a percent (212 of 285 groups sit at exactly 100 =
+// identity); the units of position/crop and the absolute rectangle unit are NOT proven,
+// so those pass through raw under Avid's own names — the SpeedRatio lesson, which was
+// stored as the INVERSE of play rate and would have shipped inverted as a "normalized"
+// field.
+
+test('aaf_probe: PaintResize scale is a percent; unproven units keep their Avid names', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+from fractions import Fraction
+og = opgroup("PaintResize_v2", 40, [mk("Sequence", components=[clip("A001", 40)])])
+og.parameters = [
+    mk("ConstantValue", name="AFX_SCALE_X_U", value=Fraction(110, 1)),
+    mk("ConstantValue", name="AFX_SCALE_Y_U", value=Fraction(110, 1)),
+    mk("ConstantValue", name="AFX_POS_X_U", value=Fraction(479999999, 10000000)),
+    mk("ConstantValue", name="AFX_POS_Y_U", value=Fraction(0, 1)),
+    mk("ConstantValue", name="AFX_CROP_LEFT_U", value=Fraction(360, 1)),
+    mk("ConstantValue", name="AFX_FIXED_ASPECT_U", value=True),
+    # Colour/blend parameters ride on the same group and must not leak into geometry.
+    mk("ConstantValue", name="AFX_BG_H_U", value=Fraction(0, 1)),
+    mk("ConstantValue", name="AvidParameterByteOrder", value=18761),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const [ev] = out.events;
+  assert.deepEqual(ev.geometry, [
+    {
+      effect: 'PaintResize_v2',
+      scalePercentX: 110.0,
+      scalePercentY: 110.0,
+      // Raw, under Avid's own parameter names — no invented "position in frame widths".
+      params: { AFX_CROP_LEFT_U: 360.0, AFX_FIXED_ASPECT_U: true, AFX_POS_X_U: 48.0, AFX_POS_Y_U: 0.0 },
+    },
+  ]);
+  assert.equal(ev.effect, undefined, 'a resize is not a retime — it must not set the retime fields');
+  assert.equal(ev.speed, 100);
+});
+
+test('aaf_probe: SpatialAdapter rectangles yield a unit-free reformat ratio', { skip: PY ? false : 'python3 not available' }, () => {
+  // The rectangles arrive as _NUM/_DEN rational pairs and share one (unknown) unit, so
+  // their RATIO is the only unit-free quantity — and it is the one that matters: a
+  // 2.39:1 source reformatted into a 16:9 framing is the letterbox the reference showed.
+  const out = runWalker(`
+og = opgroup("SpatialAdapter", 30, [mk("Sequence", components=[clip("A001", 30)])])
+og.parameters = [
+    mk("ConstantValue", name="AFX_SPATIAL_SOURCE_WID_NUM", value=5120),
+    mk("ConstantValue", name="AFX_SPATIAL_SOURCE_WID_DEN", value=3),
+    mk("ConstantValue", name="AFX_SPATIAL_SOURCE_HEI_NUM", value=715),
+    mk("ConstantValue", name="AFX_SPATIAL_SOURCE_HEI_DEN", value=1),
+    mk("ConstantValue", name="AFX_SPATIAL_FRAMING_WID_NUM", value=11440),
+    mk("ConstantValue", name="AFX_SPATIAL_FRAMING_WID_DEN", value=9),
+    mk("ConstantValue", name="AFX_SPATIAL_FRAMING_HEI_NUM", value=715),
+    mk("ConstantValue", name="AFX_SPATIAL_FRAMING_HEI_DEN", value=1),
+    mk("ConstantValue", name="AFX_SPATIAL_REFORMAT", value=-1),
+    mk("ConstantValue", name="AFX_SPATIAL_LOCK_ASPECT", value=True),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  assert.deepEqual(out.events[0].geometry, [
+    {
+      effect: 'SpatialAdapter',
+      rect: {
+        AFX_SPATIAL_FRAMING_HEI: 715.0,
+        AFX_SPATIAL_FRAMING_WID: 1271.111111,
+        AFX_SPATIAL_SOURCE_HEI: 715.0,
+        AFX_SPATIAL_SOURCE_WID: 1706.666667,
+      },
+      reformatScaleX: 0.744792, // 2.39:1 squeezed into a 16:9 framing
+      reformatScaleY: 1.0, // full height retained — i.e. pillarbox, not crop
+      params: { AFX_SPATIAL_LOCK_ASPECT: true, AFX_SPATIAL_REFORMAT: -1.0 },
+    },
+  ]);
+});
+
+test('aaf_probe: nested transform groups stack innermost-first, never collapse', { skip: PY ? false : 'python3 not available' }, () => {
+  // 84 of the fixture's clips are a SpatialAdapter wrapped in a PaintResize. A single
+  // `geometry` field would have silently dropped one stage of the transform.
+  const out = runWalker(`
+from fractions import Fraction
+inner = opgroup("SpatialAdapter", 30, [mk("Sequence", components=[clip("A001", 30)])])
+inner.parameters = [mk("ConstantValue", name="AFX_SCALE_X_U", value=Fraction(744, 10))]
+outer = opgroup("PaintResize_v2", 30, [mk("Sequence", components=[inner])])
+outer.parameters = [mk("ConstantValue", name="AFX_SCALE_X_U", value=Fraction(100, 1))]
+flip = opgroup("FlipHoriz_2", 20, [mk("Sequence", components=[clip("A002", 20)])])
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[outer, flip]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  assert.deepEqual(
+    out.events[0].geometry.map((g) => [g.effect, g.scalePercentX]),
+    [
+      ['SpatialAdapter', 74.4], // innermost applies first...
+      ['PaintResize_v2', 100.0], // ...and the walk annotates on the way back out
+    ],
+  );
+  assert.deepEqual(out.events[1].geometry, [{ effect: 'FlipHoriz_2', flipHorizontal: true }]);
+});
+
+test('aaf_probe: an ANIMATED transform is named, never flattened to one number', { skip: PY ? false : 'python3 not available' }, () => {
+  // Same rule as the variable-speed timewarp: a parameter with more than one distinct
+  // control-point value has no single honest value. A FLAT point list is a constant.
+  const out = runWalker(`
+og = opgroup("PaintResize_v2", 50, [mk("Sequence", components=[clip("A001", 50)])])
+og.parameters = [
+    mk("VaryingValue", name="AFX_POS_X_U", pointlist=[
+        mk("ControlPoint", value=-42.0), mk("ControlPoint", value=0.0)]),
+    mk("VaryingValue", name="AFX_SCALE_X_U", pointlist=[
+        mk("ControlPoint", value=110.0), mk("ControlPoint", value=110.0)]),
+    mk("VaryingValue", name="AFX_CROP_TOP_U", pointlist=[mk("ControlPoint", value=0.0)]),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const [geo] = out.events[0].geometry;
+  assert.deepEqual(geo.varying, ['AFX_POS_X_U'], 'the animated parameter is named');
+  assert.equal(geo.params?.AFX_POS_X_U, undefined, 'and carries no fabricated single value');
+  // A point list whose values are all equal IS a constant — same rule as the speed map.
+  assert.equal(geo.scalePercentX, 110.0);
+  assert.equal(geo.params.AFX_CROP_TOP_U, 0.0);
+});
+
+test('aaf_probe: non-transform effects carry no geometry at all', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+from fractions import Fraction
+cc = opgroup("RGBColorCorrect_2", 30, [mk("Sequence", components=[clip("A001", 30)])])
+cc.parameters = [mk("ConstantValue", name="AFX_SCALE_X_U", value=Fraction(110, 1))]
+retime = opgroup("Motion Control", 50, [mk("Sequence", components=[clip("A002", 100)])])
+retime.parameters = [mk("ConstantValue", name="SpeedRatio", value=Fraction(1, 2))]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[cc, retime]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  // A colour corrector is not a transform, even when it happens to carry a scale param.
+  assert.equal(out.events[0].geometry, undefined);
+  // And a retime keeps its own contract, untouched by the geometry pass.
+  assert.equal(out.events[1].geometry, undefined);
+  assert.equal(out.events[1].speed, 200);
 });
 
 test('the bridge passes multi-layer tracks + the unhandled report through unchanged', async () => {

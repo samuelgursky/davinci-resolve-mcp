@@ -11,6 +11,8 @@ trusting, so the Node server shells out to this helper, which uses the pure-Pyth
       "ok": true,
       "sequences": [
         { "id": <mob-id str>, "name": <str>, "eventCount": <int>,
+          "startTimecode": <"HH:MM:SS:FF"|null>, "startFrame": <int|null>,
+          "startTimecodeFps": <int|null>, "startTimecodeDrop": <bool|null>,
           "unhandled": { "<ComponentClass>": <int>, ... },
           "events": [ {normalized-event}, ... ] }
       ]
@@ -55,6 +57,11 @@ Segment model (Avid Media Composer picture turnovers):
   * Selector     — an enabled/disabled layer variant; the live one is `Selected`.
   * ScopeReference — "show the NestedScope layer beneath me": real record time, no
                    clip of this layer's own. Treated as a gap, like Filler.
+  * Transition   — a dissolve/wipe that OVERLAPS its neighbours. It does not occupy
+                   record time of its own; it CONSUMES it. See _walk_components.
+
+Retimes additionally carry `"effect"`/`"speedRatio"`; clips wrapped in an Avid transform
+effect carry `"geometry"` (see _geometry_fields).
 """
 
 import json
@@ -353,6 +360,148 @@ def _retime_fields(op_group):
     }
 
 
+# ── Per-clip geometry (Avid transform OperationGroups) ────────────────────────
+# The data behind Resolve's "Use sizing information" AAF import option. Census of a
+# real 878-event Avid picture turnover — the parameters that are actually present,
+# by operation:
+#
+#   PaintResize_v2 (285)  AFX_SCALE_X_U / AFX_SCALE_Y_U       percent, 100 = identity
+#                         AFX_POS_X_U / AFX_POS_Y_U           Avid position units
+#                         AFX_CROP_{LEFT,RIGHT,TOP,BOTTOM}_U  Avid crop units
+#                         AFX_FIXED_ASPECT_U                  bool (aspect locked)
+#   SpatialAdapter (90)   AFX_SPATIAL_SOURCE_{WID,HEI}_{NUM,DEN}   source rectangle
+#                         AFX_SPATIAL_FRAMING_{WID,HEI}_{NUM,DEN}  framing rectangle
+#                         AFX_SPATIAL_REFORMAT, AFX_SCALE_{X,Y}_U
+#   FlipHoriz_2 (10)      a horizontal flip; carries no geometry parameters of its own
+#
+# What the fixture PROVES, and is therefore emitted as a named field:
+#   * scale is a PERCENT — 212 of 285 PaintResize groups sit at exactly 100, i.e.
+#     identity, which pins the unit without needing a reference render.
+#   * the source and framing rectangles share ONE unit, so their RATIO is unit-free.
+#     `reformatScaleX/Y` is that ratio (a 5120/3 x 900 source into a 1200 x 900
+#     framing is the 2.39:1-into-16:9 letterbox the reference showed).
+#
+# What it does NOT prove, and is therefore passed through RAW under Avid's own
+# parameter names in `params` rather than reinterpreted into a normalized field:
+# the unit of POS_*/CROP_*, and the ABSOLUTE unit of the rectangles. This is the
+# SpeedRatio lesson applied ahead of time — that one was stored as the INVERSE of
+# play rate, and a normalized-looking field would have shipped the inversion. A
+# stored Avid number keeps its own name until its semantics are measured.
+
+_GEOMETRY_OPS = frozenset({"PaintResize_v2", "SpatialAdapter", "FlipHoriz_2"})
+
+_GEOMETRY_SCALARS = frozenset(
+    {
+        "AFX_POS_X_U",
+        "AFX_POS_Y_U",
+        "AFX_CROP_LEFT_U",
+        "AFX_CROP_RIGHT_U",
+        "AFX_CROP_TOP_U",
+        "AFX_CROP_BOTTOM_U",
+        "AFX_SPATIAL_REFORMAT",
+    }
+)
+_GEOMETRY_BOOLS = frozenset({"AFX_FIXED_ASPECT_U", "AFX_SPATIAL_LOCK_ASPECT"})
+# Rectangles arrive split across a <base>_NUM / <base>_DEN rational pair.
+_GEOMETRY_RECTS = frozenset(
+    {
+        "AFX_SPATIAL_SOURCE_WID",
+        "AFX_SPATIAL_SOURCE_HEI",
+        "AFX_SPATIAL_FRAMING_WID",
+        "AFX_SPATIAL_FRAMING_HEI",
+    }
+)
+
+
+def _param_number(param):
+    """A Parameter's ConstantValue as a float (AAFRational, int, bool all convert)."""
+    try:
+        return round(float(param.value), 6)
+    except Exception:
+        return None
+
+
+def _geometry_scalar(param):
+    """(value, is_varying) for one geometry parameter, or (None, False) if unreadable.
+
+    A VaryingValue whose control points all carry the SAME value is a constant — the
+    same rule the speed map uses. More than one distinct value is an animated
+    transform, and no single number for it would be honest.
+    """
+    if type(param).__name__ == "VaryingValue":
+        values = _pointlist_values(param)
+        if values is None:
+            return None, False
+        if len(set(values)) > 1:
+            return None, True
+        return (round(float(values[0]), 6) if values else None), False
+    return _param_number(param), False
+
+
+def _geometry_fields(op_group, op_name):
+    """Recovered geometry for one transform OperationGroup. See the census above."""
+    scale = {}
+    scalars = {}
+    bools = {}
+    rects = {}
+    varying = set()
+    for param in _op_parameters(op_group):
+        name = _param_name(param)
+        base, _, suffix = name.rpartition("_")
+        if suffix in ("NUM", "DEN") and base in _GEOMETRY_RECTS:
+            value = _param_number(param)
+            if value is not None:
+                rects.setdefault(base, {})[suffix] = value
+            continue
+        if name in ("AFX_SCALE_X_U", "AFX_SCALE_Y_U"):
+            value, is_varying = _geometry_scalar(param)
+            if is_varying:
+                varying.add(name)
+            elif value is not None:
+                scale[name] = value
+            continue
+        if name in _GEOMETRY_BOOLS:
+            value = _param_number(param)
+            if value is not None:
+                bools[name] = bool(value)
+            continue
+        if name in _GEOMETRY_SCALARS:
+            value, is_varying = _geometry_scalar(param)
+            if is_varying:
+                varying.add(name)
+            elif value is not None:
+                scalars[name] = value
+    geometry = {"effect": op_name}
+    if op_name == "FlipHoriz_2":
+        geometry["flipHorizontal"] = True
+    if "AFX_SCALE_X_U" in scale:
+        geometry["scalePercentX"] = scale["AFX_SCALE_X_U"]
+    if "AFX_SCALE_Y_U" in scale:
+        geometry["scalePercentY"] = scale["AFX_SCALE_Y_U"]
+    sizes = {}
+    for base, parts in rects.items():
+        num, den = parts.get("NUM"), parts.get("DEN")
+        if num is None or not den:
+            continue
+        sizes[base] = round(num / den, 6)
+    if sizes:
+        geometry["rect"] = dict(sorted(sizes.items()))
+        # The one unit-free quantity the rectangles yield: framing over source.
+        for axis, src, framing in (
+            ("X", "AFX_SPATIAL_SOURCE_WID", "AFX_SPATIAL_FRAMING_WID"),
+            ("Y", "AFX_SPATIAL_SOURCE_HEI", "AFX_SPATIAL_FRAMING_HEI"),
+        ):
+            if sizes.get(src) and sizes.get(framing) is not None:
+                geometry[f"reformatScale{axis}"] = round(sizes[framing] / sizes[src], 6)
+    if varying:
+        # An animated transform. Named, never reduced to one number.
+        geometry["varying"] = sorted(varying)
+    params = dict(sorted({**scalars, **bools}.items()))
+    if params:
+        geometry["params"] = params
+    return geometry
+
+
 def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
     """
     Emit normalized events for ONE segment placed at record position `rec`.
@@ -417,6 +566,15 @@ def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
         for inp in getattr(segment, "segments", None) or []:
             _walk_segment(inp, track=track, fps=fps, rec=rec, state=state, depth=depth + 1, transition=transition)
         op_name = _operation_name(segment)
+        if op_name in _GEOMETRY_OPS:
+            # A transform effect. Clips are commonly wrapped in MORE than one (a
+            # SpatialAdapter reformat inside a PaintResize, say), so geometry is a
+            # LIST in application order — innermost first, because this walk annotates
+            # on the way back out. Collapsing them to one field would silently drop a
+            # stage of the transform stack.
+            geometry = _geometry_fields(segment, op_name)
+            for ev in state["events"][before:]:
+                ev.setdefault("geometry", []).append(geometry)
         if op_name and ("speed" in op_name.lower() or "motion" in op_name.lower()):
             # A retime. Its ratio is recoverable from the group's PARAMETERS (see
             # _retime_fields): a constant ratio updates speed/speedRatio so
@@ -445,7 +603,25 @@ def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
 
 
 def _walk_components(sequence, *, track, fps, rec, state, depth, transition=None):
-    """Lay a Sequence's components end to end. Returns the record length consumed."""
+    """Lay a Sequence's components end to end. Returns the record length consumed.
+
+    Transitions SUBTRACT. This is the dual of the declared-length rule above, and it
+    is the AAF Edit Protocol's definition rather than a heuristic: a Transition is not
+    a component that occupies record time, it is an OVERLAP of the two components
+    around it, so
+
+        sequence length == sum(component lengths) - sum(transition lengths)
+
+    and the component after a transition starts `duration` frames EARLIER than the
+    previous one ended. Annotating the following clip (which this walker already did)
+    without rewinding `rec` left every later event on that track late by the CUMULATIVE
+    transition time — silent, track-local, and invisible on any timeline without a
+    dissolve. Measured on a real Avid turnover: V1's single 59-frame dissolve put every
+    subsequent V1 cut 59 frames past Resolve's own native import of the same file, and
+    each layer's walked length overshot its DECLARED length by exactly the sum of that
+    layer's transitions (V1 +59, V6 +77, every dissolve-free layer +0). The declared
+    length is the cross-check — with the subtraction, walked == declared on every layer.
+    """
     start = rec
     pending_transition = transition
     components = getattr(sequence, "components", None)
@@ -455,8 +631,13 @@ def _walk_components(sequence, *, track, fps, rec, state, depth, transition=None
         cls = type(comp).__name__
         try:
             if cls == "Transition":
-                # A transition overlaps its neighbours; it does not advance rec itself.
-                pending_transition = {"type": "dissolve", "duration": _length(comp)}
+                duration = _length(comp)
+                pending_transition = {"type": "dissolve", "duration": duration}
+                # Rewind: the next component overlaps the previous one by `duration`.
+                # Clamped at this sequence's own start — a leading transition has no
+                # preceding material to overlap, and a negative record position would
+                # be a worse lie than the malformed AAF that produced it.
+                rec = max(start, rec - duration)
                 continue
             rec += _walk_segment(
                 comp, track=track, fps=fps, rec=rec, state=state, depth=depth, transition=pending_transition
@@ -518,6 +699,147 @@ def _media_kind_to_track(slot):
     return "A" if _slot_media_kind(slot).startswith("sound") else "V"
 
 
+# ── Sequence start timecode ───────────────────────────────────────────────────
+# A composition does NOT have one timecode slot. Avid writes several — one per common
+# timecode rate — all naming the same wall-clock start. A real turnover carried seven:
+#
+#     start 86160 @24     start 89750 @25     start 107592 @30 drop
+#     start 107700 @30    start 215400 @60    (and duplicates)
+#
+# Every one of those is 00:59:50:00. They agree on the STRING and disagree on the
+# FRAME NUMBER, so "read the first timecode slot" hands back a frame count in a rate
+# the rest of the parse never uses — a 10%-off offset that looks plausible. Pick the
+# slot whose rate matches the EDITORIAL edit rate, and always report the rate the
+# frame number is expressed in so a mismatch can't hide.
+#
+# This mattered: a consumer built its conform timeline at Resolve's default
+# 01:00:00:00 while the AAF started at 00:59:50:00, mis-aligning the linked picture
+# reference by ten seconds until it was hand-fixed.
+
+_TIMECODE_KIND = "timecode"
+
+
+def _timecode_component(segment, depth=0):
+    """The Timecode component inside a timecode slot's segment, or None.
+
+    Avid wraps it in a Pulldown (the rate conversion that makes a 30-drop view of a
+    23.976 sequence), sometimes inside a Sequence, so the slot segment's own class
+    name is not enough to find it.
+    """
+    if segment is None or depth > 8:
+        return None
+    cls = type(segment).__name__
+    if cls == "Timecode":
+        return segment
+    children = []
+    if cls == "Sequence":
+        children = list(getattr(segment, "components", None) or [])
+    elif cls == "Pulldown":
+        # pyaaf2 exposes the wrapped segment as the InputSegment PROPERTY, not an
+        # attribute — same access pattern as Selector's `Selected`.
+        for getter in (
+            lambda s: s["InputSegment"].value,
+            lambda s: s.getvalue("InputSegment"),
+            lambda s: getattr(s, "input_segment", None),
+        ):
+            try:
+                inner = getter(segment)
+            except Exception:
+                inner = None
+            if inner is not None:
+                children = [inner]
+                break
+    for child in children:
+        found = _timecode_component(child, depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
+def _frames_to_timecode(frames, rate, drop):
+    """SMPTE timecode string for a frame count at an INTEGER timecode rate.
+
+    Drop-frame (`;` separator) skips two frame NUMBERS — four at the 60-family rate —
+    at the top of every minute except every tenth. It renumbers; it never drops a
+    picture frame, which is why the conversion is a renumbering pass and not a
+    rescaling of `frames`.
+    """
+    try:
+        frames = int(frames)
+        rate = int(round(float(rate)))
+    except Exception:
+        return None
+    if rate <= 0 or frames < 0:
+        return None
+    sep = ":"
+    if drop and rate % 30 == 0:
+        dropped = 2 * (rate // 30)
+        per_10min = rate * 600 - dropped * 9
+        per_min = rate * 60 - dropped
+        tens, rem = divmod(frames, per_10min)
+        frames += dropped * 9 * tens
+        if rem > dropped:
+            frames += dropped * ((rem - dropped) // per_min)
+        sep = ";"
+    total_seconds, ff = divmod(frames, rate)
+    hh, rem_seconds = divmod(total_seconds, 3600)
+    mm, ss = divmod(rem_seconds, 60)
+    return f"{hh % 24:02d}:{mm:02d}:{ss:02d}{sep}{ff:02d}"
+
+
+# Absent-timecode sequences report these as null rather than omitting them: an explicit
+# null is a readable "this AAF carries no start timecode", where a missing key is
+# indistinguishable from an older probe that never emitted one.
+_NO_START_TIMECODE = {
+    "startTimecode": None,
+    "startFrame": None,
+    "startTimecodeFps": None,
+    "startTimecodeDrop": None,
+}
+
+
+def _sequence_start_timecode(mob, edit_fps):
+    """Start-timecode fields for a composition mob. Never guesses — see _NO_START_TIMECODE.
+
+    `startFrame` is expressed at `startTimecodeFps`, which is the rate of the slot we
+    picked; it equals the editorial edit rate whenever a matching slot exists.
+    """
+    candidates = []
+    for slot in getattr(mob, "slots", []) or []:
+        if _slot_media_kind(slot) != _TIMECODE_KIND:
+            continue
+        tc = _timecode_component(getattr(slot, "segment", None))
+        if tc is None:
+            continue
+        try:
+            start = int(getattr(tc, "start", None))
+            rate = int(round(float(getattr(tc, "fps", 0) or 0)))
+        except Exception:
+            continue
+        if rate <= 0 or start < 0:
+            continue
+        try:
+            drop = bool(getattr(tc, "drop", False))
+        except Exception:
+            drop = False
+        candidates.append((start, rate, drop))
+    if not candidates:
+        return dict(_NO_START_TIMECODE)
+    wanted = int(round(edit_fps)) if edit_fps else None
+    chosen = None
+    if wanted:
+        chosen = next((c for c in candidates if c[1] == wanted), None)
+    if chosen is None:
+        chosen = candidates[0]
+    start, rate, drop = chosen
+    return {
+        "startTimecode": _frames_to_timecode(start, rate, drop),
+        "startFrame": start,
+        "startTimecodeFps": rate,
+        "startTimecodeDrop": drop,
+    }
+
+
 def probe(path):
     import aaf2
 
@@ -542,6 +864,7 @@ def probe(path):
                 name = None
             # `idx` is monotonic across the WHOLE mob, every slot and every nested layer.
             state = {"idx": 1, "events": [], "unhandled": {}}
+            edit_fps = None
             for slot in getattr(mob, "slots", []) or []:
                 seg = getattr(slot, "segment", None)
                 if seg is None:
@@ -550,18 +873,17 @@ def probe(path):
                 # metadata/sound master) — see _NON_EDITORIAL_KINDS.
                 if not _is_editorial_slot(slot):
                     continue
-                _walk_slot(
-                    seg,
-                    prefix=_media_kind_to_track(slot),
-                    fps=_fps_from_edit_rate(getattr(slot, "edit_rate", None)),
-                    state=state,
-                )
+                fps = _fps_from_edit_rate(getattr(slot, "edit_rate", None))
+                if edit_fps is None:
+                    edit_fps = fps  # picks the timecode slot to trust — see above
+                _walk_slot(seg, prefix=_media_kind_to_track(slot), fps=fps, state=state)
             events = state["events"]
             sequences.append(
                 {
                     "id": mob_id or (str(name) if name else f"seq{len(sequences) + 1}"),
                     "name": str(name) if name else f"Sequence {len(sequences) + 1}",
                     "eventCount": len(events),
+                    **_sequence_start_timecode(mob, edit_fps),
                     # Component classes we could not model, by name+count. Empty {} means
                     # a structurally complete read; non-empty means events are INCOMPLETE.
                     "unhandled": dict(sorted(state["unhandled"].items())),

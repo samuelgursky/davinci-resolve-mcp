@@ -5,6 +5,7 @@
  * Actions:
  *   parse_interchange     — EDL / OTIO / XMEML / AAF (pyaaf2) / PRPROJ (gunzip+XML) → normalized events
  *   list_sequences        — ONE picker entry point across xml/edl/otio/drt/drp/aaf/prproj → [{id,name,eventCount}]
+ *                           (AAF rows also carry startTimecode/startFrame — see aaf.mjs sequenceSummary)
  *   convert_to_interchange— events (or a parsed source) → OTIO/EDL/DRT Resolve CAN import (the .prproj bridge)
  *   turnover_changelist   — diff old vs new events → moved/retimed/replaced/new/gone (+timing flags)
  *   conform_manifest      — per-event assert: source resolved, handles, retime, reverse, TC-base
@@ -13,7 +14,7 @@
 import fs from 'node:fs/promises';
 import { z } from 'zod';
 import { parseInterchange, diffChangelist, timingGuards, conformManifest, markerRoundtrip } from '../editorial.mjs';
-import { parseAAF } from '../aaf.mjs';
+import { parseAAF, parseAafDocument } from '../aaf.mjs';
 import { parsePrproj, parsePrprojDoc } from '../prproj.mjs';
 import { listSequences, detectFormat } from '../sequences.mjs';
 import { authorInterchange } from '../author-interchange.mjs';
@@ -81,14 +82,17 @@ const markerSchema = z.object({
 export const editorialTool = {
   name: 'editorial',
   description:
-    'Editorial integrity (Cluster E) — turnover interchange → normalized events → changelist + conform manifest with TIMING silent-lie guards (flattened retime / dropped J/L-cut audio / framerate-pulldown slip / reverse dropped / transition-handle starvation → flag, skip-not-fake). Report-only (gate: review). Actions: parse_interchange (EDL/OTIO/XMEML natively + AAF via pyaaf2 + PRPROJ via gunzip+XML → normalized events; for AAF/PRPROJ pass the file PATH as content), list_sequences (ONE offline picker entry point across xml/edl/otio/drt/drp/aaf/prproj → [{id,name,eventCount}]), convert_to_interchange (author OTIO/EDL/DRT Resolve CAN import from events or a parsed source — the .prproj→Resolve conform bridge, no Premiere needed; editorial timing/transitions/speed survive, per-clip effects/color do not), turnover_changelist (diff old vs new → moved/retimed/replaced/new/gone + timing flags), conform_manifest (per-event assert: source resolved/handles/retime/reverse/TC-base), marker_roundtrip (markers with provenance tags). Offline (AAF needs pyaaf2; live AAF/DRP import is on the Python davinci-resolve MCP).',
+    'Editorial integrity (Cluster E) — turnover interchange → normalized events → changelist + conform manifest with TIMING silent-lie guards (flattened retime / dropped J/L-cut audio / framerate-pulldown slip / reverse dropped / transition-handle starvation → flag, skip-not-fake). Report-only (gate: review). Actions: parse_interchange (EDL/OTIO/XMEML natively + AAF via pyaaf2 + PRPROJ via gunzip+XML → normalized events; for AAF/PRPROJ pass the file PATH as content; AAF also returns per-sequence startTimecode/startFrame — build the timeline at THAT start, not the Resolve 01:00:00:00 default — and per-clip `geometry` for Avid transform effects), list_sequences (ONE offline picker entry point across xml/edl/otio/drt/drp/aaf/prproj → [{id,name,eventCount}], plus startTimecode/startFrame for AAF), convert_to_interchange (author OTIO/EDL/DRT Resolve CAN import from events or a parsed source — the .prproj→Resolve conform bridge, no Premiere needed; editorial timing/transitions/speed survive, per-clip effects/color do not), turnover_changelist (diff old vs new → moved/retimed/replaced/new/gone + timing flags), conform_manifest (per-event assert: source resolved/handles/retime/reverse/TC-base), marker_roundtrip (markers with provenance tags). Offline (AAF needs pyaaf2; live AAF/DRP import is on the Python davinci-resolve MCP).',
   async handler({ action, args }) {
     if (action === 'parse_interchange') {
       const p = parseSchema.parse(args);
       // Binary formats parse out-of-band from a PATH: AAF via pyaaf2, .prproj via gunzip+XML.
       if (p.format === 'aaf') {
-        const events = await parseAAF(p.content);
-        return { format: 'aaf', count: events.length, events };
+        // `sequences` carries the per-sequence start timecode, which the flattened event
+        // list cannot express — a conform that places events without it lands the whole
+        // timeline at the wrong start.
+        const { events, sequences } = await parseAafDocument(p.content);
+        return { format: 'aaf', count: events.length, events, sequences };
       }
       if (p.format === 'prproj') {
         const doc = parsePrprojDoc(p.content);
