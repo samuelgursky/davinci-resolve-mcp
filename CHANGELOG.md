@@ -2,6 +2,38 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.73.2
+
+Two honesty fixes in the conform path, both found by running a real 83-minute
+Avid AAF turnover end to end. Neither adds tool surface; `detect_missing_media`
+gains two additive response fields.
+
+### Fixed
+
+- **`detect_missing_media` counted an unknown item as a present one.** A timeline
+  item with no media pool item has no file path and no offline marker, so it fell
+  through to `present` — absence of information reported as presence. An AAF
+  imported with `importSourceClips=false` yields 882 such items, and the probe
+  answered `present_count: 882, missing_count: 0` while every one of them returned
+  `None` from `GetMediaPoolItem()`. The payload contradicted itself: the diagnosis
+  already said `unique_media_pool_item_count: 0`.
+
+  Those items now report under `unlinked` / `unlinked_count` and never inflate
+  `present_count`. They are deliberately **not** folded into `missing`: those rows
+  drive relink plans keyed on `media_pool_item_id`, and there is no pool item here
+  to relink. When a timeline is entirely unlinked the diagnosis says so, instead of
+  "No offline media detected" — technically true and completely misleading.
+
+- **The "Resolve created no timeline" remediation named the wrong fix.** It advised
+  converting the file to FCP7 XML / FCPXML. The far more common cause is that
+  `importSourceClips` defaults to `True`, so Resolve tries to pull in the sequence's
+  source clips and fails the entire import when those paths do not resolve — the
+  normal state of a turnover, whose paths belong to the offline editor.
+  `import_source_clips=false` lands the timeline offline and now leads the
+  remediation. Note `sourceClipsPath` does not rescue it: Resolve matches source
+  clips by the filenames recorded in the sequence, so an AAF referencing Avid MXF
+  finds nothing in a folder of differently-named finishing media.
+
 ## What's New in v2.73.1
 
 Packaging fix. The npm package shipped the AAF reader's Node half without its
