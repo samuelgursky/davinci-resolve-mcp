@@ -19,6 +19,16 @@ trusting, so the Node server shells out to this helper, which uses the pure-Pyth
 Normalized event shape mirrors resolve-advanced/server/editorial.mjs `evt()`:
     { index, track, source, srcIn, srcOut, recIn, recOut, speed, reverse, transition, fps }
 
+Retime (motion-effect) events additionally carry `"effect"` and, when the ratio is
+recoverable from the OperationGroup's parameters (see _retime_fields):
+  * constant ratio  → `"speedRatio"`: play-rate float (1.75 = 175%), `"speed"`:
+                      round(playRate*100), `"reverse"`: true for backwards play.
+  * variable speed  → `"speedVarying": true` and speed stays 100 — a timewarp has
+                      no single honest number, so none is fabricated.
+  * unrecoverable   → the flag alone, speed stays 100 (unchanged old contract).
+For retimes, srcIn/srcOut are the SOURCE-side range while recIn/recOut span the
+OperationGroup's DECLARED (record) length — they differ by the ratio.
+
 Honest-refuse discipline (no fake parses):
   * exit 3  → pyaaf2 not installed        (stderr: AAF_PROBE_NO_PYAAF2)
   * exit 4  → file unreadable / not an AAF (stderr: AAF_PROBE_UNREADABLE: <detail>)
@@ -40,6 +50,8 @@ Segment model (Avid Media Composer picture turnovers):
   * Sequence     — ordered `.components`, laid end to end.
   * OperationGroup — effect wrapper. Its `.segments` are the effect INPUTS, and the
                    primary input is usually a nested Sequence (not a bare SourceClip).
+                   Its `.parameters` carry the retime ratio for motion effects, and
+                   its own declared length is the RECORD duration of the effect.
   * Selector     — an enabled/disabled layer variant; the live one is `Selected`.
   * ScopeReference — "show the NestedScope layer beneath me": real record time, no
                    clip of this layer's own. Treated as a gap, like Filler.
@@ -224,6 +236,123 @@ def _operation_name(comp):
         return ""
 
 
+# ── Retime (Motion Control) parameter recovery ─────────────────────────────────
+# Avid stores a retime's ratio on the OperationGroup's PARAMETERS. Verified against
+# real Media Composer turnovers by cross-checking the inner SourceClip length vs the
+# group's declared record length AND the PARAM_SPEED_MAP_U control-point values:
+#   * "SpeedRatio" (AAF Edit Protocol ParameterDef, a ConstantValue rational) is the
+#     RECORD/SOURCE length ratio — i.e. the INVERSE of the play rate. A 175% fast
+#     motion is stored as 4/7 (100 record frames consume 175 source frames); reverse
+#     play is a NEGATIVE rational (-1/1 = 100% backwards). Mixed-rate pulldown
+#     wrappers appear as 1000/1001.
+#   * "PARAM_SPEED_MAP_U" (Avid, a VaryingValue) has control points whose VALUES are
+#     play-rate scalars directly (1.75 = 175%, negative = reverse). More than one
+#     distinct value means the speed VARIES across the clip.
+#   * "PARAM_SPEED_RATIO_U" (Avid, a ConstantValue) belongs to the same *_U family
+#     as the speed map, so its value is a play-rate scalar, not a SpeedRatio.
+
+# The AAF Edit Protocol parameter-definition id for SpeedRatio, so a file whose
+# dictionary lost the human name still resolves.
+_SPEED_RATIO_AUID = "72559a80-24d7-11d3-8a50-0050040ef7d2"
+
+
+def _op_parameters(op_group):
+    """An OperationGroup's Parameter objects; [] when absent or unreadable."""
+    try:
+        prop = getattr(op_group, "parameters", None)
+        if prop is None:
+            return []
+        value = getattr(prop, "value", None)
+        return list(value if value is not None else prop)
+    except Exception:
+        return []
+
+
+def _param_name(param):
+    try:
+        return str(param.name or "")
+    except Exception:
+        return ""
+
+
+def _param_is(param, name, auid=None):
+    if _param_name(param) == name:
+        return True
+    if auid:
+        try:
+            return str(param.auid).lower() == auid
+        except Exception:
+            return False
+    return False
+
+
+def _pointlist_values(varying):
+    """Control-point VALUES of a VaryingValue's point list, or None if unreadable."""
+    points = getattr(varying, "pointlist", None)
+    if points is None:
+        return None
+    inner = getattr(points, "value", None)
+    if inner is not None:
+        points = inner
+    try:
+        return [float(p.value) for p in points]
+    except Exception:
+        return None
+
+
+def _retime_fields(op_group):
+    """Extra event fields recovered from a retime OperationGroup's parameters.
+
+    Returns one of:
+      {"speedRatio": <play-rate float>, "speed": <int %>, "reverse": <bool>}
+      {"speedVarying": True}  — a variable-speed timewarp; no single honest number
+      {}                      — nothing recoverable (flag-only, speed stays 100)
+    """
+    play = None
+    speed_map = None
+    for param in _op_parameters(op_group):
+        cls = type(param).__name__
+        if cls == "VaryingValue":
+            if _param_name(param) == "PARAM_SPEED_MAP_U":
+                speed_map = param
+            continue
+        if cls != "ConstantValue":
+            continue
+        if _param_is(param, "SpeedRatio", _SPEED_RATIO_AUID):
+            try:
+                value = param.value
+                num = int(value.numerator)
+                den = int(value.denominator)
+            except Exception:
+                continue
+            if num:
+                play = den / num  # stored record/source → play rate is the inverse
+        elif _param_name(param) == "PARAM_SPEED_RATIO_U" and play is None:
+            try:
+                value = float(param.value)
+            except Exception:
+                continue
+            if value:
+                play = value  # *_U family stores the play rate directly
+    if speed_map is not None:
+        values = _pointlist_values(speed_map)
+        if values is None:
+            # A speed map we cannot read: we can neither call the speed constant
+            # nor prove it varies — recover nothing rather than guess.
+            return {}
+        if len(set(values)) > 1:
+            return {"speedVarying": True}
+        if play is None and values and values[0]:
+            play = values[0]  # a flat map's single value IS the constant play rate
+    if not play:
+        return {}
+    return {
+        "speedRatio": round(abs(play), 6),
+        "speed": int(round(abs(play) * 100)),
+        "reverse": play < 0,
+    }
+
+
 def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
     """
     Emit normalized events for ONE segment placed at record position `rec`.
@@ -289,10 +418,24 @@ def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
             _walk_segment(inp, track=track, fps=fps, rec=rec, state=state, depth=depth + 1, transition=transition)
         op_name = _operation_name(segment)
         if op_name and ("speed" in op_name.lower() or "motion" in op_name.lower()):
-            # We can detect that a retime is present but not reliably its ratio
-            # offline; flag it honestly rather than fake a speed number.
+            # A retime. Its ratio is recoverable from the group's PARAMETERS (see
+            # _retime_fields): a constant ratio updates speed/speedRatio so
+            # consumers reading only `speed` are no longer told 100; a variable
+            # timewarp is reported as speedVarying: true; an unreadable one keeps
+            # the old flag-only contract. A number is never fabricated.
+            extra = _retime_fields(segment)
             for ev in state["events"][before:]:
                 ev["effect"] = op_name
+                ev.update(extra)
+                # The group's DECLARED length is the RECORD duration; the inner
+                # SourceClip's length is the SOURCE-side range — under a retime
+                # they differ by the ratio, so an event whose recOut was advanced
+                # by the source length inflates (fast motion) or undershoots
+                # (slow motion) its real record span. The container declared-
+                # length rule (this file's convention for rec advancement)
+                # applies to the events too.
+                if declared > 0:
+                    ev["recOut"] = max(ev["recIn"], rec + declared)
         return declared
 
     # Unknown component — advance by its declared length, don't fake an event, and

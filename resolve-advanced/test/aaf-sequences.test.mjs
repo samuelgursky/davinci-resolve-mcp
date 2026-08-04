@@ -421,6 +421,131 @@ print(json.dumps(state))
   assert.equal(out.events[0].source, 'UNKNOWN');
 });
 
+// ── Motion Control retime ratio recovery (OperationGroup parameters) ───────────
+// Avid stores the retime ratio on the OperationGroup's PARAMETERS. "SpeedRatio"
+// (AAF Edit Protocol) is a rational RECORD/SOURCE length ratio — the INVERSE of the
+// play rate (a stored 1/2 = 100 record frames consume 200 source frames = 200%
+// fast motion; negative = reverse). Avid's PARAM_*_U parameters store play-rate
+// scalars directly. Verified against real Media Composer turnovers by cross-checking
+// source-vs-record lengths and PARAM_SPEED_MAP_U control points.
+
+test('aaf_probe: Motion Control constant SpeedRatio → recovered play rate + honest record span', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+from fractions import Fraction
+# 200% fast motion: 100 source frames render into 50 record frames → stored 1/2.
+fast = opgroup("Motion Control", 50, [mk("Sequence", components=[clip("A001", 100)])])
+fast.parameters = [mk("ConstantValue", name="SpeedRatio", value=Fraction(1, 2))]
+# 100% reverse: stored -1/1. Source and record spans are equal.
+rev = opgroup("Motion Control", 40, [mk("Sequence", components=[clip("A002", 40)])])
+rev.parameters = [mk("ConstantValue", name="SpeedRatio", value=Fraction(-1, 1))]
+seq = mk("Sequence", components=[fast, rev, clip("B001", 25)])
+state = new_state()
+ap._walk_slot(seq, prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  assert.deepEqual(
+    out.events.map((e) => [e.source, e.srcIn, e.srcOut, e.recIn, e.recOut, e.speed, e.speedRatio, e.reverse]),
+    [
+      // srcIn/srcOut keep the SOURCE-side range; recOut spans the group's RECORD length.
+      ['A001', 0, 100, 0, 50, 200, 2.0, false],
+      ['A002', 0, 40, 50, 90, 100, 1.0, true],
+      ['B001', 0, 25, 90, 115, 100, undefined, false],
+    ],
+  );
+  assert.equal(out.events[0].effect, 'Motion Control');
+  assert.equal(out.events[2].effect, undefined);
+  assert.deepEqual(out.unhandled, {});
+});
+
+test('aaf_probe: variable-speed timewarp → speedVarying, never a fabricated number', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+from fractions import Fraction
+og = opgroup("Motion Control", 193, [mk("Sequence", components=[clip("A001", 181)])])
+og.parameters = [
+    # Even with a constant SpeedRatio present, a speed map with more than one
+    # distinct value proves the speed VARIES — the map wins and no single ratio
+    # is reported.
+    mk("ConstantValue", name="SpeedRatio", value=Fraction(800, 1001)),
+    mk("VaryingValue", name="PARAM_SPEED_MAP_U", pointlist=[
+        mk("ControlPoint", time=0.0, value=0.5),
+        mk("ControlPoint", time=90.0, value=1.0),
+        mk("ControlPoint", time=193.0, value=1.0),
+    ]),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const [ev] = out.events;
+  assert.equal(ev.speedVarying, true);
+  assert.equal(ev.speedRatio, undefined, 'a varying retime must not carry a single fabricated ratio');
+  assert.equal(ev.speed, 100, 'speed stays at the honest default for a varying retime');
+  assert.equal(ev.effect, 'Motion Control');
+  assert.deepEqual([ev.srcIn, ev.srcOut, ev.recIn, ev.recOut], [0, 181, 0, 193]);
+});
+
+test('aaf_probe: retime with no readable parameters → unchanged flag-only contract', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+og = opgroup("Motion Control", 60, [mk("Sequence", components=[clip("A002", 60)])])
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const [ev] = out.events;
+  assert.equal(ev.effect, 'Motion Control');
+  assert.equal(ev.speed, 100);
+  assert.equal(ev.speedRatio, undefined, 'no parameters → no ratio is invented');
+  assert.equal(ev.speedVarying, undefined, 'absence of evidence is not evidence of varying');
+  assert.deepEqual([ev.recIn, ev.recOut], [0, 60]);
+});
+
+test('aaf_probe: OperationGroup declared length drives the record span (slow motion extends it)', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+from fractions import Fraction
+# 50% slow motion: 50 source frames fill 100 record frames → stored 2/1.
+slow = opgroup("Motion Control", 100, [mk("Sequence", components=[clip("A001", 50)])])
+slow.parameters = [mk("ConstantValue", name="SpeedRatio", value=Fraction(2, 1))]
+seq = mk("Sequence", components=[slow, clip("B001", 10)])
+state = new_state()
+ap._walk_slot(seq, prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  assert.deepEqual(
+    out.events.map((e) => [e.source, e.srcOut, e.recIn, e.recOut, e.speed]),
+    [
+      // Before the fix recOut advanced by the SOURCE length (50), so slow motion
+      // undershot and fast motion inflated the record span — every measured
+      // record-overlap on a real turnover involved a Motion Control event.
+      ['A001', 50, 0, 100, 50],
+      ['B001', 10, 100, 110, 100],
+    ],
+  );
+  assert.equal(out.events[0].speedRatio, 0.5);
+});
+
+test('aaf_probe: Avid *_U parameter variants store play rates directly', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+# PARAM_SPEED_RATIO_U is a play-rate scalar (same family as the speed map), NOT a
+# record/source rational — it must not be inverted.
+a = opgroup("Motion Control", 100, [mk("Sequence", components=[clip("A001", 175)])])
+a.parameters = [mk("ConstantValue", name="PARAM_SPEED_RATIO_U", value=1.75)]
+# A flat single-point speed map is a constant retime; its value is the play rate.
+b = opgroup("Motion Control", 80, [mk("Sequence", components=[clip("A002", 80)])])
+b.parameters = [mk("VaryingValue", name="PARAM_SPEED_MAP_U", pointlist=[mk("ControlPoint", time=0.0, value=-1.0)])]
+seq = mk("Sequence", components=[a, b])
+state = new_state()
+ap._walk_slot(seq, prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  assert.deepEqual(
+    out.events.map((e) => [e.source, e.speed, e.speedRatio, e.reverse, e.recIn, e.recOut]),
+    [
+      ['A001', 175, 1.75, false, 0, 100],
+      ['A002', 100, 1.0, true, 100, 180],
+    ],
+  );
+});
+
 test('the bridge passes multi-layer tracks + the unhandled report through unchanged', async () => {
   const MULTI = {
     ok: true,
