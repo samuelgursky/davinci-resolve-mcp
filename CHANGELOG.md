@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.73.1
+
+Packaging fix. The npm package shipped the AAF reader's Node half without its
+Python half, so offline AAF preview could never have worked from an npm install.
+
+### Fixed
+
+- **`aaf_probe.py` was missing from the published npm package.** The `files`
+  allowlist was written in v2.58.0 as `resolve-advanced/server/**/*.mjs`, and
+  when `aaf_probe.py` landed in v2.59.0 the allowlist was not extended. `aaf.mjs`
+  shipped and shelled out to a file that did not exist on disk, so every
+  `parse_interchange` / `list_sequences` call against a `.aaf` failed for
+  npm-installed users. Repository clones were unaffected, which is why it
+  survived a year of releases unnoticed.
+
+  The failure was at least loud rather than a fake parse — but its remediation
+  was actively misleading. The probe exited 2 (`can't open file …aaf_probe.py`),
+  which fell through to the generic branch and appended "Install the offline AAF
+  reader (`pip install pyaaf2`)". Installing pyaaf2 cannot fix a file that was
+  never packaged, so the message sent anyone who hit it down a dead end.
+
+  This means the v2.73.0 multi-layer AAF fix did not reach npm users at all;
+  2.73.1 is what actually delivers it.
+
 ## What's New in v2.73.0
 
 The offline AAF reader could not read a multi-layer Avid timeline, and said so
