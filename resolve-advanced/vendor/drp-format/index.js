@@ -153,6 +153,10 @@ module.exports = {
   // Author a project with one media clip referencing an arbitrary h264 file, from scratch [P8].
   addMediaClip: require('./author-project').addMediaClip,
 
+  // Relabel the timeline frame rate tag in place (not a retime — frame counts untouched).
+  setTimelineFrameRate: require('./set-framerate').setTimelineFrameRate,
+  readTimelineFrameRates: require('./set-framerate').readTimelineFrameRates,
+
   // Offline media relink — repoint media to new paths in the Media Pool blobs (no Resolve).
   relinkMedia: require('./relink-media').relinkMedia,
   // Relink + fix cached specs (resolution/frames/fps) for a differently-formatted file [P8].
