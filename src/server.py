@@ -6048,9 +6048,23 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
                     imported = t
         if not imported:
             if is_binary:
+                # importSourceClips defaults to True, so Resolve tries to pull in the
+                # sequence's source clips during import — and when those paths do not
+                # resolve it fails the whole import rather than creating an offline
+                # timeline. That is the normal case for a turnover (the paths belong
+                # to the offline editor), so it is by far the most common reason a
+                # valid AAF "creates no timeline", and the flag fixes it. Naming a
+                # format conversion first sent people down a much longer road than
+                # the one-flag retry that actually works. Note sourceClipsPath does
+                # NOT rescue it: Resolve matches source clips by the filenames
+                # recorded in the sequence, so an AAF referencing Avid MXF finds
+                # nothing in a folder of differently-named finishing media.
                 remediation = (
-                    f"Resolve created no timeline from this {ext}. Verify it exports/opens in "
-                    "Resolve directly, or convert to FCP7 XML / FCPXML upstream and import that."
+                    f"Resolve created no timeline from this {ext}. Most often the source clips "
+                    "could not be resolved: retry with import_source_clips=false to land the "
+                    "timeline offline, then add the media to the media pool and relink. "
+                    "Otherwise verify it exports/opens in Resolve directly, or convert to "
+                    "FCP7 XML / FCPXML upstream and import that."
                 )
             elif sanitize:
                 remediation = None
@@ -6583,6 +6597,7 @@ def _missing_media_diagnosis(missing_rows: List[Dict[str, Any]]) -> Dict[str, An
 def _detect_missing_media_from_snapshot(snapshot: Dict[str, Any]):
     missing = []
     present = []
+    unlinked = []
     for track_type, type_payload in (snapshot.get("tracks") or {}).items():
         for track in type_payload.get("tracks", []):
             for item in track.get("items", []):
@@ -6603,13 +6618,40 @@ def _detect_missing_media_from_snapshot(snapshot: Dict[str, Any]):
                 }
                 if is_missing:
                     missing.append(row)
+                elif not file_path and not item.get("media_pool_item_id"):
+                    # No path AND no media pool item: the timeline item has nothing
+                    # behind it at all. It is not "present" — we simply know nothing
+                    # about it — and counting it as present is how an entirely
+                    # offline timeline reported full coverage (an AAF imported with
+                    # importSourceClips=false yields 882 such items and used to
+                    # report present_count 882 / missing_count 0, while every one of
+                    # them returned None from GetMediaPoolItem()).
+                    #
+                    # Kept out of `missing` deliberately: those rows drive relink
+                    # plans keyed on media_pool_item_id, and there is no pool item
+                    # here to relink. This is a third state, so it gets its own.
+                    unlinked.append(row)
                 else:
                     present.append(row)
     diagnosis = _missing_media_diagnosis(missing)
+    if unlinked and not missing:
+        # Nothing to relink, so the generic "no offline media detected" advice
+        # would send the caller away satisfied from a timeline with no media.
+        diagnosis = dict(diagnosis)
+        diagnosis["primary_cause"] = "no_media_pool_items"
+        diagnosis["recommended_next_step"] = (
+            f"{len(unlinked)} timeline items have no media pool item at all — the timeline was "
+            "imported without its source clips. Add the media to the media pool, then relink; "
+            "there is nothing here for a path-based relink to act on."
+        )
     return {
         "missing": missing,
         "present_count": len(present),
         "missing_count": len(missing),
+        # Timeline items with neither a file path nor a media pool item. Never
+        # folded into present_count — see above.
+        "unlinked": unlinked,
+        "unlinked_count": len(unlinked),
         "diagnosis": diagnosis,
     }
 

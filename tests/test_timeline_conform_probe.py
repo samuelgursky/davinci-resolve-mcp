@@ -208,6 +208,43 @@ class TimelineConformProbeTest(unittest.TestCase):
         self.assertEqual(plan["candidate_count"], 1)
         self.assertEqual(plan["unique_missing_basename_count"], 1)
 
+    def test_items_with_no_media_pool_item_are_not_counted_as_present(self):
+        """A timeline item with neither a path nor a pool item knows nothing, and
+        `present` is a claim. Counting those as present made an entirely offline
+        timeline report full coverage: an AAF imported with importSourceClips=false
+        yields items like these, and the probe answered present_count 882 /
+        missing_count 0 while every one returned None from GetMediaPoolItem()."""
+        snapshot = {
+            "tracks": {
+                "video": {
+                    "tracks": [
+                        {
+                            "track_index": 1,
+                            "items": [
+                                # no file_path, no media_pool_item_id -> unlinked
+                                {"timeline_item_id": "a", "name": "A001C001.new.01"},
+                                {"timeline_item_id": "b", "name": "A001C002.new.01"},
+                                # genuinely linked, file exists
+                                {
+                                    "timeline_item_id": "c",
+                                    "name": "real",
+                                    "media_pool_item_id": "mp1",
+                                    "file_path": __file__,
+                                },
+                            ],
+                        }
+                    ]
+                }
+            }
+        }
+        result = _detect_missing_media_from_snapshot(snapshot)
+
+        self.assertEqual(result["unlinked_count"], 2)
+        self.assertEqual(result["present_count"], 1, "unlinked items must not inflate present_count")
+        self.assertEqual(result["missing_count"], 0, "no pool item means nothing to relink")
+        self.assertEqual(result["diagnosis"]["primary_cause"], "no_media_pool_items")
+        self.assertIn("media pool", result["diagnosis"]["recommended_next_step"])
+
     def test_relink_plan_skips_search_when_source_volume_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             replacement = Path(tmp) / "P1047043.MOV"
