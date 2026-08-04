@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.75.0
+
+The offline AAF reader now recovers retime ratios instead of only flagging them.
+
+### Added
+
+- **Motion Control speed recovery.** OperationGroup parameters are read: a
+  constant `SpeedRatio` emits `speedRatio` (play rate) and corrects `speed`, so
+  consumers reading only `speed` are no longer told 100 for a 175% clip. Variable
+  timewarps (multi-point speed maps) report `speedVarying: true` rather than a
+  fabricated number — the reader's honest-refuse contract extends to speeds.
+  Note the stored AAF rational is RECORD/SOURCE (Edit Protocol output-over-input),
+  the inverse of play rate; the reader emits play rate, verified against the
+  length identity (sourceLen = recordLen / |ratio|) and Avid's own speed maps.
+
+### Fixed
+
+- **Motion Control events inflated `recOut`.** Record advancement used the inner
+  source clip's length instead of the OperationGroup's declared record length, so
+  fast-motion clips claimed more record time than they occupy (and slow motion
+  claimed less). On a real 83-minute turnover this produced 40 spurious record
+  overlaps; with the declared length driving advancement, one remains — a
+  two-input blend genuinely sharing its record span.
+
 ## What's New in v2.74.0
 
 ### Added
