@@ -2,6 +2,94 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.79.0
+
+Six silent failures in the conform path, found by conforming a real Avid picture turnover
+and cross-checking every step against Resolve's own behaviour on 19.1.3. The common shape:
+a call that reports success, or reports nothing at all, and leaves you with a timeline you
+believe is right.
+
+### Fixed
+
+- **`convert_to_interchange` promised speed survives the DRT target. It does not.** The DRT
+  spec builder read four fields per event — start, duration, in, mediaFilePath — and never
+  read `speed` or `reverse`. One level down is why: the DRT clip schema has no per-clip speed
+  field at all, so there is nothing to write a retime into. A 200% clip and a reversed clip
+  both landed at 100% forward and the caller was told the conversion succeeded — inside the
+  module whose own description opens by naming "flattened retime → flag, skip-not-fake" as
+  its guarantee. Since carrying speed through was not available, the `drt` target now returns
+  **`flattened`**: one entry per retimed or reversed event, with its index, recIn, speed,
+  reverse, source and reason. It is always an array (empty when there are no retimes), so a
+  caller can tell "none to lose" from "this build is too old to report". `otio` (LinearTimeWarp)
+  and `edl` (M2) still carry retimes and are now named as the targets to use for a cut that
+  has them.
+- **The vendored FCP7 emitter produced XML that Resolve 19.1.3 imports as nothing.** Three
+  defects, all failing the same silent way — a clean-looking file and a Resolve that does
+  nothing. (1) The file def had no `<timecode>` element; Resolve rejects the ENTIRE import
+  over one absent block, not the one clip. (2) `<pathurl>` got XML escaping where it needed
+  URL escaping, now percent-encoded per segment so `/` separators survive. (3) The sequence
+  had no `<rate>`, which bisection showed was the single element standing between "no
+  timeline" and a working import. Because a *wrong* timecode block is as fatal as a missing
+  one, the emitter never guesses: clips whose media timecode is unknown emit no block and are
+  reported through `fcp7TimecodeCoverage()`, which `buildPackage` attaches as `fcp7Timecode`
+  with an `importable` flag.
+- **Importing a timeline into the never-saved `Untitled Project` silently no-opped.** Resolve
+  accepted the call, created nothing, and named no cause; the generic "Resolve created no
+  timeline" error that came back pointed at missing media and `sanitize_media` — the wrong
+  road, because the file is fine. `import_timeline_checked` now refuses before the call with
+  a remediation naming the project state. **Behaviour change:** a call that previously
+  returned a generic error now refuses earlier with a different message. The refusal is hard
+  and has no override flag, because the call cannot succeed either way.
+- **OTIO authored by `convert_to_interchange` would not import into Resolve.** Filed as a
+  scripting-API limitation; it was not one. Exporting a timeline with `EXPORT_OTIO` and
+  feeding Resolve's own file back proved the API imports OTIO fine — what it refuses is a
+  document that is valid OTIO but not Resolve-shaped. The decisive requirement is that source
+  frames be **timecode-absolute**: media starting at 01:00:00:00 has an available range at
+  frame 86400, and 0-based source offsets put the clip outside it. The emitter now mirrors
+  Resolve's own shape (Clip.2 with a `media_references` map, `available_range`, bare
+  `target_url`, `global_start_time`) and takes each event's origin via `mediaStartTcFrame` or
+  an absolute `srcTcFrame`. Events whose origin had to be assumed come back in
+  **`mediaOriginAssumed`** rather than producing a file that imports as nothing.
+- **`.otio` failures were misdiagnosed as missing media.** A `.otio` is JSON, so the
+  sanitize/relink pass cannot parse it and its advice never applied. `sanitize_media` is now
+  N/A for `.otio` as it already was for `.aaf`, and the no-timeline remediation names the
+  document's shape and the frame origin instead.
+
+### Documentation
+
+- `api_truth`: the retime entry now records that **the read side is as dead as the write
+  side** — `GetProperty('Speed'|'PlaybackSpeed'|'RetimeSpeed'|'ClipSpeed')` all return None on
+  19.1.3.7, and the keyless property dict carries no speed value at all. It also records that
+  the interchange route is closed (scalar speed filter ignored, `graphdict` dead in four
+  shapes, `reverse` dropped, in↔pproTicks inconsistency rejected in both orientations) and the
+  trap that makes it expensive to find: Resolve's own FCP7 export writes a degenerate Time
+  Remap, so `EXPORT_FCP_7_XML` cannot witness a speed. Each claim now says which Resolve
+  version it was measured on.
+- `api_truth`: **`AppendToTimeline` does not overwrite an overlapping record** — the earlier
+  item wins and the later append is dropped, leaving a silently short timeline.
+- `api_truth`: **placements from an errored append chunk are not durable across a save** — a
+  timeline verified at 573 items held 500 afterward. Every in-session read agrees with the
+  wrong number; only a post-save read catches it.
+- `api_truth`: `CreateTimelineFromClips`' clipInfo has **no track field** while
+  `AppendToTimeline`'s does, with the empty-timeline + `add_track` + per-clip append workaround.
+- `api_truth`: what Resolve's OTIO importer actually requires, and how to debug a refusal by
+  diffing against an `EXPORT_OTIO` file.
+- **New guide — `docs/guides/conforming-an-avid-aaf.md`.** Three Resolve-native mechanisms
+  measured against one real turnover; all three fail. The most convincing-looking one fails
+  worst: "Link to source camera files" links 878 of 882 items with **only 144 correct — 734
+  wrong takes, 84%** — and then renders as a fully conformed timeline, with no offline media
+  and no warning. The guide explains why the matching lands on adjacent takes and says plainly
+  that the only witness which catches it is a frame comparison against a reference.
+
+### Validation
+
+- 2417 Python unit tests, 744 Node advanced tests, plus 8 fixture-free packaging tests, all
+  green. `packaging.test.js` also no longer fails to load on a fresh clone: it read a
+  git-ignored fixture at module scope, which took the fixture-free tests down with it.
+- Live-validated on DaVinci Resolve Studio 19.1.3.7 with synthetic media: the fixed FCP7 XML
+  imports 2 items / 2 linked where the same file with its timecode blocks stripped imports
+  nothing; the authored `.otio` imports 3 items / 3 linked and re-reads frame-exact.
+
 ## What's New in v2.78.1
 
 `Timeline.DeleteClips` is page-gated. Contributed by
