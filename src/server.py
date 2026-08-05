@@ -6011,6 +6011,12 @@ _PRPROJ_REFUSAL = (
 # pool after import, not by rewriting the file.
 _BINARY_INTERCHANGE_EXTS = {".aaf"}
 
+# Interchange that is not XML at all. `.otio` is JSON, so the sanitize/relink pass —
+# which parses the file as XML and rewrites <pathurl> elements — cannot run on it, and
+# the missing-media / generator-clip advice it exists to give is not the diagnosis for
+# an .otio that fails to import.
+_JSON_INTERCHANGE_EXTS = {".otio"}
+
 
 def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     path = p.get("path")
@@ -6021,12 +6027,50 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     ext = os.path.splitext(path)[1].lower()
     if ext == ".prproj":
         return _err(_PRPROJ_REFUSAL, category="invalid_input")
+    # ImportTimelineFromFile silently no-ops on the never-saved default project: it returns
+    # nothing, creates no timeline, and reports no cause. The generic "Resolve created no
+    # timeline" error that came back instead sent people to source-clip resolution and
+    # sanitize_media — the wrong road entirely, because the file is fine.
+    #
+    # This is the last unrecorded member of a family the repo already documents: SaveProject
+    # returns False here (and blocks forever headless), CreateProject fails against a dirty
+    # untitled project, and DeleteProject's workaround warns against leaving the session on
+    # this fallback. Refusing early is what makes the cause visible.
+    #
+    # The refusal is HARD — no override flag. An override would reintroduce exactly the
+    # silent no-op this exists to kill, since the call cannot succeed either way.
+    #
+    # Resolve exposes no "is this project unsaved" predicate (no IsModified / IsSaved), so
+    # the test is the literal fallback name. Known hole, stated rather than hidden: a
+    # localized Resolve may not name it "Untitled Project", and this guard will miss it —
+    # such a session gets the old generic error, not a wrong answer.
+    from src.utils.project_cleanup import UNSAVED_DEFAULT_PROJECT
+    try:
+        _current_name = proj.GetName()
+    except Exception:
+        _current_name = None
+    if _current_name == UNSAVED_DEFAULT_PROJECT:
+        return _err(
+            f"Cannot import a timeline into the never-saved default project "
+            f"('{UNSAVED_DEFAULT_PROJECT}') — Resolve accepts the call and creates no "
+            f"timeline, with no error naming the cause.",
+            category="invalid_input",
+            remediation=(
+                "The project state is the problem, not the file. Save this project under a "
+                "name, or load an existing named project (project_manager.load), then retry "
+                "the import unchanged."
+            ),
+        )
     # AAF (and any binary interchange) is read natively by Resolve. The XML
     # sanitize/relink path parses the file as text, so it must be SKIPPED for AAF
     # even when sanitize_media / relink_search_roots is passed; fuzzy XML relink is
     # N/A (media links through the media pool). We still detect the created
     # (possibly offline) timeline via the before/after id diff.
     is_binary = ext in _BINARY_INTERCHANGE_EXTS
+    # .otio is JSON. The sanitize/relink pass parses the file as XML, so it cannot run here
+    # any more than it can on an AAF — and its advice (missing media, generator clips) is
+    # not the diagnosis for an .otio that fails to import.
+    is_json = ext in _JSON_INTERCHANGE_EXTS
     # sanitize_media (alias: relink_media) rewrites the XML to drop clipitems that
     # reference missing media or are generators (slug/solid w/ no pathurl) — both
     # abort Resolve's scripting-API import and leave the timeline fully offline.
@@ -6046,7 +6090,13 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
             "relinks via the media pool. Imported the file as-is; pass relink_search_roots to "
             "auto-relink after import."
         )
-    sanitize = sanitize_requested and not is_binary
+    elif is_json and (sanitize_requested or _binary_has_roots):
+        binary_relink_note = (
+            f"sanitize_media / XML path-rewrite relink are N/A for {ext} (JSON, not XML) — "
+            "imported as-is. Media links by the target_url recorded in the file; relink via "
+            "the media pool afterward (see `relink`)."
+        )
+    sanitize = sanitize_requested and not is_binary and not is_json
     if not sanitize and p.get("require_temp_path", True) and not _render_temp_path_ok(path):
         return _err(
             "path must be under the system temp directory unless require_temp_path=False",
@@ -6143,6 +6193,26 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
                     "Otherwise verify it exports/opens in Resolve directly, or convert to "
                     "FCP7 XML / FCPXML upstream and import that."
                 )
+            elif is_json:
+                # Measured on 19.1.3: Resolve DOES import OTIO through the scripting API —
+                # its own EXPORT_OTIO output re-imports cleanly. What it refuses is a
+                # document that is valid OTIO but not Resolve-shaped, and the shape it cares
+                # about most is the source frame ORIGIN: a clip's source_range must sit
+                # inside the media's real timecode range, so 0-based source offsets against
+                # media that starts at 01:00:00:00 produce no timeline at all. Missing media
+                # and sanitize_media are not the diagnosis here and pointing at them wastes
+                # the caller's time on a file whose media is online.
+                remediation = (
+                    f"Resolve created no timeline from this {ext}. This is usually the "
+                    "document's shape, not its media: Resolve expects Clip.2 with a "
+                    "media_references map, an available_range on each reference, and "
+                    "source_range frames expressed against the media's own timecode origin "
+                    "(0-based source offsets fail when the media does not start at "
+                    "00:00:00:00). Author it with editorial.convert_to_interchange "
+                    "(target 'otio'), supplying each event's media start timecode, and check "
+                    "the returned mediaOriginAssumed list. To compare against a known-good "
+                    "file, export any timeline with timeline.export EXPORT_OTIO."
+                )
             elif sanitize:
                 remediation = None
             else:
@@ -6183,6 +6253,9 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
             if is_binary:
                 msg += (" Relink via the media pool (right-click → Relink Clips) or point Resolve "
                         "at the media roots — AAF media links there, not by rewriting the file.")
+            elif is_json:
+                msg += (" Relink via the media pool — .otio is JSON, so sanitize_media cannot "
+                        "rewrite its paths; check each clip's target_url instead.")
             elif not sanitize:
                 msg += (" Retry with sanitize_media=True to drop missing-media/generator "
                         "clips so the remaining media links automatically.")

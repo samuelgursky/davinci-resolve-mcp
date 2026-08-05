@@ -238,3 +238,140 @@ class ImportFromDrpTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _NamedProject:
+    """Minimal project stand-in: all the guard reads is the name."""
+
+    def __init__(self, name):
+        self._name = name
+
+    def GetName(self):
+        return self._name
+
+
+class UnsavedProjectRefusalTests(unittest.TestCase):
+    """U6 — importing into the never-saved default project is refused, not silently no-opped.
+
+    Resolve accepts ImportTimelineFromFile on the never-saved 'Untitled Project', creates
+    nothing, and reports no cause; the generic 'Resolve created no timeline' error that came
+    back instead pointed at missing media and sanitize_media, which is the wrong road.
+    """
+
+    def _xml(self):
+        fd, path = tempfile.mkstemp(suffix=".xml")
+        os.close(fd)
+        return path
+
+    def test_refuses_on_the_never_saved_untitled_project(self):
+        path = self._xml()
+        try:
+            res = _import_timeline_checked(
+                _NamedProject("Untitled Project"), None, {"path": path, "dry_run": True})
+            self.assertTrue(_is_error(res))
+            # The remediation must name the PROJECT STATE — that is the whole point.
+            rem = _remediation(res)
+            self.assertIn("project", rem.lower())
+            self.assertTrue("save" in rem.lower() or "load" in rem.lower())
+            # And it must NOT send the caller down the missing-media road.
+            self.assertNotIn("sanitize_media", rem)
+            self.assertIn("Untitled Project", _err_msg(res))
+        finally:
+            os.unlink(path)
+
+    def test_refusal_is_hard__no_override_flag_reopens_it(self):
+        # An override would reintroduce the silent no-op: the call cannot succeed either way.
+        path = self._xml()
+        try:
+            for extra in ({"force": True}, {"allow_unsaved_project": True}, {"require_temp_path": False}):
+                params = {"path": path, "dry_run": True}
+                params.update(extra)
+                res = _import_timeline_checked(_NamedProject("Untitled Project"), None, params)
+                self.assertTrue(_is_error(res), f"must still refuse with {extra}")
+        finally:
+            os.unlink(path)
+
+    def test_a_named_project_imports_with_nothing_else_changed(self):
+        # Same file, same params — only the project name differs.
+        path = self._xml()
+        try:
+            res = _import_timeline_checked(
+                _NamedProject("A Named Project"), None, {"path": path, "dry_run": True})
+            self.assertTrue(res.get("success"))
+            self.assertTrue(res.get("would_import"))
+        finally:
+            os.unlink(path)
+
+    def test_dated_untitled_projects_are_NOT_refused(self):
+        # Closing a project on a populated database lands on 'Untitled Project <date>_<time>',
+        # which is a real database project — measured on 19.1.3: imports into it succeed
+        # (2 items / 2 linked). Refusing it would block a call that works.
+        path = self._xml()
+        try:
+            res = _import_timeline_checked(
+                _NamedProject("Untitled Project 2026-08-05_170228"), None, {"path": path, "dry_run": True})
+            self.assertTrue(res.get("success"))
+        finally:
+            os.unlink(path)
+
+
+class OtioRemediationTests(unittest.TestCase):
+    """U18 — a .otio is JSON, so the XML sanitize path and its advice do not apply."""
+
+    def test_sanitize_is_na_for_otio_and_the_file_is_imported_as_is(self):
+        fd, path = tempfile.mkstemp(suffix=".otio")
+        os.close(fd)
+        try:
+            res = _import_timeline_checked(
+                None, None, {"path": path, "sanitize_media": True, "dry_run": True})
+            self.assertTrue(res.get("success"))
+            self.assertNotIn("sanitize", res)          # the XML rewrite never ran
+            self.assertEqual(res.get("import_path"), path)  # imported as-is, not a copy
+            self.assertIn("N/A", res.get("note", ""))
+            self.assertIn("JSON", res.get("note", ""))
+        finally:
+            os.unlink(path)
+
+
+class _NamedFakeProject(_FakeProject):
+    def GetName(self):
+        return "A Named Project"
+
+
+class _RefusingMediaPool:
+    """Resolve's no-timeline outcome: the call returns nothing and creates nothing."""
+
+    def ImportTimelineFromFile(self, path, options):
+        return None
+
+
+class OtioNoTimelineRemediationTests(unittest.TestCase):
+    def test_otio_failure_does_not_blame_missing_media_or_sanitize(self):
+        fd, path = tempfile.mkstemp(suffix=".otio")
+        os.close(fd)
+        try:
+            res = _import_timeline_checked(_NamedFakeProject(), _RefusingMediaPool(), {"path": path})
+            self.assertTrue(_is_error(res))
+            rem = _remediation(res)
+            # The old advice was flatly wrong for .otio — the media is usually online and
+            # sanitize_media cannot even parse a JSON file.
+            self.assertNotIn("sanitize_media=True", rem)
+            self.assertNotIn("generator clips", rem)
+            # It names the real cause: the document's shape, and the frame origin.
+            self.assertIn("Clip.2", rem)
+            self.assertIn("media_references", rem)
+            self.assertIn("timecode origin", rem)
+            self.assertIn("EXPORT_OTIO", rem)  # how to get a known-good file to compare
+        finally:
+            os.unlink(path)
+
+    def test_xml_failure_still_gets_the_sanitize_advice(self):
+        # The XML road is unchanged — only .otio was being misdiagnosed.
+        fd, path = tempfile.mkstemp(suffix=".xml")
+        os.close(fd)
+        try:
+            res = _import_timeline_checked(_NamedFakeProject(), _RefusingMediaPool(), {"path": path})
+            self.assertTrue(_is_error(res))
+            self.assertIn("sanitize_media=True", _remediation(res))
+        finally:
+            os.unlink(path)
