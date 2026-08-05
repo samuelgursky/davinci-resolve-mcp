@@ -979,3 +979,81 @@ test('the bridge passes multi-layer tracks + the unhandled report through unchan
     delete process.env.AAF_PROBE_PYTHON;
   }
 });
+
+// ── Physical source position + timecode (the consolidated-media trap) ─────────
+//
+// MEASURED on a consolidated Avid turnover (2026-08-05): a SourceClip's own
+// `start` is an offset into whatever it references DIRECTLY. For consolidated
+// media that is a per-cut fragment with handles, so 774 of 878 events reported
+// srcIn <= 45 and one take used 13 times reported srcIn 40 THIRTEEN TIMES. A
+// consumer placing those numbers against camera originals puts every clip on
+// the right cut of the right take showing the wrong moment — and the number
+// FITS inside the file, so no range check can catch it.
+//
+// The chase sums `start` down the mob chain and reads the nearest mob timecode.
+// Verified frame-exact against the turnover's own picture reference: the probe
+// says 21:19:28:21 at the frame the reference burned 21:19:28:21.
+
+test('aaf_probe: srcPos/srcTc chase the mob chain to the PHYSICAL source, not the fragment', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+def tc_slot(start, rate=24, drop=False):
+    tc = mk("Timecode", start=start, fps=rate, drop=drop)
+    slot = mk("TimelineMobSlot", segment=tc, media_kind="timecode")
+    slot.getvalue = lambda key: None
+    return slot
+
+def picture_slot(segment):
+    slot = mk("TimelineMobSlot", segment=segment, media_kind="picture")
+    slot.getvalue = lambda key: None
+    return slot
+
+# (1) camera original — the media mob's own timeline IS its timecode timeline
+# (tc start 0), so the chased position reads out directly as source TC. This is
+# the measured shape: srcIn 40 on the fragment, 1,752,142 in the take.
+original = mk("SourceMob", name="A001C001", mob_id="mob:orig", slots=[tc_slot(0)])
+inner = mk("SourceClip", length=999999, start=1752102, mob=original)
+fragment = mk("MasterMob", name="A001C001.new.01", mob_id="mob:frag", slots=[picture_slot(inner)])
+cut_a = mk("SourceClip", length=196, start=40, mob=fragment)
+
+# (2) archival file with no real timecode — Avid stamps 01:00:00:00 (86400 @24)
+# and the position is an offset from there.
+arch = mk("SourceMob", name="ARCHIVE_0001", mob_id="mob:arch", slots=[tc_slot(86400)])
+arch_inner = mk("SourceClip", length=99999, start=200, mob=arch)
+arch_frag = mk("MasterMob", name="ARCHIVE_0001.new.01", mob_id="mob:archfrag", slots=[picture_slot(arch_inner)])
+cut_b = mk("SourceClip", length=47, start=40, mob=arch_frag)
+
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[cut_a, cut_b]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const [a, b] = out.events;
+
+  // srcIn keeps its old meaning — fragment-relative, unchanged, back-compatible.
+  assert.equal(a.srcIn, 40);
+  assert.equal(b.srcIn, 40);
+  // …and the two clips, INDISTINGUISHABLE by srcIn, separate completely once the
+  // chain is chased. This is the whole point.
+  assert.equal(a.srcPos, 1752142, 'srcPos sums every hop: 40 + 1,752,102');
+  assert.equal(b.srcPos, 240, '40 + 200');
+  assert.equal(a.srcTcFrame, 1752142);
+  assert.equal(a.srcTc, '20:16:45:22');
+  assert.equal(b.srcTcFrame, 86640, "the archival mob's own 01:00:00:00 origin + 240");
+  assert.equal(b.srcTc, '01:00:10:00');
+  assert.equal(a.srcTcFps, 24);
+  assert.equal(a.srcTcDrop, false);
+});
+
+test('aaf_probe: a clip whose chain goes nowhere reports NO source position — never a guess', { skip: PY ? false : 'python3 not available' }, () => {
+  // A bare MasterMob with no inner source clip and no timecode slot: the chase
+  // finds nothing, so nothing is emitted. Silence here is the honest answer —
+  // restating srcIn as srcPos would manufacture a physical position we never read.
+  const out = runWalker(`
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[clip("A001", 100, start=40)]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const e = out.events[0];
+  assert.equal(e.srcIn, 40);
+  assert.ok(!('srcPos' in e), 'no srcPos when the chain adds nothing');
+  assert.ok(!('srcTcFrame' in e), 'no source timecode when no mob carries one');
+});

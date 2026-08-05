@@ -160,6 +160,133 @@ def _source_name(clip):
     return _usable_name(clip) or "UNKNOWN"
 
 
+# ── Physical source position + timecode (the "which frames" question) ─────────
+#
+# MEASURED 2026-08-05 on a consolidated Avid turnover: a SourceClip's own
+# `start` is the offset into whatever mob it references DIRECTLY, and for
+# consolidated media that is a per-cut fragment with ~40-frame handles — so 774
+# of 878 events reported srcIn <= 45, and takes used several times all reported
+# the SAME srcIn with different lengths. Two different cuts of one take cannot
+# both begin at frame 42 of that take; those 42s were handles on separate
+# fragments.
+#
+# The real position is the SUM of the `start` offsets down the mob chain, and
+# the anchor that survives relinking to different media is the physical source
+# TIMECODE: the referenced mob's timecode start plus that accumulated offset.
+# A consumer that links camera originals can then place
+# `sourceTc - fileStartTc` instead of a fragment-relative number that merely
+# FITS inside the file.
+#
+# Emitted per event as srcPos / srcTcFrame / srcTc / srcTcFps / srcTcDrop, and
+# only when actually found — a consumer must be able to tell "this AAF carries
+# no source timecode" from "this probe is too old to emit it", which is what
+# the per-sequence sourceTimecodeCoverage counters are for.
+
+
+def _mob_timecode(mob, _cache={}):
+    """(startFrame, rate, drop) from a mob's timecode slot, or None."""
+    try:
+        key = str(getattr(mob, "mob_id", "") or id(mob))
+    except Exception:
+        key = str(id(mob))
+    if key in _cache:
+        return _cache[key]
+    found = None
+    for slot in getattr(mob, "slots", None) or []:
+        try:
+            if _slot_media_kind(slot) != _TIMECODE_KIND:
+                continue
+        except Exception:
+            continue
+        tc = _timecode_component(getattr(slot, "segment", None))
+        if tc is None:
+            continue
+        try:
+            start = int(getattr(tc, "start"))
+            rate = int(round(float(getattr(tc, "fps", 0) or 0)))
+            drop = bool(getattr(tc, "drop", False))
+        except Exception:
+            continue
+        if rate > 0 and start >= 0:
+            found = (start, rate, drop)
+            break
+    _cache[key] = found
+    return found
+
+
+def _chase_source_position(clip):
+    """Physical source position + timecode for a SourceClip's FIRST frame.
+
+    Walks clip -> referenced mob -> that mob's own SourceClip, accumulating each
+    hop's `start`. Returns (position, timecode_or_None) where `timecode` is
+    (tc_start, rate, drop, position_at_that_mob) for the NEAREST mob carrying a
+    timecode slot. Bounded and cycle-guarded like _source_name.
+    """
+    current = clip
+    position = 0
+    timecode = None
+    seen = set()
+    for _ in range(_MAX_MOB_CHASE):
+        try:
+            position += int(getattr(current, "start", 0) or 0)
+        except Exception:
+            pass
+        try:
+            mob = getattr(current, "mob", None)
+        except Exception:
+            mob = None
+        if mob is None:
+            break
+        try:
+            key = str(getattr(mob, "mob_id", "") or id(mob))
+        except Exception:
+            key = str(id(mob))
+        if key in seen:
+            break  # reference cycle — stop rather than spin
+        seen.add(key)
+        if timecode is None:
+            tc = _mob_timecode(mob)
+            if tc is not None:
+                timecode = (tc[0], tc[1], tc[2], position)
+        nxt = None
+        for slot in getattr(mob, "slots", None) or []:
+            nxt = _find_source_clip(getattr(slot, "segment", None))
+            if nxt is not None:
+                break
+        if nxt is None:
+            break
+        current = nxt
+    return position, timecode
+
+
+def _source_position_fields(clip):
+    """The srcPos/srcTc* keys for an event. Empty dict when nothing is knowable."""
+    try:
+        position, timecode = _chase_source_position(clip)
+    except Exception:
+        return {}
+    fields = {}
+    try:
+        own_start = int(getattr(clip, "start", 0) or 0)
+    except Exception:
+        own_start = 0
+    if position != own_start:
+        # Only meaningful when the chain actually went deeper than the clip's
+        # own reference — otherwise srcPos would just restate srcIn.
+        fields["srcPos"] = position
+    if timecode is not None:
+        tc_start, rate, drop, at = timecode
+        fields.update(
+            {
+                "srcTcFrame": tc_start + at,
+                "srcTc": _frames_to_timecode(tc_start + at, rate, drop),
+                "srcTcFps": rate,
+                "srcTcDrop": drop,
+            }
+        )
+    return fields
+
+
 def _emit_source_clip(clip, *, index, track, rec, fps, transition=None):
     """Turn a SourceClip into a normalized event. Returns (event, length)."""
     try:
@@ -183,6 +310,7 @@ def _emit_source_clip(clip, *, index, track, rec, fps, transition=None):
         "transition": transition,
         "fps": fps,
     }
+    event.update(_source_position_fields(clip))
     return event, length
 
 
@@ -884,6 +1012,15 @@ def probe(path):
                     "name": str(name) if name else f"Sequence {len(sequences) + 1}",
                     "eventCount": len(events),
                     **_sequence_start_timecode(mob, edit_fps),
+                    # How much of this sequence carries a physical source position
+                    # / timecode. Always present, so a consumer can tell "this AAF
+                    # has none" (zeros) from "this probe is too old to emit it"
+                    # (key absent) — the same reasoning as _NO_START_TIMECODE.
+                    "sourcePositionCoverage": {
+                        "events": len(events),
+                        "withSourcePosition": sum(1 for e in events if "srcPos" in e),
+                        "withSourceTimecode": sum(1 for e in events if "srcTcFrame" in e),
+                    },
                     # Component classes we could not model, by name+count. Empty {} means
                     # a structurally complete read; non-empty means events are INCOMPLETE.
                     "unhandled": dict(sorted(state["unhandled"].items())),
