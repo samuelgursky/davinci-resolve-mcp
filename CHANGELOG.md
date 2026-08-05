@@ -2,6 +2,48 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.77.0
+
+Folder addressing fails loud instead of quietly answering about whichever bin the
+UI happens to have open. Contributed by [@billcarroll](https://github.com/billcarroll)
+in [#116](https://github.com/samuelgursky/davinci-resolve-mcp/pull/116).
+
+### Fixed
+
+- **An unresolvable folder address no longer falls back to the current bin.**
+  `media_pool add_subfolder` and `media_pool get_timeline_mattes` resolved their
+  folder argument with `_navigate_folder(...) or fallback`, so a typo'd path was
+  dropped and the action proceeded against the current bin (or root) with a
+  `success` envelope. For a read that is a wrong answer indistinguishable from a
+  right one; for `add_subfolder` it creates the folder wherever the UI happens to
+  be pointed. All three sites now share one resolver that returns
+  `FOLDER_NOT_FOUND` / `invalid_input` when a supplied address does not resolve,
+  with remediation naming `get_subfolders`.
+- **A bad folder path came back marked retryable.** The `folder` tool did already
+  error on an unresolvable `path`, but with a bare message, so the envelope
+  defaulted to `resolve_api_failed` and told the caller to retry an address that
+  would never resolve. It is now `invalid_input`, non-retryable — the caller's to
+  fix.
+
+### Added
+
+- **`folder_id` is accepted as a folder address**, alongside `path`, on the
+  `folder` tool, `media_pool add_subfolder`, and `media_pool get_timeline_mattes`.
+  `get_subfolders` hands out ids, and having no way to spend them is what invited
+  agents to guess a `folder_id` argument that no action read — which was silently
+  dropped, returned the current bin's contents with `success`, and made the tools
+  look like they ignored their arguments. Omitting every address still means what
+  it did before: the current folder for the `folder` tool, the root folder for the
+  two `media_pool` actions.
+
+### Known limitation
+
+Only `path`/`folder_path`/`folderPath` and `folder_id`/`folderId` are recognised
+as addresses. Any other invented key (`id`, `bin`, `folderName`) is still dropped,
+and the action still answers about its default folder with `success`. This release
+narrows the silent-wrong-folder class to a known key set rather than closing it;
+closing it needs unknown-parameter rejection at the dispatch layer.
+
 ## What's New in v2.76.0
 
 Three AAF conform-fidelity fixes found by placing a full 83-minute Avid turnover and

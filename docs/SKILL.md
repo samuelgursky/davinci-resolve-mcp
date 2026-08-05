@@ -617,9 +617,25 @@ switching, and flattening remain Resolve UI workflows; see
 Note: `folder path` arguments use slash notation like `"Master/SubFolder"`.
 `"Master"` or `"/"` refers to the root folder.
 
+Address a folder either by `path` or by `folder_id` — the id `get_subfolders`
+returns for each entry (v2.77.0+; the same pair works for `media_pool
+add_subfolder` via `parent_path`/`folder_id` and for `media_pool
+get_timeline_mattes` via `folder_path`/`folder_id`). Omit both to get the
+action's default: the current folder for the `folder` tool, the root folder for
+those two `media_pool` actions. An address that is supplied but does not resolve
+is a `FOLDER_NOT_FOUND` / `invalid_input` error — it never quietly falls back to
+the current bin.
+
+That fallback is what these tools used to do, so treat a pre-v2.77.0 server as
+unable to tell you when it answered about the wrong folder. Note also that only
+`path`/`folder_path`/`folderPath` and `folder_id`/`folderId` are recognised as
+addresses: any other key you invent (`id`, `bin`, `folderName`) is still
+silently dropped, and the action still answers about its default folder with
+`success`. Use the documented names.
+
 **`folder`** — Operations on a specific Media Pool folder.
 
-Key actions: `get_clips(path?)`, `get_subfolders(path?)`, `export(path?, export_path)`,
+Key actions: `get_clips(path?|folder_id?)`, `get_subfolders(path?|folder_id?)`, `export(path?, export_path)`,
 `transcribe_audio(path?, use_speaker_detection?)`, `clear_transcription(path?)`,
 `perform_audio_classification(path?)`, `analyze_for_intellisearch(path?, identify_faces?, is_better_mode?)`,
 `analyze_for_slate(path?, marker_color?)`, `remove_motion_blur(path?, deblur_option?)` (Resolve 21+;
