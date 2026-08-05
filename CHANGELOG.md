@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.78.0
+
+The AAF probe reports where in the *source* an event actually lives, not where it
+lives in the consolidated fragment the AAF happens to reference.
+
+### Fixed
+
+- **`srcIn`/`srcOut` were handle offsets, not positions in the take.** A
+  `SourceClip`'s `start` is an offset into whatever mob it references *directly*,
+  and for consolidated media that mob is a per-cut fragment carrying handles — not
+  the take. On a real turnover 774 of 878 events reported `srcIn <= 45`, and one
+  take used thirteen times reported `srcIn 40` all thirteen times; two cuts of one
+  take cannot both begin at frame 42 of it. A consumer placing those numbers
+  against camera originals lands on the right cut of the right take showing the
+  **wrong moment**, and the number fits inside the file, so no range check catches
+  it. The consumer measured 2 of 526 cuts matching its picture reference before
+  this.
+
+### Added
+
+- **Physical source position and timecode per event** — `srcPos`, `srcTcFrame`,
+  `srcTc`, `srcTcFps`, `srcTcDrop`. The chase sums `start` down the mob chain and
+  reads the nearest mob's timecode slot, so a consumer that links camera originals
+  can place `sourceTc − fileStartTc` instead of a fragment-relative number. Emitted
+  only when actually read: a chain that adds nothing emits nothing rather than
+  restating `srcIn`, and per-sequence `sourcePositionCoverage` counters let a
+  consumer distinguish "this AAF carries none" from "this probe is too old to emit
+  it." `srcIn`/`srcOut` are unchanged — this is additive.
+
+Verified on the fixture: 869/878 events carry `srcPos`, 876 carry source timecode,
+and the take used thirteen times separates into thirteen distinct positions.
+Frame-exact against an independent witness — at the frame the turnover's own
+picture reference burned 21:19:28:21, the probe says 21:19:28:21.
+
 ## What's New in v2.77.0
 
 Folder addressing fails loud instead of quietly answering about whichever bin the
