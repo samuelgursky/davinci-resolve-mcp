@@ -2,6 +2,36 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.79.1
+
+One redirect that was never written, in a dispatcher whose other container formats all have one.
+
+### Fixed
+
+- **`parse_interchange` told `.drt`/`.drp` callers the format was unknown — for formats the
+  same package parses.** `parseInterchange(format, content)` gives AAF and `.prproj` explicit,
+  helpful redirects to their path-based readers, but `drt` and `drp` had no case at all and
+  fell through to `unknown format 'drt' (edl|otio|xml|xmeml|fcp7|aaf|prproj)`. Meanwhile
+  `list_sequences` in the same cluster parses both by path, and the tool description advertises
+  it. So the cluster supports DRT, documents that it supports DRT, then tells the
+  content-shaped caller it does not. The failure is silent downstream: a consumer that reads
+  "unknown format" (or hands `{ content }` to `drt.parse`, whose schema wants `{ drtPath }`)
+  records **zero events**, and an empty sequence is indistinguishable from an unsupported one.
+  `parseInterchange` now throws the same shape of redirect the AAF and `.prproj` cases throw —
+  naming the ZIP container, `parseDRT(path)`, and the two callable entry points — and the
+  `default:` message lists `drt|drp` among the known formats. The `editorial`
+  `parse_interchange` schema accepts `drt`/`drp` so the tool-level caller gets that redirect
+  instead of a bare enum rejection, and `drt.parse` / `list_sequences` / `validate` now name
+  the path argument they wanted rather than emitting a raw zod issue dump.
+
+### Validation
+
+- `resolve-advanced` suite: 778 tests, 748 pass, 30 skipped, 0 fail (4 new assertions, written
+  first and confirmed failing on v2.79.0).
+- Static/drift checks, `--help`/`--version`, `npm pack --dry-run`, `git diff --check`: clean.
+- No Resolve behavior changed; this path never touches the Resolve API, so live validation was
+  not required.
+
 ## What's New in v2.79.0
 
 Six silent failures in the conform path, found by conforming a real Avid picture turnover
