@@ -1,5 +1,10 @@
 # Node (resolve-advanced — the davinci-resolve-advanced-mcp server + vendored libs)
+# No trailing slash: a trailing slash matches directories only, so a SYMLINK
+# named node_modules (handy for pointing a git worktree at the primary tree's
+# installed deps) slipped past these and got committed once. Match both.
+node_modules
 node_modules/
+resolve-advanced/node_modules
 resolve-advanced/node_modules/
 
 # Python (envs, build artifacts, caches)
