@@ -70,17 +70,32 @@ const downgradeSchema = z.object({
   appVersionString: z.string().optional().describe('DbAppVer comment to stamp (default derived from targetAppVersion, else "<v>.0.0.0000")'),
 });
 
+/**
+ * .drt/.drp are ZIP containers, so every reader here takes a FILE PATH. A caller reaching for the
+ * content-shaped convention its sibling text formats use (`{ content }`) otherwise gets a bare zod
+ * dump that never names the key it wanted.
+ */
+function requirePathArg(args, key, action) {
+  const a = args && typeof args === 'object' ? args : {};
+  if (typeof a[key] === 'string' && a[key]) return a;
+  const given = Object.keys(a).filter((k) => a[k] !== undefined);
+  throw new Error(
+    `drt.${action}: pass \`${key}\` — an absolute path to the .drt/.drp. A .drt/.drp is a ZIP container, so this action reads a FILE PATH, never file content` +
+      `${given.length ? ` (got: ${given.join(', ')})` : ' (got no arguments)'}.`,
+  );
+}
+
 export const drtTool = {
   name: 'drt',
   description:
     'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: parse, list_sequences (enumerate the timelines inside a .drp/.drt → [{id,name,eventCount,index}] to drive a "which sequence?" picker), author, validate, inject_into_drp, extract_from_drp (pull one SeqContainer out as a .drt — feed the .drt to the Python davinci-resolve MCP timeline.import_timeline_checked, or use timeline.import_from_drp to do both), downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
   async handler({ action, args }) {
     if (action === 'parse') {
-      const p = parseSchema.parse(args);
+      const p = parseSchema.parse(requirePathArg(args, 'drtPath', 'parse'));
       return drt().parseDRT(p.drtPath);
     }
     if (action === 'list_sequences') {
-      const p = listSequencesSchema.parse(args);
+      const p = listSequencesSchema.parse(requirePathArg(args, 'drpPath', 'list_sequences'));
       const parsed = await drt().parseDRT(p.drpPath);
       const sequences = summarizeDrtTimelines(parsed);
       return { path: p.drpPath, count: sequences.length, sequences };
@@ -92,7 +107,7 @@ export const drtTool = {
       return { outputPath: p.outputPath, bytes: buf.length };
     }
     if (action === 'validate') {
-      const p = validateSchema.parse(args);
+      const p = validateSchema.parse(requirePathArg(args, 'drtPath', 'validate'));
       return drt().validateDRT(p.drtPath);
     }
     if (action === 'inject_into_drp') {

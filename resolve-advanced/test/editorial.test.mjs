@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseEDL, parseOTIO, parseInterchange, diffChangelist, timingGuards, conformManifest, markerRoundtrip } from '../server/editorial.mjs';
 import { editorialTool } from '../server/tools/editorial.mjs';
+import { drtTool } from '../server/tools/drt.mjs';
 
 const EDL = `TITLE: EP012 LOCKED
 FCM: NON-DROP FRAME
@@ -63,6 +64,61 @@ test('parseOTIO accumulates record positions across gaps and reads time_scalar',
 
 test('parseInterchange refuses AAF honestly', () => {
   assert.throws(() => parseInterchange('aaf', 'anything'), /AAF is binary/);
+});
+
+// A .drt/.drp is a ZIP. The cluster parses it (sequences.mjs listSequences) and the tool
+// description advertises it, so the content-shaped caller must be ROUTED, not told the format
+// is unknown — an "unknown format" here reads as "not supported" and the caller silently
+// records zero events.
+test('parseInterchange routes drt/drp to the path-based reader instead of calling them unknown', () => {
+  for (const fmt of ['drt', 'drp', 'DRT']) {
+    assert.throws(
+      () => parseInterchange(fmt, 'PK (a .drt slurped as text)'),
+      (err) => {
+        assert.match(err.message, /ZIP/, `${fmt}: should say it is a ZIP — got: ${err.message}`);
+        assert.match(err.message, /parseDRT/, `${fmt}: should name the path-based reader — got: ${err.message}`);
+        assert.match(err.message, /list_sequences|drtPath/, `${fmt}: should name a callable entry point — got: ${err.message}`);
+        assert.doesNotMatch(err.message, /unknown format/, `${fmt}: must not claim the format is unknown`);
+        return true;
+      },
+    );
+  }
+});
+
+test('parseInterchange default message lists drt|drp among the known formats', () => {
+  assert.throws(
+    () => parseInterchange('mogrt', 'x'),
+    (err) => {
+      assert.match(err.message, /unknown format 'mogrt'/);
+      assert.match(err.message, /\bdrt\b/, `default message should list drt — got: ${err.message}`);
+      assert.match(err.message, /\bdrp\b/, `default message should list drp — got: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('editorial.parse_interchange accepts drt/drp as a format and answers with the redirect, not a schema dump', async () => {
+  for (const format of ['drt', 'drp']) {
+    await assert.rejects(
+      () => editorialTool.handler({ action: 'parse_interchange', args: { format, content: 'PK' } }),
+      (err) => {
+        assert.match(err.message, /parseDRT/, `${format}: got: ${err.message}`);
+        assert.doesNotMatch(err.message, /invalid_enum_value|Invalid enum/, `${format}: must not be a bare zod dump`);
+        return true;
+      },
+    );
+  }
+});
+
+test('drt.parse names drtPath when a caller passes content instead of a path', async () => {
+  await assert.rejects(
+    () => drtTool.handler({ action: 'parse', args: { content: 'PK' } }),
+    (err) => {
+      assert.match(err.message, /drtPath/, `got: ${err.message}`);
+      assert.doesNotMatch(err.message, /^\[\s*\{/, 'must not be a bare zod issue dump');
+      return true;
+    },
+  );
 });
 
 test('turnover_changelist classifies moved / retimed / replaced / new / gone', () => {

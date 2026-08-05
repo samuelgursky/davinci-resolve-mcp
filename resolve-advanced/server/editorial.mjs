@@ -196,9 +196,13 @@ export function parseXMEMLEvents(xml, opts = {}) {
 }
 
 /**
- * Dispatch by format (SYNC, pure over TEXT). Binary formats are handled out-of-band by their own
- * path-based readers — AAF via aaf.mjs `parseAAF` (async, pyaaf2), .prproj via prproj.mjs
- * `parsePrproj` (gunzip+XML). This throws to route callers there rather than faking a parse.
+ * Dispatch by format (SYNC, pure over TEXT). Binary/container formats are handled out-of-band by
+ * their own path-based readers — AAF via aaf.mjs `parseAAF` (async, pyaaf2), .prproj via prproj.mjs
+ * `parsePrproj` (gunzip+XML), .drt/.drp via drt.mjs `parseDRT` (ZIP). This throws to route callers
+ * there rather than faking a parse. Every container format gets a NAMED redirect: falling through
+ * to `unknown format` would tell a caller the cluster does not support a format it does support
+ * (list_sequences parses .drt/.drp), and an empty parse is indistinguishable downstream from an
+ * unsupported one.
  */
 export function parseInterchange(format, content, opts = {}) {
   switch (String(format).toLowerCase()) {
@@ -218,8 +222,13 @@ export function parseInterchange(format, content, opts = {}) {
       throw new Error(
         'parse_interchange: .prproj is gzip-compressed XML — parse it via the path-based reader (prproj.mjs `parsePrproj`), not the sync parseInterchange().',
       );
+    case 'drt':
+    case 'drp':
+      throw new Error(
+        `parse_interchange: .${String(format).toLowerCase()} is a ZIP container — parse it via the path-based reader (drt.mjs \`parseDRT(path)\`), not the sync parseInterchange(). Entry points: editorial \`list_sequences({path})\` or drt \`parse({drtPath})\`.`,
+      );
     default:
-      throw new Error(`parse_interchange: unknown format '${format}' (edl|otio|xml|xmeml|fcp7|aaf|prproj)`);
+      throw new Error(`parse_interchange: unknown format '${format}' (edl|otio|xml|xmeml|fcp7|drt|drp|aaf|prproj)`);
   }
 }
 

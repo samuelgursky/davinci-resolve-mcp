@@ -32,11 +32,15 @@ async function parseAnySource(sourcePath, sourceFormat) {
   return parseInterchange(fmt, content, {});
 }
 
+// drt/drp are accepted only so the caller gets parseInterchange's NAMED redirect to the
+// path-based reader instead of a bare enum-rejection that reads as "unsupported".
 const parseSchema = z.object({
-  format: z.enum(['edl', 'otio', 'xml', 'xmeml', 'fcp7', 'aaf', 'prproj']),
+  format: z.enum(['edl', 'otio', 'xml', 'xmeml', 'fcp7', 'aaf', 'prproj', 'drt', 'drp']),
   content: z
     .union([z.string(), z.object({}).passthrough()])
-    .describe('EDL text / OTIO JSON (string or object) / XMEML string. For AAF or PRPROJ (binary): the file PATH.'),
+    .describe(
+      'EDL text / OTIO JSON (string or object) / XMEML string. For AAF or PRPROJ (binary): the file PATH. For .drt/.drp (ZIP): use list_sequences or drt.parse — this action redirects.',
+    ),
   fps: z.number().optional(),
 });
 
