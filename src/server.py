@@ -2579,6 +2579,54 @@ def _find_clip_with_parent(folder, clip_id, _parent=None):
             return found_clip, found_parent
     return None, None
 
+def _find_folder_by_id(folder, folder_id):
+    if folder.GetUniqueId() == folder_id:
+        return folder
+    for sub in (folder.GetSubFolderList() or []):
+        found = _find_folder_by_id(sub, folder_id)
+        if found:
+            return found
+    return None
+
+
+def _folder_from_params(mp, p, *path_keys, no_address="current"):
+    """Resolve the folder an action was aimed at. Returns (folder, error).
+
+    Naming no folder falls back to the action's documented default (see
+    `no_address`). What must never happen is the middle case: an addressing argument was
+    supplied, did not resolve, and the action answered about the current bin
+    anyway. That reports success for a different question than the caller asked,
+    and it is indistinguishable from the tool working. It cost one session an
+    afternoon: `folder_id` is not a key any action read, so it was dropped, the
+    current bin's clips came back, and the tools were written off as broken.
+
+    So: unresolvable-but-supplied is an error, and the id that `get_subfolders`
+    hands out is accepted as an address, since being given an id and having no
+    way to use it is what invited the guess.
+
+    `no_address` preserves each action's historical no-argument default: "current"
+    for the folder tool, "root" for the media_pool actions (whose old code hit
+    `_navigate_folder(mp, "")`, which returns root). This fix must not also
+    change what omitting the address means.
+    """
+    remediation = ("List folders with folder get_subfolders (walking down from "
+                   "path=\"Master\") and address by exact path or folder_id.")
+    path = _first_param(p, *path_keys)
+    if path:
+        f = _navigate_folder(mp, path)
+        return (f, None) if f else (None, _err(
+            f"Folder not found: {path}", code="FOLDER_NOT_FOUND",
+            category="invalid_input", remediation=remediation))
+    folder_id = _first_param(p, "folder_id", "folderId")
+    if folder_id:
+        f = _find_folder_by_id(mp.GetRootFolder(), str(folder_id))
+        return (f, None) if f else (None, _err(
+            f"Folder not found: {folder_id}", code="FOLDER_NOT_FOUND",
+            category="invalid_input", remediation=remediation))
+    f = mp.GetRootFolder() if no_address == "root" else mp.GetCurrentFolder()
+    return (f, None) if f else (None, _err("No current Media Pool folder"))
+
+
 def _navigate_folder(mp, path):
     root = mp.GetRootFolder()
     if not path or path in ("Master", "/", ""):
@@ -16666,7 +16714,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             return _err(f"Folder not found: {p.get('path')}")
         return {"success": bool(mp.SetCurrentFolder(f))}
     elif action == "add_subfolder":
-        parent = _navigate_folder(mp, p.get("parent_path", "")) or mp.GetCurrentFolder()
+        parent, folder_err = _folder_from_params(mp, p, "parent_path", "parentPath", no_address="root")
+        if folder_err:
+            return folder_err
         f = mp.AddSubFolder(parent, p["name"])
         return _ok(name=f.GetName(), id=f.GetUniqueId()) if f else _err("Failed to create subfolder")
     elif action == "delete_folders":
@@ -16973,7 +17023,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         clip = _find_clip(root, p["clip_id"])
         return {"mattes": mp.GetClipMatteList(clip)} if clip else _err("Clip not found")
     elif action == "get_timeline_mattes":
-        folder = _navigate_folder(mp, p.get("folder_path", "")) or mp.GetCurrentFolder()
+        folder, folder_err = _folder_from_params(mp, p, "folder_path", "folderPath", no_address="root")
+        if folder_err:
+            return folder_err
         result = mp.GetTimelineMatteList(folder)
         return {"mattes": len(result) if result else 0}
     elif action == "delete_clip_mattes":
@@ -17037,6 +17089,11 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
 def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Operations on Media Pool folders.
 
+    Address a folder with `path` ("Master/SubFolder") or with `folder_id` (the id
+    get_subfolders returns). Omit both for the current folder. An address that is
+    supplied but does not resolve is an error — it never falls back to the current
+    folder.
+
     Actions:
       get_clips(path?) -> {clips}  — path like "Master/SubFolder", omit for current
       get_name(path?) -> {name}
@@ -17057,10 +17114,9 @@ def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     if err:
         return err
 
-    folder_path = p.get("path", "")
-    f = _navigate_folder(mp, folder_path) if folder_path else mp.GetCurrentFolder()
-    if not f:
-        return _err(f"Folder not found: {folder_path}")
+    f, folder_err = _folder_from_params(mp, p, "path", "folder_path", "folderPath")
+    if folder_err:
+        return folder_err
 
     if action == "get_clips":
         clips = f.GetClipList() or []
