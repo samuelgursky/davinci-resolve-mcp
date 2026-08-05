@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const { toOtio } = require('./otio');
-const { toFcp7Xml } = require('./emit-fcp7');
+const { toFcp7Xml, fcp7TimecodeCoverage } = require('./emit-fcp7');
 const { toAafModel } = require('./emit-aaf');
 
 const MEDIA_MODES = Object.freeze(['relink', 'full', 'consolidate']);
@@ -108,6 +108,9 @@ function buildPackage(conformed, opts = {}) {
   for (const f of formats) {
     if (f === 'otio') files.otio = toOtio(conformed);
     else if (f === 'fcp7Xml') files.fcp7Xml = toFcp7Xml(conformed, opts);
+    // A file def with no <timecode> makes Resolve reject THE WHOLE import, silently, so
+    // the coverage report rides with the package rather than being something the caller
+    // has to know to ask for. importable:false means this XML will import nothing.
     else if (f === 'aaf') files.aaf = toAafModel(conformed);
     else if (f === 'drp') files.drp = { blocked: true, reason: 'DRP authoring requires Resolve (Tier 3)' };
     else throw new Error(`package: unknown format "${f}"`);
@@ -115,6 +118,7 @@ function buildPackage(conformed, opts = {}) {
   const manifest = buildManifest(conformed, opts);
   const v2FlagTrack = opts.v2Flags || [];
   const pkg = { mediaMode, formats, files, media: buildMedia(conformed, mediaMode), v2FlagTrack, manifest };
+  if (files.fcp7Xml) pkg.fcp7Timecode = fcp7TimecodeCoverage(conformed);
   pkg.record = makeConformPackage({ mediaMode, formats, manifest, v2FlagCount: v2FlagTrack.length, version: opts.version, createdAt: opts.createdAt });
   return pkg;
 }
