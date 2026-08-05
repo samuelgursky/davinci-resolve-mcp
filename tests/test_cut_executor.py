@@ -80,7 +80,7 @@ class ApplyCutsApplyTest(unittest.TestCase):
         ]
         calls = []
 
-        def fake_lift(tl, rp):
+        def fake_lift(tl, rp, **_kw):
             calls.append(rp)
             return {"success": True, "deleted": 1}
 

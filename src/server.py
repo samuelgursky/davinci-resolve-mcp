@@ -50,6 +50,7 @@ from src.utils.contracts import validate as _validate_params
 from src.utils.cut_ir import build_cut_list as _build_cut_list
 from src.utils.page_lock import (
     color_page_for_thumbnails as _color_page_for_thumbnails,
+    edit_page_for_timeline_edits as _edit_page_for_timeline_edits,
     open_page_serialized as _open_page_serialized,
     page_lock as _page_lock,
 )
@@ -3918,12 +3919,31 @@ def _timeline_items_presence(tl, items):
     return "absent"
 
 
-def _timeline_delete_clips_verified(tl, items, ripple):
-    """Timeline.DeleteClips with readback-and-retry.
+def _timeline_delete_clips_verified(tl, items, ripple, *, resolve=None):
+    """Timeline.DeleteClips with a page guard and readback-and-retry.
 
-    api_truth 'Timeline.DeleteClips (flaky first attempt)': the call can
-    return False while every item is still present, and an identical retry
-    then succeeds. On a False, read the tracks back:
+    api_truth 'Timeline.DeleteClips (requires the Edit page; flaky first
+    attempt)' records two distinct failures behind this one call.
+
+    Wrong page (deterministic): with the UI on some pages (verified:
+    Fairlight) the call returns False and deletes nothing, retries included —
+    retrying cannot help. When a `resolve` handle is supplied, the guard
+    switches to the Edit page for the call and restores the caller's page
+    after. Guard failures are swallowed: the delete attempt itself stays the
+    source of truth. `resolve` is an explicit parameter, not an internal
+    get_resolve(), so offline tests calling this helper directly can never
+    touch a live Resolve UI.
+
+    The guard is page_lock's edit_page_for_timeline_edits, not a local
+    OpenPage pair, because the switch has to be serialized against every other
+    page-switching operation (thumbnail capture takes the Color page the same
+    way). Unlocked, a concurrent switch lands this delete on some other page —
+    reintroducing the very failure the guard prevents. Callers deleting in a
+    loop should hold that guard around the loop; nesting it here is free.
+
+    Flaky first attempt: the call can return False while every item is still
+    present, and an identical retry then succeeds. On a False, read the
+    tracks back:
 
       absent  -> the delete landed despite the False; report success.
       present -> retry the identical call once, then read back again.
@@ -3938,14 +3958,20 @@ def _timeline_delete_clips_verified(tl, items, ripple):
     handles to already-deleted items included. That could not be made to
     misbehave against a fake; it is recorded, not resolved.
     """
-    if bool(tl.DeleteClips(items, ripple)):
-        return True
-    presence = _timeline_items_presence(tl, items)
-    if presence != "present":
-        return presence == "absent"
-    if bool(tl.DeleteClips(items, ripple)):
-        return True
-    return _timeline_items_presence(tl, items) == "absent"
+    def _delete_with_readback():
+        if bool(tl.DeleteClips(items, ripple)):
+            return True
+        presence = _timeline_items_presence(tl, items)
+        if presence != "present":
+            return presence == "absent"
+        if bool(tl.DeleteClips(items, ripple)):
+            return True
+        return _timeline_items_presence(tl, items) == "absent"
+
+    if resolve is None:
+        return _delete_with_readback()
+    with _edit_page_for_timeline_edits(resolve):
+        return _delete_with_readback()
 
 
 def _timeline_items_by_ids(tl, ids, track_types=("video", "audio", "subtitle")):
@@ -4110,7 +4136,7 @@ def _append_and_recover_timeline_item(
     return result, duplicate_item, None
 
 
-def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_sources: bool = False):
+def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_sources: bool = False, resolve=None):
     ids = p.get("clip_ids") or p.get("ids")
     selected = bool(p.get("selected", False))
     if ids is not None and not isinstance(ids, list):
@@ -4321,7 +4347,7 @@ def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_source
                 seen_delete_ids.add(item_id)
         if delete_items:
             try:
-                out["deleted_sources"] = _timeline_delete_clips_verified(tl, delete_items, bool(p.get("ripple", False)))
+                out["deleted_sources"] = _timeline_delete_clips_verified(tl, delete_items, bool(p.get("ripple", False)), resolve=resolve)
                 out["deleted_source_ids"] = _timeline_item_ids(delete_items)
             except Exception as exc:
                 out["deleted_sources"] = False
@@ -4399,7 +4425,7 @@ def _collect_timeline_items_in_range(tl, p: Dict[str, Any]):
     return start, end, items, None
 
 
-def _timeline_copy_range_impl(proj, tl, p: Dict[str, Any], *, overwrite: bool = False):
+def _timeline_copy_range_impl(proj, tl, p: Dict[str, Any], *, overwrite: bool = False, resolve=None):
     start, end, items, err = _collect_timeline_items_in_range(tl, p)
     if err:
         return err
@@ -4436,7 +4462,7 @@ def _timeline_copy_range_impl(proj, tl, p: Dict[str, Any], *, overwrite: bool = 
                     if existing_start < dest_end and existing_end > dest_start:
                         delete_targets.append(existing)
         if delete_targets:
-            deleted = _timeline_delete_clips_verified(tl, delete_targets, False)
+            deleted = _timeline_delete_clips_verified(tl, delete_targets, False, resolve=resolve)
 
     results = []
     for track_type, source_track, item, overlap_start, overlap_end in items:
@@ -4499,7 +4525,7 @@ def _apply_cuts_skip_reason(cut):
     return None
 
 
-def _timeline_lift_range_impl(tl, p: Dict[str, Any]):
+def _timeline_lift_range_impl(tl, p: Dict[str, Any], *, resolve=None):
     start, end, items, err = _collect_timeline_items_in_range(tl, p)
     if err:
         return err
@@ -4529,7 +4555,7 @@ def _timeline_lift_range_impl(tl, p: Dict[str, Any]):
         return {"success": True, "deleted": 0, "range": {"start": start, "end": end}}
     deleted_ids = _timeline_item_ids(delete_items)
     return {
-        "success": _timeline_delete_clips_verified(tl, delete_items, bool(p.get("ripple", False))),
+        "success": _timeline_delete_clips_verified(tl, delete_items, bool(p.get("ripple", False)), resolve=resolve),
         "deleted": len(delete_items),
         "deleted_ids": deleted_ids,
         "range": {"start": start, "end": end},
@@ -20499,7 +20525,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             "track_indices": [target_track],
             "allow_partial_item_delete": True,
             "ripple": False,
-        })
+        }, resolve=_r)
         if not lift.get("success"):
             return {"success": False, "error": f"lift failed: {lift.get('error')}", "lift": lift}
         audio_lift = None
@@ -20511,7 +20537,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                 "track_indices": linked_audio_indices,
                 "allow_partial_item_delete": True,
                 "ripple": False,
-            })
+            }, resolve=_r)
             if not audio_lift.get("success"):
                 return {
                     "success": False,
@@ -21005,7 +21031,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
             blocked = _consume_confirm_token(action="timeline.delete_clips_ripple", params=p)
             if blocked:
                 return blocked
-        return {"success": _timeline_delete_clips_verified(tl, found, ripple)}
+        return {"success": _timeline_delete_clips_verified(tl, found, ripple, resolve=get_resolve())}
     elif action == "set_clips_linked":
         ids_set = set(p["clip_ids"])
         found = []
@@ -21023,13 +21049,13 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "copy_clips":
         return _timeline_duplicate_clips_impl(proj, tl, p)
     elif action == "move_clips":
-        return _timeline_duplicate_clips_impl(proj, tl, p, delete_sources=True)
+        return _timeline_duplicate_clips_impl(proj, tl, p, delete_sources=True, resolve=get_resolve())
     elif action in {"copy_range", "duplicate_range"}:
         return _timeline_copy_range_impl(proj, tl, p)
     elif action == "overwrite_range":
-        return _timeline_copy_range_impl(proj, tl, p, overwrite=True)
+        return _timeline_copy_range_impl(proj, tl, p, overwrite=True, resolve=get_resolve())
     elif action == "lift_range":
-        return _timeline_lift_range_impl(tl, p)
+        return _timeline_lift_range_impl(tl, p, resolve=get_resolve())
     elif action == "story_spine_report":
         return _timeline_story_spine_report(tl, p)
     elif action == "create_variant_from_ranges":
@@ -21184,15 +21210,21 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
 
         allow_partial = bool(p.get("allow_partial_item_delete", True))
         results = []
-        for c in applicable:
-            sp = c["span"]
-            res = _timeline_lift_range_impl(tl, {
-                "start_frame": sp["start"],
-                "end_frame": sp["end"],
-                "ripple": c["action"] == "ripple_delete",
-                "allow_partial_item_delete": allow_partial,
-            })
-            results.append({"action": c["action"], "span": sp, "result": res})
+        resolve_obj = get_resolve()
+        # Hold the Edit page once for the whole run. The per-delete guard nests
+        # harmlessly inside (it finds the page already on edit), but without this
+        # each cut would switch and restore on its own: from Fairlight, N cuts
+        # cost 2N page flips instead of 2.
+        with _edit_page_for_timeline_edits(resolve_obj):
+            for c in applicable:
+                sp = c["span"]
+                res = _timeline_lift_range_impl(tl, {
+                    "start_frame": sp["start"],
+                    "end_frame": sp["end"],
+                    "ripple": c["action"] == "ripple_delete",
+                    "allow_partial_item_delete": allow_partial,
+                }, resolve=resolve_obj)
+                results.append({"action": c["action"], "span": sp, "result": res})
         applied = sum(1 for r in results
                       if isinstance(r["result"], dict) and r["result"].get("success"))
         return {"success": True, "applied": applied, "total": len(applicable),

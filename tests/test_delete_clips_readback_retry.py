@@ -1,4 +1,5 @@
-"""api_truth 'Timeline.DeleteClips (flaky first attempt)' — readback-and-retry.
+"""api_truth 'Timeline.DeleteClips (requires the Edit page; flaky first
+attempt)' — page guard and readback-and-retry.
 
 Timeline.DeleteClips can return False on the first call even when every item
 is valid and present; an identical immediate retry succeeds. It can also
@@ -17,6 +18,7 @@ import unittest
 from unittest import mock
 
 import src.server as s
+import src.utils.page_lock as page_lock
 
 
 class FakeItem:
@@ -203,13 +205,161 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(tl.calls, 2)
 
 
+class FakeResolve:
+    """Just enough of the Resolve app object for the page guard."""
+
+    def __init__(self, page="edit", open_ok=True, raise_on=None, events=None):
+        self.page = page
+        self.open_ok = open_ok
+        self.raise_on = raise_on  # 'get' or 'open'
+        self.events = events if events is not None else []
+
+    def GetCurrentPage(self):
+        if self.raise_on == "get":
+            raise RuntimeError("bridge lost")
+        return self.page
+
+    def OpenPage(self, page):
+        if self.raise_on == "open":
+            raise RuntimeError("bridge lost")
+        self.events.append(("open", page))
+        if self.open_ok:
+            self.page = page
+        return self.open_ok
+
+    @property
+    def opened(self):
+        return [page for kind, page in self.events if kind == "open"]
+
+
+class PageGuardTest(unittest.TestCase):
+    """The wrong-page failure: on Fairlight the call deterministically
+    returns False and deletes nothing. The guard switches to Edit for the
+    call and restores the caller's page after."""
+
+    def _logged(self, tl, events):
+        real_delete = tl.DeleteClips
+
+        def logged_delete(items, ripple):
+            events.append(("delete", None))
+            return real_delete(items, ripple)
+
+        tl.DeleteClips = logged_delete
+        return tl
+
+    def test_switches_to_edit_before_delete_and_restores_after(self):
+        events = []
+        items = [FakeItem("a")]
+        tl = self._logged(FlakyTimeline(items, [(True, True)]), events)
+        r = FakeResolve(page="fairlight", events=events)
+        ok = s._timeline_delete_clips_verified(tl, items, False, resolve=r)
+        self.assertTrue(ok)
+        self.assertEqual(events, [("open", "edit"), ("delete", None), ("open", "fairlight")])
+
+    def test_already_on_edit_touches_no_pages(self):
+        items = [FakeItem("a")]
+        tl = FlakyTimeline(items, [(True, True)])
+        r = FakeResolve(page="edit")
+        self.assertTrue(s._timeline_delete_clips_verified(tl, items, False, resolve=r))
+        self.assertEqual(r.opened, [])
+
+    def test_page_restored_even_when_the_delete_fails(self):
+        items = [FakeItem("a")]
+        tl = FlakyTimeline(items, [(False, False), (False, False)])
+        r = FakeResolve(page="fairlight")
+        ok = s._timeline_delete_clips_verified(tl, items, False, resolve=r)
+        self.assertFalse(ok)
+        self.assertEqual(r.opened, ["edit", "fairlight"])
+        self.assertEqual(r.page, "fairlight")
+
+    def test_guard_failure_never_blocks_the_delete(self):
+        # GetCurrentPage raising must not stop the delete attempt.
+        items = [FakeItem("a")]
+        tl = FlakyTimeline(items, [(True, True)])
+        r = FakeResolve(raise_on="get")
+        self.assertTrue(s._timeline_delete_clips_verified(tl, items, False, resolve=r))
+        self.assertEqual(tl.calls, 1)
+
+    def test_openpage_refusing_means_no_restore_attempt(self):
+        items = [FakeItem("a")]
+        tl = FlakyTimeline(items, [(True, True)])
+        r = FakeResolve(page="fairlight", open_ok=False)
+        self.assertTrue(s._timeline_delete_clips_verified(tl, items, False, resolve=r))
+        self.assertEqual(r.opened, ["edit"])  # tried once; no restore of a page never left
+
+    def test_no_resolve_handle_means_no_guard(self):
+        # Direct callers (and offline tests) pass no handle; behavior is
+        # exactly the pre-guard helper.
+        items = [FakeItem("a")]
+        tl = FlakyTimeline(items, [(False, False), (True, True)])
+        self.assertTrue(s._timeline_delete_clips_verified(tl, items, False))
+        self.assertEqual(tl.calls, 2)
+
+
+class PageGuardSerializationTest(unittest.TestCase):
+    """The switch must be serialized, and it must not repeat per iteration."""
+
+    def _delete_once(self, resolve, probe=None):
+        items = [FakeItem("a")]
+        tl = FlakyTimeline(items, [(True, True)])
+        if probe is not None:
+            real = tl.DeleteClips
+
+            def probing(i, ripple):
+                probe.append(page_lock._depth)
+                return real(i, ripple)
+
+            tl.DeleteClips = probing
+        return s._timeline_delete_clips_verified(tl, items, False, resolve=resolve)
+
+    def test_delete_runs_holding_the_page_lock(self):
+        # Resolve has one globally-active page. An unlocked switch-work-restore
+        # races every other page-switching operation — thumbnail capture takes
+        # the Color page the same way — and losing that race lands the delete on
+        # another page, which is the exact failure the guard exists to prevent.
+        depths = []
+        self.assertTrue(self._delete_once(FakeResolve(page="fairlight"), probe=depths))
+        self.assertEqual(depths, [1])
+
+    def test_nested_guards_switch_once_not_once_per_delete(self):
+        # What apply_cuts does: hold the page across the run. The per-delete
+        # guard nests and finds the page already on edit, so five deletes cost
+        # one switch and one restore.
+        r = FakeResolve(page="fairlight")
+        with page_lock.edit_page_for_timeline_edits(r):
+            for _ in range(5):
+                self.assertTrue(self._delete_once(r))
+        self.assertEqual(r.opened, ["edit", "fairlight"])
+        self.assertEqual(r.page, "fairlight")
+
+    def test_unheld_loop_pays_a_flip_per_iteration(self):
+        # The counter-example the hoist exists to avoid: without an outer guard
+        # the same five deletes flip the page ten times, each a visible flash
+        # and possible cache/render work.
+        r = FakeResolve(page="fairlight")
+        for _ in range(5):
+            self.assertTrue(self._delete_once(r))
+        self.assertEqual(r.opened, ["edit", "fairlight"] * 5)
+
+    def test_lock_is_released_even_when_the_delete_raises(self):
+        items = [FakeItem("a")]
+        tl = FlakyTimeline(items, [(True, True)])
+        tl.DeleteClips = mock.Mock(side_effect=RuntimeError("bridge lost"))
+        r = FakeResolve(page="fairlight")
+        with self.assertRaises(RuntimeError):
+            s._timeline_delete_clips_verified(tl, items, False, resolve=r)
+        self.assertEqual(page_lock._depth, 0)
+        self.assertEqual(r.page, "fairlight")  # user's page still restored
+
+
 class DispatcherTest(unittest.TestCase):
-    def _delete(self, plan, blind=None):
+    def _delete(self, plan, blind=None, resolve=None):
         items = [FakeItem("a"), FakeItem("b")]
         tl = FlakyTimeline(items, plan, blind=blind)
         fake_proj = mock.Mock()
         fake_proj.GetCurrentTimeline.return_value = tl
-        with mock.patch.object(s, "_check", return_value=(mock.Mock(), fake_proj, None)):
+        with mock.patch.object(s, "get_resolve", return_value=resolve), \
+             mock.patch.object(s, "_check", return_value=(mock.Mock(), fake_proj, None)):
             return s.timeline("delete_clips", {"clip_ids": ["a", "b"]}), tl
 
     def test_flaky_first_attempt_retries_to_success(self):
@@ -225,6 +375,12 @@ class DispatcherTest(unittest.TestCase):
     def test_genuine_failure_still_reports_false(self):
         res, tl = self._delete([(False, False), (False, False)])
         self.assertFalse(res["success"])
+
+    def test_dispatcher_threads_the_resolve_handle_to_the_guard(self):
+        r = FakeResolve(page="fairlight")
+        res, tl = self._delete([(True, True)], resolve=r)
+        self.assertTrue(res["success"])
+        self.assertEqual(r.opened, ["edit", "fairlight"])
 
 
 class LiftRangeIntegrationTest(unittest.TestCase):
