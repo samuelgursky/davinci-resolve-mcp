@@ -374,13 +374,17 @@ values, or automation-hostile modal prompts.
 - **Reference:** [issue #77](https://github.com/samuelgursky/davinci-resolve-mcp/issues/77)
 - **Tags:** unreliable-return, silent-failure, metadata, reel-name
 
-### Timeline.DeleteClips (flaky first attempt)
+### Timeline.DeleteClips (requires the Edit page; flaky first attempt)
 
 - **Object:** `Timeline`
 - **Signature:** `([TimelineItem], ripple) -> bool`
-- **Behavior:** Can return False on the first call even when every item in the list is a valid, present TimelineItem; an identical immediate retry succeeds. Observed once, on Studio 21.0 during a cut-video edit session (items confirmed still present after the False, deleted cleanly on retry). Cause unknown — do NOT read this as the ProjectManager.DeleteProject shape: that one has an identified mechanism (the project being, or recently having been, current) that retrying does not clear, whereas a single retry cleared this in the one instance seen. One observation is not a mechanism; if a retry is ever seen to fail repeatedly here, this entry needs revisiting.
-- **Workaround / current handling:** Treat a False return as advisory: re-list the track and check whether the items are actually gone; if still present, retry the identical call once before failing. A readback that raised, enumerated nothing, or covered items whose unique ID cannot be read is UNKNOWN, not gone — never report an unverifiable delete as success, and do not spend a second destructive call on an outcome you equally cannot read.
-- **Tags:** unreliable-return, flaky, timeline, edit
+- **Behavior:** Two distinct failures share this call.
+
+  **1. Wrong page (deterministic, has a mechanism).** With the UI on the Fairlight page, DeleteClips returns False and deletes nothing, no matter how many times it is retried. Verified 2026-08-04 on Studio 21.0: three identical retries against 132 valid, unlocked, present TimelineItems all returned False with all 132 still on the track; a single `Resolve.OpenPage("edit")` followed by the same call returned True and left 0 items. Track lock and enable state were confirmed clear before and after, so this is a page gate, not a lock. This is the case the previous entry's falsification condition anticipated — a retry seen to fail repeatedly — and revisiting it found the mechanism.
+
+  **2. Flaky first attempt (one observation, no mechanism).** Independently of the page, the call has been seen once to return False with every item still present, where an identical immediate retry succeeded (Studio 21.0, cut-video edit session). Whether the UI was on the Edit page at the time was not recorded, so it cannot be ruled in or out as failure 1 in disguise. Do NOT read this as the ProjectManager.DeleteProject shape: that one has an identified mechanism (the project being, or recently having been, current) that retrying does not clear. One observation is still not a mechanism; if an immediate retry is ever seen to fail repeatedly while the UI is confirmed on the Edit page, this sub-entry needs revisiting.
+- **Workaround / current handling:** Open the Edit page first (`Resolve.OpenPage("edit")`) — a caller that deletes clips from a script must not assume the user left the UI on Edit, and a Fairlight or Color session is a completely ordinary place for them to be. Then treat a False return as advisory: re-list the track and check whether the items are actually gone; if still present, retry the identical call once before failing. A readback that raised, enumerated nothing, or covered items whose unique ID cannot be read is UNKNOWN, not gone — never report an unverifiable delete as success, and do not spend a second destructive call on an outcome you equally cannot read.
+- **Tags:** unreliable-return, flaky, silent-failure, page-dependent, timeline, edit
 
 ### MediaPool.AppendToTimeline with mixed-fps sources (duration floor)
 
