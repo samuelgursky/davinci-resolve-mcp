@@ -50,6 +50,7 @@ from src.utils.contracts import validate as _validate_params
 from src.utils.cut_ir import build_cut_list as _build_cut_list
 from src.utils.page_lock import (
     color_page_for_thumbnails as _color_page_for_thumbnails,
+    edit_page_for_timeline_edits as _edit_page_for_timeline_edits,
     open_page_serialized as _open_page_serialized,
     page_lock as _page_lock,
 )
@@ -3933,6 +3934,13 @@ def _timeline_delete_clips_verified(tl, items, ripple, *, resolve=None):
     get_resolve(), so offline tests calling this helper directly can never
     touch a live Resolve UI.
 
+    The guard is page_lock's edit_page_for_timeline_edits, not a local
+    OpenPage pair, because the switch has to be serialized against every other
+    page-switching operation (thumbnail capture takes the Color page the same
+    way). Unlocked, a concurrent switch lands this delete on some other page —
+    reintroducing the very failure the guard prevents. Callers deleting in a
+    loop should hold that guard around the loop; nesting it here is free.
+
     Flaky first attempt: the call can return False while every item is still
     present, and an identical retry then succeeds. On a False, read the
     tracks back:
@@ -3950,15 +3958,7 @@ def _timeline_delete_clips_verified(tl, items, ripple, *, resolve=None):
     handles to already-deleted items included. That could not be made to
     misbehave against a fake; it is recorded, not resolved.
     """
-    previous_page = None
-    if resolve is not None:
-        try:
-            page = resolve.GetCurrentPage()
-            if page and page != "edit" and resolve.OpenPage("edit"):
-                previous_page = page
-        except Exception:
-            pass
-    try:
+    def _delete_with_readback():
         if bool(tl.DeleteClips(items, ripple)):
             return True
         presence = _timeline_items_presence(tl, items)
@@ -3967,12 +3967,11 @@ def _timeline_delete_clips_verified(tl, items, ripple, *, resolve=None):
         if bool(tl.DeleteClips(items, ripple)):
             return True
         return _timeline_items_presence(tl, items) == "absent"
-    finally:
-        if previous_page:
-            try:
-                resolve.OpenPage(previous_page)
-            except Exception:
-                pass
+
+    if resolve is None:
+        return _delete_with_readback()
+    with _edit_page_for_timeline_edits(resolve):
+        return _delete_with_readback()
 
 
 def _timeline_items_by_ids(tl, ids, track_types=("video", "audio", "subtitle")):
@@ -21212,15 +21211,20 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         allow_partial = bool(p.get("allow_partial_item_delete", True))
         results = []
         resolve_obj = get_resolve()
-        for c in applicable:
-            sp = c["span"]
-            res = _timeline_lift_range_impl(tl, {
-                "start_frame": sp["start"],
-                "end_frame": sp["end"],
-                "ripple": c["action"] == "ripple_delete",
-                "allow_partial_item_delete": allow_partial,
-            }, resolve=resolve_obj)
-            results.append({"action": c["action"], "span": sp, "result": res})
+        # Hold the Edit page once for the whole run. The per-delete guard nests
+        # harmlessly inside (it finds the page already on edit), but without this
+        # each cut would switch and restore on its own: from Fairlight, N cuts
+        # cost 2N page flips instead of 2.
+        with _edit_page_for_timeline_edits(resolve_obj):
+            for c in applicable:
+                sp = c["span"]
+                res = _timeline_lift_range_impl(tl, {
+                    "start_frame": sp["start"],
+                    "end_frame": sp["end"],
+                    "ripple": c["action"] == "ripple_delete",
+                    "allow_partial_item_delete": allow_partial,
+                }, resolve=resolve_obj)
+                results.append({"action": c["action"], "span": sp, "result": res})
         applied = sum(1 for r in results
                       if isinstance(r["result"], dict) and r["result"].get("success"))
         return {"success": True, "applied": applied, "total": len(applicable),

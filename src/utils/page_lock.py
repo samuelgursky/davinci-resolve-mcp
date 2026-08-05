@@ -113,3 +113,53 @@ def color_page_for_thumbnails(resolve):
                     resolve.OpenPage(original)
                 except Exception:
                     pass
+
+
+@contextmanager
+def edit_page_for_timeline_edits(resolve):
+    """Hold the Edit page for the block, restoring the user's page after.
+
+    api_truth 'Timeline.DeleteClips (requires the Edit page; flaky first
+    attempt)': off the Edit page the call returns False and deletes nothing,
+    retries included — retrying cannot clear a page gate. Yields True when
+    Resolve is on the Edit page for the block.
+
+    Same shape as color_page_for_thumbnails, and for the same reason it lives
+    here rather than at the callsite: the switch must be serialized. Resolve has
+    one globally-active page, so an unlocked switch-work-restore races every
+    other page-switching operation — and losing that race puts the delete on
+    some other page, which is exactly the failure this guard exists to prevent.
+
+    Nesting is free (page_lock is reentrant, and an inner guard finds the page
+    already on edit and switches nothing), so a caller that deletes in a LOOP
+    should hold this once around the loop. Otherwise it pays a switch and a
+    restore per iteration: from Fairlight, N cuts cost 2N page flips, each a
+    visible flash and possible cache/render work.
+
+    If the current page can't be captured (GetCurrentPage returned None or
+    raised), no switch is attempted, so a skipped restore can never strand the
+    user on the Edit page.
+    """
+    original = None
+    try:
+        original = resolve.GetCurrentPage() if resolve else None
+    except Exception:
+        original = None
+    with page_lock():
+        on_edit = original == "edit"
+        if original and not on_edit:
+            try:
+                on_edit = bool(resolve.OpenPage("edit"))
+            except Exception:
+                pass
+        try:
+            yield on_edit
+        finally:
+            # Restore only a page we actually left: `on_edit` is False here when
+            # OpenPage refused, and restoring then would flip a page the user is
+            # still on.
+            if original and original != "edit" and on_edit:
+                try:
+                    resolve.OpenPage(original)
+                except Exception:
+                    pass

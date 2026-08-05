@@ -18,6 +18,7 @@ import unittest
 from unittest import mock
 
 import src.server as s
+import src.utils.page_lock as page_lock
 
 
 class FakeItem:
@@ -293,6 +294,62 @@ class PageGuardTest(unittest.TestCase):
         tl = FlakyTimeline(items, [(False, False), (True, True)])
         self.assertTrue(s._timeline_delete_clips_verified(tl, items, False))
         self.assertEqual(tl.calls, 2)
+
+
+class PageGuardSerializationTest(unittest.TestCase):
+    """The switch must be serialized, and it must not repeat per iteration."""
+
+    def _delete_once(self, resolve, probe=None):
+        items = [FakeItem("a")]
+        tl = FlakyTimeline(items, [(True, True)])
+        if probe is not None:
+            real = tl.DeleteClips
+
+            def probing(i, ripple):
+                probe.append(page_lock._depth)
+                return real(i, ripple)
+
+            tl.DeleteClips = probing
+        return s._timeline_delete_clips_verified(tl, items, False, resolve=resolve)
+
+    def test_delete_runs_holding_the_page_lock(self):
+        # Resolve has one globally-active page. An unlocked switch-work-restore
+        # races every other page-switching operation — thumbnail capture takes
+        # the Color page the same way — and losing that race lands the delete on
+        # another page, which is the exact failure the guard exists to prevent.
+        depths = []
+        self.assertTrue(self._delete_once(FakeResolve(page="fairlight"), probe=depths))
+        self.assertEqual(depths, [1])
+
+    def test_nested_guards_switch_once_not_once_per_delete(self):
+        # What apply_cuts does: hold the page across the run. The per-delete
+        # guard nests and finds the page already on edit, so five deletes cost
+        # one switch and one restore.
+        r = FakeResolve(page="fairlight")
+        with page_lock.edit_page_for_timeline_edits(r):
+            for _ in range(5):
+                self.assertTrue(self._delete_once(r))
+        self.assertEqual(r.opened, ["edit", "fairlight"])
+        self.assertEqual(r.page, "fairlight")
+
+    def test_unheld_loop_pays_a_flip_per_iteration(self):
+        # The counter-example the hoist exists to avoid: without an outer guard
+        # the same five deletes flip the page ten times, each a visible flash
+        # and possible cache/render work.
+        r = FakeResolve(page="fairlight")
+        for _ in range(5):
+            self.assertTrue(self._delete_once(r))
+        self.assertEqual(r.opened, ["edit", "fairlight"] * 5)
+
+    def test_lock_is_released_even_when_the_delete_raises(self):
+        items = [FakeItem("a")]
+        tl = FlakyTimeline(items, [(True, True)])
+        tl.DeleteClips = mock.Mock(side_effect=RuntimeError("bridge lost"))
+        r = FakeResolve(page="fairlight")
+        with self.assertRaises(RuntimeError):
+            s._timeline_delete_clips_verified(tl, items, False, resolve=r)
+        self.assertEqual(page_lock._depth, 0)
+        self.assertEqual(r.page, "fairlight")  # user's page still restored
 
 
 class DispatcherTest(unittest.TestCase):
