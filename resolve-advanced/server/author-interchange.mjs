@@ -29,11 +29,70 @@ const byTrack = (events) => {
 };
 
 /**
+ * Events whose media timecode ORIGIN had to be assumed as 0 when authoring OTIO. Resolve
+ * measures a clip's source_range against the media's real timecode range, so an event with
+ * no origin only imports if its media genuinely starts at 00:00:00:00 — otherwise the file
+ * looks fine and Resolve creates no timeline. Supply `mediaStartTcFrame` (or an absolute
+ * `srcTcFrame`) per event to clear it. Always an array, empty when every event carried one.
+ */
+export function otioMediaOriginAssumed(events) {
+  const out = [];
+  (events || []).forEach((e, index) => {
+    if (e.srcTcFrame != null || e.mediaStartTcFrame != null || e.startTcFrame != null) return;
+    out.push({
+      index,
+      recIn: e.recIn ?? 0,
+      srcIn: e.srcIn ?? 0,
+      source: e.source || '',
+      reason: 'no media timecode origin — assumed 00:00:00:00; Resolve rejects the import if the media starts elsewhere',
+    });
+  });
+  return out;
+}
+
+const rt = (value, rate) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: Number(rate), value: Number(value) });
+const tr = (start, duration, rate) => ({ OTIO_SCHEMA: 'TimeRange.1', duration: rt(duration, rate), start_time: rt(start, rate) });
+const basename = (p) => String(p || '').split('/').pop() || 'UNKNOWN';
+
+/**
  * Build an OTIO timeline doc (plain object) from normalized events. Inserts gaps so record
  * positions are exact; emits LinearTimeWarp for speed/reverse and Transition items where present.
+ *
+ * The emitted shape mirrors what Resolve's own EXPORT_OTIO writes, because Resolve's importer
+ * is far pickier than the OTIO spec. Measured on 19.1.3: a Resolve-authored .otio re-imports
+ * through MediaPool.ImportTimelineFromFile (3 items, 3 linked) while the shape this function
+ * used to emit produced NO TIMELINE — same project, same session, same three online media
+ * files. So the scripting API imports OTIO fine; what it rejects is a document that is valid
+ * OTIO but not Resolve-shaped. The parts that matter:
+ *
+ *   - `Clip.2` with a `media_references` MAP + `active_media_reference_key`, not `Clip.1`
+ *     with a singular `media_reference`. This is the one that most looks like a free choice
+ *     and is not.
+ *   - `available_range` on the external reference, and a clip `name` that is the media
+ *     BASENAME rather than its full path.
+ *   - SOURCE FRAMES ARE TIMECODE-ABSOLUTE. This is the one that decides the import. The
+ *     media used to measure this carries an embedded start TC of 01:00:00:00, so Resolve
+ *     writes its `available_range` starting at frame 86400 and the clip's `source_range`
+ *     at 86400 too. Emitting the same cut with 0-based source offsets — the natural
+ *     reading of "source in point" — produced NO TIMELINE, because frame 0 is outside the
+ *     media's real range. Bisected: 0-based fails and absolute succeeds whether or not the
+ *     stack/track `source_range` is null, so it is the frame origin that matters and not
+ *     the surrounding shape. Same lesson as srcIn being fragment-relative on consolidated
+ *     media: a source position means nothing without the origin it is measured from.
+ *   - `enabled: true` on stack, tracks and clips; `metadata` objects present (Resolve stamps
+ *     its own `Resolve_OTIO` block and reads the tracks' back).
+ *   - `global_start_time` on the timeline, and track names in Resolve's own form ("Video 1").
+ *
+ * Give the media's TC origin per event as `mediaStartTcFrame` (or an already-absolute
+ * `srcTcFrame`). Without it this falls back to a 0 origin, which only imports when the media
+ * really does start at 00:00:00:00 — so the events that had to be assumed are reported back
+ * in `mediaOriginAssumed` rather than silently producing a file that imports as nothing.
+ *
+ * Handy inverse: this repo's parseOTIO still reads what we emit, so the bridge round-trips.
  */
 export function eventsToOTIO(events, opts = {}) {
   const fps = opts.fps || events.find((e) => e.fps)?.fps || 24;
+  const startFrame = opts.startFrame ?? opts.globalStartFrame ?? 0;
   const groups = byTrack(events);
   const tracks = [];
   for (const [kind, list] of [
@@ -48,40 +107,88 @@ export function eventsToOTIO(events, opts = {}) {
       if (recIn > rec) {
         children.push({
           OTIO_SCHEMA: 'Gap.1',
-          source_range: { OTIO_SCHEMA: 'TimeRange.1', duration: { OTIO_SCHEMA: 'RationalTime.1', value: recIn - rec, rate: fps } },
+          metadata: {},
+          source_range: { OTIO_SCHEMA: 'TimeRange.1', duration: rt(recIn - rec, fps), start_time: rt(0, fps) },
+          effects: [],
+          markers: [],
+          enabled: true,
         });
         rec = recIn;
       }
       const recDur = (e.recOut ?? recIn) - recIn;
+      const clipFps = e.fps || fps;
+      const srcIn = e.srcIn ?? 0;
+      // The media's timecode origin. srcTcFrame (already absolute) wins; otherwise the
+      // media start TC plus the in-point. A 0 origin is an ASSUMPTION, and it is recorded.
+      const mediaStart = e.mediaStartTcFrame ?? e.startTcFrame ?? null;
+      const srcStart = e.srcTcFrame ?? (mediaStart ?? 0) + srcIn;
+      const availStart = e.srcTcFrame != null ? e.srcTcFrame - srcIn : (mediaStart ?? 0);
       const clip = {
-        OTIO_SCHEMA: 'Clip.1',
-        name: e.source || 'UNKNOWN',
-        source_range: {
-          OTIO_SCHEMA: 'TimeRange.1',
-          start_time: { OTIO_SCHEMA: 'RationalTime.1', value: e.srcIn ?? 0, rate: e.fps || fps },
-          duration: { OTIO_SCHEMA: 'RationalTime.1', value: recDur, rate: e.fps || fps },
-        },
-        media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: e.source || '' },
+        OTIO_SCHEMA: 'Clip.2',
+        metadata: {},
+        name: basename(e.source),
+        source_range: tr(srcStart, recDur, clipFps),
         effects: [],
         markers: [],
+        enabled: true,
+        media_references: {
+          DEFAULT_MEDIA: {
+            OTIO_SCHEMA: 'ExternalReference.1',
+            metadata: {},
+            name: basename(e.source),
+            // Resolve writes a BARE path here, not a file:// URL.
+            target_url: e.source || '',
+            available_range: tr(availStart, e.mediaDuration ?? e.srcAvailDuration ?? Math.max(recDur, srcIn + recDur), clipFps),
+            available_image_bounds: null,
+          },
+        },
+        active_media_reference_key: 'DEFAULT_MEDIA',
       };
       if ((e.speed ?? 100) !== 100 || e.reverse) {
-        clip.effects.push({ OTIO_SCHEMA: 'LinearTimeWarp.1', name: 'Speed', time_scalar: (e.reverse ? -1 : 1) * ((e.speed ?? 100) / 100) });
+        clip.effects.push({ OTIO_SCHEMA: 'LinearTimeWarp.1', name: 'Speed', metadata: {}, effect_name: 'LinearTimeWarp', time_scalar: (e.reverse ? -1 : 1) * ((e.speed ?? 100) / 100) });
       }
       if (e.transition) {
         children.push({
           OTIO_SCHEMA: 'Transition.1',
+          metadata: {},
+          name: 'Cross Dissolve',
           transition_type: 'SMPTE_Dissolve',
-          in_offset: { OTIO_SCHEMA: 'RationalTime.1', value: Math.ceil((e.transition.duration || 0) / 2), rate: fps },
-          out_offset: { OTIO_SCHEMA: 'RationalTime.1', value: Math.floor((e.transition.duration || 0) / 2), rate: fps },
+          in_offset: rt(Math.ceil((e.transition.duration || 0) / 2), fps),
+          out_offset: rt(Math.floor((e.transition.duration || 0) / 2), fps),
         });
       }
       children.push(clip);
       rec = recIn + recDur;
     }
-    tracks.push({ OTIO_SCHEMA: 'Track.1', name: `${kind[0]}1`, kind, children });
+    tracks.push({
+      OTIO_SCHEMA: 'Track.1',
+      metadata: {},
+      name: `${kind} 1`,
+      source_range: tr(0, rec, fps),
+      effects: [],
+      markers: [],
+      enabled: true,
+      children,
+      kind,
+    });
   }
-  return { OTIO_SCHEMA: 'Timeline.1', name: opts.name || 'Conformed', tracks: { OTIO_SCHEMA: 'Stack.1', name: 'tracks', children: tracks } };
+  const stackDur = tracks.reduce((m, t) => Math.max(m, t.source_range.duration.value), 0);
+  return {
+    OTIO_SCHEMA: 'Timeline.1',
+    metadata: {},
+    name: opts.name || 'Conformed',
+    global_start_time: rt(startFrame, fps),
+    tracks: {
+      OTIO_SCHEMA: 'Stack.1',
+      metadata: {},
+      name: 'tracks',
+      source_range: tr(0, stackDur, fps),
+      effects: [],
+      markers: [],
+      enabled: true,
+      children: tracks,
+    },
+  };
 }
 
 /** Build a CMX3600 EDL string (cuts + M2 speed). Video events only, per EDL convention. */
@@ -169,7 +276,7 @@ export async function authorInterchange(events, target, opts = {}) {
   const t = String(target || 'otio').toLowerCase();
   if (t === 'otio') {
     const doc = eventsToOTIO(events, opts);
-    return { target: 'otio', content: JSON.stringify(doc, null, 2), doc };
+    return { target: 'otio', content: JSON.stringify(doc, null, 2), doc, mediaOriginAssumed: otioMediaOriginAssumed(events) };
   }
   if (t === 'edl') {
     return { target: 'edl', content: eventsToEDL(events, opts) };

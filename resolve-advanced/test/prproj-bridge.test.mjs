@@ -221,3 +221,55 @@ test('parse_interchange prproj → events + projectVersion (no more refuse)', as
   assert.equal(r.count, 4);
   assert.equal(r.projectVersion, 40);
 });
+
+// The OTIO shape Resolve's importer actually accepts. Measured on 19.1.3 by round-tripping
+// Resolve's own EXPORT_OTIO: a Resolve-authored .otio re-imports (3 items, 3 linked) while
+// the shape this module used to emit produced NO TIMELINE from the same three online files.
+test('otio: emits the Clip.2 / media_references shape Resolve imports', () => {
+  const doc = eventsToOTIO([
+    { track: 'V', recIn: 0, recOut: 48, srcIn: 0, source: '/m/src01.mov', fps: 24, mediaStartTcFrame: 86400, mediaDuration: 240 },
+  ], { name: 'Shape', fps: 24, startFrame: 86400 });
+  assert.equal(doc.global_start_time.value, 86400);
+  const track = doc.tracks.children[0];
+  assert.equal(track.name, 'Video 1');
+  assert.equal(track.kind, 'Video');
+  assert.equal(track.enabled, true);
+  const clip = track.children[0];
+  assert.equal(clip.OTIO_SCHEMA, 'Clip.2', 'Clip.1 + singular media_reference is what Resolve refuses');
+  assert.equal(clip.media_reference, undefined);
+  assert.equal(clip.active_media_reference_key, 'DEFAULT_MEDIA');
+  assert.equal(clip.name, 'src01.mov', 'name is the basename, not the full path');
+  const ref = clip.media_references.DEFAULT_MEDIA;
+  assert.equal(ref.target_url, '/m/src01.mov', 'a BARE path, not a file:// URL');
+  assert.equal(ref.available_range.start_time.value, 86400);
+  assert.equal(ref.available_range.duration.value, 240);
+});
+
+test('otio: source frames are TIMECODE-ABSOLUTE against the media origin', () => {
+  // The decisive one. 0-based source offsets sit outside the media's real range and Resolve
+  // creates no timeline; the same cut with absolute frames imports 3/3.
+  const [clip] = eventsToOTIO([
+    { track: 'V', recIn: 0, recOut: 48, srcIn: 100, source: '/m/a.mov', fps: 24, mediaStartTcFrame: 86400, mediaDuration: 240 },
+  ], { fps: 24 }).tracks.children[0].children;
+  assert.equal(clip.source_range.start_time.value, 86500, 'origin 86400 + srcIn 100');
+  assert.equal(clip.media_references.DEFAULT_MEDIA.available_range.start_time.value, 86400);
+  // An already-absolute srcTcFrame wins and back-derives the media origin.
+  const [abs] = eventsToOTIO([
+    { track: 'V', recIn: 0, recOut: 48, srcIn: 100, srcTcFrame: 90000, source: '/m/a.mov', fps: 24, mediaDuration: 240 },
+  ], { fps: 24 }).tracks.children[0].children;
+  assert.equal(abs.source_range.start_time.value, 90000);
+  assert.equal(abs.media_references.DEFAULT_MEDIA.available_range.start_time.value, 89900);
+});
+
+test('otio: an ASSUMED media timecode origin is reported, not hidden', async () => {
+  const withOrigin = await authorInterchange(
+    [{ track: 'V', recIn: 0, recOut: 48, srcIn: 0, source: '/m/a.mov', fps: 24, mediaStartTcFrame: 86400 }], 'otio', {});
+  assert.deepEqual(withOrigin.mediaOriginAssumed, []);
+  const without = await authorInterchange(
+    [{ track: 'V', recIn: 0, recOut: 48, srcIn: 0, source: '/m/a.mov', fps: 24 }], 'otio', {});
+  assert.equal(without.mediaOriginAssumed.length, 1);
+  assert.equal(without.mediaOriginAssumed[0].index, 0);
+  assert.match(without.mediaOriginAssumed[0].reason, /origin/i);
+  // Assuming 0 is still what gets emitted — the point is that you are TOLD.
+  assert.equal(without.doc.tracks.children[0].children[0].source_range.start_time.value, 0);
+});
