@@ -8049,6 +8049,25 @@ def _media_analysis_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+def _media_analysis_wants_batch_job(p: Dict[str, Any]) -> bool:
+    """True when an analyze_* call should divert to the durable batch-job path.
+
+    `prefer_handle` is the documented opt-in; `background`/`async_job` are accepted
+    as aliases. Both previously looked like the async opt-in used by the timeline
+    actions (export/import/create_subtitles_from_audio) but were silently ignored
+    here, leaving callers with no job_id and no way to return early — see
+    davinci-resolve-mcp CONTRIBUTION_NOTES.md, Bug 2a. `dry_run` calls never divert,
+    same as `prefer_handle` alone did before.
+    """
+    if _media_analysis_bool(p.get("dry_run"), False):
+        return False
+    return (
+        _media_analysis_bool(p.get("prefer_handle"), False)
+        or _media_analysis_bool(p.get("background"), False)
+        or _media_analysis_bool(p.get("async_job"), False)
+    )
+
+
 def _media_analysis_target_dict(raw_target: Any, p: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     p = p or {}
     if raw_target is None:
@@ -17728,12 +17747,16 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       set_ai_governance(preset?, mode?, overrides?) -> {success, tier, mode, overrides} — set the tier, the mode (advisory|enforce), and/or overrides (deblur_runs, speech_runs, render_bytes, render_wall_clock_ms; int or "unlimited"). In enforce mode a blocked run returns GOVERNANCE_BLOCKED; pass override_governance=true on the op to consciously exceed the tier once.
       resolve_output_root(analysis_root?, source_paths?) -> {project_root}
       plan(target, depth?, analysis_root?, transcription?, vision?, dry_run?) -> {clips, artifacts}
-      analyze_file(path|file_path, dry_run?, session_only?, persist?) -> {clips, manifest}
-      analyze_clip(clip_id|selected, dry_run?, session_only?, persist?) -> {clips, manifest}
-      analyze_bin(path|bin_path, recursive?, dry_run?, session_only?, persist?) -> {clips, manifest}
-      analyze_project(recursive?, dry_run?, session_only?, persist?) -> {clips, manifest}
-      analyze_sequence(timeline_index?, track_types?, dry_run?, session_only?, persist?) -> {clips, manifest}
+      analyze_file(path|file_path, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {job_id, status} if handled
+      analyze_clip(clip_id|selected, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {job_id, status} if handled
+      analyze_bin(path|bin_path, recursive?, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {job_id, status} if handled
+      analyze_project(recursive?, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {job_id, status} if handled
+      analyze_sequence(timeline_index?, track_types?, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {job_id, status} if handled
       analyze_timeline(...) -> alias for analyze_sequence on the current timeline
+      -- `background`/`async_job` are accepted as aliases for `prefer_handle` on the analyze_* actions
+         above: any of the three reroutes to start_batch_job (job_id, polled via batch_job_status) when
+         not a dry_run. On dry_run=true they're ignored, same as prefer_handle — the call still returns
+         the synchronous plan.
       detect_sync_events(paths?|target?, event_types?, windows?) -> {files, alignment}
       add_sync_event_markers(target?|paths?|detections?, confirm?) -> {added, skipped}
       publish_clip_metadata(target?, fields?, slate_detection?, timed_markers?|write_markers?, dry_run?, confirm?) -> {results}
@@ -18621,15 +18644,17 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 "track_types": p.get("track_types") or p.get("trackTypes") or target.get("track_types") or target.get("trackTypes"),
             })
         p["target"] = target
-        # E3 — `prefer_handle` opt-in. When true AND this isn't a dry-run,
-        # divert to the durable batch-job machinery so the call returns a
-        # job_id immediately instead of blocking on vision/transcription.
-        # Default false: existing blocking semantics are preserved.
+        # E3 — `prefer_handle` opt-in (plus `background`/`async_job` aliases,
+        # see _media_analysis_wants_batch_job). When true AND this isn't a
+        # dry-run, divert to the durable batch-job machinery so the call
+        # returns a job_id immediately instead of blocking on
+        # vision/transcription. Default false: existing blocking semantics
+        # are preserved.
         # The start_batch_job handler lives ABOVE this block in the dispatch
         # chain, so we can't just rewrite `action` and fall through — we
         # re-enter the tool with the rewritten action via await so the
         # handler chain restarts from the top.
-        if _media_analysis_bool(p.get("prefer_handle"), False) and not p.get("dry_run"):
+        if _media_analysis_wants_batch_job(p):
             return await media_analysis("start_batch_job", p, ctx)
         action = "plan"
 

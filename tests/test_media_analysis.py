@@ -25,6 +25,7 @@ from src.server import (
     _media_analysis_provenance_metadata,
     _media_analysis_records_from_target,
     _media_analysis_report_metadata_candidates,
+    _media_analysis_wants_batch_job,
     _publish_clip_metadata_from_analysis,
     setup,
 )
@@ -4760,6 +4761,36 @@ class InventoryCacheReuseTests(unittest.TestCase):
                 self.dash._current_resolve_project_id = original
             self.assertTrue(payload["resolve_available"])
             self.assertEqual(payload["counts"]["total"], 2)
+
+
+class MediaAnalysisWantsBatchJobTests(unittest.TestCase):
+    """Bug 2a: `background`/`async_job` must behave as aliases for `prefer_handle`
+    on analyze_clip/analyze_bin/etc, not be silently ignored (which previously
+    left callers with no job_id and no way to return early — see
+    davinci-resolve-mcp CONTRIBUTION_NOTES.md, Bug 2a)."""
+
+    def test_prefer_handle_true_wants_batch_job(self):
+        self.assertTrue(_media_analysis_wants_batch_job({"prefer_handle": True}))
+
+    def test_background_true_wants_batch_job(self):
+        self.assertTrue(_media_analysis_wants_batch_job({"background": True}))
+
+    def test_async_job_true_wants_batch_job(self):
+        self.assertTrue(_media_analysis_wants_batch_job({"async_job": True}))
+
+    def test_string_true_values_are_coerced(self):
+        self.assertTrue(_media_analysis_wants_batch_job({"background": "true"}))
+
+    def test_no_opt_in_does_not_want_batch_job(self):
+        self.assertFalse(_media_analysis_wants_batch_job({}))
+        self.assertFalse(_media_analysis_wants_batch_job({"prefer_handle": False, "background": False}))
+
+    def test_dry_run_suppresses_all_aliases(self):
+        # Matches prefer_handle's existing dry_run behavior: a dry_run call always
+        # returns the synchronous plan, regardless of the async opt-in used.
+        self.assertFalse(_media_analysis_wants_batch_job({"prefer_handle": True, "dry_run": True}))
+        self.assertFalse(_media_analysis_wants_batch_job({"background": True, "dry_run": True}))
+        self.assertFalse(_media_analysis_wants_batch_job({"async_job": True, "dry_run": True}))
 
 
 if __name__ == "__main__":
