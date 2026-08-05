@@ -86,6 +86,13 @@ state as the thing it is checking cannot contradict it.
   including `MediaPool.ImportTimelineFromFile` and the `AppendToTimeline`
   placement and durability limits you will hit if you build the timeline
   yourself.
+- `docs/reference/api-limitations.md` → *Clip speed / retime ratio and speed
+  ramps* — the same failure class in the Premiere XML route. Importing an FCP7
+  XML that contains retimes through the scripting API places every retimed clip
+  at `<in>`, which is the true source frame divided by the speed ratio. Lengths
+  correct, links correct, wrong moment of the right file, no warning. If your
+  turnover is a Premiere XML rather than an AAF, read that entry before trusting
+  the conform.
 - `docs/guides/headless-edit-loop.md` — which interchange formats relink at all
   when media has moved (DRT, OTIO and EDL do not).
 </content>

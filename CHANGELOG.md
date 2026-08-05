@@ -2,6 +2,60 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.79.2
+
+A published contract was **wrong**. This release corrects it. If you read the retime entry in
+v2.79.0 or v2.79.1 and built anything on it, read this.
+
+### Corrected
+
+- **The `Clip speed / retime ratio and speed ramps` entry stated a rule that does not exist,
+  and missed the hazard that does.** The interchange half of that entry claimed *"any
+  `<in>`/`<pproTicksIn>` inconsistency is silently REJECTED, measured in BOTH orientations."*
+  **That claim is false and has been removed.** It came from an emitter that wrote
+  `ticks = in × ticks-per-frame` at every speed — so what it measured was its own malformed
+  files being refused, not a rule of Resolve's importer. In a real Premiere FCP7 export a
+  retimed clip's `<in>` and `pproTicksIn` are *supposed* to disagree, by exactly the speed
+  ratio: `<in>`/`<out>` are the post-retime (warped) domain and span the **record** duration,
+  `pproTicksIn/Out` carry the **true source** position, and `<duration>` is the file length in
+  the warped domain. The entry now states that convention with the tick arithmetic shown
+  (254016000000/24 = 10584000000 ticks per frame), and notes that
+  `resolve-advanced/server/prproj.mjs` already derives Premiere speed from the same tick
+  geometry.
+- **The graphdict evidence has been replaced.** The "dead in FOUR separate shapes / 0 of 2
+  landed" table and the "200% clip emitted `in 200 / out 296` clamped to `out 248`" line
+  described that same malformed input being normalized, and did not support the conclusion
+  they were cited for. Re-tested on 19.1.3.7 in Premiere's actual convention — one 100%
+  control clip plus one 200% clip per timeline — the document imports, the control lands
+  correct, and the retimed clip reads back `src 1500..1548`: a 48-frame source span over a
+  48-frame record span, i.e. no retime. Identical result with the graphdict removed. **The
+  conclusion is unchanged** — the scripting-API xmeml import builds no retime — only the
+  evidence behind it.
+- **The real hazard, previously absent, is now documented.** **Resolve reads `<in>` literally
+  as the true source frame**, honouring neither the ticks nor the graphdict. So importing a
+  genuine Premiere XML that contains retimes places every retimed clip at `in ÷ ratio` — the
+  200% clip above lands on source frame 1957 instead of 3914. No error, cut lengths still
+  correct, every clip linked and online, timeline renders. It reads as a good conform while
+  sitting at the wrong moment of the right file — the same failure class as the Avid AAF
+  camera-file link, and `docs/guides/conforming-an-avid-aaf.md` now cross-references it.
+- **The claim is scoped honestly.** All of it describes the **scripting-API** import
+  (`ImportTimelineFromFile`). Resolve's **UI** importer (File > Import > Timeline) is
+  **untested**, and that is how editors usually conform a Premiere XML — the entry no longer
+  implies otherwise. The existing "no positive control" caveat is kept: no clip *known* to be
+  retimed has been read back through `GetLeftOffset`/`GetRightOffset`, because there is no
+  scripting path to create one.
+
+The `SetProperty`/`GetProperty` half of the entry was re-measured on 19.1.3.7 and is
+unaffected. `docs/reference/api-limitations.md` is generated from `src/utils/api_truth.py` and
+was regenerated.
+
+### Validation
+
+- `gen_api_limitations.py --check`, `test_api_limitations_doc`, static/drift guards,
+  `audit_api_parity.py`, agent-rules drift, `--help`/`--version`, `npm pack --dry-run`,
+  `git diff --check`: clean.
+- Docs-only; no code path changed, so no live Resolve validation was required.
+
 ## What's New in v2.79.1
 
 One redirect that was never written, in a dispatcher whose other container formats all have one.
