@@ -2376,13 +2376,18 @@ def build_plan(
     }
 
 
-def _run_command(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tuple[int, str, str]:
+def _run_command(
+    args: List[str],
+    timeout: int = COMMAND_TIMEOUT_SECONDS,
+    env: Optional[Dict[str, str]] = None,
+) -> Tuple[int, str, str]:
     try:
         proc = subprocess.run(
             args,
             capture_output=True,
             timeout=timeout,
             check=False,
+            env=env,
         )
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
@@ -4023,7 +4028,21 @@ def _transcribe_with_whisper_cli(path: str, artifacts: Dict[str, Any], transcrip
     ]
     if transcription.get("language"):
         cmd.extend(["--language", str(transcription["language"])])
-    code, _, stderr = _run_command(cmd, timeout=int(transcription.get("timeout", 1800)))
+    # PYTHONHOME/PYTHONPATH are set in this server's own environment to point
+    # at Resolve's bundled Python (for DaVinciResolveScript) — inherited by a
+    # child process, they corrupt a *different* Python interpreter's own
+    # stdlib resolution. whisper's CLI is itself a Python program (frequently
+    # a different interpreter/venv than this server's), so it must not
+    # inherit these. Confirmed by hang: whisper_cli silently stalled
+    # (ffmpeg child pegged at 0% CPU, never exiting) under the inherited
+    # env, and completed normally in under 5 minutes once these were
+    # stripped. PYTHONIOENCODING=utf-8 avoids a separate UnicodeEncodeError
+    # crash in whisper's own argparse help text on non-UTF-8 consoles.
+    whisper_env = dict(os.environ)
+    whisper_env.pop("PYTHONHOME", None)
+    whisper_env.pop("PYTHONPATH", None)
+    whisper_env["PYTHONIOENCODING"] = "utf-8"
+    code, _, stderr = _run_command(cmd, timeout=int(transcription.get("timeout", 1800)), env=whisper_env)
     if code != 0:
         return {"success": False, "backend": "whisper_cli", "error": stderr.strip() or "whisper CLI failed"}
     json_files = sorted(Path(work_dir).glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
