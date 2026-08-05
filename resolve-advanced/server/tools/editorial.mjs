@@ -82,7 +82,7 @@ const markerSchema = z.object({
 export const editorialTool = {
   name: 'editorial',
   description:
-    'Editorial integrity (Cluster E) — turnover interchange → normalized events → changelist + conform manifest with TIMING silent-lie guards (flattened retime / dropped J/L-cut audio / framerate-pulldown slip / reverse dropped / transition-handle starvation → flag, skip-not-fake). Report-only (gate: review). Actions: parse_interchange (EDL/OTIO/XMEML natively + AAF via pyaaf2 + PRPROJ via gunzip+XML → normalized events; for AAF/PRPROJ pass the file PATH as content; AAF also returns per-sequence startTimecode/startFrame — build the timeline at THAT start, not the Resolve 01:00:00:00 default — and per-clip `geometry` for Avid transform effects), list_sequences (ONE offline picker entry point across xml/edl/otio/drt/drp/aaf/prproj → [{id,name,eventCount}], plus startTimecode/startFrame for AAF), convert_to_interchange (author OTIO/EDL/DRT Resolve CAN import from events or a parsed source — the .prproj→Resolve conform bridge, no Premiere needed; editorial timing/transitions/speed survive, per-clip effects/color do not), turnover_changelist (diff old vs new → moved/retimed/replaced/new/gone + timing flags), conform_manifest (per-event assert: source resolved/handles/retime/reverse/TC-base), marker_roundtrip (markers with provenance tags). Offline (AAF needs pyaaf2; live AAF/DRP import is on the Python davinci-resolve MCP).',
+    'Editorial integrity (Cluster E) — turnover interchange → normalized events → changelist + conform manifest with TIMING silent-lie guards (flattened retime / dropped J/L-cut audio / framerate-pulldown slip / reverse dropped / transition-handle starvation → flag, skip-not-fake). Report-only (gate: review). Actions: parse_interchange (EDL/OTIO/XMEML natively + AAF via pyaaf2 + PRPROJ via gunzip+XML → normalized events; for AAF/PRPROJ pass the file PATH as content; AAF also returns per-sequence startTimecode/startFrame — build the timeline at THAT start, not the Resolve 01:00:00:00 default — and per-clip `geometry` for Avid transform effects), list_sequences (ONE offline picker entry point across xml/edl/otio/drt/drp/aaf/prproj → [{id,name,eventCount}], plus startTimecode/startFrame for AAF), convert_to_interchange (author OTIO/EDL/DRT Resolve CAN import from events or a parsed source — the .prproj→Resolve conform bridge, no Premiere needed; editorial timing/transitions survive and per-clip effects/color do not. SPEED/REVERSE survive on the otio (LinearTimeWarp) and edl (M2) targets ONLY — the DRT clip schema has no per-clip speed field, so target `drt` flattens every retime to 100% forward and returns `flattened`/`flattenedCount` naming each event that lost one; `flattened` is always present on `drt`, empty when there were none), turnover_changelist (diff old vs new → moved/retimed/replaced/new/gone + timing flags), conform_manifest (per-event assert: source resolved/handles/retime/reverse/TC-base), marker_roundtrip (markers with provenance tags). Offline (AAF needs pyaaf2; live AAF/DRP import is on the Python davinci-resolve MCP).',
   async handler({ action, args }) {
     if (action === 'parse_interchange') {
       const p = parseSchema.parse(args);
@@ -125,6 +125,10 @@ export const editorialTool = {
         eventCount: events.length,
         ...(written || { content: authored.content }),
         ...(authored.spec ? { spec: authored.spec } : {}),
+        // skip-not-fake: the DRT clip schema has no per-clip speed field, so retimes cannot
+        // ride into a .drt. Name every event that lost one rather than returning a timeline
+        // the caller believes is conformed. Always present on 'drt' (empty = none to lose).
+        ...(authored.flattened ? { flattened: authored.flattened, flattenedCount: authored.flattened.length } : {}),
       };
     }
     if (action === 'turnover_changelist') {

@@ -108,6 +108,35 @@ export function eventsToEDL(events, opts = {}) {
   return lines.join('\n') + '\n';
 }
 
+const isRetimed = (e) => (e.speed ?? 100) !== 100 || Boolean(e.reverse);
+
+/**
+ * Which events lose their retime on the DRT target. The DRT clip schema
+ * (vendor/drp-format/seq-container-builder.js) carries start / duration / in /
+ * mediaFilePath / mediaStartTime / mediaFrameRate and nothing else — there is no per-clip
+ * speed field to write a retime into, so a retimed event lands at 100% forward. OTIO
+ * (LinearTimeWarp) and EDL (M2) do carry it; only DRT flattens.
+ *
+ * Reporting it is this cluster's skip-not-fake contract: a flattened retime that nobody is
+ * told about is a timeline the caller believes is conformed and is not. `index` is the
+ * event's position in the ORIGINAL events array, so a caller can map straight back.
+ */
+export function drtFlattenedRetimes(events) {
+  const out = [];
+  (events || []).forEach((e, index) => {
+    if (!isRetimed(e)) return;
+    out.push({
+      index,
+      recIn: e.recIn ?? 0,
+      speed: e.speed ?? 100,
+      reverse: Boolean(e.reverse),
+      source: e.source || '',
+      reason: 'DRT clip schema has no per-clip speed field — retime flattened to 100% forward',
+    });
+  });
+  return out;
+}
+
 /** Build a buildDRT spec (Resolve-native .drt) from normalized events. */
 export function eventsToDrtSpec(events, opts = {}) {
   const fps = opts.fps || events.find((e) => e.fps)?.fps || 24;
@@ -133,6 +162,8 @@ export function eventsToDrtSpec(events, opts = {}) {
 /**
  * Author `events` into `target` interchange. Returns { target, content?, spec?, bytes? }.
  * For 'drt', when outputPath is given the .drt bytes are written; otherwise the spec is returned.
+ * The 'drt' target additionally returns `flattened` — ALWAYS an array, empty when the cut
+ * carries no retimes, so a caller can tell "none to lose" from "this build is too old to say".
  */
 export async function authorInterchange(events, target, opts = {}) {
   const t = String(target || 'otio').toLowerCase();
@@ -146,7 +177,7 @@ export async function authorInterchange(events, target, opts = {}) {
   if (t === 'drt') {
     const spec = eventsToDrtSpec(events, opts);
     const buf = await drt().buildDRT(spec);
-    return { target: 'drt', spec, buffer: buf, bytes: buf.length };
+    return { target: 'drt', spec, buffer: buf, bytes: buf.length, flattened: drtFlattenedRetimes(events) };
   }
   throw new Error(`authorInterchange: unknown target '${target}' (otio|edl|drt)`);
 }

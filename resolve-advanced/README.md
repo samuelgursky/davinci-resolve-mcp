@@ -98,7 +98,9 @@ Each dispatches on an `action`. Highlights:
   **.prproj via gunzip+XML** — pass the file PATH for the binary ones), `list_sequences` (one picker entry
   point across xml/edl/otio/drt/drp/aaf/prproj), `convert_to_interchange` (author OTIO/EDL/DRT that Resolve
   imports, from events or a parsed source — **the .prproj→Resolve conform bridge**, no Premiere needed;
-  editorial timing/cuts/transitions/speed carry, per-clip effects/color do not),
+  editorial timing/cuts/transitions carry, per-clip effects/color do not; speed/reverse carry on
+  the `otio` and `edl` targets only — `drt` has no per-clip speed field and reports every retime it
+  flattens in `flattened`),
   `turnover_changelist` (moved/retimed/replaced/new/gone + timing silent-lie guards), `conform_manifest`,
   `marker_roundtrip`.
 - **`provenance`** — provenance / audit: `gallery_lineage`, `grade_provenance` ("why is this graded this

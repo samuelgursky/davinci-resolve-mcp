@@ -5999,7 +5999,10 @@ _PRPROJ_REFUSAL = (
     "advanced MCP — editorial.list_sequences / editorial.parse_interchange (format 'prproj'); "
     "(2) convert it to an importable interchange — editorial.convert_to_interchange "
     "(target 'otio'|'edl'|'drt') — then import that here with import_timeline_checked. "
-    "Editorial timing/cuts/transitions/speed carry over; per-clip effects/Lumetri color do not. "
+    "Editorial timing/cuts/transitions carry over; per-clip effects/Lumetri color do not. "
+    "Speed/reverse carry on 'otio' and 'edl' ONLY — the DRT clip schema has no per-clip "
+    "speed field, so 'drt' flattens every retime to 100% forward and reports them in "
+    "`flattened`. Prefer 'otio' or 'edl' for a cut that carries retimes. "
     "Alternatively export FCP7 XML / AAF / FCPXML from Premiere and conform that."
 )
 

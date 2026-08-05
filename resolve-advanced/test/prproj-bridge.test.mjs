@@ -153,6 +153,57 @@ test('bridge: authorInterchange drt builds a Resolve-native timeline', async () 
   assert.ok(parsed.timelines[0].videoTracks[0].clips.length >= 2);
 });
 
+// The DRT clip schema (vendor/drp-format/seq-container-builder.js) reads start / duration /
+// in / mediaFilePath / mediaStartTime / mediaFrameRate — there is NO per-clip speed field, so
+// a retime CANNOT ride into a .drt. The cluster's contract is skip-not-fake: say so, per event.
+const RETIME_EVENTS = [
+  { track: 'V', recIn: 0, recOut: 48, srcIn: 100, source: '/media/a.mov' },
+  { track: 'V', recIn: 48, recOut: 96, srcIn: 200, source: '/media/b.mov', speed: 200 },
+  { track: 'V', recIn: 96, recOut: 144, srcIn: 300, source: '/media/c.mov', reverse: true },
+];
+
+test('bridge: DRT target FLAGS flattened retimes instead of dropping them silently', async () => {
+  const out = await authorInterchange(RETIME_EVENTS, 'drt', { name: 'Retimes' });
+  assert.ok(Array.isArray(out.flattened), 'drt target must report a flattened list');
+  assert.equal(out.flattened.length, 2, 'the 200% and the reverse are both flattened');
+  const speedEv = out.flattened.find((x) => x.speed === 200);
+  assert.ok(speedEv, '200% event is named');
+  assert.equal(speedEv.index, 1);
+  assert.equal(speedEv.recIn, 48);
+  assert.match(speedEv.reason, /speed/i);
+  const revEv = out.flattened.find((x) => x.reverse === true);
+  assert.ok(revEv, 'reverse event is named');
+  assert.equal(revEv.index, 2);
+  assert.equal(revEv.recIn, 96);
+  // The un-retimed event is NOT flagged.
+  assert.equal(out.flattened.some((x) => x.recIn === 0), false);
+});
+
+test('bridge: a cuts-only DRT reports an EMPTY flattened list, not a missing one', async () => {
+  const out = await authorInterchange([RETIME_EVENTS[0]], 'drt', { name: 'Cuts' });
+  assert.deepEqual(out.flattened, []);
+});
+
+test('bridge: OTIO and EDL still CARRY speed/reverse — only DRT flattens', async () => {
+  const otio = await authorInterchange(RETIME_EVENTS, 'otio', {});
+  assert.equal(otio.flattened, undefined, 'otio carries retimes, so nothing is flattened');
+  const scalars = JSON.stringify(otio.doc).match(/"time_scalar":\s*(-?[\d.]+)/g) || [];
+  assert.equal(scalars.length, 2);
+  const edl = await authorInterchange(RETIME_EVENTS, 'edl', {});
+  assert.equal(edl.flattened, undefined);
+  assert.equal((edl.content.match(/^M2\s/gm) || []).length, 2);
+});
+
+test('convert_to_interchange action: DRT target surfaces flattened retimes to the caller', async () => {
+  const r = await editorialTool.handler({
+    action: 'convert_to_interchange',
+    args: { events: RETIME_EVENTS, target: 'drt', name: 'Retimes' },
+  });
+  assert.equal(r.target, 'drt');
+  assert.equal(r.flattened.length, 2);
+  assert.equal(r.flattenedCount, 2);
+});
+
 test('convert_to_interchange action: prproj source → OTIO content the parser accepts', async () => {
   const r = await editorialTool.handler({
     action: 'convert_to_interchange',
