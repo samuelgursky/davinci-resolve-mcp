@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.78.1
+
+`Timeline.DeleteClips` is page-gated. Contributed by
+[@billcarroll](https://github.com/billcarroll) in
+[#117](https://github.com/samuelgursky/davinci-resolve-mcp/pull/117).
+
+### Fixed
+
+- **Every delete-capable action failed whenever the UI was left on another page.**
+  `Timeline.DeleteClips` deterministically returns False and deletes nothing off
+  the Edit page (verified: Fairlight), retries included — the readback-and-retry
+  helper from v2.71.1 handles a *flaky* False correctly, but retrying cannot clear
+  a page gate. Live verification on Studio 21.0: three identical retries against
+  132 valid, unlocked, present items all returned False with all 132 still on the
+  track; one `OpenPage("edit")` and the same call returned True and left 0. Track
+  lock and enable state were clear throughout — a page gate, not a lock.
+  `timeline` `delete_clips` / `move_clips` / `overwrite_range` / `lift_range` /
+  `apply_cuts` and `edit_engine execute_swap` now hold the Edit page for the call
+  and restore the caller's page after.
+
+The guard is serialized through `page_lock`, alongside the existing Color-page
+guard for thumbnail capture: Resolve has one globally-active page, so an
+unserialized switch-work-restore races every other page-switching operation, and
+under the threaded dispatch from v2.62.0 a concurrent thumbnail capture flipping
+to Color mid-delete would land the delete on the wrong page — reintroducing this
+same bug. `apply_cuts` holds the guard once around its loop rather than per cut,
+which would otherwise cost 2N page flips for N cuts.
+
+The `api_truth` entry is restructured into the two distinct failures now known to
+share this call: wrong page (deterministic, mechanism identified, verified) and
+flaky first attempt (one observation, cause not established — and the entry now
+records that the page state at the time was not captured, so it cannot be ruled in
+or out as the first failure in disguise).
+
 ## What's New in v2.78.0
 
 The AAF probe reports where in the *source* an event actually lives, not where it
