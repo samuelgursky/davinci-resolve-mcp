@@ -2413,11 +2413,21 @@ def _kill_process_tree(pid: int) -> None:
 _POST_KILL_DRAIN_SECONDS = 5
 
 
-def _run_command(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tuple[int, str, str]:
+def _run_command(
+    args: List[str],
+    timeout: int = COMMAND_TIMEOUT_SECONDS,
+    env: Optional[Dict[str, str]] = None,
+) -> Tuple[int, str, str]:
     """Run args to completion and return (returncode, stdout, stderr).
 
     Spawned via Popen rather than subprocess.run so a timeout can kill the whole
     process tree instead of one PID — see _kill_process_tree.
+
+    `env=None` inherits this process's environment, matching what subprocess.run
+    did. Pass an explicit mapping for a child that must not inherit it: on
+    Windows this server sets PYTHONHOME so the fusionscript bridge can find
+    Resolve's Python, and a child that is itself a *different* Python (the
+    whisper CLI) dies loading a foreign stdlib against its own C extensions.
 
     Returns 124 on timeout, 127 when the binary cannot be spawned.
     """
@@ -2432,7 +2442,11 @@ def _run_command(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tup
         popen_kwargs["start_new_session"] = True
     try:
         proc = subprocess.Popen(
-            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            **popen_kwargs,
         )
     except OSError as exc:
         return 127, "", str(exc)
@@ -4092,7 +4106,28 @@ def _transcribe_with_whisper_cli(path: str, artifacts: Dict[str, Any], transcrip
     ]
     if transcription.get("language"):
         cmd.extend(["--language", str(transcription["language"])])
-    code, _, stderr = _run_command(cmd, timeout=int(transcription.get("timeout", 1800)))
+    # PYTHONHOME/PYTHONPATH point this server at Resolve's bundled Python so
+    # DaVinciResolveScript imports. Inherited by a child that is itself a
+    # *different* Python, they corrupt its stdlib resolution — and the whisper
+    # CLI is exactly that: a Python program, frequently on another interpreter
+    # entirely. Measured: whisper under Python 3.14 inheriting a 3.10
+    # PYTHONHOME loads 3.10's stdlib against its own compiled extensions and
+    # dies on `AssertionError: SRE module mismatch`. That crash is fast, not a
+    # hang; it only reads as one when something else delays the response.
+    #
+    # This is the shipped Windows configuration, not a local quirk: install.py
+    # writes PYTHONHOME into generated client configs (see docs/install.md,
+    # issue #26), and server.py sets it on Windows whenever it isn't already
+    # set. So every Windows install hands a foreign PYTHONHOME to every child
+    # it spawns, and any Python-based tool added here needs the same scrub.
+    #
+    # PYTHONIOENCODING=utf-8 is unrelated: it avoids a UnicodeEncodeError in
+    # whisper's own argparse help text on a non-UTF-8 console.
+    whisper_env = dict(os.environ)
+    whisper_env.pop("PYTHONHOME", None)
+    whisper_env.pop("PYTHONPATH", None)
+    whisper_env["PYTHONIOENCODING"] = "utf-8"
+    code, _, stderr = _run_command(cmd, timeout=int(transcription.get("timeout", 1800)), env=whisper_env)
     if code != 0:
         return {"success": False, "backend": "whisper_cli", "error": stderr.strip() or "whisper CLI failed"}
     json_files = sorted(Path(work_dir).glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)

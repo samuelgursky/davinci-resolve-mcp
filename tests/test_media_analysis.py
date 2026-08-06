@@ -4852,6 +4852,43 @@ class RunCommandPostKillDrainIsBoundedTests(unittest.TestCase):
         self.assertIn("timed out", stderr)
         self.assertIn("abandoned", stderr.lower())
         self.assertLess(elapsed, natural_runtime - 1)
+class RunCommandEnvOverrideTests(unittest.TestCase):
+    """_run_command must let a caller pass a scrubbed env for a subprocess that
+    shouldn't inherit this server's own PYTHONHOME/PYTHONPATH — set so
+    DaVinciResolveScript imports, but fatal to a *different* Python interpreter
+    such as whisper's CLI, which dies on `AssertionError: SRE module mismatch`
+    loading a foreign stdlib against its own compiled extensions."""
+
+    def test_explicit_env_replaces_inherited_environment(self):
+        # Mirrors the real fix's pattern: copy the parent env, pop one key, pass
+        # the result as env=. The child must not see the popped variable, even
+        # though it's set in this test process's own environment.
+        os.environ["_RUN_COMMAND_ENV_TEST_MARKER"] = "should-not-be-seen"
+        try:
+            custom_env = dict(os.environ)
+            custom_env.pop("_RUN_COMMAND_ENV_TEST_MARKER", None)
+            code, stdout, _stderr = _run_command(
+                [sys.executable, "-c",
+                 "import os; print(os.environ.get('_RUN_COMMAND_ENV_TEST_MARKER', 'MISSING'))"],
+                env=custom_env,
+            )
+        finally:
+            del os.environ["_RUN_COMMAND_ENV_TEST_MARKER"]
+        self.assertEqual(code, 0)
+        self.assertIn("MISSING", stdout)
+
+    def test_default_env_none_still_inherits_parent(self):
+        # Backward compatibility: omitting env= must preserve the pre-fix
+        # behavior of inheriting the full parent environment.
+        os.environ["_RUN_COMMAND_ENV_TEST_MARKER"] = "present"
+        try:
+            code, stdout, _stderr = _run_command(
+                [sys.executable, "-c", "import os; print(os.environ.get('_RUN_COMMAND_ENV_TEST_MARKER', 'MISSING'))"]
+            )
+        finally:
+            del os.environ["_RUN_COMMAND_ENV_TEST_MARKER"]
+        self.assertEqual(code, 0)
+        self.assertIn("present", stdout)
 
 
 if __name__ == "__main__":
