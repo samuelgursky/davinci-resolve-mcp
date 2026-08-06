@@ -1,5 +1,7 @@
 # DaVinci Resolve MCP Server
 
+English | [简体中文](README.zh-CN.md)
+
 [![Version](https://img.shields.io/badge/version-2.83.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
