@@ -2380,30 +2380,53 @@ def build_plan(
 def _kill_process_tree(pid: int) -> None:
     """Best-effort: terminate pid and its descendants, not just the direct child.
 
-    Popen.kill() only reaches the immediate child. On Windows a PATH lookup can
-    resolve to a shim (Chocolatey, npm, etc.) that spawns the real work as a
-    grandchild, which survives a plain kill() untouched — confirmed for `ffmpeg`
-    on a Chocolatey-managed machine (davinci-resolve-mcp CONTRIBUTION_NOTES.md,
-    Bug 2b: a 5s timeout had zero effect on an ~82s real ffmpeg pass, because
-    killing the shim's PID left the real ffmpeg.exe grandchild running). Killing
-    the whole tree instead of one PID fixes this regardless of what kind of
-    wrapper sits on PATH.
+    Popen.kill() reaches only the immediate child. On Windows a bare-name PATH
+    lookup can resolve to a wrapper — a Chocolatey/npm shim, a pip console
+    script — that runs the real work as a grandchild, which a single-PID kill
+    leaves untouched. Measured: `ffmpeg` on PATH was a 392KB shim, and a 5s
+    timeout against an ~82s real ffmpeg pass had no effect at all, because the
+    surviving grandchild still held the stdout/stderr handles it had inherited
+    and the follow-up read blocked until it finished on its own.
+
+    Failure here is never fatal. The caller is already on its error path and
+    owes its own caller a (code, stdout, stderr) tuple, so this must not raise:
+    `taskkill` can be absent from PATH and `killpg` can return EPERM, which is
+    why the whole branch catches OSError rather than only ProcessLookupError.
     """
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
-            capture_output=True, check=False,
-        )
-        return
     try:
-        os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                check=False,
+            )
+        else:
+            os.killpg(pid, signal.SIGKILL)
+    except OSError:
         pass
 
 
+# How long to wait for the pipes to drain after a tree kill. The kill is
+# best-effort, so this read has to be bounded: anything that escaped it still
+# holds the inherited pipe handles, and an unbounded read there would hang for
+# exactly the reason the kill exists.
+_POST_KILL_DRAIN_SECONDS = 5
+
+
 def _run_command(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tuple[int, str, str]:
+    """Run args to completion and return (returncode, stdout, stderr).
+
+    Spawned via Popen rather than subprocess.run so a timeout can kill the whole
+    process tree instead of one PID — see _kill_process_tree.
+
+    Returns 124 on timeout, 127 when the binary cannot be spawned.
+    """
     popen_kwargs: Dict[str, Any] = {}
     if os.name == "nt":
+        # Isolates the child from console signals sent to the server. Note this
+        # is not what makes the tree kill work — taskkill /T walks parent-child
+        # links, not process groups. start_new_session is load-bearing on POSIX,
+        # where killpg needs the child to lead a group of its own.
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         popen_kwargs["start_new_session"] = True
@@ -2416,15 +2439,26 @@ def _run_command(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tup
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        # subprocess.run's default TimeoutExpired handling only kills the direct
-        # child, which is insufficient when that child is itself a wrapper — see
-        # _kill_process_tree. The follow-up communicate() (no timeout) drains
-        # whatever's left now that the tree is actually gone.
         _kill_process_tree(proc.pid)
-        stdout, stderr = proc.communicate()
+        abandoned = False
+        try:
+            stdout, stderr = proc.communicate(timeout=_POST_KILL_DRAIN_SECONDS)
+        except subprocess.TimeoutExpired:
+            # A descendant outlived the tree kill and still holds the pipes.
+            # Give up the output rather than block — a stalled caller is a
+            # worse outcome than a timeout report with no stderr tail.
+            stdout, stderr = b"", b""
+            abandoned = True
         stdout_s = stdout.decode("utf-8", errors="replace") if stdout else ""
         stderr_s = stderr.decode("utf-8", errors="replace") if stderr else ""
-        return 124, stdout_s, f"Command timed out after {timeout}s. {stderr_s}".strip()
+        detail = " Output abandoned: a descendant survived the kill." if abandoned else ""
+        return 124, stdout_s, f"Command timed out after {timeout}s.{detail} {stderr_s}".strip()
+    except BaseException:
+        # subprocess.run kills the child on any exception on the way out;
+        # Popen does not. Under the server's threaded dispatch a cancellation
+        # or KeyboardInterrupt here would otherwise leave an orphaned tree.
+        _kill_process_tree(proc.pid)
+        raise
     stdout_s = stdout.decode("utf-8", errors="replace") if stdout else ""
     stderr_s = stderr.decode("utf-8", errors="replace") if stderr else ""
     return proc.returncode, stdout_s, stderr_s

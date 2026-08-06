@@ -4768,12 +4768,14 @@ class InventoryCacheReuseTests(unittest.TestCase):
 
 
 class RunCommandTimeoutKillsProcessTreeTests(unittest.TestCase):
-    """Bug 2b: a timeout must actually cut the wait short, not just relabel a
+    """A timeout must actually cut the wait short, not relabel a
     normally-completing (or genuinely stalled) child as 'timed out' after
-    waiting for its full natural runtime — see davinci-resolve-mcp
-    CONTRIBUTION_NOTES.md, Bug 2b. Popen.kill() alone only reaches the direct
+    waiting out its full natural runtime. Popen.kill() reaches only the direct
     child; on Windows a PATH lookup can resolve to a shim whose real work
-    happens in a grandchild that survives untouched."""
+    happens in a grandchild that survives untouched, still holding the pipes.
+    Measured before the fix: a 5s timeout against an ~82s ffmpeg pass returned
+    after the full 82s, with 'timed out after 5s' attached to complete,
+    correct output."""
 
     def test_timeout_returns_well_before_natural_completion(self):
         # sys.executable, not an external binary — no shim/wrapper can sit on
@@ -4816,6 +4818,40 @@ class KillProcessTreeWindowsTests(unittest.TestCase):
             ["taskkill", "/F", "/T", "/PID", "12345"],
             capture_output=True, check=False,
         )
+
+
+class KillProcessTreeIsBestEffortTests(unittest.TestCase):
+    """A kill helper on an error path must not raise. taskkill can be missing
+    from PATH and killpg can return EPERM; either escaping would break
+    _run_command's (code, stdout, stderr) contract at the exact moment the
+    caller is already handling a failure."""
+
+    def test_os_error_from_the_platform_call_is_swallowed(self):
+        target = "subprocess.run" if os.name == "nt" else "os.killpg"
+        with unittest.mock.patch(target, side_effect=PermissionError("EPERM")):
+            _kill_process_tree(12345)  # must not raise
+
+
+class RunCommandPostKillDrainIsBoundedTests(unittest.TestCase):
+    """The tree kill is best-effort, so the read that follows it must be
+    bounded. A descendant that escaped the kill still holds the inherited
+    pipes, and an unbounded read there hangs for the very reason the kill
+    exists."""
+
+    def test_returns_even_when_the_kill_does_not_take(self):
+        import src.utils.media_analysis as _ma
+
+        natural_runtime = 6
+        args = [sys.executable, "-c", f"import time; time.sleep({natural_runtime})"]
+        with unittest.mock.patch.object(_ma, "_kill_process_tree"), \
+                unittest.mock.patch.object(_ma, "_POST_KILL_DRAIN_SECONDS", 1):
+            start = time.monotonic()
+            code, _stdout, stderr = _run_command(args, timeout=1)
+            elapsed = time.monotonic() - start
+        self.assertEqual(code, 124)
+        self.assertIn("timed out", stderr)
+        self.assertIn("abandoned", stderr.lower())
+        self.assertLess(elapsed, natural_runtime - 1)
 
 
 if __name__ == "__main__":
