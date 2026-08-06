@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 26 missing capabilities, 29 bugs / unreliable behaviors.
+**Totals:** 27 missing capabilities, 30 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -131,7 +131,7 @@ equivalent, blocking full automation.
 ### Fairlight audio levels / pan / EQ / automation / FairlightFX
 
 - **Object:** `TimelineItem / Timeline`
-- **Behavior:** There is no API to set clip or track volume, pan, EQ, audio automation, or to add/configure FairlightFX. SetProperty covers video transform only; the audio surface is read-only (GetSourceAudioChannelMapping, GetAudioMapping, voice isolation). Verified via dir() + SetProperty docs AND by live mutating attempt on 21.0.0: SetProperty('Volume'|'Level'|'Gain'|'AudioVolume', 0) all return False (note 'Pan' is the VIDEO transform key, not audio pan, so it misleadingly succeeds). The gap is PER-PARAMETER control specifically: a whole saved mix CAN be applied wholesale via Project.ApplyFairlightPresetToCurrentTimeline(name), with the available names from Resolve.GetFairlightPresets() — so 'no Fairlight write path exists' would be too strong.
+- **Behavior:** There is no API to set clip or track volume, pan, EQ, audio automation, or to add/configure FairlightFX. SetProperty covers video transform only; the audio surface is read-only (GetSourceAudioChannelMapping, GetAudioMapping, voice isolation). Verified via dir() + SetProperty docs AND by live mutating attempt on 21.0.0: SetProperty('Volume'|'Level'|'Gain'|'AudioVolume', 0) all return False (note 'Pan' is the VIDEO transform key, not audio pan, so it misleadingly succeeds). The gap is PER-PARAMETER control specifically: a whole saved mix CAN be applied wholesale via Project.ApplyFairlightPresetToCurrentTimeline(name), with the available names from Resolve.GetFairlightPresets() — so 'no Fairlight write path exists' would be too strong. Both methods require Resolve 20.2.2+; on 19.1.3 they are absent (confirmed live 2026-08-06), so on older builds the per-parameter gap really is the whole story.
 - **Workaround / current handling:** To reapply a known mix, save it once as a Fairlight preset in the UI and apply it per-timeline with ApplyFairlightPresetToCurrentTimeline (exposed as resolve_control get_fairlight_presets + project_settings apply_fairlight_preset). Dial individual levels/pan/EQ/automation/FairlightFX in the Fairlight UI; beyond presets, only voice-isolation state and channel-mapping reads are scriptable.
 - **Tags:** missing-method, audio, fairlight
 
@@ -182,7 +182,7 @@ equivalent, blocking full automation.
 
 - **Object:** `TimelineItem / Timeline / Project`
 - **Behavior:** There is no API method to set or query subtitle font family, font size, text color, background color, outline, shadow, position, alignment, or to apply/query subtitle style presets. TimelineItem.GetProperty() on subtitle items returns only transform/composite keys. Timeline.GetSetting() and Project.GetSetting() return None for all probed subtitle-style keys (e.g. 'subtitleFontName', 'subtitleFontSize', 'subtitleTextColor', 'subtitleBackgroundColor', 'subtitlePosition', 'subtitleAlignment', 'subtitlePreset', 'subtitleStyle'). Verified via dir(), GetProperty(), and GetSetting() on Resolve 21.0.0.48.
-- **Workaround / current handling:** No API workaround exists, but the style IS reachable below the API: it lives in Sm2TiTrack.FieldsBlob for Type=2 tracks, as an EffectFiltersBA payload whose effect 136 carries a Qt QFont descriptor (param 18) and a normalised position vector (param 17). Exposed as project_db list_subtitle_styles / set_subtitle_style (font family/size/weight/italic + position). Confirmed live on 21.0 (2026-08-06): Resolve opens a patched track and re-serialises it back to its own zstd form with the patched values intact, so it genuinely parses the write. Caveats: whole-TRACK style not per-caption, project must be CLOSED, Resolve must be fully quit and relaunched afterwards, and the track must already carry a style blob (a freshly added subtitle track has none until it is styled once in the UI). Burn-in overlays via Fusion titles remain a visual alternative but do not produce subtitle tracks.
+- **Workaround / current handling:** No API workaround exists, but the style IS reachable below the API: it lives in Sm2TiTrack.FieldsBlob for Type=2 tracks, as an EffectFiltersBA payload whose effect 136 carries a Qt QFont descriptor (param 18) and a normalised position vector (param 17). Exposed as project_db list_subtitle_styles / set_subtitle_style (font family/size/weight/italic + position). Confirmed live on Studio 19.1.3 (2026-08-06): Resolve opens a patched track and re-serialises it back to its own zstd form with the patched values intact, so it genuinely parses the write. Caveats: whole-TRACK style not per-caption, project must be CLOSED, Resolve must be fully quit and relaunched afterwards, and the track must already carry a style blob (a freshly added subtitle track has none until it is styled once in the UI). Burn-in overlays via Fusion titles remain a visual alternative but do not produce subtitle tracks.
 - **Tags:** missing-method, subtitle, style, preset
 
 ### Speech recognition engine selection and SRT import
@@ -221,6 +221,15 @@ equivalent, blocking full automation.
 - **Behavior:** Imports always land in the CURRENT media pool folder; the call has no destination-folder parameter, and passing an unrecognized one to the MCP tool is silently ignored.
 - **Workaround / current handling:** SetCurrentFolder to the target bin first (media_pool set_current_folder), import, then restore the previous current folder if it matters.
 - **Tags:** media-pool, import
+
+### SetClipColor (undocumented value space; marker constants are a decoy)
+
+- **Object:** `TimelineItem / MediaPoolItem`
+- **Signature:** `(colorName) -> bool`
+- **Behavior:** SetClipColor accepts exactly 16 names — the Edit-page clip-colour palette — and refuses everything else with a bare False, no exception and no other signal. Enumerated live on Studio 19.1.3.7 (2026-08-06) against both objects; the accepted set is IDENTICAL on TimelineItem and MediaPoolItem: Orange, Apricot, Yellow, Lime, Olive, Green, Teal, Navy, Blue, Purple, Violet, Pink, Tan, Beige, Brown, Chocolate. The empty string is refused too. The trap is that the scripting reference documents colorName as a bare string with no enumerated values, while exporting the MARKER palette as constants (resolve.MARKER_ROSE, resolve.MARKER_FUCHSIA, ...) — so the only colour vocabulary reachable from the API surface is the wrong one. Cyan, Red, Fuchsia, Rose, Lavender, Sky, Mint, Lemon, Sand, Cocoa and Cream are all marker-only and all refused. Five names overlap both palettes (Blue, Green, Yellow, Pink, Purple), which is why the decoy survives: reasoning from the marker constants scores 5 of 16 and looks like the right vocabulary with a few gaps.
+- **Workaround / current handling:** Pass only the 16 clip-colour names; on False, treat it as an invalid name rather than an item/lock/page problem. The set is pinned in utils/clip_colors.py and named in the refusal remediation, but deliberately NOT enforced — it was measured on one build and a later Resolve could extend it.
+- **Reference:** [issue #124](https://github.com/samuelgursky/davinci-resolve-mcp/issues/124)
+- **Tags:** timeline-item, media-pool, silent-failure, undocumented-enum
 
 ### Project.SetCurrentRenderFormatAndCodec
 
@@ -442,6 +451,15 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Normalize both arguments through the live maps before calling: src.utils.render_ids.render_format_id_from_formats and render_codec_id_from_codecs accept a description or an id and return the id.
 - **Reference:** [issue #59](https://github.com/samuelgursky/davinci-resolve-mcp/issues/59)
 - **Tags:** render, deliver, silent-failure, id-vs-label
+
+### TimelineItem.SetClipColor on generator/title items
+
+- **Object:** `TimelineItem`
+- **Signature:** `(colorName) -> bool`
+- **Behavior:** On a generator or title item SetClipColor returns True with a VALID colour name and the colour does not persist — GetClipColor still reads '' immediately afterwards, and ClearClipColor changes nothing because there is nothing to clear. Measured on Studio 19.1.3.7 (2026-08-06) on a Solid Color generator. A media-backed item on the SAME timeline in the same session persists correctly (SetClipColor('Teal') -> True, GetClipColor -> 'Teal'), so the bool is honest for some items and a lie for others, with nothing in the return value to tell them apart. A timeline item's colour is also independent of its backing MediaPoolItem's: colouring the item leaves the pool clip at ''.
+- **Workaround / current handling:** Never trust the bool alone — read GetClipColor back and compare. To mark a generator or title, use a timeline marker at its start instead; markers read back reliably.
+- **Reference:** [issue #124](https://github.com/samuelgursky/davinci-resolve-mcp/issues/124)
+- **Tags:** timeline-item, silent-failure, generator, readback-lies
 
 ### Project.SetRenderSettings (inherits the loaded preset)
 

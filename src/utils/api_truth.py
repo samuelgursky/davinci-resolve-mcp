@@ -863,7 +863,10 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "mix CAN be applied wholesale via "
                    "Project.ApplyFairlightPresetToCurrentTimeline(name), with the "
                    "available names from Resolve.GetFairlightPresets() — so "
-                   "'no Fairlight write path exists' would be too strong.",
+                   "'no Fairlight write path exists' would be too strong. Both "
+                   "methods require Resolve 20.2.2+; on 19.1.3 they are absent "
+                   "(confirmed live 2026-08-06), so on older builds the "
+                   "per-parameter gap really is the whole story.",
         "recommended": "To reapply a known mix, save it once as a Fairlight preset "
                        "in the UI and apply it per-timeline with "
                        "ApplyFairlightPresetToCurrentTimeline (exposed as "
@@ -1005,7 +1008,7 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "a normalised position vector (param 17). Exposed as "
                        "project_db list_subtitle_styles / set_subtitle_style "
                        "(font family/size/weight/italic + position). Confirmed "
-                       "live on 21.0 (2026-08-06): Resolve opens a patched track "
+                       "live on Studio 19.1.3 (2026-08-06): Resolve opens a patched track "
                        "and re-serialises it back to its own zstd form with the "
                        "patched values intact, so it genuinely parses the write. "
                        "Caveats: whole-TRACK style not per-caption, project must "
@@ -1420,6 +1423,60 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
         "issue": 59,
         "mitigation": ["_render_format_id", "_render_codec_id"],
+    },
+    {
+        "symbol": "SetClipColor (undocumented value space; marker constants are a decoy)",
+        "object": "TimelineItem / MediaPoolItem",
+        "signature": "(colorName) -> bool",
+        "reality": "SetClipColor accepts exactly 16 names — the Edit-page clip-colour "
+                   "palette — and refuses everything else with a bare False, no "
+                   "exception and no other signal. Enumerated live on Studio "
+                   "19.1.3.7 (2026-08-06) against both objects; the accepted set is "
+                   "IDENTICAL on TimelineItem and MediaPoolItem: Orange, Apricot, "
+                   "Yellow, Lime, Olive, Green, Teal, Navy, Blue, Purple, Violet, "
+                   "Pink, Tan, Beige, Brown, Chocolate. The empty string is refused "
+                   "too. The trap is that the scripting reference documents "
+                   "colorName as a bare string with no enumerated values, while "
+                   "exporting the MARKER palette as constants (resolve.MARKER_ROSE, "
+                   "resolve.MARKER_FUCHSIA, ...) — so the only colour vocabulary "
+                   "reachable from the API surface is the wrong one. Cyan, Red, "
+                   "Fuchsia, Rose, Lavender, Sky, Mint, Lemon, Sand, Cocoa and Cream "
+                   "are all marker-only and all refused. Five names overlap both "
+                   "palettes (Blue, Green, Yellow, Pink, Purple), which is why the "
+                   "decoy survives: reasoning from the marker constants scores 5 of "
+                   "16 and looks like the right vocabulary with a few gaps.",
+        "recommended": "Pass only the 16 clip-colour names; on False, treat it as an "
+                       "invalid name rather than an item/lock/page problem. The set "
+                       "is pinned in utils/clip_colors.py and named in the refusal "
+                       "remediation, but deliberately NOT enforced — it was measured "
+                       "on one build and a later Resolve could extend it.",
+        "tags": ["timeline-item", "media-pool", "silent-failure", "undocumented-enum"],
+        "submit": "missing",
+        "issue": 124,
+        "mitigation": ["_set_clip_color_checked", "ti_set_clip_color"],
+    },
+    {
+        "symbol": "TimelineItem.SetClipColor on generator/title items",
+        "object": "TimelineItem",
+        "signature": "(colorName) -> bool",
+        "reality": "On a generator or title item SetClipColor returns True with a "
+                   "VALID colour name and the colour does not persist — GetClipColor "
+                   "still reads '' immediately afterwards, and ClearClipColor "
+                   "changes nothing because there is nothing to clear. Measured on "
+                   "Studio 19.1.3.7 (2026-08-06) on a Solid Color generator. A "
+                   "media-backed item on the SAME timeline in the same session "
+                   "persists correctly (SetClipColor('Teal') -> True, GetClipColor "
+                   "-> 'Teal'), so the bool is honest for some items and a lie for "
+                   "others, with nothing in the return value to tell them apart. A "
+                   "timeline item's colour is also independent of its backing "
+                   "MediaPoolItem's: colouring the item leaves the pool clip at ''.",
+        "recommended": "Never trust the bool alone — read GetClipColor back and "
+                       "compare. To mark a generator or title, use a timeline marker "
+                       "at its start instead; markers read back reliably.",
+        "tags": ["timeline-item", "silent-failure", "generator", "readback-lies"],
+        "submit": "bug",
+        "issue": 124,
+        "mitigation": ["_set_clip_color_checked", "ti_set_clip_color"],
     },
     {
         "symbol": "Project.SetRenderSettings (inherits the loaded preset)",

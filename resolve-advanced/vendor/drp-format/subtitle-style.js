@@ -167,7 +167,7 @@ function unwrapEffectFilters(raw) {
  * *compressor* (the bundled fzstd is decompress-only); the cost is a larger
  * blob, which does not matter here.
  *
- * Confirmed live against Resolve 21 (2026-08-06): a subtitle track patched with
+ * Confirmed live against Resolve Studio 19.1.3 (2026-08-06): a subtitle track patched with
  * a 0x80 payload opens without error, and once Resolve next re-serialises that
  * track it writes the style back out as 0x81 zstd with the font descriptor and
  * position preserved exactly — i.e. Resolve genuinely parses the 0x80 form into

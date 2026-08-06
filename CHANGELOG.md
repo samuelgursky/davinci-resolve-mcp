@@ -2,6 +2,25 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.82.1
+
+Corrects the Resolve version the v2.82.0 subtitle-style validation was actually
+run against.
+
+### Fixed
+
+- **v2.82.0 claimed the subtitle-style write path was confirmed on Resolve 21.
+  It was confirmed on Resolve Studio 19.1.3.** The validation itself stands —
+  Resolve opened the patched track and re-serialised it to its own zstd form
+  with the patched values intact — but it was run against 19.1.3, which is the
+  build that was installed. Corrected in `api_truth`, the codec header, and the
+  changelog. If anything this widens the supported range rather than narrowing
+  it, but the version on the claim has to be the one actually tested.
+- **`GetFairlightPresets` / `ApplyFairlightPresetToCurrentTimeline` require
+  Resolve 20.2.2+**, now recorded in the `api_truth` Fairlight entry. On 19.1.3
+  both are absent (confirmed live), so on older builds the per-parameter gap
+  really is the whole story and the preset workaround is unavailable.
+
 ## What's New in v2.82.0
 
 Caption styling, which the scripting API cannot touch at all, is now readable
@@ -21,7 +40,7 @@ Blackmagic.
   position vector (param 17). New codec at
   `resolve-advanced/vendor/drp-format/subtitle-style.js`.
 
-  Verified live on Resolve 21 (2026-08-06): a patched track opens without error
+  Verified live on Resolve Studio 19.1.3 (2026-08-06): a patched track opens without error
   and, once Resolve next re-serialises it, is written back out in Resolve's own
   zstd form with the patched values intact — so Resolve genuinely parses the
   write rather than passing the bytes through. Read side verified against a

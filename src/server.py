@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.82.0"
+VERSION = "2.82.1"
 
 import base64
 import os
@@ -46,6 +46,7 @@ for p in [current_dir, project_dir]:
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
+from src.utils import clip_colors as _clip_colors
 from src.utils.contracts import validate as _validate_params
 from src.utils.cut_ir import build_cut_list as _build_cut_list
 from src.utils.page_lock import (
@@ -9006,6 +9007,66 @@ def _safe_int(value: Any, default: int, *, minimum: Optional[int] = None, maximu
     return parsed
 
 
+def _set_clip_color_checked(obj, color, *, kind: str):
+    """SetClipColor, with the bare bool turned into something a caller can act on.
+
+    Two measured failures hide behind that bool (issue #124, enumerated live on
+    Studio 19.1.3.7):
+
+    - A name outside the 16-name Edit-page palette is refused with `False` and
+      nothing else. The marker constants are the only colour vocabulary the
+      scripting reference enumerates, so they are what an agent reaches for, and
+      most of them are refused.
+    - On generator and title items the call returns `True` and the colour does
+      not persist — `GetClipColor` still reads empty afterwards. Media-backed
+      items on the same timeline persist correctly, so the bool is honest for
+      some items and a lie for others.
+
+    So the return value is never trusted on its own: the colour is read back and
+    the response reports what actually stuck.
+    """
+    returned = bool(obj.SetClipColor(color))
+    readback = None
+    if _has_method(obj, "GetClipColor"):
+        try:
+            readback = obj.GetClipColor()
+        except Exception:  # pragma: no cover - defensive; getter is documented
+            readback = None
+    persisted = (readback == color) if readback is not None else None
+
+    if not returned:
+        refusal = _clip_colors.clip_color_refusal(color)
+        return _err(
+            f"SetClipColor refused '{color}' on this {kind}",
+            code="CLIP_COLOR_REJECTED",
+            category="invalid_input",
+            reason=refusal["reason"],
+            remediation=refusal["remediation"],
+            state=refusal["state"],
+        )
+    if persisted is False:
+        # The generator/title case. Reporting success here is the silent lie.
+        return {
+            "success": False,
+            "color": color,
+            "readback": readback,
+            "warnings": [{
+                "code": "CLIP_COLOR_NOT_PERSISTED",
+                "message": (
+                    f"SetClipColor returned True on this {kind} but the colour did "
+                    f"not persist — GetClipColor reads {readback!r}. Measured on "
+                    "generator and title items, which take the call and drop it; "
+                    "media-backed items on the same timeline persist correctly."
+                ),
+                "remediation": (
+                    "Colour a media-backed item, or mark the generator another way "
+                    "(a timeline marker at its start reads back reliably)."
+                ),
+            }],
+        }
+    return {"success": True, "color": color, "readback": readback}
+
+
 def _filter_to_keys(settings: Any, allowed) -> Tuple[Dict[str, Any], list]:
     """Whitelist a settings/options dict to the keys a Resolve API documents.
 
@@ -17783,7 +17844,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "get_clip_color":
         return {"color": clip.GetClipColor()}
     elif action == "set_clip_color":
-        return {"success": bool(clip.SetClipColor(p["color"]))}
+        return _set_clip_color_checked(clip, p["color"], kind="media pool item")
     elif action == "clear_clip_color":
         return {"success": bool(clip.ClearClipColor())}
     elif action == "link_proxy":
@@ -22251,7 +22312,7 @@ def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) 
     elif action == "get_clip_color":
         return {"color": item.GetClipColor()}
     elif action == "set_clip_color":
-        return {"success": bool(item.SetClipColor(p["color"]))}
+        return _set_clip_color_checked(item, p["color"], kind="timeline item")
     elif action == "clear_clip_color":
         return {"success": bool(item.ClearClipColor())}
     return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","add_flag","get_flags","clear_flags","get_clip_color","set_clip_color","clear_clip_color"])
