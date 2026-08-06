@@ -16805,6 +16805,9 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       get_resolutions(format, codec) -> {resolutions}
       get_settings() -> {settings}  (alias for set_render_settings with get)
       set_settings(settings) -> {success}
+        Resolve 21.0.4+ settings keys: UseFullExtents (bool),
+        AddFrameHandles (int >= 0, ignored when UseFullExtents is true),
+        DataBurnIn (burn-in preset name, "Same as project", or "None").
       list_presets() -> {presets}
       load_preset(name) -> {success}
       save_preset(name) -> {success}
