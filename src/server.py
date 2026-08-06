@@ -1962,9 +1962,67 @@ def _marker_display_frame(tl, frame):
     return frame
 
 
-def _frame_id_to_timecode(frame: int, fps: float, separator: str = ":") -> str:
+def _playhead_absolute_timecode(tl, timecode):
+    """Lift an elapsed timecode to the absolute timecode SetCurrentTimecode wants.
+
+    Timeline.SetCurrentTimecode only accepts the absolute timeline timecode
+    shown in the Resolve UI; handing it a timecode below the start timecode
+    returns False with no error info (measured on Studio 19.1.3.7: on a
+    timeline starting 00:59:50:00, '00:00:21:03' fails while '01:00:11:03'
+    succeeds). Mirror the marker-param contract: a timecode that parses to a
+    frame below the timeline start is elapsed time and gets lifted by the
+    start frame. At-or-past-start timecodes, and strings this parser cannot
+    read, pass through unchanged so Resolve stays the arbiter of them.
+    """
+    if not isinstance(timecode, str):
+        return timecode
+    frame, err = _timeline_timecode_to_frame_id(tl, timecode)
+    if err:
+        return timecode
+    start = _timeline_start_frame(tl)
+    if not start or frame >= start:
+        return timecode
+    fps, fps_err = _timeline_fps(tl)
+    if fps_err:
+        return timecode
+    drop_frame = ";" in timecode
+    try:
+        start_tc = tl.GetStartTimecode()
+    except Exception:
+        start_tc = None
+    if isinstance(start_tc, str) and start_tc:
+        drop_frame = ";" in start_tc
+    separator = ";" if drop_frame else ":"
+    return _frame_id_to_timecode(
+        frame + start, fps, separator=separator, drop_frame=drop_frame
+    )
+
+
+def _frame_id_to_timecode(
+    frame: int, fps: float, separator: str = ":", drop_frame: bool = False
+) -> str:
     nominal_fps = max(1, int(round(float(fps))))
     frame = max(0, int(frame))
+    if drop_frame:
+        # Inverse of the drop-frame arithmetic in _timecode_to_frame_id: 2 (30
+        # fps) or 4 (60 fps) frame numbers are skipped each minute except every
+        # tenth minute.
+        drop = int(round(nominal_fps * 0.0666666667))
+        if drop > 0:
+            per_minute = nominal_fps * 60 - drop
+            per_ten = per_minute * 10 + drop
+            tens, rem = divmod(frame, per_ten)
+            if rem < nominal_fps * 60:
+                minutes = tens * 10
+                frame_in_minute = rem
+            else:
+                rem -= nominal_fps * 60
+                extra_minutes, frame_in_minute = divmod(rem, per_minute)
+                minutes = tens * 10 + 1 + extra_minutes
+                frame_in_minute += drop
+            hours, minutes = divmod(minutes, 60)
+            seconds, frames = divmod(frame_in_minute, nominal_fps)
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}{separator}{frames:02d}"
     total_seconds, frames = divmod(frame, nominal_fps)
     hours, rem = divmod(total_seconds, 3600)
     minutes, seconds = divmod(rem, 60)
@@ -21623,9 +21681,12 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
 
     Marker frames are RELATIVE to the timeline start: frame 0 is the first
     frame of the timeline, even when the timeline starts at 01:00:00:00.
-    Timecode params are absolute timeline timecode as shown in the Resolve UI
-    (timecodes before the start timecode are treated as elapsed time) and are
-    converted to relative frames automatically.
+    Marker timecode params are absolute timeline timecode as shown in the
+    Resolve UI (timecodes before the start timecode are treated as elapsed
+    time) and are converted to relative frames automatically.
+    set_current_timecode accepts the same convention: elapsed timecodes below
+    the start timecode are lifted to absolute before calling Resolve, which
+    itself refuses sub-start timecodes with a bare False.
 
     Actions:
       add(frame|frame_id|frameId|timecode?, color?, name?, note?, duration?, custom_data?) -> {success, frame}
@@ -21690,7 +21751,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
     elif action == "get_current_timecode":
         return {"timecode": tl.GetCurrentTimecode()}
     elif action == "set_current_timecode":
-        return {"success": bool(tl.SetCurrentTimecode(p["timecode"]))}
+        return {"success": bool(tl.SetCurrentTimecode(_playhead_absolute_timecode(tl, p["timecode"])))}
     elif action == "get_current_video_item":
         it = tl.GetCurrentVideoItem()
         return {"name": it.GetName(), "id": it.GetUniqueId()} if it else {"name": None, "id": None}
