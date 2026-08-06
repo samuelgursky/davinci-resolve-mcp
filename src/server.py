@@ -16326,6 +16326,24 @@ def _render_preset_pin(proj, preset_name: str):
     return {"preset": preset_name, "loaded": True}, None
 
 
+def _render_settings_warnings(settings: Dict[str, Any]):
+    """Inter-key combinations Resolve accepts and then silently ignores.
+
+    SetRenderSettings returns True for these, so nothing downstream would ever
+    tell the caller the key did nothing — the same silent-no-op class as the
+    unknown-key drop that `_filter_to_keys` covers on the set path.
+    """
+    warnings = []
+    if not isinstance(settings, dict):
+        return warnings
+    if settings.get("UseFullExtents") is True and isinstance(settings.get("AddFrameHandles"), int) and settings["AddFrameHandles"] > 0:
+        warnings.append(
+            "AddFrameHandles is ignored while UseFullExtents is true: Resolve renders the "
+            "clip's full extents and the handle count silently does nothing. Drop one of the two."
+        )
+    return warnings
+
+
 def _validate_render_settings_payload(settings: Dict[str, Any], *, require_temp_target: bool = False):
     if not isinstance(settings, dict) or not settings:
         return None, _err("settings must be a non-empty object")
@@ -16353,13 +16371,8 @@ def _validate_render_settings_payload(settings: Dict[str, Any], *, require_temp_
         errors.append("DataBurnIn must be a string (a burn-in preset name, 'Same as project', or 'None')")
     if "MarkIn" in settings and "MarkOut" in settings and settings["MarkOut"] < settings["MarkIn"]:
         errors.append("MarkOut must be greater than or equal to MarkIn")
-    warnings = []
-    if settings.get("UseFullExtents") is True and isinstance(settings.get("AddFrameHandles"), int) and settings["AddFrameHandles"] > 0:
-        warnings.append(
-            "AddFrameHandles is ignored while UseFullExtents is true: Resolve renders the "
-            "clip's full extents and the handle count silently does nothing. Drop one of the two."
-        )
-    result = {"valid": not errors, "unknown_keys": unknown, "errors": errors, "warnings": warnings, "settings": dict(settings)}
+    result = {"valid": not errors, "unknown_keys": unknown, "errors": errors,
+              "warnings": _render_settings_warnings(settings), "settings": dict(settings)}
     return result, None
 
 
@@ -16810,10 +16823,12 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       set_mode(mode) -> {success}
       get_resolutions(format, codec) -> {resolutions}
       get_settings() -> {settings}  (alias for set_render_settings with get)
-      set_settings(settings) -> {success}
+      set_settings(settings) -> {success, ignored_settings?, warnings?}
         Resolve 21.0.4+ settings keys: UseFullExtents (bool),
-        AddFrameHandles (int >= 0, ignored when UseFullExtents is true),
-        DataBurnIn (burn-in preset name, "Same as project", or "None").
+        AddFrameHandles (int >= 0), DataBurnIn (burn-in preset name,
+        "Same as project", or "None"). AddFrameHandles is ignored while
+        UseFullExtents is true — the call still succeeds, so that pairing
+        comes back in warnings rather than silently doing nothing.
       list_presets() -> {presets}
       load_preset(name) -> {success}
       save_preset(name) -> {success}
@@ -16937,6 +16952,11 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         result = {"success": bool(proj.SetRenderSettings(settings))}
         if ignored_settings:
             result["ignored_settings"] = ignored_settings
+        # Accepted-then-ignored key combinations (21.0.4 AddFrameHandles under
+        # UseFullExtents) read as a clean success without this.
+        warnings = _render_settings_warnings(settings)
+        if warnings:
+            result["warnings"] = warnings
         return result
     elif action == "list_presets":
         return {"presets": proj.GetRenderPresetList()}
@@ -18096,25 +18116,20 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "clear_mark_in_out":
         return {"success": bool(clip.ClearMarkInOut(p.get("type", "all")))}
     elif action == "get_timeline":
-        method = getattr(clip, "GetTimeline", None)
-        if not callable(method):
-            return _err("MediaPoolItem.GetTimeline is not available on this Resolve build (requires 21.0.4+)")
+        missing = _requires_method(clip, "GetTimeline", "21.0.4")
+        if missing:
+            return missing
         try:
-            tl_obj = method()
+            tl_obj = clip.GetTimeline()
         except Exception as exc:
             return _err(f"GetTimeline failed: {exc}")
         if not tl_obj:
             return {"is_timeline": False, "timeline": None,
                     "note": "This media pool item is not a timeline entry."}
-        summary = {"name": tl_obj.GetName()}
-        if _has_method(tl_obj, "GetUniqueId"):
-            try:
-                summary["unique_id"] = tl_obj.GetUniqueId()
-            except Exception:
-                pass
-        for getter, key in (("GetStartFrame", "start_frame"), ("GetEndFrame", "end_frame"),
-                            ("GetTrackCount", None)):
-            if key and _has_method(tl_obj, getter):
+        summary = {}
+        for getter, key in (("GetName", "name"), ("GetUniqueId", "unique_id"),
+                            ("GetStartFrame", "start_frame"), ("GetEndFrame", "end_frame")):
+            if _has_method(tl_obj, getter):
                 try:
                     summary[key] = getattr(tl_obj, getter)()
                 except Exception:
