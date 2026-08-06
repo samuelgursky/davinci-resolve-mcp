@@ -2,6 +2,54 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.86.0
+
+The Resolve 21.0.4 scripting-API surfaces, plus a `project_db` fix found while
+validating the subtitle-style work against the free edition over the new
+automatic bridge.
+
+### Added
+
+- **The three new Resolve 21.0.4 scripting-API surfaces are wired** (PR #133),
+  with the 21.0.4 settings keys advertised in the render tool docstring.
+  `AddFrameHandles` warns when Resolve silently ignores it rather than reporting
+  a success that did not happen, and the `get_timeline` path is guarded; both
+  are covered by tests.
+
+### Fixed
+
+- **`project_db` resolved by `projectName` only ever searched the Studio project
+  library.** The free edition ships from the App Store and runs **sandboxed**, so
+  its library is not under Application Support at all — it lives inside the app
+  container, under a differently-named root (`Resolve Project Library`, not
+  `Resolve Disk Database`). Every free-edition user hit `no Project.db found`
+  and had to supply an absolute path they had no reason to know. Both roots are
+  now searched, Studio first, results deduplicated, and a miss names both paths
+  it looked in. Confirmed on free 21.0.3.7, macOS.
+
+  macOS-only by design: the sandbox container is an Apple construct, and where
+  the free edition keeps its library on Windows and Linux is not verified here,
+  so nothing is guessed for those platforms — `projectDb` still takes an
+  explicit path.
+
+### Validation
+
+- **Subtitle caption styling is now confirmed on BOTH editions.** v2.82.0 proved
+  the write path on Studio 19.1.3; it now also passes on free 21.0.3 with
+  *identical* behaviour — Resolve parses the uncompressed `0x80` payload, and on
+  its next re-serialisation of that track writes the style back as `0x81` zstd
+  with the font descriptor and position preserved exactly, dropping the same
+  neighbouring key both times. A freshly added subtitle track carries no style
+  blob on either version.
+
+- **The automatic bridge fallback shipped in v2.85.0 is confirmed live.** The
+  free edition connected with no `DAVINCI_RESOLVE_BRIDGE` set — the transport it
+  refuses outright — so the fallback is what carried the session.
+
+- **`GetFairlightPresets` works on 21.0.3**, returning a preset map. It is absent
+  on 19.1.3, confirming the 20.2.2+ floor from both sides. `apply_fairlight_preset`
+  still awaits a genuinely saved preset (issue #128).
+
 ## What's New in v2.85.0
 
 The free edition now works with no environment variable at all — start the

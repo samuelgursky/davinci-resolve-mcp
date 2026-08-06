@@ -167,11 +167,17 @@ function unwrapEffectFilters(raw) {
  * *compressor* (the bundled fzstd is decompress-only); the cost is a larger
  * blob, which does not matter here.
  *
- * Confirmed live against Resolve Studio 19.1.3 (2026-08-06): a subtitle track patched with
- * a 0x80 payload opens without error, and once Resolve next re-serialises that
- * track it writes the style back out as 0x81 zstd with the font descriptor and
- * position preserved exactly — i.e. Resolve genuinely parses the 0x80 form into
- * its in-memory model rather than passing the bytes through untouched.
+ * Confirmed live on BOTH editions (2026-08-06) — Studio 19.1.3 and free 21.0.3:
+ * a subtitle track patched with a 0x80 payload opens without error, and once
+ * Resolve next re-serialises that track it writes the style back out as 0x81
+ * zstd with the font descriptor and position preserved exactly. Resolve
+ * genuinely parses the 0x80 form into its in-memory model rather than passing
+ * the bytes through untouched. Both versions behaved identically, down to
+ * dropping the same neighbouring key on rewrite.
+ *
+ * Also identical across both: a freshly added subtitle track carries NO style
+ * blob (a ~111-byte NumLayers stub), so there is nothing to patch until the
+ * track has been styled once in the UI.
  */
 function wrapEffectFilters(protobuf, version = 2) {
   const head = Buffer.alloc(9);

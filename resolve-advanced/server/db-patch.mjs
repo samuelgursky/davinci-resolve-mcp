@@ -18,6 +18,29 @@ const require = createRequire(import.meta.url);
 
 export const DISK_DB_ROOT = path.join(os.homedir(), 'Library/Application Support/Blackmagic Design/DaVinci Resolve/Resolve Disk Database/Resolve Projects');
 
+/**
+ * The FREE edition ships from the App Store and runs SANDBOXED, so its project
+ * library is not under Application Support at all — it lives inside the app's
+ * container, under a differently-named root ("Resolve Project Library", not
+ * "Resolve Disk Database"). Confirmed on free 21.0.3.7, macOS.
+ *
+ * Without this, `project_db` resolved by projectName could never find a
+ * free-edition project: it searched only the Studio root and reported "no
+ * Project.db found", sending exactly the users the in-app bridge exists to serve
+ * hunting for a path they have no reason to know.
+ *
+ * macOS-only: the sandbox container is an Apple construct. Where the free
+ * edition keeps its library on Windows and Linux is NOT verified here, so
+ * nothing is guessed for those platforms — pass `projectDb` explicitly there.
+ */
+export const LITE_DB_ROOT = path.join(
+  os.homedir(),
+  'Library/Containers/com.blackmagic-design.DaVinciResolveLite/Data/Library/Application Support/Resolve Project Library/Resolve Projects',
+);
+
+/** Every root searched when resolving a project by name, Studio first. */
+export const DB_ROOTS = [DISK_DB_ROOT, LITE_DB_ROOT];
+
 export function loadSqlite() {
   try {
     return require('better-sqlite3');
@@ -26,7 +49,10 @@ export function loadSqlite() {
   }
 }
 
-/** Recursively locate <projectName>/Project.db under the Resolve Disk Database. */
+/**
+ * Recursively locate <projectName>/Project.db under a project-library root.
+ * Called once per root by resolveDbPath; pass `root` to search just one.
+ */
 export function findProjectDb(projectName, root = DISK_DB_ROOT) {
   const hits = [];
   const walk = (dir, depth) => {
@@ -51,9 +77,22 @@ export function findProjectDb(projectName, root = DISK_DB_ROOT) {
 export function resolveDbPath({ projectDb, projectName }) {
   if (projectDb) return projectDb;
   if (!projectName) throw new Error('provide projectDb (path) or projectName');
-  const hits = findProjectDb(projectName);
-  if (!hits.length) throw new Error(`no Project.db found for project "${projectName}" under the Resolve Disk Database`);
-  if (hits.length > 1) throw new Error(`multiple Project.db match "${projectName}": pass projectDb explicitly`);
+  // Deduplicate: a project present under both roots must not read as ambiguous
+  // just because the same file was found twice.
+  const hits = [...new Set(DB_ROOTS.flatMap((root) => findProjectDb(projectName, root)))];
+  if (!hits.length) {
+    throw new Error(
+      `no Project.db found for project "${projectName}". Searched the Studio library ` +
+      `(${DISK_DB_ROOT}) and the sandboxed free-edition library (${LITE_DB_ROOT}). ` +
+      'If Resolve keeps its projects elsewhere — a relocated library, a network/Postgres ' +
+      'database, or the free edition on Windows/Linux — pass projectDb with the full path.',
+    );
+  }
+  if (hits.length > 1) {
+    throw new Error(
+      `multiple Project.db match "${projectName}" (${hits.join(', ')}): pass projectDb explicitly`,
+    );
+  }
   return hits[0];
 }
 
