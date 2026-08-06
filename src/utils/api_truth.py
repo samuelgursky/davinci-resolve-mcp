@@ -1444,7 +1444,12 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "are all marker-only and all refused. Five names overlap both "
                    "palettes (Blue, Green, Yellow, Pink, Purple), which is why the "
                    "decoy survives: reasoning from the marker constants scores 5 of "
-                   "16 and looks like the right vocabulary with a few gaps.",
+                   "16 and looks like the right vocabulary with a few gaps. The "
+                   "reporter's field experience sharpens this — the trap is not that "
+                   "a decoy vocabulary exists, it is that the decoy HALF-WORKS. "
+                   "Intermittent successes read as an unreliable API rather than as "
+                   "a wrong vocabulary, so the wrong conclusion is the natural one; "
+                   "a clean 0-for-8 would have exposed the mechanism immediately.",
         "recommended": "Pass only the 16 clip-colour names; on False, treat it as an "
                        "invalid name rather than an item/lock/page problem. The set "
                        "is pinned in utils/clip_colors.py and named in the refusal "
