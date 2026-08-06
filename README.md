@@ -61,7 +61,12 @@ Validated on free 21.0.3.7 and Studio 19.1.3.7, both macOS. The Windows paths
 added in v2.70.1 (issue #106) shipped unverified; reports on free 21.0.1.11
 (issue #109) and free 21.0.3.7 (issue #112) have since shown the bridge
 installing, listing and serving from **both** `%PROGRAMDATA%` and `%APPDATA%` on
-Windows 11, so those paths are now confirmed rather than assumed.
+Windows 11, so those paths are now confirmed rather than assumed. Linux is
+confirmed as well: a report on free 20.3.2.9 (issue #129, Fedora 43) shows the
+bridge installing to `~/.local/share/DaVinciResolve/Fusion/Scripts/Utility`,
+listing against the system Python — no framework-Python requirement on Linux —
+and serving end-to-end, so all three platforms now rest on reports rather than
+assumptions.
 
 Note that the bridge holds its port for as long as it serves. Before v2.70.3 a
 Windows bridge could outlive Resolve and block the next session's listener; if
