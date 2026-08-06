@@ -2,6 +2,61 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.80.1
+
+A correction to the retime measurement contract published in v2.80.0, and a fix
+for a documented timecode conversion that never happened.
+
+### Fixed
+
+- **`timeline_markers.set_current_timecode` now honors the documented
+  elapsed-timecode conversion.** The tool doc has always said timecodes before
+  the timeline start are treated as elapsed time and converted automatically —
+  but only marker actions did the conversion. `set_current_timecode` passed the
+  raw string to `Timeline.SetCurrentTimecode`, which refuses sub-start
+  timecodes with a bare `False` and no error info (measured on Studio 19.1.3.7:
+  on a timeline starting `00:59:50:00`, `00:00:21:03` failed while
+  `01:00:11:03` succeeded). The wrapper now lifts elapsed timecodes by the
+  start frame — `00:00:21:03` lands the playhead at `01:00:11:03` — with
+  drop-frame-correct formatting on DF timelines. Absolute timecodes and strings
+  the parser cannot read pass through unchanged. Marker `add()`'s conversion
+  was re-verified live on a non-zero-start timeline (elapsed `00:00:21:03` →
+  relative frame 507) and was already correct.
+
+### Documentation
+
+- **🚩 Correction to v2.80.0's retime witness — the recommended instrument
+  cannot see retimes.** The v2.80.0 retime entry recommended reading
+  `GetLeftOffset`/`GetRightOffset` to tell whether a retime was built. A
+  calibration with the confound removed (the SAME clip twice in ONE timeline,
+  one copy hand-set to 200%, Studio 19.1.3.7) proves that pair reads the
+  WARPED domain — position ÷ speed, span always equal to the record span — so
+  it is exact for placement and structurally blind for speed. The corrected
+  entry installs the calibrated model: judge speed by the
+  `GetSourceStartFrame`/`GetSourceEndFrame` span vs the record duration (the
+  200% copy read span 96 vs 48; a 0/0 read on xmeml-imported timelines is
+  UNKNOWN, never "no retime"), cross-checked by the `Sm2TimeMap` slope in a
+  saved Project.db or the `EXPORT_EDL` M2 rate.
+- **Two import routes DO build constant retimes**, now documented with their
+  emission rules: OTIO `LinearTimeWarp` through `ImportTimelineFromFile` (200%
+  and 50% measured; `source_range.duration` is the RECORD span — the
+  `time_scalar` handles source consumption; source frames timecode-absolute)
+  and EDL `M2` in the exact shape Resolve's own `EXPORT_EDL` writes (200%
+  measured; event-line source span equals the record span; `* FROM CLIP NAME:`
+  drives linking). Reverse and varying-speed maps remain untested as import
+  routes and the entry says so.
+- `docs/reference/api-limitations.md` regenerated; the `GetSourceStartFrame`
+  off-by-one entry now scopes its GetLeftOffset advice to 100%-speed placement.
+
+### Validation
+
+- Full offline suite: 2460 passed, 1 skipped (up exactly the 7 new tests from
+  the 2453 baseline).
+- Live Resolve Studio 19.1.3.7: new
+  `tests/live_playhead_timecode_validation.py` harness — raw refusal control,
+  elapsed lift to `01:00:11:03`, absolute pass-through, and marker add() at
+  relative frame 507 all verified against a disposable project.
+
 ## What's New in v2.80.0
 
 Three community PRs from @staahlarkitektur, all found on Windows, all real. Each is merged with
