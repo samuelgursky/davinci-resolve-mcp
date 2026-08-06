@@ -17,6 +17,7 @@ import os
 import platform as _platform
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -2376,23 +2377,57 @@ def build_plan(
     }
 
 
-def _run_command(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tuple[int, str, str]:
-    try:
-        proc = subprocess.run(
-            args,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
+def _kill_process_tree(pid: int) -> None:
+    """Best-effort: terminate pid and its descendants, not just the direct child.
+
+    Popen.kill() only reaches the immediate child. On Windows a PATH lookup can
+    resolve to a shim (Chocolatey, npm, etc.) that spawns the real work as a
+    grandchild, which survives a plain kill() untouched — confirmed for `ffmpeg`
+    on a Chocolatey-managed machine (davinci-resolve-mcp CONTRIBUTION_NOTES.md,
+    Bug 2b: a 5s timeout had zero effect on an ~82s real ffmpeg pass, because
+    killing the shim's PID left the real ffmpeg.exe grandchild running). Killing
+    the whole tree instead of one PID fixes this regardless of what kind of
+    wrapper sits on PATH.
+    """
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True, check=False,
         )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
-        stderr_tail = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
-        return 124, stdout, f"Command timed out after {timeout}s. {stderr_tail}".strip()
+        return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _run_command(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tuple[int, str, str]:
+    popen_kwargs: Dict[str, Any] = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+    try:
+        proc = subprocess.Popen(
+            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs
+        )
     except OSError as exc:
         return 127, "", str(exc)
-    stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
-    stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
-    return proc.returncode, stdout, stderr
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # subprocess.run's default TimeoutExpired handling only kills the direct
+        # child, which is insufficient when that child is itself a wrapper — see
+        # _kill_process_tree. The follow-up communicate() (no timeout) drains
+        # whatever's left now that the tree is actually gone.
+        _kill_process_tree(proc.pid)
+        stdout, stderr = proc.communicate()
+        stdout_s = stdout.decode("utf-8", errors="replace") if stdout else ""
+        stderr_s = stderr.decode("utf-8", errors="replace") if stderr else ""
+        return 124, stdout_s, f"Command timed out after {timeout}s. {stderr_s}".strip()
+    stdout_s = stdout.decode("utf-8", errors="replace") if stdout else ""
+    stderr_s = stderr.decode("utf-8", errors="replace") if stderr else ""
+    return proc.returncode, stdout_s, stderr_s
 
 
 def _write_json(path: str, payload: Dict[str, Any]) -> None:

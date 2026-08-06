@@ -2,9 +2,12 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 from typing import Any, Dict, Optional
@@ -58,6 +61,8 @@ from src.utils.media_analysis import (
     execute_plan,
     execute_plan_async,
     executing_clips,
+    _kill_process_tree,
+    _run_command,
     plan_requires_capabilities,
     load_report,
     mark_registry_stale_for_clip,
@@ -4760,6 +4765,57 @@ class InventoryCacheReuseTests(unittest.TestCase):
                 self.dash._current_resolve_project_id = original
             self.assertTrue(payload["resolve_available"])
             self.assertEqual(payload["counts"]["total"], 2)
+
+
+class RunCommandTimeoutKillsProcessTreeTests(unittest.TestCase):
+    """Bug 2b: a timeout must actually cut the wait short, not just relabel a
+    normally-completing (or genuinely stalled) child as 'timed out' after
+    waiting for its full natural runtime — see davinci-resolve-mcp
+    CONTRIBUTION_NOTES.md, Bug 2b. Popen.kill() alone only reaches the direct
+    child; on Windows a PATH lookup can resolve to a shim whose real work
+    happens in a grandchild that survives untouched."""
+
+    def test_timeout_returns_well_before_natural_completion(self):
+        # sys.executable, not an external binary — no shim/wrapper can sit on
+        # PATH in front of it, so this isolates the kill-tree mechanism itself
+        # from the shim-specific scenario in the original repro.
+        natural_runtime = 5
+        args = [sys.executable, "-c", f"import time; time.sleep({natural_runtime})"]
+        start = time.monotonic()
+        code, _stdout, stderr = _run_command(args, timeout=1)
+        elapsed = time.monotonic() - start
+        self.assertEqual(code, 124)
+        self.assertIn("timed out", stderr)
+        # Generous bound, not a tight one: proves the kill actually cut the wait
+        # short (vs. the pre-fix behavior of waiting out the full natural
+        # runtime) without flaking on a slow/loaded CI runner.
+        self.assertLess(elapsed, natural_runtime - 1)
+
+    def test_normal_completion_is_unaffected(self):
+        code, stdout, _stderr = _run_command(
+            [sys.executable, "-c", "print('ok')"], timeout=10
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("ok", stdout)
+
+
+@unittest.skipIf(os.name == "nt", "POSIX-only branch of _kill_process_tree")
+class KillProcessTreePosixTests(unittest.TestCase):
+    def test_uses_killpg_with_sigkill(self):
+        with unittest.mock.patch("os.killpg") as mock_killpg:
+            _kill_process_tree(12345)
+        mock_killpg.assert_called_once_with(12345, signal.SIGKILL)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows-only branch of _kill_process_tree")
+class KillProcessTreeWindowsTests(unittest.TestCase):
+    def test_uses_taskkill_with_tree_flag(self):
+        with unittest.mock.patch("subprocess.run") as mock_run:
+            _kill_process_tree(12345)
+        mock_run.assert_called_once_with(
+            ["taskkill", "/F", "/T", "/PID", "12345"],
+            capture_output=True, check=False,
+        )
 
 
 if __name__ == "__main__":
