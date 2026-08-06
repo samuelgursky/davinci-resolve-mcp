@@ -35,7 +35,9 @@ re-derive it here.
   markers/flags/grades/takes/keyframes …); scope with a group list.
 - `edit_engine` drives higher-level selects/tighten/swap flows
   (plan → confirm → execute); tighten variants can carry audio via `keep_ranges`
-  mirror / `include_audio`.
+  mirror / `include_audio`. For a full dead-air pass over **one long single-take
+  recording** — transcribe → plan → review → execute, with the source/record
+  coordinate trap spelled out — use the `resolve-tighten-recording` skill.
 
 ## Show the gaps before cutting them (`edit_engine`)
 

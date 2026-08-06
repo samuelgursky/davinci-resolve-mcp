@@ -61,7 +61,15 @@ Each skill is a directory containing `SKILL.md`. Claude Code does not discover
 loose `.md` files in `.claude/skills/`; a skill placed at the top level of that
 directory silently never loads.
 
-Two skills sit outside the domain routing:
+Two end-to-end assembly recipes sit alongside the domain skills. Where a domain
+skill routes, these two walk a whole job:
+
+- `resolve-rough-cut` (`.claude/skills/resolve-rough-cut/SKILL.md`) — **additive**:
+  select shots from a folder of many clips into an assembled timeline.
+- `resolve-tighten-recording` (`.claude/skills/resolve-tighten-recording/SKILL.md`)
+  — **subtractive**: remove dead air from one long single-take recording.
+
+Two more sit outside the domain routing:
 
 - `house-style` (`.claude/skills/house-style/SKILL.md`) — accumulated editorial
   corrections, so the same note is not given twice. Claude-only; append to it
