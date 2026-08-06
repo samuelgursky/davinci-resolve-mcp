@@ -24,7 +24,7 @@ cannot drift.
    | Platform | File(s) | Trigger | Source |
    |---|---|---|---|
    | Codex / OpenCode / Zed / others | `AGENTS.md` (`## Domain Routing` block) | always-on | generated block |
-   | Claude Code | `.claude/skills/*.md` | semantic (description) | hand-authored (rich) |
+   | Claude Code | `.claude/skills/<name>/SKILL.md` | semantic (description) | hand-authored (rich) |
    | Cursor | `.cursor/rules/*.mdc` | `alwaysApply` repo rule + per-domain `description` (agent-requested) | generated |
    | VS Code / Copilot | `.github/copilot-instructions.md` + `.github/instructions/*.instructions.md` | always-on + `applyTo` | generated |
    | Windsurf | `.windsurf/rules/*.md` + `.windsurfrules` | rules dir + legacy flat | generated |
@@ -33,7 +33,10 @@ cannot drift.
    | Continue | `.continue/rules/resolve-mcp.md` | always-on | generated |
    | Claude Desktop | — (chat client, no repo rules) | — | MCP prompts only |
 
-   `.claude/skills/*` stays hand-authored (Claude's rich semantic skills); every
+   `.claude/skills/*` stays hand-authored (Claude's rich semantic skills). Each
+   one is a **directory** holding a `SKILL.md` named for its frontmatter `name`;
+   a loose `.md` at the top level of `.claude/skills/` is never discovered and
+   fails silently. Every
    other file is generated. `AGENTS.md` remains the universal backstop for any
    client not listed. Always-on rule dirs (Cline/Roo/Continue) get one compact
    combined file (repo hygiene + domain table), since they load every rule file
@@ -61,8 +64,8 @@ node scripts/agent-rules/generate.mjs --check   # exit 1 if anything is stale (C
 ## Adding a domain or a platform
 
 - **New domain:** add an entry to `DOMAINS` in `generate.mjs`, add a matching
-  `@mcp.prompt` in `src/server.py`, and (optionally) a rich `.claude/skills/*.md`.
-  Regenerate.
+  `@mcp.prompt` in `src/server.py`, and (optionally) a rich
+  `.claude/skills/<name>/SKILL.md`. Regenerate.
 - **New platform:** add an `emit(...)` for its convention in `generate.mjs`,
   reusing `domainBody(d)` / `repoHygiene`. Regenerate. Do not hand-edit generated
   files — the drift guard will fail.
