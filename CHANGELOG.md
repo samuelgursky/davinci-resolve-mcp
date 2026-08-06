@@ -2,6 +2,61 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.82.0
+
+Caption styling, which the scripting API cannot touch at all, is now readable
+and writable — plus a correction to a claim this repo was about to send to
+Blackmagic.
+
+### Added
+
+- **`project_db list_subtitle_styles` / `set_subtitle_style`** — read and patch
+  the caption style on a subtitle track: font family, point size, weight,
+  italic, and normalised on-screen position. The scripting API exposes none of
+  this (subtitle `TimelineItem`s return only the 21 transform/composite
+  properties, and every `subtitleFontName`/`subtitlePreset`-shaped setting key
+  returns `None`), but the style is persisted in `Sm2TiTrack.FieldsBlob` for
+  `Type = 2` tracks: a keyed-dict holding an `EffectFiltersBA` payload whose
+  effect 136 carries a Qt `QFont::toString()` descriptor (param 18) and a
+  position vector (param 17). New codec at
+  `resolve-advanced/vendor/drp-format/subtitle-style.js`.
+
+  Verified live on Resolve 21 (2026-08-06): a patched track opens without error
+  and, once Resolve next re-serialises it, is written back out in Resolve's own
+  zstd form with the patched values intact — so Resolve genuinely parses the
+  write rather than passing the bytes through. Read side verified against a
+  real project carrying 12 subtitle tracks.
+
+  Caveats, all reported by the tool: this is a whole-**track** style and not
+  per-caption, the project must be CLOSED, Resolve must be fully quit and
+  relaunched afterwards, and the track must already carry a style blob — a
+  freshly added subtitle track has none until it is styled once in the UI.
+
+  Only the font descriptor and position are named. The neighbouring parameters
+  vary across real projects but have not been correlated against the UI, so
+  they round-trip untouched and are reported as opaque rather than guessed at.
+
+### Fixed
+
+- **The `api_truth` Fairlight entry claimed more was missing than actually is.**
+  It read "only voice-isolation state and channel-mapping reads are scriptable",
+  which omits `Project.ApplyFairlightPresetToCurrentTimeline(name)` — already
+  exposed as `project_settings apply_fairlight_preset`, with the names coming
+  from `resolve_control get_fairlight_presets`. The real gap is *per-parameter*
+  control (volume/pan/EQ/automation/FairlightFX), not the whole surface. Since
+  this text generates `docs/reference/api-limitations.md`, the incorrect claim
+  was headed for the Blackmagic submission. The subtitle-styling entry got the
+  same treatment: it claimed no workaround existed, which the above now closes.
+
+### Documented
+
+- **AI Audio Assistant has no scripting method** — logged with the reason, which
+  is *not* that it is a menu command: the API has no generic menu-invocation
+  hook, so scriptability is per-feature, and `DetectSceneCuts`, `Stabilize`,
+  `SmartReframe` and `TranscribeAudio` are all menu commands that do have
+  methods. For a repeatable mix, save the Assistant's result as a Fairlight
+  preset once and apply it per-timeline (issues #127, #128).
+
 ## What's New in v2.81.0
 
 One render bug where every readback agreed and the file disagreed, plus the two

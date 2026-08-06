@@ -163,10 +163,15 @@ function unwrapEffectFilters(raw) {
 /**
  * Re-wrap a protobuf payload as EffectFiltersBA.
  *
- * Always emits the UNCOMPRESSED 0x80 form. Resolve reads both markers, and
- * writing 0x80 avoids depending on a zstd *compressor* (the bundled fzstd is
- * decompress-only) and avoids any risk of a re-compressed frame differing from
- * what Resolve expects. The cost is a larger blob, which does not matter here.
+ * Always emits the UNCOMPRESSED 0x80 form. This avoids depending on a zstd
+ * *compressor* (the bundled fzstd is decompress-only); the cost is a larger
+ * blob, which does not matter here.
+ *
+ * Confirmed live against Resolve 21 (2026-08-06): a subtitle track patched with
+ * a 0x80 payload opens without error, and once Resolve next re-serialises that
+ * track it writes the style back out as 0x81 zstd with the font descriptor and
+ * position preserved exactly — i.e. Resolve genuinely parses the 0x80 form into
+ * its in-memory model rather than passing the bytes through untouched.
  */
 function wrapEffectFilters(protobuf, version = 2) {
   const head = Buffer.alloc(9);

@@ -1004,11 +1004,17 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "effect 136 carries a Qt QFont descriptor (param 18) and "
                        "a normalised position vector (param 17). Exposed as "
                        "project_db list_subtitle_styles / set_subtitle_style "
-                       "(font family/size/weight/italic + position). Caveats: "
-                       "whole-TRACK style not per-caption, project must be "
-                       "CLOSED, and Resolve must be fully quit and relaunched "
-                       "afterwards. Burn-in overlays via Fusion titles remain a "
-                       "visual alternative but do not produce subtitle tracks.",
+                       "(font family/size/weight/italic + position). Confirmed "
+                       "live on 21.0 (2026-08-06): Resolve opens a patched track "
+                       "and re-serialises it back to its own zstd form with the "
+                       "patched values intact, so it genuinely parses the write. "
+                       "Caveats: whole-TRACK style not per-caption, project must "
+                       "be CLOSED, Resolve must be fully quit and relaunched "
+                       "afterwards, and the track must already carry a style "
+                       "blob (a freshly added subtitle track has none until it "
+                       "is styled once in the UI). Burn-in overlays via Fusion "
+                       "titles remain a visual alternative but do not produce "
+                       "subtitle tracks.",
         "tags": ["missing-method", "subtitle", "style", "preset"],
         "submit": "missing",
     },
