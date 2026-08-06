@@ -2,12 +2,85 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.83.0
+
+Transcript-reading features now say what they cannot see, and the clip-colour
+work that shipped undocumented in v2.82.1 is written down.
+
+### Added
+
+- **`possible_swallowed_retake` flags on `plan_transcript_tighten` and
+  `rank_takes`** (issue #125, measured by @chenyuxiaojin). When a speaker
+  re-reads a sentence immediately, whisper emits the text **once**, aligns it to
+  the first take, and absorbs "pause + entire second take" into the duration of
+  a single word. Every transcript-reading feature inherits that: the plan cannot
+  propose removing a restart it was never told happened, and fluency scoring
+  ranks a take that stumbled and recovered above one that did not. Energy
+  detection cannot cover for it either — in the original measurement the
+  swallowed span peaked at **-12.1 dB against adjacent real speech at -16.7 dB**,
+  so `silencedetect` recalled 3 of 17 instances at any threshold.
+
+  The detector is one absolute bar: any word longer than 1.2s. That is
+  deliberately dumber than two designs that were tried and measured on English
+  material first. A characters-per-second gate — which worked on the original
+  Chinese — fires on **0 of 50** English segments, so it is retired rather than
+  made configurable. Scoring each word against the distribution of its *own*
+  durations elsewhere in the take missed the swallow entirely and produced 8
+  false positives, all function words, for a structural reason worth keeping:
+  the words that absorb retakes are content words, and content words are rare
+  within a single take, so they never accumulate a distribution to score
+  against. The plain bar found exactly one stretched word in 191.5s and it was
+  the swallow point.
+
+  It emits a flag and never a cut point, because where inside the stretched word
+  the second take begins is exactly what the swallow destroyed. The English
+  confirmation rests on **n=1** in synthetic material; the Chinese measurement it
+  generalises from had 17 real instances.
+
+- The `rank_takes` caveat now states the undercount directly rather than leaving
+  it to be discovered.
+
+### Changed
+
+- The `SetClipColor` `api_truth` entry records the sharper form of the trap
+  (@chenyuxiaojin): it is not that a decoy vocabulary exists, it is that the
+  decoy **half-works**. Five names live in both palettes, so probing from the
+  marker constants scores 5 of 16 — which reads as an unreliable API rather than
+  as a wrong vocabulary. A clean 0-for-8 would have exposed the mechanism at
+  once.
+
+### Note on v2.82.1
+
+The clip-colour fix described below shipped **in v2.82.1**, whose release notes
+described only the subtitle-style version correction. The code was correct and
+released; only its documentation was missing. Recorded here rather than by
+rewriting a published release.
+
 ## What's New in v2.82.1
 
 Corrects the Resolve version the v2.82.0 subtitle-style validation was actually
-run against.
+run against — and, undocumented at the time, fixes `SetClipColor`.
 
 ### Fixed
+
+- **`SetClipColor`'s value space, enumerated live** (issue #124, reported by
+  @chenyuxiaojin). The accepted set is exactly the 16 Edit-page clip colours —
+  Orange, Apricot, Yellow, Lime, Olive, Green, Teal, Navy, Blue, Purple, Violet,
+  Pink, Tan, Beige, Brown, Chocolate — and it is **identical on `TimelineItem`
+  and `MediaPoolItem`**, which the report flagged as unmeasured. Everything else
+  is refused with a bare `False`, the empty string included. The scripting
+  reference documents `colorName` as a bare string with no enumerated values
+  while exporting the *marker* palette as constants, so the only colour
+  vocabulary reachable from the API surface is the wrong one.
+- **A second failure the report did not contain: on generator and title items
+  `SetClipColor` returns `True` and the colour does not persist.** `GetClipColor`
+  still reads empty immediately after. A media-backed item on the same timeline
+  in the same session persists correctly, so the bool is honest for some items
+  and a lie for others with nothing in the return value to separate them.
+- All three call sites now read the colour back instead of returning the bare
+  bool, and a refusal names the measured-valid set. The set is deliberately
+  **not** enforced: it was measured on one build, and hard-rejecting an unlisted
+  name would turn a working call into a failure on a Resolve we have not seen.
 
 - **v2.82.0 claimed the subtitle-style write path was confirmed on Resolve 21.
   It was confirmed on Resolve Studio 19.1.3.** The validation itself stands —
