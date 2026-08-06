@@ -10,6 +10,13 @@ Nothing enforced that for Bash. A single `ffmpeg -i camera.mov out.mov` with the
 wrong output path, or an `rm` on a card, is unrecoverable. This hook denies
 mutating shell commands whose target is a media file outside a scratch root.
 
+What it does not catch, stated plainly so it is not mistaken for a sandbox: it
+reads argv lexically, so a directory delete with no media extension
+(`rm -rf /Volumes/CARD/DCIM`), an indirect delete (`find … -delete`,
+`… | xargs rm`), or a script that writes media of its own
+(`python transcode.py --out …`) all pass. This is a tripwire for the common
+direct mistake, not a boundary. The boundary is still the rule in AGENTS.md.
+
 Reads the PreToolUse payload on stdin, emits a permission decision on stdout.
 """
 
@@ -20,7 +27,7 @@ import os
 import re
 import shlex
 import sys
-from typing import List
+from typing import List, Sequence
 
 MEDIA_SUFFIXES = (
     # camera + delivery containers
@@ -43,21 +50,44 @@ MUTATING = {
     "exiftool", "touch", "chmod", "chown",
 }
 
-# Roots where derivative files are allowed to land.
-SCRATCH_MARKERS = (
-    "/scratch",
-    "/claude-",
-    "davinci-resolve-mcp-analysis",
-    "/tmp/",
-    "/var/folders/",
-    "/private/tmp/",
-    ".cache/",
-    "/proxies/",
-    "/renders/",
-    "/exports/",
-    "tests/fixtures",
-    "tests/tmp",
-)
+# Commands that destroy or relocate what they are pointed at, as opposed to
+# writing something new. A derivative-output directory licenses the second but
+# never the first: a camera card with an `exports` folder is still a camera card.
+DESTRUCTIVE = {"rm", "mv", "dd", "truncate", "shred", "unlink"}
+
+# Scratch roots, anchored: the normalized path must start inside one of these.
+SCRATCH_ROOTS = ("/tmp", "/private/tmp", "/var/folders")
+
+# Directory names that mark scratch space, matched as whole path components —
+# never as substrings, so `/Volumes/CARD/scratchpad-dailies` is not exempt.
+SCRATCH_COMPONENTS = ("scratch", "davinci-resolve-mcp-analysis", ".cache")
+
+# Session scratch directories are named `claude-<uid>`.
+SCRATCH_COMPONENT_PREFIXES = ("claude-",)
+
+# Multi-segment markers, matched as a contiguous run of components.
+SCRATCH_RUNS = (("tests", "fixtures"), ("tests", "tmp"))
+
+# Derivative-output directories. These exempt a *write* — a render, a proxy, an
+# export landing where it belongs — but deliberately do not exempt a delete or a
+# move, which is how a folder named `renders` on a source drive got a pass.
+WRITE_ONLY_COMPONENTS = ("proxies", "renders", "exports")
+
+
+def normalize(path: str) -> str:
+    """Absolute, `..`-collapsed, `~`-expanded. Traversal cannot outrun a marker."""
+    expanded = os.path.expanduser(os.path.expandvars(path))
+    return os.path.normpath(os.path.abspath(expanded))
+
+
+def components(path: str) -> List[str]:
+    return [part for part in normalize(path).lower().split(os.sep) if part]
+
+
+def has_run(parts: List[str], marker: Sequence[str]) -> bool:
+    """True when marker appears as a contiguous run of whole components."""
+    width = len(marker)
+    return any(parts[i:i + width] == list(marker) for i in range(len(parts) - width + 1))
 
 
 def decide(decision: str, reason: str) -> None:
@@ -75,12 +105,31 @@ def decide(decision: str, reason: str) -> None:
     sys.exit(0)
 
 
-def is_scratch(path: str) -> bool:
-    lowered = path.lower()
-    if any(marker.lower() in lowered for marker in SCRATCH_MARKERS):
-        return True
+def is_scratch(path: str, destructive: bool = False) -> bool:
+    """Is this path somewhere a derivative may land?
+
+    `destructive` narrows the answer: a delete or a move must clear a genuine
+    scratch root, not merely sit in a directory named `renders`.
+    """
+    resolved = normalize(path).lower()
+    parts = components(path)
+
     configured = os.environ.get("RESOLVE_MCP_SCRATCH", "")
-    return bool(configured) and lowered.startswith(configured.lower())
+    roots = SCRATCH_ROOTS + ((normalize(configured).lower(),) if configured else ())
+    if any(resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep) for root in roots):
+        return True
+
+    if any(part in SCRATCH_COMPONENTS for part in parts):
+        return True
+    if any(part.startswith(SCRATCH_COMPONENT_PREFIXES) for part in parts):
+        return True
+    if any(has_run(parts, marker) for marker in SCRATCH_RUNS):
+        return True
+
+    if not destructive and any(part in WRITE_ONLY_COMPONENTS for part in parts):
+        return True
+
+    return False
 
 
 def is_media(token: str) -> bool:
@@ -113,6 +162,8 @@ def endangered_targets(segment: str) -> List[str]:
         # Still catch redirection onto a media file: `... > camera.mov`
         return [t for t in re.findall(r">>?\s*(\S+)", segment) if is_media(t)]
 
+    destructive = argv0 in DESTRUCTIVE
+
     if argv0 in {"ffmpeg", "avconv"}:
         # ffmpeg reads every -i and writes the trailing operand.
         inputs = {args[i + 1] for i, a in enumerate(args) if a == "-i" and i + 1 < len(args)}
@@ -124,7 +175,10 @@ def endangered_targets(segment: str) -> List[str]:
         operands = [a for a in args if not a.startswith("-")]
         return [t for t in operands[-1:] if is_media(t) and not is_scratch(t)]
 
-    return [a for a in args if not a.startswith("-") and is_media(a) and not is_scratch(a)]
+    return [
+        a for a in args
+        if not a.startswith("-") and is_media(a) and not is_scratch(a, destructive)
+    ]
 
 
 def main() -> None:
