@@ -2,6 +2,73 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.81.0
+
+One render bug where every readback agreed and the file disagreed, plus the two
+community skill contributions that were open against it.
+
+### Fixed
+
+- **`prepare_render_job` inherited the Deliver page's loaded preset, and could
+  queue an mp4 that rendered with no video stream** (issue #123, reported with
+  a full measurement by @chenyuxiaojin). `SetRenderSettings` applies the keys a
+  caller passes *on top of* whatever render state the Deliver page is holding
+  rather than replacing it, and a loaded preset carries more state than those
+  keys. Measured 2026-07-08: after an MP3 render through the stock **Audio
+  Only** preset, a job queued with an explicit `ExportVideo: true` and an `.mp4`
+  target returned `settings_success: true` and a real `job_id`, `list_jobs`
+  reported `IsExportVideo: true`, and the rendered file held only an AAC stream.
+  The single visible tell was 18 minutes of material "rendering" in ~10 seconds.
+
+  No caller-side check could have caught it, and the reason is worse than the
+  bug itself: the scripting API documents neither `GetRenderSettings` nor
+  `GetCurrentRenderPresetName`, so the inherited state cannot be read at all.
+  Detection is unreachable; only pinning is.
+
+### Added
+
+- **`from_preset` on `prepare_render_job`** (and through
+  `prepare_delivery_job`) runs `LoadRenderPreset` before the explicit settings
+  go on top, so a caller pins the base state instead of inheriting one.
+  `PresetName` flipping to `Custom` once the explicit settings land is expected.
+  The name is validated against `GetRenderPresetList` first, because
+  `LoadRenderPreset` refuses an unknown name with a bare `False` that is
+  indistinguishable from any other refusal — and a `False` of either kind now
+  refuses to queue rather than falling through to an inheriting render.
+- **An inherited-state warning** when a job asks for `ExportVideo: true` without
+  a pin, naming the risk and saying plainly that the job readback is not a
+  witness for the rendered file — verify a `codec_type=video` stream before
+  reporting a deliverable. The `before` snapshot now also reports
+  `settings_readable: false` and what is unreadable, instead of leaving the gap
+  unnamed.
+- **`resolve-tighten-recording` skill** (PR #126, @chenyuxiaojin) — the
+  subtractive counterpart to `resolve-rough-cut`: one long single-take recording
+  in, a tightened variant timeline out, original untouched. Measured live
+  against Studio 21.0.1.11 on a real 28.5-minute recording. Its centerpiece is
+  the coordinate-system trap between plan `keep_ranges` (source frames,
+  exclusive end) and `structural_diff.added` (record frames) — feed one where
+  the other is expected and every clip lands at the wrong moment of the right
+  file, with correct cut lengths and no error. Also documents the three classes
+  of content silence-driven tightening cannot hear, including the whisper
+  swallowed-retake blind spot (issue #125).
+
+### Changed
+
+- **`resolve-rough-cut` reconciled with the `api_truth` ledger** (PR #115,
+  @bolnet). Two rows contradicted the ledger the skill itself points at. Import
+  order was backwards — `ImportMedia` has no destination parameter and always
+  lands in the *current* folder, so the bin must be created and made current
+  *before* importing. And the traps table still asserted that a comp attached to
+  a media clip "never renders", a blanket claim the ledger retracted on
+  2026-08-02: a comp wired `MediaIn → Blur → MediaOut` does render, and an
+  unrooted `MediaOut` fails the render job outright rather than being silently
+  bypassed. Every row now names the build it was confirmed on, and a note
+  records that a **running** MCP keeps executing the version it started with, so
+  `git pull` does not refresh the ledger until restart.
+- The skill index in `docs/README.md` now lists the two end-to-end assembly
+  recipes (`resolve-rough-cut`, `resolve-tighten-recording`), neither of which
+  had ever appeared there, and `resolve-edit` points at the tighten skill.
+
 ## What's New in v2.80.2
 
 Agent tooling only. Ten Claude Code skills that this repository has shipped and
