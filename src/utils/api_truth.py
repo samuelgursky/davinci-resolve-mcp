@@ -858,10 +858,44 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "isolation). Verified via dir() + SetProperty docs AND by live "
                    "mutating attempt on 21.0.0: SetProperty('Volume'|'Level'|'Gain'"
                    "|'AudioVolume', 0) all return False (note 'Pan' is the VIDEO "
-                   "transform key, not audio pan, so it misleadingly succeeds).",
-        "recommended": "Mix in the Fairlight UI; only voice-isolation state and "
-                       "channel-mapping reads are scriptable.",
+                   "transform key, not audio pan, so it misleadingly succeeds). "
+                   "The gap is PER-PARAMETER control specifically: a whole saved "
+                   "mix CAN be applied wholesale via "
+                   "Project.ApplyFairlightPresetToCurrentTimeline(name), with the "
+                   "available names from Resolve.GetFairlightPresets() — so "
+                   "'no Fairlight write path exists' would be too strong.",
+        "recommended": "To reapply a known mix, save it once as a Fairlight preset "
+                       "in the UI and apply it per-timeline with "
+                       "ApplyFairlightPresetToCurrentTimeline (exposed as "
+                       "resolve_control get_fairlight_presets + project_settings "
+                       "apply_fairlight_preset). Dial individual levels/pan/EQ/"
+                       "automation/FairlightFX in the Fairlight UI; beyond presets, "
+                       "only voice-isolation state and channel-mapping reads are "
+                       "scriptable.",
         "tags": ["missing-method", "audio", "fairlight"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "AI Audio Assistant (one-click timeline auto-mix)",
+        "object": "Timeline / Project",
+        "reality": "The Fairlight AI Audio Assistant — which analyses a timeline "
+                   "and generates a balanced dialogue/music/effects mix — has no "
+                   "scripting method. Nothing matching it appears in the Resolve "
+                   "scripting API reference or in a dir() audit of Resolve, "
+                   "Project, Timeline or TimelineItem. Note this is NOT because it "
+                   "is a menu command: the API has no generic menu-invocation hook "
+                   "at all, so scriptability is per-feature, and plenty of menu "
+                   "commands DO have methods (DetectSceneCuts, Stabilize, "
+                   "SmartReframe, CreateMagicMask, TranscribeAudio, "
+                   "RemoveMotionBlur, AnalyzeForIntellisearch). It is compounded by "
+                   "the per-parameter Fairlight gap above: even the mix it produces "
+                   "cannot be read back or reconstructed clip-by-clip.",
+        "recommended": "No way to trigger it from a script. For a repeatable mix, "
+                       "run the Assistant once in the UI, save the result as a "
+                       "Fairlight preset, then apply that preset per-timeline with "
+                       "project_settings apply_fairlight_preset — content-adaptive "
+                       "per run is not achievable, a consistent template mix is.",
+        "tags": ["missing-method", "audio", "fairlight", "ai", "auto-mix"],
         "submit": "missing",
     },
     {

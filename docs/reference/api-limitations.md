@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 25 missing capabilities, 29 bugs / unreliable behaviors.
+**Totals:** 26 missing capabilities, 29 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -131,9 +131,16 @@ equivalent, blocking full automation.
 ### Fairlight audio levels / pan / EQ / automation / FairlightFX
 
 - **Object:** `TimelineItem / Timeline`
-- **Behavior:** There is no API to set clip or track volume, pan, EQ, audio automation, or to add/configure FairlightFX. SetProperty covers video transform only; the audio surface is read-only (GetSourceAudioChannelMapping, GetAudioMapping, voice isolation). Verified via dir() + SetProperty docs AND by live mutating attempt on 21.0.0: SetProperty('Volume'|'Level'|'Gain'|'AudioVolume', 0) all return False (note 'Pan' is the VIDEO transform key, not audio pan, so it misleadingly succeeds).
-- **Workaround / current handling:** Mix in the Fairlight UI; only voice-isolation state and channel-mapping reads are scriptable.
+- **Behavior:** There is no API to set clip or track volume, pan, EQ, audio automation, or to add/configure FairlightFX. SetProperty covers video transform only; the audio surface is read-only (GetSourceAudioChannelMapping, GetAudioMapping, voice isolation). Verified via dir() + SetProperty docs AND by live mutating attempt on 21.0.0: SetProperty('Volume'|'Level'|'Gain'|'AudioVolume', 0) all return False (note 'Pan' is the VIDEO transform key, not audio pan, so it misleadingly succeeds). The gap is PER-PARAMETER control specifically: a whole saved mix CAN be applied wholesale via Project.ApplyFairlightPresetToCurrentTimeline(name), with the available names from Resolve.GetFairlightPresets() — so 'no Fairlight write path exists' would be too strong.
+- **Workaround / current handling:** To reapply a known mix, save it once as a Fairlight preset in the UI and apply it per-timeline with ApplyFairlightPresetToCurrentTimeline (exposed as resolve_control get_fairlight_presets + project_settings apply_fairlight_preset). Dial individual levels/pan/EQ/automation/FairlightFX in the Fairlight UI; beyond presets, only voice-isolation state and channel-mapping reads are scriptable.
 - **Tags:** missing-method, audio, fairlight
+
+### AI Audio Assistant (one-click timeline auto-mix)
+
+- **Object:** `Timeline / Project`
+- **Behavior:** The Fairlight AI Audio Assistant — which analyses a timeline and generates a balanced dialogue/music/effects mix — has no scripting method. Nothing matching it appears in the Resolve scripting API reference or in a dir() audit of Resolve, Project, Timeline or TimelineItem. Note this is NOT because it is a menu command: the API has no generic menu-invocation hook at all, so scriptability is per-feature, and plenty of menu commands DO have methods (DetectSceneCuts, Stabilize, SmartReframe, CreateMagicMask, TranscribeAudio, RemoveMotionBlur, AnalyzeForIntellisearch). It is compounded by the per-parameter Fairlight gap above: even the mix it produces cannot be read back or reconstructed clip-by-clip.
+- **Workaround / current handling:** No way to trigger it from a script. For a repeatable mix, run the Assistant once in the UI, save the result as a Fairlight preset, then apply that preset per-timeline with project_settings apply_fairlight_preset — content-adaptive per run is not achievable, a consistent template mix is.
+- **Tags:** missing-method, audio, fairlight, ai, auto-mix
 
 ### Proxy / optimized-media generation
 
