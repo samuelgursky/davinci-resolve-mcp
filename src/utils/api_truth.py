@@ -1374,6 +1374,36 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["_render_format_id", "_render_codec_id"],
     },
     {
+        "symbol": "Project.SetRenderSettings (inherits the loaded preset)",
+        "object": "Project",
+        "signature": "({settings}) -> bool",
+        "reality": "SetRenderSettings applies the passed keys ON TOP of whatever "
+                   "render state the Deliver page is holding; it does not replace "
+                   "it. A loaded preset carries more state than the keys a caller "
+                   "passes, and that state survives. Measured 2026-07-08: after a "
+                   "render through the stock 'Audio Only' preset, a job queued with "
+                   "an explicit ExportVideo=True and an .mp4 target returned "
+                   "settings_success=True and a real job id, GetRenderJobList "
+                   "reported IsExportVideo=True, and the rendered .mp4 contained "
+                   "only an AAC stream with NO video stream (ffprobe) — 18 minutes "
+                   "of material 'rendered' in ~10 seconds. The job readback is "
+                   "therefore NOT a witness for the rendered file. There is also no "
+                   "way to detect the inherited state: the scripting API documents "
+                   "no GetRenderSettings and no GetCurrentRenderPresetName, so the "
+                   "base state can be pinned but never read.",
+        "recommended": "Pin the base state instead of inheriting one — "
+                       "prepare_render_job(from_preset='<a video preset>') runs "
+                       "LoadRenderPreset before the explicit settings go on top "
+                       "(PresetName flips to 'Custom' once they do, which is "
+                       "expected). Then verify the OUTPUT, not the job: ffprobe for "
+                       "a codec_type=video stream. A long timeline that completes "
+                       "in seconds is the tell.",
+        "tags": ["render", "deliver", "silent-failure", "preset", "readback-lies"],
+        "submit": "bug",
+        "issue": 123,
+        "mitigation": ["_render_preset_pin", "_prepare_render_job"],
+    },
+    {
         "symbol": "Project.SetCurrentRenderFormatAndCodec",
         "object": "Project",
         "signature": "(format, codec) -> bool",

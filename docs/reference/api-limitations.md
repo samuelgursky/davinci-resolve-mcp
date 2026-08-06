@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 25 missing capabilities, 28 bugs / unreliable behaviors.
+**Totals:** 25 missing capabilities, 29 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -435,6 +435,15 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Normalize both arguments through the live maps before calling: src.utils.render_ids.render_format_id_from_formats and render_codec_id_from_codecs accept a description or an id and return the id.
 - **Reference:** [issue #59](https://github.com/samuelgursky/davinci-resolve-mcp/issues/59)
 - **Tags:** render, deliver, silent-failure, id-vs-label
+
+### Project.SetRenderSettings (inherits the loaded preset)
+
+- **Object:** `Project`
+- **Signature:** `({settings}) -> bool`
+- **Behavior:** SetRenderSettings applies the passed keys ON TOP of whatever render state the Deliver page is holding; it does not replace it. A loaded preset carries more state than the keys a caller passes, and that state survives. Measured 2026-07-08: after a render through the stock 'Audio Only' preset, a job queued with an explicit ExportVideo=True and an .mp4 target returned settings_success=True and a real job id, GetRenderJobList reported IsExportVideo=True, and the rendered .mp4 contained only an AAC stream with NO video stream (ffprobe) — 18 minutes of material 'rendered' in ~10 seconds. The job readback is therefore NOT a witness for the rendered file. There is also no way to detect the inherited state: the scripting API documents no GetRenderSettings and no GetCurrentRenderPresetName, so the base state can be pinned but never read.
+- **Workaround / current handling:** Pin the base state instead of inheriting one — prepare_render_job(from_preset='<a video preset>') runs LoadRenderPreset before the explicit settings go on top (PresetName flips to 'Custom' once they do, which is expected). Then verify the OUTPUT, not the job: ffprobe for a codec_type=video stream. A long timeline that completes in seconds is the tell.
+- **Reference:** [issue #123](https://github.com/samuelgursky/davinci-resolve-mcp/issues/123)
+- **Tags:** render, deliver, silent-failure, preset, readback-lies
 
 ### ProjectManager.SaveProject
 

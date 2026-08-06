@@ -195,6 +195,93 @@ class RenderDeliverProbeTest(unittest.TestCase):
         self.assertEqual(result["job_id"], "job-1")
         self.assertEqual(project.format_codec["format"], "mp4")
 
+    def test_prepare_render_job_warns_that_preset_state_is_inherited(self):
+        """Issue #123: an unpinned video job inherits unreadable Deliver state.
+
+        The measured failure returned success=True with IsExportVideo=True on the
+        job and an mp4 with no video stream on disk, so the warning is the only
+        place a caller learns the readback is not a witness.
+        """
+        project = RenderProjectStub()
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "custom_name": "unpinned_video",
+                "settings": {"ExportVideo": True},
+            },
+        )
+
+        self.assertTrue(result["success"])
+        codes = [w["code"] for w in result.get("warnings", [])]
+        self.assertIn("RENDER_PRESET_STATE_INHERITED", codes)
+
+    def test_prepare_render_job_from_preset_pins_state_before_settings(self):
+        """LoadRenderPreset must run BEFORE SetRenderSettings.
+
+        Reversed, the preset overwrites the caller's explicit keys instead of
+        being overwritten by them — the same wrong file, arrived at backwards.
+        """
+        project = RenderProjectStub()
+        calls = []
+        project.LoadRenderPreset = lambda name: (calls.append(("load", name)), True)[1]
+        original_set = project.SetRenderSettings
+        project.SetRenderSettings = lambda s: (calls.append(("set", dict(s))), original_set(s))[1]
+
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "custom_name": "pinned_video",
+                "from_preset": "H.264 Master",
+                "settings": {"ExportVideo": True},
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["preset_pinned"], {"preset": "H.264 Master", "loaded": True})
+        self.assertEqual([c[0] for c in calls], ["load", "set"])
+        # Pinning replaces the warning — the base state is no longer a guess.
+        self.assertNotIn(
+            "RENDER_PRESET_STATE_INHERITED",
+            [w["code"] for w in result.get("warnings", [])],
+        )
+
+    def test_prepare_render_job_rejects_unknown_preset_without_queueing(self):
+        project = RenderProjectStub()
+
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "from_preset": "Audio Only",
+                "settings": {"ExportVideo": True},
+            },
+        )
+
+        self.assertFalse(result.get("success"))
+        self.assertEqual(result["error"]["code"], "RENDER_PRESET_NOT_FOUND")
+        self.assertEqual(result["error"]["state"]["available_presets"], ["H.264 Master"])
+        self.assertEqual(project.jobs, {})
+
+    def test_prepare_render_job_refuses_when_preset_load_returns_false(self):
+        """A bare False must not fall through to an inheriting render."""
+        project = RenderProjectStub()
+        project.LoadRenderPreset = lambda name: False
+
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "from_preset": "H.264 Master",
+                "settings": {"ExportVideo": True},
+            },
+        )
+
+        self.assertFalse(result.get("success"))
+        self.assertEqual(result["error"]["code"], "RENDER_PRESET_LOAD_FAILED")
+        self.assertEqual(project.jobs, {})
+
     def test_prepare_render_job_normalizes_display_format_name(self):
         project = RenderProjectStub()
 

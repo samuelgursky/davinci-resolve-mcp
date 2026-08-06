@@ -16124,13 +16124,66 @@ def _render_settings_snapshot(proj):
         settings = _ser(proj.GetRenderSettings())
     else:
         settings = {"error": "GetRenderSettings unavailable"}
-    return {
+    snapshot = {
         "format_and_codec": _ser(proj.GetCurrentRenderFormatAndCodec()),
         "mode": _ser(proj.GetCurrentRenderMode()),
         "settings": settings,
         "jobs": _ser(proj.GetRenderJobList() or []),
         "is_rendering": bool(proj.IsRenderingInProgress()),
     }
+    # The Deliver page's loaded preset carries render state beyond the keys a
+    # caller passes, and SetRenderSettings applies on TOP of it rather than
+    # replacing it. The scripting API exposes no reader for either half — there
+    # is no GetCurrentRenderPresetName, and GetRenderSettings is not in the
+    # documented surface — so this snapshot cannot report what is being
+    # inherited. Say that in the payload instead of leaving the gap unnamed.
+    if not isinstance(settings, dict) or "error" in settings:
+        snapshot["settings_readable"] = False
+        snapshot["inherited_state"] = (
+            "unreadable: no GetRenderSettings / GetCurrentRenderPresetName in the "
+            "scripting API. Whatever preset the Deliver page holds survives into "
+            "this job for every key not explicitly passed. Pass from_preset to pin "
+            "the base state."
+        )
+    else:
+        snapshot["settings_readable"] = True
+    return snapshot
+
+
+def _render_preset_pin(proj, preset_name: str):
+    """LoadRenderPreset with the name validated against the live preset list.
+
+    Returns (result_dict, err). LoadRenderPreset returns a bare False for a name
+    that does not exist, which is indistinguishable from any other refusal, so
+    the name is checked first and a miss names the available presets.
+    """
+    try:
+        available = [str(x) for x in (proj.GetRenderPresetList() or [])]
+    except Exception:
+        available = []
+    if available and preset_name not in available:
+        return None, _err(
+            f"Render preset not found: {preset_name}",
+            code="RENDER_PRESET_NOT_FOUND",
+            category="invalid_input",
+            reason="LoadRenderPreset refuses an unknown name with a bare False; no job was queued.",
+            remediation="Use render(action='list_presets') for the names this project carries.",
+            state={"requested_preset": preset_name, "available_presets": available},
+        )
+    loaded = bool(proj.LoadRenderPreset(preset_name))
+    if not loaded:
+        return None, _err(
+            f"Could not load render preset: {preset_name}",
+            code="RENDER_PRESET_LOAD_FAILED",
+            category="engine_refused",
+            reason=(
+                "LoadRenderPreset returned False. Refusing to queue: the job would "
+                "otherwise inherit whatever unrelated state the Deliver page holds."
+            ),
+            remediation="Check render(action='list_presets'), then retry.",
+            state={"requested_preset": preset_name, "available_presets": available},
+        )
+    return {"preset": preset_name, "loaded": True}, None
 
 
 def _validate_render_settings_payload(settings: Dict[str, Any], *, require_temp_target: bool = False):
@@ -16230,6 +16283,16 @@ def _prepare_render_job(proj, p: Dict[str, Any]):
     if p.get("dry_run"):
         return _ok(validation=validation, format=p.get("format"), codec=p.get("codec"))
     before = _render_settings_snapshot(proj)
+    # Pin the base render state before layering explicit settings on top. Without
+    # this the job inherits the Deliver page's loaded preset for every key the
+    # caller does not pass — an Audio Only preset plus ExportVideo:True has been
+    # measured to queue a job that reads back IsExportVideo:True and renders an
+    # mp4 with no video stream (issue #123).
+    preset_pin = None
+    if p.get("from_preset"):
+        preset_pin, err = _render_preset_pin(proj, str(p["from_preset"]))
+        if err:
+            return err
     format_success = None
     if p.get("format") and p.get("codec"):
         formats = _render_formats(proj)
@@ -16261,7 +16324,7 @@ def _prepare_render_job(proj, p: Dict[str, Any]):
             )
     settings_success = bool(proj.SetRenderSettings(settings))
     job_id = proj.AddRenderJob() if settings_success else None
-    return {
+    result = {
         "success": bool(job_id),
         "job_id": job_id,
         "format_success": format_success,
@@ -16269,6 +16332,30 @@ def _prepare_render_job(proj, p: Dict[str, Any]):
         "before": before,
         "settings": settings,
     }
+    if preset_pin:
+        result["preset_pinned"] = preset_pin
+    elif settings.get("ExportVideo") is True:
+        # No pin, and the caller is asking for video. This is the exact shape
+        # that produced a video-less mp4 in issue #123: the queued job's
+        # IsExportVideo readback agreed with the request and the file did not.
+        # The job readback is not a witness for the rendered file, so say so
+        # here rather than let success=True imply a verified deliverable.
+        result["warnings"] = result.get("warnings", []) + [{
+            "code": "RENDER_PRESET_STATE_INHERITED",
+            "message": (
+                "This job inherits the Deliver page's current render state for every "
+                "key not passed in settings, and that state is not readable from the "
+                "scripting API. A previously loaded audio-only preset has been measured "
+                "to survive an explicit ExportVideo:true and render an mp4 with no video "
+                "stream, while the job readback reported IsExportVideo:true."
+            ),
+            "remediation": (
+                "Pass from_preset='<a video preset>' to pin the base state, and verify "
+                "the rendered file has a codec_type=video stream before reporting it "
+                "delivered — a long timeline that 'renders' in seconds is the tell."
+            ),
+        }]
+    return result
 
 
 # ── Delivery targets ────────────────────────────────────────────────────────
@@ -16585,7 +16672,11 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       probe_render_settings() -> {format_and_codec, mode, settings, jobs, is_rendering}
       validate_render_settings(settings, require_temp_target?) -> {valid, errors, unknown_keys}
       safe_set_render_settings(settings, dry_run?, restore?, require_temp_target?) -> {success, diff}
-      prepare_render_job(target_dir, settings?, format?, codec?, custom_name?, dry_run?) -> {success, job_id}
+      prepare_render_job(target_dir, settings?, format?, codec?, custom_name?, from_preset?, dry_run?) -> {success, job_id}
+        from_preset pins the base render state (LoadRenderPreset) before the
+        explicit settings go on top. Without it the job inherits the Deliver
+        page's loaded preset for every key not passed, which the API gives no
+        way to read back — see the SetRenderSettings api_truth entry.
       render_job_lifecycle_probe(target_dir, settings?, format?, codec?, custom_name?) -> {success, job_id, status_before_delete}
       quick_export_capabilities() -> {presets, safe_params, guards}
       safe_quick_export(preset, target_dir?|params?, custom_name?, dry_run?, allow_render?) -> {success, status}
