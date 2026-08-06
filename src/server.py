@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 341-tool granular server instead
 """
 
-VERSION = "2.84.0"
+VERSION = "2.85.0"
 
 import base64
 import os
@@ -181,9 +181,10 @@ mcp = FastMCP(
         "if one is already running they never launch a second. "
         "On a connection error, read the error's own remediation field — it names the "
         "fix that applies. External scripting is Studio-only, but the free edition is "
-        "reachable via the in-app bridge (Workspace > Scripts > resolve_bridge, with "
-        "DAVINCI_RESOLVE_BRIDGE=1), so a connection error does NOT mean the free "
-        "edition is unsupported."
+        "reachable via the in-app bridge (Workspace > Scripts > resolve_bridge — it is "
+        "used automatically when external scripting is unavailable; "
+        "DAVINCI_RESOLVE_BRIDGE=1 only forces it), so a connection error does NOT mean "
+        "the free edition is unsupported."
     ),
 )
 
@@ -938,8 +939,8 @@ def get_resolve():
                 "DaVinci Resolve is already running but is not answering the scripting API, "
                 "so it will NOT be launched again. Either enable Preferences > General > "
                 "'External scripting using' = Local (Studio only), or, on the free edition, "
-                "use the in-app bridge: install it, run Workspace > Scripts > resolve_bridge, "
-                "and set DAVINCI_RESOLVE_BRIDGE=1."
+                "use the in-app bridge: install it and run Workspace > Scripts > resolve_bridge "
+                "— once running it is used automatically, no environment variable needed."
             )
             return None
         if already_running is None:
@@ -992,8 +993,10 @@ def _not_connected_error():
             reason="External scripting is a Studio feature; the free edition refuses it "
                    "regardless of the preference. Resolve was NOT launched again.",
             remediation="On Studio: Preferences > General > 'External scripting using' = Local. "
-                        "On the free edition: install the in-app bridge, run "
-                        "Workspace > Scripts > resolve_bridge, and set DAVINCI_RESOLVE_BRIDGE=1.",
+                        "On the free edition: install the in-app bridge and run "
+                        "Workspace > Scripts > resolve_bridge — once it is running it is used "
+                        "automatically, no environment variable needed "
+                        "(DAVINCI_RESOLVE_BRIDGE=1 only forces it and disables this fallback).",
             # Which Resolve is refusing matters to the reader: a headless render
             # worker and the editor the user is looking at warrant different
             # responses, and the in-app bridge is not an option for the former.

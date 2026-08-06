@@ -1259,8 +1259,17 @@ class ProxyTests(unittest.TestCase):
             self.rbc.BridgeProxy(dead, "resolve").GetProductName()
 
 
-class BridgeOptInTests(unittest.TestCase):
-    def test_the_bridge_is_opt_in(self) -> None:
+class BridgeForceFlagTests(unittest.TestCase):
+    """`DAVINCI_RESOLVE_BRIDGE` forces the bridge; it does not gate it.
+
+    These once described the variable as the bridge's on-switch. Since the
+    automatic fallback landed, an unset variable no longer means "never try the
+    bridge" — `connect_resolve` still reaches it when a direct transport yields
+    nothing. What the variable controls is *exclusivity*: set, the bridge is the
+    only transport tried and its faults surface instead of degrading.
+    """
+
+    def test_the_flag_reads_as_a_boolean(self) -> None:
         from unittest import mock
         from src.utils import resolve_bridge_client as rbc
 
@@ -1274,12 +1283,19 @@ class BridgeOptInTests(unittest.TestCase):
         from unittest import mock
         from src.utils import resolve_bridge_client as rbc
 
+        # connect() defaults to require_enabled=True, so it still refuses without
+        # the flag. The fallback path reaches the bridge by asking for
+        # require_enabled=False instead — see connect_resolve.
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(rbc.BridgeUnavailable) as ctx:
                 rbc.connect()
-        self.assertIn("opt-in", str(ctx.exception))
+        self.assertIn(rbc.ENV_ENABLE, str(ctx.exception))
+        self.assertIn("require_enabled=False", str(ctx.exception))
 
-    def test_connect_resolve_does_not_change_behaviour_when_disabled(self) -> None:
+    def test_a_working_direct_transport_is_never_diverted_to_the_bridge(self) -> None:
+        # The Studio path must be untouched by the fallback: when scriptapp
+        # returns a handle, the bridge is not consulted and the native handle is
+        # what comes back.
         from unittest import mock
         from src.utils import resolve_connection
 

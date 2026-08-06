@@ -20,8 +20,8 @@ orientation, not an audit.
    over external scripting or the in-app bridge. If the connection fails, read
    the error's own `remediation` field and follow it — it names the applicable
    fix. A connection error does **not** mean the free edition is unsupported;
-   the bridge path (`DAVINCI_RESOLVE_BRIDGE=1`, Workspace > Scripts >
-   resolve_bridge) covers it.
+   the bridge path (Workspace > Scripts > resolve_bridge) covers it, and is used
+   automatically once running — `DAVINCI_RESOLVE_BRIDGE=1` only forces it.
 
    Report **both** versions: `version_string` is the Resolve build,
    `mcp.version` is this server. They fail differently, and one of them is

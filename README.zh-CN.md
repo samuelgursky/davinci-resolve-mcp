@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.84.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.85.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#服务器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.84.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v2.85.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -47,8 +47,11 @@ Blackmagic 把*外部*脚本控制限定给了 Studio 版：在免费版上，�
 ```bash
 python scripts/install_resolve_bridge.py
 # 重启 Resolve，打开一个项目，然后：Workspace > Scripts > resolve_bridge
-export DAVINCI_RESOLVE_BRIDGE=1      # 显式开启；不设置则一切照旧
 ```
+
+监听器一旦运行，只要外部脚本控制不可用，服务器就会**自动**使用它——无需设置任何环境变量。设置
+`DAVINCI_RESOLVE_BRIDGE=1` 则是*强制*走桥接：它会成为唯一尝试的传输方式，因此桥接一旦停止响应会
+直接报错，而不会悄悄回退到其他传输。当你明确要依赖桥接时使用它。
 
 在 **macOS** 上，这需要 **framework 版 Python**（python.org 官网安装包）。Resolve 只有找到 framework Python 才会枚举 `.py` 脚本——Homebrew、pyenv、conda 的解释器都不被识别，脚本会静默地不出现在菜单里。安装时会顺带装一个 Lua 金丝雀脚本，帮你区分"Python 不对"和"目录放错"。
 

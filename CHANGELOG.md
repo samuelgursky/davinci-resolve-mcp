@@ -2,6 +2,47 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.85.0
+
+The free edition now works with no environment variable at all — start the
+in-Resolve bridge and the server finds it.
+
+### Changed
+
+- **The in-app bridge is used automatically when external scripting is
+  unavailable.** Previously it was strictly opt-in: without
+  `DAVINCI_RESOLVE_BRIDGE=1` the bridge was never tried, so a free-edition user
+  who had installed and started it still got a connection error until they also
+  set a variable — a chicken-and-egg the error text had to explain.
+  `connect_resolve` now falls back to the bridge when a direct transport yields
+  nothing, including when Blackmagic's Python module is missing entirely (the
+  bridge does not need it, which is the whole reason it reaches editions the
+  module cannot).
+
+  `DAVINCI_RESOLVE_BRIDGE=1` keeps its exact previous meaning and is now a
+  *force* flag: the bridge becomes the only transport tried, so a bridge that
+  stops answering reports its own fault instead of silently degrading to another
+  path. That property is why the fallback runs *after* a direct attempt rather
+  than before — it can only engage where the old code had already given up, so
+  it cannot mask a broken bridge.
+
+### Fixed
+
+- **Five surfaces described the variable as required**, which the change above
+  turns from true into false. The worst was `scripts/doctor.py` — the tool people
+  run precisely when they are confused — reporting "the bridge is installed but
+  will not be used". Also corrected: the launcher banner every free-edition user
+  sees on startup (the one quoted in issue #109), the `install.py` post-install
+  hint, a `src/server.py` log line, and the `BridgeUnavailable` message in the
+  bridge client. English and Chinese READMEs, `docs/SKILL.md` and the session
+  skill updated to match.
+
+- **A drift guard now fails the build if that text contradicts the connector
+  again.** It rejects the specific phrasings that assert the variable is
+  required, and requires any surface naming the variable to also say it *forces*
+  the bridge — naming it without saying what it does is how the old wording read
+  as "required" while being technically true.
+
 ## What's New in v2.84.0
 
 Guidance now depends on the build you are actually connected to, and the README

@@ -55,8 +55,10 @@ logger = logging.getLogger("resolve-mcp.bridge-client")
 DEFAULT_CONFIG_PATH = Path.home() / ".config/davinci-resolve-mcp/bridge.json"
 #: Env override, so a caller can point at a non-default bridge without editing code.
 ENV_CONFIG_PATH = "DAVINCI_RESOLVE_BRIDGE_CONFIG"
-#: Opt-in. Absent means "do not try the bridge", so nothing changes for existing
-#: installs until someone asks for it.
+#: Forces the bridge: it becomes the only transport tried, so its faults surface
+#: directly. Absent does NOT mean "never try the bridge" — `connect_resolve` falls
+#: back to it when a direct transport yields nothing, which is what lets the free
+#: edition work with no configuration beyond starting the in-Resolve script.
 ENV_ENABLE = "DAVINCI_RESOLVE_BRIDGE"
 
 #: Operations this client cannot work without. The in-Resolve script is a *copy*
@@ -390,7 +392,8 @@ def connect(*, timeout: float = DEFAULT_TIMEOUT_SECONDS, require_enabled: bool =
     """
     if require_enabled and not bridge_enabled():
         raise BridgeUnavailable(
-            f"The in-app bridge is opt-in: set {ENV_ENABLE}=1 to use it."
+            f"This caller required an explicitly-enabled bridge: set {ENV_ENABLE}=1, "
+            "or call connect(require_enabled=False) to use the bridge as a fallback."
         )
     path = config_path()
     try:

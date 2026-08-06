@@ -12023,8 +12023,8 @@ def _not_connected_message(bridge_on: bool) -> str:
                 "Workspace > Scripts > resolve_bridge; launching Resolve cannot start it.")
     return ("DaVinci Resolve is not connected. On Studio, enable Preferences > General > "
             "'External scripting using' = Local. On the free edition, install the in-app "
-            "bridge, run Workspace > Scripts > resolve_bridge, and set "
-            "DAVINCI_RESOLVE_BRIDGE=1.")
+            "bridge and run Workspace > Scripts > resolve_bridge — once running it is used "
+            "automatically, no environment variable needed.")
 
 
 @_serialize_resolve
