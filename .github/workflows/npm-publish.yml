@@ -4,6 +4,18 @@ on:
   push:
     tags:
       - "v*"
+  # Manual re-trigger. A tag push is single-shot: if Actions cannot allocate a
+  # runner (2026-08-06 outage — the v2.84.0 tag registered no run at all), there
+  # is nothing to re-run and the only other recovery is deleting and re-pushing
+  # a published tag. `gh run rerun` is not a substitute either: it re-presents
+  # the consumed single-use OIDC token and fails provenance with
+  # IDENTITY_TOKEN_READ_ERROR. A fresh dispatch mints a fresh token.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or ref to publish (e.g. v2.84.0). Defaults to the selected branch."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -15,6 +27,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          # Empty on a tag push, which checkout treats as "use the triggering ref".
+          ref: ${{ inputs.ref || '' }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
