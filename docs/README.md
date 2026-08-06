@@ -74,8 +74,42 @@ The offline half of every one is the advanced server; see
 
 ## Claude Code Hooks and Subagents
 
-`.claude/settings.json` wires two `PreToolUse` guards that enforce rules
-`AGENTS.md` states in prose:
+Two `PreToolUse` guards enforce rules `AGENTS.md` states in prose. They ship as
+scripts but are **not** wired up by default — the repository does not enable
+hooks on your behalf. Opt in by adding the block below to your own
+`.claude/settings.local.json` (gitignored, so it stays yours):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__davinci-resolve__(timeline_item_color|color_group)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/frame_verification_guard.py",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/source_media_guard.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Hooks are read at session start, so restart Claude Code after adding them. The
+two guards are:
 
 - `.claude/hooks/frame_verification_guard.py` — denies grade-applying actions on
   `timeline_item_color` until the session has actually looked at a
