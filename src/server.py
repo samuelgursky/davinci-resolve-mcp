@@ -104,9 +104,11 @@ from src.utils.media_analysis_jobs import (
     batch_job_status as media_analysis_batch_job_status,
     cancel_batch_job as cancel_media_analysis_batch_job,
     create_batch_job as create_media_analysis_batch_job,
+    join_batch_job_runner as join_media_analysis_batch_job_runner,
     list_batch_jobs as list_media_analysis_batch_jobs,
     resume_batch_job as resume_media_analysis_batch_job,
     run_batch_job_slice as run_media_analysis_batch_job_slice,
+    start_batch_job_runner as start_media_analysis_batch_job_runner,
 )
 from src.utils.platform import get_resolve_paths, get_resolve_plugin_paths
 from src.utils.resolve_connection import connect_resolve
@@ -8241,23 +8243,47 @@ def _media_analysis_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
-def _media_analysis_wants_batch_job(p: Dict[str, Any]) -> bool:
-    """True when an analyze_* call should divert to the durable batch-job path.
+MEDIA_ANALYSIS_ASYNC_QUEUED = "queued"
+MEDIA_ANALYSIS_ASYNC_RUNNING = "running"
 
-    `prefer_handle` is the documented opt-in; `background`/`async_job` are accepted
-    as aliases. Both previously looked like the async opt-in used by the timeline
-    actions (export/import/create_subtitles_from_audio) but were silently ignored
-    here, leaving callers with no job_id and no way to return early — see
-    davinci-resolve-mcp CONTRIBUTION_NOTES.md, Bug 2a. `dry_run` calls never divert,
-    same as `prefer_handle` alone did before.
+
+def _media_analysis_async_mode(p: Dict[str, Any], *, dry_run_explicit: bool = True) -> Optional[str]:
+    """How an analyze_* call wants its work handled. None means synchronously.
+
+    Two opt-ins, deliberately not synonyms:
+
+      prefer_handle        -> "queued".  Create the durable batch job and hand
+                              it back. Nothing runs until the caller drives
+                              run_batch_job_slice. This is the pre-existing
+                              contract and is unchanged.
+      background/async_job -> "running". Create the job AND drive it off-thread,
+                              so the work is under way when the call returns.
+
+    The split exists because `background` already means something specific
+    everywhere else in this server — _run_maybe_background starts the work and
+    the caller polls until it finishes on its own. Before, these two params were
+    accepted here and silently ignored: the analyze_* actions collapsed to
+    action="plan" and ran to completion inline, so a caller got no job_id and no
+    signal, indistinguishable from a hang. Aliasing them onto prefer_handle
+    would have replaced that with a job that never progressed — a quieter
+    failure than the one being fixed. So `background` keeps its meaning and gets
+    the runner it always implied.
+
+    `dry_run` still wins, but only when the caller asked for it. Pass
+    dry_run_explicit=False when p["dry_run"] came from the dry_run_first_default
+    preference rather than the call: a preference should not silently swallow an
+    explicit async request and hand back a plan the caller never asked for,
+    which is the same silence this whole change is closing.
     """
-    if _media_analysis_bool(p.get("dry_run"), False):
-        return False
-    return (
-        _media_analysis_bool(p.get("prefer_handle"), False)
-        or _media_analysis_bool(p.get("background"), False)
-        or _media_analysis_bool(p.get("async_job"), False)
-    )
+    if dry_run_explicit and _media_analysis_bool(p.get("dry_run"), False):
+        return None
+    if _media_analysis_bool(p.get("background"), False) or _media_analysis_bool(
+        p.get("async_job"), False
+    ):
+        return MEDIA_ANALYSIS_ASYNC_RUNNING
+    if _media_analysis_bool(p.get("prefer_handle"), False):
+        return MEDIA_ANALYSIS_ASYNC_QUEUED
+    return None
 
 
 def _media_analysis_target_dict(raw_target: Any, p: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -17947,16 +17973,22 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
       set_ai_governance(preset?, mode?, overrides?) -> {success, tier, mode, overrides} — set the tier, the mode (advisory|enforce), and/or overrides (deblur_runs, speech_runs, render_bytes, render_wall_clock_ms; int or "unlimited"). In enforce mode a blocked run returns GOVERNANCE_BLOCKED; pass override_governance=true on the op to consciously exceed the tier once.
       resolve_output_root(analysis_root?, source_paths?) -> {project_root}
       plan(target, depth?, analysis_root?, transcription?, vision?, dry_run?) -> {clips, artifacts}
-      analyze_file(path|file_path, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {job_id, status} if handled
-      analyze_clip(clip_id|selected, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {job_id, status} if handled
-      analyze_bin(path|bin_path, recursive?, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {job_id, status} if handled
-      analyze_project(recursive?, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {job_id, status} if handled
-      analyze_sequence(timeline_index?, track_types?, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {job_id, status} if handled
+      analyze_file(path|file_path, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {success, job, plan, running, note} when async
+      analyze_clip(clip_id|selected, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {success, job, plan, running, note} when async
+      analyze_bin(path|bin_path, recursive?, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {success, job, plan, running, note} when async
+      analyze_project(recursive?, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {success, job, plan, running, note} when async
+      analyze_sequence(timeline_index?, track_types?, dry_run?, session_only?, persist?, prefer_handle?|background?|async_job?) -> {clips, manifest} | {success, job, plan, running, note} when async
       analyze_timeline(...) -> alias for analyze_sequence on the current timeline
-      -- `background`/`async_job` are accepted as aliases for `prefer_handle` on the analyze_* actions
-         above: any of the three reroutes to start_batch_job (job_id, polled via batch_job_status) when
-         not a dry_run. On dry_run=true they're ignored, same as prefer_handle — the call still returns
-         the synchronous plan.
+      -- async opt-ins on the analyze_* actions above. Both reroute to start_batch_job and return its
+         {success, job, plan} envelope — the id is job.job_id, NOT a top-level job_id — plus `running`
+         and a `note` naming the next call. They differ in what happens next:
+           prefer_handle=true        job is created and left queued; nothing runs until you call
+                                     run_batch_job_slice yourself. Unchanged contract.
+           background|async_job=true job is created AND driven to completion off-thread, matching what
+                                     `background` means on every other tool here. Poll batch_job_status
+                                     until status is completed / completed_with_errors / canceled.
+         An explicit dry_run=true still returns the synchronous plan and starts nothing. A dry_run that
+         came from the dry_run_first_default preference does not override an explicit async request.
       detect_sync_events(paths?|target?, event_types?, windows?) -> {files, alignment}
       add_sync_event_markers(target?|paths?|detections?, confirm?) -> {added, skipped}
       publish_clip_metadata(target?, fields?, slate_detection?, timed_markers?|write_markers?, dry_run?, confirm?) -> {results}
@@ -18810,21 +18842,56 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             if warnings:
                 target_err["warnings"] = warnings
             return target_err
+        capabilities = detect_media_analysis_capabilities()
         created = create_media_analysis_batch_job(
             project_name=project_name,
             project_id=project_id,
             records=records or [],
             target=normalized_target,
             params=p,
-            capabilities=detect_media_analysis_capabilities(),
+            capabilities=capabilities,
             name=p.get("name") or p.get("job_name") or p.get("jobName"),
         )
         if warnings:
             created.setdefault("warnings", warnings)
+        # A created job sits at "queued" and nothing advances it on its own.
+        # That is the right default for start_batch_job and prefer_handle, whose
+        # contract is "here is a handle, drive it". It is the wrong one for
+        # background/async_job, which promise the work is under way — so those
+        # get a runner. Reached either by the analyze_* divert (which sets
+        # _async_mode) or by calling start_batch_job with background=true.
+        job_id = str((created.get("job") or {}).get("job_id") or "")
+        project_root = str((created.get("plan") or {}).get("output_root") or "")
+        wants_runner = p.get("_async_mode") == MEDIA_ANALYSIS_ASYNC_RUNNING or (
+            _media_analysis_bool(p.get("background"), False)
+            or _media_analysis_bool(p.get("async_job"), False)
+        )
+        if wants_runner and job_id and project_root:
+            started = start_media_analysis_batch_job_runner(
+                project_root, job_id, capabilities=capabilities
+            )
+            created["running"] = bool(started.get("started"))
+            created["note"] = (
+                f"Analysis is running off-thread. Poll with "
+                f"media_analysis(action='batch_job_status', params={{'job_id': '{job_id}'}})."
+            )
+            if not started.get("started"):
+                created["note"] = (
+                    f"Job created but not started ({started.get('reason')}). Drive it with "
+                    f"media_analysis(action='run_batch_job_slice', params={{'job_id': '{job_id}'}})."
+                )
+        else:
+            created["running"] = False
+            created["note"] = (
+                f"Job is queued, not running. Drive it with "
+                f"media_analysis(action='run_batch_job_slice', params={{'job_id': '{job_id}'}}), "
+                f"or pass background=true to have the server run it."
+            )
         return created
 
     if action in {"analyze_file", "analyze_clip", "analyze_bin", "analyze_project", "analyze_timeline", "analyze_sequence"}:
         dry_run_default = bool(_media_analysis_effective_preferences().get("dry_run_first_default"))
+        dry_run_explicit = _has_any_param(p, "dry_run", "dryRun")
         p["dry_run"] = _media_analysis_bool(p.get("dry_run"), dry_run_default)
         target = _media_analysis_target_dict(p.get("target"), p)
         if target.get("_invalid_target"):
@@ -18844,17 +18911,17 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 "track_types": p.get("track_types") or p.get("trackTypes") or target.get("track_types") or target.get("trackTypes"),
             })
         p["target"] = target
-        # E3 — `prefer_handle` opt-in (plus `background`/`async_job` aliases,
-        # see _media_analysis_wants_batch_job). When true AND this isn't a
-        # dry-run, divert to the durable batch-job machinery so the call
-        # returns a job_id immediately instead of blocking on
-        # vision/transcription. Default false: existing blocking semantics
-        # are preserved.
+        # E3 — async opt-ins. `prefer_handle` hands back a queued job for the
+        # caller to drive; `background`/`async_job` additionally start driving
+        # it. Either way the call returns at once instead of blocking on
+        # vision/transcription. Default: unchanged blocking semantics.
         # The start_batch_job handler lives ABOVE this block in the dispatch
         # chain, so we can't just rewrite `action` and fall through — we
         # re-enter the tool with the rewritten action via await so the
         # handler chain restarts from the top.
-        if _media_analysis_wants_batch_job(p):
+        async_mode = _media_analysis_async_mode(p, dry_run_explicit=dry_run_explicit)
+        if async_mode:
+            p["_async_mode"] = async_mode
             return await media_analysis("start_batch_job", p, ctx)
         action = "plan"
 

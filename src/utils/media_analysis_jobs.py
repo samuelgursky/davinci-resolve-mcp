@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -793,6 +794,135 @@ def run_batch_job_slice(
         "processed": processed,
         "job": batch_job_status(root, job_id),
     }
+
+
+# A job reaching one of these is finished; the runner stops rather than
+# spinning on a queue that will never drain.
+TERMINAL_JOB_STATUSES = {"completed", "completed_with_errors", "canceled"}
+
+# Runner threads in flight, keyed by (project_root, job_id). Starting a second
+# runner for a job already being driven is a no-op, not a second pump — two
+# pumps on one job would race for the same pending rows.
+_ACTIVE_RUNNERS: Dict[Tuple[str, str], threading.Thread] = {}
+_RUNNERS_LOCK = threading.Lock()
+
+# Exactly one slice executes at a time across the whole process. Slices are
+# bounded (max_clips defaults to 1), so several jobs interleave a clip at a
+# time instead of one starving the others — and a laptop never ends up running
+# N ffmpeg/whisper passes at once because someone queued N analyses.
+_SLICE_LOCK = threading.Lock()
+
+
+def _job_status_value(root: str, job_id: str) -> Optional[str]:
+    """Current status string for a job, or None if it no longer exists.
+
+    Deliberately not batch_job_status: that assembles every clip row and event
+    for the caller, and the runner only needs the one column between slices.
+    """
+    conn = _connect_jobs(root)
+    try:
+        row = conn.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        return str(row["status"]) if row else None
+    finally:
+        conn.close()
+
+
+def _drive_batch_job(root: str, job_id: str, capabilities: Optional[Dict[str, Any]], max_clips: int) -> None:
+    """Run slices back to back until the job finishes, is canceled, or stalls."""
+    try:
+        while True:
+            status = _job_status_value(root, job_id)
+            if status is None or status in TERMINAL_JOB_STATUSES:
+                return
+            with _SLICE_LOCK:
+                result = run_batch_job_slice(
+                    root, job_id, max_clips=max_clips, capabilities=capabilities
+                )
+            if not result.get("success"):
+                return
+            # No pending rows left to claim. Either the job just finished (the
+            # status check above catches that next pass) or it is wedged; in
+            # both cases another identical slice would be a spin.
+            if not int(result.get("processed_count") or 0):
+                return
+            if str((result.get("job") or {}).get("status") or "") in TERMINAL_JOB_STATUSES:
+                return
+    except Exception as exc:  # pragma: no cover - defensive; per-clip errors are handled in the slice
+        conn = _connect_jobs(root)
+        try:
+            _event(conn, job_id, "error", "Batch job runner stopped", {"error": f"{type(exc).__name__}: {exc}"})
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+    finally:
+        with _RUNNERS_LOCK:
+            _ACTIVE_RUNNERS.pop((root, job_id), None)
+
+
+def start_batch_job_runner(
+    project_root: str,
+    job_id: str,
+    *,
+    capabilities: Optional[Dict[str, Any]] = None,
+    max_clips: int = 1,
+) -> Dict[str, Any]:
+    """Drive a queued batch job to completion on a daemon thread.
+
+    This is what makes `background=true` mean the same thing on the analyze_*
+    actions as it does everywhere else in the server: the work is running when
+    the call returns, and the caller polls until it stops. Without it,
+    start_batch_job only ever left a row at status "queued" that nothing
+    advanced, so a caller that trusted the name waited forever.
+
+    Deliberately NOT routed through background_jobs.start_job, which wraps its
+    worker in resolve_busy.long_resolve_op. That gate exists to serialize calls
+    against Resolve's single-threaded scripting bridge, and analysis touches it
+    nowhere — media_analysis and this module drive ffmpeg, whisper and vision
+    over file paths only. Holding the gate for an hour of transcription would
+    lock the editor out of Resolve for the duration, for no benefit.
+
+    Returns {"started": bool, "reason": str} — `started` is False when a runner
+    is already driving this job or the job is already finished, neither of
+    which is an error.
+    """
+    root = normalize_path(project_root)
+    key = (root, job_id)
+    status = _job_status_value(root, job_id)
+    if status is None:
+        return {"started": False, "reason": "job_not_found"}
+    if status in TERMINAL_JOB_STATUSES:
+        return {"started": False, "reason": f"job_already_{status}"}
+    with _RUNNERS_LOCK:
+        existing = _ACTIVE_RUNNERS.get(key)
+        if existing is not None and existing.is_alive():
+            return {"started": False, "reason": "already_running"}
+        thread = threading.Thread(
+            target=_drive_batch_job,
+            args=(root, job_id, capabilities, max(1, int(max_clips or 1))),
+            name=f"media-analysis-job-{job_id}",
+            daemon=True,
+        )
+        _ACTIVE_RUNNERS[key] = thread
+    thread.start()
+    return {"started": True, "reason": "running"}
+
+
+def join_batch_job_runner(project_root: str, job_id: str, timeout: Optional[float] = None) -> bool:
+    """Block until this job's runner exits. True if it is gone, False on timeout.
+
+    A daemon thread dies with the process, so a server restart leaves a job
+    stuck at "running" with nothing driving it — resume_batch_job is the way
+    back from that. This exists so tests (and any caller that genuinely needs
+    to wait) don't have to poll the database.
+    """
+    with _RUNNERS_LOCK:
+        thread = _ACTIVE_RUNNERS.get((normalize_path(project_root), job_id))
+    if thread is None:
+        return True
+    thread.join(timeout)
+    return not thread.is_alive()
 
 
 def project_root_for_dashboard(project_name: Any, project_id: Any = None, analysis_root: Any = None, source_paths: Optional[Iterable[Any]] = None) -> Dict[str, Any]:

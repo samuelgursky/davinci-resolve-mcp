@@ -28,7 +28,7 @@ from src.server import (
     _media_analysis_provenance_metadata,
     _media_analysis_records_from_target,
     _media_analysis_report_metadata_candidates,
-    _media_analysis_wants_batch_job,
+    _media_analysis_async_mode,
     _publish_clip_metadata_from_analysis,
     setup,
 )
@@ -90,9 +90,11 @@ from src.utils.media_analysis_jobs import (
     cancel_batch_job,
     create_batch_job,
     create_batch_job_from_paths,
+    join_batch_job_runner,
     list_batch_jobs,
     resume_batch_job,
     run_batch_job_slice,
+    start_batch_job_runner,
 )
 
 
@@ -3929,6 +3931,81 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("Analysis index not found", (result["error"].get("message","") if isinstance(result["error"], dict) else result["error"]))
 
+    def test_batch_job_runner_drives_the_job_to_completion(self):
+        """background=true has to leave the work actually running.
+
+        start_batch_job only ever created a row at status "queued" that nothing
+        advanced, so a caller who passed background=true — which starts the work
+        off-thread everywhere else in this server — got a job that sat there. The
+        runner is the missing half: it drives slices until the job reaches a
+        terminal status, with no caller intervention at all.
+        """
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "source")
+            analysis_dir = os.path.join(tmp, "analysis")
+            os.makedirs(source_dir)
+            sources = [os.path.join(source_dir, f"runner_{n}.mp4") for n in ("a", "b")]
+            for source in sources:
+                self._write_synthetic_media(source)
+            records = [
+                {"clip_id": f"clip-{n}", "clip_name": os.path.basename(path), "file_path": path, "media_id": f"media-{n}"}
+                for n, path in zip(("a", "b"), sources)
+            ]
+            created = create_batch_job(
+                project_name="Runner Project",
+                project_id="project-runner",
+                records=records,
+                target={"type": "file_list"},
+                params={
+                    "analysis_root": analysis_dir,
+                    "depth": "standard",
+                    "max_analysis_frames": 2,
+                    "transcription": {
+                        "enabled": True,
+                        "backend": "mock",
+                        "segments": [{"start": 0, "end": 1.0, "text": "Runner transcript."}],
+                    },
+                    "vision": {"enabled": True, "provider": "mock"},
+                },
+                name="Runner batch",
+            )
+            job = created["job"]
+            root = job["project_root"]
+            self.assertEqual(job["status"], "queued")
+            self.assertEqual(job["pending_clips"], 2)
+
+            started = start_batch_job_runner(root, job["job_id"])
+            self.assertTrue(started["started"])
+            # A second start must not spawn a competing pump — two runners would
+            # race for the same pending rows.
+            self.assertFalse(start_batch_job_runner(root, job["job_id"])["started"])
+
+            self.assertTrue(join_batch_job_runner(root, job["job_id"], timeout=300))
+            final = batch_job_status(root, job["job_id"])
+            self.assertEqual(final["status"], "completed")
+            self.assertEqual(final["succeeded_clips"], 2)
+            self.assertEqual(final["pending_clips"], 0)
+
+    def test_batch_job_runner_declines_a_finished_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            created = create_batch_job(
+                project_name="Runner Project",
+                project_id="project-runner-empty",
+                records=[],
+                target={"type": "file_list"},
+                params={"analysis_root": os.path.join(tmp, "analysis")},
+                name="Empty batch",
+            )
+            job = created["job"]
+            root = job["project_root"]
+            cancel_batch_job(root, job["job_id"])
+            started = start_batch_job_runner(root, job["job_id"])
+            self.assertFalse(started["started"])
+            self.assertIn("canceled", started["reason"])
+            self.assertFalse(start_batch_job_runner(root, "no-such-job")["started"])
+
     def test_batch_job_slice_runs_and_builds_index(self):
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             self.skipTest("ffmpeg/ffprobe not installed")
@@ -4890,34 +4967,55 @@ class RunCommandEnvOverrideTests(unittest.TestCase):
             del os.environ["_RUN_COMMAND_ENV_TEST_MARKER"]
         self.assertEqual(code, 0)
         self.assertIn("present", stdout)
-class MediaAnalysisWantsBatchJobTests(unittest.TestCase):
-    """Bug 2a: `background`/`async_job` must behave as aliases for `prefer_handle`
-    on analyze_clip/analyze_bin/etc, not be silently ignored (which previously
-    left callers with no job_id and no way to return early — see
-    davinci-resolve-mcp CONTRIBUTION_NOTES.md, Bug 2a)."""
+class MediaAnalysisAsyncModeTests(unittest.TestCase):
+    """`background`/`async_job` used to be accepted on analyze_clip/analyze_bin/etc
+    and silently ignored — the call ran to completion inline with no job_id, which
+    from the caller's side is indistinguishable from a hang.
 
-    def test_prefer_handle_true_wants_batch_job(self):
-        self.assertTrue(_media_analysis_wants_batch_job({"prefer_handle": True}))
+    They are not aliases for prefer_handle. prefer_handle hands back a queued job
+    for the caller to drive; background promises the work is under way, which is
+    what it means on every other tool in this server. Collapsing the two would
+    have swapped one silence for a quieter one: a job nothing ever advanced."""
 
-    def test_background_true_wants_batch_job(self):
-        self.assertTrue(_media_analysis_wants_batch_job({"background": True}))
+    def test_prefer_handle_queues_without_running(self):
+        self.assertEqual(_media_analysis_async_mode({"prefer_handle": True}), "queued")
 
-    def test_async_job_true_wants_batch_job(self):
-        self.assertTrue(_media_analysis_wants_batch_job({"async_job": True}))
+    def test_background_runs_the_job(self):
+        self.assertEqual(_media_analysis_async_mode({"background": True}), "running")
+
+    def test_async_job_runs_the_job(self):
+        self.assertEqual(_media_analysis_async_mode({"async_job": True}), "running")
+
+    def test_background_wins_over_prefer_handle(self):
+        # Asking for both is asking for the stronger guarantee.
+        self.assertEqual(
+            _media_analysis_async_mode({"prefer_handle": True, "background": True}), "running"
+        )
 
     def test_string_true_values_are_coerced(self):
-        self.assertTrue(_media_analysis_wants_batch_job({"background": "true"}))
+        self.assertEqual(_media_analysis_async_mode({"background": "true"}), "running")
+        self.assertEqual(_media_analysis_async_mode({"prefer_handle": "yes"}), "queued")
 
-    def test_no_opt_in_does_not_want_batch_job(self):
-        self.assertFalse(_media_analysis_wants_batch_job({}))
-        self.assertFalse(_media_analysis_wants_batch_job({"prefer_handle": False, "background": False}))
+    def test_no_opt_in_is_synchronous(self):
+        self.assertIsNone(_media_analysis_async_mode({}))
+        self.assertIsNone(_media_analysis_async_mode({"prefer_handle": False, "background": False}))
 
-    def test_dry_run_suppresses_all_aliases(self):
-        # Matches prefer_handle's existing dry_run behavior: a dry_run call always
-        # returns the synchronous plan, regardless of the async opt-in used.
-        self.assertFalse(_media_analysis_wants_batch_job({"prefer_handle": True, "dry_run": True}))
-        self.assertFalse(_media_analysis_wants_batch_job({"background": True, "dry_run": True}))
-        self.assertFalse(_media_analysis_wants_batch_job({"async_job": True, "dry_run": True}))
+    def test_explicit_dry_run_suppresses_every_opt_in(self):
+        for opt in ("prefer_handle", "background", "async_job"):
+            self.assertIsNone(_media_analysis_async_mode({opt: True, "dry_run": True}), opt)
+
+    def test_defaulted_dry_run_does_not_swallow_an_explicit_async_request(self):
+        # dry_run here came from the dry_run_first_default preference, not the
+        # call. Letting it win would silently hand back a plan to a caller that
+        # explicitly asked for a job — the same silence this change closes.
+        self.assertEqual(
+            _media_analysis_async_mode({"background": True, "dry_run": True}, dry_run_explicit=False),
+            "running",
+        )
+        self.assertEqual(
+            _media_analysis_async_mode({"prefer_handle": True, "dry_run": True}, dry_run_explicit=False),
+            "queued",
+        )
 
 
 if __name__ == "__main__":
