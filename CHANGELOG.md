@@ -2,6 +2,66 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.80.0
+
+Three community PRs from @staahlarkitektur, all found on Windows, all real. Each is merged with
+its diagnosis intact and a fix on top for what the patch didn't reach.
+
+### Added
+
+- **`background=true` now actually runs the analysis.** `background`/`async_job` were accepted on
+  `analyze_clip` / `analyze_bin` / `analyze_file` / `analyze_project` / `analyze_sequence` and
+  silently ignored — the call ran the whole analysis inline and returned no `job_id`, which from
+  the caller's side is indistinguishable from a hang (#119). The two async opt-ins are now
+  distinct and both do what their names say:
+  - `prefer_handle=true` — creates the durable batch job and hands it back **queued**. Nothing
+    runs until you call `run_batch_job_slice`. Unchanged contract.
+  - `background=true` / `async_job=true` — creates the job **and drives it to completion
+    off-thread**, matching what `background` means on every other tool in this server. Poll
+    `batch_job_status` until `completed` / `completed_with_errors` / `canceled`.
+
+  Aliasing the two, as the PR proposed, would have replaced one silence with a quieter one: a job
+  that nothing ever advanced, polled forever. The runner deliberately does **not** hold the
+  Resolve busy gate — analysis drives ffmpeg, whisper and vision over file paths and touches the
+  scripting bridge nowhere, so holding it for an hour of transcription would lock the editor out
+  for nothing. A process-wide slice lock bounds the real cost instead: queued analyses interleave
+  a clip at a time rather than starting N ffmpeg passes at once.
+
+### Fixed
+
+- **A timeout could take 82 seconds to report a 5-second limit.** `subprocess.run(timeout=...)`
+  kills only the direct child. On Windows a bare-name PATH lookup can resolve to a shim
+  (Chocolatey, npm, a pip console script) that runs the real work as a grandchild, so the kill hit
+  the wrapper while the real `ffmpeg` kept running — and the follow-up read blocked on the pipe
+  handles it had inherited. Measured on a Chocolatey-managed machine: `ffmpeg` on PATH was a 392KB
+  shim, and a 5s timeout against an ~82s pass returned after the full 82s with "timed out after
+  5s" attached to complete, correct output (#120). `_run_command` now spawns via `Popen` in its own
+  session/process group and kills the whole tree. Beyond the PR: the kill helper no longer raises
+  (`killpg` returns EPERM, `taskkill` can be missing from PATH — either escaped and broke the
+  return contract mid-failure), the read after the kill is bounded and says so when it gives up
+  rather than hanging on a survivor, and a cancellation mid-run kills the tree instead of orphaning
+  it. Fixes every `_run_command` caller at once — the whisper CLI and every ffmpeg pass in
+  `_readthrough_analysis`, `silence_ripple`, and `deep_vision`.
+- **The whisper CLI inherited a `PYTHONHOME` that killed it.** `PYTHONHOME`/`PYTHONPATH` point this
+  server at Resolve's bundled Python so `DaVinciResolveScript` imports. Inherited by a child that
+  is itself a *different* Python, they corrupt its stdlib resolution — and whisper's CLI is exactly
+  that. Measured: whisper on 3.14 inheriting a 3.10 `PYTHONHOME` dies on `AssertionError: SRE
+  module mismatch` (#118). The whisper subprocess now gets a scrubbed environment. This is the
+  **shipped Windows configuration**, not a local quirk: `install.py` writes `PYTHONHOME` into
+  generated client configs (issue #26) and `server.py` sets it on Windows whenever it isn't
+  already set, so every Windows install hands a foreign `PYTHONHOME` to every child it spawns.
+
+### Corrected in the merged PRs
+
+- The documented async return shape was wrong — `{job_id, status}` was advertised, the real
+  envelope is `{success, job, plan}` with the id at `job.job_id`. Now documented as it is, plus
+  `running` and a `note` naming the next call so the queued and running routes can't be confused.
+- The async divert ran *after* `dry_run` was resolved from the `dry_run_first_default` preference,
+  so a user with that preference on still got `background=true` swallowed in silence. An explicit
+  `dry_run` still wins; an inherited one no longer does.
+- A code comment attributed the whisper failure to a silent stall with an ffmpeg child at 0% CPU —
+  a diagnosis the PR's own description retracted, and one that belongs to the shim problem above.
+
 ## What's New in v2.79.2
 
 A published contract was **wrong**. This release corrects it. If you read the retime entry in
