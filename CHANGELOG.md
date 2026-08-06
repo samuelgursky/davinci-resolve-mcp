@@ -2,6 +2,71 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.80.2
+
+Agent tooling only. Ten Claude Code skills that this repository has shipped and
+advertised were never loading; they load now. No runtime behavior changed and
+nothing under `src/` was touched.
+
+### Fixed
+
+- **The ten `.claude/skills/` domain skills were invisible to every agent.**
+  Claude Code discovers skills at `.claude/skills/<name>/SKILL.md`. All ten were
+  loose `.md` files at the top level of that directory — a layout the loader
+  does not scan — so `resolve-color`, `resolve-edit`, `resolve-conform`,
+  `resolve-delivery`, `resolve-audio`, `resolve-fusion`, `resolve-media-pool`,
+  `resolve-media-analysis`, `resolve-rough-cut`, and `resolve-mcp` never
+  appeared in a session, while the generated domain-routing block in `AGENTS.md`
+  and the index in `docs/README.md` both listed them as available. The failure
+  was silent: no warning, no error, no degraded mode. Each skill now lives in a
+  directory named for its frontmatter `name` (recorded as 100% renames, so
+  history follows), and both `docs/README.md` and
+  `scripts/agent-rules/README.md` — the file consulted when authoring a new
+  skill — state the directory requirement so the next one is not written back
+  into the bug.
+
+### Added
+
+- **Two opt-in `PreToolUse` guard scripts** for rules `AGENTS.md` has only ever
+  stated in prose. They ship as scripts and are deliberately *not* wired
+  repo-wide; `docs/README.md` carries the block to paste into a personal
+  gitignored `.claude/settings.local.json`. `frame_verification_guard.py`
+  refuses grade-applying actions on `timeline_item_color` until the session has
+  actually looked at a Resolve-rendered frame, and asks before `safe_copy_grade`
+  / `bulk_match_to_hero` push a whole-grade artifact across clips; `dry_run`
+  passes through. `source_media_guard.py` refuses shell commands that write,
+  move, or delete source media outside a scratch root — paths are normalized and
+  matched by whole path component, and a derivative-output directory
+  (`proxies`/`renders`/`exports`) exempts a *write* but never a delete or a
+  move, so a camera card with an `exports` folder is still a camera card. Its
+  docstring states what it cannot catch — extension-less directory deletes,
+  `find -delete`, `xargs rm`, and scripts that write media themselves — because
+  it is a tripwire for the common direct mistake, not a sandbox.
+- **Two review subagents** in `.claude/agents/`, run in their own context so
+  frame images stay out of the main session. `cut-reviewer` screens an assembled
+  timeline from its frames and is told explicitly that a metadata summary is not
+  a review, because assembling through an API succeeds loudly and fails quietly.
+  `grade-match-verifier` measures shot match numerically against the project's
+  R−B tolerance and must report the pixel count behind every masked
+  measurement — a near-empty skin mask returns a delta near zero and reads as a
+  perfect match.
+- **Two skills outside the domain routing.** `house-style` accumulates editorial
+  corrections so the same note is not given twice, and `/resolve-session`
+  reports connection, edition, project, timeline, and media-pool state before
+  editing begins.
+
+### Validation
+
+- Full offline suite: 2460 passed, 1 skipped — level with the v2.80.1 baseline,
+  as expected for a change that touches no runtime code.
+- Both guard scripts exercised against a 26-case matrix covering deny, ask, and
+  silent-allow: `ffprobe` reads, `ffmpeg` into scratch, `ffmpeg` overwriting a
+  card, chained `ffprobe && rm`, redirection onto a media file, glob `rm`,
+  quoted paths, writes into `renders`/`proxies`/`exports`, deletes out of those
+  same directories, `..` traversal, and ordinary repo commands (`git status`,
+  the test runner, `npm run build`).
+- No live Resolve validation: no behavior changed.
+
 ## What's New in v2.80.1
 
 A correction to the retime measurement contract published in v2.80.0, and a fix
