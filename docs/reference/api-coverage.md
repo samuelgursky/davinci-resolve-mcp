@@ -12,8 +12,8 @@ Complete Resolve scripting API coverage, live-test status, and method-by-method 
 | Methods Live Tested | **338/351** (96.3%) |
 | Live Test Pass Rate | **338/338** (100%) |
 | API Object Classes | 13 |
-| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio + Resolve 21.0.2 Studio |
-| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21.0 additions are version-guarded and live-tested on 21.0.2 (see the Resolve 21 delta row below — five wrappers need AI Extras packs and stay untested without one, and one is deliberately not executed). The Resolve 21.0.4 additions are version-guarded and unit-tested, but not live-tested here — no 21.0.4 build was available on the validation machine |
+| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio + Resolve 21.0.2 Studio + Resolve 21.0.3 **free** (via the in-app bridge) |
+| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21.0 additions are version-guarded and live-tested on 21.0.2 (see the Resolve 21 delta row below — five wrappers need AI Extras packs and stay untested without one, and one is deliberately not executed). The Resolve 21.0.4 additions are version-guarded and unit-tested, but not live-tested here — the validation machine carries Studio 19.1.3 and free 21.0.3, neither of which is 21.0.4. Note the free build is reachable only through the in-app bridge, since the free edition refuses external scripting |
 
 ## API Coverage
 
@@ -148,7 +148,7 @@ checkable rather than asserted.
 | `MPI.AnalyzeForSlate` | Requires the AI Slate ID Extra | Yes |
 | `Project.GenerateSpeech` | Requires the AI Speech Generator Extra | Yes |
 | `Resolve.DisableBackgroundTasksForCurrentResolveSession` | Deliberately not executed: session-wide, returns `None`, and has no `Enable...` counterpart, so there is no undo short of restarting Resolve | No |
-| `MPI.GetTimeline` | Requires a Resolve 21.0.4 build; the validation machine runs 19.1.3 | Yes |
+| `MPI.GetTimeline` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
 | `TL.GetSelectedClips` | Requires a Resolve 21.0.4 build; the validation machine runs 19.1.3 | Yes |
 
 The five AI Extras rows are untested for want of a downloadable pack, not because
@@ -197,7 +197,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 19 | `ExportBurnInPreset(presetName, exportPath)` | ⚠️ | API accepts; needs valid preset name |
 | 20 | `GetKeyframeMode()` | ✅ | Returns keyframe mode |
 | 21 | `SetKeyframeMode(keyframeMode)` | ⚠️ | API accepts; mode must match valid enum |
-| 22 | `GetFairlightPresets()` | ✅ | Resolve 20.3.2 live test returns preset map |
+| 22 | `GetFairlightPresets()` | ✅ | Returns a preset map. Live on 20.3.2 Studio and 21.0.3 free; **absent below 20.2.2** — confirmed missing on 19.1.3, so the version floor is verified from both sides |
 | 23 | `DisableBackgroundTasksForCurrentResolveSession()` | 🔬 | Resolve 21.0. Present in `dir()`; **not executed** — session-wide, returns `None`, no `Enable...` counterpart, so no undo short of restarting Resolve |
 
 ### ProjectManager
@@ -276,7 +276,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 40 | `GetColorGroupsList()` | ✅ | Returns color group list |
 | 41 | `AddColorGroup(groupName)` | ✅ | Returns ColorGroup object |
 | 42 | `DeleteColorGroup(colorGroup)` | ✅ | Deletes color group |
-| 43 | `ApplyFairlightPresetToCurrentTimeline(presetName)` | ⚠️ | Resolve 20.3.2 live test accepts call; returns `False` without a named preset |
+| 43 | `ApplyFairlightPresetToCurrentTimeline(presetName)` | ⚠️ | Accepts the call and returns `False` when handed a name that does not exist. **Never exercised against a genuinely saved preset**, so a `True` path has not been observed — the API has no way to create one, and `GetFairlightPresets` reported an empty map on both test machines. To clear this: save a mix as a Fairlight preset in the UI, then apply it by that name. Requires 20.2.2+ |
 | 44 | `GenerateSpeech({speechGenerationSettings}, timecode)` | 🔬 | Resolve 21.0. Requires the AI Speech Generator Extra; without it returns an error **string**, not a MediaPoolItem |
 | 45 | `ResetIntellisearchAnalysis()` | ✅ | Resolve 21.0.2 live test returns `True` |
 

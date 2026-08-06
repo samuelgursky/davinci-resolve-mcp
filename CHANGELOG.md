@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.86.1
+
+Corrects `api-coverage.md` where today's live work on the free edition made it
+inaccurate.
+
+### Documentation
+
+- **`GetFairlightPresets` is now recorded as verified from both sides** — live on
+  20.3.2 Studio and 21.0.3 free, and confirmed *absent* on 19.1.3, which pins the
+  20.2.2 floor rather than assuming it.
+- **`ApplyFairlightPresetToCurrentTimeline` says what its ⚠️ actually means.** It
+  was reported as "accepts call; returns False without a named preset", which
+  reads like a quirk. The real state: it has never been exercised against a
+  genuinely saved preset, so no `True` path has ever been observed. The API
+  cannot create a preset, and `GetFairlightPresets` returned an empty map on both
+  machines, so clearing this needs a preset saved in the Fairlight UI first. The
+  entry now says so.
+- **The tested-against list includes Resolve 21.0.3 free**, reached through the
+  in-app bridge, and the notes that said the validation machine "runs 19.1.3" now
+  name both builds present.
+
 ## What's New in v2.86.0
 
 The Resolve 21.0.4 scripting-API surfaces, plus a `project_db` fix found while
