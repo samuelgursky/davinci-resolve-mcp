@@ -33,6 +33,19 @@ re-derive it here.
   `allow_partial_item_delete=True` (whole-item delete, not a trim).
 - Item state copy: `copy_properties` (transform/crop/composite/audio/retime/
   markers/flags/grades/takes/keyframes …); scope with a group list.
+- **Reading the user's selection is best-effort and version-dependent.** The
+  selection helper duck-probes three method names; the documented one,
+  `Timeline.GetSelectedClips`, is **21.0.4+** (issue #131), so on older builds
+  selection resolves by luck or not at all. Never build a destructive operation
+  on "the selected clips" without reading back what you actually got — an empty
+  or partial selection is indistinguishable from a small one.
+- **There is no clip-speed API at any version.** `set_retime` sets retime
+  *quality* only (`RetimeProcess`, `MotionEstimation`) and returns `True` for
+  doing so, which reads as if the retime succeeded. Setting a % speed, reversing
+  a clip, and speed ramps are all unreachable — `SetProperty('Speed'|'PlaybackSpeed'|
+  'RetimeSpeed'|'ClipSpeed')` returns `False` and the matching `GetProperty`
+  returns `None` on every build measured. Say so and route the user to the UI;
+  do not offer `set_retime` as if it answered the question (issue #132).
 - `edit_engine` drives higher-level selects/tighten/swap flows
   (plan → confirm → execute); tighten variants can carry audio via `keep_ranges`
   mirror / `include_audio`. For a full dead-air pass over **one long single-take

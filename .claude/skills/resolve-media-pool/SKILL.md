@@ -35,5 +35,14 @@ and organize live.
   or derivatives of source media.
 - Native multicam clip creation/flattening is not in the public API — the setup
   helper preps a stacked timeline you convert in Resolve's UI (see the guide).
+- **`ImportMedia` has no destination parameter** — clips always land in the
+  *current* folder, and an unrecognized destination argument is silently ignored.
+  Create the bin, `set_current_folder` to it, **then** import. Getting this
+  backwards puts clips wherever the current folder happened to be, which is
+  routinely somewhere an automated step moved it.
+- **`MediaPoolItem.GetTimeline` is 21.0.4+** (issue #131) and is not reachable
+  through this server yet. A media-pool entry that *is* a timeline cannot be
+  turned back into a timeline object on older builds — check
+  `resolve_control check_version_support` rather than assuming.
 - **Never rename or derive camera originals** without explicit approval;
   `rename_plan` refuses them by design.

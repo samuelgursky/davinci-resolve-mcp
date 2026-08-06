@@ -68,6 +68,23 @@ Use the lower-level path below when you need something no target covers.
   and applies through `SetRenderSettings` regardless.
 - `safe_quick_export` forces `EnableUpload=False` and needs `allow_render=True`
   before it actually renders.
+- **Pin the base render state with `prepare_render_job(from_preset=...)`.**
+  `SetRenderSettings` applies your keys *on top of* whatever the Deliver page is
+  holding rather than replacing it, and a loaded preset carries more state than
+  the keys you pass. An Audio Only preset plus an explicit `ExportVideo: true`
+  has been measured to queue a job that reads back `IsExportVideo: true` and
+  renders an mp4 with **no video stream** (issue #123). There is no way to detect
+  this: the API documents neither `GetRenderSettings` nor
+  `GetCurrentRenderPresetName`, so the inherited state cannot be read — only
+  pinned. Verify the OUTPUT, not the job: ffprobe for a `codec_type=video`
+  stream. A long timeline that "renders" in seconds is the tell.
+- **Three render keys are 21.0.4+**: `UseFullExtents`, `AddFrameHandles`,
+  `DataBurnIn` (issue #131). `SetRenderSettings` ignores unknown keys **silently**,
+  so on an older build these are dropped with no signal rather than refused —
+  which is exactly the failure mode that produces a deliverable missing handles
+  nobody notices until the conform. Check `resolve_control check_version_support`
+  before offering them, and note `AddFrameHandles` is also ignored when full
+  extents is enabled, so it can do nothing for two different reasons.
 
 ## Offline deliverable QC (`deliverable` actions)
 
