@@ -164,6 +164,36 @@ class RenderDeliverProbeTest(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertIn("TargetDir must be under the system temp directory", result["errors"][0])
 
+    def test_validate_render_settings_accepts_2104_keys(self):
+        result = _validate_render_settings_action(
+            {"settings": {"UseFullExtents": False, "AddFrameHandles": 12, "DataBurnIn": "None"}}
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["unknown_keys"], [])
+        self.assertEqual(result["warnings"], [])
+
+    def test_validate_render_settings_types_2104_keys(self):
+        result = _validate_render_settings_action(
+            {"settings": {"UseFullExtents": "yes", "AddFrameHandles": -3, "DataBurnIn": 7}}
+        )
+
+        self.assertFalse(result["valid"])
+        joined = " ".join(result["errors"])
+        self.assertIn("UseFullExtents must be a boolean", joined)
+        self.assertIn("AddFrameHandles must be >= 0", joined)
+        self.assertIn("DataBurnIn must be a string", joined)
+
+    def test_validate_render_settings_warns_handles_ignored_under_full_extents(self):
+        # Resolve accepts the combination but silently ignores the handle count —
+        # the validator stays valid and says so out loud instead.
+        result = _validate_render_settings_action(
+            {"settings": {"UseFullExtents": True, "AddFrameHandles": 12}}
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertIn("AddFrameHandles is ignored while UseFullExtents is true", result["warnings"][0])
+
     def test_safe_set_render_settings_reports_diff_and_restores(self):
         project = RenderProjectStub()
         result = _safe_set_render_settings(

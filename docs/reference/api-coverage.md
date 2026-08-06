@@ -8,12 +8,12 @@ Complete Resolve scripting API coverage, live-test status, and method-by-method 
 |--------|-------|
 | MCP Tools | **34** compound (default) / **341** granular |
 | Kernel Actions | **136** guarded MCP workflow actions across 9 compound tools |
-| API Methods Covered | **349/349** (100%) |
-| Methods Live Tested | **338/349** (96.8%) |
+| API Methods Covered | **351/351** (100%) |
+| Methods Live Tested | **338/351** (96.3%) |
 | Live Test Pass Rate | **338/338** (100%) |
 | API Object Classes | 13 |
 | Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio + Resolve 21.0.2 Studio |
-| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21.0 additions are version-guarded and live-tested on 21.0.2 (see the Resolve 21 delta row below — five wrappers need AI Extras packs and stay untested without one, and one is deliberately not executed) |
+| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21.0 additions are version-guarded and live-tested on 21.0.2 (see the Resolve 21 delta row below — five wrappers need AI Extras packs and stay untested without one, and one is deliberately not executed). The Resolve 21.0.4 additions are version-guarded and unit-tested, but not live-tested here — no 21.0.4 build was available on the validation machine |
 
 ## API Coverage
 
@@ -109,7 +109,7 @@ source, these summaries are downstream of it:
 | Phase 5 | 6/6 | 100% | Scene cuts, subtitles from audio, graph node cache/tools/enable |
 | Resolve 20 delta | 12/12 | 100% | Resolve 20.0-20.2.2 scripting additions live-tested on 20.3.2 |
 | Resolve 21 delta | 7/7 | 100% | Resolve 21.0 additions that could be executed, live-tested on Studio 21.0.2.4 (`tests/live_resolve21_validation.py`). The other 6 need an AI Extras pack or are unsafe to run — counted as untested, not as passes |
-| **Total** | **338/338** | **100%** | **96.8% of the 349 covered methods tested live** |
+| **Total** | **338/338** | **100%** | **96.3% of the 351 covered methods tested live** |
 
 #### Resolve 21 delta detail
 
@@ -130,7 +130,7 @@ marked 🔬 rather than ⚠️.
 | `Project.GenerateSpeech` | 🔬 | Requires AI Speech Generator; returned an error **string**, not a MediaPoolItem |
 | `Resolve.DisableBackgroundTasksForCurrentResolveSession` | 🔬 | Present in `dir()`; **not executed** — session-wide, returns None, and has no `Enable...` counterpart, so there is no undo short of restarting Resolve |
 
-### Untested Methods (11 of 349)
+### Untested Methods (13 of 351)
 
 Every ☁️ and 🔬 row from the reference tables, listed here so the count is
 checkable rather than asserted.
@@ -148,10 +148,15 @@ checkable rather than asserted.
 | `MPI.AnalyzeForSlate` | Requires the AI Slate ID Extra | Yes |
 | `Project.GenerateSpeech` | Requires the AI Speech Generator Extra | Yes |
 | `Resolve.DisableBackgroundTasksForCurrentResolveSession` | Deliberately not executed: session-wide, returns `None`, and has no `Enable...` counterpart, so there is no undo short of restarting Resolve | No |
+| `MPI.GetTimeline` | Requires a Resolve 21.0.4 build; the validation machine runs 19.1.3 | Yes |
+| `TL.GetSelectedClips` | Requires a Resolve 21.0.4 build; the validation machine runs 19.1.3 | Yes |
 
 The five AI Extras rows are untested for want of a downloadable pack, not because
 the wrappers are suspect — a report from anyone who has the packs installed would
-close them. The last one is a decision rather than a gap: it is reachable, and
+close them. The two 21.0.4 rows are untested for want of the build: this machine
+runs 19.1.3, so they are guarded and unit-tested against stubs and carry a
+contributor's report rather than a result of ours. The remaining one is a
+decision rather than a gap: it is reachable, and
 running it during a validation sweep would disable background tasks for every
 project open in that Resolve instance.
 
@@ -250,7 +255,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 19 | `LoadRenderPreset(presetName)` | ✅ | Loads render preset |
 | 20 | `SaveAsNewRenderPreset(presetName)` | ✅ | Creates render preset |
 | 21 | `DeleteRenderPreset(presetName)` | ✅ | Deletes render preset |
-| 22 | `SetRenderSettings({settings})` | ✅ | Applies render settings; Resolve 20.2 adds `ExportSubtitle` and `SubtitleFormat` keys |
+| 22 | `SetRenderSettings({settings})` | ✅ | Applies render settings; Resolve 20.2 adds `ExportSubtitle` and `SubtitleFormat` keys; Resolve 21.0.4 adds `UseFullExtents`, `AddFrameHandles` and `DataBurnIn` — `AddFrameHandles` is accepted and then ignored while `UseFullExtents` is true, so the server returns it as a warning |
 | 23 | `GetRenderJobStatus(jobId)` | ✅ | Returns `{JobStatus, CompletionPercentage}` |
 | 24 | `GetQuickExportRenderPresets()` | ✅ | Returns preset names |
 | 25 | `RenderWithQuickExport(preset, {params})` | ✅ | Initiates quick export |
@@ -382,6 +387,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 39 | `AnalyzeForIntellisearch(identifyFaces, isBetterMode)` | 🔬 | Resolve 21.0. Requires the AI IntelliSearch Extra; without it returns an error **string**, not `False` |
 | 40 | `AnalyzeForSlate(markerColor)` | 🔬 | Resolve 21.0. Requires the AI Slate ID Extra. Documented `resolve.MARKER_*` constants do not exist on the handle |
 | 41 | `RemoveMotionBlur({deblurOption})` | ✅ | Resolve 21.0.2 live test returns the new MediaPoolItem; source media path unchanged. Requires the AI Motion Deblur Extra |
+| 42 | `GetTimeline()` | 🔬 | Resolve 21.0.4. Not executed here — no 21.0.4 build on hand; reported working on Studio 21.0.4.5 in issue #131 |
 
 ### Timeline
 
@@ -445,6 +451,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 56 | `ClearMarkInOut(type)` | ✅ | Clears mark in/out |
 | 57 | `GetVoiceIsolationState(trackIndex)` | ✅ | Resolve 20.3.2 live test returns voice isolation state |
 | 58 | `SetVoiceIsolationState(trackIndex, {state})` | ✅ | Resolve 20.3.2 live test sets voice isolation state |
+| 59 | `GetSelectedClips()` | 🔬 | Resolve 21.0.4. First name tried by the selection probe, ahead of the two legacy speculative names. Not executed here — no 21.0.4 build on hand; reported working on Studio 21.0.4.5 in issue #131 |
 
 ### TimelineItem
 
