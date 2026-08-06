@@ -28,6 +28,12 @@ Every release bump must update all version surfaces:
 - `package.json`
 - README version badge
 - README current stats or latest-release summary when they changed
+- `README.zh-CN.md` — the Simplified Chinese translation. Update its version
+  badge and the `本翻译对应 vX.Y.Z 版 README` line, and carry over any
+  substantive English change. **If you cannot keep it current, delete the file
+  and the language switcher at the top of `README.md`** — a translation that
+  silently lags is worse than no translation, because its version line then
+  makes a claim that is false. No drift guard covers this; it is a human check.
 - `CHANGELOG.md` latest release entry
 - `docs/reference/api-limitations.md` when any `submit`-tagged entry in
   `src/utils/api_truth.py` was added or changed (a newly documented Resolve API
