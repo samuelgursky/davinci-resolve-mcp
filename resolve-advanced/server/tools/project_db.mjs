@@ -12,6 +12,9 @@
  * set_clip_marks — Sm2MpMedia.MarkIn/MarkOut (set clip in/out points)
  * relayout_node_graphs — rewrite node x/y in every graded ListMgt::LmVersion Body
  *   (whole-project "Cleanup Node Graph"; the UI command has NO scripting API)
+ * list_subtitle_styles — read caption style per subtitle track (font + position)
+ * set_subtitle_style — patch Sm2TiTrack.FieldsBlob caption style (font family/size/
+ *   italic/weight + normalised position). The API exposes NO subtitle styling at all.
  */
 
 import { z } from 'zod';
@@ -52,6 +55,33 @@ const relayoutSchema = z.object({
   iConfirmProjectClosed: confirm,
 });
 
+const listSubtitleStylesSchema = z.object({ ...dbTarget });
+const setSubtitleStyleSchema = z.object({
+  ...dbTarget,
+  timeline: z.string().describe('Timeline name carrying the subtitle track'),
+  track: z.number().int().min(1).optional().describe('1-based subtitle track index within that timeline (default 1)'),
+  family: z.string().optional().describe('Font family, e.g. "Montserrat"'),
+  pointSize: z.number().int().optional().describe('Font point size'),
+  weight: z.number().int().optional().describe('Qt font weight (50 = Regular, 75 = Bold)'),
+  italic: z.boolean().optional(),
+  styleName: z.string().optional().describe('Qt style name, e.g. "Regular" / "Bold" / "Oblique"'),
+  positionX: z.number().optional().describe('Normalised X (0-1, 0.5 = centre)'),
+  positionY: z.number().optional().describe('Normalised Y (0-1)'),
+  dryRun: z.boolean().optional().describe('Report the decoded before/after without writing'),
+  iConfirmProjectClosed: confirm,
+});
+
+// Subtitle tracks are Sm2TiTrack rows with Type = 2, linked to their timeline via
+// Sm2TiTrack.Sequence -> Sm2Sequence.Sm2Sequence_id -> Sm2Timeline. (Note the join
+// column is `Sequence`, NOT the same-table `Sm2Sequence_id`, which is null here.)
+const SUBTITLE_TRACK_QUERY = `
+  SELECT tl.Name AS timeline, tr.Sm2TiTrack_id AS id, tr.FieldsBlob AS blob
+  FROM Sm2TiTrack tr
+  JOIN Sm2Sequence sq ON tr.Sequence = sq.Sm2Sequence_id
+  JOIN Sm2Timeline tl ON sq.Sm2Timeline_id = tl.Sm2Timeline_id
+  WHERE tr.Type = 2
+  ORDER BY tl.Name, tr.rowid`;
+
 function selectOne(db, table, col, value) {
   const rows = db.prepare(`SELECT rowid AS rid, Name FROM ${table} WHERE Name = ?`).all(value);
   if (!rows.length) throw new Error(`no ${table} named "${value}"`);
@@ -62,7 +92,7 @@ function selectOne(db, table, col, value) {
 export const projectDbTool = {
   name: 'project_db',
   description:
-    'Beyond-the-API live Project.db patches (plain columns) — closes gaps the scripting API cannot. Project must be CLOSED (auto-backup + schema guard + verify). Actions: list_folders, rename_folder (no RenameSubFolder API), set_folder_color, list_clips, set_clip_marks, relayout_node_graphs (whole-project Cleanup Node Graph — rewrites node x/y in every graded version Body; grade content untouched; REQUIRES full Resolve quit+relaunch after patching, it caches open projects in memory). Needs optional better-sqlite3.',
+    'Beyond-the-API live Project.db patches (plain columns) — closes gaps the scripting API cannot. Project must be CLOSED (auto-backup + schema guard + verify). Actions: list_folders, rename_folder (no RenameSubFolder API), set_folder_color, list_clips, set_clip_marks, relayout_node_graphs (whole-project Cleanup Node Graph — rewrites node x/y in every graded version Body; grade content untouched; REQUIRES full Resolve quit+relaunch after patching, it caches open projects in memory), list_subtitle_styles, set_subtitle_style (caption font family/size/italic/weight + normalised position — the scripting API exposes NO subtitle styling; whole-track, not per-caption; same quit+relaunch requirement). Needs optional better-sqlite3.',
   async handler({ action, args }) {
     if (action === 'list_folders') {
       const p = listFoldersSchema.parse(args);
@@ -189,6 +219,104 @@ export const projectDbTool = {
           changed,
           note: write
             ? 'Resolve caches open projects IN MEMORY: fully QUIT Resolve and relaunch before reopening this project, or the patched layout will not be visible (and an oversave could revert it).'
+            : 'Dry run — nothing written. Re-run with dryRun:false + iConfirmProjectClosed:true (project CLOSED in Resolve).',
+        };
+      } finally {
+        db.close();
+      }
+    }
+    if (action === 'list_subtitle_styles') {
+      const p = listSubtitleStylesSchema.parse(args);
+      const style = require('../../vendor/drp-format/subtitle-style.js');
+      const db = openGuarded(resolveDbPath(p), { table: 'Sm2TiTrack', column: 'FieldsBlob' });
+      try {
+        const counts = new Map();
+        const tracks = [];
+        for (const row of db.prepare(SUBTITLE_TRACK_QUERY).all()) {
+          const n = (counts.get(row.timeline) || 0) + 1;
+          counts.set(row.timeline, n);
+          const entry = { timeline: row.timeline, track: n };
+          try {
+            const dec = style.decodeSubtitleStyle(Buffer.from(row.blob));
+            entry.styled = dec.styled;
+            if (dec.styled) {
+              entry.font = dec.font && {
+                family: dec.font.family,
+                pointSize: dec.font.pointSize,
+                weight: dec.font.weight,
+                italic: dec.font.italic,
+                styleName: dec.font.styleName,
+              };
+              entry.position = dec.position;
+              entry.opaqueParams = dec.opaque.length;
+            }
+          } catch (e) {
+            // Report an undecodable track rather than failing the whole listing.
+            entry.error = e.message;
+          }
+          tracks.push(entry);
+        }
+        return {
+          tracks,
+          note: tracks.some((t) => t.styled === false)
+            ? 'Tracks with styled:false carry no style blob (Resolve writes a NumLayers-only stub until the track is styled once in the UI); set_subtitle_style cannot patch those.'
+            : undefined,
+        };
+      } finally {
+        db.close();
+      }
+    }
+    if (action === 'set_subtitle_style') {
+      const p = setSubtitleStyleSchema.parse(args);
+      const style = require('../../vendor/drp-format/subtitle-style.js');
+      const changes = {};
+      for (const k of ['family', 'pointSize', 'weight', 'italic', 'styleName']) {
+        if (p[k] != null) changes[k] = p[k];
+      }
+      if ((p.positionX == null) !== (p.positionY == null)) {
+        throw new Error('positionX and positionY must be given together');
+      }
+      if (p.positionX != null) changes.position = { x: p.positionX, y: p.positionY };
+      if (!Object.keys(changes).length) throw new Error('nothing to change — pass family/pointSize/weight/italic/styleName and/or positionX+positionY');
+
+      const write = !p.dryRun;
+      if (write) requireClosed(p);
+      const dbPath = resolveDbPath(p);
+      const bak = write ? backup(dbPath) : null;
+      const db = openGuarded(dbPath, { writable: write, table: 'Sm2TiTrack', column: 'FieldsBlob' });
+      try {
+        const wanted = p.track || 1;
+        let seen = 0;
+        let target = null;
+        for (const row of db.prepare(SUBTITLE_TRACK_QUERY).all()) {
+          if (row.timeline !== p.timeline) continue;
+          seen += 1;
+          if (seen === wanted) { target = row; break; }
+        }
+        if (!target) {
+          throw new Error(`timeline "${p.timeline}" has no subtitle track ${wanted} (found ${seen}) — run list_subtitle_styles`);
+        }
+        const before = style.decodeSubtitleStyle(Buffer.from(target.blob));
+        const patched = style.encodeSubtitleStyle(Buffer.from(target.blob), changes);
+        const after = style.decodeSubtitleStyle(patched);
+        if (write) {
+          db.prepare('UPDATE Sm2TiTrack SET FieldsBlob = ? WHERE Sm2TiTrack_id = ?').run(patched, target.id);
+          const back = db.prepare('SELECT FieldsBlob FROM Sm2TiTrack WHERE Sm2TiTrack_id = ?').get(target.id);
+          const verify = style.decodeSubtitleStyle(Buffer.from(back.FieldsBlob));
+          if (verify.font.raw !== after.font.raw || JSON.stringify(verify.position) !== JSON.stringify(after.position)) {
+            throw new Error(`read-back verify failed on track ${target.id} — restore from backup ${bak}`);
+          }
+        }
+        return {
+          dryRun: !write,
+          backup: bak,
+          timeline: p.timeline,
+          track: wanted,
+          before: { font: before.font && before.font.raw, position: before.position },
+          after: { font: after.font && after.font.raw, position: after.position },
+          opaqueParamsPreserved: JSON.stringify(before.opaque) === JSON.stringify(after.opaque),
+          note: write
+            ? 'Resolve caches open projects IN MEMORY: fully QUIT Resolve and relaunch before reopening this project, or the patched style will not be visible (and an oversave could revert it). This is a whole-TRACK style, not per-caption.'
             : 'Dry run — nothing written. Re-run with dryRun:false + iConfirmProjectClosed:true (project CLOSED in Resolve).',
         };
       } finally {

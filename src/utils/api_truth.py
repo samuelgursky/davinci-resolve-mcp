@@ -998,9 +998,17 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "'subtitlePosition', 'subtitleAlignment', "
                    "'subtitlePreset', 'subtitleStyle'). Verified via dir(), "
                    "GetProperty(), and GetSetting() on Resolve 21.0.0.48.",
-        "recommended": "No workaround exists — subtitle styling is UI-only. "
-                       "Burn-in overlays via Fusion titles are a visual "
-                       "alternative but do not produce proper subtitle tracks.",
+        "recommended": "No API workaround exists, but the style IS reachable "
+                       "below the API: it lives in Sm2TiTrack.FieldsBlob for "
+                       "Type=2 tracks, as an EffectFiltersBA payload whose "
+                       "effect 136 carries a Qt QFont descriptor (param 18) and "
+                       "a normalised position vector (param 17). Exposed as "
+                       "project_db list_subtitle_styles / set_subtitle_style "
+                       "(font family/size/weight/italic + position). Caveats: "
+                       "whole-TRACK style not per-caption, project must be "
+                       "CLOSED, and Resolve must be fully quit and relaunched "
+                       "afterwards. Burn-in overlays via Fusion titles remain a "
+                       "visual alternative but do not produce subtitle tracks.",
         "tags": ["missing-method", "subtitle", "style", "preset"],
         "submit": "missing",
     },
