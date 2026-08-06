@@ -196,7 +196,7 @@ Use these to answer "what changed between v3 and v4" or to hand a conform an
 accurate change list without opening either timeline. For conforming/relinking
 that change list, see the Timeline Conform / Interchange kernel and the
 `resolve-conform` skill; for the edit ↔ offline routing, see the `resolve-edit`
-skill (`.claude/skills/timeline-edit.md`).
+skill (`.claude/skills/resolve-edit/SKILL.md`).
 
 ## Development Guardrails
 
