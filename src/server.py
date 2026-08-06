@@ -47,6 +47,7 @@ from src.utils.cdl import normalize_cdl_payload
 from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
 from src.utils import clip_colors as _clip_colors
+from src.utils import resolve_versions as _resolve_versions
 from src.utils.contracts import validate as _validate_params
 from src.utils.cut_ir import build_cut_list as _build_cut_list
 from src.utils.page_lock import (
@@ -13547,8 +13548,18 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       ignore_mcp_update() -> {success, version, update, decision}
       snooze_mcp_update(hours?) -> {success, version, update, decision}
       clear_mcp_update_preferences() -> {success, version, update, decision}
-      api_truth(query?) -> {verified_on, count, facts}  — look up behaviorally-verified
-        facts about quirky/unreliable Resolve API behavior (no connection needed).
+      api_truth(query?, resolve_version?) -> {verified_on, count, facts, live_version?}
+        — look up behaviorally-verified facts about quirky/unreliable Resolve API
+        behavior (no connection needed; never connects). When a build is already
+        connected or resolve_version is passed, each fact carries a
+        version_context saying whether it was measured on an older, newer or
+        identical build — the API changes per PATCH release, so a fact from
+        another build is a prior, not a finding.
+      check_version_support(symbol?, resolve_version?) -> {live_version, support|unavailable_on_this_build}
+        — does THIS build have that method? Answers "unknown" unless a gate is
+        recorded, because most of the API has never been version-bisected and a
+        false "available" is how an agent insists a missing method exists.
+        Omit symbol for every recorded gate this build does not clear.
       verification_stats() -> {stats}  — readback-verification tally
         (verified/contradicted/unverified) since server start (no connection needed).
       job_status(job_id) -> {id, label, status, result?, error?, started_at, ended_at}
@@ -13576,10 +13587,72 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     """
     p = _params(params)
 
-    # api_truth is a static knowledge lookup — no Resolve connection needed.
+    # api_truth is a static knowledge lookup — no Resolve connection needed, and
+    # that property is worth keeping: it is the one call that still answers when
+    # Resolve is down or unreachable. So the live build is used only if one is
+    # ALREADY connected, or if the caller names it. Never connect for this.
     if action == "api_truth":
         facts = lookup_api_truth(p.get("query"))
-        return {"verified_on": _API_TRUTH_VERIFIED_ON, "count": len(facts), "facts": facts}
+        live_version = p.get("resolve_version")
+        if not live_version and resolve is not None:
+            try:
+                live_version = resolve.GetVersionString()
+            except Exception:
+                live_version = None
+        result = {
+            "verified_on": _API_TRUTH_VERIFIED_ON,
+            "count": len(facts),
+            "facts": _resolve_versions.annotate_facts(
+                facts, live_version, ledger_verified_on=_API_TRUTH_VERIFIED_ON
+            ),
+        }
+        if live_version:
+            result["live_version"] = str(live_version)
+            unavailable = _resolve_versions.gates_unavailable_on(live_version)
+            if unavailable:
+                result["unavailable_on_this_build"] = unavailable
+        else:
+            result["version_context"] = (
+                "No live build known, so facts are unannotated. The scripting API "
+                "changes per PATCH release, so a fact measured on another build is a "
+                "prior rather than a finding. Pass resolve_version, or call "
+                "get_version first."
+            )
+        return result
+    if action == "check_version_support":
+        # "Does THIS build have it?" asked directly, instead of inferred from
+        # prose. Answers `unknown` unless a gate is recorded — see
+        # utils/resolve_versions.py for why that default is the load-bearing one.
+        live_version = p.get("resolve_version")
+        if not live_version and resolve is not None:
+            try:
+                live_version = resolve.GetVersionString()
+            except Exception:
+                live_version = None
+        if not live_version:
+            return _err(
+                "No Resolve version available",
+                code="VERSION_UNKNOWN",
+                category="invalid_input",
+                reason="Nothing is connected and no resolve_version was passed.",
+                remediation="Call get_version first, or pass resolve_version='21.0.4.5'.",
+            )
+        symbol = p.get("symbol")
+        if symbol:
+            return {
+                "live_version": str(live_version),
+                "support": _resolve_versions.availability(symbol, live_version),
+            }
+        return {
+            "live_version": str(live_version),
+            "unavailable_on_this_build": _resolve_versions.gates_unavailable_on(live_version),
+            "known_gates": len(_resolve_versions.VERSION_GATES),
+            "note": (
+                "Only surfaces with recorded evidence appear here. Most of the "
+                "scripting API has never been version-bisected, so an absence from "
+                "this list is not a promise that a method exists."
+            ),
+        }
     if action == "verification_stats":
         # Process-level readback-verification tally — no connection needed.
         stats = _verification_stats()
@@ -13737,7 +13810,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             return missing
         r.DisableBackgroundTasksForCurrentResolveSession()
         return _ok()
-    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","verification_stats","job_status","list_jobs","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
