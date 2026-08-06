@@ -2,6 +2,73 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.84.0
+
+Guidance now depends on the build you are actually connected to, and the README
+speaks Chinese.
+
+### Added
+
+- **Version-aware routing** (issue #132). The scripting API changes per **patch**
+  release, so "Resolve 21" is not a label you can reason from: `GetFairlightPresets`
+  exists on 20.2.2 and not 19.1.3, and three surfaces reported in 21.0.4 are
+  absent from 21.0.2. Skills and `api_truth` previously gave identical guidance
+  whatever was connected, which is how an agent ends up insisting a method is
+  there when it is not — exactly the report in #132.
+
+  `utils/resolve_versions.py` parses the three shapes Resolve reports a version
+  in (the `GetVersion()` list, `GetVersionString()`, and prose), compares them
+  patch-precisely, and holds `VERSION_GATES` — only surfaces with evidence, each
+  tagged **measured / reported / vendor** so a relayed fact can state how strong
+  it is. All shipped gates were confirmed `dir()`-absent on live 19.1.3.7.
+
+- **`resolve_control check_version_support(symbol?, resolve_version?)`** — does
+  *this* build have that method? Omit `symbol` for every recorded gate the build
+  does not clear. **`api_truth` now takes `resolve_version`** and annotates each
+  fact with whether it was measured on an older, newer or identical build.
+  Neither ever connects: `api_truth` is the one call that still answers when
+  Resolve is down, and that is worth keeping.
+
+  Two defaults carry the weight. **`unknown` means probe, not yes** — most of the
+  API has never been version-bisected, and a false "available" is the failure
+  being fixed. And the ledger-wide `VERIFIED_ON` stamp is **never** attributed to
+  an individual fact: most entries record their real build in prose, so stamping
+  each of them would invent a measurement that never happened.
+
+- **`README.zh-CN.md`** — Simplified Chinese translation (PR #122,
+  @chenyuxiaojin), brought current rather than merged at its original v2.80.1.
+  `docs/process/release-process.md` now lists it among the surfaces every release
+  must update, naming deletion as an acceptable outcome: because the file states
+  which release it matches, going stale turns it into a false claim rather than
+  vague oldness — and no CI check can catch that, since a lagging translation is
+  still valid Markdown.
+
+### Changed
+
+- **The skills ask the build before promising a capability.** `resolve-session`
+  gains a step that asks what the build *cannot* do before any project or
+  timeline is read, and reports both the Resolve build and `mcp.version` — a
+  running server keeps executing the version it started with, so `git pull` does
+  not refresh its ledger until restart. `resolve-audio`, `resolve-delivery`,
+  `resolve-edit` and `resolve-media-pool` each carry the specific gate that bites
+  them rather than a generic reminder; `resolve-color`, `resolve-conform` and
+  `resolve-fusion` deliberately get nothing, since no gates are recorded for them.
+- `resolve-edit` now states plainly that **there is no clip-speed API at any
+  version** — `set_retime` sets retime *quality* and returns `True` for doing so,
+  which is the misread behind #132.
+
+### Fixed
+
+- **An `api_truth` entry that had been UNRESOLVED is now partly settled**, because
+  writing the probe advice required knowing what a probe actually does. The entry
+  asked for five real borrowed method names to be re-run; done on 19.1.3.7 over
+  the direct connection, 42 checks across seven object types. No fabrication —
+  every one was `getattr`-callable `False` and `dir()`-absent, agreeing in all 42
+  cases. The same run showed **bare `hasattr()` returns `True` for every name on
+  every Resolve object**, real or invented: it is not a weak probe, it carries no
+  information at all. Bridge-side fabrication remains untested, so the
+  `dir()`-membership recommendation stands.
+
 ## What's New in v2.83.0
 
 Transcript-reading features now say what they cannot see, and the clip-colour
