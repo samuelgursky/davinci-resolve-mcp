@@ -55,7 +55,7 @@ python scripts/install_resolve_bridge.py
 
 在 **macOS** 上，这需要 **framework 版 Python**（python.org 官网安装包）。Resolve 只有找到 framework Python 才会枚举 `.py` 脚本——Homebrew、pyenv、conda 的解释器都不被识别，脚本会静默地不出现在菜单里。安装时会顺带装一个 Lua 金丝雀脚本，帮你区分"Python 不对"和"目录放错"。
 
-已在免费版 21.0.3.7 和 Studio 19.1.3.7 上验证（均为 macOS）。v2.70.1（issue #106）加入的 Windows 路径发布时未经验证；后续免费版 21.0.1.11（issue #109）和免费版 21.0.3.7（issue #112）的用户报告证实，Windows 11 上桥接在 `%PROGRAMDATA%` 和 `%APPDATA%` **两处**都能安装、列出并正常服务，这些路径现在是已证实而非假设。Linux 同样已获证实：免费版 20.3.2.9 的用户报告（issue #129，Fedora 43）显示桥接可安装到 `~/.local/share/DaVinciResolve/Fusion/Scripts/Utility`，直接对系统 Python 列出脚本（Linux 上不需要 framework Python），并能端到端正常服务。现在没有任何平台停留在假设上：macOS 为本项目直接验证，Windows 和 Linux 来自用户报告。
+已在免费版 21.0.3.7 和 Studio 19.1.3.7 上验证（均为 macOS）。v2.70.1（issue #106）加入的 Windows 路径发布时未经验证；后续免费版 21.0.1.11（issue #109）和免费版 21.0.3.7（issue #112）的用户报告证实，Windows 11 上桥接在 `%PROGRAMDATA%` 和 `%APPDATA%` **两处**都能安装、列出并正常服务，这些路径现在是已证实而非假设。Linux 同样已获证实：免费版 20.3.2.9 的用户报告（issue #129，Fedora 43）显示桥接可安装到 `~/.local/share/DaVinciResolve/Fusion/Scripts/Utility`，用系统 Python 就能直接枚举脚本（Linux 不需要 framework 版 Python），并能端到端正常服务。现在没有任何平台停留在假设上：macOS 为本项目直接验证，Windows 和 Linux 来自用户报告。
 
 注意：桥接在服务期间会一直占用端口。v2.70.3 之前，Windows 上的桥接可能在 Resolve 退出后存活，挡住下一个会话的监听器；如果你用的是旧版本且桥接不响应了，检查是否有残留的 `fuscript.exe` 还占着端口。
 
