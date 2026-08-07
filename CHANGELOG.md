@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.86.2
+
+A Simplified Chinese phrasing fix from the reviewer who asked for it when #122
+merged. No behavior changed.
+
+### Documentation
+
+- **The Linux bridge sentence in `README.zh-CN.md` now reads as native Chinese.**
+  `直接对系统 Python 列出脚本` was translationese; it is now
+  `用系统 Python 就能直接枚举脚本`. The same sentence picks up two terms the
+  macOS paragraph three lines above was already using — `framework 版 Python`
+  (the `版` was missing) and `枚举` for script enumeration — so the two
+  paragraphs describe the same Resolve behavior with the same words. The claim
+  itself is unchanged: the issue #129 Fedora 43 report still stands behind it.
+  Thanks to @chenyuxiaojin (PR #134).
+
 ## What's New in v2.86.1
 
 Corrects `api-coverage.md` where today's live work on the free edition made it
