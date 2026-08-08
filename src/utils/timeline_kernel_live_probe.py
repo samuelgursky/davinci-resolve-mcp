@@ -17,6 +17,8 @@ import platform
 import subprocess
 import sys
 import tempfile
+
+from src.utils.resolve_probe import has_method
 import time
 import types
 import traceback
@@ -153,7 +155,7 @@ def _frame_int(value) -> int:
 
 
 def _source_start(item) -> int:
-    if hasattr(item, "GetSourceStartFrame"):
+    if has_method(item, "GetSourceStartFrame"):
         try:
             value = item.GetSourceStartFrame()
             if value is not None:

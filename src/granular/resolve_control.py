@@ -186,10 +186,12 @@ def inspect_custom_object(object_path: str) -> Dict[str, Any]:
                     return {"error": f"Method '{method_name}' not found or not callable"}
             else:
                 # It's an attribute access
-                if hasattr(obj, part):
-                    obj = getattr(obj, part)
-                else:
+                # getattr, not hasattr: on a Resolve object hasattr is a
+                # constant True, so the not-found branch could never run.
+                value = getattr(obj, part, None)
+                if value is None:
                     return {"error": f"Attribute '{part}' not found"}
+                obj = value
         
         # Inspect the object we've retrieved
         return inspect_object(obj)
@@ -399,7 +401,19 @@ def get_resolve_version_fields() -> Dict[str, Any]:
         return {"error": "Not connected to DaVinci Resolve"}
     version = resolve.GetVersion()
     if version:
-        return {"major": version[0], "minor": version[1], "patch": version[2], "build": version[3], "suffix": version[4] if len(version) > 4 else ""}
+        # Carry what this build is MISSING, not just what it is. An agent that
+        # only learns the number still has to know which surfaces that number
+        # rules out, and guessing that is issue #132.
+        missing = gates_unavailable_on(resolve.GetVersionString())
+        return {"major": version[0], "minor": version[1], "patch": version[2], "build": version[3],
+                "suffix": version[4] if len(version) > 4 else "",
+                "unavailable_on_this_build": missing,
+                "note": ("Recorded surfaces absent here — do not offer them. An absence "
+                         "from this list is not a promise a method exists; most of the "
+                         "API has never been version-bisected."
+                         if missing else
+                         "Clears every recorded version gate. Surfaces nobody has "
+                         "bisected are still unknown — probe before offering them.")}
     return {"error": "Failed to get version"}
 
 

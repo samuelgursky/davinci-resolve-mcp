@@ -30,8 +30,9 @@ orientation, not an audit.
 
 2. **Ask what this build cannot do.**
 
-   `resolve_control(action="check_version_support")` — every recorded API gate
-   this build does not clear.
+   `get_version` already answers this in its `build.unavailable_on_this_build`
+   block, so read that first; `resolve_control(action="check_version_support")`
+   is for asking about one named symbol, or for re-checking after a reconnect.
 
    The scripting API changes per **patch** release, so "Resolve 21" is not a
    usable label: `GetFairlightPresets` needs 20.2.2, and three surfaces exist in

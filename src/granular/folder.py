@@ -325,9 +325,10 @@ def folder_perform_audio_classification(folder_path: str = "") -> Dict[str, Any]
     folder, err = _resolve_folder(mp, folder_path)
     if err:
         return err
-    if not hasattr(folder, "PerformAudioClassification"):
-        return {"error": "PerformAudioClassification requires DaVinci Resolve 21+"}
-    return {"success": bool(folder.PerformAudioClassification())}
+    missing = _requires_method(folder, "PerformAudioClassification", "21.0")
+    if missing:
+        return missing
+    return _ai_result_payload(folder.PerformAudioClassification())
 
 
 @mcp.tool()
@@ -343,9 +344,10 @@ def folder_clear_audio_classification(folder_path: str = "") -> Dict[str, Any]:
     folder, err = _resolve_folder(mp, folder_path)
     if err:
         return err
-    if not hasattr(folder, "ClearAudioClassification"):
-        return {"error": "ClearAudioClassification requires DaVinci Resolve 21+"}
-    return {"success": bool(folder.ClearAudioClassification())}
+    missing = _requires_method(folder, "ClearAudioClassification", "21.0")
+    if missing:
+        return missing
+    return _ai_result_payload(folder.ClearAudioClassification())
 
 
 @mcp.tool()
@@ -363,9 +365,10 @@ def folder_analyze_for_intellisearch(folder_path: str = "", identify_faces: bool
     folder, err = _resolve_folder(mp, folder_path)
     if err:
         return err
-    if not hasattr(folder, "AnalyzeForIntellisearch"):
-        return {"error": "AnalyzeForIntellisearch requires DaVinci Resolve 21+"}
-    return {"success": bool(folder.AnalyzeForIntellisearch(bool(identify_faces), bool(is_better_mode)))}
+    missing = _requires_method(folder, "AnalyzeForIntellisearch", "21.0")
+    if missing:
+        return missing
+    return _ai_result_payload(folder.AnalyzeForIntellisearch(bool(identify_faces), bool(is_better_mode)))
 
 
 @mcp.tool()
@@ -383,11 +386,12 @@ def folder_analyze_for_slate(folder_path: str = "", marker_color: str = "Blue") 
     folder, err = _resolve_folder(mp, folder_path)
     if err:
         return err
-    if not hasattr(folder, "AnalyzeForSlate"):
-        return {"error": "AnalyzeForSlate requires DaVinci Resolve 21+"}
+    missing = _requires_method(folder, "AnalyzeForSlate", "21.0")
+    if missing:
+        return missing
     if marker_color not in _MARKER_COLORS:
         return {"error": f"Invalid marker_color '{marker_color}'. Valid: {', '.join(_MARKER_COLORS)}"}
-    return {"success": bool(folder.AnalyzeForSlate(marker_color))}
+    return _ai_result_payload(folder.AnalyzeForSlate(marker_color))
 
 
 @mcp.tool()
@@ -407,9 +411,16 @@ def folder_remove_motion_blur(folder_path: str = "", deblur_option: Optional[Dic
     folder, err = _resolve_folder(mp, folder_path)
     if err:
         return err
-    if not hasattr(folder, "RemoveMotionBlur"):
-        return {"error": "RemoveMotionBlur requires DaVinci Resolve 21+"}
+    missing = _requires_method(folder, "RemoveMotionBlur", "21.0")
+    if missing:
+        return missing
     result = folder.RemoveMotionBlur(deblur_option or {})
+    # A missing Extras pack comes back as an error STRING, which is truthy and
+    # also iterable — the loop below would walk it character by character and
+    # report success. Normalize before either.
+    ok, message = _ai_result(result)
+    if not ok:
+        return {"success": False, "error": message} if message else {"success": False}
     created = []
     for pair in (result or []):
         try:
@@ -417,4 +428,4 @@ def folder_remove_motion_blur(folder_path: str = "", deblur_option: Optional[Dic
             created.append({"original": orig.GetName(), "new": new.GetName(), "new_id": new.GetUniqueId()})
         except Exception:
             continue
-    return {"success": bool(result), "created": created}
+    return {"success": True, "created": created}

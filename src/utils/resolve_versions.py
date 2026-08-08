@@ -102,11 +102,13 @@ def at_least(live: Any, required: Any) -> Optional[bool]:
 # measured from what a reporter measured, because the two carry different
 # weight and an agent relaying the fact should be able to say which it is.
 #
-#   measured  — probed live by this project
-#   reported  — a user's live probe, credited, not independently reproduced
-#   vendor    — stated by Blackmagic's shipped Developer/Scripting/README.txt
+#   measured   — probed live by this project
+#   reported   — a user's live probe, credited, not independently reproduced
+#   vendor     — stated by Blackmagic's shipped Developer/Scripting/README.txt
+#   documented — a floor this server already enforces at the call site, taken
+#                from Blackmagic's release documentation. See CODE_FLOORS.
 
-VERSION_GATES: List[Dict[str, Any]] = [
+_EVIDENCE_GATES: List[Dict[str, Any]] = [
     {
         "symbol": "Resolve.GetFairlightPresets",
         "introduced_in": "20.2.2",
@@ -117,7 +119,11 @@ VERSION_GATES: List[Dict[str, Any]] = [
         "issue": 128,
     },
     {
-        "symbol": "Timeline.ApplyFairlightPresetToCurrentTimeline",
+        # Named on Project, not Timeline: the shipped README lists it in the
+        # Project section and src/server.py calls it on the project handle. The
+        # method's name says "CurrentTimeline", which is what made the earlier
+        # Timeline attribution here look right.
+        "symbol": "Project.ApplyFairlightPresetToCurrentTimeline",
         "introduced_in": "20.2.2",
         "source": "measured",
         "note": "Same gate as GetFairlightPresets; the two are only useful together.",
@@ -166,6 +172,90 @@ VERSION_GATES: List[Dict[str, Any]] = [
     },
 ]
 
+
+# ── Floors this server already enforces ─────────────────────────────────────
+# `_requires_method(obj, "Method", "X.Y")` in src/server.py and src/granular/
+# refuses a call when the method is absent and names a floor. Those floors were
+# real routing knowledge that `check_version_support` could not see: the ledger
+# above knew seven symbols while the two servers gated thirty-one, so the one
+# call an agent is told to make answered `unknown` for surfaces this repo was
+# already routing on. That is the shape of issue #132 — guidance that does not
+# vary with the build it is connected to — showing up inside our own tooling.
+#
+# The `documented` label is deliberately weaker than `measured`. These floors
+# come from Blackmagic's release documentation (the build whose shipped
+# Developer/Scripting README first carried the method), not from a live bisect
+# by this project, so an agent relaying one should say "documented as requiring
+# 21.0.4+", never "measured absent on your build". A floor being wrong in the
+# vendor's direction is survivable — the call-site guard still probes the live
+# object before refusing, so the floor only ever supplies the *explanation*.
+#
+# tests/test_version_gate_drift.py fails when a call site and this table
+# disagree, which is what keeps the two from drifting apart again.
+
+CODE_FLOORS: Dict[str, str] = {
+    "MediaPoolItem.LinkProxyMedia": "17.0",
+    "MediaPoolItem.LinkFullResolutionMedia": "20.0",
+    "MediaPoolItem.MonitorGrowingFile": "20.0",
+    "MediaPoolItem.ReplaceClipPreserveSubClip": "20.0",
+    "Timeline.GetVoiceIsolationState": "20.1",
+    "Timeline.SetVoiceIsolationState": "20.1",
+    "TimelineItem.GetVoiceIsolationState": "20.1",
+    "TimelineItem.SetVoiceIsolationState": "20.1",
+    "MediaPoolItem.SetName": "20.2",
+    "TimelineItem.SetName": "20.2",
+    "TimelineItem.ResetAllNodeColors": "20.2",
+    "Resolve.DisableBackgroundTasksForCurrentResolveSession": "21.0",
+    "Project.GenerateSpeech": "21.0",
+    "Project.ResetIntellisearchAnalysis": "21.0",
+    "MediaPoolItem.PerformAudioClassification": "21.0",
+    "MediaPoolItem.ClearAudioClassification": "21.0",
+    "MediaPoolItem.AnalyzeForIntellisearch": "21.0",
+    "MediaPoolItem.AnalyzeForSlate": "21.0",
+    "MediaPoolItem.RemoveMotionBlur": "21.0",
+    "Folder.PerformAudioClassification": "21.0",
+    "Folder.ClearAudioClassification": "21.0",
+    "Folder.AnalyzeForIntellisearch": "21.0",
+    "Folder.AnalyzeForSlate": "21.0",
+    "Folder.RemoveMotionBlur": "21.0",
+    "Resolve.GetLayoutPresetList": "21.0.4",
+    "Resolve.GetBurnInPresetList": "21.0.4",
+    "Resolve.DeleteBurnInPreset": "21.0.4",
+    "Resolve.GetUserPreferencesPresetList": "21.0.4",
+    "Resolve.SaveUserPreferencesPreset": "21.0.4",
+    "Resolve.LoadUserPreferencesPreset": "21.0.4",
+    "Resolve.DeleteUserPreferencesPreset": "21.0.4",
+    "Resolve.ImportUserPreferencesPreset": "21.0.4",
+    "Resolve.ExportUserPreferencesPreset": "21.0.4",
+    "ProjectManager.GetProjectAttributesInCurrentFolder": "21.0.4",
+}
+
+#: Methods whose call-site guard names no usable floor. Recorded rather than
+#: silently dropped, because "we gate this and cannot say since when" is itself
+#: worth an agent knowing — it is a candidate for the next live bisect.
+UNDATED_FLOORS: Tuple[str, ...] = ("Project.GetRenderSettings",)
+
+_EVIDENCE_SYMBOLS = {gate["symbol"] for gate in _EVIDENCE_GATES}
+
+VERSION_GATES: List[Dict[str, Any]] = _EVIDENCE_GATES + [
+    {
+        "symbol": symbol,
+        "introduced_in": floor,
+        "source": "documented",
+        "note": (
+            "Floor enforced at this server's call site, from Blackmagic's "
+            "release documentation rather than a live bisect here. The guard "
+            "probes the live object first, so this supplies the explanation, "
+            "not the refusal."
+        ),
+        "issue": 132,
+    }
+    for symbol, floor in sorted(CODE_FLOORS.items())
+    # An evidence-backed entry always wins: it says how we know, and these
+    # would overwrite that with the weaker label.
+    if symbol not in _EVIDENCE_SYMBOLS
+]
+
 _GATES_BY_SYMBOL = {gate["symbol"].lower(): gate for gate in VERSION_GATES}
 
 AVAILABLE = "available"
@@ -174,12 +264,24 @@ UNKNOWN = "unknown"
 
 
 def gate_for(symbol: str) -> Optional[Dict[str, Any]]:
-    """The recorded gate for `symbol`, matched loosely. None if we have none."""
+    """The recorded gate for `symbol`, matched loosely. None if we have none.
+
+    Tried in order — exact, then bare method name, then substring — because the
+    registry now carries the same method on several classes (`SetName` is gated
+    on four). Iteration order decided which one a bare `"SetName"` lookup hit
+    when the registry was small enough for that not to matter; it now is not.
+    A bare name matching several classes only stays honest while their floors
+    agree, which `test_version_gate_drift` asserts.
+    """
     if not symbol:
         return None
     needle = symbol.strip().lower()
     if needle in _GATES_BY_SYMBOL:
         return _GATES_BY_SYMBOL[needle]
+    suffix = "." + needle
+    for key, gate in _GATES_BY_SYMBOL.items():
+        if key.endswith(suffix):
+            return gate
     for key, gate in _GATES_BY_SYMBOL.items():
         if needle in key or key in needle:
             return gate

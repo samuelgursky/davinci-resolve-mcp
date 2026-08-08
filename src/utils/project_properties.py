@@ -13,6 +13,8 @@ import logging
 import json
 from typing import Dict, List, Any, Optional, Union
 
+from src.utils.resolve_probe import has_method
+
 # Configure logging
 logger = logging.getLogger("davinci-resolve-mcp.project_properties")
 
@@ -521,7 +523,7 @@ def get_project_metadata(project_obj) -> Dict[str, Any]:
         metadata["name"] = project_obj.GetName()
         
         # Add project path if available
-        if hasattr(project_obj, "GetPath"):
+        if has_method(project_obj, "GetPath"):
             metadata["path"] = project_obj.GetPath()
         
         # Get current timeline

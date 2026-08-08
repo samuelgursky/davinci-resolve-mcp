@@ -87,7 +87,11 @@ class AvailabilityTest(unittest.TestCase):
 
     def test_every_gate_declares_evidence_and_parses(self):
         for gate in VERSION_GATES:
-            self.assertIn(gate["source"], {"measured", "reported", "vendor"}, gate["symbol"])
+            self.assertIn(
+                gate["source"],
+                {"measured", "reported", "vendor", "documented"},
+                gate["symbol"],
+            )
             self.assertIsNotNone(parse_version(gate["introduced_in"]), gate["symbol"])
 
 

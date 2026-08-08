@@ -489,7 +489,16 @@ you are on the correct page first.
 Key actions:
 - `launch` — connect to or start Resolve; call this first if any tool returns a
   "Not connected" error
-- `get_version` — returns `{product, version, version_string}`
+- `get_version` — returns `{product, version, version_string, build, mcp}`.
+  `build.unavailable_on_this_build` lists every recorded API surface this build
+  does **not** have; read it before offering anything version-gated. An absence
+  from that list is not a promise a method exists — most of the API has never
+  been version-bisected, so `check_version_support` answers `unknown` for it,
+  and `unknown` means probe with `name in dir(obj)`, never bare `hasattr`
+  (constant `True` on Resolve objects)
+- `check_version_support(symbol?, resolve_version?)` — is one named symbol on
+  this build? Without `symbol`, the same missing-surface list `get_version`
+  carries. No connection needed when `resolve_version` is passed
 - `api_truth(query?)` — look up behaviorally-verified facts about quirky/unreliable
   Resolve API behavior (no connection needed); filter by substring
 - `verification_stats` — readback-verification tally (verified/contradicted/

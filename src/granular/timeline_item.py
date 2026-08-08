@@ -2118,7 +2118,7 @@ def ti_export_lut(export_type: str, path: str, item_index: int = 0, track_type: 
     if err:
         return err
     try:
-        etype = getattr(resolve, export_type) if hasattr(resolve, export_type) else export_type
+        etype = _api_constant(resolve, export_type, export_type)
     except Exception:
         etype = export_type
     return {"success": bool(item.ExportLUT(etype, path))}

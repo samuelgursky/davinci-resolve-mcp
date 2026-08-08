@@ -48,6 +48,7 @@ from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
 from src.utils import clip_colors as _clip_colors
 from src.utils import resolve_versions as _resolve_versions
+from src.utils.resolve_probe import api_constant as _api_constant, has_method as _probe_has_method
 from src.utils.contracts import validate as _validate_params
 from src.utils.cut_ir import build_cut_list as _build_cut_list
 from src.utils.page_lock import (
@@ -1032,7 +1033,7 @@ def _destructive_versioning_provider() -> Optional[Tuple[Any, Any, str, Optional
         except Exception:
             project_name = None
         try:
-            project_id = proj.GetUniqueId() if hasattr(proj, "GetUniqueId") else None
+            project_id = proj.GetUniqueId() if _has_method(proj, "GetUniqueId") else None
         except Exception:
             project_id = None
         root = resolve_media_analysis_output_root(
@@ -1785,7 +1786,8 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
         return {"sent": False, "error": f"{type(exc).__name__}: {exc}"}
 
 def _has_method(obj, method_name):
-    return callable(getattr(obj, method_name, None))
+    # `hasattr` is a constant True on Resolve objects — see src/utils/resolve_probe.
+    return _probe_has_method(obj, method_name)
 
 def _requires_method(obj, method_name, min_version):
     if _has_method(obj, method_name):
@@ -5901,10 +5903,11 @@ def _timeline_export_value(value, resolve_obj=None):
     if not raw:
         return "", None
     const_name = raw if raw.startswith("EXPORT_") else None
-    if const_name and resolve_obj is not None and hasattr(resolve_obj, const_name):
-        return getattr(resolve_obj, const_name), const_name
     if const_name:
-        return const_name, const_name
+        # hasattr is a constant True on a Resolve object, so the old presence
+        # test always won and handed Export a None from getattr on a build
+        # without the constant. Fall back on the value instead.
+        return _api_constant(resolve_obj, const_name, const_name), const_name
     return raw, None
 
 
@@ -7383,9 +7386,7 @@ def _safe_auto_sync_audio(mp, p: Dict[str, Any]):
 
 
 def _resolve_audio_constant(resolve_obj, name: str, fallback):
-    if resolve_obj is not None and hasattr(resolve_obj, name):
-        return getattr(resolve_obj, name)
-    return fallback
+    return _api_constant(resolve_obj, name, fallback)
 
 
 def _normalize_auto_sync_settings(settings: Dict[str, Any], resolve_obj=None):
@@ -13787,10 +13788,33 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     if action == "get_version":
         update_env = _setup_update_env()
         mcp_update = get_cached_update_status(project_dir, VERSION, env=update_env)
+        version_string = r.GetVersionString()
+        # The first call of nearly every session. Issue #132 is the report of an
+        # agent describing a surface that was not on the user's build, and the
+        # reason it could happen is that nothing in the session ever said which
+        # build that was in terms of what is missing from it. So the answer to
+        # "what am I connected to" now carries what this build does not have,
+        # rather than waiting to be asked.
+        missing = _resolve_versions.gates_unavailable_on(version_string)
         return {
             "product": r.GetProductName(),
             "version": r.GetVersion(),
-            "version_string": r.GetVersionString(),
+            "version_string": version_string,
+            "build": {
+                "unavailable_on_this_build": missing,
+                "known_gates": len(_resolve_versions.VERSION_GATES),
+                "note": (
+                    f"{len(missing)} recorded surface(s) are absent on this build. "
+                    "Do not offer them. An absence from this list is NOT a promise "
+                    "the method exists — most of the scripting API has never been "
+                    "version-bisected, so ask check_version_support for a specific "
+                    "symbol and probe when it answers `unknown`."
+                    if missing else
+                    "This build clears every recorded version gate. That is not a "
+                    "promise about surfaces nobody has bisected — ask "
+                    "check_version_support for a specific symbol before offering it."
+                ),
+            },
             "mcp": {
                 "version": VERSION,
                 "update": mcp_update,
@@ -22792,9 +22816,7 @@ def _resolve_lut_export_type(export_type, resolve_obj=None):
         const_name = raw
     if not const_name:
         return None, _err(f"Unknown LUT export type: {raw}")
-    if resolve_obj and hasattr(resolve_obj, const_name):
-        return getattr(resolve_obj, const_name), None
-    return const_name, None
+    return _api_constant(resolve_obj, const_name, const_name), None
 
 
 def _validate_cdl_payload(cdl):
@@ -27636,7 +27658,7 @@ def _resource_current_project() -> Dict[str, Any]:
     return {
         "open": True,
         "name": proj.GetName(),
-        "id": proj.GetUniqueId() if hasattr(proj, "GetUniqueId") else None,
+        "id": proj.GetUniqueId() if _has_method(proj, "GetUniqueId") else None,
     }
 
 
@@ -27659,7 +27681,7 @@ def _resource_current_timeline() -> Dict[str, Any]:
     return {
         "open": True,
         "name": tl.GetName(),
-        "id": tl.GetUniqueId() if hasattr(tl, "GetUniqueId") else None,
+        "id": tl.GetUniqueId() if _has_method(tl, "GetUniqueId") else None,
         "start_frame": tl.GetStartFrame(),
         "end_frame": tl.GetEndFrame(),
         "start_timecode": tl.GetStartTimecode(),

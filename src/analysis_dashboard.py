@@ -45,6 +45,7 @@ from src.utils.media_analysis_jobs import (
 )
 from src.utils.platform import setup_environment
 from src.utils.resolve_connection import connect_resolve
+from src.utils.resolve_probe import has_method
 from src.utils.analysis_memory import read_panel_state, write_panel_state
 from src.utils import brain_edits as _brain_edits
 from src.utils import timeline_versioning as _timeline_versioning
@@ -11917,7 +11918,7 @@ HTML = HTML.replace("/* CONTROL_PANEL_I18N */", localization_script())
 
 
 def _safe_call(obj: Any, method_name: str, *args: Any) -> Tuple[Any, Optional[str]]:
-    if obj is None or not hasattr(obj, method_name):
+    if not has_method(obj, method_name):
         return None, f"{method_name} unavailable"
     try:
         return getattr(obj, method_name)(*args), None
