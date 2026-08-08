@@ -13581,6 +13581,16 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       get_fairlight_presets() -> {presets}
       set_high_priority() -> {success}
       disable_background_tasks_for_current_session() -> {success}  — Resolve 21+
+      list_user_preferences_presets() -> {presets}  — Resolve 21.0.4+
+      save_user_preferences_preset(name) -> {success}  — Resolve 21.0.4+
+      load_user_preferences_preset(name) -> {success}  — Resolve 21.0.4+.
+        SESSION-WIDE: swaps the user's global Resolve preferences, not a
+        project setting. Only call when the user asked for the switch.
+      delete_user_preferences_preset(name) -> {success}  — Resolve 21.0.4+
+      import_user_preferences_preset(path, name?) -> {success}  — Resolve 21.0.4+.
+        The imported preset is NOT auto-loaded; follow with
+        load_user_preferences_preset to activate it.
+      export_user_preferences_preset(name, path) -> {success}  — Resolve 21.0.4+
       open_control_panel(port?, host?, open_browser?) -> {success, url, pid, port, status}
         — Launches the analysis control panel (src/analysis_dashboard.py) as a background process.
           Idempotent: returns the existing URL if already running.
@@ -13816,7 +13826,56 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             return missing
         r.DisableBackgroundTasksForCurrentResolveSession()
         return _ok()
-    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    elif action == "list_user_preferences_presets":
+        missing = _requires_method(r, "GetUserPreferencesPresetList", "21.0.4")
+        if missing:
+            return missing
+        return {"presets": _ser(r.GetUserPreferencesPresetList() or [])}
+    elif action == "save_user_preferences_preset":
+        missing = _requires_method(r, "SaveUserPreferencesPreset", "21.0.4")
+        if missing:
+            return missing
+        if not p.get("name"):
+            return _err("save_user_preferences_preset requires name")
+        return {"success": bool(r.SaveUserPreferencesPreset(p["name"]))}
+    elif action == "load_user_preferences_preset":
+        missing = _requires_method(r, "LoadUserPreferencesPreset", "21.0.4")
+        if missing:
+            return missing
+        if not p.get("name"):
+            return _err("load_user_preferences_preset requires name")
+        return {"success": bool(r.LoadUserPreferencesPreset(p["name"]))}
+    elif action == "delete_user_preferences_preset":
+        missing = _requires_method(r, "DeleteUserPreferencesPreset", "21.0.4")
+        if missing:
+            return missing
+        if not p.get("name"):
+            return _err("delete_user_preferences_preset requires name")
+        return {"success": bool(r.DeleteUserPreferencesPreset(p["name"]))}
+    elif action == "import_user_preferences_preset":
+        missing = _requires_method(r, "ImportUserPreferencesPreset", "21.0.4")
+        if missing:
+            return missing
+        if not p.get("path"):
+            return _err("import_user_preferences_preset requires path")
+        if p.get("name"):
+            ok = bool(r.ImportUserPreferencesPreset(p["path"], p["name"]))
+        else:
+            ok = bool(r.ImportUserPreferencesPreset(p["path"]))
+        return {"success": ok,
+                "note": "The imported preset is not auto-loaded; use load_user_preferences_preset to activate it."}
+    elif action == "export_user_preferences_preset":
+        missing = _requires_method(r, "ExportUserPreferencesPreset", "21.0.4")
+        if missing:
+            return missing
+        err, clean = _validate_params(p, {
+            "name": {"type": str, "required": True, "non_empty": True},
+            "path": {"type": str, "required": True, "non_empty": True},
+        })
+        if err:
+            return _err(err)
+        return {"success": bool(r.ExportUserPreferencesPreset(clean["name"], clean["path"]))}
+    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
@@ -14682,6 +14741,7 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     """Manage DaVinci Resolve UI layout presets.
 
     Actions:
+      list() -> {presets}  — Resolve 21.0.4+; saved layout preset names
       save(name) -> {success}
       load(name) -> {success}
       update(name) -> {success}
@@ -14694,7 +14754,12 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     if r is None:
         return _not_connected_error()
 
-    if action == "save":
+    if action == "list":
+        missing = _requires_method(r, "GetLayoutPresetList", "21.0.4")
+        if missing:
+            return missing
+        return {"presets": _ser(r.GetLayoutPresetList() or [])}
+    elif action == "save":
         if not p.get("name"):
             return _err("save requires name")
         return {"success": bool(r.SaveLayoutPreset(p["name"]))}
@@ -14716,7 +14781,7 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
         return {"success": bool(r.ImportLayoutPreset(p["path"]))}
     elif action == "delete":
         return {"success": bool(r.DeleteLayoutPreset(p["name"]))}
-    return _unknown(action, ["save","load","update","export","import_preset","delete"])
+    return _unknown(action, ["list","save","load","update","export","import_preset","delete"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -14733,6 +14798,10 @@ def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
       export_render(name, path) -> {success}
       import_burnin(path) -> {success}
       export_burnin(name, path) -> {success}
+      list_burnin() -> {presets}  — Resolve 21.0.4+; burn-in preset names usable
+        with the render tool's DataBurnIn setting and load_burnin_preset on
+        project_settings / timeline_item
+      delete_burnin(name) -> {success}  — Resolve 21.0.4+
     """
     p = _params(params)
     r = get_resolve()
@@ -14747,7 +14816,19 @@ def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
         return {"success": bool(r.ImportBurnInPreset(p["path"]))}
     elif action == "export_burnin":
         return {"success": bool(r.ExportBurnInPreset(p["name"], p["path"]))}
-    return _unknown(action, ["import_render","export_render","import_burnin","export_burnin"])
+    elif action == "list_burnin":
+        missing = _requires_method(r, "GetBurnInPresetList", "21.0.4")
+        if missing:
+            return missing
+        return {"presets": _ser(r.GetBurnInPresetList() or [])}
+    elif action == "delete_burnin":
+        missing = _requires_method(r, "DeleteBurnInPreset", "21.0.4")
+        if missing:
+            return missing
+        if not p.get("name"):
+            return _err("delete_burnin requires name")
+        return {"success": bool(r.DeleteBurnInPreset(p["name"]))}
+    return _unknown(action, ["import_render","export_render","import_burnin","export_burnin","list_burnin","delete_burnin"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -14783,6 +14864,7 @@ _PROJECT_MANAGER_METHODS = [
     "CreateFolder",
     "DeleteFolder",
     "GetProjectListInCurrentFolder",
+    "GetProjectAttributesInCurrentFolder",
     "GetFolderListInCurrentFolder",
     "GotoRootFolder",
     "GotoParentFolder",
@@ -14938,6 +15020,7 @@ def _project_capabilities(pm=None, project=None, resolve_obj=None) -> Dict[str, 
         "kernel_actions": list(_PROJECT_KERNEL_ACTIONS),
         "resolve": {
             "layout_presets": {
+                "list": _has_method(resolve_obj, "GetLayoutPresetList") if resolve_obj else True,
                 "save": _has_method(resolve_obj, "SaveLayoutPreset") if resolve_obj else True,
                 "load": _has_method(resolve_obj, "LoadLayoutPreset") if resolve_obj else True,
                 "update": _has_method(resolve_obj, "UpdateLayoutPreset") if resolve_obj else True,
@@ -14950,6 +15033,16 @@ def _project_capabilities(pm=None, project=None, resolve_obj=None) -> Dict[str, 
                 "export_render": _has_method(resolve_obj, "ExportRenderPreset") if resolve_obj else True,
                 "import_burnin": _has_method(resolve_obj, "ImportBurnInPreset") if resolve_obj else True,
                 "export_burnin": _has_method(resolve_obj, "ExportBurnInPreset") if resolve_obj else True,
+                "list_burnin": _has_method(resolve_obj, "GetBurnInPresetList") if resolve_obj else True,
+                "delete_burnin": _has_method(resolve_obj, "DeleteBurnInPreset") if resolve_obj else True,
+            },
+            "user_preferences_presets": {
+                "list": _has_method(resolve_obj, "GetUserPreferencesPresetList") if resolve_obj else True,
+                "save": _has_method(resolve_obj, "SaveUserPreferencesPreset") if resolve_obj else True,
+                "load": _has_method(resolve_obj, "LoadUserPreferencesPreset") if resolve_obj else True,
+                "delete": _has_method(resolve_obj, "DeleteUserPreferencesPreset") if resolve_obj else True,
+                "import": _has_method(resolve_obj, "ImportUserPreferencesPreset") if resolve_obj else True,
+                "export": _has_method(resolve_obj, "ExportUserPreferencesPreset") if resolve_obj else True,
             },
         },
     }
@@ -15248,6 +15341,7 @@ def _preset_lifecycle_probe(resolve_obj, project, p: Dict[str, Any]) -> Dict[str
         "quick_export_presets": {"available": _has_method(project, "GetQuickExportRenderPresets")},
         "fairlight_presets": {"available": _has_method(resolve_obj, "GetFairlightPresets")},
         "layout_presets": {
+            "list": _has_method(resolve_obj, "GetLayoutPresetList"),
             "save": _has_method(resolve_obj, "SaveLayoutPreset"),
             "load": _has_method(resolve_obj, "LoadLayoutPreset"),
             "update": _has_method(resolve_obj, "UpdateLayoutPreset"),
@@ -15260,6 +15354,16 @@ def _preset_lifecycle_probe(resolve_obj, project, p: Dict[str, Any]) -> Dict[str
             "export_render": _has_method(resolve_obj, "ExportRenderPreset"),
             "import_burnin": _has_method(resolve_obj, "ImportBurnInPreset"),
             "export_burnin": _has_method(resolve_obj, "ExportBurnInPreset"),
+            "list_burnin": _has_method(resolve_obj, "GetBurnInPresetList"),
+            "delete_burnin": _has_method(resolve_obj, "DeleteBurnInPreset"),
+        },
+        "user_preferences_presets": {
+            "list": _has_method(resolve_obj, "GetUserPreferencesPresetList"),
+            "save": _has_method(resolve_obj, "SaveUserPreferencesPreset"),
+            "load": _has_method(resolve_obj, "LoadUserPreferencesPreset"),
+            "delete": _has_method(resolve_obj, "DeleteUserPreferencesPreset"),
+            "import": _has_method(resolve_obj, "ImportUserPreferencesPreset"),
+            "export": _has_method(resolve_obj, "ExportUserPreferencesPreset"),
         },
     }
     try:
@@ -15641,6 +15745,9 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 
     Actions:
       list() -> {projects}
+      list_attributes() -> {projects: {name: {lastModifiedDate, creationDate, notes, liveCollaborationMode}}}
+        — Resolve 21.0.4+. Per-project attributes for the current folder without
+          loading any project.
       get_current() -> {name, id}
       create(name, media_location_path?) -> {success, name}
       load(name) -> {success}
@@ -15722,6 +15829,11 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return _project_boundary_report(r, pm, proj, p)
     elif action == "list":
         return {"projects": pm.GetProjectListInCurrentFolder()}
+    elif action == "list_attributes":
+        missing = _requires_method(pm, "GetProjectAttributesInCurrentFolder", "21.0.4")
+        if missing:
+            return missing
+        return {"projects": _ser(pm.GetProjectAttributesInCurrentFolder() or {})}
     elif action == "get_current":
         proj = pm.GetCurrentProject()
         return {"name": proj.GetName(), "id": proj.GetUniqueId()} if proj else _err("No project open")
@@ -15776,7 +15888,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if not p.get("path"):
             return _err("restore requires path")
         return {"success": bool(pm.RestoreProject(p["path"], p.get("name")))}
-    return _unknown(action, ["list","get_current","create","load","save","close","delete","import_project","export_project","archive","restore","lint","diff_to_spec","plan_spec","apply_spec", *_PROJECT_KERNEL_ACTIONS])
+    return _unknown(action, ["list","list_attributes","get_current","create","load","save","close","delete","import_project","export_project","archive","restore","lint","diff_to_spec","plan_spec","apply_spec", *_PROJECT_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
