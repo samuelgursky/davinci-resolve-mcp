@@ -498,11 +498,21 @@ Key actions:
 - `get_keyframe_mode` / `set_keyframe_mode(mode)`
 - `get_fairlight_presets` — Resolve 20.2.2+; returns available Fairlight
   preset names
+- `list/save/load/delete/import/export_user_preferences_preset` — Resolve
+  21.0.4+; user-preferences presets. `load_...` is SESSION-WIDE: it swaps the
+  user's global Resolve preferences, so only call it when the user asked for
+  the switch. `import_...` does not activate the imported preset — follow with
+  `load_user_preferences_preset`
 - `quit` — terminates Resolve (destructive; confirm with user first)
 
 **`layout_presets`** — Save, load, export, import, delete UI layout presets.
+`list` (Resolve 21.0.4+) enumerates the saved preset names the other actions
+take.
 
 **`render_presets`** — Import and export render and burn-in presets.
+`list_burnin` / `delete_burnin` (Resolve 21.0.4+) enumerate and remove burn-in
+presets — `list_burnin` is the only way to discover the names the `DataBurnIn`
+render setting and the `load_burnin_preset` actions expect.
 
 ---
 
@@ -510,10 +520,15 @@ Key actions:
 
 **`project_manager`** — CRUD on projects.
 
-Key actions: `list`, `get_current`, `create(name, media_location_path?)`,
+Key actions: `list`, `list_attributes`, `get_current`,
+`create(name, media_location_path?)`,
 `load(name)`, `save`, `close`,
 `delete(name)`, `import_project(path)`, `export_project(name, path)`, `archive`,
 `restore`
+
+`list_attributes` (Resolve 21.0.4+) returns `lastModifiedDate`, `creationDate`,
+`notes`, and `liveCollaborationMode` per project in the current folder without
+loading any of them.
 
 Project / Database / Archive kernel actions (v2.15.0+) add guarded project
 lifecycle, settings, database, preset, and archive boundary helpers:
