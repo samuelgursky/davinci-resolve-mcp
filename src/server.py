@@ -8,7 +8,7 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 341-tool granular server instead
+    python src/server.py --full       # Start the 353-tool granular server instead
 """
 
 VERSION = "2.87.2"
@@ -27796,9 +27796,9 @@ if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 
-    # Support --full flag to run the 341-tool granular server instead
+    # Support --full flag to run the 353-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 341-tool granular server...")
+        logger.info("Starting full 353-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 

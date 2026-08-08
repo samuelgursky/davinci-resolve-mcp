@@ -5,7 +5,7 @@ English | [简体中文](README.zh-CN.md)
 [![Version](https://img.shields.io/badge/version-2.87.2-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
-[![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#server-modes)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(353%20full)-blue.svg)](#server-modes)
 [![Advanced](https://img.shields.io/badge/Advanced%20(offline)-18%20tools-blueviolet.svg)](#server-modes)
 [![Tested](https://img.shields.io/badge/Live%20Tested-93.6%25-green.svg)](docs/reference/api-coverage.md#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
@@ -100,7 +100,7 @@ The command starts a localhost server and opens the control panel in your browse
 | Mode | Entry point | Tools | Best for |
 |------|-------------|-------|----------|
 | Compound | `src/server.py` | 34 | Default mode for most assistants. Related Resolve operations are grouped behind action parameters to keep context usage low. |
-| Full / granular | `src/server.py --full` or `src/resolve_mcp_server.py` | 341 | Power users who want one MCP tool per Resolve API method. |
+| Full / granular | `src/server.py --full` or `src/resolve_mcp_server.py` | 353 | Power users who want one MCP tool per Resolve API method. |
 
 The compound server is recommended unless you specifically need the granular one-tool-per-method surface.
 
@@ -262,7 +262,7 @@ The default server is a local stdio process launched by your MCP client; it does
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **34** compound / **341** granular (live server) |
+| MCP Tools | **34** compound / **353** granular (live server) |
 | Advanced (offline) tools | **18** — .drp/.drt/.drx + DB authoring, no Resolve running |
 | Kernel Actions | **136** guarded workflow actions across 9 compound tools |
 | API Methods Covered | **361/361** (100%) |

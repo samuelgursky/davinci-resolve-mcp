@@ -5,7 +5,7 @@
 [![Version](https://img.shields.io/badge/version-2.87.2-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
-[![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#服务器模式)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(353%20full)-blue.svg)](#服务器模式)
 [![Advanced](https://img.shields.io/badge/Advanced%20(offline)-18%20tools-blueviolet.svg)](#服务器模式)
 [![Tested](https://img.shields.io/badge/Live%20Tested-93.6%25-green.svg)](docs/reference/api-coverage.md#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
@@ -76,7 +76,7 @@ venv/bin/python -m src.control_panel
 | 模式 | 入口 | 工具数 | 适合谁 |
 |------|------|--------|--------|
 | Compound（复合） | `src/server.py` | 34 | 大多数助手的默认模式。相关的 Resolve 操作按 action 参数分组，压低上下文占用。 |
-| Full / granular（细粒度） | `src/server.py --full` 或 `src/resolve_mcp_server.py` | 341 | 想要"一个 Resolve API 方法 = 一个 MCP 工具"的重度用户。 |
+| Full / granular（细粒度） | `src/server.py --full` 或 `src/resolve_mcp_server.py` | 353 | 想要"一个 Resolve API 方法 = 一个 MCP 工具"的重度用户。 |
 
 除非你明确需要一方法一工具的细粒度界面，否则推荐复合模式。
 
@@ -190,7 +190,7 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 
 | 指标 | 数值 |
 |------|------|
-| MCP 工具 | **34** 复合 / **341** 细粒度（实时服务器） |
+| MCP 工具 | **34** 复合 / **353** 细粒度（实时服务器） |
 | Advanced（离线）工具 | **18**——.drp/.drt/.drx + 数据库创作，无需 Resolve 运行 |
 | 内核 action | 9 个复合工具下 **136** 个带护栏的工作流 action |
 | API 方法覆盖 | **361/361**（100%） |

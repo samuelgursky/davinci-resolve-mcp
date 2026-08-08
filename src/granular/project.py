@@ -1667,3 +1667,21 @@ def generate_speech(text_input: str, voice_model: str = "", timecode: str = "",
     if not new_item:
         return {"success": False, "error": "GenerateSpeech returned no media item"}
     return {"success": True, "new": new_item.GetName(), "new_id": new_item.GetUniqueId()}
+
+
+@mcp.tool()
+def get_project_attributes_in_current_folder() -> Dict[str, Any]:
+    """Get per-project attributes for every project in the current folder (Resolve 21.0.4+).
+
+    Calls ProjectManager.GetProjectAttributesInCurrentFolder(). Returns a dict
+    keyed by project name with 'lastModifiedDate', 'creationDate', 'notes' and
+    'liveCollaborationMode' — without loading any project.
+    """
+    project_manager = get_project_manager()
+    if not project_manager:
+        return {"error": "Failed to get Project Manager"}
+    missing = _requires_method(project_manager, "GetProjectAttributesInCurrentFolder", "21.0.4")
+    if missing:
+        return missing
+    attributes = project_manager.GetProjectAttributesInCurrentFolder()
+    return {"projects": attributes if attributes else {}}
