@@ -1087,3 +1087,33 @@ def set_timeline_setting(setting_name: str, setting_value: str) -> Dict[str, Any
         return err
     result = tl.SetSetting(setting_name, setting_value)
     return {"success": bool(result), "setting_name": setting_name, "setting_value": setting_value}
+
+
+@mcp.tool()
+def get_selected_timeline_items() -> Dict[str, Any]:
+    """Get the timeline items currently selected in the timeline (Resolve 21.0.4+).
+
+    Calls Timeline.GetSelectedClips() on the current timeline. An empty list
+    means nothing is selected — that is an answer, not a failure. (Distinct
+    from get_selected_clips, which reads the Media Pool selection.)
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    missing = _requires_method(tl, "GetSelectedClips", "21.0.4")
+    if missing:
+        return missing
+    items = tl.GetSelectedClips() or []
+    summaries = []
+    for item in items:
+        entry = {}
+        for getter, key in (("GetName", "name"), ("GetUniqueId", "unique_id"),
+                            ("GetStart", "start"), ("GetEnd", "end")):
+            method = getattr(item, getter, None)
+            if callable(method):
+                try:
+                    entry[key] = method()
+                except Exception:
+                    pass
+        summaries.append(entry)
+    return {"count": len(summaries), "items": summaries}

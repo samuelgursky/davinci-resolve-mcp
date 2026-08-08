@@ -1018,3 +1018,41 @@ def remove_clip_motion_blur(clip_id: str, deblur_option: Optional[Dict[str, Any]
     if not new_clip:
         return {"success": False}
     return {"success": True, "new": new_clip.GetName(), "new_id": new_clip.GetUniqueId()}
+
+
+@mcp.tool()
+def get_clip_timeline(clip_id: str) -> Dict[str, Any]:
+    """Resolve a Media Pool timeline entry to its timeline summary (Resolve 21.0.4+).
+
+    Calls MediaPoolItem.GetTimeline(). Returns is_timeline=false for ordinary
+    clips — that is an answer, not a failure.
+
+    Args:
+        clip_id: Unique ID of the Media Pool item.
+    """
+    _, mp, err = _get_mp()
+    if err:
+        return err
+    clip = _find_clip_by_id(mp.GetRootFolder(), clip_id)
+    if not clip:
+        return {"error": f"Clip {clip_id} not found"}
+    missing = _requires_method(clip, "GetTimeline", "21.0.4")
+    if missing:
+        return missing
+    try:
+        tl_obj = clip.GetTimeline()
+    except Exception as exc:
+        return {"error": f"GetTimeline failed: {exc}"}
+    if not tl_obj:
+        return {"is_timeline": False, "timeline": None,
+                "note": "This media pool item is not a timeline entry."}
+    summary = {}
+    for getter, key in (("GetName", "name"), ("GetUniqueId", "unique_id"),
+                        ("GetStartFrame", "start_frame"), ("GetEndFrame", "end_frame")):
+        method = getattr(tl_obj, getter, None)
+        if callable(method):
+            try:
+                summary[key] = method()
+            except Exception:
+                pass
+    return {"is_timeline": True, "timeline": summary}
