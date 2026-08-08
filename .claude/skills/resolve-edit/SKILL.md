@@ -46,6 +46,27 @@ re-derive it here.
   'RetimeSpeed'|'ClipSpeed')` returns `False` and the matching `GetProperty`
   returns `None` on every build measured. Say so and route the user to the UI;
   do not offer `set_retime` as if it answered the question (issue #132).
+- **Routing to the UI is where issue #132 actually went wrong — and it was not
+  a tool lie.** Having been told to hand off, the assistant improvised the
+  handoff: it sent the user hunting for a dropdown "in the lower left of the
+  clip" and never mentioned the keyframe tray. That direction came from nowhere
+  in this repo. **This repo verifies API behavior, not UI geography, and has no
+  mechanism to version-guard a UI claim** — Resolve's controls move between
+  builds, pages and layouts, and every ledger entry here is stamped with the
+  build it was measured on precisely because unstamped claims rot. So:
+  **never improvise UI geography.** Say *what* the user needs to do ("set the
+  clip's speed / build the speed ramp in Resolve's own retime controls") and say
+  plainly that you cannot see their screen. Do **not** invent where a control
+  sits, what it looks like, which corner of a clip to click, or a menu path or
+  keyboard shortcut recalled from general knowledge — an invented location costs
+  the user more than "I don't know where it is on your build" ever does, and it
+  reads as authoritative because everything else you told them was measured.
+  **The line is improvised vs. written down here.** A UI pointer that already
+  exists in these skills (e.g. the playback-frame-rate path in
+  `resolve-rough-cut`) was authored and reviewed deliberately — use it verbatim.
+  If no pointer exists, that is not an invitation to supply one: name the
+  operation and point at Blackmagic's manual for their build. The same rule
+  covers every other "do it in the UI" handoff in these skills.
 - `edit_engine` drives higher-level selects/tighten/swap flows
   (plan → confirm → execute); tighten variants can carry audio via `keep_ranges`
   mirror / `include_audio`. For a full dead-air pass over **one long single-take

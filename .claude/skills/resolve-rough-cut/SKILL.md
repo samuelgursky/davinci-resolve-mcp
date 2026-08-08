@@ -40,6 +40,12 @@ Render an mp4 only to preview the cut, and say that is what it is.
 
    > Project Settings (gear, bottom-right) → Master Settings → Playback frame rate
 
+   Quote that path as written and **do not extend it from memory** — if the user
+   cannot find it on their build, say you cannot see their screen and point at
+   Blackmagic's manual rather than guessing a second location. Improvised UI
+   directions are what issue #132 cost a user; see the retime entry in
+   `resolve-edit` for the rule.
+
    Do not defer this to the end or write it off as cosmetic; a mismatch has been
    reported to affect playback and output, not just the display. On an existing
    project, read both back and only raise it if they are wrong.
