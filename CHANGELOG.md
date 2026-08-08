@@ -2,6 +2,37 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.87.1
+
+Follow-up evidence from @legionsound on PR #139, plus the process fix for the
+tooling failure that PR exposed.
+
+### Changed
+
+- **`import_user_preferences_preset` now says what the preset ended up called.**
+  The no-name path was the one branch in v2.87.0 with nothing behind it — it
+  calls the single-argument binding, which would have been a `TypeError` rather
+  than a graceful failure if the binding wanted two positionals. Round-tripped
+  on Studio 21.0.4.5 (export → delete → import both ways): the single-arg form
+  returns `True`, and the imported preset is **named after the file**. The
+  answer now carries that, so a caller who passed no name knows to read the
+  name back with `list_user_preferences_presets` instead of guessing.
+
+### Documentation
+
+- **`api-coverage.md`: the import/export rows carry the round-trip**, not
+  `dir()` membership. Still 🔬 and still 23 untested of 361 — the counting
+  convention is unchanged, because none of this was executed here. What changed
+  is the strength of the contributor's evidence behind two of the rows.
+- **`AGENTS.md` now states how the API snapshot must be refreshed:** copy the
+  shipped `Developer/Scripting/README.txt` over it wholesale, never hand-add the
+  lines you already know about. A hand-patch carries a newer `Last Updated:`
+  header while hiding everything you did not know to look for — which is
+  precisely how the file sat eight weeks stale at 26 May 2026 while ten
+  documented 21.0.4 methods went unwired. The v2.87.0 snapshot was verified as a
+  wholesale replace (md5 `d732b3f6c1da08dc516bc8f80c5acd92`, byte-identical to
+  the 21.0.4.5 shipped file per the contributor).
+
 ## What's New in v2.87.0
 
 The ten Resolve 21.0.4 scripting surfaces that the 24 Jul 2026 README refresh
