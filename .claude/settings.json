@@ -19,7 +19,9 @@
       "Bash(git mv *)",
       "Bash(echo \"findings file archived, exit $?\")",
       "Bash(git add *)",
-      "Bash(mdfind -onlyin /Volumes/BACKUP \"057_REUNIFICATION_FULL_VER2\")"
+      "Bash(mdfind -onlyin /Volumes/BACKUP \"057_REUNIFICATION_FULL_VER2\")",
+      "Bash(python3 dashscrub.py)",
+      "Bash(python3 verify.py)"
     ]
   },
   "model": "opus[1m]"
