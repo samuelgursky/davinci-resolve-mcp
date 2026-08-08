@@ -1,4 +1,4 @@
-Last Updated: 26 May 2026
+Last Updated: 24 Jul 2026
 -------------------------
 In this package, you will find a brief introduction to the Scripting API for DaVinci Resolve Studio. Apart from this README.txt file, this package contains folders containing the basic import
 modules for scripting access (DaVinciResolve.py) and some representative examples.
@@ -91,6 +91,7 @@ Resolve
   GetProductName()                                --> string             # Returns product name.
   GetVersion()                                    --> [version fields]   # Returns list of product version fields in [major, minor, patch, build, suffix] format.
   GetVersionString()                              --> string             # Returns product version in "major.minor.patch[suffix].build" format.
+  GetLayoutPresetList()                           --> [presetNames...]   # Returns list of layout preset names.
   LoadLayoutPreset(presetName)                    --> Bool               # Loads UI layout from saved preset named 'presetName'.
   UpdateLayoutPreset(presetName)                  --> Bool               # Overwrites preset named 'presetName' with current UI layout.
   ExportLayoutPreset(presetName, presetFilePath)  --> Bool               # Exports preset named 'presetName' to path 'presetFilePath'.
@@ -100,8 +101,16 @@ Resolve
   Quit()                                          --> None               # Quits the Resolve App.
   ImportRenderPreset(presetPath)                  --> Bool               # Import a preset from presetPath (string) and set it as current preset for rendering.
   ExportRenderPreset(presetName, exportPath)      --> Bool               # Export a preset to a given path (string) if presetName(string) exists.
+  GetBurnInPresetList()                           --> [presetName...]    # Returns a list of data burn in preset names.
+  DeleteBurnInPreset(presetName)                  --> Bool               # Deletes the data burn in preset.
   ImportBurnInPreset(presetPath)                  --> Bool               # Import a data burn in preset from a given presetPath (string)
   ExportBurnInPreset(presetName, exportPath)      --> Bool               # Export a data burn in preset to a given path (string) if presetName (string) exists.
+  GetUserPreferencesPresetList()                  --> [presetNames...]   # Returns a list of user preferences preset names.
+  LoadUserPreferencesPreset(presetName)           --> Bool               # Loads the user preferences preset named 'presetName'.
+  SaveUserPreferencesPreset(presetName)           --> Bool               # Saves the current user preferences as a new preset named 'presetName'.
+  DeleteUserPreferencesPreset(presetName)         --> Bool               # Deletes the user preferences preset named 'presetName'.
+  ImportUserPreferencesPreset(presetFilePath, presetName) --> Bool       # Imports user preferences preset from presetFilePath. Optional presetName argument to name the imported preset. The imported preset is not automatically loaded, use LoadUserPreferencesPreset(..) to load it.
+  ExportUserPreferencesPreset(presetName, exportPath) --> Bool           # Exports the user preferences preset to exportPath.
   GetKeyframeMode()                               --> keyframeMode       # Returns the currently set keyframe mode (int). Refer to section 'Keyframe Mode information' below for details.
   SetKeyframeMode(keyframeMode)                   --> Bool               # Returns True when 'keyframeMode'(enum) is successfully set. Refer to section 'Keyframe Mode information' below for details.
   GetFairlightPresets()                           --> [presetNames...].  # Returns a list of Fairlight presets by name
@@ -122,6 +131,8 @@ ProjectManager
   CreateFolder(folderName)                        --> Bool               # Creates a folder if folderName (string) is unique.
   DeleteFolder(folderName)                        --> Bool               # Deletes the specified folder if it exists. Returns True in case of success.
   GetProjectListInCurrentFolder()                 --> [project names...] # Returns a list of project names in current folder.
+  GetProjectAttributesInCurrentFolder()           --> {project name: {attributes}, ...} # Returns a dictionary of project names in the current folder to project attributes.
+                                                                         # Attributes include "lastModifiedDate", "creationDate", "notes", and "liveCollaborationMode".
   GetFolderListInCurrentFolder()                  --> [folder names...]  # Returns a list of folder names in current folder.
   GotoRootFolder()                                --> Bool               # Opens root folder in database.
   GotoParentFolder()                              --> Bool               # Opens parent folder of current folder in database if current folder has parent.
@@ -295,6 +306,7 @@ MediaPoolItem
                                                                          # If no argument is specified, a dict of all set metadata properties is returned.
   SetMetadata(metadataType, metadataValue)        --> Bool               # Sets the given metadata to metadataValue (string). Returns True if successful.
   SetMetadata({metadata})                         --> Bool               # Sets the item metadata with specified 'metadata' dict. Returns True if successful.
+  GetTimeline()                                   --> TimelineItem       # Returns the timeline object if the mpItem is a timeline clip, or None if not.
   GetThirdPartyMetadata(metadataType=None)        --> string|dict        # Returns the third party metadata value for the key 'metadataType'.
                                                                          # If no argument is specified, a dict of all set third party metadata properties is returned.
   SetThirdPartyMetadata(metadataType, metadataValue) --> Bool            # Sets/Add the given third party metadata to metadataValue (string). Returns True if successful.
@@ -385,6 +397,7 @@ Timeline
   DeleteClips([timelineItems], Bool)              --> Bool               # Deletes specified TimelineItems from the timeline, performing ripple delete if the second argument is True. Second argument is optional (The default for this is False)
   SetClipsLinked([timelineItems], Bool)           --> Bool               # Links or unlinks the specified TimelineItems depending on second argument.
   GetItemListInTrack(trackType, index)            --> [items...]         # Returns a list of timeline items on that track (based on trackType and index). 1 <= index <= GetTrackCount(trackType).
+  GetSelectedClips()                              --> [items...]         # Returns the currently selected timeline items.
   AddMarker(frameId, color, name, note, duration, --> Bool               # Creates a new marker at given frameId position and with given marker information. 'customData' is optional and helps to attach user specific data to the marker.
             customData)
   GetMarkers()                                    --> {markers...}       # Returns a dict (frameId -> {information}) of all markers and dicts with their information.
@@ -693,6 +706,10 @@ Affects:
 Affects:
 • x = Project:GetSetting('timelineFrameRate') and Project:SetSetting('timelineFrameRate', x)
 
+"timelineSampleRate" - the property value is one of the sample rates available to the user in project settings under "Audio sample rate" option in the Fairlight tab.
+Affects:
+• x = Project:GetSetting('timelineSampleRate') and Project:SetSetting('timelineSampleRate', x)
+
 The following Clip properties have specifically enumerated values:
 "Super Scale" - the property value is an enumerated integer between 1 and 4 with these meanings: 1=no scaling, and 2, 3 and 4 represent the Super Scale multipliers 2x, 3x and 4x.
                 for super scale multiplier '2x Enhanced', exactly 4 arguments must be passed as outlined below. If less than 4 arguments are passed, it will default to 2x.
@@ -844,6 +861,9 @@ The parameter setting is a dictionary containing the following keys:
     - "ReplaceExistingFilesInPlace": Bool
     - "ExportSubtitle": Bool
     - "SubtitleFormat": string (options: "BurnIn", "EmbeddedCaptions", "SeparateFile")
+    - "UseFullExtents": Bool
+    - "AddFrameHandles": int (>= 0). Ignored if use full extents is enabled.
+    - "DataBurnIn": string. (example: "Same as project", "None")
 
 Looking up timeline export properties
 -------------------------------------
