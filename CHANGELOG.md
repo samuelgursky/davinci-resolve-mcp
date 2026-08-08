@@ -2,6 +2,56 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.88.0
+
+The twelve Resolve 21.0.4 surfaces that only existed on the compound server now
+exist on the granular one too. Issue #140, PR #142 by @legionsound.
+
+### Added
+
+- **Twelve granular tools closing the 21.0.4 delta.** `get_layout_preset_list`,
+  `get_burn_in_preset_list` and `delete_burn_in_preset`; the six
+  `*_user_preferences_preset` tools; `get_project_attributes_in_current_folder`;
+  `get_clip_timeline`; and `get_selected_timeline_items`. Each is guarded with
+  `_requires_method` at 21.0.4, so an older build gets a named version error
+  rather than an attribute crash, and each returns the same shape its compound
+  counterpart does. `get_selected_timeline_items` is deliberately not called
+  `get_selected_clips` — that name belongs to the Media Pool selection tool, and
+  the collision was the confusion the issue reported. The granular server is now
+  353 tools.
+- **`load_user_preferences_preset` carries the SESSION-WIDE warning** in its
+  docstring, matching the compound action. It swaps the user's global Resolve
+  preferences, not a project setting.
+
+### Fixed
+
+- **Four places still said 341 after the count moved to 353, and the guard that
+  exists to catch exactly that was not looking at any of them.** The literal in
+  `tests/test_import.py` was the one that bit: that file is pytest-style, so
+  `unittest discover` never collects it, and a green 2560-test run said nothing
+  while `python tests/test_import.py` — the smoke step in the publish workflow
+  and step one of the release process — failed. The other three were the startup
+  log line in `src/resolve_mcp_server.py`, `docs/install.md` (which had also been
+  quoting 32 compound tools since the compound server reached 34), and the badge,
+  server-modes table and metrics table in `README.zh-CN.md`. All six files are in
+  `test_doc_tool_counts` now, along with the English README's Tools badge, so the
+  next count change fails offline instead of at publish time.
+
+### Validation
+
+- 2560 offline tests OK; `python tests/test_import.py` exits 0; agent-rules
+  drift check in sync.
+- The twelve 21.0.4 methods were exercised live on Studio 21.0.4.5 by the
+  contributor — full round-trips for the layout, burn-in and user-preferences
+  preset families, project attributes across 8 projects, and both branches of
+  `get_clip_timeline`. `LoadUserPreferencesPreset` was deliberately not executed,
+  by them or here. The validation machine for this repo runs 19.1.3, so the live
+  results stay attributed to the reporter in `docs/reference/api-coverage.md`.
+- What could be checked live here was: against a running Studio 19.1.3.7, the
+  new tools return their named `requires DaVinci Resolve 21.0.4+` error rather
+  than crashing on a missing attribute — the guard path exercised against a real
+  Resolve object, not a stub.
+
 ## What's New in v2.87.2
 
 A refused `SetSetting` now says why, when the ledger already knows. Issue #141,
