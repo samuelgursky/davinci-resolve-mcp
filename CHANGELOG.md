@@ -2,7 +2,7 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
-## What's New in v2.86.2
+## What's New in v2.86.3
 
 A Simplified Chinese phrasing fix from the reviewer who asked for it when #122
 merged. No behavior changed.
