@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 27 missing capabilities, 30 bugs / unreliable behaviors.
+**Totals:** 27 missing capabilities, 32 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -381,6 +381,21 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Reads back one frame off on some items. Measured while verifying a constructed timeline against the clipInfos it was built from: for 4/4 items GetLeftOffset returned exactly the startFrame that was sent, while GetSourceStartFrame disagreed by 1 on some of the same items. The two are supposed to describe the same edit point, so a conform that verifies placement with GetSourceStartFrame reports phantom off-by-one drift on correctly placed clips — and would hide a real one-frame error just as easily.
 - **Workaround / current handling:** Verify source-side placement with GetLeftOffset, which is exact. Treat GetSourceStartFrame as approximate, and never diff it against a sent startFrame to decide whether a clip landed right. Scope: placement at 100% speed. On a retimed clip the two read DIFFERENT domains — GetLeftOffset is warped (position / speed), GetSourceStartFrame is true source — see the retime entry's witness calibration before comparing them.
 - **Tags:** off-by-one, unreliable-return, timeline, conform, verify
+
+### Studio-gated calls on the free edition raise a modal that blocks LATER calls
+
+- **Object:** `Resolve (all objects)`
+- **Behavior:** Calling a Studio-only function from the free edition returns False, which the reference documents. What it does NOT document: Resolve also raises a modal upsell dialog ('You have reached a limitation with DaVinci Resolve'), and while that dialog is up, UNRELATED subsequent API calls fail too. Confirmed live on free 21.0.3.7 over the in-app bridge (2026-08-06): Timeline.CreateSubtitlesFromAudio and MediaPoolItem.TranscribeAudio each returned False and raised the dialog; Project.SaveProject then returned False on every attempt until a human clicked 'Not Yet', after which it succeeded. Nothing in any return value, and no error, names the dialog — an automated caller sees only a cascade of unexplained False returns and will misattribute them to whatever it called next.
+- **Workaround / current handling:** Detect the edition BEFORE calling Studio-gated features rather than discovering the gate by tripping it: the product name is 'DaVinci Resolve' on free and 'DaVinci Resolve Studio' on Studio (resolve_control get_version reports it). If a Studio-only call has already returned False on a free build, treat every following failure as suspect: re-run a known-good read, and if that fails too, a modal is blocking and only a human can dismiss it — no API closes it. Known Studio-gated so far: subtitle generation from audio, and audio transcription.
+- **Tags:** free-edition, studio-only, silent-failure, modal, ai, subtitle, transcription
+
+### SetRenderSettings ExportSubtitle / SubtitleFormat had no observable effect
+
+- **Object:** `Project (render settings)`
+- **Behavior:** Queuing a render with {'ExportSubtitle': True, 'SubtitleFormat': 'BurnIn'} returned success from SetRenderSettings and rendered without error, but the output contained NO subtitles in any form: no burned-in pixels (every frame of the region carrying 7 subtitle items was fully black and byte-identical), no embedded subtitle stream (ffprobe saw only video/audio/data), and no sidecar file. Observed on Studio 19.1.3.7, 2026-08-06, on a timeline whose subtitle track held 7 generated caption items. NOT YET DISTINGUISHED: whether Resolve ignores these keys, or whether burn-in has an unmet precondition (a Deliver-page toggle, a subtitle track enabled for output, or a format that supports it). Both are consistent with what was seen, so this is recorded as an observation rather than asserted as a Resolve bug. Note the related confirmed trap: SetRenderSettings applies on top of whatever state the Deliver page holds (issue #123), so an inherited preset can override a key that was passed.
+- **Workaround / current handling:** Do not trust a render's subtitle settings from the settings_success boolean. VERIFY the artifact: ffprobe the output for a subtitle stream, check for a sidecar file, or sample frames for burned-in pixels. If subtitles must be burned in, confirm the result before delivering.
+- **Reference:** [issue #123](https://github.com/samuelgursky/davinci-resolve-mcp/issues/123)
+- **Tags:** render, subtitle, silent-failure, unverified-cause, deliver
 
 ### hasattr() / getattr() on Resolve API objects (attribute fabrication)
 

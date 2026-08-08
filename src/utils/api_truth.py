@@ -902,6 +902,68 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "missing",
     },
     {
+        "symbol": "Studio-gated calls on the free edition raise a modal that blocks LATER calls",
+        "object": "Resolve (all objects)",
+        "reality": "Calling a Studio-only function from the free edition returns "
+                   "False, which the reference documents. What it does NOT "
+                   "document: Resolve also raises a modal upsell dialog ('You "
+                   "have reached a limitation with DaVinci Resolve'), and while "
+                   "that dialog is up, UNRELATED subsequent API calls fail too. "
+                   "Confirmed live on free 21.0.3.7 over the in-app bridge "
+                   "(2026-08-06): Timeline.CreateSubtitlesFromAudio and "
+                   "MediaPoolItem.TranscribeAudio each returned False and raised "
+                   "the dialog; Project.SaveProject then returned False on every "
+                   "attempt until a human clicked 'Not Yet', after which it "
+                   "succeeded. Nothing in any return value, and no error, names "
+                   "the dialog — an automated caller sees only a cascade of "
+                   "unexplained False returns and will misattribute them to "
+                   "whatever it called next.",
+        "recommended": "Detect the edition BEFORE calling Studio-gated features "
+                       "rather than discovering the gate by tripping it: the "
+                       "product name is 'DaVinci Resolve' on free and 'DaVinci "
+                       "Resolve Studio' on Studio (resolve_control get_version "
+                       "reports it). If a Studio-only call has already returned "
+                       "False on a free build, treat every following failure as "
+                       "suspect: re-run a known-good read, and if that fails too, "
+                       "a modal is blocking and only a human can dismiss it — no "
+                       "API closes it. Known Studio-gated so far: subtitle "
+                       "generation from audio, and audio transcription.",
+        "tags": ["free-edition", "studio-only", "silent-failure", "modal", "ai",
+                 "subtitle", "transcription"],
+        "submit": "bug",
+    },
+    {
+        "symbol": "SetRenderSettings ExportSubtitle / SubtitleFormat had no observable effect",
+        "object": "Project (render settings)",
+        "reality": "Queuing a render with {'ExportSubtitle': True, "
+                   "'SubtitleFormat': 'BurnIn'} returned success from "
+                   "SetRenderSettings and rendered without error, but the output "
+                   "contained NO subtitles in any form: no burned-in pixels (every "
+                   "frame of the region carrying 7 subtitle items was fully black "
+                   "and byte-identical), no embedded subtitle stream (ffprobe saw "
+                   "only video/audio/data), and no sidecar file. Observed on "
+                   "Studio 19.1.3.7, 2026-08-06, on a timeline whose subtitle "
+                   "track held 7 generated caption items. "
+                   "NOT YET DISTINGUISHED: whether Resolve ignores these keys, or "
+                   "whether burn-in has an unmet precondition (a Deliver-page "
+                   "toggle, a subtitle track enabled for output, or a format that "
+                   "supports it). Both are consistent with what was seen, so this "
+                   "is recorded as an observation rather than asserted as a "
+                   "Resolve bug. Note the related confirmed trap: SetRenderSettings "
+                   "applies on top of whatever state the Deliver page holds "
+                   "(issue #123), so an inherited preset can override a key that "
+                   "was passed.",
+        "recommended": "Do not trust a render's subtitle settings from the "
+                       "settings_success boolean. VERIFY the artifact: ffprobe the "
+                       "output for a subtitle stream, check for a sidecar file, or "
+                       "sample frames for burned-in pixels. If subtitles must be "
+                       "burned in, confirm the result before delivering.",
+        "tags": ["render", "subtitle", "silent-failure", "unverified-cause",
+                 "deliver"],
+        "submit": "bug",
+        "issue": 123,
+    },
+    {
         "symbol": "Proxy / optimized-media generation",
         "object": "MediaPoolItem",
         "reality": "Only LinkProxyMedia, UnlinkProxyMedia and "

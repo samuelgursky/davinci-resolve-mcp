@@ -18,6 +18,31 @@ merged. No behavior changed.
   itself is unchanged: the issue #129 Fedora 43 report still stands behind it.
   Thanks to @chenyuxiaojin (PR #134).
 
+## What's New in v2.86.2
+
+Two free-edition/render limitations found while trying to photograph a styled
+caption, both of the "returns success, does nothing" shape.
+
+### Documented
+
+- **Studio-gated calls on the free edition raise a modal that blocks LATER
+  calls.** The reference documents that a Studio-only function returns `False` on
+  the free edition. It does not mention that Resolve also throws a modal upsell
+  dialog, and that while it is up, *unrelated* API calls fail too. Confirmed on
+  free 21.0.3.7 over the bridge: `CreateSubtitlesFromAudio` and `TranscribeAudio`
+  each returned `False` and raised the dialog, after which `SaveProject` returned
+  `False` on every attempt until a human dismissed it. Nothing in any return
+  value names the dialog, so an automated caller sees a cascade of unexplained
+  failures and blames whatever it called next. Detect the edition first rather
+  than discovering the gate by tripping it.
+
+- **A render with `ExportSubtitle` / `SubtitleFormat: BurnIn` produced no
+  subtitles at all** — no burned-in pixels, no embedded stream, no sidecar —
+  despite `SetRenderSettings` reporting success. Recorded as an observation, not
+  asserted as a Resolve bug: an unmet precondition (a Deliver-page toggle, output
+  enablement) is equally consistent with what was seen. Either way the guidance
+  holds — verify the artifact, never the boolean.
+
 ## What's New in v2.86.1
 
 Corrects `api-coverage.md` where today's live work on the free edition made it
