@@ -157,7 +157,7 @@ checkable rather than asserted.
 | `Resolve.SaveUserPreferencesPreset` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
 | `Resolve.LoadUserPreferencesPreset` | Deliberately not executed even by the reporter: swaps the user's global preferences session-wide | No |
 | `Resolve.DeleteUserPreferencesPreset` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
-| `Resolve.ImportUserPreferencesPreset` | Requires a Resolve 21.0.4 build and a preset file to import | Yes |
+| `Resolve.ImportUserPreferencesPreset` | Requires a Resolve 21.0.4 build; round-tripped by the reporter on 21.0.4.5 in both call shapes (PR #139), not here | Yes |
 | `Resolve.ExportUserPreferencesPreset` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
 | `PM.GetProjectAttributesInCurrentFolder` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
 
@@ -218,8 +218,8 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 28 | `SaveUserPreferencesPreset(presetName)` | 🔬 | Resolve 21.0.4. Not executed here; part of the issue #138 round-trip on 21.0.4.5 |
 | 29 | `LoadUserPreferencesPreset(presetName)` | 🔬 | Resolve 21.0.4. `dir()`-present on 21.0.4.5; **not executed** even by the reporter — swaps the user's global preferences session-wide (issue #138) |
 | 30 | `DeleteUserPreferencesPreset(presetName)` | 🔬 | Resolve 21.0.4. Not executed here; part of the issue #138 round-trip on 21.0.4.5 |
-| 31 | `ImportUserPreferencesPreset(presetFilePath, presetName)` | 🔬 | Resolve 21.0.4. `dir()`-present on 21.0.4.5 only (issue #138) — no preset file was on hand. Per the README the imported preset is **not** auto-loaded |
-| 32 | `ExportUserPreferencesPreset(presetName, exportPath)` | 🔬 | Resolve 21.0.4. `dir()`-present on 21.0.4.5 only (issue #138) |
+| 31 | `ImportUserPreferencesPreset(presetFilePath, presetName)` | 🔬 | Resolve 21.0.4. Not executed here; reporter's export→delete→import round-trip on 21.0.4.5 (PR #139) covers **both** call shapes — single-arg returns `True` rather than a `TypeError`, and the imported preset is then named after the file; the two-arg form takes the given name. Per the README the imported preset is **not** auto-loaded, and the round-trip did not load either import |
+| 32 | `ExportUserPreferencesPreset(presetName, exportPath)` | 🔬 | Resolve 21.0.4. Not executed here; reported writing the file at the given path with no extension appended, on 21.0.4.5 (PR #139) |
 
 ### ProjectManager
 

@@ -13589,7 +13589,10 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       delete_user_preferences_preset(name) -> {success}  — Resolve 21.0.4+
       import_user_preferences_preset(path, name?) -> {success}  — Resolve 21.0.4+.
         The imported preset is NOT auto-loaded; follow with
-        load_user_preferences_preset to activate it.
+        load_user_preferences_preset to activate it. Omitting name is safe
+        (reported on 21.0.4.5: single-arg returns True, not a TypeError) and
+        the preset is then named after the file, so pass name when the preset
+        should be called something the filename does not say.
       export_user_preferences_preset(name, path) -> {success}  — Resolve 21.0.4+
       open_control_panel(port?, host?, open_browser?) -> {success, url, pid, port, status}
         — Launches the analysis control panel (src/analysis_dashboard.py) as a background process.
@@ -13862,8 +13865,11 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             ok = bool(r.ImportUserPreferencesPreset(p["path"], p["name"]))
         else:
             ok = bool(r.ImportUserPreferencesPreset(p["path"]))
-        return {"success": ok,
-                "note": "The imported preset is not auto-loaded; use load_user_preferences_preset to activate it."}
+        note = "The imported preset is not auto-loaded; use load_user_preferences_preset to activate it."
+        if not p.get("name"):
+            note += (" No name was given, so the preset takes its name from the file — "
+                     "list_user_preferences_presets to read it back.")
+        return {"success": ok, "note": note}
     elif action == "export_user_preferences_preset":
         missing = _requires_method(r, "ExportUserPreferencesPreset", "21.0.4")
         if missing:

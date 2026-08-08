@@ -197,6 +197,19 @@ class UserPreferencesPresetTest(_ResolveStubTest):
         self.assertIn(("ImportUserPreferencesPreset", "/tmp/prefs.zip", None),
                       self.resolve.calls)
 
+    def test_import_without_a_name_says_the_file_names_the_preset(self):
+        # Round-tripped on Studio 21.0.4.5 (PR #139): the single-arg form
+        # returns True and the preset comes back named after the file, so a
+        # caller who passed no name is told what to look for.
+        out = compound.resolve_control("import_user_preferences_preset",
+                                       {"path": "/tmp/prefs.zip"})
+        self.assertIn("takes its name from the file", out["note"])
+
+    def test_import_with_a_name_does_not_claim_the_file_named_it(self):
+        out = compound.resolve_control("import_user_preferences_preset",
+                                       {"path": "/tmp/prefs.zip", "name": "Studio"})
+        self.assertNotIn("takes its name from the file", out["note"])
+
     def test_import_notes_that_the_preset_is_not_auto_loaded(self):
         # The README is explicit that import does not activate the preset;
         # the answer carries that forward so a caller doesn't stop early.
