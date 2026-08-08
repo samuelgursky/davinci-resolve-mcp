@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.87.2
+
+A refused `SetSetting` now says why, when the ledger already knows. Issue #141,
+reported by @jus-kim.
+
+### Fixed
+
+- **`project_settings set_setting` returned a bare `{"success": false}` for a
+  key that can never be written.** `Project.SetSetting('timelinePlaybackFrameRate')`
+  refuses every value form, before and after a timeline exists — measured in
+  PR #99, written into `api_truth`, published in `api-limitations.md`, and
+  invisible at the one moment it mattered. A bare `false` reads as *your value
+  was wrong*, which sends a caller into retrying string, int, and float for a
+  key with no writable path at all. A refusal now carries the ledger entry for
+  that key: what is really happening, and the UI step that is the way through.
+  `timeline set_setting` gets the same treatment.
+- The match is deliberately narrow. It requires the exact quoted key on the
+  right object — `Project.SetSetting('x')` will not be handed to a `Timeline`
+  refusal, and a substring like `timeline` will not collect the
+  `timelinePlaybackFrameRate` entry. An unmeasured refusal stays bare, because
+  inventing an explanation for a failure nobody measured is the thing this
+  ledger exists to prevent. The write is always attempted first, so a key that
+  starts working in a later build reports plain success.
+
+### Documentation
+
+- **The `timelinePlaybackFrameRate` ledger entry carries the second report.**
+  Issue #141 confirms it independently on **Resolve 20.2**, against a freshly
+  created project whose timeline rate already read 60 — so a matching
+  `timelineFrameRate` does not unlock the write, which the PR #99 measurement
+  alone left open. The reporter's workaround is now recorded too: for repeat
+  setups, duplicate a project that already carries the wanted playback rate
+  rather than creating one and trying to write it.
+
 ## What's New in v2.87.1
 
 Follow-up evidence from @legionsound on PR #139, plus the process fix for the
