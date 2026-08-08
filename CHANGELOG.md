@@ -2,6 +2,56 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.87.0
+
+The ten Resolve 21.0.4 scripting surfaces that the 24 Jul 2026 README refresh
+documented beyond the three wired in v2.86.0. Contributed by @legionsound
+(PR #139), who reported them as issues #135–#138 from Studio 21.0.4.5.
+
+### Added
+
+- **`layout_presets` gains `list`** (`Resolve.GetLayoutPresetList`). The tool
+  had six actions and every one of them took a preset name the caller had no
+  way to enumerate.
+- **`render_presets` gains `list_burnin` and `delete_burnin`**
+  (`Resolve.GetBurnInPresetList` / `DeleteBurnInPreset`). `list_burnin` is the
+  missing half of the burn-in surface: the `DataBurnIn` render setting and both
+  `load_burnin_preset` actions take a name nothing could list.
+- **`resolve_control` gains the six `*_user_preferences_preset` actions** —
+  `list`, `save`, `load`, `delete`, `import`, `export`. Two caveats are carried
+  in the docstrings and answers rather than left to be discovered:
+  `load_user_preferences_preset` is **session-wide** (it swaps the user's global
+  Resolve preferences, not a project setting), and
+  `import_user_preferences_preset` answers with the README's own caveat that the
+  imported preset is *not* auto-loaded, so a caller follows with `load` instead
+  of stopping early.
+- **`project_manager` gains `list_attributes`**
+  (`ProjectManager.GetProjectAttributesInCurrentFolder`) — `lastModifiedDate`,
+  `creationDate`, `notes`, and `liveCollaborationMode` per project in the
+  current folder, without loading any project.
+
+All ten are `_requires_method`-guarded at 21.0.4, advertised in the capability
+and preset-lifecycle probes, and covered by 21 stub contract cases in
+`tests/test_resolve2104_preset_actions.py` (answers, name-required errors,
+pre-21.0.4 guards, `_unknown` listings, capability advertisement on both a
+21.0.4 and a legacy stub).
+
+### Documentation
+
+- **`docs/reference/resolve_scripting_api.txt` was the 26 May 2026 README** —
+  which is exactly why this delta went unnoticed. It is now the 24 Jul 2026
+  text these wrappers came from.
+- **`api-coverage.md`: 351 → 361 methods**, with the ten new rows marked 🔬 and
+  carrying the contributor's Studio 21.0.4.5 results as a contributor report,
+  not as validation of ours — this machine runs Studio 19.1.3 and free 21.0.3,
+  neither of which is 21.0.4. `LoadUserPreferencesPreset` is recorded as
+  deliberately unexecuted even by the reporter, same class as
+  `DisableBackgroundTasksForCurrentResolveSession`.
+- **The README key stats were stale at 349** since the v2.86.0 surfaces landed;
+  both READMEs and the live-tested badge now read 361 covered / 338 live-tested
+  (93.6%), and the English tested-against row picks up the free 21.0.3 build the
+  coverage doc already listed.
+
 ## What's New in v2.86.4
 
 The issue #132 follow-up, which turned out not to be a tool bug at all. No
