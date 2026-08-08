@@ -2,6 +2,38 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.86.4
+
+The issue #132 follow-up, which turned out not to be a tool bug at all. No
+behavior changed in any tool.
+
+### Fixed
+
+- **The skills told an assistant to "route the user to the UI" and stopped
+  there, so it invented the directions.** In issue #132 a user was sent hunting
+  for a retime dropdown "in the lower left of the clip"; the keyframe tray was
+  never mentioned. That direction exists nowhere in this repo — no skill, doc,
+  or ledger entry describes where any Resolve control sits. The assistant
+  improvised the handoff and delivered it in the same confident register as the
+  API facts around it, which had been measured, so the user had no way to tell
+  the two apart. `resolve-edit` now carries the rule: **never improvise UI
+  geography.** Name the operation, say you cannot see the user's screen, and
+  treat a UI pointer already written into a skill (the playback-frame-rate path
+  in `resolve-rough-cut`) as the only kind to quote — verbatim, never extended
+  from memory. Where no pointer exists, point at Blackmagic's manual for their
+  build rather than supplying one. `resolve-rough-cut` picks up the same guard
+  at its own UI handoff.
+
+  Deliberately **not** fixed by adding the correct location. This repo verifies
+  API behavior and has no mechanism to version-guard a UI claim — every
+  `api_truth` entry is stamped with the build it was measured on because
+  unstamped claims rot, and UI geography moves between builds, pages and
+  layouts with no drift guard that would catch it going stale. The reporter hit
+  this on Resolve 21; the validation machine here is Studio 19.1.3.7, so
+  confirming a location here and publishing it for 21 would be the exact move
+  v2.82.1 exists to correct. Thanks to @magwa101 for coming back with the
+  detail that relocated the bug.
+
 ## What's New in v2.86.3
 
 A Simplified Chinese phrasing fix from the reviewer who asked for it when #122
