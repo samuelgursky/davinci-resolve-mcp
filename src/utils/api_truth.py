@@ -124,11 +124,18 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "float), both before and after a timeline exists, so the "
                    "playback frame rate cannot be set from the API at all. "
                    "Reported by a community contributor against Resolve Studio "
-                   "while assembling a vertical timeline (PR #99).",
+                   "while assembling a vertical timeline (PR #99), and "
+                   "independently on Resolve 20.2 against a freshly created "
+                   "project whose timeline rate already read 60 (issue #141) — "
+                   "so a matching timelineFrameRate does not unlock the write.",
         "recommended": "Ask the user to set it in Project Settings > Master "
                        "Settings > Playback frame rate as a SETUP step, before "
                        "any timeline exists. Read it back to confirm; do not "
-                       "report it as set on the strength of the call alone.",
+                       "report it as set on the strength of the call alone. The "
+                       "issue #141 reporter's workaround is worth passing on "
+                       "for repeat setups: duplicate a project that already "
+                       "carries the wanted playback rate rather than creating "
+                       "one and trying to write it.",
         "tags": ["project-settings", "silent-failure", "timeline"],
         "submit": "missing",
     },

@@ -16017,6 +16017,37 @@ def project_manager_database(action: str, params: Optional[Dict[str, Any]] = Non
 # TOOL 8: project_settings
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _setting_limitation(name: Any, obj: str = "Project") -> Optional[Dict[str, Any]]:
+    """The api_truth entry for a settings key on `obj`, when one exists.
+
+    `SetSetting` reports a refusal as a bare `False` with no reason, and for
+    several keys this repo has already measured the reason and written it down —
+    `timelinePlaybackFrameRate` returns False for every value form, before and
+    after a timeline exists (issue #141, PR #99). A caller who gets
+    `{"success": false}` has no way to tell "you passed a bad value" from "this
+    key cannot be written from the API at all", and the second one is a
+    different task: it has to go to the user as a UI step.
+
+    Matched narrowly on purpose. The entry must name this exact key *and* be
+    `obj.SetSetting`, because attaching an unrelated explanation to a failure is
+    worse than attaching none — it reads as a diagnosis. `Project` and
+    `Timeline` both have a `SetSetting` and their keys overlap by name, so the
+    object is part of the match rather than assumed.
+    """
+    if not isinstance(name, str) or not name:
+        return None
+    prefix = f"{obj}.SetSetting"
+    quoted = f"'{name}'"
+    for entry in lookup_api_truth(name):
+        symbol = entry.get("symbol", "")
+        # The quoted form is what makes this an exact key match: `name in
+        # symbol` would hand the timelinePlaybackFrameRate entry to anything
+        # that is a substring of it, "timeline" included.
+        if symbol.startswith(prefix) and quoted in symbol:
+            return entry
+    return None
+
+
 @mcp.tool()
 @_guard_missing_params
 def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -16026,7 +16057,9 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
       get_name() -> {name}
       set_name(name) -> {success}
       get_setting(name?) -> {settings}  — omit name for all settings
-      set_setting(name, value) -> {success}
+      set_setting(name, value) -> {success, known_limitation?}
+        A refusal carries the api_truth entry for that key when one exists —
+        several settings cannot be written from the API at all.
       get_unique_id() -> {id}
       get_presets() -> {presets}
       set_preset(name) -> {success}
@@ -16062,7 +16095,20 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
             return _err("set_setting requires name")
         if "value" not in p:
             return _err("set_setting requires value")
-        return {"success": bool(proj.SetSetting(p["name"], p["value"]))}
+        if bool(proj.SetSetting(p["name"], p["value"])):
+            return {"success": True}
+        known = _setting_limitation(p["name"])
+        if not known:
+            return {"success": False}
+        return {
+            "success": False,
+            "known_limitation": {
+                "symbol": known.get("symbol"),
+                "reality": known.get("reality"),
+                "recommended": known.get("recommended"),
+                "ledger_verified_on": _API_TRUTH_VERIFIED_ON,
+            },
+        }
     elif action == "get_unique_id":
         return {"id": proj.GetUniqueId()}
     elif action == "get_presets":
@@ -21402,7 +21448,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       export(path, type, subtype?, background?) -> {success | job_id}  — type: AAF, EDL, FCPXML, etc.
         UNSAFE. No path sandboxing. Prefer export_timeline_checked.
       get_setting(name?) -> {settings}
-      set_setting(name, value) -> {success}
+      set_setting(name, value) -> {success, known_limitation?}
+        A refusal carries the api_truth entry for that key when one exists.
       insert_generator(name) -> {success}
       insert_fusion_generator(name) -> {success}
       insert_fusion_composition() -> {success}
@@ -21762,7 +21809,20 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     elif action == "get_setting":
         return {"settings": _ser(tl.GetSetting(p.get("name", "")))}
     elif action == "set_setting":
-        return {"success": bool(tl.SetSetting(p["name"], p["value"]))}
+        if bool(tl.SetSetting(p["name"], p["value"])):
+            return {"success": True}
+        known = _setting_limitation(p["name"], obj="Timeline")
+        if not known:
+            return {"success": False}
+        return {
+            "success": False,
+            "known_limitation": {
+                "symbol": known.get("symbol"),
+                "reality": known.get("reality"),
+                "recommended": known.get("recommended"),
+                "ledger_verified_on": _API_TRUTH_VERIFIED_ON,
+            },
+        }
     elif action == "insert_generator":
         r = tl.InsertGeneratorIntoTimeline(p["name"])
         return _ok() if r else _err("Failed to insert generator")
