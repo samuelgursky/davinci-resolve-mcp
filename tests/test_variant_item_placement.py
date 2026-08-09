@@ -67,7 +67,10 @@ class VariantItemPlacementTest(unittest.TestCase):
         placed = _variant_item_placement(PlacedItemStub(start=105, end=165, duration=60, source_start=72))
         self.assertEqual(
             placed,
-            {"record_start": 105, "record_end": 165, "duration": 60, "source_start": 72},
+            # source_fps is None here: the stub exposes no media pool item, so
+            # the rate the source frame is counted in is unknown, not assumed.
+            {"record_start": 105, "record_end": 165, "duration": 60,
+             "source_start": 72, "source_fps": None, "source_start_seconds": None},
         )
 
     def test_reports_item_duration_that_differs_from_the_span(self):
@@ -87,7 +90,8 @@ class VariantItemPlacementTest(unittest.TestCase):
     def test_absent_and_failing_readers_yield_none(self):
         self.assertEqual(
             _variant_item_placement(object()),
-            {"record_start": None, "record_end": None, "duration": None, "source_start": None},
+            {"record_start": None, "record_end": None, "duration": None,
+             "source_start": None, "source_fps": None, "source_start_seconds": None},
         )
         raising = _variant_item_placement(RaisingStub())
         self.assertIsNone(raising["record_start"])

@@ -682,7 +682,22 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "twin of the AppendToTimeline mixed-fps entry below: that one is "
                    "about writing source frames whose rate differs from the "
                    "timeline's, this one about reading them back and not knowing "
-                   "which rate they are in.",
+                   "which rate they are in. The rate was pinned by regression, "
+                   "not assumed: across 12 items of the same WAV, "
+                   "GetSourceStartFrame advances at 24.000 fps against the item's "
+                   "own GetSourceStartTime (24.0000/24.0007/23.9995 over spans up "
+                   "to 22 minutes). The same measurement exposed a second unit "
+                   "trap: on an AUDIO item GetLeftOffset advances at 29.970 — the "
+                   "TIMELINE rate — so the two readers describe the same edit "
+                   "point in DIFFERENT frame spaces (60687 vs 75784 for one "
+                   "item). On video they share the source space. Caveat on the "
+                   "absolute zero: Resolve's model of this file is 133003 frames "
+                   "(Duration 01:32:21:19 at 24 fps = 5541.79 s) while its true "
+                   "PCM length is 266264768 samples / 48 kHz = 5547.18 s, a 0.097% "
+                   "difference we have not explained — so frames/24 is exact in "
+                   "Resolve's source-time space, which is the space every other "
+                   "Resolve call uses, but may sit ~2 s off the byte position in "
+                   "a 40-minute-deep offset.",
         "recommended": "Convert an audio item's source frames with the MEDIA's rate, "
                        "never the timeline's: seconds = source_start / media_fps, "
                        "treating a WAV (or any container with no native rate) as 24 "
@@ -694,10 +709,17 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "conversion in items[].duration_delta. The separate "
                        "GetSourceStartFrame entry above (off-by-one vs "
                        "GetLeftOffset) applies on top of this — the rate question "
-                       "is which unit the number is in, not whether it is exact.",
+                       "is which unit the number is in, not whether it is exact. "
+                       "Mitigated in-process: _timeline_item_summary now emits "
+                       "source_fps and source_start_seconds/source_end_seconds "
+                       "beside the frames, so the number always arrives with its "
+                       "unit; on the GetLeftOffset fallback for an audio item it "
+                       "reports the rate as unknown rather than converting a "
+                       "timeline-frame value at the media rate.",
         "tags": ["timeline", "audio", "wav", "frame-rate", "mixed-fps",
                  "silent-failure", "readback"],
         "submit": "bug",
+        "mitigation": ["_media_item_source_fps", "_source_frames_to_seconds"],
     },
     {
         "symbol": "Razor / blade / split a timeline item",

@@ -2992,18 +2992,31 @@ def _safe_media_pool_item_name(mpi):
     return None
 
 
-def _timeline_item_source_start(item):
+def _timeline_item_source_start_with_origin(item):
+    """(source_start, origin) — which reader the frame number came from.
+
+    The origin matters because the two readers do not agree on units. On an
+    AUDIO item, measured on Studio 21.0.3.7 across 12 items of one WAV,
+    GetSourceStartFrame advances at exactly 24.000 fps against the item's own
+    GetSourceStartTime (the media's rate) while GetLeftOffset advances at 29.970
+    — the TIMELINE rate. Same edit point, different frame spaces. Callers that
+    attach a rate to the number must know which reader produced it.
+    """
     if _has_method(item, "GetSourceStartFrame"):
         try:
             source_start = _frame_int(item.GetSourceStartFrame())
             if source_start is not None:
-                return source_start
+                return source_start, "GetSourceStartFrame"
         except Exception:
             pass
     try:
-        return _frame_int(item.GetLeftOffset())
+        return _frame_int(item.GetLeftOffset()), "GetLeftOffset"
     except Exception:
-        return None
+        return None, None
+
+
+def _timeline_item_source_start(item):
+    return _timeline_item_source_start_with_origin(item)[0]
 
 
 def _timeline_item_media_pool_item(item):
@@ -3039,7 +3052,46 @@ def _timeline_item_track_info(item):
         return None, _err("invalid source track index")
 
 
-def _timeline_item_summary(item, track_info=None):
+def _media_item_source_fps(media_pool_item, clip_properties=None):
+    """The frame rate a media-pool item's SOURCE frames are counted in.
+
+    Source frames (GetSourceStartFrame / GetLeftOffset) are expressed in the
+    MEDIA's own rate, never the timeline's — and a WAV carries no native rate,
+    so Resolve reports 24 for it. Read the rate instead of assuming the
+    timeline's: at 29.97 a WAV offset lands minutes away from the real position
+    in the file, and nothing errors (see the api_truth entry "GetSourceStartFrame
+    on an AUDIO item"). Returns None when the rate cannot be read, so callers
+    surface "unknown" rather than a guess.
+
+    Pass ``clip_properties`` when the caller already holds the item's property
+    dict — the probe path does, so this costs it no extra bridge call.
+    """
+    value = None
+    if isinstance(clip_properties, dict):
+        value = clip_properties.get("FPS")
+    if value in (None, "") and media_pool_item is not None:
+        try:
+            value = media_pool_item.GetClipProperty("FPS")
+        except Exception:
+            value = None
+        if isinstance(value, dict):  # GetClipProperty("") returns the whole map
+            value = value.get("FPS")
+    try:
+        fps = float(value)
+    except (TypeError, ValueError):
+        return None
+    return fps if fps > 0 else None
+
+
+def _source_frames_to_seconds(frames, fps):
+    """Source frames -> seconds into the file, or None when either is unknown."""
+    if frames is None or not fps:
+        return None
+    return round(frames / fps, 3)
+
+
+def _timeline_item_summary(item, track_info=None, *, media_pool_item=None,
+                           clip_properties=None):
     if not item:
         return None
     start = end = duration = source_start = source_end = None
@@ -3049,12 +3101,21 @@ def _timeline_item_summary(item, track_info=None):
     except Exception:
         pass
     duration = _timeline_item_duration(item, start, end)
-    source_start = _timeline_item_source_start(item)
+    source_start, source_start_origin = _timeline_item_source_start_with_origin(item)
     if source_start is not None and duration is not None:
         source_end = source_start + duration
     if track_info is None:
         track_info, _ = _timeline_item_track_info(item)
-    media_pool_item = _timeline_item_media_pool_item(item)
+    if media_pool_item is None:
+        media_pool_item = _timeline_item_media_pool_item(item)
+    # source_* are in the MEDIA's frame rate; report it and the derived seconds
+    # so a caller never has to guess which rate the frame numbers are in.
+    source_fps = _media_item_source_fps(media_pool_item, clip_properties)
+    if source_start_origin == "GetLeftOffset" and (track_info or (None,))[0] == "audio":
+        # GetLeftOffset counts an audio item in TIMELINE frames, so pairing it
+        # with the media rate would produce a confidently wrong number. Report
+        # the frame and leave the rate unknown rather than convert it wrong.
+        source_fps = None
     summary = {
         "timeline_item_id": _safe_timeline_item_id(item),
         "name": _safe_timeline_item_name(item),
@@ -3065,6 +3126,9 @@ def _timeline_item_summary(item, track_info=None):
         "duration": duration,
         "source_start": source_start,
         "source_end": source_end,
+        "source_fps": source_fps,
+        "source_start_seconds": _source_frames_to_seconds(source_start, source_fps),
+        "source_end_seconds": _source_frames_to_seconds(source_end, source_fps),
         "media_pool_item_id": _safe_media_pool_item_id(media_pool_item),
         "media_pool_item_name": _safe_media_pool_item_name(media_pool_item),
     }
@@ -5008,8 +5072,9 @@ def _conform_capabilities():
 
 
 def _timeline_item_conform_summary(item, track_type: str, track_index: int, item_index: int):
-    summary = _timeline_item_summary(item, (track_type, track_index)) or {}
-    summary["item_index"] = item_index
+    # Fetch the media-pool item and its properties FIRST, then hand both to the
+    # summary: it needs the 'FPS' property for source_fps, and this way the probe
+    # pays for one GetMediaPoolItem/GetClipProperty pair per item, not two.
     media_pool_item = _timeline_item_media_pool_item(item)
     file_path = None
     clip_properties = None
@@ -5019,12 +5084,17 @@ def _timeline_item_conform_summary(item, track_type: str, track_index: int, item
             clip_properties = _ser(media_pool_item.GetClipProperty(""))
         except Exception:
             clip_properties = None
-        if isinstance(clip_properties, dict):
-            file_path = clip_properties.get("File Path") or clip_properties.get("FilePath")
-            for key in ("Status", "Media Status", "Offline", "Online Status"):
-                if key in clip_properties:
-                    media_status = clip_properties.get(key)
-                    break
+    summary = _timeline_item_summary(
+        item, (track_type, track_index),
+        media_pool_item=media_pool_item, clip_properties=clip_properties,
+    ) or {}
+    summary["item_index"] = item_index
+    if isinstance(clip_properties, dict):
+        file_path = clip_properties.get("File Path") or clip_properties.get("FilePath")
+        for key in ("Status", "Media Status", "Offline", "Online Status"):
+            if key in clip_properties:
+                media_status = clip_properties.get(key)
+                break
     summary["file_path"] = file_path
     summary["file_exists"] = bool(file_path and os.path.exists(str(file_path)))
     summary["media_status"] = media_status
@@ -5409,7 +5479,8 @@ def _timeline_apply_look_to_items(tl, p: Dict[str, Any]) -> Dict[str, Any]:
 def _variant_item_placement(item) -> Dict[str, Any]:
     """Report an appended item's placed frame positions in both frame spaces.
     record_* are TIMELINE frames (GetStart/GetEnd/GetDuration); source_start is
-    a SOURCE frame."""
+    a SOURCE frame, counted in source_fps — the MEDIA's rate, which for a WAV is
+    24 and not the timeline's."""
     def _read(method):
         fn = getattr(item, method, None)
         if not callable(fn):
@@ -5423,11 +5494,15 @@ def _variant_item_placement(item) -> Dict[str, Any]:
     duration = _read("GetDuration")
     if duration is None and record_start is not None and record_end is not None:
         duration = record_end - record_start
+    source_start = _timeline_item_source_start(item)
+    source_fps = _media_item_source_fps(_timeline_item_media_pool_item(item))
     return {
         "record_start": record_start,
         "record_end": record_end,
         "duration": duration,
-        "source_start": _timeline_item_source_start(item),
+        "source_start": source_start,
+        "source_fps": source_fps,
+        "source_start_seconds": _source_frames_to_seconds(source_start, source_fps),
     }
 
 
@@ -21516,6 +21591,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         Default handles=24, gap_max=30. Use handles=0 for gap-only auto handles.
       conform_capabilities() -> {supported, partially_supported, unsupported, export_aliases}
       probe_timeline_structure(track_types?, include_markers?, include_clip_properties?) -> {tracks, markers}
+        Each item reports source_start/source_end in the MEDIA's frame rate, plus the
+        source_fps it is counted in and source_start_seconds/source_end_seconds derived
+        with it. Use those seconds — a WAV counts at 24 fps on any timeline, so dividing
+        by the timeline rate is wrong by minutes. source_fps is null when the rate could
+        not be read; treat the frames as unitless then, do not assume the timeline's.
       detect_gaps_overlaps(track_types?, min_gap?) -> {gaps, overlaps}
       source_range_report(handles?, merge?) -> {ranges, occurrences}
       export_timeline_checked(path, format?|type?, subtype?, require_temp_path?, dry_run?, background?) -> {success, path, size | job_id}
