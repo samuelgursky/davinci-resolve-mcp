@@ -21393,7 +21393,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     Frame numbers are TIMELINE/record frames (position on the timeline) unless an action
     says SOURCE. Source frames are positions within a media-pool clip's own media:
     create_variant_from_ranges takes SOURCE start_frame/end_frame; extract_source_frame_ranges
-    and source_range_report return SOURCE ranges.
+    and source_range_report return SOURCE ranges. A SOURCE frame is counted in the MEDIA's own
+    frame rate, not the timeline's: an AUDIO item's source_start/source_end read back in the
+    file's rate, and a WAV (no native rate) defaults to 24 fps, so converting one at the timeline
+    rate is silently wrong by minutes (resolve_control api_truth "GetSourceStartFrame").
 
     Actions:
       list() -> {timelines}
@@ -21449,6 +21452,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         nothing moves. (frames here are TIMELINE/record frames.)
       story_spine_report() -> {beats, track_summaries, source_ranges, audio_spine}
       create_variant_from_ranges(name, ranges, markers?, cdl?, dry_run?) -> {success, id, items}
+        ranges[] take track_type? (video|audio) and track_index? (1-based, within the
+        track_type, default 1); missing tracks are added, so V2/V3 multicam angles survive.
         # example: action_help(name='<action_name>')
       bulk_set_item_properties(ops, dry_run?, readback?) -> {results, op_count}
         # example: action_help(name='<action_name>')
@@ -23334,9 +23339,16 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
             "summary": "Build a variant timeline from N source ranges. Video-only unless ranges include track_type='audio'. Source-safe; dry_run validates clip ids and frame ranges.",
             "params": (
                 "name, ranges: [{clip_id|media_pool_item_id, start_frame, end_frame, "
-                "record_frame?, track_type?}], pack?, markers?, cdl?, dry_run?  — clip_id is a "
+                "record_frame?, track_type?, track_index?}], pack?, markers?, cdl?, dry_run?  — clip_id is a "
                 "media-pool item id (not a timeline-item id); start_frame/end_frame are SOURCE "
                 "frames, end_frame exclusive (source duration = end_frame - start_frame). "
+                "track_index is the 1-based destination track WITHIN track_type (default 1); the "
+                "variant is created with enough video/audio tracks to cover the highest index used, "
+                "so multicam angles can be rebuilt onto V2/V3 instead of collapsing onto V1. "
+                "SOURCE frames are counted in the MEDIA's frame rate, not the timeline's — an audio "
+                "item's read back as 24 fps for a WAV (api_truth \"GetSourceStartFrame on an AUDIO "
+                "item\"); pass them in that space, placement converts and items[].duration_delta "
+                "reports the conversion. "
                 "pack=true butts clips together at the end of each track (gap-free, ignores record_frame)"
             ),
             "returns": "{success, id, items}  — items[].placed = placed frames; items[].range = the requested range",
@@ -23344,8 +23356,11 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
                 'timeline(action="create_variant_from_ranges", params={\n'
                 '  "name": "v02_tighter_act1",\n'
                 '  "ranges": [\n'
-                '    {"clip_id": "<media-pool-item-id>", "start_frame": 1200, "end_frame": 1320},\n'
-                '    {"clip_id": "<media-pool-item-id>", "start_frame": 1500, "end_frame": 1600}\n'
+                '    {"clip_id": "<cam1-id>", "start_frame": 1200, "end_frame": 1320},\n'
+                '    {"clip_id": "<cam3-id>", "start_frame": 1500, "end_frame": 1600,\n'
+                '     "track_index": 2},\n'
+                '    {"clip_id": "<wav-id>", "track_type": "audio", "track_index": 1,\n'
+                '     "start_frame": 56871, "end_frame": 57591}  # 24 fps source frames\n'
                 '  ],\n'
                 '  "dry_run": True\n'
                 '})'

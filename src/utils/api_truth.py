@@ -661,6 +661,45 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
+        "symbol": "TimelineItem.GetSourceStartFrame on an AUDIO item (media-rate frames; 24 fps for WAV)",
+        "object": "TimelineItem",
+        "signature": "() -> int  # source frame, counted in the MEDIA's frame rate",
+        "reality": "The value is counted in the source MEDIA's own frame rate, not "
+                   "the timeline's — and a WAV carries no frame rate, so Resolve "
+                   "falls back to 24 fps. Reading it at the timeline rate lands "
+                   "minutes away from the real position in the file. Verified live "
+                   "on Studio 21.0.3.7 (2026-08-09, 29.97 fps timeline): a "
+                   "ZOOM0028.WAV item reported source_start 56871, which is "
+                   "56871 / 24 = 2369.6 s into the file, NOT the 1897.6 s a 29.97 "
+                   "fps reading gives — a 471.9 s (7 min 52 s) error. Nothing looks "
+                   "wrong, because timeline probe_timeline_structure derives "
+                   "source_end as source_start + timeline_duration: the start/end "
+                   "pair stays internally consistent whatever rate you assume. "
+                   "VIDEO items are NOT affected — two 29.97 fps items "
+                   "(KR020007.MOV, IMG_0001.mov) on the same timeline reported "
+                   "source frames in their own, matching rate, confirmed against "
+                   "ffprobe durations and span arithmetic. This is the read-side "
+                   "twin of the AppendToTimeline mixed-fps entry below: that one is "
+                   "about writing source frames whose rate differs from the "
+                   "timeline's, this one about reading them back and not knowing "
+                   "which rate they are in.",
+        "recommended": "Convert an audio item's source frames with the MEDIA's rate, "
+                       "never the timeline's: seconds = source_start / media_fps, "
+                       "treating a WAV (or any container with no native rate) as 24 "
+                       "fps. Take media_fps from the media-pool item's 'FPS' clip "
+                       "property or from ffprobe — do not infer it from the "
+                       "timeline. Feed the frames back to timeline "
+                       "create_variant_from_ranges in the same media-rate space you "
+                       "read them in; it converts on placement and reports the "
+                       "conversion in items[].duration_delta. The separate "
+                       "GetSourceStartFrame entry above (off-by-one vs "
+                       "GetLeftOffset) applies on top of this — the rate question "
+                       "is which unit the number is in, not whether it is exact.",
+        "tags": ["timeline", "audio", "wav", "frame-rate", "mixed-fps",
+                 "silent-failure", "readback"],
+        "submit": "bug",
+    },
+    {
         "symbol": "Razor / blade / split a timeline item",
         "object": "Timeline / TimelineItem",
         "reality": "There is no method to split/cut/blade a clip at a given frame. "
