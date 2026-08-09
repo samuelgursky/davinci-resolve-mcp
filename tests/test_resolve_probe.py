@@ -72,6 +72,21 @@ class ApiConstantTest(unittest.TestCase):
             "EXPORT_OTIO",
         )
 
+    def test_a_falsy_constant_is_a_value_not_an_absence(self):
+        """`EXPORT_AAF` really is 0.0 on Studio 19.1.3.7 (checked live).
+
+        So the fallback has to key on `is None`, not on truthiness — a
+        `value or default` here would silently swap the real constant for its
+        own name and take the AAF export path with a string.
+        """
+        class Zero:
+            EXPORT_AAF = 0.0
+
+            def __getattr__(self, name):
+                return None
+
+        self.assertEqual(api_constant(Zero(), "EXPORT_AAF", "EXPORT_AAF"), 0.0)
+
     def test_the_old_form_would_have_returned_none(self):
         """Pins the regression this replaced, so it cannot quietly come back."""
         obj = FabricatingObject()

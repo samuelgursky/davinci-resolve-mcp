@@ -2,6 +2,78 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.89.0
+
+The build gates this server already enforced are now gates an agent can ask
+about, and the capability probe those gates run on no longer lies. Issue #132,
+reported by @magwa101.
+
+### Added
+
+- **`get_version` reports what the connected build is missing.** A new `build`
+  block carries `unavailable_on_this_build` — every recorded API surface this
+  build does not have — plus `known_gates` and the caveat that an absence from
+  that list is not a promise a method exists. #132 happened in a session that
+  opened with `get_version` and was told a number and nothing the number ruled
+  out. `get_resolve_version_fields` gains the same list on the granular server.
+- **The version-gate registry went from 7 recorded surfaces to 41.**
+  `_requires_method(obj, "GetLayoutPresetList", "21.0.4")` appears 44 times
+  across the two servers and gates 31 distinct symbols, but
+  `check_version_support` — the call `resolve-session` step 2 tells an agent to
+  make — answered from a ledger that knew seven of them. So the one question an
+  agent is instructed to ask returned `unknown` for surfaces this server was
+  already routing on. On Studio 19.1.3.7 the session preflight named 7 missing
+  surfaces; it now names 40. The new floors are labelled `documented` rather
+  than `measured`: they come from Blackmagic's release documentation, not a live
+  bisect here, and an agent relaying one should be able to say which.
+- **`tests/test_version_gate_drift.py`** fails when a call site and the ledger
+  disagree, and when a bare method name is gated at two different builds on two
+  different classes (which would make a bare-name lookup a coin flip). A table
+  copied by hand is exactly what drifts back apart.
+- **`src/utils/resolve_probe.py`** — `has_method` and `api_constant`, with the
+  measurement behind them. A companion guard fails the suite on a bare `hasattr`
+  with a Resolve-shaped attribute name.
+
+### Fixed
+
+- **29 capability probes across `src/` used `hasattr` on Resolve API objects,
+  where it is a constant `True`** (measured on Studio 19.1.3.7 across 42 checks,
+  recorded in `api_truth`; re-confirmed live for this release —
+  `hasattr(project, 'GenerateSpeech')` returns `True` on a build that has no
+  such method). It failed in two shapes that look nothing alike:
+  - `if not hasattr(clip, "RemoveMotionBlur")` is a dead branch, so the
+    "requires Resolve 21+" refusal never fired and the call below it raised
+    `AttributeError` on an older build. Eleven of these were the granular
+    server's Resolve 21 AI guards.
+  - `getattr(r, n) if hasattr(r, n) else n` never reaches its `else`, so a build
+    without the constant got `None` where the author wrote a string fallback —
+    no exception, no refusal, just a `None` travelling on into `Export()`. This
+    reached granular timeline export and `ExportLUT`, and three constant
+    lookups on the compound server. Confirmed live: a name Resolve does not
+    define returned `None` under the old form and now falls back correctly.
+    The fallback keys on `is None`, not truthiness, because `EXPORT_AAF` is
+    genuinely `0.0`.
+- **The granular AI tools reported a missing Extras pack as success.** Resolve's
+  AI methods return the reason as a *string* when the pack is absent, and
+  `bool("Required package ... is not installed.")` is `True`. The compound
+  server has normalized that since the 21.0.2.4 measurement; the granular one
+  had not, so folder and clip audio classification returned `{"success": true}`
+  for a call that did not run, and `RemoveMotionBlur` / `GenerateSpeech` walked
+  a string into `.GetName()`. All now route through `_ai_result`, which reports
+  the failure and carries Resolve's own reason.
+- **`Project.ApplyFairlightPresetToCurrentTimeline` was recorded on `Timeline`.**
+  The shipped README lists it under Project and the server calls it there; the
+  method's name is what made the wrong attribution look right.
+
+### Validation
+
+Suite 2560 → 2580. Live-checked against the running Studio 19.1.3.7 for the
+probe semantics, the refusal path, the constant fallback, and the `get_version`
+preflight (40 of 41 gates unavailable, as expected on that build). The Resolve 21
+and 21.0.4 surfaces themselves remain untested here — this machine cannot run
+them — and the Extras-pack failure paths are pinned by a stub that reproduces
+the measured attribute-fabrication behaviour rather than by a live 21 build.
+
 ## What's New in v2.88.0
 
 The twelve Resolve 21.0.4 surfaces that only existed on the compound server now
