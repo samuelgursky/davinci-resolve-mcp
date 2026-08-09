@@ -1057,3 +1057,245 @@ print(json.dumps(state))
   assert.ok(!('srcPos' in e), 'no srcPos when the chain adds nothing');
   assert.ok(!('srcTcFrame' in e), 'no source timecode when no mob carries one');
 });
+
+// ── Keyframes (U21) ───────────────────────────────────────────────────────────
+// Until U21 a VaryingValue was read for its VALUES only, to answer "constant or
+// not". `ControlPoint.time` was never asked for, so an animated reframe reached a
+// consumer as the bare word "varying" — enough to refuse the clip, never enough to
+// rebuild it. These pin the two time domains, which are NOT the same and whose
+// confusion would be wrong by the effect's whole length.
+
+test('aaf_probe: a transform curve carries time, value, and frame — domain (length - 1)', { skip: PY ? false : 'python3 not available' }, () => {
+  // Measured over all 1254 geometry control points of a real Avid turnover: 1243
+  // land on an integer frame under (length - 1) and only 278 under (length), so the
+  // two are distinguishable and the endpoint is INCLUSIVE. This is that clip:
+  // length 131, times 0.338461538 / 0.515384615 → frames 44 and 67 exactly.
+  const out = runWalker(`
+og = opgroup("PaintResize_v2", 131, [mk("Sequence", components=[clip("A001", 131)])])
+og.parameters = [
+    mk("VaryingValue", name="AFX_POS_X_U",
+       interpolationdef=mk("InterpolationDefinition", name="LinearInterp"),
+       pointlist=[mk("ControlPoint", time=0.338461538, value=-42.0),
+                  mk("ControlPoint", time=0.515384615, value=0.0)]),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const [geo] = out.events[0].geometry;
+  assert.deepEqual(geo.varying, ['AFX_POS_X_U'], 'the old contract is untouched — consumers gate on it');
+  assert.deepEqual(geo.keyframes.AFX_POS_X_U, {
+    domain: 'effectSpan',
+    points: [
+      { t: 0.338461538, v: -42.0, frame: 44.0 },
+      { t: 0.515384615, v: 0.0, frame: 67.0 },
+    ],
+    interpolation: 'LinearInterp',
+    effectLength: 131,
+  });
+});
+
+test('aaf_probe: keys outside the trimmed range are KEPT, and a half-frame key stays half', { skip: PY ? false : 'python3 not available' }, () => {
+  // 107 of the fixture's 1254 keys sit before frame 0 or past the last frame —
+  // what Avid leaves behind when a clip is trimmed after it was animated. Clamping
+  // them would silently move the animation. And one real key lands at frame 125.5.
+  // Length 180 and t=0.7011173184357542 are the real ones: they are the single key
+  // in the whole fixture that lands on neither denominator as an integer, because
+  // it is genuinely at frame 125.5. Under (length - 1) it renders exactly.
+  const out = runWalker(`
+og = opgroup("PaintResize_v2", 180, [mk("Sequence", components=[clip("A001", 180)])])
+og.parameters = [
+    mk("VaryingValue", name="AFX_SCALE_X_U",
+       pointlist=[mk("ControlPoint", time=-0.5, value=100.0),
+                  mk("ControlPoint", time=0.7011173184357542, value=127.0),
+                  mk("ControlPoint", time=1.5, value=140.0)]),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const frames = out.events[0].geometry[0].keyframes.AFX_SCALE_X_U.points.map((p) => p.frame);
+  assert.deepEqual(frames, [-89.5, 125.5, 268.5], 'negative, half-frame and past-the-end keys all survive');
+});
+
+test('aaf_probe: a retime carries its own curves, and the offset map is in effect FRAMES', { skip: PY ? false : 'python3 not available' }, () => {
+  // The second time domain. PARAM_SPEED_OFFSET_MAP_U spans exactly 0..length on
+  // every retime measured — it is ALREADY frames, so the (length - 1) normalization
+  // the transform params need would be wrong here by the effect's whole length.
+  const out = runWalker(`
+from fractions import Fraction
+og = opgroup("Motion Control", 112, [mk("Sequence", components=[clip("A001", 202)])])
+og.parameters = [
+    mk("ConstantValue", name="SpeedRatio", value=Fraction(112, 201)),
+    mk("VaryingValue", name="PARAM_SPEED_OFFSET_MAP_U",
+       interpolationdef=mk("InterpolationDefinition", name="LinearInterp"),
+       pointlist=[mk("ControlPoint", time=0.0, value=0.0),
+                  mk("ControlPoint", time=112.0, value=201.6)]),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const ev = out.events[0];
+  const off = ev.speedCurve.sourceOffset;
+  assert.equal(off.domain, 'effectFrames');
+  assert.deepEqual(off.points.map((p) => p.frame), [0.0, 112.0], 'frame == t, not t x (length - 1)');
+  assert.equal(off.parameter, 'PARAM_SPEED_OFFSET_MAP_U', "kept under Avid's own name");
+});
+
+test('aaf_probe: the declared SpeedRatio is whole-frame TRUNCATED — both numbers ship, neither is substituted', { skip: PY ? false : 'python3 not available' }, () => {
+  // 🚨 Measured on the fixture: 7 of 18 constant retimes disagree with their own
+  // source-offset curve, always the same way — the rational is the source span
+  // rounded to whole frames (201/112) while the curve is exact (201.6/112 = 1.80).
+  // The worst is 1.631579 declared against a true 1.70: a 4% speed error handed to
+  // an operator to type in. Reporting both under their own names is the contract;
+  // silently replacing `speedRatio` would be the SpeedRatio inversion all over again.
+  const out = runWalker(`
+from fractions import Fraction
+og = opgroup("Motion Control", 112, [mk("Sequence", components=[clip("A001", 202)])])
+og.parameters = [
+    mk("ConstantValue", name="SpeedRatio", value=Fraction(112, 201)),
+    mk("VaryingValue", name="PARAM_SPEED_OFFSET_MAP_U",
+       pointlist=[mk("ControlPoint", time=0.0, value=0.0),
+                  mk("ControlPoint", time=112.0, value=201.6)]),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const ev = out.events[0];
+  assert.equal(ev.speedRatio, 1.794643, 'the DECLARED rational is reported unchanged');
+  assert.equal(ev.speedRatioFromCurve, 1.8, 'and the curve is reported as what it measures');
+});
+
+test('aaf_probe: a real timewarp is never averaged into one rate', { skip: PY ? false : 'python3 not available' }, () => {
+  // The colinearity test is what separates "a dense curve that happens to be a
+  // straight line" from "a ramp". A ramp has no single rate, so none is offered —
+  // but the curve itself still ships, which is what makes it rebuildable at all.
+  const out = runWalker(`
+pts = [mk("ControlPoint", time=float(i), value=float(i * i) / 40.0) for i in range(0, 81)]
+og = opgroup("Motion Control", 80, [mk("Sequence", components=[clip("A001", 160)])])
+og.parameters = [
+    mk("VaryingValue", name="PARAM_SPEED_MAP_U",
+       pointlist=[mk("ControlPoint", time=0.0, value=0.5),
+                  mk("ControlPoint", time=80.0, value=2.0)]),
+    mk("VaryingValue", name="PARAM_SPEED_OFFSET_MAP_U", pointlist=pts),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const ev = out.events[0];
+  assert.equal(ev.speedVarying, true);
+  assert.equal(ev.speedRatioFromCurve, undefined, 'a ramp gets no single rate');
+  assert.equal(ev.speedCurve.sourceOffset.points.length, 81, 'but the whole ramp is carried');
+});
+
+test('aaf_probe: an unreadable control point refuses the WHOLE curve', { skip: PY ? false : 'python3 not available' }, () => {
+  // A curve with a hole in it is worse than no curve: a consumer would interpolate
+  // straight through the missing key and produce a confident, wrong animation.
+  const out = runWalker(`
+og = opgroup("PaintResize_v2", 50, [mk("Sequence", components=[clip("A001", 50)])])
+og.parameters = [
+    mk("VaryingValue", name="AFX_POS_X_U",
+       pointlist=[mk("ControlPoint", time=0.0, value=-42.0),
+                  mk("ControlPoint", value=10.0),
+                  mk("ControlPoint", time=1.0, value=0.0)]),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[og]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const [geo] = out.events[0].geometry;
+  assert.deepEqual(geo.varying, ['AFX_POS_X_U'], 'still named as animated — the refusal is loud');
+  assert.equal(geo.keyframes, undefined, 'and no partial curve is offered');
+});
+
+// ── Uninterpreted transform ops (U22) ─────────────────────────────────────────
+
+test('aaf_probe: a transform op we do not interpret is REPORTED, under a key nobody applies', { skip: PY ? false : 'python3 not available' }, () => {
+  // 🚨 The trap this shape exists to avoid: 2DMatteKey_2 carries AFX_POS_X_U 500.0,
+  // and AFX_POS_X_U is a name a consumer already has a CALIBRATED pan rule for. Put
+  // it in `params` and a clip nobody repositioned slides ~960px. So an uninterpreted
+  // op's numbers travel in `rawParams`, which no existing consumer reads.
+  const out = runWalker(`
+from fractions import Fraction
+mk_key = opgroup("2DMatteKey_2", 40, [mk("Sequence", components=[clip("A001", 40)])])
+mk_key.parameters = [mk("ConstantValue", name="AFX_POS_X_U", value=Fraction(500, 1))]
+blend = opgroup("SBlend_v2", 30, [mk("Sequence", components=[clip("A002", 30)])])
+blend.parameters = [
+    mk("ConstantValue", name="DVE_SCALE_X_U", value=Fraction(103, 1)),
+    mk("ConstantValue", name="DVE_ROT_Z_U", value=Fraction(3, 1)),
+    mk("ConstantValue", name="AvidParameterByteOrder", value=18761),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[mk_key, blend]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const [matte] = out.events[0].geometry;
+  assert.equal(matte.passthrough, true);
+  assert.equal(matte.rawParams.AFX_POS_X_U, 500.0, 'the number is carried...');
+  assert.equal(matte.params, undefined, '...but never where the calibrated pan rule looks');
+  assert.equal(matte.scalePercentX, undefined, 'and never as a composable scale');
+
+  const [blend] = out.events[1].geometry;
+  assert.deepEqual(blend.rawParams, { DVE_ROT_Z_U: 3.0, DVE_SCALE_X_U: 103.0 });
+  assert.equal(blend.scalePercentX, undefined, 'DVE_SCALE is a different unit per op — never normalized');
+});
+
+test('aaf_probe: an uninterpreted op that animates still carries the curve', { skip: PY ? false : 'python3 not available' }, () => {
+  const out = runWalker(`
+blend = opgroup("SBlend_v2", 21, [mk("Sequence", components=[clip("A001", 21)])])
+blend.parameters = [
+    mk("VaryingValue", name="DVE_POS_X_U",
+       pointlist=[mk("ControlPoint", time=0.0, value=0.0),
+                  mk("ControlPoint", time=1.0, value=99.0)]),
+    mk("VaryingValue", name="DVE_SCALE_X_U",
+       pointlist=[mk("ControlPoint", time=0.0, value=110.0),
+                  mk("ControlPoint", time=1.0, value=110.0)]),
+]
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[blend]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  const [geo] = out.events[0].geometry;
+  assert.deepEqual(geo.varying, ['DVE_POS_X_U']);
+  assert.deepEqual(geo.keyframes.DVE_POS_X_U.points.map((p) => p.frame), [0, 20]);
+  assert.equal(geo.rawParams.DVE_SCALE_X_U, 110.0, 'a flat point list is still a constant');
+});
+
+// ── Effects that occupy record time and emit nothing (U23) ────────────────────
+
+test('aaf_probe: an effect that consumes record time but emits no event is COUNTED', { skip: PY ? false : 'python3 not available' }, () => {
+  // 🚨 `unhandled` structurally cannot see this. It counts component classes the
+  // walker does not model — and these are modeled perfectly: an OperationGroup is
+  // walked, its inputs are walked, and they contain no SourceClip. On the reference
+  // turnover `unhandled` reads {} (a complete parse) while 29 SubCap titles occupy
+  // real record time and reach the consumer as nothing whatsoever. A conform that
+  // silently loses 29 titles is indistinguishable from one that never had any.
+  const out = runWalker(`
+title = opgroup("SubCap", 60, [])
+real  = opgroup("PaintResize_v2", 40, [mk("Sequence", components=[clip("A001", 40)])])
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[title, real]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  assert.deepEqual(out.unhandled, {}, 'nothing is UNMODELLED — that is exactly the trap');
+  assert.deepEqual(out.effectsWithoutEvents, { SubCap: 1 });
+  assert.equal(out.events.length, 1, 'and the real clip is unaffected');
+  // The title still consumed its record time, so the clip after it lands at 60.
+  assert.equal(out.events[0].recIn, 60);
+});
+
+test('aaf_probe: an empty effect is charged ONCE, to the innermost group', { skip: PY ? false : 'python3 not available' }, () => {
+  // A wrapper around an empty effect is empty for the same single reason. Charging
+  // both would report one lost title as two, which is its own kind of wrong.
+  const out = runWalker(`
+inner = opgroup("SubCap", 60, [])
+outer = opgroup("PaintResize_v2", 60, [mk("Sequence", components=[inner])])
+state = new_state()
+ap._walk_slot(mk("Sequence", components=[outer]), prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  assert.deepEqual(out.effectsWithoutEvents, { SubCap: 1 }, 'the innermost cause, once');
+});
