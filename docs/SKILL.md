@@ -1381,7 +1381,9 @@ Key actions:
   into an editor-facing beat report
 - `create_variant_from_ranges(name, ranges, markers?, cdl?, dry_run?)` — create
   a guarded timeline variant from declarative source ranges, optional markers,
-  transforms, and CDL
+  transforms, and CDL. Each range takes `track_type?` and a 1-based
+  `track_index?` (default 1), so multicam angles can be rebuilt onto V2/V3
+  rather than collapsing onto V1; missing tracks are added
 - `bulk_set_item_properties(ops, dry_run?, readback?)` — apply transforms,
   crop/composite/audio/property groups to many timeline items in one call
 - `apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?)` — apply a
