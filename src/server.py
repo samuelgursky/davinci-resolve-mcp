@@ -3058,12 +3058,16 @@ def _media_item_source_fps(media_pool_item, clip_properties=None):
     """The frame rate a media-pool item's SOURCE frames are counted in.
 
     Source frames (GetSourceStartFrame / GetLeftOffset) are expressed in the
-    MEDIA's own rate, never the timeline's — and a WAV carries no native rate,
-    so Resolve reports 24 for it. Read the rate instead of assuming the
-    timeline's: at 29.97 a WAV offset lands minutes away from the real position
-    in the file, and nothing errors (see the api_truth entry "GetSourceStartFrame
-    on an AUDIO item"). Returns None when the rate cannot be read, so callers
-    surface "unknown" rather than a guess.
+    MEDIA's own rate, never the timeline's. A WAV has no intrinsic rate, so it
+    takes the PROJECT's timelineFrameRate at IMPORT and freezes it — measured on
+    Studio 19.1.3.7: imported at 24 it reads 24.0, imported at 29.97 it reads
+    29.97, and moving the project afterwards does not change it. So the rate is
+    read here every time and never assumed; 24 in particular is not a WAV
+    constant, only the value a project that was at 24 handed its imports. Reading
+    a mismatched offset at the timeline rate lands minutes from the real position
+    in the file and nothing errors (see the api_truth entry
+    "GetSourceStartFrame on an AUDIO item"). Returns None when the rate cannot be
+    read, so callers surface "unknown" rather than a guess.
 
     Pass ``clip_properties`` when the caller already holds the item's property
     dict — the probe path does, so this costs it no extra bridge call.
@@ -3114,13 +3118,16 @@ def _timeline_item_source_time(item, method):
 
 
 def _timeline_item_source_end_frame(item):
-    """The item's SOURCE-space end frame, from Resolve's own reader.
+    """`GetSourceEndFrame` raw — WARNING: its end convention is not fixed.
 
-    Distinct from the ``source_end`` this module derives as
-    ``source_start + duration``: that duration is a TIMELINE duration
-    (GetDuration), so the sum mixes units the moment the media rate differs
-    from the timeline's — always, for a WAV. Only a genuine source-space frame
-    may be divided by source_fps.
+    Measured on Studio 19.1.3.7 (2026-08-10, 12 items, both regimes): this reader
+    is **exclusive** when the source rate equals the timeline rate, and
+    **inclusive** when they differ — off by one in exactly the case a caller
+    reaches for it. It is not a media-type split; a WAV imported at 29.97 into a
+    29.97 timeline reads exclusive like video, and only the rate MISMATCH flips
+    it. Prefer `_timeline_item_source_end_exclusive`, which sidesteps the
+    convention entirely. Kept raw for the seconds fallback, where a one-frame
+    difference is below the reported precision.
     """
     if not _has_method(item, "GetSourceEndFrame"):
         return None
@@ -3128,6 +3135,45 @@ def _timeline_item_source_end_frame(item):
         return _frame_int(item.GetSourceEndFrame())
     except Exception:
         return None
+
+
+def _timeline_item_source_end_exclusive(item, source_start, duration, source_fps):
+    """The EXCLUSIVE source-space end frame — the contract every caller assumes.
+
+    `source_end` has always been exclusive (`src_end_excl` at the append site,
+    `source_end - 1` wherever an inclusive end is wanted). What was wrong was the
+    arithmetic: `source_start + duration` adds a TIMELINE duration to a SOURCE
+    frame, so it is unit-mixed the moment the two rates differ. Measured on
+    Studio 19.1.3.7 against the endFrame actually sent, it overshot by +24, +26,
+    +108 and +149 frames on a 24 fps WAV in a 29.97 timeline, while being exact
+    on every matched-rate item.
+
+    Resolve's own second-reader settles it without knowing the timeline rate:
+    seconds carry no frame-rate assumption, so `GetSourceEndTime x source_fps` is
+    in source space by construction. Measured exact on **12 of 12** valid items
+    across both regimes and both media types — 30.633 s x 24 = 735.19 -> 735,
+    24.524 s x 29.97 = 734.98 -> 735 — and it reproduces the derived value
+    wherever the derived value was already right, so nothing moves for
+    matched-rate media.
+
+    Deliberately NOT `GetSourceEndFrame`: that reader changes convention between
+    the two regimes (see above), so building on it would mean branching on a
+    rate comparison this function would first have to reconstruct.
+
+    Falls back to the historical `source_start + duration` when the second-reader
+    or the rate is unreadable — same value as before, so an older build loses the
+    correction rather than the field.
+    """
+    end_seconds = _timeline_item_source_time(item, "GetSourceEndTime")
+    if end_seconds is not None and source_fps:
+        end_frame = int(round(end_seconds * source_fps))
+        # A source end at or before the start means the readers disagree about
+        # this item; the derived value is the safer answer than a negative span.
+        if source_start is None or end_frame > source_start:
+            return end_frame
+    if source_start is not None and duration is not None:
+        return source_start + duration
+    return None
 
 
 def _timeline_item_source_seconds(item, source_start, source_end, source_fps):
@@ -3161,15 +3207,21 @@ def _timeline_item_summary(item, track_info=None, *, media_pool_item=None,
         pass
     duration = _timeline_item_duration(item, start, end)
     source_start, source_start_origin = _timeline_item_source_start_with_origin(item)
-    if source_start is not None and duration is not None:
-        source_end = source_start + duration
     if track_info is None:
         track_info, _ = _timeline_item_track_info(item)
     if media_pool_item is None:
         media_pool_item = _timeline_item_media_pool_item(item)
-    # source_* are in the MEDIA's frame rate; report it and the derived seconds
-    # so a caller never has to guess which rate the frame numbers are in.
-    source_fps = _media_item_source_fps(media_pool_item, clip_properties)
+    # source_* are in the MEDIA's frame rate; report it and the seconds beside
+    # them so a caller never has to guess which rate the frame numbers are in.
+    media_fps = _media_item_source_fps(media_pool_item, clip_properties)
+    # EXCLUSIVE, as it has always been — but computed in source space now, not
+    # by adding a timeline duration to a source frame. media_fps rather than
+    # source_fps below: the end comes from GetSourceEndTime, which is independent
+    # of whichever reader produced source_start, so the audio caveat that blanks
+    # source_fps must not blank the end as well.
+    source_end = _timeline_item_source_end_exclusive(
+        item, source_start, duration, media_fps)
+    source_fps = media_fps
     if source_start_origin == "GetLeftOffset" and (track_info or (None,))[0] == "audio":
         # GetLeftOffset counts an audio item in TIMELINE frames, so pairing it
         # with the media rate would produce a confidently wrong number. Report
@@ -3186,9 +3238,9 @@ def _timeline_item_summary(item, track_info=None, *, media_pool_item=None,
         "end": end,
         "duration": duration,
         "source_start": source_start,
-        # NOTE: derived as source_start + TIMELINE duration, so it is unit-mixed
-        # whenever source_fps != the timeline rate. Kept for compatibility; use
-        # source_end_seconds, which is read from source space, for real time.
+        # EXCLUSIVE source frame. Read from source space via GetSourceEndTime;
+        # falls back to source_start + TIMELINE duration only when that reader or
+        # the media rate is unavailable, which is the old unit-mixed value.
         "source_end": source_end,
         "source_fps": source_fps,
         "source_start_seconds": source_start_seconds,
@@ -21535,8 +21587,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     create_variant_from_ranges takes SOURCE start_frame/end_frame; extract_source_frame_ranges
     and source_range_report return SOURCE ranges. A SOURCE frame is counted in the MEDIA's own
     frame rate, not the timeline's: an AUDIO item's source_start/source_end read back in the
-    file's rate, and a WAV (no native rate) defaults to 24 fps, so converting one at the timeline
-    rate is silently wrong by minutes (resolve_control api_truth "GetSourceStartFrame").
+    file's rate. A WAV has no intrinsic rate and freezes the PROJECT's rate at import, so it
+    differs from the timeline whenever the project moved afterwards — read source_fps, never
+    assume 24, and converting at the timeline rate is silently wrong by minutes
+    (resolve_control api_truth "GetSourceStartFrame").
 
     Actions:
       list() -> {timelines}
@@ -21656,14 +21710,16 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         Default handles=24, gap_max=30. Use handles=0 for gap-only auto handles.
       conform_capabilities() -> {supported, partially_supported, unsupported, export_aliases}
       probe_timeline_structure(track_types?, include_markers?, include_clip_properties?) -> {tracks, markers}
-        Each item reports source_start in the MEDIA's frame rate, the source_fps it is
-        counted in, and source_start_seconds/source_end_seconds. Use those seconds — a
-        WAV counts at 24 fps on any timeline, so dividing by the timeline rate is wrong
-        by minutes. source_fps is null when the rate could not be read; treat the frames
-        as unitless then, do not assume the timeline's. source_end is derived as
-        source_start + TIMELINE duration, so it is unit-mixed when the rates differ —
-        the seconds come from Resolve's own source-time readers instead, and read null
-        rather than convert the derived value.
+        Each item reports source_start/source_end (SOURCE frames, end EXCLUSIVE) in the
+        MEDIA's frame rate, the source_fps they are counted in, and
+        source_start_seconds/source_end_seconds. Use the reported source_fps — a WAV
+        freezes the PROJECT's rate at import, so it differs from the timeline whenever
+        the project moved afterwards, and dividing by the timeline rate is then wrong by
+        minutes. source_fps is null when the rate could not be read; treat the frames as
+        unitless then, do not assume the timeline's. source_end comes from
+        GetSourceEndTime x source_fps, so it is a source frame even when the rates
+        differ; it falls back to source_start + TIMELINE duration (unit-mixed) only when
+        that reader or the rate is unavailable.
       detect_gaps_overlaps(track_types?, min_gap?) -> {gaps, overlaps}
       source_range_report(handles?, merge?) -> {ranges, occurrences}
       export_timeline_checked(path, format?|type?, subtype?, require_temp_path?, dry_run?, background?) -> {success, path, size | job_id}
@@ -23493,10 +23549,10 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
                 "track_index is the 1-based destination track WITHIN track_type (default 1); the "
                 "variant is created with enough video/audio tracks to cover the highest index used, "
                 "so multicam angles can be rebuilt onto V2/V3 instead of collapsing onto V1. "
-                "SOURCE frames are counted in the MEDIA's frame rate, not the timeline's — an audio "
-                "item's read back as 24 fps for a WAV (api_truth \"GetSourceStartFrame on an AUDIO "
-                "item\"); pass them in that space, placement converts and items[].duration_delta "
-                "reports the conversion. "
+                "SOURCE frames are counted in the MEDIA's frame rate, not the timeline's — read the "
+                "clip's source_fps rather than assuming one, since a WAV freezes the PROJECT's rate "
+                "at import (api_truth \"GetSourceStartFrame on an AUDIO item\"); pass the frames in "
+                "that space, placement converts and items[].duration_delta reports the conversion. "
                 "pack=true butts clips together at the end of each track (gap-free, ignores record_frame)"
             ),
             "returns": "{success, id, items}  — items[].placed = placed frames; items[].range = the requested range",
@@ -23508,7 +23564,7 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
                 '    {"clip_id": "<cam3-id>", "start_frame": 1500, "end_frame": 1600,\n'
                 '     "track_index": 2},\n'
                 '    {"clip_id": "<wav-id>", "track_type": "audio", "track_index": 1,\n'
-                '     "start_frame": 56871, "end_frame": 57591}  # 24 fps source frames\n'
+                '     "start_frame": 56871, "end_frame": 57591}  # frames in the WAV\'s own source_fps\n'
                 '  ],\n'
                 '  "dry_run": True\n'
                 '})'

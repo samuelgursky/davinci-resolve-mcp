@@ -1,17 +1,17 @@
-"""Guard for the audio source-frame-rate trap.
+"""Guard for the source-frame-rate trap and the units around it.
 
 A timeline item's source frames are counted in the MEDIA's frame rate, not the
-timeline's, and a WAV carries no native rate — Resolve reports 24 for it. Read
-back at the timeline rate, a WAV offset lands minutes from the real position in
-the file, and nothing errors: probe derives source_end as
-source_start + timeline_duration, so the pair stays self-consistent whatever
-rate the caller assumes (api_truth "GetSourceStartFrame on an AUDIO item",
-measured on Studio 21.0.3.7).
+timeline's. A WAV has no intrinsic rate, so it takes the PROJECT's timeline rate
+at import and freezes it — move the project afterwards and the clip keeps the
+old one (measured on Studio 19.1.3.7, 2026-08-10; see the api_truth entry). Read
+back at the timeline rate, that offset lands minutes from the real position in
+the file, and nothing errors.
 
 Documentation alone cannot stop that — it only helps a caller who thinks to look
-it up. These tests pin the guard that makes it unmissable: every summary carries
-source_fps and the seconds derived with it, so the frame number always arrives
-with its unit attached.
+it up. These tests pin the guards that make it unmissable: every summary carries
+source_fps and the seconds beside the frames, so a frame number always arrives
+with its unit attached, and source_end is computed in source space rather than
+by adding a timeline duration to a source frame.
 """
 import unittest
 
@@ -230,6 +230,103 @@ class SummaryCarriesTheRateTest(unittest.TestCase):
         self.assertEqual(summary["source_start_seconds"], 2369.625)
         self.assertEqual(summary["file_path"], "/tmp/ZOOM0028.WAV")
         self.assertEqual(media_pool_item.property_calls, [""])
+
+
+class SourceEndIsComputedInSourceSpaceTest(unittest.TestCase):
+    """source_end is EXCLUSIVE and must be a SOURCE frame.
+
+    It used to be `source_start + duration`, where duration is a TIMELINE
+    duration (GetDuration) — unit-mixed the moment the rates differ. Measured
+    live on Studio 19.1.3.7 against the endFrame actually sent, that overshot by
+    +24, +26, +108 and +149 frames on a 24 fps WAV in a 29.97 fps timeline, and
+    `extract_source_frame_ranges` builds pull ranges out of it.
+
+    Resolve's second-reader has no frame-rate assumption in it, so
+    `GetSourceEndTime x source_fps` is in source space by construction: exact on
+    12 of 12 valid items across matched AND mismatched rates, both media types.
+    """
+
+    @staticmethod
+    def _item(fps, source_start, duration, end_time):
+        class WithEndTime(TimelineItemStub):
+            def GetSourceEndTime(self):
+                return end_time
+
+        return WithEndTime(MediaPoolItemStub({"FPS": fps}),
+                           source_start=source_start, duration=duration)
+
+    def test_mismatched_rates_no_longer_overshoot(self):
+        # The measured row: WAV frozen at 24 in a 29.97 timeline, source frames
+        # 300-735 sent, timeline duration 543. GetSourceEndTime read 30.633 s.
+        item = self._item(24, source_start=300, duration=543, end_time=30.633)
+        summary = _timeline_item_summary(item, ("audio", 1))
+        self.assertEqual(summary["source_end"], 735)          # what was sent
+        self.assertNotEqual(summary["source_end"], 300 + 543)  # the old +108
+        # Still exclusive: the span is the source frames the item consumes.
+        self.assertEqual(summary["source_end"] - summary["source_start"], 435)
+
+    def test_matched_rates_land_on_exactly_the_old_value(self):
+        # 29.97 source in a 29.97 timeline: the derived value was already right,
+        # so the new route must reproduce it or every matched-rate consumer moves.
+        item = self._item(29.97, source_start=300, duration=435, end_time=24.524)
+        summary = _timeline_item_summary(item, ("video", 1))
+        self.assertEqual(summary["source_end"], 300 + 435)
+
+    def test_rounding_absorbs_the_seconds_quantisation(self):
+        # The conversions land just off an integer in both directions and must
+        # round to the frame that was sent, not truncate toward it.
+        for fps, start, end_time, expected in (
+            (24, 0, 4.175, 100),        # 100.20 -> 100
+            (24, 1500, 71.800, 1723),   # 1723.20 -> 1723
+            (24, 3000, 150.008, 3600),  # 3600.19 -> 3600
+            (29.97, 300, 24.524, 735),  # 734.98 -> 735
+        ):
+            with self.subTest(fps=fps, end_time=end_time):
+                item = self._item(fps, source_start=start, duration=1, end_time=end_time)
+                self.assertEqual(
+                    _timeline_item_summary(item, ("audio", 1))["source_end"], expected)
+
+    def test_falls_back_to_the_old_value_without_the_second_reader(self):
+        # An older build keeps the historical number rather than losing the field.
+        item = TimelineItemStub(MediaPoolItemStub({"FPS": 24}),
+                                source_start=300, duration=543)
+        self.assertEqual(_timeline_item_summary(item, ("audio", 1))["source_end"], 843)
+
+    def test_falls_back_when_the_rate_is_unreadable(self):
+        # Seconds alone cannot produce a frame; without a rate there is nothing
+        # to multiply by, so the historical value stands.
+        item = self._item("n/a", source_start=300, duration=543, end_time=30.633)
+        self.assertEqual(_timeline_item_summary(item, ("audio", 1))["source_end"], 843)
+
+    def test_an_end_at_or_before_the_start_is_refused(self):
+        # Readers disagreeing about an item must not yield a negative span.
+        item = self._item(24, source_start=300, duration=543, end_time=1.0)
+        summary = _timeline_item_summary(item, ("audio", 1))
+        self.assertEqual(summary["source_end"], 843)
+        self.assertGreater(summary["source_end"], summary["source_start"])
+
+    def test_the_left_offset_audio_fallback_keeps_the_pair_self_consistent(self):
+        # On the GetLeftOffset fallback for an audio item, source_start is a
+        # TIMELINE frame (75784 where the source frame is 60687). A source-space
+        # end beside it would make start and end different units in one summary,
+        # and source_end - source_start meaningless. Neither choice rescues a
+        # consumer here, so keep the historical self-consistent pair — the end
+        # stays a duration away from the start — and let source_fps: null carry
+        # the warning that these numbers have no reliable unit.
+        class NoStartFrame(TimelineItemStub):
+            GetSourceStartFrame = None
+
+            def GetLeftOffset(self):
+                return 75784
+
+            def GetSourceEndTime(self):
+                return 30.633
+
+        summary = _timeline_item_summary(NoStartFrame(MediaPoolItemStub({"FPS": 24})),
+                                         ("audio", 1))
+        self.assertIsNone(summary["source_fps"])
+        self.assertEqual(summary["source_end"] - summary["source_start"],
+                         summary["duration"])
 
 
 if __name__ == "__main__":

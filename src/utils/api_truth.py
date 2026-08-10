@@ -661,12 +661,28 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
-        "symbol": "TimelineItem.GetSourceStartFrame on an AUDIO item (media-rate frames; 24 fps for WAV)",
+        "symbol": "TimelineItem.GetSourceStartFrame on an AUDIO item (media-rate frames; a WAV freezes the PROJECT rate at import)",
         "object": "TimelineItem",
         "signature": "() -> int  # source frame, counted in the MEDIA's frame rate",
         "reality": "The value is counted in the source MEDIA's own frame rate, not "
-                   "the timeline's — and a WAV carries no frame rate, so Resolve "
-                   "falls back to 24 fps. Reading it at the timeline rate lands "
+                   "the timeline's. CORRECTION (2026-08-10, Studio 19.1.3.7): an "
+                   "earlier version of this entry said a WAV 'carries no frame rate, "
+                   "so Resolve falls back to 24 fps'. That is WRONG, and 24 is not a "
+                   "constant to rely on. A WAV takes the PROJECT's timelineFrameRate "
+                   "AT IMPORT and freezes it. Measured with one 400.000 s 48 kHz WAV "
+                   "imported into three project states: project at 24 -> clip FPS "
+                   "24.0, Duration 00:06:40:00 (9600 frames = 400 s); project at "
+                   "29.97 -> clip FPS 29.97, Duration 00:06:39:18 (11988 frames = "
+                   "400 s); and changing the project rate to 29.97 AFTER import left "
+                   "the clip reading 24.0 (SetSetting returned True and the project "
+                   "did move). So the mismatch is not 'audio is always 24' but "
+                   "'the clip kept the rate the project had when it was imported, "
+                   "and the project moved afterwards' — which also means a WAV "
+                   "imported into a 29.97 project behaves exactly like video, with "
+                   "no trap at all. ALWAYS read the clip's FPS property; never "
+                   "assume 24. The original 21.0.3.7 report below is consistent with "
+                   "this: that project was at 24 when the WAV was imported. "
+                   "Reading the frames at the timeline rate lands "
                    "minutes away from the real position in the file. Verified live "
                    "on Studio 21.0.3.7 (2026-08-09, 29.97 fps timeline): a "
                    "ZOOM0028.WAV item reported source_start 56871, which is "
@@ -712,13 +728,28 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "29.97 timeline) was unaffected in both: 24.524 s read against "
                    "24.525 s derived. Both second-readers exist on 19.1.3.7, so "
                    "the GetSourceEndFrame fallback below is for builds older "
-                   "still.",
+                   "still. GetSourceEndFrame ITSELF changes convention between "
+                   "the two regimes and cannot be used raw: measured over 12 "
+                   "items on 19.1.3.7, it is EXCLUSIVE (equals the endFrame "
+                   "sent) when the source rate equals the timeline rate, and "
+                   "INCLUSIVE (one less) when they differ — off by one in "
+                   "exactly the case a caller reaches for it. It is not a "
+                   "media-type split: the same WAV imported at 29.97 into a "
+                   "29.97 timeline read exclusive, like video, and only the "
+                   "rate MISMATCH flipped it. What IS stable across both "
+                   "regimes is GetSourceEndTime x media_fps, which was exact "
+                   "on 12 of 12 valid items (30.633 s x 24 = 735.19 -> 735; "
+                   "24.524 s x 29.97 = 734.98 -> 735) — seconds carry no "
+                   "frame-rate assumption, so the product is in source space "
+                   "by construction.",
         "recommended": "Convert an audio item's source frames with the MEDIA's rate, "
-                       "never the timeline's: seconds = source_start / media_fps, "
-                       "treating a WAV (or any container with no native rate) as 24 "
-                       "fps. Take media_fps from the media-pool item's 'FPS' clip "
-                       "property or from ffprobe — do not infer it from the "
-                       "timeline. Feed the frames back to timeline "
+                       "never the timeline's: seconds = source_start / media_fps. "
+                       "READ media_fps from the media-pool item's 'FPS' clip property "
+                       "(or ffprobe) every time — do not infer it from the timeline, "
+                       "and do NOT hard-code 24 for a WAV: that number is whatever "
+                       "the project rate was when the clip was imported, so it is 24 "
+                       "only for a project that was at 24, and a WAV imported at "
+                       "29.97 has no mismatch at all. Feed the frames back to timeline "
                        "create_variant_from_ranges in the same media-rate space you "
                        "read them in; it converts on placement and reports the "
                        "conversion in items[].duration_delta. The separate "
@@ -730,21 +761,27 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "beside the frames, so the number always arrives with its "
                        "unit; on the GetLeftOffset fallback for an audio item it "
                        "reports the rate as unknown rather than converting a "
-                       "timeline-frame value at the media rate. Note which "
-                       "number may be converted: source_end in the same summary "
-                       "is derived as source_start + TIMELINE duration, so on "
-                       "this WAV it adds 435 frames of 29.97 record time to a 24 "
-                       "fps source frame and dividing THAT by 24 reports an "
-                       "18.125 s span for a 14.515 s clip. The seconds therefore "
-                       "come from GetSourceStartTime/GetSourceEndTime — which "
-                       "answer in seconds with no rate inference at all — then "
-                       "from GetSourceEndFrame / media_fps, and read null rather "
-                       "than convert the derived source_end.",
+                       "timeline-frame value at the media rate. source_end is "
+                       "no longer source_start + TIMELINE duration: as of "
+                       "v2.93.0 it is round(GetSourceEndTime x media_fps), "
+                       "which is a SOURCE frame by construction and stays "
+                       "EXCLUSIVE as every caller already assumed. Measured "
+                       "live on 19.1.3.7 over 8 items in both regimes, it "
+                       "equals the endFrame actually sent every time, and it "
+                       "reproduces the old value exactly wherever the old value "
+                       "was already right — so matched-rate media does not "
+                       "move. The old arithmetic overshot by +24/+26/+108/+149 "
+                       "frames on the mismatched WAV, and timeline "
+                       "extract_source_frame_ranges built pull ranges out of "
+                       "it: widths of 543 and 749 for clips that consume 435 "
+                       "and 600 source frames. It falls back to the old sum "
+                       "only when GetSourceEndTime or the rate is unreadable.",
         "tags": ["timeline", "audio", "wav", "frame-rate", "mixed-fps",
                  "silent-failure", "readback"],
         "submit": "bug",
         "mitigation": ["_media_item_source_fps", "_source_frames_to_seconds",
-                       "_timeline_item_source_seconds"],
+                       "_timeline_item_source_seconds",
+                       "_timeline_item_source_end_exclusive"],
     },
     {
         "symbol": "Razor / blade / split a timeline item",
