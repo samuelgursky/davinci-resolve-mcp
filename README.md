@@ -59,11 +59,21 @@ transport tried, so a bridge that stops answering reports its own fault rather
 than quietly falling back to another transport. Use it when the bridge is the
 path you intend to depend on.
 
-On **macOS**, this requires a **framework Python** (python.org). Resolve
-enumerates `.py` scripts only when it finds one — Homebrew, pyenv and conda
-interpreters are not detected, and the script silently never appears in the
-menu. A Lua canary is installed alongside so you can tell that apart from a
-wrong folder.
+On **macOS**, Resolve looks for Python 3 in exactly two places: the
+`PYTHON3HOME` environment variable, then `/usr/local/bin/python3`. Homebrew,
+pyenv, uv and conda land in neither, so the script silently never appears in the
+menu. A python.org install works because its installer creates
+`/usr/local/bin/python3` — but you do not need one: point Resolve at the
+interpreter you already have, no `sudo` required.
+
+```bash
+launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"
+```
+
+Use `launchctl setenv`, not `export` — Resolve is launched from the Dock and
+never sees your shell's environment. Restart Resolve afterwards. A Lua canary is
+installed alongside so you can tell "Python not detected" apart from a wrong
+folder.
 
 Validated on free 21.0.3.7 and Studio 19.1.3.7, both macOS. The Windows paths
 added in v2.70.1 (issue #106) shipped unverified; reports on free 21.0.1.11

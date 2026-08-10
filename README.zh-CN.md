@@ -53,7 +53,13 @@ python scripts/install_resolve_bridge.py
 `DAVINCI_RESOLVE_BRIDGE=1` 则是*强制*走桥接：它会成为唯一尝试的传输方式，因此桥接一旦停止响应会
 直接报错，而不会悄悄回退到其他传输。当你明确要依赖桥接时使用它。
 
-在 **macOS** 上，这需要 **framework 版 Python**（python.org 官网安装包）。Resolve 只有找到 framework Python 才会枚举 `.py` 脚本——Homebrew、pyenv、conda 的解释器都不被识别，脚本会静默地不出现在菜单里。安装时会顺带装一个 Lua 金丝雀脚本，帮你区分"Python 不对"和"目录放错"。
+在 **macOS** 上，Resolve 只在两个位置查找 Python 3：环境变量 `PYTHON3HOME`，然后是 `/usr/local/bin/python3`。Homebrew、pyenv、uv、conda 都不装在这两处，因此脚本会静默地不出现在菜单里。python.org 安装包之所以有效，是因为它的安装程序会创建 `/usr/local/bin/python3`——但你并不需要它：直接把 Resolve 指向你已有的解释器即可，无需 `sudo`。
+
+```bash
+launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"
+```
+
+必须用 `launchctl setenv` 而不是 `export`——Resolve 从 Dock 启动，看不到你 shell 的环境变量。之后重启 Resolve。安装时会顺带装一个 Lua 金丝雀脚本，帮你区分"Python 未被检测到"和"目录放错"。
 
 已在免费版 21.0.3.7 和 Studio 19.1.3.7 上验证（均为 macOS）。v2.70.1（issue #106）加入的 Windows 路径发布时未经验证；后续免费版 21.0.1.11（issue #109）和免费版 21.0.3.7（issue #112）的用户报告证实，Windows 11 上桥接在 `%PROGRAMDATA%` 和 `%APPDATA%` **两处**都能安装、列出并正常服务，这些路径现在是已证实而非假设。Linux 同样已获证实：免费版 20.3.2.9 的用户报告（issue #129，Fedora 43）显示桥接可安装到 `~/.local/share/DaVinciResolve/Fusion/Scripts/Utility`，用系统 Python 就能直接枚举脚本（Linux 不需要 framework 版 Python），并能端到端正常服务。现在没有任何平台停留在假设上：macOS 为本项目直接验证，Windows 和 Linux 来自用户报告。
 

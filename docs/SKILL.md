@@ -30,12 +30,17 @@ scripting is unavailable, with no environment variable needed.
 tried, so its faults surface directly instead of degrading to another path.
 Existing tool call sites work unchanged. Two things to know when diagnosing it:
 
-- On macOS, Resolve lists `.py` scripts only when it can find a **framework
-  Python** (python.org). Homebrew/pyenv/conda are not detected and the script
-  simply never appears, with no error. The installer preflights this and ships a
-  Lua canary, which always lists, so "Python not detected" is distinguishable
-  from "wrong folder". The preflight is macOS-only — off macOS Resolve finds
-  Python by other means, and running the check there was a false alarm (#106).
+- On macOS, Resolve finds Python 3 through **`PYTHON3HOME`, then
+  `/usr/local/bin/python3`** — and nowhere else, so Homebrew/pyenv/uv/conda
+  interpreters simply never appear, with no error. python.org installs work
+  because that installer creates `/usr/local/bin/python3`; framework-ness itself
+  is not the variable (#143). The sudo-free fix is
+  `launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"`
+  — `launchctl`, not `export`, because Resolve is GUI-launched and inherits
+  launchd's environment. The installer preflights both routes and ships a Lua
+  canary, which always lists, so "Python not detected" is distinguishable from
+  "wrong folder". The preflight is macOS-only — off macOS Resolve finds Python
+  by other means, and running the check there was a false alarm (#106).
 - **Windows: both script folders confirmed.** `%PROGRAMDATA%` (#109) and
   `%APPDATA%` (#112) have each been shown serving the bridge on Windows 11 free
   builds. If a user reports the menu entry missing on Windows, ask whether the

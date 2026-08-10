@@ -767,30 +767,99 @@ class InstallerTargetTests(unittest.TestCase):
         self.assertIsNotNone(probe_markers, "probe has no PARENT_MARKERS to compare")
         self.assertEqual(tuple(rb.PARENT_MARKERS), probe_markers)
 
-    def test_framework_python_detection_drives_the_preflight(self) -> None:
-        """Resolve lists .py scripts only with a framework Python — silently.
+    def _darwin_preflight(self, *, frameworks=(), python3_home=None,
+                          shell_home=None, fallback_exists=False):
+        """python_preflight() on a synthetic macOS machine.
 
         Pinned to darwin explicitly: the check is macOS-only, so on a Linux or
-        Windows runner an unpinned version of this test would assert the very
-        false alarm the platform gate exists to suppress.
+        Windows runner an unpinned version would assert the very false alarm the
+        platform gate exists to suppress.
         """
         import sys as _sys
         from unittest import mock
 
+        home = {
+            "value": python3_home,
+            "in_launchd": python3_home is not None,
+            "in_this_shell": shell_home,
+            "dylib": f"{python3_home}/lib/libpython3.12.dylib" if python3_home else None,
+            "usable": python3_home is not None,
+        }
+        fallback = {
+            "path": "/usr/local/bin/python3",
+            "exists": fallback_exists,
+            "resolves_to": "/usr/local/bin/python3" if fallback_exists else None,
+        }
         with mock.patch.object(_sys, "platform", "darwin"), \
-                mock.patch.object(self.installer, "framework_pythons", lambda: []):
-            preflight = self.installer.python_preflight()
-        self.assertFalse(preflight["resolve_will_list_python_scripts"])
-        self.assertIn("python.org", preflight["advice"])
-        self.assertIn("silently", preflight["advice"])
+                mock.patch.object(self.installer, "framework_pythons", lambda: list(frameworks)), \
+                mock.patch.object(self.installer, "python3_home_prefix", lambda: home), \
+                mock.patch.object(self.installer, "fallback_python3", lambda: fallback):
+            return self.installer.python_preflight()
 
-        with mock.patch.object(_sys, "platform", "darwin"), mock.patch.object(
-            self.installer, "framework_pythons",
-            lambda: ["/Library/Frameworks/Python.framework/Versions/3.11"],
-        ):
-            preflight = self.installer.python_preflight()
+    def test_no_python_at_all_is_the_silent_failure(self) -> None:
+        preflight = self._darwin_preflight()
+        self.assertFalse(preflight["resolve_will_list_python_scripts"])
+        self.assertIn("silently", preflight["advice"])
+        # Both remedies must be offered, cheapest first: the sudo-free one is the
+        # whole point of issue #143.
+        self.assertIn("PYTHON3HOME", preflight["advice"])
+        self.assertIn("launchctl setenv", preflight["advice"])
+        self.assertIn("python.org", preflight["advice"])
+
+    def test_a_framework_python_still_satisfies_the_preflight(self) -> None:
+        preflight = self._darwin_preflight(
+            frameworks=["/Library/Frameworks/Python.framework/Versions/3.11"])
         self.assertTrue(preflight["resolve_will_list_python_scripts"])
         self.assertIsNone(preflight["advice"])
+
+    def test_python3home_alone_satisfies_the_preflight(self) -> None:
+        """Issue #143: a uv/pixi/conda-forge interpreter is explicitly NOT a
+        framework build and can never become one, but Resolve reads PYTHON3HOME
+        before it reads anything else. Free 21.0.4.5 ran the bridge on uv-managed
+        CPython 3.12.13 with no python.org Python on the machine at all, so
+        demanding a framework build there was a system-wide sudo install
+        prescribed for a problem the user did not have."""
+        preflight = self._darwin_preflight(
+            python3_home="/Users/x/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none")
+        self.assertTrue(preflight["resolve_will_list_python_scripts"])
+        self.assertIsNone(preflight["advice"])
+        self.assertEqual(preflight["framework_pythons"], [])
+
+    def test_usr_local_python3_alone_satisfies_the_preflight(self) -> None:
+        """The path actually baked into fusionscript.so. python.org installs work
+        because their installer creates it — framework-ness was correlated, not
+        causal — so it must count on its own."""
+        preflight = self._darwin_preflight(fallback_exists=True)
+        self.assertTrue(preflight["resolve_will_list_python_scripts"])
+        self.assertIsNone(preflight["advice"])
+
+    def test_python3home_in_the_shell_only_is_called_out(self) -> None:
+        """`export PYTHON3HOME=...` is the natural thing to try and it cannot
+        work: Resolve is GUI-launched and inherits launchd's environment. Found
+        by another route here, so this is a warning, not a failure — but silence
+        would let the user conclude the export was what fixed it."""
+        preflight = self._darwin_preflight(
+            fallback_exists=True, shell_home="/opt/homebrew/opt/python@3.12")
+        self.assertTrue(preflight["resolve_will_list_python_scripts"])
+        self.assertIn("launchd", preflight["advice"])
+        self.assertIn("launchctl setenv", preflight["advice"])
+
+    def test_launchd_env_does_not_read_our_own_environment(self) -> None:
+        """The one thing launchd_env must never do. os.environ would report a hit
+        for a shell export, which is exactly the case that does not work."""
+        import inspect
+
+        import ast
+        import textwrap
+
+        source = inspect.getsource(self.installer.launchd_env)
+        self.assertIn("launchctl", source)
+        # Check the executable body, not the docstring — the docstring names
+        # os.environ precisely to say it is deliberately not used.
+        fn_node = ast.parse(textwrap.dedent(source)).body[0]
+        statements = fn_node.body[1:] if ast.get_docstring(fn_node) else fn_node.body
+        body = "\n".join(ast.unparse(node) for node in statements)
+        self.assertNotIn("os.environ", body)
 
     def test_the_framework_python_alarm_is_macos_only(self) -> None:
         """`/Library/Frameworks` does not exist off macOS, so the check found
@@ -811,16 +880,23 @@ class InstallerTargetTests(unittest.TestCase):
                 )
                 self.assertTrue(preflight["resolve_will_list_python_scripts"])
 
-    def test_homebrew_python_does_not_count_as_a_framework_install(self) -> None:
-        # The exact trap: three Homebrew interpreters on PATH and Resolve sees none.
+    def test_homebrew_python_is_on_neither_discovery_route(self) -> None:
+        # The exact trap: three Homebrew interpreters on PATH and Resolve sees
+        # none — not because they are not frameworks, but because neither the
+        # framework roots nor /usr/local/bin/python3 is where Homebrew installs.
         for root in self.installer._FRAMEWORK_PYTHON_ROOTS:
             self.assertNotIn("homebrew", str(root).lower())
             self.assertIn("Python.framework", str(root))
+        self.assertNotIn("homebrew", str(self.installer._FALLBACK_PYTHON3).lower())
+        self.assertEqual(str(self.installer._FALLBACK_PYTHON3), "/usr/local/bin/python3")
 
     def test_a_lua_canary_ships_with_every_probe(self) -> None:
         # Lua always enumerates, so the canary separates "Python not detected"
-        # from "wrong folder" — the ambiguity that cost four restarts.
-        self.assertIn("framework Python", self.installer._LUA_CANARY)
+        # from "wrong folder" — the ambiguity that cost four restarts. It must
+        # name both remedies, or it sends uv/pixi users to a sudo install they
+        # do not need (issue #143).
+        self.assertIn("PYTHON3HOME", self.installer._LUA_CANARY)
+        self.assertIn("python.org", self.installer._LUA_CANARY)
         self.assertIn("print(", self.installer._LUA_CANARY)
 
     # ── Windows (issue #106) ────────────────────────────────────────────────
@@ -2182,9 +2258,13 @@ class NotConnectedMessageTests(unittest.TestCase):
             error = server._not_connected_error()["error"]
         self.assertEqual(error["code"], "BRIDGE_UNAVAILABLE")
         self.assertIn("Workspace > Scripts > resolve_bridge", error["remediation"])
-        # The framework-Python trap cost four restarts to find once; a caller
-        # staring at an empty Scripts menu should not have to rediscover it.
-        self.assertIn("framework Python", error["remediation"])
+        # The Python-discovery trap cost four restarts to find once; a caller
+        # staring at an empty Scripts menu should not have to rediscover it. The
+        # remediation must name the sudo-free route, not just python.org — that
+        # was issue #143, where the only advice on offer was a system-wide
+        # install the reporter's machine did not need and may not have allowed.
+        self.assertIn("PYTHON3HOME", error["remediation"])
+        self.assertIn("launchctl setenv", error["remediation"])
 
     def test_a_genuinely_absent_resolve_says_so(self) -> None:
         from unittest import mock

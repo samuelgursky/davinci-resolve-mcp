@@ -980,8 +980,10 @@ def _not_connected_error():
             reason="DAVINCI_RESOLVE_BRIDGE is set, so no other transport is tried.",
             remediation="In Resolve, run Workspace > Scripts > resolve_bridge. If it is not in "
                         "that menu, run `python scripts/install_resolve_bridge.py` and restart "
-                        "Resolve; a framework Python from python.org is required for Resolve to "
-                        "list .py scripts at all.",
+                        "Resolve. On macOS, Resolve lists .py scripts only if it can find a "
+                        "Python 3 via PYTHON3HOME or /usr/local/bin/python3; if neither exists, "
+                        "run `launchctl setenv PYTHON3HOME \"$(python3 -c 'import sys; "
+                        "print(sys.prefix)')\"` (launchctl, not export) and restart Resolve.",
             state={"resolve_running": running, "bridge_enabled": True},
         )
     if running:

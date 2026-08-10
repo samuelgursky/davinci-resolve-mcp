@@ -223,22 +223,69 @@ def stale_container_warning(targets: list[Path]) -> str | None:
     )
 
 
-#: Resolve enumerates `.py` scripts in Workspace > Scripts only when it finds a
-#: **framework** Python. Homebrew/pyenv/conda interpreters are not detected, and
-#: the failure is completely silent: the script sits in the right folder with the
-#: right permissions and simply never appears. Lua is embedded, so `.lua` always
-#: lists — which is why a Lua canary is installed alongside the probe.
+#: Resolve enumerates `.py` scripts in Workspace > Scripts only when it can find
+#: and load a Python 3, and the failure is completely silent: the script sits in
+#: the right folder with the right permissions and simply never appears. Lua is
+#: embedded, so `.lua` always lists — which is why a Lua canary is installed
+#: alongside the probe.
+#:
+#: **What it actually looks for (issue #143, corrected 2026-08-10).** This check
+#: used to require a *framework* build and send everyone else to python.org. That
+#: was the right remedy for the wrong reason, and it turned a one-line fix into a
+#: system-wide `sudo` install that managed machines often forbid. In
+#: `fusionscript.so` — read on Studio 19.1.3.7, a January 2025 binary, matching
+#: what the reporter read on 21.0.4.5 — every `Python.framework` reference is
+#: Python **2.7**:
+#:
+#:     /Library/Frameworks/Python.framework/Versions/2.7/
+#:     /System/Library/Frameworks/Python.framework/Versions/2.7/
+#:
+#: There is no `Python.framework/Versions/3` string at all. Python 3 is found by
+#: a different mechanism entirely, whose pieces sit adjacent in the binary:
+#:
+#:     PYTHON3HOME
+#:     /usr/local/bin/python3
+#:     python3 -c 'import sys; sys.stdout.write("%s.%s|%s" % (sys.version_info.major, sys.version_info.minor, sys.prefix))'
+#:     /libpython
+#:
+#: i.e. resolve `PYTHON3HOME`, else `/usr/local/bin/python3`; probe it for its
+#: version and `sys.prefix`; `dlopen` `<prefix>/lib/libpython3.X.dylib`. The
+#: ordering is inferred from adjacency rather than decompiled control flow, but
+#: the two entry points are not in doubt.
+#:
+#: That explains every observation the old rule was built on. python.org works
+#: because its installer creates `/usr/local/bin/python3` — verified here, where
+#: it is a symlink into `Python.framework/Versions/3.11`. Homebrew on Apple
+#: silicon installs to `/opt/homebrew/bin`, pyenv to `~/.pyenv/shims`, and uv to
+#: `~/.local/share/uv/...`; none of them land `/usr/local/bin/python3`, so none
+#: are found. Framework-ness was never the variable — it was correlated with it.
+#:
+#: So a non-framework interpreter works once Resolve can see it, and `uv`/`pixi`/
+#: conda-forge users are not stuck: they can point `PYTHON3HOME` at their prefix
+#: without touching a system directory. It must be set with `launchctl setenv`,
+#: not `export` — Resolve is GUI-launched and inherits launchd's environment, not
+#: any shell's.
 _FRAMEWORK_PYTHON_ROOTS = (
     Path("/Library/Frameworks/Python.framework/Versions"),
     Path("/System/Library/Frameworks/Python.framework/Versions"),
 )
 
+#: The interpreter path baked into fusionscript.so as the fallback when
+#: PYTHON3HOME is unset. This is the one python.org's installer creates.
+_FALLBACK_PYTHON3 = Path("/usr/local/bin/python3")
+
 _LUA_CANARY = """-- Installed by davinci-resolve-mcp as an enumeration canary.
 -- If THIS appears under Workspace > Scripts but resolve_bridge_probe does not,
--- Resolve is listing Lua and silently skipping Python: it cannot find a
--- framework Python install. Install one from python.org and restart Resolve.
-print("Resolve is enumerating scripts. If the Python probe is missing, install a")
-print("framework Python from python.org (Homebrew/pyenv are NOT detected).")
+-- Resolve is listing Lua and silently skipping Python: it cannot find a Python 3.
+-- It looks at PYTHON3HOME, then /usr/local/bin/python3 -- and nowhere else, which
+-- is why Homebrew, pyenv, uv and conda interpreters go unseen. Either point it at
+-- the one you have (no sudo):
+--   launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"
+-- (launchctl, not export -- Resolve never sees your shell), or install a
+-- python.org build, which creates /usr/local/bin/python3. Restart Resolve after.
+print("Resolve is enumerating scripts. If the Python probe is missing, Resolve")
+print("cannot find a Python 3: set PYTHON3HOME with launchctl setenv, or install")
+print("a python.org build. Homebrew/pyenv/uv/conda are not looked at directly.")
 """
 
 
@@ -258,37 +305,145 @@ def framework_pythons() -> list[str]:
     return found
 
 
+def launchd_env(name: str) -> str | None:
+    """A variable's value as a GUI-launched Resolve sees it.
+
+    Deliberately NOT ``os.environ``. Resolve is started from the Dock or Finder,
+    so it inherits launchd's environment; a ``export PYTHON3HOME=...`` in the
+    terminal running this installer is invisible to it. Reading our own
+    environment would report a hit in precisely the case where the user has done
+    the wrong thing and needs to be told so.
+    """
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["launchctl", "getenv", name],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    value = (completed.stdout or "").strip()
+    return value or None
+
+
+def python3_home_prefix() -> dict:
+    """Is PYTHON3HOME set for Resolve, and does it point at a loadable Python 3?
+
+    "Loadable" means the `lib/libpython3.X.dylib` that fusionscript.so dlopens.
+    An interpreter that cannot supply one is reported as set-but-unusable rather
+    than counted, because the silent-non-enumeration symptom is identical and the
+    remedy is not.
+    """
+    value = launchd_env("PYTHON3HOME")
+    result = {
+        "value": value,
+        "in_launchd": value is not None,
+        "in_this_shell": os.environ.get("PYTHON3HOME") or None,
+        "dylib": None,
+        "usable": False,
+    }
+    if not value:
+        return result
+    try:
+        dylibs = sorted(Path(value).glob("lib/libpython3.*.dylib"))
+    except OSError:
+        dylibs = []
+    if dylibs:
+        result["dylib"] = str(dylibs[0])
+        result["usable"] = True
+    return result
+
+
+def fallback_python3() -> dict:
+    """`/usr/local/bin/python3` — the path baked into fusionscript.so.
+
+    Present for a python.org install (its installer creates it) and absent for
+    Homebrew, pyenv, uv and conda, which is the whole of the "framework Pythons
+    only" folklore.
+    """
+    result = {"path": str(_FALLBACK_PYTHON3), "exists": False, "resolves_to": None}
+    try:
+        if not _FALLBACK_PYTHON3.exists():
+            return result
+        result["exists"] = True
+        result["resolves_to"] = str(_FALLBACK_PYTHON3.resolve())
+    except OSError:
+        pass
+    return result
+
+
 def python_preflight() -> dict:
     """Will Resolve list the Python probe we are about to install?
 
-    The framework-Python trap is **macOS-only**: `/Library/Frameworks/...` does
-    not exist on Windows or Linux, where Resolve finds Python by other means (the
-    registry, or the system interpreter). Running the macOS check there always
-    found nothing and emitted the macOS remediation — telling the Windows 11 user
-    in issue #106, who had a working python.org 3.12, to go install the Python
-    they already had. Report "no known reason it will not list" off macOS rather
-    than a false alarm; the Lua canary still ships either way, so a genuine
-    enumeration problem remains diagnosable.
+    The trap is **macOS-only**: `/Library/Frameworks/...` and
+    `/usr/local/bin/python3` are not how Resolve finds Python on Windows or
+    Linux (the registry, or the system interpreter). Running the macOS check
+    there always found nothing and emitted the macOS remediation — telling the
+    Windows 11 user in issue #106, who had a working python.org 3.12, to go
+    install the Python they already had. Report "no known reason it will not
+    list" off macOS rather than a false alarm; the Lua canary still ships either
+    way, so a genuine enumeration problem remains diagnosable.
+
+    On macOS, Resolve is satisfied by EITHER discovery route (see the note on
+    `_FRAMEWORK_PYTHON_ROOTS`), so requiring a framework build failed a `uv` or
+    `pixi` user who had a perfectly good interpreter and sent them to a
+    system-wide `sudo` install they may not be permitted to run — issue #143,
+    where free Resolve 21.0.4.5 ran the bridge on uv-managed CPython 3.12.13
+    with no python.org Python on the machine at all.
     """
     if sys.platform != "darwin":
         return {
             "framework_pythons": [],
+            "python3_home": None,
+            "fallback_python3": None,
             "resolve_will_list_python_scripts": True,
             "advice": None,
         }
     frameworks = framework_pythons()
+    home = python3_home_prefix()
+    fallback = fallback_python3()
+    # Either route is sufficient. PYTHON3HOME wins when both are present: that is
+    # the order the binary's strings imply, and it is the one the user chose.
+    found = home["usable"] or fallback["exists"] or bool(frameworks)
+    advice = None
+    if not found:
+        advice = (
+            "Resolve cannot find a Python 3, so it will silently ignore every "
+            ".py script in its Scripts folders — they will simply not appear in "
+            "Workspace > Scripts, with no error. It looks in exactly two places: "
+            "the PYTHON3HOME environment variable, then /usr/local/bin/python3. "
+            "Homebrew (/opt/homebrew/bin), pyenv, uv and conda land in neither, "
+            "which is why they appear 'unsupported'.\n"
+            "Fix it either way:\n"
+            "  1. Point Resolve at the interpreter you already have, no sudo:\n"
+            "       launchctl setenv PYTHON3HOME \"$(python3 -c 'import sys; "
+            "print(sys.prefix)')\"\n"
+            "     Use launchctl, NOT export — Resolve is launched from the Dock "
+            "and never sees your shell's environment. The prefix must contain "
+            "lib/libpython3.X.dylib.\n"
+            "  2. Or install a python.org build, which creates "
+            "/usr/local/bin/python3 for you.\n"
+            "Restart Resolve either way, then re-check. The Lua canary installed "
+            "alongside will list regardless, so you can tell 'Python not "
+            "detected' apart from 'wrong folder'."
+        )
+    elif home["in_this_shell"] and not home["in_launchd"]:
+        # Found by another route, but the user has clearly tried this one and it
+        # will not survive into Resolve. Say so before they conclude it worked.
+        advice = (
+            "PYTHON3HOME is set in this shell but not in launchd, so Resolve "
+            "will not see it — Resolve is GUI-launched and inherits launchd's "
+            "environment, not your shell's. Python will still be found via "
+            "another route this time. To make PYTHON3HOME the one that counts: "
+            "launchctl setenv PYTHON3HOME \"$PYTHON3HOME\", then restart Resolve."
+        )
     return {
         "framework_pythons": frameworks,
-        "resolve_will_list_python_scripts": bool(frameworks),
-        "advice": None if frameworks else (
-            "No framework Python found. Resolve will silently ignore every .py "
-            "script in its Scripts folders — they will simply not appear in "
-            "Workspace > Scripts, with no error. Homebrew, pyenv and conda "
-            "interpreters are NOT detected. Install a framework build from "
-            "python.org (any recent 3.x), restart Resolve, and re-check. The "
-            "Lua canary installed alongside will list either way, so you can "
-            "tell 'Python not detected' apart from 'wrong folder'."
-        ),
+        "python3_home": home,
+        "fallback_python3": fallback,
+        "resolve_will_list_python_scripts": found,
+        "advice": advice,
     }
 
 
