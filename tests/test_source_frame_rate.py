@@ -133,7 +133,46 @@ class SummaryCarriesTheRateTest(unittest.TestCase):
         self.assertEqual(summary["source_fps"], 24.0)
         self.assertEqual(summary["source_start_seconds"], 2369.625)
         self.assertEqual(summary["source_end"], 56871 + 435)
-        self.assertEqual(summary["source_end_seconds"], round((56871 + 435) / 24.0, 3))
+        # source_end is source_start + TIMELINE duration, so it is itself
+        # unit-mixed: 435 frames of 29.97 record time added to a 24 fps source
+        # frame. Dividing THAT by 24 reports an 18.1 s span for a 14.5 s clip —
+        # the same class of silent error this module exists to stop. With no
+        # source-space end reader on the item, the end must read unknown.
+        self.assertIsNone(summary["source_end_seconds"])
+
+    def test_end_seconds_come_from_resolves_own_second_reader(self):
+        # GetSourceEndTime answers in seconds with no rate inference at all, so
+        # it wins outright when the build exposes it.
+        class WithSourceTimes(TimelineItemStub):
+            def GetSourceStartTime(self):
+                return 2369.625
+
+            def GetSourceEndTime(self):
+                return 2369.625 + 435 / 29.97
+
+        summary = _timeline_item_summary(
+            WithSourceTimes(MediaPoolItemStub({"FPS": 24}), source_start=56871, duration=435),
+            ("audio", 1))
+        self.assertEqual(summary["source_start_seconds"], 2369.625)
+        self.assertEqual(summary["source_end_seconds"], 2384.14)
+        # The span is the clip's real record length, not the unit-mixed 18.125 s.
+        self.assertAlmostEqual(
+            summary["source_end_seconds"] - summary["source_start_seconds"],
+            435 / 29.97, places=2)
+
+    def test_end_seconds_fall_back_to_the_source_space_end_frame(self):
+        # No second-reader, but GetSourceEndFrame is a genuine SOURCE frame, so
+        # it may be divided by the media rate. source_end (derived) may not.
+        class WithSourceEndFrame(TimelineItemStub):
+            def GetSourceEndFrame(self):
+                return 56871 + round(435 * 24 / 29.97)
+
+        summary = _timeline_item_summary(
+            WithSourceEndFrame(MediaPoolItemStub({"FPS": 24}), source_start=56871, duration=435),
+            ("audio", 1))
+        self.assertEqual(summary["source_end_seconds"], round((56871 + 348) / 24.0, 3))
+        self.assertNotEqual(summary["source_end_seconds"],
+                            round(summary["source_end"] / 24.0, 3))
 
     def test_summary_reports_the_video_rate(self):
         item = TimelineItemStub(MediaPoolItemStub({"FPS": 29.97}), source_start=20379)

@@ -3090,6 +3090,63 @@ def _source_frames_to_seconds(frames, fps):
     return round(frames / fps, 3)
 
 
+def _timeline_item_source_time(item, method):
+    """Resolve's own source-time reader (GetSourceStartTime/GetSourceEndTime).
+
+    Seconds into the source file, read directly — no rate inference, so it is
+    the authoritative answer whenever the build exposes it. None when the
+    method is absent or unreadable, leaving the caller to fall back to
+    frames / source_fps.
+    """
+    if not _has_method(item, method):
+        return None
+    try:
+        value = getattr(item, method)()
+    except Exception:
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(seconds, 3)
+
+
+def _timeline_item_source_end_frame(item):
+    """The item's SOURCE-space end frame, from Resolve's own reader.
+
+    Distinct from the ``source_end`` this module derives as
+    ``source_start + duration``: that duration is a TIMELINE duration
+    (GetDuration), so the sum mixes units the moment the media rate differs
+    from the timeline's — always, for a WAV. Only a genuine source-space frame
+    may be divided by source_fps.
+    """
+    if not _has_method(item, "GetSourceEndFrame"):
+        return None
+    try:
+        return _frame_int(item.GetSourceEndFrame())
+    except Exception:
+        return None
+
+
+def _timeline_item_source_seconds(item, source_start, source_end, source_fps):
+    """(start_seconds, end_seconds) into the source file, or None each.
+
+    Prefers Resolve's second-readers, then a source-space frame divided by the
+    media rate. The derived ``source_end`` is deliberately NOT a fallback: it
+    is ``source_start + timeline_duration``, so on a 24 fps WAV in a 29.97 fps
+    timeline it overstates the clip's span by 25% (18.1 s reported for a
+    14.5 s clip). An unknown end reads as unknown.
+    """
+    start_seconds = _timeline_item_source_time(item, "GetSourceStartTime")
+    if start_seconds is None:
+        start_seconds = _source_frames_to_seconds(source_start, source_fps)
+    end_seconds = _timeline_item_source_time(item, "GetSourceEndTime")
+    if end_seconds is None:
+        end_seconds = _source_frames_to_seconds(
+            _timeline_item_source_end_frame(item), source_fps)
+    return start_seconds, end_seconds
+
+
 def _timeline_item_summary(item, track_info=None, *, media_pool_item=None,
                            clip_properties=None):
     if not item:
@@ -3116,6 +3173,8 @@ def _timeline_item_summary(item, track_info=None, *, media_pool_item=None,
         # with the media rate would produce a confidently wrong number. Report
         # the frame and leave the rate unknown rather than convert it wrong.
         source_fps = None
+    source_start_seconds, source_end_seconds = _timeline_item_source_seconds(
+        item, source_start, source_end, source_fps)
     summary = {
         "timeline_item_id": _safe_timeline_item_id(item),
         "name": _safe_timeline_item_name(item),
@@ -3125,10 +3184,13 @@ def _timeline_item_summary(item, track_info=None, *, media_pool_item=None,
         "end": end,
         "duration": duration,
         "source_start": source_start,
+        # NOTE: derived as source_start + TIMELINE duration, so it is unit-mixed
+        # whenever source_fps != the timeline rate. Kept for compatibility; use
+        # source_end_seconds, which is read from source space, for real time.
         "source_end": source_end,
         "source_fps": source_fps,
-        "source_start_seconds": _source_frames_to_seconds(source_start, source_fps),
-        "source_end_seconds": _source_frames_to_seconds(source_end, source_fps),
+        "source_start_seconds": source_start_seconds,
+        "source_end_seconds": source_end_seconds,
         "media_pool_item_id": _safe_media_pool_item_id(media_pool_item),
         "media_pool_item_name": _safe_media_pool_item_name(media_pool_item),
     }
@@ -5496,13 +5558,14 @@ def _variant_item_placement(item) -> Dict[str, Any]:
         duration = record_end - record_start
     source_start = _timeline_item_source_start(item)
     source_fps = _media_item_source_fps(_timeline_item_media_pool_item(item))
+    source_start_seconds, _ = _timeline_item_source_seconds(item, source_start, None, source_fps)
     return {
         "record_start": record_start,
         "record_end": record_end,
         "duration": duration,
         "source_start": source_start,
         "source_fps": source_fps,
-        "source_start_seconds": _source_frames_to_seconds(source_start, source_fps),
+        "source_start_seconds": source_start_seconds,
     }
 
 
@@ -21591,11 +21654,14 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         Default handles=24, gap_max=30. Use handles=0 for gap-only auto handles.
       conform_capabilities() -> {supported, partially_supported, unsupported, export_aliases}
       probe_timeline_structure(track_types?, include_markers?, include_clip_properties?) -> {tracks, markers}
-        Each item reports source_start/source_end in the MEDIA's frame rate, plus the
-        source_fps it is counted in and source_start_seconds/source_end_seconds derived
-        with it. Use those seconds — a WAV counts at 24 fps on any timeline, so dividing
-        by the timeline rate is wrong by minutes. source_fps is null when the rate could
-        not be read; treat the frames as unitless then, do not assume the timeline's.
+        Each item reports source_start in the MEDIA's frame rate, the source_fps it is
+        counted in, and source_start_seconds/source_end_seconds. Use those seconds — a
+        WAV counts at 24 fps on any timeline, so dividing by the timeline rate is wrong
+        by minutes. source_fps is null when the rate could not be read; treat the frames
+        as unitless then, do not assume the timeline's. source_end is derived as
+        source_start + TIMELINE duration, so it is unit-mixed when the rates differ —
+        the seconds come from Resolve's own source-time readers instead, and read null
+        rather than convert the derived value.
       detect_gaps_overlaps(track_types?, min_gap?) -> {gaps, overlaps}
       source_range_report(handles?, merge?) -> {ranges, occurrences}
       export_timeline_checked(path, format?|type?, subtype?, require_temp_path?, dry_run?, background?) -> {success, path, size | job_id}

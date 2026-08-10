@@ -715,11 +715,21 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "beside the frames, so the number always arrives with its "
                        "unit; on the GetLeftOffset fallback for an audio item it "
                        "reports the rate as unknown rather than converting a "
-                       "timeline-frame value at the media rate.",
+                       "timeline-frame value at the media rate. Note which "
+                       "number may be converted: source_end in the same summary "
+                       "is derived as source_start + TIMELINE duration, so on "
+                       "this WAV it adds 435 frames of 29.97 record time to a 24 "
+                       "fps source frame and dividing THAT by 24 reports an "
+                       "18.125 s span for a 14.515 s clip. The seconds therefore "
+                       "come from GetSourceStartTime/GetSourceEndTime — which "
+                       "answer in seconds with no rate inference at all — then "
+                       "from GetSourceEndFrame / media_fps, and read null rather "
+                       "than convert the derived source_end.",
         "tags": ["timeline", "audio", "wav", "frame-rate", "mixed-fps",
                  "silent-failure", "readback"],
         "submit": "bug",
-        "mitigation": ["_media_item_source_fps", "_source_frames_to_seconds"],
+        "mitigation": ["_media_item_source_fps", "_source_frames_to_seconds",
+                       "_timeline_item_source_seconds"],
     },
     {
         "symbol": "Razor / blade / split a timeline item",
