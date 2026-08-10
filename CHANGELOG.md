@@ -2,6 +2,62 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.91.0
+
+A timeline item's source frames are counted in the **media's** frame rate, not
+the timeline's — and a WAV carries no native rate, so Resolve reports **24** for
+it. Read back at the timeline rate a WAV offset lands minutes from the real
+position in the file, and nothing errors: `source_end` is derived as
+`source_start + timeline_duration`, so the start/end pair stays internally
+consistent whatever rate the caller assumed. Reported and measured by
+@rusanivsky in #144.
+
+### Added
+
+- **`source_fps` beside the frames.** Every timeline-item summary now carries
+  the rate its source frames are counted in, plus `source_start_seconds` /
+  `source_end_seconds`, so the frame number always arrives with its unit
+  attached. The rate is read from the media-pool item's `FPS` property, never
+  assumed; an unreadable rate reports `null` so callers see *unknown* rather
+  than a guess.
+- **The reader that produced the value is tracked**, because the two do not
+  agree on units: on an audio item `GetLeftOffset` counts in **timeline** frames
+  while `GetSourceStartFrame` counts in **source** frames — 60687 vs 75784 for
+  the same edit point. On that fallback the summary reports `source_fps: null`
+  rather than pairing a timeline-frame number with the media rate.
+- **`create_variant_from_ranges`' per-range `track_index`** — 1-based within
+  `track_type`, missing tracks added — was accepted but undocumented, so
+  multicam angles collapsed onto V1 for anyone who did not read the source. Now
+  in the action help, the action list, the example, and `docs/SKILL.md`.
+- The trap is in the `api_truth` ledger and in `resolve-rough-cut`'s verified
+  traps table.
+
+### Fixed
+
+- **`source_end_seconds` was the same unit lie the field was added to stop.**
+  `source_end` is `source_start + duration`, and that duration comes from
+  `GetDuration` — a **timeline** duration. Converting the sum at the media rate
+  compounds the very mix-up being guarded. The seconds now come from
+  `GetSourceStartTime` / `GetSourceEndTime`, which answer in seconds with no
+  rate inference at all, then from `GetSourceEndFrame / source_fps`, and read
+  `null` rather than convert the derived value. `source_end` itself is
+  unchanged — no consumer moves — but it is now annotated as unit-mixed where
+  it is assigned, in the probe action help, and in the ledger.
+
+### Validation
+
+- Suite: 2613 passed, 1 skipped. `gen_api_limitations.py --check` clean.
+- **Live on Studio 19.1.3.7** with synthetic media, which also shows the trap is
+  not a 21.x regression. A 300 s 48 kHz WAV reports `FPS 24`; appending its
+  source frames 4800–5235 to a 29.97 fps timeline yields a timeline duration of
+  **543** (= 435 × 29.97/24), so `source_end` came back **5343** where the true
+  source end is 5235 — `source_end / 24` reports **222.625 s** against a real
+  **218.133 s**, 4.49 s out on a clip 18.1 s long. The patched code reports
+  218.133 s. The matching 29.97 video item was unaffected either way (24.524 s
+  read vs 24.525 s derived). Both second-readers exist on 19.1.3.7.
+- Not tested here: the 21.0.3.7 measurements in the ledger entry, which are
+  @rusanivsky's and are labelled as such.
+
 ## What's New in v2.90.0
 
 AAF turnovers parsed by `editorial.parse_interchange` on the advanced server now
