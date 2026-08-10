@@ -22,6 +22,31 @@ Bridges online-editing / finishing *craft* to this repo's *tools*.
 | Import / relink / compare a **running** conform | `davinci-resolve` (Python, live) | `timeline` (conform actions), `media_pool` (`safe_relink`, `safe_import_sequence`) |
 | Conform QC math, reverse-clip repair, lineage, grade tracing, `.drt`/`.drp`/DB edits with **no Resolve open** | `davinci-resolve-advanced` (Node) | `conform`, `color_trace`, `offline_ref`, `editorial`, `drt`, `project_db` |
 
+## What this build cannot do (check before you offer it)
+
+The scripting API changes per **patch** release, so "Resolve 21" is not a usable
+label. Read `resolve_control get_version` → `build.unavailable_on_this_build`
+before offering a gated surface; `check_version_support` asks about one named
+symbol. Gated on the relink/media side this domain leans on:
+
+| Surface | Needs | If absent |
+|---|---|---|
+| `MediaPoolItem.LinkProxyMedia` | 17.0 | No script-side proxy attach |
+| `MediaPoolItem.LinkFullResolutionMedia` | 20.0 | Cannot swap proxies back to full-res from a script |
+| `MediaPoolItem.ReplaceClipPreserveSubClip` | 20.0 | Replacing a clip loses sub-clip boundaries; relink by path instead |
+| `MediaPoolItem.MonitorGrowingFile` | 20.0 | No growing-file support during ingest |
+| `MediaPoolItem.GetTimeline` | 21.0.4 | Cannot ask a clip which timelines use it; walk timelines and collect their items instead |
+
+An empty `unavailable_on_this_build` means **nothing recorded is missing**, not
+that everything exists — most of the API has never been version-bisected. A
+symbol with no gate returns `unknown`, which means probe it. Probe with
+`name in dir(obj)`, never bare `hasattr`: on a Resolve object `hasattr` returns
+`True` for every name, real or invented, so it can only say yes.
+
+The offline `conform` / `drt` / `project_db` routes are **not** gated this way —
+they operate on files, so a missing live surface is a reason to reach for them,
+not a dead end.
+
 ## Live conform essentials
 
 - Inspect before touching: `probe_timeline_structure`, `detect_gaps_overlaps`,

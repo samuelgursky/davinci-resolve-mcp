@@ -13,6 +13,34 @@ This skill wraps the project's canonical media analysis guide with Claude Code-s
 
 **Never touch the source.** Your relationship to source media is READ-ONLY. See `docs/guides/media-analysis-guide.md` section "The First Rule: Never Touch the Source" for the full rationale from every post-production department.
 
+## What this build cannot do (check before you offer it)
+
+The scripting API changes per **patch** release, so "Resolve 21" is not a usable
+label. Read `resolve_control get_version` → `build.unavailable_on_this_build`
+before offering a gated surface; `check_version_support` asks about one named
+symbol. Gated in *this* domain — note all of it is Resolve's **own** analysis,
+not this repo's:
+
+| Surface | Needs | If absent |
+|---|---|---|
+| `MediaPoolItem` / `Folder.AnalyzeForIntellisearch` | 21.0 | No IntelliSearch index |
+| `Project.ResetIntellisearchAnalysis` | 21.0 | The index cannot be cleared from a script |
+| `MediaPoolItem` / `Folder.AnalyzeForSlate` | 21.0 | No automatic slate detection |
+| `MediaPoolItem` / `Folder.PerformAudioClassification` / `ClearAudioClassification` | 21.0 | No Resolve-side audio classification |
+| `MediaPoolItem` / `Folder.RemoveMotionBlur` | 21.0 | Unavailable |
+| `Project.GenerateSpeech` | 21.0 | No AI speech generation |
+
+**This repo's own analysis stack does not depend on any of them.** `analyze_media`
+reads frames and audio off disk and runs its own vision/transcription/embedding
+tiers, so an older Resolve loses Resolve's AI features, not this pipeline. Say
+which one the user is actually missing.
+
+An empty `unavailable_on_this_build` means **nothing recorded is missing**, not
+that everything exists — most of the API has never been version-bisected. A
+symbol with no gate returns `unknown`, which means probe it. Probe with
+`name in dir(obj)`, never bare `hasattr`: on a Resolve object `hasattr` returns
+`True` for every name, real or invented, so it can only say yes.
+
 ## MCP Integration
 
 When using the DaVinci Resolve MCP tools alongside media analysis:

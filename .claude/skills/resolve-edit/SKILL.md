@@ -23,6 +23,29 @@ re-derive it here.
 | Restructure a **running** timeline | `davinci-resolve` (Python, live) | `timeline` (edit kernel), `timeline_item`, `edit_engine`, `timeline_markers` |
 | Author/diff a `.drt` **file**, or parse/compare editorial interchange with **no Resolve open** | `davinci-resolve-advanced` (Node) | `drt`, `editorial` |
 
+## What this build cannot do (check before you offer it)
+
+The scripting API changes per **patch** release, so "Resolve 21" is not a usable
+label. Read `resolve_control get_version` → `build.unavailable_on_this_build`
+before offering a gated surface; `check_version_support` asks about one named
+symbol. Gated in *this* domain:
+
+| Surface | Needs | If absent |
+|---|---|---|
+| `Timeline.GetSelectedClips` | 21.0.4 | No selection readback. Identify clips by track/index or id instead — this repo's selection helper duck-probes three names, so it degrades to "no selection" rather than erroring |
+| `TimelineItem.SetName` | 20.2 | Clip names are read-only from a script |
+
+An empty `unavailable_on_this_build` means **nothing recorded is missing**, not
+that everything exists — most of the API has never been version-bisected. A
+symbol with no gate returns `unknown`, which means probe it. Probe with
+`name in dir(obj)`, never bare `hasattr`: on a Resolve object `hasattr` returns
+`True` for every name, real or invented, so it can only say yes.
+
+Distinguish *gated* from *absent*. A gated surface arrives with a newer build;
+an absent one never does, and upgrading will not help. **Clip speed / retime is
+absent on every build** — see the edit-kernel essentials below before you offer
+`set_retime` for it.
+
 ## Live edit-kernel essentials
 
 - Duplicate/relocate: `duplicate_clips` (modes `same_time`/`offset`/

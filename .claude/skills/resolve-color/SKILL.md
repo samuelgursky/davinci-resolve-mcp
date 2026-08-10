@@ -27,6 +27,27 @@ manuals — it tells you which one to open and the rules that cross both servers
 apply-ready `.drx`; **applying** it is the live server's job
 (`timeline_item_color.safe_apply_drx`). Node never drives Resolve.
 
+## What this build cannot do (check before you offer it)
+
+The scripting API changes per **patch** release, so "Resolve 21" is not a usable
+label. Read `resolve_control get_version` → `build.unavailable_on_this_build`
+before offering a gated surface; `check_version_support` asks about one named
+symbol. Gated in *this* domain:
+
+| Surface | Needs | If absent |
+|---|---|---|
+| `TimelineItem.ResetAllNodeColors` | 20.2 | Clear node colors one at a time via the `graph` node-color setter, or leave them |
+
+An empty `unavailable_on_this_build` means **nothing recorded is missing**, not
+that everything exists — most of the API has never been version-bisected. A
+symbol with no gate returns `unknown`, which means probe it. Probe with
+`name in dir(obj)`, never bare `hasattr`: on a Resolve object `hasattr` returns
+`True` for every name, real or invented, so it can only say yes.
+
+The offline `drx` / `project_db` routes are **not** version-gated this way —
+they read and write files, so they work regardless of the build attached, and
+are the fallback when a live surface turns out to be missing.
+
 ## The frame-first rule (non-negotiable — see AGENTS.md)
 
 Before applying any grade, look, shot match, LUT, CDL, DRX, or copied grade to a
