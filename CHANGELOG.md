@@ -2,6 +2,77 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.90.0
+
+AAF turnovers parsed by `editorial.parse_interchange` on the advanced server now
+carry their animation curves, the transforms nobody had interpreted, and the
+effects that occupy record time while emitting nothing. All three were losses a
+consumer could not see, because the parse reported itself complete.
+
+### Added
+
+- **Keyframe curves ship instead of the word "varying".** A `VaryingValue` was
+  read for its values alone, and only to answer "one number or more than one" —
+  `ControlPoint.time` was never asked for, so every animated reframe reached a
+  consumer as `"varying"`: enough to refuse the clip, never enough to rebuild
+  it. Transform stages now carry `keyframes[<AvidParamName>]` and retimes carry
+  `speedCurve.playRate` / `speedCurve.sourceOffset`, each with its interpolation
+  and its points as `{t, v, frame}`.
+- **`domain` names which rule produced `frame`,** because the two curve families
+  do not share a time domain and a single conversion rule would have been wrong
+  by an effect's whole length on one of them. Measured over all 2047 control
+  points of an 878-event Avid picture turnover: transform params are normalized
+  over the effect span with the endpoint inclusive (`frame = t x (length - 1)`,
+  which lands 1243 of 1254 points on an integer frame against 278 under
+  `length`), while speed maps are already in frames. Keys outside `0..1` are
+  kept rather than clamped — 107 of 1254 sit before the first frame or past the
+  last, which is what Avid leaves when an animated clip is trimmed. A curve with
+  one unreadable point is refused whole; interpolating through a missing key
+  produces a confident wrong animation.
+- **`passthrough` stages carry the four uninterpreted transform operations**
+  (SBlend_v2, Stabilize_2, MaskImage_2, 2DMatteKey_2) that were previously
+  discarded whole — 22 events on the fixture. Their numbers travel in
+  `rawParams`, deliberately not `params`: the same parameter *name* carries
+  different units on different operations (SBlend's `DVE_POS_X_U` runs to -315
+  where Stabilize's runs to -0.92 on the same show), so there is nothing to
+  normalize, and a 2DMatteKey `AFX_POS_X_U` of 500 promoted into `params` would
+  become a ~960px shift of a clip nobody repositioned.
+- **`effectsWithoutEvents` closes a hole `unhandled` structurally cannot see.**
+  An effect can be modelled perfectly and still emit nothing — the group is
+  walked, its inputs are walked, and they contain no `SourceClip`. On the
+  fixture `unhandled` reads `{}` (a complete parse) while 29 SubCap titles
+  occupy real record time and reach the consumer as nothing whatsoever. Charged
+  once, to the innermost cause.
+- **`speedRatioFromCurve`** — the rate the offset curve itself implies, emitted
+  only when that curve is straight, so no variable timewarp is ever averaged
+  into a single number.
+
+### Fixed
+
+- **The declared AAF `SpeedRatio` rational is the source span truncated to whole
+  frames, and 7 of 18 constant retimes on the fixture disagree with their own
+  curve** — `201/112 = 1.794643` where the curve says `201.6/112 = 1.80`, and at
+  worst `31/19 = 1.631579` against a curve reading `1.70`, a 4% speed error in a
+  number an operator is handed to type in by hand. Every curve slope lands on a
+  rate an editor would actually dial (1.7, 1.8, 2.0, 0.75); every declared value
+  is that rate spoiled by rounding. Both ship under their own names and neither
+  is substituted for the other.
+- **Variable timewarps are reconstructible.** The offset curve is dense (up to
+  387 points at half-frame steps) and describes where every record frame reads
+  from, taking the 4 variable timewarps on the fixture from "flagged, rebuild
+  from nothing" to fully described — including one reverse ramp whose offset
+  runs 301.0 to -0.78. Reverse read off the curve agreed with the declared flag
+  9 of 9, in both directions.
+
+### Validation
+
+- Every pre-existing field is byte-identical on the fixture, verified by a
+  structural diff of the full 878-event parse against the previous output; event
+  count, `unhandled`, and all existing counters are unchanged.
+- 10 new tests in `resolve-advanced/test/aaf-sequences.test.mjs`.
+- No DaVinci Resolve scripting behavior changed; this is offline interchange
+  parsing, so no live Resolve validation was required.
+
 ## What's New in v2.89.0
 
 The build gates this server already enforced are now gates an agent can ask
