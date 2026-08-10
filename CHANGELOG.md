@@ -2,6 +2,68 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.93.0
+
+`source_end` is a source frame again, and the guidance v2.91.0 shipped about WAV
+frame rates was wrong. Both found by measuring rather than reasoning, live on
+Studio 19.1.3.7 with synthetic media in a disposable project.
+
+### Fixed
+
+- **`source_end` was `source_start + duration`, and that duration is a TIMELINE
+  duration.** So the sum was unit-mixed the moment the media and timeline rates
+  differed. Measured against the `endFrame` actually sent, it overshot by
+  **+24, +26, +108 and +149 frames** on a WAV counting at 24 in a 29.97 timeline
+  — and `extract_source_frame_ranges` builds pull ranges out of it, reporting
+  widths of 543 and 749 for clips that consume 435 and 600 source frames.
+  The direction was safe (a longer pull); the number was wrong, and anything
+  sizing an archive, a consolidation or a pull list inherited it.
+
+  It is now `round(GetSourceEndTime × source_fps)`. Seconds carry no frame-rate
+  assumption, so the product is a source frame by construction, and the field
+  stays **EXCLUSIVE** exactly as every caller already read it. Over 8 items in
+  both regimes it equals the `endFrame` sent every time, and it reproduces the
+  old value wherever the old value was already right — so no matched-rate
+  consumer moves, which the full suite confirms without a single existing
+  expectation changing. It falls back to the old sum only when the second-reader
+  or the rate is unreadable.
+
+- **`GetSourceEndFrame` was the obvious candidate and it is not usable raw.**
+  Measured over 12 items, it is **exclusive when the source and timeline rates
+  match and inclusive when they differ** — off by one in exactly the case a
+  caller reaches for it. Not a media-type split either: the same WAV imported at
+  29.97 into a 29.97 timeline reads exclusive like video, and only the mismatch
+  flips it. Building on it would have meant branching on a rate comparison the
+  code would first have to reconstruct.
+
+### Corrected
+
+- **A WAV is not 24 fps.** v2.91.0's ledger entry said a WAV "carries no frame
+  rate, so Resolve falls back to 24" and told callers to treat one as 24 fps.
+  That is wrong. A WAV takes the **project's `timelineFrameRate` at import** and
+  freezes it: one 400.000 s file imported at 24 reads `FPS 24.0` /
+  `Duration 00:06:40:00`, the same file imported at 29.97 reads `29.97` /
+  `00:06:39:18`, and changing the project rate after import leaves the clip on
+  its original rate. So the trap is "the project moved after import", not "audio
+  is always 24" — and a WAV imported at 29.97 has no mismatch at all. Anyone who
+  followed the old advice on such a file would have converted a correct number
+  into a wrong one. Corrected in the ledger, the `resolve-rough-cut` traps table,
+  the `probe_timeline_structure` and `create_variant_from_ranges` action help,
+  and the helper docstrings: every site now says read the rate, never assume it.
+
+### Validation
+
+- Suite: 2628 passed, 1 skipped (7 new cases covering both regimes, the rounding
+  boundaries, and each fallback). Static checks and drift guards clean.
+- Live on **Studio 19.1.3.7**, ffmpeg-generated synthetic media, disposable
+  project deleted after each run. The first measurement pass was discarded and
+  redone: it zipped `AppendToTimeline`'s return against the request list, two
+  entries came back unreadable, and the resulting misalignment looked exactly
+  like reader noise. Every number above comes from appending one range at a time.
+- **Not tested here:** Resolve 21.x, and retimed clips — there is no clip-speed
+  API to build one from, so whether the new route also fixes the retime case
+  (where the old arithmetic is wrong for the same reason) is untested.
+
 ## What's New in v2.92.0
 
 Two corrections to advice this project was giving confidently and wrongly, both
