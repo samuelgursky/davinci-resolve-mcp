@@ -2,6 +2,69 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.92.0
+
+Two corrections to advice this project was giving confidently and wrongly, both
+from issues filed by users who hit them.
+
+### Fixed
+
+- **`PYTHON3HOME` satisfies the macOS bridge preflight — uv/pixi/conda need no
+  `sudo`.** The preflight demanded a *framework* Python and sent everyone else
+  to a system-wide python.org install, which managed machines often forbid.
+  `uv`, `pixi` and conda-forge ship no `--enable-framework` build at all, so
+  their users got the warning no matter what they did. Reported by @rusanivsky
+  in #143, who had free Resolve 21.0.4.5 serving the bridge on uv-managed
+  CPython 3.12.13 with no python.org Python on the machine.
+
+  Framework-ness was never the variable. In `fusionscript.so` — read here on
+  Studio 19.1.3.7, a January 2025 binary — every `Python.framework` reference is
+  Python **2.7**, and there is no `Python.framework/Versions/3` string anywhere.
+  Python 3 is found through `PYTHON3HOME`, else `/usr/local/bin/python3`, then
+  probed for `sys.prefix` and dlopened as `<prefix>/lib/libpython3.X.dylib`.
+  python.org installs work because that installer creates
+  `/usr/local/bin/python3` — verified here, where it is a symlink into
+  `Python.framework/Versions/3.11`. Homebrew (`/opt/homebrew`), pyenv, uv and
+  conda land in neither place, which is the whole of the "framework Pythons
+  only" folklore.
+
+  The preflight now accepts either route and reports both. `PYTHON3HOME` is read
+  with `launchctl getenv`, never `os.environ`: Resolve is GUI-launched and
+  inherits launchd's environment, so reading our own shell would report a hit in
+  exactly the case that does not work. A `PYTHON3HOME` exported in the shell but
+  absent from launchd is called out, because it is the natural thing to try. The
+  old advice is corrected in the Lua canary, the `BRIDGE_UNAVAILABLE`
+  remediation, both READMEs and `docs/SKILL.md`.
+
+### Added
+
+- **Domain skills ask the build what it cannot do.** v2.89.0 taught
+  `get_version` to report a connected build's missing surfaces, but only the
+  session skill ever asked — an agent entering through
+  `/timeline_edit_workflow` or `/color_grade_workflow` got identical guidance
+  whatever it was attached to. That is the hole @magwa101 fell into on DR 21 in
+  #132. `resolve-edit`, `resolve-color`, `resolve-conform` and
+  `resolve-media-analysis` now name the gated surfaces in their own domain, with
+  the floor and what to do instead, sourced from `resolve_versions.VERSION_GATES`
+  rather than prose. Each section also has to say that an empty list means
+  nothing *recorded* is missing, that probes use `name in dir(obj)` and never
+  bare `hasattr` (which returns `True` for every name on a Resolve object), and
+  that *gated* is not *absent* — clip speed is unreachable on every build and no
+  upgrade will help.
+- `tests/test_skill_version_gates.py` fails when a skill quotes a floor the
+  ledger disagrees with. Confirmed it bites by mis-stating a floor and watching
+  it fail, not by trusting a green run.
+
+### Validation
+
+- Suite: 2621 passed, 1 skipped. Static checks and drift guards clean.
+- The binary strings and the `/usr/local/bin/python3` mechanism were confirmed
+  here on Studio 19.1.3.7. **Not reproduced here:** the live positive on free
+  21.0.4.5 with uv Python — that is the reporter's, and is labelled as such in
+  the code comment.
+- No Resolve scripting behavior changed; the bridge change is installer
+  preflight and advice text.
+
 ## What's New in v2.91.0
 
 A timeline item's source frames are counted in the **media's** frame rate, not
