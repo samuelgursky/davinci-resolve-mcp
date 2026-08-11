@@ -3011,16 +3011,76 @@ _DETAILED_ITEM_TRACK_TYPES = ("video", "audio", "subtitle")
 
 def _timeline_list_items_detailed(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     track_types = p.get("track_types", ["video"])
+    if not isinstance(track_types, list) or not track_types:
+        return _err(
+            "track_types must be a non-empty list",
+            code="INVALID_TRACK_TYPES",
+            category="invalid_input",
+        )
+    if any(not isinstance(value, str) or value not in _DETAILED_ITEM_TRACK_TYPES
+           for value in track_types):
+        return _err(
+            "track_types values must be video, audio, or subtitle",
+            code="INVALID_TRACK_TYPES",
+            category="invalid_input",
+        )
+    if len(set(track_types)) != len(track_types):
+        return _err(
+            "track_types values must be unique",
+            code="INVALID_TRACK_TYPES",
+            category="invalid_input",
+        )
+
     enabled_only = p.get("enabled_only", True)
+    if not isinstance(enabled_only, bool):
+        return _err(
+            "enabled_only must be a boolean",
+            code="INVALID_ENABLED_ONLY",
+            category="invalid_input",
+        )
+
     tracks = []
     items = []
     warnings = []
 
     for track_type in track_types:
-        for track_index in range(1, int(tl.GetTrackCount(track_type)) + 1):
-            enabled = bool(tl.GetIsTrackEnabled(track_type, track_index))
-            track_items = list(tl.GetItemListInTrack(track_type, track_index) or [])
-            include = not enabled_only or enabled
+        try:
+            track_count = int(tl.GetTrackCount(track_type))
+        except Exception as exc:
+            return _err(
+                f"Could not read {track_type} track count: {exc}",
+                code="TRACK_COUNT_READ_FAILED",
+                category="resolve_api_failed",
+            )
+        for track_index in range(1, track_count + 1):
+            try:
+                raw_enabled = tl.GetIsTrackEnabled(track_type, track_index)
+                if isinstance(raw_enabled, bool):
+                    enabled = raw_enabled
+                elif raw_enabled in (0, 1):
+                    enabled = bool(raw_enabled)
+                else:
+                    raise ValueError(f"unexpected enabled value: {raw_enabled!r}")
+            except Exception as exc:
+                enabled = None
+                warnings.append({
+                    "code": "TRACK_ENABLED_STATE_UNAVAILABLE",
+                    "track_type": track_type,
+                    "track_index": track_index,
+                    "message": str(exc),
+                })
+
+            try:
+                track_items = list(tl.GetItemListInTrack(track_type, track_index) or [])
+            except Exception as exc:
+                return _err(
+                    f"Could not list {track_type} track {track_index}: {exc}",
+                    code="TRACK_ITEMS_READ_FAILED",
+                    category="resolve_api_failed",
+                    state={"track_type": track_type, "track_index": track_index},
+                )
+
+            include = not enabled_only or enabled is not False
             tracks.append({
                 "track_type": track_type,
                 "track_index": track_index,
@@ -3044,7 +3104,7 @@ def _timeline_list_items_detailed(tl, p: Dict[str, Any]) -> Dict[str, Any]:
 
     return _ok(
         count=len(items),
-        track_types=track_types,
+        track_types=list(track_types),
         enabled_only=enabled_only,
         tracks=tracks,
         items=items,
