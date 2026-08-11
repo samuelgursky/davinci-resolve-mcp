@@ -16314,6 +16314,7 @@ _RENDER_KERNEL_ACTIONS = [
     "list_loudness_standards",
     "prepare_delivery_job",
     "delivery_preflight",
+    "complete_delivery_job",
 ]
 
 
@@ -16896,6 +16897,83 @@ def _render_delivery_preflight(proj, p: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _delivery_output_qc(path: Optional[str], spec: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not path:
+        return {"success": False, "status": "not_run", "code": "OUTPUT_PATH_UNAVAILABLE", "spec": spec}
+    if not os.path.isfile(path):
+        return {"success": False, "status": "failed", "code": "OUTPUT_FILE_MISSING", "path": path, "spec": spec}
+    probe = _probe_media_file(path)
+    if not probe.get("success"):
+        return {"success": False, "status": "unavailable", "probe": probe, "spec": spec}
+    expected_video = (spec or {}).get("video") or {}
+    actual_video = probe.get("video") or {}
+    checks = []
+    for field, actual_key in (("width", "width"), ("height", "height"), ("codec", "codec_name")):
+        if field in expected_video:
+            expected = expected_video[field]
+            actual = actual_video.get(actual_key)
+            checks.append({"field": f"video.{field}", "expected": expected, "actual": actual, "pass": str(actual) == str(expected)})
+    return {"success": all(row["pass"] for row in checks), "status": "passed" if all(row["pass"] for row in checks) else "failed", "path": path, "checks": checks, "probe": probe, "spec": spec}
+
+
+def _render_complete_delivery_job(proj, p: Dict[str, Any]) -> Dict[str, Any]:
+    profile = p.get("profile") or p.get("target") or "instagram_reels"
+    execute = bool(p.get("execute", False))
+    job_id = p.get("job_id")
+    qc_spec = p.get("qc_spec")
+    prepared = None
+    if not job_id:
+        prepared = _prepare_delivery_job(proj, {
+            **p,
+            "target": profile,
+            "dry_run": not execute,
+        })
+        if prepared.get("error") or not prepared.get("success"):
+            return prepared
+        qc_spec = prepared.get("qc_spec")
+        if not execute:
+            return {"success": True, "dry_run": True, "profile": profile, "prepared": prepared, "qc_spec": qc_spec}
+        job_id = prepared.get("job_id")
+
+    resumed = p.get("job_id") is not None
+    status = _ser(proj.GetRenderJobStatus(job_id)) if resumed else None
+    status_name = str((status or {}).get("JobStatus") or "").lower()
+    terminal = status_name in {"complete", "failed", "cancelled", "canceled"}
+    if not terminal:
+        started = bool(proj.StartRendering([job_id], bool(p.get("interactive", False))))
+        if not started:
+            return {"success": False, "job_id": job_id, "resumed": resumed, "code": "RENDER_START_FAILED", "status": status, "qc_spec": qc_spec}
+
+    max_wait = max(0.0, float(p.get("max_wait_seconds", 300.0)))
+    poll_interval = max(0.0, float(p.get("poll_interval_seconds", 1.0)))
+    deadline = time.monotonic() + max_wait
+    while not terminal:
+        status = _ser(proj.GetRenderJobStatus(job_id))
+        status_name = str((status or {}).get("JobStatus") or "").lower()
+        terminal = status_name in {"complete", "failed", "cancelled", "canceled"}
+        if terminal or time.monotonic() >= deadline:
+            break
+        if poll_interval:
+            time.sleep(poll_interval)
+
+    if not terminal:
+        return {"success": False, "retryable": True, "code": "RENDER_WAIT_TIMEOUT", "job_id": job_id, "resumed": resumed, "status": status, "qc_spec": qc_spec}
+    output_path = p.get("output_path") or (status or {}).get("OutputFilename") or (status or {}).get("OutputFileName")
+    qc = _delivery_output_qc(output_path, qc_spec) if status_name == "complete" else {"success": False, "status": "not_run"}
+    return {
+        "success": status_name == "complete",
+        "dry_run": False,
+        "profile": profile,
+        "job_id": job_id,
+        "resumed": resumed,
+        "prepared": prepared,
+        "status": status,
+        "output_path": output_path,
+        "qc_spec": qc_spec,
+        "qc": qc,
+    }
+
+
 def _render_job_lifecycle_probe(proj, p: Dict[str, Any]):
     prepared = _prepare_render_job(proj, {**p, "dry_run": False, "require_temp_target": True})
     if prepared.get("error") or not prepared.get("success"):
@@ -17008,6 +17086,7 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       resolve_delivery_target(target, overrides?) -> {format_id, codec_id, settings, qc_spec}
       prepare_delivery_job(target, target_dir, overrides?, settings?, custom_name?, dry_run?) -> {success, job_id, qc_spec}
       delivery_preflight(profile?) -> {ready, blockers, warnings, inventory, delivery}
+      complete_delivery_job(profile, target_dir?, custom_name?, job_id?, execute?, max_wait_seconds?) -> {success, job_id, status, qc}
 
     Delivery targets are named render intents (`prores422hq_master`, `youtube`,
     `tiktok`, ...). One definition emits both the Resolve render settings and an
@@ -17061,6 +17140,8 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return _prepare_delivery_job(proj, p)
     elif action == "delivery_preflight":
         return _render_delivery_preflight(proj, p)
+    elif action == "complete_delivery_job":
+        return _render_complete_delivery_job(proj, p)
     elif action == "set_format_and_codec":
         _formats = _render_formats(proj)
         _format_id = _render_format_id_from_formats(_formats, p["format"])
