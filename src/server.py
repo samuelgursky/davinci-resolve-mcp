@@ -3006,6 +3006,52 @@ def _timeline_item_summary(item, track_info=None):
     return summary
 
 
+_DETAILED_ITEM_TRACK_TYPES = ("video", "audio", "subtitle")
+
+
+def _timeline_list_items_detailed(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    track_types = p.get("track_types", ["video"])
+    enabled_only = p.get("enabled_only", True)
+    tracks = []
+    items = []
+    warnings = []
+
+    for track_type in track_types:
+        for track_index in range(1, int(tl.GetTrackCount(track_type)) + 1):
+            enabled = bool(tl.GetIsTrackEnabled(track_type, track_index))
+            track_items = list(tl.GetItemListInTrack(track_type, track_index) or [])
+            include = not enabled_only or enabled
+            tracks.append({
+                "track_type": track_type,
+                "track_index": track_index,
+                "enabled": enabled,
+                "item_count": len(track_items),
+                "included_item_count": len(track_items) if include else 0,
+            })
+            if not include:
+                continue
+            for item_index, item in enumerate(track_items):
+                row = _timeline_item_summary(item, (track_type, track_index))
+                row["item_index"] = item_index
+                media_pool_item = _timeline_item_media_pool_item(item)
+                media_summary = _media_pool_item_summary(media_pool_item) if media_pool_item else None
+                online_status, _ = _safe_clip_call(
+                    media_pool_item, "GetClipProperty", "Online Status"
+                ) if media_pool_item else (None, None)
+                row["file_path"] = media_summary.get("file_path") if media_summary else None
+                row["online_status"] = online_status
+                items.append(row)
+
+    return _ok(
+        count=len(items),
+        track_types=track_types,
+        enabled_only=enabled_only,
+        tracks=tracks,
+        items=items,
+        warnings=warnings,
+    )
+
+
 # Filters the live timeline adapter can populate from a timeline-item summary.
 # Analysis-aware filters in clip_query (analyzed/has_transcription/shot_type/
 # marker_color) require an analysis-DB join not yet wired here; reject them at
@@ -20823,7 +20869,7 @@ _TIMELINE_ACTIONS = [
     "get_end_frame", "get_start_timecode", "set_start_timecode", "get_track_count",
     "add_track", "delete_track", "get_track_sub_type", "set_track_enable",
     "get_track_enabled", "set_track_lock", "get_track_locked", "get_track_name",
-    "set_track_name", "get_items", "delete_clips", "set_clips_linked", "duplicate",
+    "set_track_name", "get_items", "list_items_detailed", "delete_clips", "set_clips_linked", "duplicate",
     "duplicate_clips", "copy_clips", "move_clips", "copy_range", "duplicate_range",
     "overwrite_range", "lift_range", "story_spine_report", "create_variant_from_ranges",
     "bulk_set_item_properties", "apply_look_to_items", "thumbnail_contact_sheet",
@@ -21168,6 +21214,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return {"name": tl.GetTrackName(p["track_type"], p["index"])}
     elif action == "set_track_name":
         return {"success": bool(tl.SetTrackName(p["track_type"], p["index"], p["name"]))}
+    elif action == "list_items_detailed":
+        return _timeline_list_items_detailed(tl, p)
     elif action in {"get_items", "get_items_in_track"}:
         track_type, track_index, err = _track_selector(p)
         if err:
