@@ -61,6 +61,7 @@ from src.utils.render_ids import (
     render_format_id_from_formats as _render_format_id_from_formats,
 )
 from src.utils import delivery_targets as _delivery_targets
+from src.utils import cover_candidates as _cover_candidates
 from src.utils import exposure_plan as _exposure_plan
 from src.utils import prebalance as _prebalance
 from src.utils.update_check import (
@@ -5988,7 +5989,15 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
     path = os.path.join(sheet_dir, filename)
     with open(path, "wb") as handle:
         handle.write(png_bytes)
+    candidate_rows = _cover_candidates.rank_cover_candidates(sheet_samples)
+    candidate_by_frame = {row.get("frame"): row for row in candidate_rows}
     for sample in sampled:
+        candidate = candidate_by_frame.get(sample.get("frame"))
+        if candidate:
+            sample["cover_metrics"] = {
+                key: candidate[key]
+                for key in ("rank", "score", "brightness", "detail", "clipped", "crushed")
+            }
         sample.pop("thumbnail_rgb", None)
     metadata_path = os.path.splitext(path)[0] + ".json"
     metadata = {
@@ -6017,8 +6026,49 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
         "height": height,
         "sample_count": len(sheet_samples),
         "samples": sampled,
+        "cover_candidates": candidate_rows,
         "project_root": root["project_root"],
     }
+
+
+def _timeline_cover_frame_candidates(proj, tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    review = _timeline_thumbnail_contact_sheet(proj, tl, p)
+    if not review.get("success"):
+        return review
+    result = {
+        "success": True,
+        "path": review.get("path"),
+        "metadata_path": review.get("metadata_path"),
+        "candidates": review.get("cover_candidates") or [],
+        "samples": review.get("samples") or [],
+    }
+    selected_frame = p.get("selected_frame")
+    export_path = p.get("export_path")
+    if selected_frame is None and export_path is None:
+        return result
+    if selected_frame is None or not export_path:
+        return _err("selected_frame and export_path must be supplied together", code="INCOMPLETE_COVER_EXPORT", category="invalid_input")
+    parent = os.path.dirname(os.path.abspath(export_path))
+    if not os.path.isdir(parent):
+        return _err(f"export_path parent does not exist: {parent}", code="COVER_EXPORT_PARENT_MISSING", category="invalid_input")
+    timecode, tc_error = _timeline_frame_id_to_timecode(tl, _marker_display_frame(tl, int(selected_frame)))
+    if tc_error:
+        return tc_error
+    original_timecode = None
+    try:
+        original_timecode = tl.GetCurrentTimecode()
+        if not tl.SetCurrentTimecode(timecode):
+            return _err("Resolve rejected selected cover frame", code="COVER_FRAME_SEEK_FAILED", category="resolve_api_failed")
+        exported = bool(proj.ExportCurrentFrameAsStill(export_path))
+    finally:
+        if original_timecode:
+            try:
+                tl.SetCurrentTimecode(original_timecode)
+            except Exception:
+                pass
+    result["export"] = {"success": exported, "path": export_path, "frame": int(selected_frame), "timecode": timecode}
+    result["success"] = exported
+    return result
 
 
 def _timeline_marker_thumbnail_review(proj, tl, p: Dict[str, Any]) -> Dict[str, Any]:
@@ -21251,7 +21301,7 @@ _TIMELINE_ACTIONS = [
     "set_track_name", "get_items", "list_items_detailed", "exposure_plan", "delete_clips", "set_clips_linked", "duplicate",
     "duplicate_clips", "copy_clips", "move_clips", "copy_range", "duplicate_range",
     "overwrite_range", "lift_range", "story_spine_report", "create_variant_from_ranges",
-    "bulk_set_item_properties", "apply_look_to_items", "apply_drx_and_cdls_bulk", "thumbnail_contact_sheet",
+    "bulk_set_item_properties", "apply_look_to_items", "apply_drx_and_cdls_bulk", "thumbnail_contact_sheet", "cover_frame_candidates",
     "marker_thumbnail_review", "edit_kernel_capabilities", "probe_edit_kernel_item",
     "title_property_scan", "set_title_text", "bulk_set_title_text", "create_compound_clip",
     "create_fusion_clip", "import_into_timeline", "export", "get_setting", "set_setting",
@@ -21344,6 +21394,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       apply_drx_and_cdls_bulk(path, items, require_temp_path?, dry_run?, confirm_token?) -> {success, items}
         # example: action_help(name='<action_name>')
       thumbnail_contact_sheet(frames?|max_samples?, analysis_root?) -> {path, samples}
+      cover_frame_candidates(frames?|max_samples?, selected_frame?, export_path?) -> {candidates, path, export?}
         frames are relative to the timeline start (frame 0 = first frame), like marker frameIds.
       marker_thumbnail_review(max_samples?, analysis_root?) -> {path, samples, review_guidance}
       edit_kernel_capabilities() -> {supported, partially_supported, unsupported}
@@ -21668,6 +21719,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _timeline_apply_drx_and_cdls_bulk(proj, tl, p)
     elif action == "thumbnail_contact_sheet":
         return _timeline_thumbnail_contact_sheet(proj, tl, p)
+    elif action == "cover_frame_candidates":
+        return _timeline_cover_frame_candidates(proj, tl, p)
     elif action == "marker_thumbnail_review":
         return _timeline_marker_thumbnail_review(proj, tl, p)
     elif action == "edit_kernel_capabilities":
