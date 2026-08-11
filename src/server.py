@@ -16032,6 +16032,7 @@ _RENDER_KERNEL_ACTIONS = [
     "resolve_delivery_target",
     "list_loudness_standards",
     "prepare_delivery_job",
+    "delivery_preflight",
 ]
 
 
@@ -16530,6 +16531,90 @@ def _prepare_delivery_job(proj, p: Dict[str, Any]):
     return prepared
 
 
+def _render_delivery_preflight(proj, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Collect the evidence needed before a profile-driven delivery."""
+    profile = p.get("profile") or p.get("target") or "instagram_reels"
+    resolved, target_error = _resolve_delivery_target_live(proj, {**p, "target": profile})
+    if target_error:
+        return target_error
+    tl = proj.GetCurrentTimeline()
+    if not tl:
+        return _err("No current timeline", code="NO_CURRENT_TIMELINE", category="invalid_state")
+
+    inventory = _timeline_list_items_detailed(tl, {"track_types": ["video"], "enabled_only": True})
+    if inventory.get("error"):
+        return inventory
+
+    def _setting(name):
+        try:
+            return tl.GetSetting(name)
+        except Exception:
+            return None
+
+    def _method(obj, name):
+        try:
+            return getattr(obj, name)()
+        except Exception:
+            return None
+
+    width = _setting("timelineResolutionWidth")
+    height = _setting("timelineResolutionHeight")
+    fps_value = _setting("timelineFrameRate")
+    try:
+        fps = float(fps_value)
+    except (TypeError, ValueError):
+        fps = None
+    try:
+        start = int(tl.GetStartFrame())
+        end = int(tl.GetEndFrame())
+    except Exception:
+        start = end = None
+
+    qc_video = (resolved.get("qc_spec") or {}).get("video") or (resolved.get("qc_spec") or {})
+    expected_width = qc_video.get("width")
+    expected_height = qc_video.get("height")
+    blockers: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = list(inventory.get("warnings") or [])
+    if expected_width is not None and expected_height is not None:
+        if str(width) != str(expected_width) or str(height) != str(expected_height):
+            blockers.append({
+                "code": "DELIVERY_CANVAS_MISMATCH",
+                "expected": {"width": expected_width, "height": expected_height},
+                "actual": {"width": width, "height": height},
+            })
+    offline = [row for row in inventory.get("items", []) if str(row.get("online_status") or "").lower() != "online"]
+    if offline:
+        blockers.append({
+            "code": "OFFLINE_MEDIA",
+            "timeline_item_ids": [row.get("timeline_item_id") for row in offline],
+        })
+    if not inventory.get("items"):
+        blockers.append({"code": "EMPTY_ENABLED_VIDEO_TIMELINE"})
+    duration_frames = (end - start) if start is not None and end is not None else None
+    duration_seconds = (duration_frames / fps) if duration_frames is not None and fps else None
+    return {
+        "success": True,
+        "ready": not blockers,
+        "profile": profile,
+        "project": {"name": _method(proj, "GetName")},
+        "timeline": {
+            "name": _method(tl, "GetName"),
+            "id": _method(tl, "GetUniqueId"),
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "start_frame": start,
+            "end_frame": end,
+            "duration_frames": duration_frames,
+            "duration_seconds": duration_seconds,
+        },
+        "inventory": inventory,
+        "delivery": resolved,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
 def _render_job_lifecycle_probe(proj, p: Dict[str, Any]):
     prepared = _prepare_render_job(proj, {**p, "dry_run": False, "require_temp_target": True})
     if prepared.get("error") or not prepared.get("success"):
@@ -16641,6 +16726,7 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       list_delivery_targets(tier?, check_availability?) -> {targets, tiers, schema_version}
       resolve_delivery_target(target, overrides?) -> {format_id, codec_id, settings, qc_spec}
       prepare_delivery_job(target, target_dir, overrides?, settings?, custom_name?, dry_run?) -> {success, job_id, qc_spec}
+      delivery_preflight(profile?) -> {ready, blockers, warnings, inventory, delivery}
 
     Delivery targets are named render intents (`prores422hq_master`, `youtube`,
     `tiktok`, ...). One definition emits both the Resolve render settings and an
@@ -16692,6 +16778,8 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return _standards_err if _standards_err else _ok(**_standards)
     elif action == "prepare_delivery_job":
         return _prepare_delivery_job(proj, p)
+    elif action == "delivery_preflight":
+        return _render_delivery_preflight(proj, p)
     elif action == "set_format_and_codec":
         _formats = _render_formats(proj)
         _format_id = _render_format_id_from_formats(_formats, p["format"])
