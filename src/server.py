@@ -14678,6 +14678,7 @@ _PROJECT_KERNEL_ACTIONS = [
     "safe_set_current_database",
     "preset_lifecycle_probe",
     "project_boundary_report",
+    "ensure_project_timeline",
 ]
 
 _PROJECT_MANAGER_METHODS = [
@@ -15542,6 +15543,103 @@ def _project_lint_live(r, pm) -> Dict[str, Any]:
     return _ok(**_project_lint.lint_report(state))
 
 
+def _ensure_project_timeline(resolve_obj, pm, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Idempotently establish one project, source clip, and named timeline."""
+    project_name = p.get("project_name")
+    timeline_name = p.get("timeline_name")
+    source_path = p.get("source_path")
+    settings = p.get("settings") or {}
+    if not all(isinstance(value, str) and value.strip() for value in (project_name, timeline_name, source_path)):
+        return _err("project_name, timeline_name, and source_path are required", code="INVALID_PROJECT_TIMELINE_SETUP", category="invalid_input")
+    if not isinstance(settings, dict):
+        return _err("settings must be an object", code="INVALID_SETTINGS", category="invalid_input")
+    if not os.path.isfile(source_path):
+        return _err(f"source_path is not a readable file: {source_path}", code="SOURCE_NOT_FOUND", category="invalid_input")
+
+    existing_names = list(pm.GetProjectListInCurrentFolder() or [])
+    project_exists = project_name in existing_names
+    if not bool(p.get("execute", False)):
+        return _ok(dry_run=True, project_name=project_name, timeline_name=timeline_name, stages=[
+            {"stage": "project", "status": "planned", "would_reuse": project_exists},
+            {"stage": "settings", "status": "planned", "settings": settings},
+            {"stage": "media", "status": "planned", "source_path": source_path},
+            {"stage": "timeline", "status": "planned", "timeline_name": timeline_name},
+            {"stage": "save", "status": "planned"},
+        ])
+
+    stages: List[Dict[str, Any]] = []
+    project = pm.LoadProject(project_name) if project_exists else pm.CreateProject(project_name)
+    if not project:
+        return _err(f"Could not {'load' if project_exists else 'create'} project '{project_name}'", code="PROJECT_ENSURE_FAILED", category="resolve_api_failed")
+    stages.append({"stage": "project", "status": "reused" if project_exists else "created"})
+
+    settings_result = _safe_set_project_settings(project, {"settings": settings, "restore": False}) if settings else _ok()
+    if not settings_result.get("success"):
+        return {"success": False, "stages": stages + [{"stage": "settings", "status": "blocked", "result": settings_result}]}
+    stages.append({"stage": "settings", "status": "applied", "result": settings_result})
+
+    media_pool = project.GetMediaPool()
+    if not media_pool:
+        return _err("Project has no Media Pool", code="MEDIA_POOL_UNAVAILABLE", category="resolve_api_failed")
+    wanted = os.path.normcase(os.path.abspath(source_path))
+
+    def _all_clips(folder):
+        found = list(folder.GetClipList() or [])
+        for child in (folder.GetSubFolderList() or []):
+            found.extend(_all_clips(child))
+        return found
+
+    clip = None
+    for candidate in _all_clips(media_pool.GetRootFolder()):
+        try:
+            candidate_path = candidate.GetClipProperty("File Path")
+            if candidate_path and os.path.normcase(os.path.abspath(candidate_path)) == wanted:
+                clip = candidate
+                break
+        except Exception:
+            continue
+    if clip is None:
+        imported = list(media_pool.ImportMedia([source_path]) or [])
+        clip = imported[0] if imported else None
+        if clip is None:
+            return {"success": False, "stages": stages + [{"stage": "media", "status": "blocked", "code": "MEDIA_IMPORT_FAILED"}]}
+        stages.append({"stage": "media", "status": "imported"})
+    else:
+        stages.append({"stage": "media", "status": "reused"})
+
+    timeline_obj = _find_project_timeline(project, timeline_name)
+    if timeline_obj is None:
+        timeline_obj = media_pool.CreateTimelineFromClips(timeline_name, [clip])
+        if timeline_obj is None:
+            return {"success": False, "stages": stages + [{"stage": "timeline", "status": "blocked", "code": "TIMELINE_CREATE_FAILED"}]}
+        stages.append({"stage": "timeline", "status": "created"})
+    else:
+        stages.append({"stage": "timeline", "status": "reused"})
+    if _has_method(project, "SetCurrentTimeline"):
+        project.SetCurrentTimeline(timeline_obj)
+
+    preset_name = p.get("fairlight_preset_name")
+    if preset_name:
+        presets = list(resolve_obj.GetFairlightPresets() or []) if _has_method(resolve_obj, "GetFairlightPresets") else []
+        if preset_name not in presets:
+            return {"success": False, "stages": stages + [{"stage": "fairlight_preset", "status": "blocked", "code": "FAIRLIGHT_PRESET_NOT_FOUND"}]}
+        if not bool(project.ApplyFairlightPresetToCurrentTimeline(preset_name)):
+            return {"success": False, "stages": stages + [{"stage": "fairlight_preset", "status": "blocked", "code": "FAIRLIGHT_PRESET_APPLY_FAILED"}]}
+        stages.append({"stage": "fairlight_preset", "status": "applied", "name": preset_name})
+
+    saved = bool(pm.SaveProject())
+    stages.append({"stage": "save", "status": "saved" if saved else "blocked"})
+    return {
+        "success": saved,
+        "dry_run": False,
+        "project_name": project_name,
+        "timeline_name": timeline_name,
+        "timeline_id": timeline_obj.GetUniqueId() if _has_method(timeline_obj, "GetUniqueId") else None,
+        "media_pool_item_id": clip.GetUniqueId() if _has_method(clip, "GetUniqueId") else None,
+        "stages": stages,
+    }
+
+
 @mcp.tool()
 @_guard_missing_params
 def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -15593,6 +15691,8 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 
     if action == "lint":
         return _project_lint_live(r, pm)
+    if action == "ensure_project_timeline":
+        return _ensure_project_timeline(r, pm, p)
     if action in {"diff_to_spec", "plan_spec", "apply_spec"}:
         return _spec_action(r, pm, action, p)
     if action == "project_capabilities":
