@@ -59,6 +59,14 @@ class ActionHelpFullActionListTest(unittest.TestCase):
         undocumented = compound._action_help("timeline", {"name": "get_current"})
         self.assertEqual(undocumented["error"]["code"], "HELP_NOT_REGISTERED")
 
+    def test_detailed_item_inventory_has_pull_on_demand_help(self):
+        out = compound._action_help("timeline", {"name": "list_items_detailed"})
+        self.assertTrue(out.get("success"), out)
+        self.assertEqual(out["action"], "list_items_detailed")
+        self.assertIn("track_types", out["params"])
+        self.assertIn("item_index", out["returns"])
+        self.assertIn("list_items_detailed", out["example"])
+
 
 if __name__ == "__main__":
     unittest.main()

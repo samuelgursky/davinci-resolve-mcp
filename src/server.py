@@ -21070,6 +21070,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       clear_mark_in_out(type?) -> {success}
       convert_to_stereo() -> {success}
       get_items_in_track(track_type, track_index|index) -> {items}  — alias of get_items
+      list_items_detailed(track_types?, enabled_only?) -> {count, tracks, items, warnings}
       get_voice_isolation_state(track_index) -> {isEnabled, amount}
       set_voice_isolation_state(track_index, state) -> {success}
       extract_source_frame_ranges(handles?, gap_max?, skip_extensions?) -> {timeline_name, frame_ranges, occurrences, ...}
@@ -22865,6 +22866,17 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
             "params": "track_type (video|audio|subtitle), index|track_index (1-based)",
             "returns": "{items: [{name, id, start, end, duration}]}",
             "example": 'timeline(action="get_items", params={"track_type": "video", "index": 1})',
+        },
+        "list_items_detailed": {
+            "summary": "List detailed items across requested tracks, omitting confirmed-disabled tracks by default.",
+            "params": "track_types? ([video|audio|subtitle], default [video]), enabled_only? (bool, default true)",
+            "returns": "{success, count, tracks, items: [{track_type, track_index, item_index, timeline_item_id, source_start, source_end, media_pool_item_id, file_path, online_status}], warnings}",
+            "example": (
+                'timeline(action="list_items_detailed", params={\n'
+                '  "track_types": ["video"],\n'
+                '  "enabled_only": True\n'
+                '})'
+            ),
         },
         "get_items_in_track": {
             "summary": "Alias of get_items: list items on one track (name/id/start/end/duration).",
