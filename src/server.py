@@ -5488,6 +5488,94 @@ def _timeline_apply_look_to_items(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _timeline_apply_drx_and_cdls_bulk(proj, tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    path = p.get("path")
+    specs = p.get("items")
+    if not path or not os.path.isfile(path):
+        return _err(f"DRX file not found: {path}", code="DRX_NOT_FOUND", category="invalid_input")
+    if p.get("require_temp_path", True) and not _grade_temp_path_ok(path):
+        return _err("DRX path must be under the system temp directory unless require_temp_path=False", code="DRX_PATH_NOT_TEMP", category="invalid_input")
+    if not isinstance(specs, list) or not specs:
+        return _err("items must be a non-empty list", code="MISSING_TARGETS", category="invalid_input")
+
+    resolved = []
+    missing = []
+    for spec in specs:
+        if not isinstance(spec, dict) or not spec.get("timeline_item_id"):
+            return _err("each item requires timeline_item_id", code="INVALID_TARGET", category="invalid_input")
+        item = _find_timeline_item_by_id(tl, spec["timeline_item_id"])
+        if item is None:
+            missing.append(spec["timeline_item_id"])
+            continue
+        normalized = None
+        if spec.get("cdl") is not None:
+            validation, err = _validate_cdl_payload(spec["cdl"])
+            if err:
+                return err
+            if not validation["valid"]:
+                return {"success": False, "validation": validation, "timeline_item_id": spec["timeline_item_id"]}
+            normalized = _normalize_cdl(validation["cdl"])
+        graph, source, graph_error = _color_graph_from_params(proj, item, {})
+        if graph_error:
+            return graph_error
+        if not _has_method(graph, "ApplyGradeFromDRX"):
+            return _err("item graph does not expose ApplyGradeFromDRX", code="APPLY_DRX_UNSUPPORTED", category="unsupported")
+        resolved.append({"spec": spec, "item": item, "graph": graph, "source": source, "normalized": normalized})
+    if missing:
+        return {"success": False, "dry_run": bool(p.get("dry_run", True)), "missing": missing, "items": []}
+
+    dry_run = p.get("dry_run", True)
+    preview_items = [{"timeline_item_id": row["spec"]["timeline_item_id"], "has_cdl": row["normalized"] is not None} for row in resolved]
+    if dry_run:
+        return _ok(dry_run=True, path=path, items=preview_items, missing=[])
+    if _confirm_token_required():
+        if "confirm_token" not in p and "confirmToken" not in p:
+            return _issue_confirm_token(
+                action="timeline.apply_drx_and_cdls_bulk",
+                params=p,
+                preview={"operation": "apply_drx_and_cdls_bulk", "path": path, "items": preview_items, "warning": "Replaces every target node graph before applying its CDL."},
+            )
+        blocked = _consume_confirm_token(action="timeline.apply_drx_and_cdls_bulk", params=p)
+        if blocked:
+            return blocked
+
+    results = []
+    grade_mode = p.get("grade_mode", p.get("mode", 0))
+    for row in resolved:
+        item_id = row["spec"]["timeline_item_id"]
+        try:
+            applied = bool(row["graph"].ApplyGradeFromDRX(path, grade_mode))
+        except Exception as exc:
+            applied = False
+            error = str(exc)
+        else:
+            error = None
+        result = {"timeline_item_id": item_id, "drx_applied": applied, "cdl_applied": None, "status": "completed" if applied else "failed"}
+        if error:
+            result["error"] = error
+        if not applied:
+            results.append(result)
+            break
+        if row["normalized"] is not None:
+            try:
+                cdl_applied = bool(row["item"].SetCDL(row["normalized"]))
+            except Exception as exc:
+                cdl_applied = False
+                result["error"] = str(exc)
+            result["cdl_applied"] = cdl_applied
+            if not cdl_applied:
+                result["status"] = "failed"
+        results.append(result)
+        if result["status"] == "failed":
+            break
+    completed_ids = {row["timeline_item_id"] for row in results}
+    for row in resolved:
+        item_id = row["spec"]["timeline_item_id"]
+        if item_id not in completed_ids:
+            results.append({"timeline_item_id": item_id, "status": "untouched", "drx_applied": None, "cdl_applied": None})
+    return {"success": all(row["status"] == "completed" for row in results), "dry_run": False, "path": path, "items": results, "missing": []}
+
+
 def _variant_item_placement(item) -> Dict[str, Any]:
     """Report an appended item's placed frame positions in both frame spaces.
     record_* are TIMELINE frames (GetStart/GetEnd/GetDuration); source_start is
@@ -21163,7 +21251,7 @@ _TIMELINE_ACTIONS = [
     "set_track_name", "get_items", "list_items_detailed", "exposure_plan", "delete_clips", "set_clips_linked", "duplicate",
     "duplicate_clips", "copy_clips", "move_clips", "copy_range", "duplicate_range",
     "overwrite_range", "lift_range", "story_spine_report", "create_variant_from_ranges",
-    "bulk_set_item_properties", "apply_look_to_items", "thumbnail_contact_sheet",
+    "bulk_set_item_properties", "apply_look_to_items", "apply_drx_and_cdls_bulk", "thumbnail_contact_sheet",
     "marker_thumbnail_review", "edit_kernel_capabilities", "probe_edit_kernel_item",
     "title_property_scan", "set_title_text", "bulk_set_title_text", "create_compound_clip",
     "create_fusion_clip", "import_into_timeline", "export", "get_setting", "set_setting",
@@ -21253,6 +21341,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       bulk_set_item_properties(ops, dry_run?, readback?) -> {results, op_count}
         # example: action_help(name='<action_name>')
       apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?) -> {success}
+      apply_drx_and_cdls_bulk(path, items, require_temp_path?, dry_run?, confirm_token?) -> {success, items}
         # example: action_help(name='<action_name>')
       thumbnail_contact_sheet(frames?|max_samples?, analysis_root?) -> {path, samples}
         frames are relative to the timeline start (frame 0 = first frame), like marker frameIds.
@@ -21575,6 +21664,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _timeline_bulk_set_item_properties(tl, p)
     elif action == "apply_look_to_items":
         return _timeline_apply_look_to_items(tl, p)
+    elif action == "apply_drx_and_cdls_bulk":
+        return _timeline_apply_drx_and_cdls_bulk(proj, tl, p)
     elif action == "thumbnail_contact_sheet":
         return _timeline_thumbnail_contact_sheet(proj, tl, p)
     elif action == "marker_thumbnail_review":
