@@ -61,6 +61,8 @@ from src.utils.render_ids import (
     render_format_id_from_formats as _render_format_id_from_formats,
 )
 from src.utils import delivery_targets as _delivery_targets
+from src.utils import exposure_plan as _exposure_plan
+from src.utils import prebalance as _prebalance
 from src.utils.update_check import (
     check_for_updates,
     clear_update_prompt_preferences,
@@ -3110,6 +3112,47 @@ def _timeline_list_items_detailed(tl, p: Dict[str, Any]) -> Dict[str, Any]:
         items=items,
         warnings=warnings,
     )
+
+
+def _default_exposure_analyzer(path: str, at_seconds: float) -> Dict[str, Any]:
+    measured = _prebalance.measure_frame_levels(path, at_seconds)
+    if not measured.get("success"):
+        return measured
+    proposal = _prebalance.propose_balance(measured["levels"])
+    operations = proposal.get("operations") or {}
+    gain = operations.get("gain") or {}
+    lift = operations.get("lift") or {}
+    return {
+        "success": True,
+        "stats": measured["levels"],
+        "sampled_at_seconds": measured.get("sampled_at_seconds"),
+        "cdl": {
+            "NodeIndex": 1,
+            "Slope": [float(gain.get(channel, 1.0)) for channel in "rgb"],
+            "Offset": [float(lift.get(channel, 0.0)) for channel in "rgb"],
+            "Power": [1.0, 1.0, 1.0],
+            "Saturation": 1.0,
+        },
+        "reasons": proposal.get("reasons") or [],
+    }
+
+
+def _timeline_exposure_plan(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    items = p.get("items")
+    if items is None:
+        inventory = _timeline_list_items_detailed(tl, {"track_types": ["video"], "enabled_only": True})
+        if inventory.get("error"):
+            return inventory
+        items = inventory.get("items") or []
+    if not isinstance(items, list):
+        return _err("items must be a list", code="INVALID_EXPOSURE_ITEMS", category="invalid_input")
+    source_fps = p.get("source_fps")
+    if source_fps is None:
+        try:
+            source_fps = float(tl.GetSetting("timelineFrameRate"))
+        except Exception:
+            source_fps = 30.0
+    return _exposure_plan.build_exposure_plan(items, _default_exposure_analyzer, source_fps=float(source_fps))
 
 
 # Filters the live timeline adapter can populate from a timeline-item summary.
@@ -21117,7 +21160,7 @@ _TIMELINE_ACTIONS = [
     "get_end_frame", "get_start_timecode", "set_start_timecode", "get_track_count",
     "add_track", "delete_track", "get_track_sub_type", "set_track_enable",
     "get_track_enabled", "set_track_lock", "get_track_locked", "get_track_name",
-    "set_track_name", "get_items", "list_items_detailed", "delete_clips", "set_clips_linked", "duplicate",
+    "set_track_name", "get_items", "list_items_detailed", "exposure_plan", "delete_clips", "set_clips_linked", "duplicate",
     "duplicate_clips", "copy_clips", "move_clips", "copy_range", "duplicate_range",
     "overwrite_range", "lift_range", "story_spine_report", "create_variant_from_ranges",
     "bulk_set_item_properties", "apply_look_to_items", "thumbnail_contact_sheet",
@@ -21259,6 +21302,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       convert_to_stereo() -> {success}
       get_items_in_track(track_type, track_index|index) -> {items}  — alias of get_items
       list_items_detailed(track_types?, enabled_only?) -> {count, tracks, items, warnings}
+      exposure_plan(items?, source_fps?) -> {success, items, blockers, unique_ranges_analyzed}
       get_voice_isolation_state(track_index) -> {isEnabled, amount}
       set_voice_isolation_state(track_index, state) -> {success}
       extract_source_frame_ranges(handles?, gap_max?, skip_extensions?) -> {timeline_name, frame_ranges, occurrences, ...}
@@ -21465,6 +21509,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return {"success": bool(tl.SetTrackName(p["track_type"], p["index"], p["name"]))}
     elif action == "list_items_detailed":
         return _timeline_list_items_detailed(tl, p)
+    elif action == "exposure_plan":
+        return _timeline_exposure_plan(tl, p)
     elif action in {"get_items", "get_items_in_track"}:
         track_type, track_index, err = _track_selector(p)
         if err:
