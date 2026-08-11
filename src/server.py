@@ -23337,6 +23337,24 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
                 '})'
             ),
         },
+        "exposure_plan": {
+            "summary": "Analyze each unique online source range once and return a proposed CDL per timeline item.",
+            "params": "items? (defaults to enabled video inventory), source_fps?",
+            "returns": "{success, items: [{timeline_item_id, source_range, analysis}], blockers, unique_ranges_analyzed}",
+            "example": 'timeline(action="exposure_plan", params={"source_fps": 30})',
+        },
+        "apply_drx_and_cdls_bulk": {
+            "summary": "Apply one DRX, then an optional per-item CDL, to a fully validated item set under one confirmation.",
+            "params": "path, items: [{timeline_item_id, cdl?}], require_temp_path?, dry_run? (default true), confirm_token?",
+            "returns": "{success, dry_run, path, items: [{timeline_item_id, status, drx_applied, cdl_applied}], missing}",
+            "example": 'timeline(action="apply_drx_and_cdls_bulk", params={"path": "<look.drx>", "items": [{"timeline_item_id": "<id>", "cdl": {"NodeIndex": 1, "Slope": [1,1,1], "Offset": [0,0,0], "Power": [1,1,1], "Saturation": 1}}]})',
+        },
+        "cover_frame_candidates": {
+            "summary": "Rank sampled timeline thumbnails using deterministic blankness, clipping, exposure, and detail signals.",
+            "params": "frames?|max_samples?, analysis_root?, selected_frame?+export_path?",
+            "returns": "{success, path, candidates: [{rank, frame, timecode, score, brightness, detail, clipped, crushed}], export?}",
+            "example": 'timeline(action="cover_frame_candidates", params={"max_samples": 12})',
+        },
         "get_items_in_track": {
             "summary": "Alias of get_items: list items on one track (name/id/start/end/duration).",
             "params": "track_type (video|audio|subtitle), track_index|index (1-based)",

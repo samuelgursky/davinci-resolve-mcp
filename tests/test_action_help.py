@@ -67,6 +67,13 @@ class ActionHelpFullActionListTest(unittest.TestCase):
         self.assertIn("item_index", out["returns"])
         self.assertIn("list_items_detailed", out["example"])
 
+    def test_social_delivery_timeline_actions_have_help(self):
+        for action in ("exposure_plan", "apply_drx_and_cdls_bulk", "cover_frame_candidates"):
+            with self.subTest(action=action):
+                out = compound._action_help("timeline", {"name": action})
+                self.assertTrue(out.get("success"), out)
+                self.assertIn(action, out["example"])
+
 
 if __name__ == "__main__":
     unittest.main()
