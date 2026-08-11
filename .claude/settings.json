@@ -21,7 +21,13 @@
       "Bash(git add *)",
       "Bash(mdfind -onlyin /Volumes/BACKUP \"057_REUNIFICATION_FULL_VER2\")",
       "Bash(python3 dashscrub.py)",
-      "Bash(python3 verify.py)"
+      "Bash(python3 verify.py)",
+      "Bash(/Users/matusoberuc/MattFrames/business/tools/genbox/genlab/boxrun.sh p1_setup 'cmd.exe /c F:\\\\AI\\\\film01\\\\p1_setup.cmd')",
+      "Bash(/Users/matusoberuc/MattFrames/business/tools/genbox/genlab/boxrun.sh cb_gate 'cmd.exe /c F:\\\\AI\\\\tts\\\\cb_venv\\\\Scripts\\\\python.exe F:\\\\AI\\\\film01\\\\cb_test.py > F:\\\\AI\\\\film01\\\\cb_gate.log 2>&1')",
+      "Bash(/Users/matusoberuc/MattFrames/business/tools/genbox/genlab/boxrun.sh cb_gate2 'cmd.exe /c F:\\\\AI\\\\tts\\\\cb_venv\\\\Scripts\\\\python.exe F:\\\\AI\\\\film01\\\\cb_test.py > F:\\\\AI\\\\film01\\\\cb_gate.log 2>&1')",
+      "Bash(./filmctl.sh push *)",
+      "Bash(./filmctl.sh vo *)",
+      "Bash(./filmctl.sh start *)"
     ]
   },
   "model": "opus[1m]"
