@@ -84,6 +84,7 @@ class TimelineItemsDetailedTest(unittest.TestCase):
                 "track_type": "video", "track_index": 1, "item_index": 0,
                 "start": 86400, "end": 86520, "duration": 120,
                 "source_start": 24, "source_end": 144,
+                "source_start_seconds": 0.4, "source_end_seconds": None,
                 "media_pool_item_id": "mpi-1", "media_pool_item_name": "clip.mov",
                 "file_path": "D:/media/clip.mov", "online_status": "Online", "source_fps": 60.0,
             },

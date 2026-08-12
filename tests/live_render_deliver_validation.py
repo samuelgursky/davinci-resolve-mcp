@@ -27,6 +27,24 @@ def _install_mcp_stubs() -> None:
 
             return decorate
 
+        def prompt(self, *args, **kwargs):
+            def decorate(func):
+                return func
+
+            return decorate
+
+    class Context:
+        pass
+
+    class Image:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class ToolAnnotations:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
     def stdio_server(*args, **kwargs):
         raise RuntimeError("stdio_server is not used by the live Render / Deliver harness")
 
@@ -34,15 +52,21 @@ def _install_mcp_stubs() -> None:
     anyio.run = lambda func: func()
 
     mcp = types.ModuleType("mcp")
+    mcp_types = types.ModuleType("mcp.types")
     server = types.ModuleType("mcp.server")
     fastmcp = types.ModuleType("mcp.server.fastmcp")
     stdio = types.ModuleType("mcp.server.stdio")
 
     fastmcp.FastMCP = FastMCP
+    fastmcp.Context = Context
+    fastmcp.Image = Image
+    mcp_types.ToolAnnotations = ToolAnnotations
+    mcp.types = mcp_types
     stdio.stdio_server = stdio_server
 
     sys.modules.setdefault("anyio", anyio)
     sys.modules.setdefault("mcp", mcp)
+    sys.modules.setdefault("mcp.types", mcp_types)
     sys.modules.setdefault("mcp.server", server)
     sys.modules.setdefault("mcp.server.fastmcp", fastmcp)
     sys.modules.setdefault("mcp.server.stdio", stdio)
