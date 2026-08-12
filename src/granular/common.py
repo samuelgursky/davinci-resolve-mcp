@@ -49,6 +49,8 @@ from src.utils.render_ids import (
     render_format_id_from_formats,
 )
 from src.utils.resolve_connection import connect_resolve
+from src.utils.resolve_probe import api_constant as _api_constant, has_method
+from src.utils.resolve_versions import availability, gates_unavailable_on
 from src.utils.project_properties import (
     get_all_project_properties,
     get_color_settings,
@@ -85,7 +87,7 @@ if not logging.getLogger().handlers:
         handlers=[logging.StreamHandler()],
     )
 
-VERSION = "2.80.0"
+VERSION = "2.93.0"
 logger = logging.getLogger("davinci-resolve-mcp")
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
@@ -741,11 +743,43 @@ def _get_timeline_item(track_type="video", track_index=1, item_index=0):
     return items[item_index], None
 
 def _has_method(obj, method_name):
-    return callable(getattr(obj, method_name, None))
+    # `hasattr` is a constant True on Resolve objects — see src/utils/resolve_probe.
+    return has_method(obj, method_name)
 
 def _requires_method(obj, method_name, min_version):
     if _has_method(obj, method_name):
         return None
     return {"error": f"{method_name} requires DaVinci Resolve {min_version}+"}
+
+def _ai_result(returned):
+    """Normalize a Resolve 21 AI-method return into (ok, message).
+
+    The AI methods do not agree on how they report a missing Extras pack, and
+    one of the two shapes is a trap. Verified live on Studio 21.0.2.4 with only
+    AI Motion Deblur installed:
+
+      - `AnalyzeForSlate`  -> False
+      - `AnalyzeForIntellisearch` -> "Required package 'AI Intellisearch -
+        Faster' is not installed."
+      - `GenerateSpeech`   -> "Required Package, 'AI Speech Generator' is not
+        Installed."
+
+    A non-empty string is truthy, so `bool(returned)` reports success for a call
+    that definitively did not run, and treating the return as a MediaPoolItem
+    raises AttributeError. This is the compound server's `_ai_result`, kept
+    identical on purpose: the granular tools called the same AI methods with a
+    bare `bool()` and inherited the whole trap.
+    """
+    if isinstance(returned, str):
+        return False, returned.strip() or None
+    return bool(returned), None
+
+def _ai_result_payload(returned):
+    """`{"success": ...}` plus the Resolve-supplied reason when there is one."""
+    ok, message = _ai_result(returned)
+    payload = {"success": ok}
+    if message:
+        payload["error"] = message
+    return payload
 
 __all__ = [name for name in globals() if not name.startswith("__")]

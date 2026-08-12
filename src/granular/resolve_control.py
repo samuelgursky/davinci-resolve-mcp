@@ -186,10 +186,12 @@ def inspect_custom_object(object_path: str) -> Dict[str, Any]:
                     return {"error": f"Method '{method_name}' not found or not callable"}
             else:
                 # It's an attribute access
-                if hasattr(obj, part):
-                    obj = getattr(obj, part)
-                else:
+                # getattr, not hasattr: on a Resolve object hasattr is a
+                # constant True, so the not-found branch could never run.
+                value = getattr(obj, part, None)
+                if value is None:
                     return {"error": f"Attribute '{part}' not found"}
+                obj = value
         
         # Inspect the object we've retrieved
         return inspect_object(obj)
@@ -399,7 +401,19 @@ def get_resolve_version_fields() -> Dict[str, Any]:
         return {"error": "Not connected to DaVinci Resolve"}
     version = resolve.GetVersion()
     if version:
-        return {"major": version[0], "minor": version[1], "patch": version[2], "build": version[3], "suffix": version[4] if len(version) > 4 else ""}
+        # Carry what this build is MISSING, not just what it is. An agent that
+        # only learns the number still has to know which surfaces that number
+        # rules out, and guessing that is issue #132.
+        missing = gates_unavailable_on(resolve.GetVersionString())
+        return {"major": version[0], "minor": version[1], "patch": version[2], "build": version[3],
+                "suffix": version[4] if len(version) > 4 else "",
+                "unavailable_on_this_build": missing,
+                "note": ("Recorded surfaces absent here — do not offer them. An absence "
+                         "from this list is not a promise a method exists; most of the "
+                         "API has never been version-bisected."
+                         if missing else
+                         "Clears every recorded version gate. Surfaces nobody has "
+                         "bisected are still unknown — probe before offering them.")}
     return {"error": "Failed to get version"}
 
 
@@ -536,3 +550,172 @@ def quit_resolve() -> Dict[str, Any]:
         return {"error": "Not connected to DaVinci Resolve"}
     resolve.Quit()
     return {"success": True, "message": "DaVinci Resolve is quitting"}
+
+
+@mcp.tool()
+def get_layout_preset_list() -> Dict[str, Any]:
+    """Get the names of all saved UI layout presets (Resolve 21.0.4+).
+
+    Calls Resolve.GetLayoutPresetList(). These are the names accepted by
+    load_layout_preset_tool, update_layout_preset, export_layout_preset_tool
+    and delete_layout_preset_tool.
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "GetLayoutPresetList", "21.0.4")
+    if missing:
+        return missing
+    presets = resolve.GetLayoutPresetList()
+    return {"presets": presets if presets else []}
+
+
+@mcp.tool()
+def get_burn_in_preset_list() -> Dict[str, Any]:
+    """Get the names of all saved data burn-in presets (Resolve 21.0.4+).
+
+    Calls Resolve.GetBurnInPresetList(). These are the names accepted by the
+    'DataBurnIn' render setting, project load_burn_in_preset, and
+    export_burn_in_preset.
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "GetBurnInPresetList", "21.0.4")
+    if missing:
+        return missing
+    presets = resolve.GetBurnInPresetList()
+    return {"presets": presets if presets else []}
+
+
+@mcp.tool()
+def delete_burn_in_preset(preset_name: str) -> Dict[str, Any]:
+    """Delete a data burn-in preset by name (Resolve 21.0.4+).
+
+    Args:
+        preset_name: Name of the burn-in preset to delete.
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "DeleteBurnInPreset", "21.0.4")
+    if missing:
+        return missing
+    result = resolve.DeleteBurnInPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+
+@mcp.tool()
+def get_user_preferences_preset_list() -> Dict[str, Any]:
+    """Get the names of all saved user-preferences presets (Resolve 21.0.4+).
+
+    Calls Resolve.GetUserPreferencesPresetList().
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "GetUserPreferencesPresetList", "21.0.4")
+    if missing:
+        return missing
+    presets = resolve.GetUserPreferencesPresetList()
+    return {"presets": presets if presets else []}
+
+
+@mcp.tool()
+def save_user_preferences_preset(preset_name: str) -> Dict[str, Any]:
+    """Save the current user preferences as a named preset (Resolve 21.0.4+).
+
+    Args:
+        preset_name: Name for the new user-preferences preset.
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "SaveUserPreferencesPreset", "21.0.4")
+    if missing:
+        return missing
+    result = resolve.SaveUserPreferencesPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+
+@mcp.tool()
+def load_user_preferences_preset(preset_name: str) -> Dict[str, Any]:
+    """Load a user-preferences preset (Resolve 21.0.4+).
+
+    SESSION-WIDE: this swaps the user's global Resolve preferences, not a
+    project setting. It affects every project open in this Resolve instance.
+    Only call when the user explicitly asked for the switch.
+
+    Args:
+        preset_name: Name of the user-preferences preset to load.
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "LoadUserPreferencesPreset", "21.0.4")
+    if missing:
+        return missing
+    result = resolve.LoadUserPreferencesPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+
+@mcp.tool()
+def delete_user_preferences_preset(preset_name: str) -> Dict[str, Any]:
+    """Delete a user-preferences preset by name (Resolve 21.0.4+).
+
+    Args:
+        preset_name: Name of the user-preferences preset to delete.
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "DeleteUserPreferencesPreset", "21.0.4")
+    if missing:
+        return missing
+    result = resolve.DeleteUserPreferencesPreset(preset_name)
+    return {"success": bool(result), "preset_name": preset_name}
+
+
+@mcp.tool()
+def import_user_preferences_preset(import_path: str, preset_name: str = None) -> Dict[str, Any]:
+    """Import a user-preferences preset from a file (Resolve 21.0.4+).
+
+    The imported preset is NOT auto-loaded; it takes its name from the file
+    when preset_name is omitted (measured on Studio 21.0.4.5). Follow with
+    load_user_preferences_preset to activate it.
+
+    Args:
+        import_path: Absolute path to the preset file to import.
+        preset_name: Name to save the imported preset as (filename if None).
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "ImportUserPreferencesPreset", "21.0.4")
+    if missing:
+        return missing
+    if preset_name:
+        result = resolve.ImportUserPreferencesPreset(import_path, preset_name)
+    else:
+        result = resolve.ImportUserPreferencesPreset(import_path)
+        preset_name = os.path.splitext(os.path.basename(import_path))[0]
+    return {"success": bool(result), "preset_name": preset_name, "import_path": import_path,
+            "note": "The imported preset is not auto-loaded; use load_user_preferences_preset to activate it."}
+
+
+@mcp.tool()
+def export_user_preferences_preset(preset_name: str, export_path: str) -> Dict[str, Any]:
+    """Export a user-preferences preset to a file (Resolve 21.0.4+).
+
+    Args:
+        preset_name: Name of the user-preferences preset to export.
+        export_path: Absolute path where the preset file will be saved.
+    """
+    resolve = get_resolve()
+    if resolve is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(resolve, "ExportUserPreferencesPreset", "21.0.4")
+    if missing:
+        return missing
+    result = resolve.ExportUserPreferencesPreset(preset_name, export_path)
+    return {"success": bool(result), "preset_name": preset_name, "export_path": export_path}

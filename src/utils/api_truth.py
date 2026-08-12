@@ -124,11 +124,18 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "float), both before and after a timeline exists, so the "
                    "playback frame rate cannot be set from the API at all. "
                    "Reported by a community contributor against Resolve Studio "
-                   "while assembling a vertical timeline (PR #99).",
+                   "while assembling a vertical timeline (PR #99), and "
+                   "independently on Resolve 20.2 against a freshly created "
+                   "project whose timeline rate already read 60 (issue #141) — "
+                   "so a matching timelineFrameRate does not unlock the write.",
         "recommended": "Ask the user to set it in Project Settings > Master "
                        "Settings > Playback frame rate as a SETUP step, before "
                        "any timeline exists. Read it back to confirm; do not "
-                       "report it as set on the strength of the call alone.",
+                       "report it as set on the strength of the call alone. The "
+                       "issue #141 reporter's workaround is worth passing on "
+                       "for repeat setups: duplicate a project that already "
+                       "carries the wanted playback rate rather than creating "
+                       "one and trying to write it.",
         "tags": ["project-settings", "silent-failure", "timeline"],
         "submit": "missing",
     },
@@ -645,9 +652,136 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "a real one-frame error just as easily.",
         "recommended": "Verify source-side placement with GetLeftOffset, which is exact. "
                        "Treat GetSourceStartFrame as approximate, and never diff it "
-                       "against a sent startFrame to decide whether a clip landed right.",
+                       "against a sent startFrame to decide whether a clip landed right. "
+                       "Scope: placement at 100% speed. On a retimed clip the two read "
+                       "DIFFERENT domains — GetLeftOffset is warped (position / speed), "
+                       "GetSourceStartFrame is true source — see the retime entry's "
+                       "witness calibration before comparing them.",
         "tags": ["off-by-one", "unreliable-return", "timeline", "conform", "verify"],
         "submit": "bug",
+    },
+    {
+        "symbol": "TimelineItem.GetSourceStartFrame on an AUDIO item (media-rate frames; a WAV freezes the PROJECT rate at import)",
+        "object": "TimelineItem",
+        "signature": "() -> int  # source frame, counted in the MEDIA's frame rate",
+        "reality": "The value is counted in the source MEDIA's own frame rate, not "
+                   "the timeline's. CORRECTION (2026-08-10, Studio 19.1.3.7): an "
+                   "earlier version of this entry said a WAV 'carries no frame rate, "
+                   "so Resolve falls back to 24 fps'. That is WRONG, and 24 is not a "
+                   "constant to rely on. A WAV takes the PROJECT's timelineFrameRate "
+                   "AT IMPORT and freezes it. Measured with one 400.000 s 48 kHz WAV "
+                   "imported into three project states: project at 24 -> clip FPS "
+                   "24.0, Duration 00:06:40:00 (9600 frames = 400 s); project at "
+                   "29.97 -> clip FPS 29.97, Duration 00:06:39:18 (11988 frames = "
+                   "400 s); and changing the project rate to 29.97 AFTER import left "
+                   "the clip reading 24.0 (SetSetting returned True and the project "
+                   "did move). So the mismatch is not 'audio is always 24' but "
+                   "'the clip kept the rate the project had when it was imported, "
+                   "and the project moved afterwards' — which also means a WAV "
+                   "imported into a 29.97 project behaves exactly like video, with "
+                   "no trap at all. ALWAYS read the clip's FPS property; never "
+                   "assume 24. The original 21.0.3.7 report below is consistent with "
+                   "this: that project was at 24 when the WAV was imported. "
+                   "Reading the frames at the timeline rate lands "
+                   "minutes away from the real position in the file. Verified live "
+                   "on Studio 21.0.3.7 (2026-08-09, 29.97 fps timeline): a "
+                   "ZOOM0028.WAV item reported source_start 56871, which is "
+                   "56871 / 24 = 2369.6 s into the file, NOT the 1897.6 s a 29.97 "
+                   "fps reading gives — a 471.9 s (7 min 52 s) error. Nothing looks "
+                   "wrong, because timeline probe_timeline_structure derives "
+                   "source_end as source_start + timeline_duration: the start/end "
+                   "pair stays internally consistent whatever rate you assume. "
+                   "VIDEO items are NOT affected — two 29.97 fps items "
+                   "(KR020007.MOV, IMG_0001.mov) on the same timeline reported "
+                   "source frames in their own, matching rate, confirmed against "
+                   "ffprobe durations and span arithmetic. This is the read-side "
+                   "twin of the AppendToTimeline mixed-fps entry below: that one is "
+                   "about writing source frames whose rate differs from the "
+                   "timeline's, this one about reading them back and not knowing "
+                   "which rate they are in. The rate was pinned by regression, "
+                   "not assumed: across 12 items of the same WAV, "
+                   "GetSourceStartFrame advances at 24.000 fps against the item's "
+                   "own GetSourceStartTime (24.0000/24.0007/23.9995 over spans up "
+                   "to 22 minutes). The same measurement exposed a second unit "
+                   "trap: on an AUDIO item GetLeftOffset advances at 29.970 — the "
+                   "TIMELINE rate — so the two readers describe the same edit "
+                   "point in DIFFERENT frame spaces (60687 vs 75784 for one "
+                   "item). On video they share the source space. Caveat on the "
+                   "absolute zero: Resolve's model of this file is 133003 frames "
+                   "(Duration 01:32:21:19 at 24 fps = 5541.79 s) while its true "
+                   "PCM length is 266264768 samples / 48 kHz = 5547.18 s, a 0.097% "
+                   "difference we have not explained — so frames/24 is exact in "
+                   "Resolve's source-time space, which is the space every other "
+                   "Resolve call uses, but may sit ~2 s off the byte position in "
+                   "a 40-minute-deep offset. Re-confirmed on Studio 19.1.3.7 "
+                   "(2026-08-10) with synthetic media, so this is not a 21.x "
+                   "regression: a 300 s 48 kHz WAV reports FPS 24, and appending "
+                   "source frames 4800-5235 of it to a 29.97 fps timeline yields "
+                   "a timeline duration of 543 (= 435 x 29.97/24), which is the "
+                   "conversion happening in the open. The same run measured the "
+                   "cost of the derived end: source_end came back 5343 "
+                   "(4800 + 543) where the true source end is 5235, so "
+                   "source_end / 24 reports 222.625 s against a real 218.133 s "
+                   "from GetSourceEndTime — 4.49 s out, on a clip only 18.1 s "
+                   "long. GetSourceStartTime read exactly 200.0 s (= 4800/24) on "
+                   "the same item. The matching VIDEO item (29.97 source in a "
+                   "29.97 timeline) was unaffected in both: 24.524 s read against "
+                   "24.525 s derived. Both second-readers exist on 19.1.3.7, so "
+                   "the GetSourceEndFrame fallback below is for builds older "
+                   "still. GetSourceEndFrame ITSELF changes convention between "
+                   "the two regimes and cannot be used raw: measured over 12 "
+                   "items on 19.1.3.7, it is EXCLUSIVE (equals the endFrame "
+                   "sent) when the source rate equals the timeline rate, and "
+                   "INCLUSIVE (one less) when they differ — off by one in "
+                   "exactly the case a caller reaches for it. It is not a "
+                   "media-type split: the same WAV imported at 29.97 into a "
+                   "29.97 timeline read exclusive, like video, and only the "
+                   "rate MISMATCH flipped it. What IS stable across both "
+                   "regimes is GetSourceEndTime x media_fps, which was exact "
+                   "on 12 of 12 valid items (30.633 s x 24 = 735.19 -> 735; "
+                   "24.524 s x 29.97 = 734.98 -> 735) — seconds carry no "
+                   "frame-rate assumption, so the product is in source space "
+                   "by construction.",
+        "recommended": "Convert an audio item's source frames with the MEDIA's rate, "
+                       "never the timeline's: seconds = source_start / media_fps. "
+                       "READ media_fps from the media-pool item's 'FPS' clip property "
+                       "(or ffprobe) every time — do not infer it from the timeline, "
+                       "and do NOT hard-code 24 for a WAV: that number is whatever "
+                       "the project rate was when the clip was imported, so it is 24 "
+                       "only for a project that was at 24, and a WAV imported at "
+                       "29.97 has no mismatch at all. Feed the frames back to timeline "
+                       "create_variant_from_ranges in the same media-rate space you "
+                       "read them in; it converts on placement and reports the "
+                       "conversion in items[].duration_delta. The separate "
+                       "GetSourceStartFrame entry above (off-by-one vs "
+                       "GetLeftOffset) applies on top of this — the rate question "
+                       "is which unit the number is in, not whether it is exact. "
+                       "Mitigated in-process: _timeline_item_summary now emits "
+                       "source_fps and source_start_seconds/source_end_seconds "
+                       "beside the frames, so the number always arrives with its "
+                       "unit; on the GetLeftOffset fallback for an audio item it "
+                       "reports the rate as unknown rather than converting a "
+                       "timeline-frame value at the media rate. source_end is "
+                       "no longer source_start + TIMELINE duration: as of "
+                       "v2.93.0 it is round(GetSourceEndTime x media_fps), "
+                       "which is a SOURCE frame by construction and stays "
+                       "EXCLUSIVE as every caller already assumed. Measured "
+                       "live on 19.1.3.7 over 8 items in both regimes, it "
+                       "equals the endFrame actually sent every time, and it "
+                       "reproduces the old value exactly wherever the old value "
+                       "was already right — so matched-rate media does not "
+                       "move. The old arithmetic overshot by +24/+26/+108/+149 "
+                       "frames on the mismatched WAV, and timeline "
+                       "extract_source_frame_ranges built pull ranges out of "
+                       "it: widths of 543 and 749 for clips that consume 435 "
+                       "and 600 source frames. It falls back to the old sum "
+                       "only when GetSourceEndTime or the rate is unreadable.",
+        "tags": ["timeline", "audio", "wav", "frame-rate", "mixed-fps",
+                 "silent-failure", "readback"],
+        "submit": "bug",
+        "mitigation": ["_media_item_source_fps", "_source_frames_to_seconds",
+                       "_timeline_item_source_seconds",
+                       "_timeline_item_source_end_exclusive"],
     },
     {
         "symbol": "Razor / blade / split a timeline item",
@@ -710,10 +844,14 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "one 200% clip per timeline, a document carrying warped "
                    "<in>/<out>, true-source pproTicks, <duration> = fileLen/ratio "
                    "and a constant-slope graphdict imports cleanly, the control "
-                   "lands correct, and the 200% clip reads back src 1500..1548 — a "
-                   "48-frame source span over a 48-frame record span, i.e. NO "
-                   "retime; emitting the identical document WITHOUT the graphdict "
-                   "gives the identical result; (c) `reverse` does not survive "
+                   "lands correct, and NO retime is built: recalibrated 2026-08-05, "
+                   "every xmeml-imported clip carries a DEGENERATE time map in "
+                   "Project.db (Sm2TimeMap with an empty source axis — five Time "
+                   "Remap shapes re-measured, 15/15 clips degenerate), so no speed "
+                   "exists in the project data, and the API source witness reads "
+                   "0/0 on those clips (see WITNESS CALIBRATION below); emitting "
+                   "the identical document WITHOUT the graphdict gives the "
+                   "identical result; (c) `reverse` does not survive "
                    "either; (d) THE HAZARD, and it is the part that bites: Resolve "
                    "reads <in> LITERALLY as the true source frame, honouring neither "
                    "the ticks nor the graphdict. Import a genuine Premiere XML that "
@@ -750,24 +888,76 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "verifying a retime by round-tripping through EXPORT_FCP_7_XML "
                    "is reading furniture, and the identity Time Remap blocks "
                    "present on every clip are what make the route look like it "
-                   "should work.",
-        "recommended": "Set clip speed/retime in the Resolve UI; no scripted "
-                       "equivalent exists, and the scripting-API xmeml import does "
-                       "not carry one in. Do NOT read speed back with GetProperty "
-                       "(None) or witness it via EXPORT_FCP_7_XML (degenerate). "
-                       "Read the clip's GEOMETRY instead — GetLeftOffset / "
-                       "GetRightOffset, whose source span is what shows whether a "
-                       "retime was built (the re-tested 200% clip read src "
-                       "1500..1548, 48 source frames over a 48-frame record, so "
-                       "none was). Caveat worth keeping: there is still no positive "
-                       "control — no clip KNOWN to be retimed has been read back "
-                       "through those two witnesses, because there is no scripting "
-                       "path to create one, so the geometry witness is the best "
-                       "available, not a proven one. And if you are importing a real "
-                       "Premiere XML that contains retimes, treat every retimed "
-                       "clip's source position as WRONG — placed at <in>, i.e. "
-                       "in / ratio — until it is checked against a reference; the "
-                       "lengths and the links will look right.",
+                   "should work. "
+                   "WITNESS CALIBRATION (2026-08-05, Studio 19.1.3.7) — the "
+                   "positive control this entry previously lacked now exists, and "
+                   "it RETRACTS the witness the 2.80.0 revision of this entry "
+                   "recommended. The rig removed every confound: the SAME clip "
+                   "placed twice, adjacent, in ONE timeline, the second copy "
+                   "hand-set to 200% in the UI (the only way to make one — see "
+                   "above). GetSourceStartFrame/GetSourceEndFrame separated the "
+                   "copies — 1822..1870 (span 48) at 100% vs 1822..1918 (span 96) "
+                   "at 200% — while GetLeftOffset/GetRightOffset did NOT: "
+                   "1822..1870 at 100% vs 911..959 at 200%, which is exactly "
+                   "position / 2. GetLeftOffset reports the WARPED (record-side) "
+                   "domain — position / speed, the `In` column of Project.db's "
+                   "Sm2TiItem — so it is exact for PLACEMENT and blind for SPEED "
+                   "BY CONSTRUCTION: its span equals the record span at every "
+                   "speed. The speed itself lives in the item's Sm2TimeMap blob "
+                   "(keyframe slope = ratio; the hand-set 200% reads slope exactly "
+                   "2.0), which is what GetSourceStart/EndFrame and EXPORT_EDL "
+                   "read. THE SPEED WITNESS is therefore the GetSourceStart/"
+                   "EndFrame span vs the record duration. CAVEAT: on "
+                   "xmeml-IMPORTED timelines those return 0/0 — the importer "
+                   "leaves the time map's source axis empty — and a 0/0 read is "
+                   "UNKNOWN, never 'no retime'. Cross-checks that work everywhere: "
+                   "the Sm2TimeMap slope read from a saved Project.db, and the "
+                   "EXPORT_EDL M2 rate (rate = fps x speed/100, so 048.0 = 200% at "
+                   "24 fps; `M2 ... 000.0` on every clip is the degenerate-map "
+                   "furniture of an xmeml import — ignore it). "
+                   "TWO IMPORT ROUTES DO BUILD CONSTANT RETIMES (measured "
+                   "2026-08-05, media linked, judged via the calibrated witnesses "
+                   "above): (1) OTIO LinearTimeWarp through ImportTimelineFromFile "
+                   "— 200% (src 200..296 over a 48-frame record) and 50% (src "
+                   "300..324 over a 48-frame record) both landed with correct "
+                   "source in-points; the saved Project.db shows slope 2.0 and "
+                   "0.5. Emission rules: the document must be Resolve-shaped with "
+                   "TIMECODE-ABSOLUTE source frames (see the ImportTimelineFromFile "
+                   ".otio entry), the effect is `LinearTimeWarp.1` with "
+                   "`time_scalar`, and `source_range.duration` is the RECORD span "
+                   "— OTIO semantics, the time_scalar handles source consumption; "
+                   "sending the source span as the duration builds a "
+                   "spec-correctly longer clip, not a retime. (2) EDL M2 — 200% "
+                   "landed (src 100..196 over a 48-frame record), linked. Author "
+                   "the shape Resolve's own EXPORT_EDL writes: the event line's "
+                   "source span EQUALS the record span even under M2; the "
+                   "`M2 <reel> <rate> <srcInTC>` line carries the play rate in "
+                   "fps (048.0 = 200% at 24); `* FROM CLIP NAME:` comments drive "
+                   "pool linking. UNTESTED as import routes: reverse (negative "
+                   "time_scalar / reverse M2) and varying-speed maps — do not "
+                   "extrapolate the constant-speed result to them.",
+        "recommended": "Set clip speed/retime in the Resolve UI, or BUILD it by "
+                       "import: OTIO LinearTimeWarp and EDL M2 both construct "
+                       "constant retimes through ImportTimelineFromFile (measured "
+                       "— emission rules in reality above); xmeml does not, in any "
+                       "Time Remap shape. To READ a retime back, judge speed by "
+                       "the GetSourceStart/EndFrame span vs the record duration — "
+                       "a 0/0 read (xmeml-imported timelines) is UNKNOWN, never "
+                       "'no retime' — and cross-check with the Sm2TimeMap slope in "
+                       "a saved Project.db or the EXPORT_EDL M2 rate. Do NOT read "
+                       "speed with GetProperty (None), witness it via "
+                       "EXPORT_FCP_7_XML (degenerate), or judge it from "
+                       "GetLeftOffset/GetRightOffset — the 2.80.0 revision of this "
+                       "entry recommended that pair as the witness and it is blind "
+                       "by construction: it reads the warped domain (position / "
+                       "speed) and its span equals the record span at every speed. "
+                       "Keep it for PLACEMENT checks only. Reverse and "
+                       "varying-speed maps remain untested as import routes. And "
+                       "if you are importing a real Premiere XML that contains "
+                       "retimes, treat every retimed clip's source position as "
+                       "WRONG — placed at <in>, i.e. in / ratio — until it is "
+                       "checked against a reference; the lengths and the links "
+                       "will look right.",
         "tags": ["missing-method", "timeline", "retime", "speed", "interchange",
                  "silent-failure", "unreliable-return"],
         "submit": "missing",
@@ -798,11 +988,110 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "isolation). Verified via dir() + SetProperty docs AND by live "
                    "mutating attempt on 21.0.0: SetProperty('Volume'|'Level'|'Gain'"
                    "|'AudioVolume', 0) all return False (note 'Pan' is the VIDEO "
-                   "transform key, not audio pan, so it misleadingly succeeds).",
-        "recommended": "Mix in the Fairlight UI; only voice-isolation state and "
-                       "channel-mapping reads are scriptable.",
+                   "transform key, not audio pan, so it misleadingly succeeds). "
+                   "The gap is PER-PARAMETER control specifically: a whole saved "
+                   "mix CAN be applied wholesale via "
+                   "Project.ApplyFairlightPresetToCurrentTimeline(name), with the "
+                   "available names from Resolve.GetFairlightPresets() — so "
+                   "'no Fairlight write path exists' would be too strong. Both "
+                   "methods require Resolve 20.2.2+; on 19.1.3 they are absent "
+                   "(confirmed live 2026-08-06), so on older builds the "
+                   "per-parameter gap really is the whole story.",
+        "recommended": "To reapply a known mix, save it once as a Fairlight preset "
+                       "in the UI and apply it per-timeline with "
+                       "ApplyFairlightPresetToCurrentTimeline (exposed as "
+                       "resolve_control get_fairlight_presets + project_settings "
+                       "apply_fairlight_preset). Dial individual levels/pan/EQ/"
+                       "automation/FairlightFX in the Fairlight UI; beyond presets, "
+                       "only voice-isolation state and channel-mapping reads are "
+                       "scriptable.",
         "tags": ["missing-method", "audio", "fairlight"],
         "submit": "missing",
+    },
+    {
+        "symbol": "AI Audio Assistant (one-click timeline auto-mix)",
+        "object": "Timeline / Project",
+        "reality": "The Fairlight AI Audio Assistant — which analyses a timeline "
+                   "and generates a balanced dialogue/music/effects mix — has no "
+                   "scripting method. Nothing matching it appears in the Resolve "
+                   "scripting API reference or in a dir() audit of Resolve, "
+                   "Project, Timeline or TimelineItem. Note this is NOT because it "
+                   "is a menu command: the API has no generic menu-invocation hook "
+                   "at all, so scriptability is per-feature, and plenty of menu "
+                   "commands DO have methods (DetectSceneCuts, Stabilize, "
+                   "SmartReframe, CreateMagicMask, TranscribeAudio, "
+                   "RemoveMotionBlur, AnalyzeForIntellisearch). It is compounded by "
+                   "the per-parameter Fairlight gap above: even the mix it produces "
+                   "cannot be read back or reconstructed clip-by-clip.",
+        "recommended": "No way to trigger it from a script. For a repeatable mix, "
+                       "run the Assistant once in the UI, save the result as a "
+                       "Fairlight preset, then apply that preset per-timeline with "
+                       "project_settings apply_fairlight_preset — content-adaptive "
+                       "per run is not achievable, a consistent template mix is.",
+        "tags": ["missing-method", "audio", "fairlight", "ai", "auto-mix"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Studio-gated calls on the free edition raise a modal that blocks LATER calls",
+        "object": "Resolve (all objects)",
+        "reality": "Calling a Studio-only function from the free edition returns "
+                   "False, which the reference documents. What it does NOT "
+                   "document: Resolve also raises a modal upsell dialog ('You "
+                   "have reached a limitation with DaVinci Resolve'), and while "
+                   "that dialog is up, UNRELATED subsequent API calls fail too. "
+                   "Confirmed live on free 21.0.3.7 over the in-app bridge "
+                   "(2026-08-06): Timeline.CreateSubtitlesFromAudio and "
+                   "MediaPoolItem.TranscribeAudio each returned False and raised "
+                   "the dialog; Project.SaveProject then returned False on every "
+                   "attempt until a human clicked 'Not Yet', after which it "
+                   "succeeded. Nothing in any return value, and no error, names "
+                   "the dialog — an automated caller sees only a cascade of "
+                   "unexplained False returns and will misattribute them to "
+                   "whatever it called next.",
+        "recommended": "Detect the edition BEFORE calling Studio-gated features "
+                       "rather than discovering the gate by tripping it: the "
+                       "product name is 'DaVinci Resolve' on free and 'DaVinci "
+                       "Resolve Studio' on Studio (resolve_control get_version "
+                       "reports it). If a Studio-only call has already returned "
+                       "False on a free build, treat every following failure as "
+                       "suspect: re-run a known-good read, and if that fails too, "
+                       "a modal is blocking and only a human can dismiss it — no "
+                       "API closes it. Known Studio-gated so far: subtitle "
+                       "generation from audio, and audio transcription.",
+        "tags": ["free-edition", "studio-only", "silent-failure", "modal", "ai",
+                 "subtitle", "transcription"],
+        "submit": "bug",
+    },
+    {
+        "symbol": "SetRenderSettings ExportSubtitle / SubtitleFormat had no observable effect",
+        "object": "Project (render settings)",
+        "reality": "Queuing a render with {'ExportSubtitle': True, "
+                   "'SubtitleFormat': 'BurnIn'} returned success from "
+                   "SetRenderSettings and rendered without error, but the output "
+                   "contained NO subtitles in any form: no burned-in pixels (every "
+                   "frame of the region carrying 7 subtitle items was fully black "
+                   "and byte-identical), no embedded subtitle stream (ffprobe saw "
+                   "only video/audio/data), and no sidecar file. Observed on "
+                   "Studio 19.1.3.7, 2026-08-06, on a timeline whose subtitle "
+                   "track held 7 generated caption items. "
+                   "NOT YET DISTINGUISHED: whether Resolve ignores these keys, or "
+                   "whether burn-in has an unmet precondition (a Deliver-page "
+                   "toggle, a subtitle track enabled for output, or a format that "
+                   "supports it). Both are consistent with what was seen, so this "
+                   "is recorded as an observation rather than asserted as a "
+                   "Resolve bug. Note the related confirmed trap: SetRenderSettings "
+                   "applies on top of whatever state the Deliver page holds "
+                   "(issue #123), so an inherited preset can override a key that "
+                   "was passed.",
+        "recommended": "Do not trust a render's subtitle settings from the "
+                       "settings_success boolean. VERIFY the artifact: ffprobe the "
+                       "output for a subtitle stream, check for a sidecar file, or "
+                       "sample frames for burned-in pixels. If subtitles must be "
+                       "burned in, confirm the result before delivering.",
+        "tags": ["render", "subtitle", "silent-failure", "unverified-cause",
+                 "deliver"],
+        "submit": "bug",
+        "issue": 123,
     },
     {
         "symbol": "Proxy / optimized-media generation",
@@ -904,9 +1193,24 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "'subtitlePosition', 'subtitleAlignment', "
                    "'subtitlePreset', 'subtitleStyle'). Verified via dir(), "
                    "GetProperty(), and GetSetting() on Resolve 21.0.0.48.",
-        "recommended": "No workaround exists — subtitle styling is UI-only. "
-                       "Burn-in overlays via Fusion titles are a visual "
-                       "alternative but do not produce proper subtitle tracks.",
+        "recommended": "No API workaround exists, but the style IS reachable "
+                       "below the API: it lives in Sm2TiTrack.FieldsBlob for "
+                       "Type=2 tracks, as an EffectFiltersBA payload whose "
+                       "effect 136 carries a Qt QFont descriptor (param 18) and "
+                       "a normalised position vector (param 17). Exposed as "
+                       "project_db list_subtitle_styles / set_subtitle_style "
+                       "(font family/size/weight/italic + position). Confirmed "
+                       "live on BOTH editions 2026-08-06 — Studio 19.1.3 and "
+                       "free 21.0.3, identical behaviour: Resolve opens a patched track "
+                       "and re-serialises it back to its own zstd form with the "
+                       "patched values intact, so it genuinely parses the write. "
+                       "Caveats: whole-TRACK style not per-caption, project must "
+                       "be CLOSED, Resolve must be fully quit and relaunched "
+                       "afterwards, and the track must already carry a style "
+                       "blob (a freshly added subtitle track has none until it "
+                       "is styled once in the UI). Burn-in overlays via Fusion "
+                       "titles remain a visual alternative but do not produce "
+                       "subtitle tracks.",
         "tags": ["missing-method", "subtitle", "style", "preset"],
         "submit": "missing",
     },
@@ -959,13 +1263,29 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "NOT refute the 21.0.0 record: if the bridge resolves any name "
                    "known to the RemoteObject method table rather than literally any "
                    "string, an invented name is correctly rejected on both builds and "
-                   "the probe never exercised the failing case. Re-running the probe "
-                   "with those five real names is what would settle it; until then, "
-                   "assume fabrication is possible.",
+                   "the probe never exercised the failing case. "
+                   "PARTLY SETTLED 2026-08-06 on Studio 19.1.3.7, DIRECT connection "
+                   "(not the bridge): the five real borrowed names were re-run as the "
+                   "entry asked, across Resolve, ProjectManager, Project, MediaPool, "
+                   "Timeline, Folder and TimelineItem — 42 checks. Every one returned "
+                   "getattr-callable False and dir()-absent, agreeing in all 42 cases, "
+                   "exactly like the invented control. So NO fabrication on the direct "
+                   "path on this build, and the borrowed-name case the 21.0.2.4 probe "
+                   "missed is now covered there. What the same run DID establish is "
+                   "narrower and worse than expected: bare hasattr() returns True for "
+                   "EVERY name on every object — real, borrowed or invented — while "
+                   "getattr returns None. hasattr alone is therefore not a weak probe, "
+                   "it is a constant True and carries no information at all. "
+                   "STILL OPEN: the 21.0.0 record was against the BRIDGE, which this "
+                   "run did not exercise, so bridge-side fabrication remains untested "
+                   "and the recommendation below stands unchanged.",
         "recommended": "Use dir(obj) membership for capability probes. It is correct "
                        "on every build measured, and it is the only form not affected "
-                       "by whichever way this resolves. server._has_method uses "
-                       "hasattr/getattr and so may over-report on builds where "
+                       "by whichever way this resolves. NEVER use bare hasattr(): it "
+                       "is a constant True on Resolve objects and cannot distinguish "
+                       "anything. server._has_method uses callable(getattr(...)), "
+                       "which agreed with dir() in all 42 direct-path checks on "
+                       "19.1.3.7 but may still over-report on a bridge build where "
                        "fabrication is live — that is the case _requires_method gates "
                        "guard, so it matters most exactly where it is least tested. "
                        "Calling a fabricated method typically returns None/False with "
@@ -1312,6 +1632,95 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
         "issue": 59,
         "mitigation": ["_render_format_id", "_render_codec_id"],
+    },
+    {
+        "symbol": "SetClipColor (undocumented value space; marker constants are a decoy)",
+        "object": "TimelineItem / MediaPoolItem",
+        "signature": "(colorName) -> bool",
+        "reality": "SetClipColor accepts exactly 16 names — the Edit-page clip-colour "
+                   "palette — and refuses everything else with a bare False, no "
+                   "exception and no other signal. Enumerated live on Studio "
+                   "19.1.3.7 (2026-08-06) against both objects; the accepted set is "
+                   "IDENTICAL on TimelineItem and MediaPoolItem: Orange, Apricot, "
+                   "Yellow, Lime, Olive, Green, Teal, Navy, Blue, Purple, Violet, "
+                   "Pink, Tan, Beige, Brown, Chocolate. The empty string is refused "
+                   "too. The trap is that the scripting reference documents "
+                   "colorName as a bare string with no enumerated values, while "
+                   "exporting the MARKER palette as constants (resolve.MARKER_ROSE, "
+                   "resolve.MARKER_FUCHSIA, ...) — so the only colour vocabulary "
+                   "reachable from the API surface is the wrong one. Cyan, Red, "
+                   "Fuchsia, Rose, Lavender, Sky, Mint, Lemon, Sand, Cocoa and Cream "
+                   "are all marker-only and all refused. Five names overlap both "
+                   "palettes (Blue, Green, Yellow, Pink, Purple), which is why the "
+                   "decoy survives: reasoning from the marker constants scores 5 of "
+                   "16 and looks like the right vocabulary with a few gaps. The "
+                   "reporter's field experience sharpens this — the trap is not that "
+                   "a decoy vocabulary exists, it is that the decoy HALF-WORKS. "
+                   "Intermittent successes read as an unreliable API rather than as "
+                   "a wrong vocabulary, so the wrong conclusion is the natural one; "
+                   "a clean 0-for-8 would have exposed the mechanism immediately.",
+        "recommended": "Pass only the 16 clip-colour names; on False, treat it as an "
+                       "invalid name rather than an item/lock/page problem. The set "
+                       "is pinned in utils/clip_colors.py and named in the refusal "
+                       "remediation, but deliberately NOT enforced — it was measured "
+                       "on one build and a later Resolve could extend it.",
+        "tags": ["timeline-item", "media-pool", "silent-failure", "undocumented-enum"],
+        "submit": "missing",
+        "issue": 124,
+        "mitigation": ["_set_clip_color_checked", "ti_set_clip_color"],
+    },
+    {
+        "symbol": "TimelineItem.SetClipColor on generator/title items",
+        "object": "TimelineItem",
+        "signature": "(colorName) -> bool",
+        "reality": "On a generator or title item SetClipColor returns True with a "
+                   "VALID colour name and the colour does not persist — GetClipColor "
+                   "still reads '' immediately afterwards, and ClearClipColor "
+                   "changes nothing because there is nothing to clear. Measured on "
+                   "Studio 19.1.3.7 (2026-08-06) on a Solid Color generator. A "
+                   "media-backed item on the SAME timeline in the same session "
+                   "persists correctly (SetClipColor('Teal') -> True, GetClipColor "
+                   "-> 'Teal'), so the bool is honest for some items and a lie for "
+                   "others, with nothing in the return value to tell them apart. A "
+                   "timeline item's colour is also independent of its backing "
+                   "MediaPoolItem's: colouring the item leaves the pool clip at ''.",
+        "recommended": "Never trust the bool alone — read GetClipColor back and "
+                       "compare. To mark a generator or title, use a timeline marker "
+                       "at its start instead; markers read back reliably.",
+        "tags": ["timeline-item", "silent-failure", "generator", "readback-lies"],
+        "submit": "bug",
+        "issue": 124,
+        "mitigation": ["_set_clip_color_checked", "ti_set_clip_color"],
+    },
+    {
+        "symbol": "Project.SetRenderSettings (inherits the loaded preset)",
+        "object": "Project",
+        "signature": "({settings}) -> bool",
+        "reality": "SetRenderSettings applies the passed keys ON TOP of whatever "
+                   "render state the Deliver page is holding; it does not replace "
+                   "it. A loaded preset carries more state than the keys a caller "
+                   "passes, and that state survives. Measured 2026-07-08: after a "
+                   "render through the stock 'Audio Only' preset, a job queued with "
+                   "an explicit ExportVideo=True and an .mp4 target returned "
+                   "settings_success=True and a real job id, GetRenderJobList "
+                   "reported IsExportVideo=True, and the rendered .mp4 contained "
+                   "only an AAC stream with NO video stream (ffprobe) — 18 minutes "
+                   "of material 'rendered' in ~10 seconds. The job readback is "
+                   "therefore NOT a witness for the rendered file. There is also no "
+                   "way to detect the inherited state: the scripting API documents "
+                   "no GetRenderSettings and no GetCurrentRenderPresetName, so the "
+                   "base state can be pinned but never read.",
+        "recommended": "Pin the base state instead of inheriting one — "
+                       "prepare_render_job(from_preset='<a video preset>') runs "
+                       "LoadRenderPreset before the explicit settings go on top "
+                       "(PresetName flips to 'Custom' once they do, which is "
+                       "expected). Then verify the OUTPUT, not the job: ffprobe for "
+                       "a codec_type=video stream. A long timeline that completes "
+                       "in seconds is the tell.",
+        "tags": ["render", "deliver", "silent-failure", "preset", "readback-lies"],
+        "submit": "bug",
+        "issue": 123,
+        "mitigation": ["_render_preset_pin", "_prepare_render_job"],
     },
     {
         "symbol": "Project.SetCurrentRenderFormatAndCodec",

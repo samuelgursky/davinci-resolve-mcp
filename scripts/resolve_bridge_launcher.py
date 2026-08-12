@@ -168,7 +168,8 @@ def main():
         print("  operations  : %d" % len(resolve_bridge_ops.ResolveOperations.OPERATIONS))
         print("  generation  : %d" % generation)
         print()
-        print("  The MCP server connects with DAVINCI_RESOLVE_BRIDGE=1.")
+        print("  The MCP server uses this bridge automatically when external")
+        print("  scripting is unavailable. DAVINCI_RESOLVE_BRIDGE=1 forces it.")
         if model["blocking_required"]:
             print("  This script now HOLDS the listener open and will look busy until")
             print("  Resolve exits. That is expected — closing it stops the bridge.")

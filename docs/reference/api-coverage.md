@@ -6,18 +6,18 @@ Complete Resolve scripting API coverage, live-test status, and method-by-method 
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **34** compound (default) / **341** granular |
+| MCP Tools | **34** compound (default) / **353** granular |
 | Kernel Actions | **136** guarded MCP workflow actions across 9 compound tools |
-| API Methods Covered | **349/349** (100%) |
-| Methods Live Tested | **338/349** (96.8%) |
+| API Methods Covered | **361/361** (100%) |
+| Methods Live Tested | **338/361** (93.6%) |
 | Live Test Pass Rate | **338/338** (100%) |
 | API Object Classes | 13 |
-| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio + Resolve 21.0.2 Studio |
-| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21.0 additions are version-guarded and live-tested on 21.0.2 (see the Resolve 21 delta row below — five wrappers need AI Extras packs and stay untested without one, and one is deliberately not executed) |
+| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio + Resolve 21.0.2 Studio + Resolve 21.0.3 **free** (via the in-app bridge) |
+| Compatibility Note | Resolve 19.1.3 remains the compatibility baseline; Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2; Resolve 21.0 additions are version-guarded and live-tested on 21.0.2 (see the Resolve 21 delta row below — five wrappers need AI Extras packs and stay untested without one, and one is deliberately not executed). The Resolve 21.0.4 additions are version-guarded and unit-tested, but not live-tested here — the validation machine carries Studio 19.1.3 and free 21.0.3, neither of which is 21.0.4. Note the free build is reachable only through the in-app bridge, since the free edition refuses external scripting |
 
 ## API Coverage
 
-Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **34 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **341 individual tools** for power users. Both modes cover all 13 API object classes. MCP-level kernel actions are tracked separately in [Kernel Action Coverage](../kernels/README.md).
+Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **34 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **353 individual tools** for power users. Both modes cover all 13 API object classes. MCP-level kernel actions are tracked separately in [Kernel Action Coverage](../kernels/README.md).
 
 The 34th compound tool is `timeline_versioning` (C6) — an MCP-level workflow
 tool, not a wrapper around a Resolve API method. It surfaces the
@@ -109,7 +109,7 @@ source, these summaries are downstream of it:
 | Phase 5 | 6/6 | 100% | Scene cuts, subtitles from audio, graph node cache/tools/enable |
 | Resolve 20 delta | 12/12 | 100% | Resolve 20.0-20.2.2 scripting additions live-tested on 20.3.2 |
 | Resolve 21 delta | 7/7 | 100% | Resolve 21.0 additions that could be executed, live-tested on Studio 21.0.2.4 (`tests/live_resolve21_validation.py`). The other 6 need an AI Extras pack or are unsafe to run — counted as untested, not as passes |
-| **Total** | **338/338** | **100%** | **96.8% of the 349 covered methods tested live** |
+| **Total** | **338/338** | **100%** | **93.6% of the 361 covered methods tested live** |
 
 #### Resolve 21 delta detail
 
@@ -130,7 +130,7 @@ marked 🔬 rather than ⚠️.
 | `Project.GenerateSpeech` | 🔬 | Requires AI Speech Generator; returned an error **string**, not a MediaPoolItem |
 | `Resolve.DisableBackgroundTasksForCurrentResolveSession` | 🔬 | Present in `dir()`; **not executed** — session-wide, returns None, and has no `Enable...` counterpart, so there is no undo short of restarting Resolve |
 
-### Untested Methods (11 of 349)
+### Untested Methods (23 of 361)
 
 Every ☁️ and 🔬 row from the reference tables, listed here so the count is
 checkable rather than asserted.
@@ -148,10 +148,27 @@ checkable rather than asserted.
 | `MPI.AnalyzeForSlate` | Requires the AI Slate ID Extra | Yes |
 | `Project.GenerateSpeech` | Requires the AI Speech Generator Extra | Yes |
 | `Resolve.DisableBackgroundTasksForCurrentResolveSession` | Deliberately not executed: session-wide, returns `None`, and has no `Enable...` counterpart, so there is no undo short of restarting Resolve | No |
+| `MPI.GetTimeline` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
+| `TL.GetSelectedClips` | Requires a Resolve 21.0.4 build; the validation machine runs 19.1.3 | Yes |
+| `Resolve.GetLayoutPresetList` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
+| `Resolve.GetBurnInPresetList` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
+| `Resolve.DeleteBurnInPreset` | Requires a Resolve 21.0.4 build; also, no scripting API creates a burn-in preset to round-trip against | Yes |
+| `Resolve.GetUserPreferencesPresetList` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
+| `Resolve.SaveUserPreferencesPreset` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
+| `Resolve.LoadUserPreferencesPreset` | Deliberately not executed even by the reporter: swaps the user's global preferences session-wide | No |
+| `Resolve.DeleteUserPreferencesPreset` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
+| `Resolve.ImportUserPreferencesPreset` | Requires a Resolve 21.0.4 build; round-tripped by the reporter on 21.0.4.5 in both call shapes (PR #139), not here | Yes |
+| `Resolve.ExportUserPreferencesPreset` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
+| `PM.GetProjectAttributesInCurrentFolder` | Requires a Resolve 21.0.4 build; the validation machine runs Studio 19.1.3 and free 21.0.3 | Yes |
 
 The five AI Extras rows are untested for want of a downloadable pack, not because
 the wrappers are suspect — a report from anyone who has the packs installed would
-close them. The last one is a decision rather than a gap: it is reachable, and
+close them. The twelve 21.0.4 rows are untested for want of the build: this machine
+runs 19.1.3, so they are guarded and unit-tested against stubs and carry a
+contributor's report rather than a result of ours (issue #131 for the first two;
+issues #135–#138 for the ten from the 24 Jul 2026 README refresh, several with
+save→list→delete round-trips on Studio 21.0.4.5). The remaining one is a
+decision rather than a gap: it is reachable, and
 running it during a validation sweep would disable background tasks for every
 project open in that Resolve instance.
 
@@ -192,8 +209,17 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 19 | `ExportBurnInPreset(presetName, exportPath)` | ⚠️ | API accepts; needs valid preset name |
 | 20 | `GetKeyframeMode()` | ✅ | Returns keyframe mode |
 | 21 | `SetKeyframeMode(keyframeMode)` | ⚠️ | API accepts; mode must match valid enum |
-| 22 | `GetFairlightPresets()` | ✅ | Resolve 20.3.2 live test returns preset map |
+| 22 | `GetFairlightPresets()` | ✅ | Returns a preset map. Live on 20.3.2 Studio and 21.0.3 free; **absent below 20.2.2** — confirmed missing on 19.1.3, so the version floor is verified from both sides |
 | 23 | `DisableBackgroundTasksForCurrentResolveSession()` | 🔬 | Resolve 21.0. Present in `dir()`; **not executed** — session-wide, returns `None`, no `Enable...` counterpart, so no undo short of restarting Resolve |
+| 24 | `GetLayoutPresetList()` | 🔬 | Resolve 21.0.4 (24 Jul 2026 README). Not executed here — no 21.0.4 build; reporter's save→list→delete round-trip on Studio 21.0.4.5 in issue #137 |
+| 25 | `GetBurnInPresetList()` | 🔬 | Resolve 21.0.4. Not executed here; reported returning a list on Studio 21.0.4.5 in issue #136 |
+| 26 | `DeleteBurnInPreset(presetName)` | 🔬 | Resolve 21.0.4. `dir()`-present on 21.0.4.5 (issue #136); not executed anywhere — no scripting API creates a burn-in preset to round-trip against |
+| 27 | `GetUserPreferencesPresetList()` | 🔬 | Resolve 21.0.4. Not executed here; reporter's save→list→delete round-trip on Studio 21.0.4.5 in issue #138 |
+| 28 | `SaveUserPreferencesPreset(presetName)` | 🔬 | Resolve 21.0.4. Not executed here; part of the issue #138 round-trip on 21.0.4.5 |
+| 29 | `LoadUserPreferencesPreset(presetName)` | 🔬 | Resolve 21.0.4. `dir()`-present on 21.0.4.5; **not executed** even by the reporter — swaps the user's global preferences session-wide (issue #138) |
+| 30 | `DeleteUserPreferencesPreset(presetName)` | 🔬 | Resolve 21.0.4. Not executed here; part of the issue #138 round-trip on 21.0.4.5 |
+| 31 | `ImportUserPreferencesPreset(presetFilePath, presetName)` | 🔬 | Resolve 21.0.4. Not executed here; reporter's export→delete→import round-trip on 21.0.4.5 (PR #139) covers **both** call shapes — single-arg returns `True` rather than a `TypeError`, and the imported preset is then named after the file; the two-arg form takes the given name. Per the README the imported preset is **not** auto-loaded, and the round-trip did not load either import |
+| 32 | `ExportUserPreferencesPreset(presetName, exportPath)` | 🔬 | Resolve 21.0.4. Not executed here; reported writing the file at the given path with no extension appended, on 21.0.4.5 (PR #139) |
 
 ### ProjectManager
 
@@ -224,6 +250,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 23 | `LoadCloudProject({cloudSettings})` | ☁️ | Requires cloud infrastructure |
 | 24 | `ImportCloudProject(filePath, {cloudSettings})` | ☁️ | Requires cloud infrastructure |
 | 25 | `RestoreCloudProject(folderPath, {cloudSettings})` | ☁️ | Requires cloud infrastructure |
+| 26 | `GetProjectAttributesInCurrentFolder()` | 🔬 | Resolve 21.0.4 (24 Jul 2026 README). Not executed here — no 21.0.4 build; reported live on Studio 21.0.4.5 in issue #135, returning `lastModifiedDate` / `creationDate` / `notes` / `liveCollaborationMode` for all 8 projects in the current folder |
 
 ### Project
 
@@ -250,7 +277,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 19 | `LoadRenderPreset(presetName)` | ✅ | Loads render preset |
 | 20 | `SaveAsNewRenderPreset(presetName)` | ✅ | Creates render preset |
 | 21 | `DeleteRenderPreset(presetName)` | ✅ | Deletes render preset |
-| 22 | `SetRenderSettings({settings})` | ✅ | Applies render settings; Resolve 20.2 adds `ExportSubtitle` and `SubtitleFormat` keys |
+| 22 | `SetRenderSettings({settings})` | ✅ | Applies render settings; Resolve 20.2 adds `ExportSubtitle` and `SubtitleFormat` keys; Resolve 21.0.4 adds `UseFullExtents`, `AddFrameHandles` and `DataBurnIn` — `AddFrameHandles` is accepted and then ignored while `UseFullExtents` is true, so the server returns it as a warning |
 | 23 | `GetRenderJobStatus(jobId)` | ✅ | Returns `{JobStatus, CompletionPercentage}` |
 | 24 | `GetQuickExportRenderPresets()` | ✅ | Returns preset names |
 | 25 | `RenderWithQuickExport(preset, {params})` | ✅ | Initiates quick export |
@@ -271,7 +298,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 40 | `GetColorGroupsList()` | ✅ | Returns color group list |
 | 41 | `AddColorGroup(groupName)` | ✅ | Returns ColorGroup object |
 | 42 | `DeleteColorGroup(colorGroup)` | ✅ | Deletes color group |
-| 43 | `ApplyFairlightPresetToCurrentTimeline(presetName)` | ⚠️ | Resolve 20.3.2 live test accepts call; returns `False` without a named preset |
+| 43 | `ApplyFairlightPresetToCurrentTimeline(presetName)` | ⚠️ | Accepts the call and returns `False` when handed a name that does not exist. **Never exercised against a genuinely saved preset**, so a `True` path has not been observed — the API has no way to create one, and `GetFairlightPresets` reported an empty map on both test machines. To clear this: save a mix as a Fairlight preset in the UI, then apply it by that name. Requires 20.2.2+ |
 | 44 | `GenerateSpeech({speechGenerationSettings}, timecode)` | 🔬 | Resolve 21.0. Requires the AI Speech Generator Extra; without it returns an error **string**, not a MediaPoolItem |
 | 45 | `ResetIntellisearchAnalysis()` | ✅ | Resolve 21.0.2 live test returns `True` |
 
@@ -382,6 +409,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 39 | `AnalyzeForIntellisearch(identifyFaces, isBetterMode)` | 🔬 | Resolve 21.0. Requires the AI IntelliSearch Extra; without it returns an error **string**, not `False` |
 | 40 | `AnalyzeForSlate(markerColor)` | 🔬 | Resolve 21.0. Requires the AI Slate ID Extra. Documented `resolve.MARKER_*` constants do not exist on the handle |
 | 41 | `RemoveMotionBlur({deblurOption})` | ✅ | Resolve 21.0.2 live test returns the new MediaPoolItem; source media path unchanged. Requires the AI Motion Deblur Extra |
+| 42 | `GetTimeline()` | 🔬 | Resolve 21.0.4. Not executed here — no 21.0.4 build on hand; reported working on Studio 21.0.4.5 in issue #131 |
 
 ### Timeline
 
@@ -445,6 +473,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 56 | `ClearMarkInOut(type)` | ✅ | Clears mark in/out |
 | 57 | `GetVoiceIsolationState(trackIndex)` | ✅ | Resolve 20.3.2 live test returns voice isolation state |
 | 58 | `SetVoiceIsolationState(trackIndex, {state})` | ✅ | Resolve 20.3.2 live test sets voice isolation state |
+| 59 | `GetSelectedClips()` | 🔬 | Resolve 21.0.4. First name tried by the selection probe, ahead of the two legacy speculative names. Not executed here — no 21.0.4 build on hand; reported working on Studio 21.0.4.5 in issue #131 |
 
 ### TimelineItem
 

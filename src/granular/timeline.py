@@ -655,8 +655,8 @@ def timeline_create_compound_clip(
         return {"success": False, "error": "Failed to create compound clip"}
     return {
         "success": True,
-        "name": result.GetName() if hasattr(result, "GetName") else None,
-        "unique_id": result.GetUniqueId() if hasattr(result, "GetUniqueId") else None,
+        "name": result.GetName() if _has_method(result, "GetName") else None,
+        "unique_id": result.GetUniqueId() if _has_method(result, "GetUniqueId") else None,
     }
 
 
@@ -714,8 +714,11 @@ def timeline_export(file_path: str, export_type: str, export_subtype: str = "EXP
         return err
     # Map string constants to resolve constants
     try:
-        etype = getattr(resolve, export_type) if hasattr(resolve, export_type) else export_type
-        esub = getattr(resolve, export_subtype) if hasattr(resolve, export_subtype) else export_subtype
+        # Fall back on the VALUE, not on hasattr: hasattr is a constant True
+        # here, so a build without the constant used to hand Export a None
+        # instead of the string name the fallback was written to pass through.
+        etype = _api_constant(resolve, export_type, export_type)
+        esub = _api_constant(resolve, export_subtype, export_subtype)
     except Exception:
         logger.debug("Could not resolve timeline export constants", exc_info=True)
         etype = export_type
@@ -1087,3 +1090,33 @@ def set_timeline_setting(setting_name: str, setting_value: str) -> Dict[str, Any
         return err
     result = tl.SetSetting(setting_name, setting_value)
     return {"success": bool(result), "setting_name": setting_name, "setting_value": setting_value}
+
+
+@mcp.tool()
+def get_selected_timeline_items() -> Dict[str, Any]:
+    """Get the timeline items currently selected in the timeline (Resolve 21.0.4+).
+
+    Calls Timeline.GetSelectedClips() on the current timeline. An empty list
+    means nothing is selected — that is an answer, not a failure. (Distinct
+    from get_selected_clips, which reads the Media Pool selection.)
+    """
+    _, tl, err = _get_timeline()
+    if err:
+        return err
+    missing = _requires_method(tl, "GetSelectedClips", "21.0.4")
+    if missing:
+        return missing
+    items = tl.GetSelectedClips() or []
+    summaries = []
+    for item in items:
+        entry = {}
+        for getter, key in (("GetName", "name"), ("GetUniqueId", "unique_id"),
+                            ("GetStart", "start"), ("GetEnd", "end")):
+            method = getattr(item, getter, None)
+            if callable(method):
+                try:
+                    entry[key] = method()
+                except Exception:
+                    pass
+        summaries.append(entry)
+    return {"count": len(summaries), "items": summaries}

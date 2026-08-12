@@ -1742,6 +1742,12 @@ def plan_transcript_tighten(
         plan.get("keep_ranges") or [],
         source_duration_seconds=float(duration) if isinstance(duration, (int, float)) and duration else None,
     )
+    # The class this planner is structurally blind to. Its false-start heuristic
+    # only sees restarts the transcript actually reports; an immediate re-read is
+    # emitted ONCE with the pause and second take absorbed into one word, so the
+    # plan cannot propose removing what it was never told happened (issue #125).
+    from src.utils import swallowed_retakes as _swallowed
+    plan["possible_swallowed_retakes"] = _swallowed.swallowed_retake_report(words)
     return plan
 
 

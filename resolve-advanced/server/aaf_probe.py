@@ -14,6 +14,7 @@ trusting, so the Node server shells out to this helper, which uses the pure-Pyth
           "startTimecode": <"HH:MM:SS:FF"|null>, "startFrame": <int|null>,
           "startTimecodeFps": <int|null>, "startTimecodeDrop": <bool|null>,
           "unhandled": { "<ComponentClass>": <int>, ... },
+          "effectsWithoutEvents": { "<OperationName>": <int>, ... },
           "events": [ {normalized-event}, ... ] }
       ]
     }
@@ -31,6 +32,25 @@ recoverable from the OperationGroup's parameters (see _retime_fields):
 For retimes, srcIn/srcOut are the SOURCE-side range while recIn/recOut span the
 OperationGroup's DECLARED (record) length — they differ by the ratio.
 
+KEYFRAMES (U21). A VaryingValue is a curve, and it used to be read for its values
+alone — enough to say "this animates", never enough to rebuild it. Curves now ship:
+  * transform stages   → `geometry[i].keyframes[<AvidParamName>]`
+  * retimes            → `speedCurve.playRate` / `speedCurve.sourceOffset`
+each `{ interpolation, domain, effectLength, points: [{t, v, frame}] }`. 🚨 The two
+families do NOT share a time domain — `domain` names which one applies:
+  * "effectSpan"   → frame = t x (effectLength - 1)   (transform parameters)
+  * "effectFrames" → frame = t                        (speed maps, already frames)
+Keys outside 0..1 are real (a clip trimmed after it was animated) and are kept, and
+a frame may be fractional. A curve with ONE unreadable point is refused whole.
+Retimes also carry `"speedRatioFromCurve"` when the offset curve is straight — the
+declared SpeedRatio rational is the source span truncated to WHOLE FRAMES and is
+wrong by up to 4% on real material, so both numbers ship under their own names.
+
+TRANSFORM OPS WE DO NOT INTERPRET (U22) get a stage marked `"passthrough": true`
+whose numbers sit in `"rawParams"`, never `"params"` — the same parameter NAME
+carries different units on different operations, so there is nothing to normalize
+and nothing a consumer may safely compose. See _PASSTHROUGH_GEOMETRY_OPS.
+
 Honest-refuse discipline (no fake parses):
   * exit 3  → pyaaf2 not installed        (stderr: AAF_PROBE_NO_PYAAF2)
   * exit 4  → file unreadable / not an AAF (stderr: AAF_PROBE_UNREADABLE: <detail>)
@@ -44,6 +64,13 @@ timeline could come back as `ok:true` with `eventCount: 0` — indistinguishable
 an genuinely empty sequence, and worse than an honest refusal because downstream
 consumers gate on `ok`. Every component we skip is now counted by class name and
 reported per sequence, so a miss is VISIBLE without changing the exit-code contract.
+
+`effectsWithoutEvents` (U23) closes the hole `unhandled` structurally cannot see.
+An effect can be modelled PERFECTLY and still produce nothing: an OperationGroup is
+walked, its inputs are walked, and they contain no SourceClip. On the reference
+turnover `unhandled` reads `{}` — a complete parse — while 29 SubCap title effects
+occupy real record time and reach the consumer as nothing at all. Each such group is
+counted once, against the innermost operation that caused it.
 
 Segment model (Avid Media Composer picture turnovers):
   * NestedScope  — a multi-layer video track. Its `.slots` are the layers (V1..Vn);
@@ -66,6 +93,7 @@ effect carry `"geometry"` (see _geometry_fields).
 
 import json
 import os
+import re
 import sys
 
 
@@ -421,8 +449,8 @@ def _param_is(param, name, auid=None):
     return False
 
 
-def _pointlist_values(varying):
-    """Control-point VALUES of a VaryingValue's point list, or None if unreadable."""
+def _pointlist(varying):
+    """A VaryingValue's ControlPoint objects, or None if unreadable."""
     points = getattr(varying, "pointlist", None)
     if points is None:
         return None
@@ -430,9 +458,143 @@ def _pointlist_values(varying):
     if inner is not None:
         points = inner
     try:
+        return list(points)
+    except Exception:
+        return None
+
+
+def _pointlist_values(varying):
+    """Control-point VALUES of a VaryingValue's point list, or None if unreadable."""
+    points = _pointlist(varying)
+    if points is None:
+        return None
+    try:
         return [float(p.value) for p in points]
     except Exception:
         return None
+
+
+# ── Keyframes (VaryingValue control points) ───────────────────────────────────
+# A VaryingValue is a CURVE, and until now the probe read only its values, and only
+# to answer "is this one number or more than one". The times were never asked for,
+# so an animated reframe reached a consumer as the bare word "varying" — enough to
+# refuse the clip, never enough to rebuild it.
+#
+# `ControlPoint.time` is readable. It is NOT one domain, and that is the whole trap
+# here — measured over all 2047 control points of a real 878-event Avid turnover:
+#
+#   * TRANSFORM parameters (AFX_*, DVE_*) are normalized over the effect span, with
+#     the endpoint INCLUSIVE:  frame = time x (length - 1).
+#     1243 of 1254 points land exactly on an integer frame under (length - 1); only
+#     278 also do under (length), so the two are distinguishable and (length - 1)
+#     is the rule. The 11 that land on neither are ONE keyframe of one clip at
+#     frame 125.5 — a legitimate half-frame key, which (length - 1) renders exactly.
+#   * SPEED maps are already in effect FRAMES: PARAM_SPEED_OFFSET_MAP_U spans
+#     exactly 0..length on every one of the 11 retimes carrying it.
+#
+# So a single "convert to frames" rule would be wrong by the effect's whole length
+# on one of the two families. The domain is therefore NAMED in the output and the
+# raw stored `t` travels next to the derived `frame`, so a consumer that disagrees
+# with our arithmetic can redo it. Same discipline as the raw AFX_* passthrough:
+# a stored number keeps its own name until its semantics are measured.
+#
+# Keyframes outside 0..1 are REAL and are kept: 107 of 1254 sit before the effect's
+# first frame or after its last, which is what Avid leaves behind when a clip is
+# trimmed after it was animated. Clamping them would silently move the animation.
+
+_DOMAIN_EFFECT_SPAN = "effectSpan"  # frame = t x (length - 1)
+_DOMAIN_EFFECT_FRAMES = "effectFrames"  # frame = t
+
+
+def _interpolation_name(varying):
+    try:
+        return str(varying.interpolationdef.name or "") or None
+    except Exception:
+        return None
+
+
+def _keyframes(varying, *, length, domain):
+    """One VaryingValue as an explicit curve, or None if its points are unreadable.
+
+    Shape: {"interpolation", "domain", "effectLength", "points": [{"t","frame","v"}]}
+    `frame` is omitted when the effect length is unknown, because there is nothing
+    to normalize against and a fabricated frame number is worse than none.
+    """
+    points = _pointlist(varying)
+    if not points:
+        return None
+    span = None
+    if isinstance(length, int) and length > 1 and domain == _DOMAIN_EFFECT_SPAN:
+        span = length - 1
+    out = []
+    for p in points:
+        try:
+            t = float(p.time)
+            v = float(p.value)
+        except Exception:
+            # A point we cannot read makes the CURVE untrustworthy, not just the
+            # point — an animation with a hole in it would interpolate straight
+            # through the missing key. Refuse the whole parameter.
+            return None
+        point = {"t": round(t, 9), "v": round(v, 6)}
+        if domain == _DOMAIN_EFFECT_FRAMES:
+            point["frame"] = round(t, 6)
+        elif span:
+            point["frame"] = round(t * span, 6)
+        out.append(point)
+    curve = {"domain": domain, "points": out}
+    interp = _interpolation_name(varying)
+    if interp:
+        curve["interpolation"] = interp
+    if isinstance(length, int) and length > 0:
+        curve["effectLength"] = length
+    return curve
+
+
+def _rate_from_offset_curve(curve):
+    """The play rate the source-offset curve ITSELF implies, or None.
+
+    Only returned when that curve is straight — every interior point on the line
+    through its endpoints, to within a tenth of a frame. A dense VARYING map is not
+    one rate and must not be averaged into one, so colinearity is the test that
+    separates the two rather than a flag we would have to trust.
+
+    🚨 Why this exists: the declared `SpeedRatio` rational is the source span
+    TRUNCATED TO WHOLE FRAMES over the record length, and the curve is exact.
+    Measured on the fixture, 6 of 18 constant retimes disagree —
+
+        L=112   curve span 201.600   rate 1.80   declared 201/112 = 1.794643
+        L= 71   curve span 142.000   rate 2.00   declared 141/71  = 1.985915
+        L= 19   curve span  32.300   rate 1.70   declared  31/19  = 1.631579  ← 4%
+
+    — and every curve slope lands on a number an editor would actually dial (1.7,
+    1.8, 2.0, 0.75) while every declared value is that number spoiled by a rounding.
+    A consumer handing 1.631579 to an operator to type in has handed them a visibly
+    wrong speed. Both numbers are reported under their own names; neither is
+    silently substituted for the other.
+    """
+    if not curve:
+        return None
+    points = curve.get("points") or []
+    if len(points) < 2:
+        return None
+    first, last = points[0], points[-1]
+    try:
+        run = float(last["frame"]) - float(first["frame"])
+        rise = float(last["v"]) - float(first["v"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if abs(run) < 1e-9:
+        return None
+    slope = rise / run
+    for p in points[1:-1]:
+        try:
+            expected = float(first["v"]) + (float(p["frame"]) - float(first["frame"])) * slope
+        except (KeyError, TypeError, ValueError):
+            return None
+        if abs(float(p["v"]) - expected) > 0.1:
+            return None  # a real timewarp — no single rate describes it
+    return slope
 
 
 def _retime_fields(op_group):
@@ -442,14 +604,34 @@ def _retime_fields(op_group):
       {"speedRatio": <play-rate float>, "speed": <int %>, "reverse": <bool>}
       {"speedVarying": True}  — a variable-speed timewarp; no single honest number
       {}                      — nothing recoverable (flag-only, speed stays 100)
+
+    Any of those may additionally carry "speedCurve" — the retime's own keyframes.
+    A variable timewarp used to reach a consumer as the single word `speedVarying`,
+    which is enough to REFUSE the clip and never enough to rebuild it. Two curves
+    are emitted when present, under Avid's own parameter names:
+
+      playRate      PARAM_SPEED_MAP_U — sparse play-rate keys (AvidCubicInterpolator
+                    on every one measured), keys freely outside the trimmed range.
+      sourceOffset  PARAM_SPEED_OFFSET_MAP_U — a DENSE source-position curve, linear,
+                    spanning exactly 0..length (up to 387 points at half-frame steps
+                    on the fixture). Its slope reproduces the constant ratios exactly
+                    — 0.75 → 175.75 over 100 frames is the 1.75 the SpeedRatio
+                    declares — so it is the same quantity measured a second way, and
+                    for a VARYING timewarp it is the only complete description of
+                    where each record frame reads from.
     """
     play = None
     speed_map = None
+    offset_map = None
+    length = _length(op_group)
     for param in _op_parameters(op_group):
         cls = type(param).__name__
         if cls == "VaryingValue":
-            if _param_name(param) == "PARAM_SPEED_MAP_U":
+            name = _param_name(param)
+            if name == "PARAM_SPEED_MAP_U":
                 speed_map = param
+            elif name == "PARAM_SPEED_OFFSET_MAP_U":
+                offset_map = param
             continue
         if cls != "ConstantValue":
             continue
@@ -469,22 +651,41 @@ def _retime_fields(op_group):
                 continue
             if value:
                 play = value  # *_U family stores the play rate directly
+    curve = {}
+    for key, param in (("playRate", speed_map), ("sourceOffset", offset_map)):
+        if param is None:
+            continue
+        # Both live in the effect's own FRAME domain — measured, see _keyframes.
+        got = _keyframes(param, length=length, domain=_DOMAIN_EFFECT_FRAMES)
+        if got:
+            got["parameter"] = _param_name(param)
+            curve[key] = got
+    extra = {"speedCurve": curve} if curve else {}
+    measured = _rate_from_offset_curve(curve.get("sourceOffset"))
+    if measured is not None:
+        extra["speedRatioFromCurve"] = round(abs(measured), 6)
+        if measured < 0:
+            extra["reverseFromCurve"] = True
+
     if speed_map is not None:
         values = _pointlist_values(speed_map)
         if values is None:
             # A speed map we cannot read: we can neither call the speed constant
-            # nor prove it varies — recover nothing rather than guess.
-            return {}
+            # nor prove it varies — recover nothing rather than guess. The offset
+            # curve, if it read cleanly, still ships: it is an independent
+            # parameter and its unreadable sibling says nothing about it.
+            return extra
         if len(set(values)) > 1:
-            return {"speedVarying": True}
+            return {"speedVarying": True, **extra}
         if play is None and values and values[0]:
             play = values[0]  # a flat map's single value IS the constant play rate
     if not play:
-        return {}
+        return extra
     return {
         "speedRatio": round(abs(play), 6),
         "speed": int(round(abs(play) * 100)),
         "reverse": play < 0,
+        **extra,
     }
 
 
@@ -517,6 +718,31 @@ def _retime_fields(op_group):
 # stored Avid number keeps its own name until its semantics are measured.
 
 _GEOMETRY_OPS = frozenset({"PaintResize_v2", "SpatialAdapter", "FlipHoriz_2"})
+
+# ── Transform-bearing operations we do NOT interpret (U22) ────────────────────
+# Widening _GEOMETRY_OPS is the wrong fix for these. Census of the same turnover:
+#
+#   SBlend_v2 (18 groups over 12 clips)  DVE_SCALE_X/Y_U 103, 123, 110→120 ·
+#                                        DVE_POS_X_U -60, -315 · DVE_ROT_Z_U 3, 1
+#   Stabilize_2 (5)                      DVE_SCALE_X/Y_U 102.52, 101.96 (a
+#                                        stabiliser's zoom-in) · DVE_POS_X_U 1.54
+#   MaskImage_2 (1), 2DMatteKey_2 (1)    AFX_POS/AFX_SCALE
+#
+# 🚨 The same parameter NAME does not mean the same unit: SBlend's DVE_POS_X_U runs
+# to -315 while Stabilize's runs to -0.92 on the same show. Two ops, one name, two
+# units — so there is nothing here to normalize, and `scalePercent*` on these would
+# be composed into the applied zoom by a consumer that has no way to know better.
+#
+# 🚨 And they cannot ride in `params` either: 2DMatteKey_2 carries AFX_POS_X_U 500.0,
+# which is a name an existing consumer already has a CALIBRATED rule for — it would
+# be silently applied as a ~960px reposition of a clip nobody repositioned. So the
+# numbers travel under their own key, `rawParams`, which no consumer reads yet, next
+# to `passthrough: true`. Reported, never silently dropped; never silently applied.
+_PASSTHROUGH_GEOMETRY_OPS = frozenset({"SBlend_v2", "Stabilize_2", "MaskImage_2", "2DMatteKey_2"})
+
+_PASSTHROUGH_PARAM_RE = re.compile(
+    r"(?:^|_)(?:POS|SCALE|CROP|ROT|SKEW|SIZE|OPACITY|ASPECT)(?:_|$)|CORNER_PIN|ENABLED"
+)
 
 _GEOMETRY_SCALARS = frozenset(
     {
@@ -566,6 +792,52 @@ def _geometry_scalar(param):
     return _param_number(param), False
 
 
+def _geometry_keyframes(param, length):
+    """The curve behind an ANIMATED geometry parameter, in the effect-span domain."""
+    return _keyframes(param, length=length, domain=_DOMAIN_EFFECT_SPAN)
+
+
+def _passthrough_geometry(op_group, op_name):
+    """A transform op we do not interpret, reported rather than dropped (U22).
+
+    Everything geometry-shaped, under Avid's own names, in `rawParams` — plus the
+    curve for any of them that animates. No normalized field is emitted and no
+    `params` key is used, so this can be composed by nobody and misread by nobody.
+    Returns None when the group carries nothing geometry-shaped at all.
+    """
+    length = _length(op_group)
+    raw = {}
+    keyframes = {}
+    for param in _op_parameters(op_group):
+        name = _param_name(param)
+        if not name or not _PASSTHROUGH_PARAM_RE.search(name):
+            continue
+        if type(param).__name__ == "VaryingValue":
+            values = _pointlist_values(param)
+            if values is None:
+                continue
+            if len(set(values)) > 1:
+                curve = _keyframes(param, length=length, domain=_DOMAIN_EFFECT_SPAN)
+                if curve:
+                    keyframes[name] = curve
+                continue
+            if values:
+                raw[name] = round(float(values[0]), 6)
+            continue
+        value = _param_number(param)
+        if value is not None:
+            raw[name] = value
+    if not raw and not keyframes:
+        return None
+    out = {"effect": op_name, "passthrough": True}
+    if raw:
+        out["rawParams"] = dict(sorted(raw.items()))
+    if keyframes:
+        out["keyframes"] = dict(sorted(keyframes.items()))
+        out["varying"] = sorted(keyframes)
+    return out
+
+
 def _geometry_fields(op_group, op_name):
     """Recovered geometry for one transform OperationGroup. See the census above."""
     scale = {}
@@ -573,6 +845,16 @@ def _geometry_fields(op_group, op_name):
     bools = {}
     rects = {}
     varying = set()
+    keyframes = {}
+    length = _length(op_group)
+
+    def note_varying(param, name):
+        """Name the animated parameter AND keep its curve."""
+        varying.add(name)
+        curve = _geometry_keyframes(param, length)
+        if curve:
+            keyframes[name] = curve
+
     for param in _op_parameters(op_group):
         name = _param_name(param)
         base, _, suffix = name.rpartition("_")
@@ -584,7 +866,7 @@ def _geometry_fields(op_group, op_name):
         if name in ("AFX_SCALE_X_U", "AFX_SCALE_Y_U"):
             value, is_varying = _geometry_scalar(param)
             if is_varying:
-                varying.add(name)
+                note_varying(param, name)
             elif value is not None:
                 scale[name] = value
             continue
@@ -596,7 +878,7 @@ def _geometry_fields(op_group, op_name):
         if name in _GEOMETRY_SCALARS:
             value, is_varying = _geometry_scalar(param)
             if is_varying:
-                varying.add(name)
+                note_varying(param, name)
             elif value is not None:
                 scalars[name] = value
     geometry = {"effect": op_name}
@@ -622,8 +904,12 @@ def _geometry_fields(op_group, op_name):
             if sizes.get(src) and sizes.get(framing) is not None:
                 geometry[f"reformatScale{axis}"] = round(sizes[framing] / sizes[src], 6)
     if varying:
-        # An animated transform. Named, never reduced to one number.
+        # An animated transform. Named, never reduced to one number — and, since
+        # U21, never reduced to the NAME either: `keyframes` carries the curve.
+        # `varying` stays exactly as it was, because consumers gate on it.
         geometry["varying"] = sorted(varying)
+    if keyframes:
+        geometry["keyframes"] = dict(sorted(keyframes.items()))
     params = dict(sorted({**scalars, **bools}.items()))
     if params:
         geometry["params"] = params
@@ -691,9 +977,21 @@ def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
         # overlap it on the same track label. Callers already cannot assume events are
         # non-overlapping — parallel NestedScope layers overlap by construction.
         before = len(state["events"])
+        charges_before = state.get("_emptyEffectCharges", 0)
         for inp in getattr(segment, "segments", None) or []:
             _walk_segment(inp, track=track, fps=fps, rec=rec, state=state, depth=depth + 1, transition=transition)
         op_name = _operation_name(segment)
+
+        if op_name and declared > 0 and len(state["events"]) == before:
+            # Walked cleanly, emitted nothing, and still consumed record time. See the
+            # "effectsWithoutEvents" note in probe(). Only the INNERMOST such group is
+            # charged — an outer wrapper around an empty effect is empty for the same
+            # one reason, and charging both would report one title as two.
+            if state.get("_emptyEffectCharges", 0) == charges_before:
+                bucket = state.setdefault("effectsWithoutEvents", {})
+                bucket[op_name] = bucket.get(op_name, 0) + 1
+                state["_emptyEffectCharges"] = charges_before + 1
+
         if op_name in _GEOMETRY_OPS:
             # A transform effect. Clips are commonly wrapped in MORE than one (a
             # SpatialAdapter reformat inside a PaintResize, say), so geometry is a
@@ -703,6 +1001,14 @@ def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
             geometry = _geometry_fields(segment, op_name)
             for ev in state["events"][before:]:
                 ev.setdefault("geometry", []).append(geometry)
+        elif op_name in _PASSTHROUGH_GEOMETRY_OPS:
+            # Carries a transform whose units we have not measured. It joins the same
+            # ordered stack so its PLACE in the chain survives, marked passthrough so
+            # no consumer composes it. See _PASSTHROUGH_GEOMETRY_OPS.
+            geometry = _passthrough_geometry(segment, op_name)
+            if geometry:
+                for ev in state["events"][before:]:
+                    ev.setdefault("geometry", []).append(geometry)
         if op_name and ("speed" in op_name.lower() or "motion" in op_name.lower()):
             # A retime. Its ratio is recoverable from the group's PARAMETERS (see
             # _retime_fields): a constant ratio updates speed/speedRatio so
@@ -991,7 +1297,7 @@ def probe(path):
             except Exception:
                 name = None
             # `idx` is monotonic across the WHOLE mob, every slot and every nested layer.
-            state = {"idx": 1, "events": [], "unhandled": {}}
+            state = {"idx": 1, "events": [], "unhandled": {}, "effectsWithoutEvents": {}}
             edit_fps = None
             for slot in getattr(mob, "slots", []) or []:
                 seg = getattr(slot, "segment", None)
@@ -1024,6 +1330,16 @@ def probe(path):
                     # Component classes we could not model, by name+count. Empty {} means
                     # a structurally complete read; non-empty means events are INCOMPLETE.
                     "unhandled": dict(sorted(state["unhandled"].items())),
+                    # 🚨 Effects that OCCUPY RECORD TIME and produce no event (U23).
+                    # `unhandled` cannot see these: it counts component classes the
+                    # walker does not model, and these are modeled fine — an
+                    # OperationGroup is walked, its inputs are walked, and they simply
+                    # contain no SourceClip. On the reference turnover `unhandled` reads
+                    # {} — a structurally complete parse — while 29 SubCap title effects
+                    # occupy real record time and reach the consumer as nothing at all.
+                    # A conform that silently loses 29 titles looks exactly like a
+                    # conform that had none. Counted by operation name so it cannot.
+                    "effectsWithoutEvents": dict(sorted(state.get("effectsWithoutEvents", {}).items())),
                     "events": events,
                 }
             )

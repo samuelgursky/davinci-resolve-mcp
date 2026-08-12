@@ -338,8 +338,10 @@ def bridge_checks(probe: dict[str, Any]) -> list[dict[str, str]]:
     elif installed_at:
         check(
             results, "INFO", "DAVINCI_RESOLVE_BRIDGE",
-            "not set — the bridge is installed but will not be used. "
-            "export DAVINCI_RESOLVE_BRIDGE=1 to enable it.",
+            "not set — the bridge is still used automatically if external scripting "
+            "is unavailable and the in-Resolve script is running. Set it to 1 to make "
+            "the bridge the only transport tried, so its faults surface directly "
+            "instead of falling back.",
         )
     return results
 

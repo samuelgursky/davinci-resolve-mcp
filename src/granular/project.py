@@ -192,7 +192,7 @@ def save_project() -> str:
     try:
         # Method 1: Try direct save method if available
         try:
-            if hasattr(current_project, "SaveProject"):
+            if _has_method(current_project, "SaveProject"):
                 result = current_project.SaveProject()
                 if result:
                     logger.info(f"Project '{project_name}' saved using SaveProject method")
@@ -204,7 +204,7 @@ def save_project() -> str:
         # Method 2: Try project manager save method
         if not success:
             try:
-                if hasattr(project_manager, "SaveProject"):
+                if _has_method(project_manager, "SaveProject"):
                     result = project_manager.SaveProject()
                     if result:
                         logger.info(f"Project '{project_name}' saved using ProjectManager.SaveProject method")
@@ -1640,8 +1640,9 @@ def generate_speech(text_input: str, voice_model: str = "", timecode: str = "",
     pm, current_project = get_current_project()
     if not current_project:
         return {"error": "No project currently open"}
-    if not hasattr(current_project, "GenerateSpeech"):
-        return {"error": "GenerateSpeech requires DaVinci Resolve 21+ and the AI Speech Generator Extra"}
+    missing = _requires_method(current_project, "GenerateSpeech", "21.0")
+    if missing:
+        return missing
     if not text_input:
         return {"error": "text_input is required"}
     settings: Dict[str, Any] = {"TextInput": text_input}
@@ -1664,6 +1665,28 @@ def generate_speech(text_input: str, voice_model: str = "", timecode: str = "",
         if audio_track is not None:
             settings["AudioTrack"] = audio_track
     new_item = current_project.GenerateSpeech(settings, timecode or "")
-    if not new_item:
-        return {"success": False, "error": "GenerateSpeech returned no media item"}
+    # Without the AI Speech Generator Extra this returns the reason as a STRING,
+    # which is truthy — the old check passed it through to .GetName().
+    ok, message = _ai_result(new_item)
+    if not ok:
+        return {"success": False,
+                "error": message or "GenerateSpeech returned no media item"}
     return {"success": True, "new": new_item.GetName(), "new_id": new_item.GetUniqueId()}
+
+
+@mcp.tool()
+def get_project_attributes_in_current_folder() -> Dict[str, Any]:
+    """Get per-project attributes for every project in the current folder (Resolve 21.0.4+).
+
+    Calls ProjectManager.GetProjectAttributesInCurrentFolder(). Returns a dict
+    keyed by project name with 'lastModifiedDate', 'creationDate', 'notes' and
+    'liveCollaborationMode' — without loading any project.
+    """
+    project_manager = get_project_manager()
+    if not project_manager:
+        return {"error": "Failed to get Project Manager"}
+    missing = _requires_method(project_manager, "GetProjectAttributesInCurrentFolder", "21.0.4")
+    if missing:
+        return missing
+    attributes = project_manager.GetProjectAttributesInCurrentFolder()
+    return {"projects": attributes if attributes else {}}

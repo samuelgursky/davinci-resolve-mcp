@@ -9,6 +9,8 @@ the Resolve scripting API.
 import logging
 from typing import Any, Dict, Optional
 
+from src.utils.resolve_probe import has_method
+
 logger = logging.getLogger("davinci-resolve-mcp.cloud_operations")
 
 
@@ -63,7 +65,7 @@ def _project_manager(resolve_obj, method_name: str):
     pm = resolve_obj.GetProjectManager()
     if not pm:
         return None, {"success": False, "error": "Failed to get Project Manager"}
-    if not hasattr(pm, method_name):
+    if not has_method(pm, method_name):
         return None, {
             "success": False,
             "error": f"{method_name} not available in this version of DaVinci Resolve",
@@ -98,7 +100,7 @@ def create_cloud_project(
     return {
         "success": True,
         "project_name": project.GetName(),
-        "project_id": project.GetUniqueId() if hasattr(project, "GetUniqueId") else None,
+        "project_id": project.GetUniqueId() if has_method(project, "GetUniqueId") else None,
     }
 
 
@@ -132,7 +134,7 @@ def load_cloud_project(
     return {
         "success": True,
         "project_name": project.GetName(),
-        "project_id": project.GetUniqueId() if hasattr(project, "GetUniqueId") else None,
+        "project_id": project.GetUniqueId() if has_method(project, "GetUniqueId") else None,
     }
 
 

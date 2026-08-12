@@ -83,6 +83,9 @@ Each dispatches on an `action`. Highlights:
   reverse-clip DB repair, sequence lineage store + diff, per-cut frame QC.
 - **`color_trace`** — cross-project clip matching → a trace plan for carrying grades across a re-conform.
 - **`project_read` / `project_db`** — read/patch the Resolve project DB (SQLite or Postgres).
+  Includes `list_subtitle_styles` / `set_subtitle_style` — caption font family/size/weight/italic
+  and normalised position, which the scripting API cannot touch at all. Whole-track (not
+  per-caption); project must be CLOSED and Resolve fully quit + relaunched afterwards.
 - **`pipeline`** — the DB-as-truth pipeline foundation (see below).
 - **`deliverable`** — deliverable QC / compliance: `deliverable_qc` (ffprobe a render vs its spec →
   pass/fail per field), `loudness_qc` (ebur128 LUFS/true-peak/LRA), `reframe_blanking_check`,

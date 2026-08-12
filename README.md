@@ -1,11 +1,13 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.80.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+English | [简体中文](README.zh-CN.md)
+
+[![Version](https://img.shields.io/badge/version-2.93.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
-[![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#server-modes)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(353%20full)-blue.svg)](#server-modes)
 [![Advanced](https://img.shields.io/badge/Advanced%20(offline)-18%20tools-blueviolet.svg)](#server-modes)
-[![Tested](https://img.shields.io/badge/Live%20Tested-96.8%25-green.svg)](docs/reference/api-coverage.md#test-results)
+[![Tested](https://img.shields.io/badge/Live%20Tested-93.6%25-green.svg)](docs/reference/api-coverage.md#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
@@ -48,20 +50,41 @@ over an authenticated loopback listener.
 ```bash
 python scripts/install_resolve_bridge.py
 # restart Resolve, open a project, then: Workspace > Scripts > resolve_bridge
-export DAVINCI_RESOLVE_BRIDGE=1      # opt-in; unset changes nothing
 ```
 
-On **macOS**, this requires a **framework Python** (python.org). Resolve
-enumerates `.py` scripts only when it finds one — Homebrew, pyenv and conda
-interpreters are not detected, and the script silently never appears in the
-menu. A Lua canary is installed alongside so you can tell that apart from a
-wrong folder.
+Once that listener is running it is used **automatically** whenever external
+scripting is unavailable — no environment variable required. Setting
+`DAVINCI_RESOLVE_BRIDGE=1` *forces* the bridge instead: it becomes the only
+transport tried, so a bridge that stops answering reports its own fault rather
+than quietly falling back to another transport. Use it when the bridge is the
+path you intend to depend on.
+
+On **macOS**, Resolve looks for Python 3 in exactly two places: the
+`PYTHON3HOME` environment variable, then `/usr/local/bin/python3`. Homebrew,
+pyenv, uv and conda land in neither, so the script silently never appears in the
+menu. A python.org install works because its installer creates
+`/usr/local/bin/python3` — but you do not need one: point Resolve at the
+interpreter you already have, no `sudo` required.
+
+```bash
+launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"
+```
+
+Use `launchctl setenv`, not `export` — Resolve is launched from the Dock and
+never sees your shell's environment. Restart Resolve afterwards. A Lua canary is
+installed alongside so you can tell "Python not detected" apart from a wrong
+folder.
 
 Validated on free 21.0.3.7 and Studio 19.1.3.7, both macOS. The Windows paths
 added in v2.70.1 (issue #106) shipped unverified; reports on free 21.0.1.11
 (issue #109) and free 21.0.3.7 (issue #112) have since shown the bridge
 installing, listing and serving from **both** `%PROGRAMDATA%` and `%APPDATA%` on
-Windows 11, so those paths are now confirmed rather than assumed.
+Windows 11, so those paths are now confirmed rather than assumed. Linux is
+confirmed as well: a report on free 20.3.2.9 (issue #129, Fedora 43) shows the
+bridge installing to `~/.local/share/DaVinciResolve/Fusion/Scripts/Utility`,
+listing against the system Python — Linux has none of this discovery problem —
+and serving end-to-end. No platform now rests on an assumption: macOS was
+validated directly, Windows and Linux on user reports.
 
 Note that the bridge holds its port for as long as it serves. Before v2.70.3 a
 Windows bridge could outlive Resolve and block the next session's listener; if
@@ -87,7 +110,7 @@ The command starts a localhost server and opens the control panel in your browse
 | Mode | Entry point | Tools | Best for |
 |------|-------------|-------|----------|
 | Compound | `src/server.py` | 34 | Default mode for most assistants. Related Resolve operations are grouped behind action parameters to keep context usage low. |
-| Full / granular | `src/server.py --full` or `src/resolve_mcp_server.py` | 341 | Power users who want one MCP tool per Resolve API method. |
+| Full / granular | `src/server.py --full` or `src/resolve_mcp_server.py` | 353 | Power users who want one MCP tool per Resolve API method. |
 
 The compound server is recommended unless you specifically need the granular one-tool-per-method surface.
 
@@ -249,13 +272,13 @@ The default server is a local stdio process launched by your MCP client; it does
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **34** compound / **341** granular (live server) |
+| MCP Tools | **34** compound / **353** granular (live server) |
 | Advanced (offline) tools | **18** — .drp/.drt/.drx + DB authoring, no Resolve running |
 | Kernel Actions | **136** guarded workflow actions across 9 compound tools |
-| API Methods Covered | **349/349** (100%) |
-| Methods Live Tested | **338/349** (96.8%) |
+| API Methods Covered | **361/361** (100%) |
+| Methods Live Tested | **338/361** (93.6%) |
 | Live Test Pass Rate | **338/338** (100%) |
-| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio + Resolve 21.0.2 Studio |
+| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio + Resolve 21.0.2 Studio + Resolve 21.0.3 **free** (via the in-app bridge) |
 
 For method-by-method status, see [API Coverage and Test Results](docs/reference/api-coverage.md). For current workflow support, see [Kernel Action Coverage](docs/kernels/README.md).
 

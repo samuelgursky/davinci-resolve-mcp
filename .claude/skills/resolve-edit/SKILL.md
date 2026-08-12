@@ -23,6 +23,29 @@ re-derive it here.
 | Restructure a **running** timeline | `davinci-resolve` (Python, live) | `timeline` (edit kernel), `timeline_item`, `edit_engine`, `timeline_markers` |
 | Author/diff a `.drt` **file**, or parse/compare editorial interchange with **no Resolve open** | `davinci-resolve-advanced` (Node) | `drt`, `editorial` |
 
+## What this build cannot do (check before you offer it)
+
+The scripting API changes per **patch** release, so "Resolve 21" is not a usable
+label. Read `resolve_control get_version` → `build.unavailable_on_this_build`
+before offering a gated surface; `check_version_support` asks about one named
+symbol. Gated in *this* domain:
+
+| Surface | Needs | If absent |
+|---|---|---|
+| `Timeline.GetSelectedClips` | 21.0.4 | No selection readback. Identify clips by track/index or id instead — this repo's selection helper duck-probes three names, so it degrades to "no selection" rather than erroring |
+| `TimelineItem.SetName` | 20.2 | Clip names are read-only from a script |
+
+An empty `unavailable_on_this_build` means **nothing recorded is missing**, not
+that everything exists — most of the API has never been version-bisected. A
+symbol with no gate returns `unknown`, which means probe it. Probe with
+`name in dir(obj)`, never bare `hasattr`: on a Resolve object `hasattr` returns
+`True` for every name, real or invented, so it can only say yes.
+
+Distinguish *gated* from *absent*. A gated surface arrives with a newer build;
+an absent one never does, and upgrading will not help. **Clip speed / retime is
+absent on every build** — see the edit-kernel essentials below before you offer
+`set_retime` for it.
+
 ## Live edit-kernel essentials
 
 - Duplicate/relocate: `duplicate_clips` (modes `same_time`/`offset`/
@@ -33,9 +56,45 @@ re-derive it here.
   `allow_partial_item_delete=True` (whole-item delete, not a trim).
 - Item state copy: `copy_properties` (transform/crop/composite/audio/retime/
   markers/flags/grades/takes/keyframes …); scope with a group list.
+- **Reading the user's selection is best-effort and version-dependent.** The
+  selection helper duck-probes three method names; the documented one,
+  `Timeline.GetSelectedClips`, is **21.0.4+** (issue #131), so on older builds
+  selection resolves by luck or not at all. Never build a destructive operation
+  on "the selected clips" without reading back what you actually got — an empty
+  or partial selection is indistinguishable from a small one.
+- **There is no clip-speed API at any version.** `set_retime` sets retime
+  *quality* only (`RetimeProcess`, `MotionEstimation`) and returns `True` for
+  doing so, which reads as if the retime succeeded. Setting a % speed, reversing
+  a clip, and speed ramps are all unreachable — `SetProperty('Speed'|'PlaybackSpeed'|
+  'RetimeSpeed'|'ClipSpeed')` returns `False` and the matching `GetProperty`
+  returns `None` on every build measured. Say so and route the user to the UI;
+  do not offer `set_retime` as if it answered the question (issue #132).
+- **Routing to the UI is where issue #132 actually went wrong — and it was not
+  a tool lie.** Having been told to hand off, the assistant improvised the
+  handoff: it sent the user hunting for a dropdown "in the lower left of the
+  clip" and never mentioned the keyframe tray. That direction came from nowhere
+  in this repo. **This repo verifies API behavior, not UI geography, and has no
+  mechanism to version-guard a UI claim** — Resolve's controls move between
+  builds, pages and layouts, and every ledger entry here is stamped with the
+  build it was measured on precisely because unstamped claims rot. So:
+  **never improvise UI geography.** Say *what* the user needs to do ("set the
+  clip's speed / build the speed ramp in Resolve's own retime controls") and say
+  plainly that you cannot see their screen. Do **not** invent where a control
+  sits, what it looks like, which corner of a clip to click, or a menu path or
+  keyboard shortcut recalled from general knowledge — an invented location costs
+  the user more than "I don't know where it is on your build" ever does, and it
+  reads as authoritative because everything else you told them was measured.
+  **The line is improvised vs. written down here.** A UI pointer that already
+  exists in these skills (e.g. the playback-frame-rate path in
+  `resolve-rough-cut`) was authored and reviewed deliberately — use it verbatim.
+  If no pointer exists, that is not an invitation to supply one: name the
+  operation and point at Blackmagic's manual for their build. The same rule
+  covers every other "do it in the UI" handoff in these skills.
 - `edit_engine` drives higher-level selects/tighten/swap flows
   (plan → confirm → execute); tighten variants can carry audio via `keep_ranges`
-  mirror / `include_audio`.
+  mirror / `include_audio`. For a full dead-air pass over **one long single-take
+  recording** — transcribe → plan → review → execute, with the source/record
+  coordinate trap spelled out — use the `resolve-tighten-recording` skill.
 
 ## Show the gaps before cutting them (`edit_engine`)
 

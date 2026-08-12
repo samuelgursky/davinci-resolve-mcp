@@ -45,6 +45,7 @@ from src.utils.media_analysis_jobs import (
 )
 from src.utils.platform import setup_environment
 from src.utils.resolve_connection import connect_resolve
+from src.utils.resolve_probe import has_method
 from src.utils.analysis_memory import read_panel_state, write_panel_state
 from src.utils import brain_edits as _brain_edits
 from src.utils import timeline_versioning as _timeline_versioning
@@ -11917,7 +11918,7 @@ HTML = HTML.replace("/* CONTROL_PANEL_I18N */", localization_script())
 
 
 def _safe_call(obj: Any, method_name: str, *args: Any) -> Tuple[Any, Optional[str]]:
-    if obj is None or not hasattr(obj, method_name):
+    if not has_method(obj, method_name):
         return None, f"{method_name} unavailable"
     try:
         return getattr(obj, method_name)(*args), None
@@ -12023,8 +12024,8 @@ def _not_connected_message(bridge_on: bool) -> str:
                 "Workspace > Scripts > resolve_bridge; launching Resolve cannot start it.")
     return ("DaVinci Resolve is not connected. On Studio, enable Preferences > General > "
             "'External scripting using' = Local. On the free edition, install the in-app "
-            "bridge, run Workspace > Scripts > resolve_bridge, and set "
-            "DAVINCI_RESOLVE_BRIDGE=1.")
+            "bridge and run Workspace > Scripts > resolve_bridge — once running it is used "
+            "automatically, no environment variable needed.")
 
 
 @_serialize_resolve

@@ -160,7 +160,10 @@ RANKING_CAVEAT = (
     "most of what makes a take the right one. The take that plays best is "
     "regularly the least fluent one: the hesitation is often the acting. Use "
     "this to find the clean safety take or to skip the warm-ups, not to choose "
-    "the read."
+    "the read. It also UNDERCOUNTS restarts: an immediate re-read is reported "
+    "by whisper as a single clean utterance, so a take that stumbled and "
+    "recovered can outscore one that did not (issue #125). Check "
+    "possible_swallowed_retakes before trusting a close ranking."
 )
 
 
@@ -185,6 +188,19 @@ def rank_takes(
         take["rank"] = position
 
     unreliable = [s["label"] for s in scored if not s["reliable"]]
+
+    # Restarts WITHIN a take are precisely what whisper's timestamps hide: an
+    # immediate re-read is emitted once, so the restart never reaches the filler
+    # or false-start counts and the take scores as cleaner than it was. Flagging
+    # the stretched words at least tells the caller which takes to distrust
+    # rather than letting the ranking imply it saw everything (issue #125).
+    from src.utils import swallowed_retakes as _swallowed
+    swallowed: Dict[str, Any] = {}
+    for take, source in zip(scored, takes):
+        report = _swallowed.swallowed_retake_report(source.get("words") or [])
+        if report["count"]:
+            swallowed[take["label"]] = report
+
     return {
         "success": True,
         "kind": "take_ranking",
@@ -194,6 +210,7 @@ def rank_takes(
         "most_fluent": scored[0]["label"] if scored else None,
         "script_supplied": bool(script and script.strip()),
         "unreliable_takes": unreliable,
+        "possible_swallowed_retakes": swallowed,
         "caveat": RANKING_CAVEAT,
         "note": (
             f"Ranked {len(scored)} takes by fluency. "

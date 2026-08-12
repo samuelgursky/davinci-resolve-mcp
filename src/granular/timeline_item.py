@@ -1,6 +1,7 @@
 """Timeline item property, keyframe, and clip-level tools."""
 
 from src.granular.common import *  # noqa: F401,F403
+from src.utils.clip_colors import clip_color_refusal
 
 resolve = ResolveProxy()
 
@@ -1528,7 +1529,32 @@ def ti_set_clip_color(color: str, item_index: int = 0, track_type: str = "video"
     item, err = _get_timeline_item(track_type, track_index, item_index)
     if err:
         return err
-    return {"success": bool(item.SetClipColor(color))}
+    returned = bool(item.SetClipColor(color))
+    readback = item.GetClipColor() or ""
+    if not returned:
+        refusal = clip_color_refusal(color)
+        return {
+            "success": False,
+            "color": color,
+            "error": f"SetClipColor refused '{color}'",
+            "reason": refusal["reason"],
+            "remediation": refusal["remediation"],
+            "valid_colors": refusal["state"]["valid_colors"],
+        }
+    if readback != color:
+        # Generator and title items take the call, return True, and drop the
+        # colour (issue #124, Studio 19.1.3.7). Media-backed items persist.
+        return {
+            "success": False,
+            "color": color,
+            "readback": readback,
+            "error": "SetClipColor returned True but the colour did not persist",
+            "remediation": (
+                "Generator and title items accept and discard clip colours; colour "
+                "a media-backed item, or use a timeline marker instead."
+            ),
+        }
+    return {"success": True, "color": color, "readback": readback}
 
 
 @mcp.tool()
@@ -2092,7 +2118,7 @@ def ti_export_lut(export_type: str, path: str, item_index: int = 0, track_type: 
     if err:
         return err
     try:
-        etype = getattr(resolve, export_type) if hasattr(resolve, export_type) else export_type
+        etype = _api_constant(resolve, export_type, export_type)
     except Exception:
         etype = export_type
     return {"success": bool(item.ExportLUT(etype, path))}

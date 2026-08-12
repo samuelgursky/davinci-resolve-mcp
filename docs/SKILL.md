@@ -23,16 +23,24 @@ take up to 60 seconds.
 edition `scriptapp("Resolve")` refuses a foreign process regardless. A third
 transport reaches it — a script run from **Workspace ▸ Scripts** is handed the
 live `resolve` object on any edition and re-exports it over an authenticated
-loopback listener. Install with `python scripts/install_resolve_bridge.py`, start
-it from that menu, and set `DAVINCI_RESOLVE_BRIDGE=1`. Existing tool call sites
-work unchanged. Two things to know when diagnosing it:
+loopback listener. Install with `python scripts/install_resolve_bridge.py` and
+start it from that menu; once running it is used automatically when external
+scripting is unavailable, with no environment variable needed.
+`DAVINCI_RESOLVE_BRIDGE=1` *forces* it — the bridge becomes the only transport
+tried, so its faults surface directly instead of degrading to another path.
+Existing tool call sites work unchanged. Two things to know when diagnosing it:
 
-- On macOS, Resolve lists `.py` scripts only when it can find a **framework
-  Python** (python.org). Homebrew/pyenv/conda are not detected and the script
-  simply never appears, with no error. The installer preflights this and ships a
-  Lua canary, which always lists, so "Python not detected" is distinguishable
-  from "wrong folder". The preflight is macOS-only — off macOS Resolve finds
-  Python by other means, and running the check there was a false alarm (#106).
+- On macOS, Resolve finds Python 3 through **`PYTHON3HOME`, then
+  `/usr/local/bin/python3`** — and nowhere else, so Homebrew/pyenv/uv/conda
+  interpreters simply never appear, with no error. python.org installs work
+  because that installer creates `/usr/local/bin/python3`; framework-ness itself
+  is not the variable (#143). The sudo-free fix is
+  `launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"`
+  — `launchctl`, not `export`, because Resolve is GUI-launched and inherits
+  launchd's environment. The installer preflights both routes and ships a Lua
+  canary, which always lists, so "Python not detected" is distinguishable from
+  "wrong folder". The preflight is macOS-only — off macOS Resolve finds Python
+  by other means, and running the check there was a false alarm (#106).
 - **Windows: both script folders confirmed.** `%PROGRAMDATA%` (#109) and
   `%APPDATA%` (#112) have each been shown serving the bridge on Windows 11 free
   builds. If a user reports the menu entry missing on Windows, ask whether the
@@ -182,7 +190,7 @@ opening and verifying tools such as Ozone still requires UI assistance.
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
 | Compound (default) | `src/server.py` | 34 tools | Most workflows — keeps context lean |
-| Granular (full) | `src/server.py --full` | 341 tools | Power users needing one tool per API method |
+| Granular (full) | `src/server.py --full` | 353 tools | Power users needing one tool per API method |
 
 This skill document covers the **compound server** (the default). Each compound
 tool accepts an `action` string and an optional `params` object.
@@ -513,7 +521,16 @@ you are on the correct page first.
 Key actions:
 - `launch` — connect to or start Resolve; call this first if any tool returns a
   "Not connected" error
-- `get_version` — returns `{product, version, version_string}`
+- `get_version` — returns `{product, version, version_string, build, mcp}`.
+  `build.unavailable_on_this_build` lists every recorded API surface this build
+  does **not** have; read it before offering anything version-gated. An absence
+  from that list is not a promise a method exists — most of the API has never
+  been version-bisected, so `check_version_support` answers `unknown` for it,
+  and `unknown` means probe with `name in dir(obj)`, never bare `hasattr`
+  (constant `True` on Resolve objects)
+- `check_version_support(symbol?, resolve_version?)` — is one named symbol on
+  this build? Without `symbol`, the same missing-surface list `get_version`
+  carries. No connection needed when `resolve_version` is passed
 - `api_truth(query?)` — look up behaviorally-verified facts about quirky/unreliable
   Resolve API behavior (no connection needed); filter by substring
 - `verification_stats` — readback-verification tally (verified/contradicted/
@@ -522,11 +539,21 @@ Key actions:
 - `get_keyframe_mode` / `set_keyframe_mode(mode)`
 - `get_fairlight_presets` — Resolve 20.2.2+; returns available Fairlight
   preset names
+- `list/save/load/delete/import/export_user_preferences_preset` — Resolve
+  21.0.4+; user-preferences presets. `load_...` is SESSION-WIDE: it swaps the
+  user's global Resolve preferences, so only call it when the user asked for
+  the switch. `import_...` does not activate the imported preset — follow with
+  `load_user_preferences_preset`
 - `quit` — terminates Resolve (destructive; confirm with user first)
 
 **`layout_presets`** — Save, load, export, import, delete UI layout presets.
+`list` (Resolve 21.0.4+) enumerates the saved preset names the other actions
+take.
 
 **`render_presets`** — Import and export render and burn-in presets.
+`list_burnin` / `delete_burnin` (Resolve 21.0.4+) enumerate and remove burn-in
+presets — `list_burnin` is the only way to discover the names the `DataBurnIn`
+render setting and the `load_burnin_preset` actions expect.
 
 ---
 
@@ -534,10 +561,15 @@ Key actions:
 
 **`project_manager`** — CRUD on projects.
 
-Key actions: `list`, `get_current`, `create(name, media_location_path?)`,
+Key actions: `list`, `list_attributes`, `get_current`,
+`create(name, media_location_path?)`,
 `load(name)`, `save`, `close`,
 `delete(name)`, `import_project(path)`, `export_project(name, path)`, `archive`,
 `restore`
+
+`list_attributes` (Resolve 21.0.4+) returns `lastModifiedDate`, `creationDate`,
+`notes`, and `liveCollaborationMode` per project in the current folder without
+loading any of them.
 
 Project / Database / Archive kernel actions (v2.15.0+) add guarded project
 lifecycle, settings, database, preset, and archive boundary helpers:
@@ -1381,7 +1413,9 @@ Key actions:
   into an editor-facing beat report
 - `create_variant_from_ranges(name, ranges, markers?, cdl?, dry_run?)` — create
   a guarded timeline variant from declarative source ranges, optional markers,
-  transforms, and CDL
+  transforms, and CDL. Each range takes `track_type?` and a 1-based
+  `track_index?` (default 1), so multicam angles can be rebuilt onto V2/V3
+  rather than collapsing onto V1; missing tracks are added
 - `bulk_set_item_properties(ops, dry_run?, readback?)` — apply transforms,
   crop/composite/audio/property groups to many timeline items in one call
 - `apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?)` — apply a
