@@ -2,6 +2,78 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.93.3
+
+Re-verifies the delivery-target table and the two recorded render API
+limitations against the **installed** Resolve build (Studio 21.0.4.5), rather
+than the 19.1.3.7 they were first measured on.
+
+### Changed
+
+- **Delivery-target provenance now reflects both builds.** `VERIFIED_ON` reads
+  21.0.4.5 (23 formats / 326 pairs) with the original 19.1.3.7 measurement
+  (20 formats / 271 pairs) kept alongside it. All 28 targets resolve on 21.0.4.5.
+- **The module now records why candidate ordering matters.** Codec **ids were
+  stable** across the two majors while **descriptions were not** — every DNx
+  description gained an `"Avid "` prefix in 21.x (`"DNxHR HQ"` →
+  `"Avid DNxHR HQ 12-bit"`) while `DNxHRHQ`, `DNxHRLB` and `DNxHRHQX_10` did not
+  move. The targets that survived the upgrade did so because their candidate list
+  contained the real id, so ids now lead every list and descriptions follow.
+- **Corrected a claim that went stale between builds.** The module asserted "PNG
+  is not a render format at all", which was true on 19.1.3.7 and is false on
+  21.0.4.5 (`png`, `jpg` and `webp` are all render formats there). There is still
+  no `png_sequence` target, but the reason is now "not added", not "impossible".
+
+### Fixed
+
+- **`api_truth.py`: the zero-codec format list was presented as fixed.** It is
+  build-specific — `wav` and `gif` on 19.1.3.7, but `braw`, `mts` and `wav` on
+  21.0.4.5 (`gif` gained codecs; BRAW and MTS lost them). `wav` is affected on
+  both, so an audio-only WAV deliverable remains inexpressible through
+  `SetCurrentRenderFormatAndCodec`, which rejects every value including the empty
+  string.
+- **The description-vs-id trap is re-confirmed unchanged on 21.0.4.5** —
+  `('mp4', 'H.264')` still returns False while `('mp4', 'H264')` returns True,
+  two major versions after it was first recorded. The entry now carries evidence
+  from both builds and notes that descriptions drift while ids do not.
+
+`docs/reference/api-limitations.md` regenerated from those entries.
+
+## What's New in v2.93.3
+
+Ledger correction, measured live on DaVinci Resolve Studio **21.0.4.5**.
+
+- **A native Text+ CAN be placed at an exact track and frame, and stay editable
+  — entirely through the public API.** The issue #74 entry has said for two
+  months to "accept the limitation." That was wrong about the outcome, and the
+  recommendation is replaced. `InsertFusionTitleIntoTimeline` really does take no
+  track/frame/duration and really does produce a source-less item — but it is not
+  the only door. Put the title on its **own timeline**, then place *that*
+  timeline's media pool item (`Type='Timeline'`) with `AppendToTimeline`'s
+  clipInfo `trackIndex`/`recordFrame`. Measured: lands on the requested track at
+  the requested frame, exactly.
+
+- **The text survives the nesting.** `placedItem.GetMediaPoolItem().GetTimeline()`
+  (Resolve 21.0.4+) opens the inner timeline; the Text+ there still reports
+  `GetFusionCompCount() == 1`, so
+  `GetFusionCompByIndex(1).FindTool("Template").SetInput("StyledText", …)` works
+  and persists across processes. Duration is controllable the same way —
+  `duration = endFrame - startFrame`, `endFrame` exclusive, verified at 1, 119 and
+  120 frames. It composes: a PNG plus two titles each placed by `trackIndex` into
+  one container timeline, and that container placed as a single clip, with every
+  element still individually reachable and editable through the nesting.
+
+- **Compound clips are the trap.** `CreateCompoundClip` also gives a source-less
+  title a MediaPoolItem and also places correctly — but it **severs the text**.
+  `FusionCompCount` drops 1 → 0, and `GetTimeline()` returns `None` for
+  `Type='Compound'` while working correctly for `Type='Timeline'`, so nothing gets
+  back to the Text+. Nest, never compound, when the text must stay editable.
+
+- Two constraints recorded with the route: every placed instance shares one media
+  pool item, so a text edit propagates to all of them (use one source timeline per
+  distinct card); and placements must not overlap on a track or the append is
+  silently rejected.
+
 ## What's New in v2.93.2
 
 Documentation and ledger correction, validated live against DaVinci Resolve

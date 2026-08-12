@@ -90,17 +90,37 @@ than emitting a spec that would be checked against an arbitrary single frame.
 Every target must have one or the other — a missing QC projection is always
 explained, never silent.
 
-## Live-verified against the real matrix
+## Live-verified against the real matrix, twice
 
-Codec candidates were checked against DaVinci Resolve Studio 19.1.3.7 on
-2026-07-27 (20 formats / 271 format-codec pairs). That pass corrected real
-mistakes — plain `"DNxHR HQX"` and `"DNxHR 444"` do not exist (the live labels
-carry a bit depth: `"DNxHR HQX 10-bit"`), DPX/TIFF codecs are spelled
-`"RGB 10 bits"` not `"RGB 10-bit"`, PNG is not a render format at all, and the
-`Wave` format exposes **zero** codecs and rejects every codec value passed to
-`SetCurrentRenderFormatAndCodec`, so an audio-only WAV target is not expressible
-through this API. Availability still varies by version, license, and installed
-IO plugins, so resolution remains live.
+Checked against **19.1.3.7** (2026-07-27, 20 formats / 271 pairs) and again
+against **21.0.4.5** (2026-08-12, 23 formats / 326 pairs).
+
+The 19.x pass corrected guessed spellings: plain `"DNxHR HQX"` / `"DNxHR 444"`
+never existed (the labels carry a bit depth), and DPX/TIFF codecs are spelled
+`"RGB 10 bits"`, not `"RGB 10-bit"`.
+
+The 21.x pass produced the more useful lesson: **codec ids were stable across the
+two majors while descriptions were not.** Every DNx description gained an `"Avid "`
+prefix in 21.x (`"DNxHR HQ"` -> `"Avid DNxHR HQ 12-bit"`) while the ids
+(`DNxHRHQ`, `DNxHRLB`, `DNxHRHQX_10`) did not move. Four targets broke, and the
+only reason the other DNx targets survived is that their candidate lists happened
+to contain the real id. So **every codec candidate list leads with the id**, and
+description spellings follow it — that ordering is what makes the table survive a
+major-version upgrade.
+
+Two findings changed between the builds and should not be treated as fixed facts:
+
+- **PNG.** Not a render format on 19.1.3.7; it *is* one on 21.0.4.5 (along with
+  `jpg` and `webp`). There is still no `png_sequence` target, but the reason is
+  now "not added", not "impossible".
+- **Zero-codec formats.** `wav` and `gif` on 19.x; `braw`, `mts` and `wav` on
+  21.x — `gif` gained codecs, BRAW and MTS lost them. `wav` is the constant, so
+  an audio-only WAV target remains inexpressible through
+  `SetCurrentRenderFormatAndCodec`, which rejects every value including the
+  empty string.
+
+Availability varies by version, license, and installed IO plugins, so resolution
+stays live and neither count above is a target to compare against.
 
 ## ffprobe gotcha encoded here
 
@@ -135,7 +155,9 @@ TIERS = ("master", "web", "sequence", "broadcast", "package")
 
 #: What the shipped candidates were checked against. Availability is still
 #: machine/license/plugin dependent, so resolution happens live regardless.
-VERIFIED_ON = "DaVinci Resolve Studio 19.1.3.7 (2026-07-27, 20 formats / 271 pairs)"
+VERIFIED_ON = (
+    "DaVinci Resolve Studio 21.0.4.5 (2026-08-12, 23 formats / 326 pairs); first verified on 19.1.3.7 (2026-07-27, 20 formats / 271 pairs)"
+)
 
 
 # ── Loudness standards ──────────────────────────────────────────────────────
