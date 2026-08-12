@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.93.1
+
+Documentation only; no behavior changed and no Resolve validation required.
+
+- **The immediate-retake blind spot is now in the media-analysis guide.** Issue
+  #125 asked for three things; the `rank_takes` caveat and the
+  `possible_swallowed_retakes` flag shipped in v2.83.0, but the documented
+  limitation never did — the guide had zero mentions of retakes, so the only way
+  to learn that word timestamps are untrustworthy around an immediate re-read was
+  to already be looking at output that flagged one. The new section states what
+  whisper does (emits a re-read sentence once, aligns it to the first take, and
+  absorbs pause-plus-second-take into a single word), names every feature that
+  inherits it, and records why silence detection cannot substitute — the
+  swallowed span measured **−12.1 dB** against adjacent speech at −16.7 dB, and a
+  silence pass recalled **3 of 17**. It is explicit that the flag is never a cut
+  point, and that no flags is weak evidence rather than proof.
+
 ## What's New in v2.93.0
 
 `source_end` is a source frame again, and the guidance v2.91.0 shipped about WAV
