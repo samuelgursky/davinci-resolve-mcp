@@ -159,14 +159,20 @@ target (`instagram_reels` for Reels):
    the project, persistent settings, source import, timeline, and optional
    Fairlight preset.
 2. After the human edit, `render.delivery_preflight` returns duration, canvas,
-   detailed enabled-item inventory, offline blockers, and the target QC contract.
-3. `timeline.exposure_plan` analyzes repeated source ranges once, then
+   detailed enabled-item inventory, conform/Fairlight evidence, offline blockers,
+   the target QC contract, and optional cover-sample evidence.
+3. `timeline.exposure_plan` analyzes repeated source ranges once at each
+   source clip's own frame rate, then
    `timeline.apply_drx_and_cdls_bulk` applies the shared DRX before each
-   per-item CDL under one confirmation.
+   per-item CDL under one confirmation after creating a recoverable local grade
+   version for every target.
 4. `timeline.cover_frame_candidates` ranks sampled frames without semantic
-   guessing and can export an explicitly selected frame.
+   guessing, falls back to uniform samples on markerless timelines, and can
+   export an explicitly selected frame to a new file inside the analysis root.
 5. `render.complete_delivery_job` prepares or resumes the render, polls to a
-   bounded terminal state, and returns ffprobe QC evidence when available.
+   bounded terminal state, validates resumed-job identity, and returns strict
+   ffprobe QC evidence. Overall `success` requires both render and QC success;
+   `execute=false` never starts a queued job.
 
 Third-party Fairlight plug-in controls remain outside Resolve's public API;
 opening and verifying tools such as Ozone still requires UI assistance.

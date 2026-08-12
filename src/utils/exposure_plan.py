@@ -33,15 +33,40 @@ def build_exposure_plan(
             blockers.append(blocker)
             results.append({"timeline_item_id": item_id, "analysis": {"success": False, "error": "source unavailable"}})
             continue
-        key = (path, int(start), int(end))
+        try:
+            start_frame = int(start)
+            end_frame = int(end)
+        except (TypeError, ValueError):
+            start_frame = end_frame = 0
+        if end_frame <= start_frame:
+            blocker = {
+                "code": "INVALID_SOURCE_RANGE",
+                "timeline_item_id": item_id,
+                "source_start": start,
+                "source_end": end,
+            }
+            blockers.append(blocker)
+            results.append({"timeline_item_id": item_id, "analysis": {"success": False, "error": "invalid source range"}})
+            continue
+        item_fps = item.get("source_fps")
+        try:
+            item_fps = float(item_fps) if item_fps is not None else fps
+        except (TypeError, ValueError):
+            item_fps = fps
+        if item_fps <= 0:
+            blocker = {"code": "INVALID_SOURCE_FPS", "timeline_item_id": item_id, "source_fps": item.get("source_fps")}
+            blockers.append(blocker)
+            results.append({"timeline_item_id": item_id, "analysis": {"success": False, "error": "invalid source fps"}})
+            continue
+        key = (path, start_frame, end_frame, item_fps)
         if key not in cache:
-            at_seconds = ((int(start) + int(end)) / 2.0) / fps
+            at_seconds = ((start_frame + end_frame) / 2.0) / item_fps
             try:
                 cache[key] = analyzer(path, at_seconds)
             except Exception as exc:
                 cache[key] = {"success": False, "error": str(exc)}
         analysis = cache[key]
-        results.append({"timeline_item_id": item_id, "source_range": {"path": path, "start": int(start), "end": int(end)}, "analysis": analysis})
+        results.append({"timeline_item_id": item_id, "source_range": {"path": path, "start": start_frame, "end": end_frame, "fps": item_fps}, "analysis": analysis})
         if not analysis.get("success"):
             blockers.append({"code": "EXPOSURE_ANALYSIS_FAILED", "timeline_item_id": item_id, "error": analysis.get("error")})
 

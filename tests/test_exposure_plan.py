@@ -38,6 +38,29 @@ class ExposurePlanTest(unittest.TestCase):
         self.assertEqual(out["blockers"][0]["code"], "EXPOSURE_ANALYSIS_FAILED")
         self.assertEqual(out["items"][0]["analysis"]["error"], "ffmpeg missing")
 
+    def test_degenerate_source_range_is_blocked_without_analysis(self):
+        out = build_exposure_plan(
+            [{"timeline_item_id": "a", "file_path": "D:/clip.mov", "online_status": "Online", "source_start": 60, "source_end": 60}],
+            lambda *_: self.fail("degenerate range must not be analyzed"),
+        )
+
+        self.assertFalse(out["success"])
+        self.assertEqual(out["blockers"][0]["code"], "INVALID_SOURCE_RANGE")
+        self.assertEqual(out["unique_ranges_analyzed"], 0)
+
+    def test_uses_each_sources_fps_for_sampling_and_deduplication(self):
+        calls = []
+        items = [
+            {"timeline_item_id": "a", "file_path": "D:/clip.mov", "online_status": "Online", "source_start": 0, "source_end": 60, "source_fps": 60},
+            {"timeline_item_id": "b", "file_path": "D:/clip.mov", "online_status": "Online", "source_start": 0, "source_end": 60, "source_fps": 30},
+        ]
+
+        out = build_exposure_plan(items, lambda path, at: calls.append((path, at)) or {"success": True})
+
+        self.assertTrue(out["success"], out)
+        self.assertEqual(calls, [("D:/clip.mov", 0.5), ("D:/clip.mov", 1.0)])
+        self.assertEqual(out["unique_ranges_analyzed"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

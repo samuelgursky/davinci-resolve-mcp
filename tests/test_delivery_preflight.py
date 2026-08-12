@@ -61,6 +61,46 @@ class DeliveryPreflightTest(unittest.TestCase):
             out = s._render_delivery_preflight(project, {"profile": "not-real"})
         self.assertEqual(out, error)
 
+    def test_reports_conform_continuity_and_unavailable_fairlight_evidence(self):
+        project, _ = self._project()
+        inventory = {"success": True, "count": 1, "tracks": [], "warnings": [], "items": [
+            {"timeline_item_id": "item-1", "file_path": "D:/clip.mov", "online_status": "Online"}
+        ]}
+        target = {"target": "h264_vertical_1080_web", "qc_spec": {"video": {"width": 1080, "height": 1920}}, "loudness_target": None}
+        conform = {"name": "IG Reel", "tracks": {"video": {"tracks": []}}}
+        continuity = {"gaps": [{"start": 10, "end": 20}], "overlaps": [], "gap_count": 1, "overlap_count": 0}
+        with mock.patch.object(s, "_timeline_list_items_detailed", return_value=inventory), \
+             mock.patch.object(s, "_resolve_delivery_target_live", return_value=(target, None)), \
+             mock.patch.object(s, "_timeline_conform_snapshot", return_value=conform), \
+             mock.patch.object(s, "_detect_gaps_overlaps_from_snapshot", return_value=continuity), \
+             mock.patch.object(s, "_fairlight_boundary_report", return_value={"fairlight_presets": None}):
+            out = s._render_delivery_preflight(project, {"profile": "instagram_reels"})
+
+        self.assertEqual(out["conform"], conform)
+        self.assertEqual(out["continuity"], continuity)
+        self.assertEqual(
+            [warning["code"] for warning in out["warnings"]],
+            ["TIMELINE_GAPS_DETECTED", "FAIRLIGHT_PRESET_EVIDENCE_UNAVAILABLE"],
+        )
+
+    def test_include_cover_samples_returns_candidate_evidence(self):
+        project, _ = self._project()
+        inventory = {"success": True, "count": 1, "tracks": [], "warnings": [], "items": [
+            {"timeline_item_id": "item-1", "file_path": "D:/clip.mov", "online_status": "Online"}
+        ]}
+        target = {"target": "h264_vertical_1080_web", "qc_spec": {"video": {"width": 1080, "height": 1920}}}
+        cover = {"success": True, "candidates": [{"frame": 12, "rank": 1}], "path": "sheet.png"}
+        with mock.patch.object(s, "_timeline_list_items_detailed", return_value=inventory), \
+             mock.patch.object(s, "_resolve_delivery_target_live", return_value=(target, None)), \
+             mock.patch.object(s, "_timeline_conform_snapshot", return_value={"tracks": {}}), \
+             mock.patch.object(s, "_detect_gaps_overlaps_from_snapshot", return_value={"gap_count": 0, "overlap_count": 0, "gaps": [], "overlaps": []}), \
+             mock.patch.object(s, "_fairlight_boundary_report", return_value={"fairlight_presets": []}), \
+             mock.patch.object(s, "_timeline_cover_frame_candidates", return_value=cover) as candidates:
+            out = s._render_delivery_preflight(project, {"profile": "instagram_reels", "include_cover_samples": True})
+
+        self.assertEqual(out["cover_samples"], cover)
+        candidates.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

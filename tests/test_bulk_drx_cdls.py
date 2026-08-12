@@ -17,11 +17,15 @@ class BulkDrxCdlsTest(unittest.TestCase):
 
     def _fixture(self):
         events = []
+        versions = ["Current"]
         graph = mock.Mock()
         graph.ApplyGradeFromDRX.side_effect = lambda path, mode: events.append(("drx", path, mode)) or True
         item = mock.Mock()
         item.GetUniqueId.return_value = "item-1"
         item.GetNodeGraph.return_value = graph
+        item.GetCurrentVersion.return_value = {"versionName": "Current", "versionType": 0}
+        item.GetVersionNameList.side_effect = lambda version_type: list(versions) if version_type == 0 else []
+        item.AddVersion.side_effect = lambda name, version_type: events.append(("backup", name, version_type)) or versions.append(name) or True
         item.SetCDL.side_effect = lambda cdl: events.append(("cdl", cdl)) or True
         timeline = mock.Mock()
         timeline.GetTrackCount.return_value = 1
@@ -58,8 +62,38 @@ class BulkDrxCdlsTest(unittest.TestCase):
         with mock.patch.object(s, "_confirm_token_required", return_value=False):
             out = s._timeline_apply_drx_and_cdls_bulk(mock.Mock(), timeline, self._params(dry_run=False))
         self.assertTrue(out["success"], out)
-        self.assertEqual([event[0] for event in events], ["drx", "cdl"])
+        self.assertEqual([event[0] for event in events if event[0] in {"drx", "cdl"}], ["drx", "cdl"])
         self.assertEqual(out["items"][0]["status"], "completed")
+
+    def test_execution_captures_grade_version_snapshot_before_drx(self):
+        timeline, item, events = self._fixture()
+        item.GetCurrentVersion.side_effect = lambda: events.append(("snapshot",)) or {
+            "versionName": "Current",
+            "versionType": 0,
+        }
+        with mock.patch.object(s, "_confirm_token_required", return_value=False):
+            out = s._timeline_apply_drx_and_cdls_bulk(
+                mock.Mock(), timeline, self._params(dry_run=False)
+            )
+
+        self.assertTrue(out["success"], out)
+        self.assertEqual(events[0][0], "snapshot")
+        self.assertEqual(events[1][0], "backup")
+        self.assertEqual(events[2][0], "drx")
+        self.assertEqual(out["items"][0]["grade_snapshot"]["current"]["versionName"], "Current")
+        self.assertTrue(out["items"][0]["grade_backup"]["verified"])
+
+    def test_backup_failure_aborts_before_any_drx_replacement(self):
+        timeline, item, events = self._fixture()
+        item.AddVersion.return_value = False
+        item.AddVersion.side_effect = None
+
+        with mock.patch.object(s, "_confirm_token_required", return_value=False):
+            out = s._timeline_apply_drx_and_cdls_bulk(mock.Mock(), timeline, self._params(dry_run=False))
+
+        self.assertFalse(out["success"], out)
+        self.assertEqual(out["code"], "GRADE_BACKUP_FAILED")
+        self.assertNotIn("drx", [event[0] for event in events])
 
 
 if __name__ == "__main__":

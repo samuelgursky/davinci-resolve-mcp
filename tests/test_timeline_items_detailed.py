@@ -17,6 +17,7 @@ def _media_pool_item(name="clip.mov", uid="mpi-1", path="D:/media/clip.mov", onl
             "Online Status": online,
             "Type": "Video + Audio",
             "Duration": "120",
+            "FPS": "60",
         }
         return properties if key == "" else properties.get(key)
 
@@ -84,9 +85,17 @@ class TimelineItemsDetailedTest(unittest.TestCase):
                 "start": 86400, "end": 86520, "duration": 120,
                 "source_start": 24, "source_end": 144,
                 "media_pool_item_id": "mpi-1", "media_pool_item_name": "clip.mov",
-                "file_path": "D:/media/clip.mov", "online_status": "Online",
+                "file_path": "D:/media/clip.mov", "online_status": "Online", "source_fps": 60.0,
             },
         )
+
+    def test_disabled_clip_is_omitted_when_enabled_only(self):
+        item = _item(uid="disabled-clip")
+        item.GetClipEnabled.return_value = False
+        out = _dispatch(_timeline({("video", 1): [item]}))
+
+        self.assertEqual(out["count"], 0)
+        self.assertEqual(out["tracks"][0]["included_item_count"], 0)
 
     def test_layered_tracks_keep_zero_based_item_index_per_track(self):
         out = _dispatch(_timeline({

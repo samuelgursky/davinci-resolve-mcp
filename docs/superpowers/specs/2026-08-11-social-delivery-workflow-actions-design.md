@@ -29,11 +29,11 @@ Conflicting existing state is a blocker, not something silently overwritten. The
 
 ### `timeline.apply_drx_and_cdls_bulk`
 
-Applies a shared DRX followed by an optional per-item CDL in one confirmed operation. Parameters: `path`, `items: [{timeline_item_id, cdl?}]`, `require_temp_path`, `dry_run` (default true), and `confirm_token`. The dry-run resolves every item and validates every CDL. Execution refuses if any target is unresolved, obtains one confirmation for the complete plan, snapshots grade versions, applies DRX then CDL per item, and returns ordered per-item results. It stops on the first failed mutation and identifies completed versus untouched items; it does not claim rollback.
+Applies a shared DRX followed by an optional per-item CDL in one confirmed operation. Parameters: `path`, `items: [{timeline_item_id, cdl?}]`, `require_temp_path`, `dry_run` (default true), and `confirm_token`. The dry-run resolves every item and validates every CDL. Execution refuses if any target is unresolved, obtains one confirmation for the complete plan, creates and verifies a recoverable local grade version for every target before the first DRX mutation, applies DRX then CDL per item, and returns ordered per-item results. It stops on the first failed mutation and identifies completed versus untouched items; it does not claim rollback.
 
 ### `timeline.exposure_plan`
 
-Read-only. Parameters: optional explicit `items`, otherwise enabled video items from `list_items_detailed`; sampling controls; and `analyzer` defaulting to the existing lightweight exposure implementation. It deduplicates identical `(file_path, source_start, source_end)` ranges, checks online/readable sources, and returns per-item stats and proposed CDLs. Missing analyzer capability or source evidence produces structured blockers. It does not apply grades.
+Read-only. Parameters: optional explicit `items`, otherwise enabled video items from `list_items_detailed`; sampling controls; and `analyzer` defaulting to the existing lightweight exposure implementation. It uses each source clip's reported frame rate (falling back to `source_fps`) and deduplicates identical `(file_path, source_start, source_end, source_fps)` ranges, checks online/readable sources, and returns per-item stats and proposed CDLs. Missing analyzer capability or source evidence produces structured blockers. It does not apply grades.
 
 ### `render.complete_delivery_job`
 
@@ -41,7 +41,7 @@ Resumable render lifecycle wrapper. Parameters: `profile`, `target_dir`, `custom
 
 ### `timeline.cover_frame_candidates`
 
-Read-only by default. Parameters: optional frames, `max_samples`, `output_dir`, and `export_selected_frame`. It builds on the existing thumbnail sampler, scores candidates using deterministic image signals (blankness, clipping, and sharpness when available), and returns ranked timecodes with contact-sheet evidence. With an explicitly selected frame and export path, it exports that still through the existing guarded still path. It does not use semantic face or subject recognition.
+Read-only by default. Parameters: optional frames, `max_samples`, `analysis_root`, `selected_frame`, and `export_path`. It builds on the existing thumbnail sampler, uses marker frames or uniform timeline samples when no markers exist, scores candidates using deterministic image signals (blankness, clipping, and sharpness when available), and returns ranked timecodes with contact-sheet evidence. With an explicitly selected frame and export path, it exports only to a new supported still-image path inside the generated analysis root and refuses source-media conflicts. It does not use semantic face or subject recognition.
 
 ## Data Flow
 
