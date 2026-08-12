@@ -87,10 +87,38 @@ Plus the full **DRX grade** surface (`createSimpleGrade`, curves/qualifiers/wind
 ## Live-edit recipe (the one thing that needs Resolve running)
 
 **#74 — insert a Text+/generator on a chosen track of the OPEN timeline.** The API's
-`InsertFusionTitleIntoTimeline` takes no track arg (always the lowest unlocked video track). Bypass:
-via computer-use, **lock the video tracks below your target**, then call `timeline.insert_fusion_title` —
-it lands on the chosen track. Verified live. (For export-based workflows, `place_fusion_title` does this
-offline.)
+`InsertFusionTitleIntoTimeline` takes no track arg; the insert lands on the Source/Auto Track
+Selector's current target (V1 in practice), which no API can read or set.
+
+> **Track locking does not redirect the insert — through the API *or* the UI.** An earlier
+> revision of this README claimed that locking the tracks below your target via computer-use
+> redirects the insert, and called it verified live. That claim shipped with no test or evidence
+> and is **withdrawn as false.** Measured 2026-08-12 on **Studio 21.0.4.5** (version read live,
+> not assumed), one fresh 3-video-track timeline per arm so no insert could fail on a collision:
+>
+> | Arm | Setup | `InsertFusionTitleIntoTimeline("Text+")` |
+> |---|---|---|
+> | A | nothing locked | lands on **V1** |
+> | B | V1 locked via `Timeline.SetTrackLock` | returns **None**, nothing placed |
+> | C | V1 locked by **clicking the padlock in the UI** | returns **None**, nothing placed |
+> | D | nothing locked, source patch dragged to V2 in the UI | lands on **V2** |
+>
+> B and C are identical, so the GUI-lock hypothesis is dead: locking blocks the target, it never
+> re-targets. This also reproduces issue #74 (measured on 21.0.0) on the newest build.
+>
+> **D is the real control.** The destination is the Edit-page patch panel, not the lock state.
+> Dragging the source patch onto V2 sends the insert to V2. In the header, the x-column of
+> per-track badges is the auto-track-selector toggle; the source patch badge appears only on the
+> patched track, and dragging it is what re-targets. The API can neither read nor set any of it —
+> which is exactly the gap to put in front of Blackmagic, and a far smaller ask than new
+> parameters on all six `Insert*IntoTimeline` methods.
+>
+> So a live-edit recipe does exist, but it is **GUI automation of the patch panel**, not track
+> locking. Treat it as such: it is not verifiable from the API side, since nothing in the
+> scripting surface can confirm the selector landed where you dragged it.
+
+For export-based workflows, `place_fusion_title` places a title on any track at an exact frame
+offline, with no selector involved.
 
 ---
 

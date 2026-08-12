@@ -2,6 +2,46 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.93.2
+
+Documentation and ledger correction, validated live against DaVinci Resolve
+Studio **21.0.4.5** (version read from the running instance, not assumed).
+
+- **A false "verified live" workaround for issue #74 is withdrawn, and the real
+  mechanism is documented.** `resolve-advanced/vendor/drp-format/README.md`
+  claimed that locking the video tracks below your target redirects
+  `InsertFusionTitleIntoTimeline` to that track, and called it verified live. It
+  shipped with no test, log, or evidence file, and it contradicted the
+  `api_truth` ledger entry written twelve days earlier from an explicit test
+  matrix. A third party independently reproduced the ledger's version on
+  21.0.4.5, so the two claims were re-measured on one rig, one fresh
+  3-video-track timeline per arm so no insert could fail on a collision:
+
+  | Arm | Setup | `InsertFusionTitleIntoTimeline("Text+")` |
+  |---|---|---|
+  | A | nothing locked | lands on **V1** |
+  | B | V1 locked via `Timeline.SetTrackLock` | returns **`None`** |
+  | C | V1 locked by **clicking the padlock in the UI** | returns **`None`** |
+  | D | nothing locked, source patch dragged to V2 in the UI | lands on **V2** |
+
+  B and C are identical, which kills the standing theory that a GUI lock
+  advances the selector where the API lock does not. Locking blocks the target;
+  it never re-targets. The README claim is withdrawn as false and the ledger
+  entry — previously measured on 21.0.0 — is confirmed on the newest build.
+
+- **The destination is the patch panel, not the lock state.** Arm D is the
+  finding: dragging the source patch badge onto V2 in the Edit page sends the
+  next insert to V2. The per-track badge column in the track header is the
+  auto-track-selector toggle; the source patch badge appears only on the patched
+  track, and dragging that is what re-targets. The capability exists in the
+  application and is reachable only by GUI automation — so the request to
+  Blackmagic is read/write access to the patch panel, which is smaller and
+  better defined than adding `trackIndex` to all six `Insert*IntoTimeline`
+  methods. The route is unverifiable from the API side (nothing in the scripting
+  surface confirms where the selector landed), so read the landing track back
+  with `TimelineItem.GetTrackTypeAndIndex()` and treat a wrong track as a
+  failure. Offline, `drp place_fusion_title` remains deterministic.
+
 ## What's New in v2.93.1
 
 Documentation only; no behavior changed and no Resolve validation required.

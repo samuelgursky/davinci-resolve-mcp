@@ -471,33 +471,35 @@ DELIVERY_TARGETS: Dict[str, DeliveryTarget] = {
     # ── Mastering: DNxHR family ─────────────────────────────────────────────
     "dnxhr_lb_master": _dnxhr(
         "dnxhr_lb_master", "LB",
-        ("DNxHR LB", "DNxHR_LB"),
+        ("DNxHRLB", "Avid DNxHR LB 12-bit", "DNxHR LB"),
         "Low-bandwidth DNxHR. Offline/review, not finishing.",
     ),
     "dnxhr_sq_master": _dnxhr(
         "dnxhr_sq_master", "SQ",
-        ("DNxHR SQ", "DNxHR_SQ"),
+        ("DNxHRSQ", "Avid DNxHR SQ 12-bit", "DNxHR SQ"),
         "Standard-quality DNxHR. Avid-family review and distribution.",
     ),
     "dnxhr_hq_master": _dnxhr(
         "dnxhr_hq_master", "HQ",
-        ("DNxHR HQ", "DNxHR_HQ"),
+        ("DNxHRHQ", "Avid DNxHR HQ 12-bit", "DNxHR HQ"),
         "High-quality 8-bit DNxHR. Common Avid mezzanine.",
     ),
-    # Live matrix carries a bit depth in the label — plain "DNxHR HQX" does not exist.
+    # Codec IDS proved stable across 19.1.3.7 -> 21.0.4.5 while DESCRIPTIONS did not:
+    # every DNx description gained an "Avid " prefix in 21.x, and plain "DNxHR HQX"
+    # never existed. So the id leads each candidate list and descriptions follow.
     "dnxhr_hqx_master": _dnxhr(
         "dnxhr_hqx_master", "HQX 10-bit",
-        ("DNxHR HQX 10-bit", "DNxHRHQX_10", "DNxHR HQX 12-bit", "DNxHRHQX_12", "DNxHR HQX"),
+        ("DNxHRHQX_10", "Avid DNxHR HQX 10-bit", "DNxHR HQX 10-bit", "DNxHRHQX_12", "DNxHR HQX"),
         "10-bit DNxHR. The DNx tier to use for finishing and HDR.",
     ),
     "dnxhr_444_master": _dnxhr(
         "dnxhr_444_master", "444 12-bit",
-        ("DNxHR 444 12-bit", "DNxHR444_12", "DNxHR 444 10-bit", "DNxHR444_10", "DNxHR 444"),
+        ("DNxHR444_12", "Avid DNxHR 444 12-bit", "DNxHR 444 12-bit", "DNxHR444_10", "DNxHR 444"),
         "4:4:4 12-bit DNxHR. Highest DNx tier for finishing.",
     ),
     "dnxhd_1080p220_10_master": _dnxhr(
         "dnxhd_1080p220_10_master", "HD 1080p 220 10-bit",
-        ("DNxHD 1080p 220/185/175 10-bit", "DNxHD1080p220_10"),
+        ("DNxHD1080p220_10", "Avid DNxHD 1080p 220/185/175 10-bit", "DNxHD 1080p 220/185/175 10-bit"),
         "HD-era 10-bit DNxHD for Avid finishing at 1920x1080.",
         width=1920,
         height=1080,
@@ -561,7 +563,7 @@ DELIVERY_TARGETS: Dict[str, DeliveryTarget] = {
         describe="Avid-native handoff: MXF OP-Atom essence, DNxHR HQ.",
         tier="broadcast",
         format_candidates=("MXF OP-Atom", "MXF_OP_Atom", "mxf_op_atom"),
-        codec_candidates=("DNxHR HQ", "DNxHR_HQ"),
+        codec_candidates=("DNxHRHQ", "Avid DNxHR HQ 12-bit", "DNxHR HQ"),
         qc_container="mxf",
         qc_codec="dnxhd",
         audio_channels=2,
