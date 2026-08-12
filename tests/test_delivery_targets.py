@@ -98,6 +98,40 @@ class TableIntegrityTest(unittest.TestCase):
         for target in DELIVERY_TARGETS.values():
             self.assertTrue(target.verified, f"{target.id} carries no verified date")
 
+    def test_animated_web_targets_export_no_audio(self):
+        """GIF and WebP have no audio track at all — not merely unpinned."""
+        for target_id in ("gif_animated", "webp_animated"):
+            target = DELIVERY_TARGETS[target_id]
+            self.assertFalse(target.export_audio, f"{target_id} must not export audio")
+            settings = to_render_settings(target)
+            self.assertFalse(settings["ExportAudio"])
+            self.assertNotIn("AudioSampleRate", settings)
+            spec = to_qc_spec(target)
+            if spec is not None:
+                self.assertNotIn("audio", spec, f"{target_id} must not assert an audio block")
+
+    def test_webp_declines_a_qc_projection_rather_than_guessing(self):
+        """The ffprobe values for animated WebP were never measured. Guessing them
+        would produce QC failures about vocabulary, not about the deliverable."""
+        target = DELIVERY_TARGETS["webp_animated"]
+        self.assertIsNone(to_qc_spec(target))
+        self.assertIsNone(target.qc_codec)
+        self.assertIn("unverified", target.qc_skip_reason)
+
+    def test_gif_qc_projection_uses_measured_ffprobe_values(self):
+        spec = to_qc_spec(DELIVERY_TARGETS["gif_animated"])
+        self.assertEqual(spec["container"], "gif")
+        self.assertEqual(spec["video"]["codec"], "gif")
+
+    def test_png_sequence_does_not_claim_alpha(self):
+        """Resolve exposes no alpha PNG codec, so PNG must not be offered as the
+        transparency route — dpx_sequence and prores4444_master are."""
+        target = DELIVERY_TARGETS["png_sequence"]
+        self.assertFalse(target.export_alpha)
+        blurb = " ".join(target.notes).lower()
+        self.assertIn("no alpha png codec", blurb)
+        self.assertTrue(DELIVERY_TARGETS["prores4444_master"].export_alpha)
+
 
 class SelectAvailableTest(unittest.TestCase):
     CODECS = {"Apple ProRes 422 HQ": "ProRes422HQ", "DNxHR HQ": "DNxHR_HQ"}

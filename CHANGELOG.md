@@ -2,6 +2,46 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.94.0
+
+Adds four delivery targets for deliverable classes the table did not cover:
+image sequences for web/graphics, animated web assets, and an HTTP Live
+Streaming package. All 32 targets resolve live on Studio 21.0.4.5.
+
+### Added
+
+- **`png_sequence`** — PNG frames for web and motion-graphics handoff. Resolve
+  exposes **RGB only** (no alpha codec), so the target says so and points at
+  `dpx_sequence` (`RGBA 8 bits`) or `prores4444_master` when transparency is
+  actually needed. Alias: `png`.
+- **`gif_animated`** — looping animated GIF. No audio track at all, so
+  `ExportAudio` is False rather than merely unpinned. Its QC projection uses
+  ffprobe values measured on a generated file (`container: gif`, `codec: gif`).
+  Alias: `gif`.
+- **`webp_animated`** — looping animated WebP. Ships with **no QC projection**:
+  the reference machine's ffmpeg has only the `webp_pipe` still-image demuxer, so
+  a rendered animated WebP could not be probed and the ffprobe values are
+  unmeasured. `qc_skip_reason` says exactly that. Guessing `webp`/`webp` would
+  have produced QC failures about vocabulary rather than about the deliverable —
+  the same trap as mp4 reporting its container as `mov`. Alias: `webp`.
+- **`hls_h264`** — HTTP Live Streaming package (`.m3u8` playlist plus segments),
+  in the `package` tier alongside IMF and DCP. Bitrate ladders, variant playlists
+  and encryption keys are not expressible as a render target. Aliases: `hls`,
+  `streaming`.
+
+### Notes
+
+- PNG, WebP and HLS are **not render formats on Resolve 19.x**. These targets
+  resolve on 21.x and fail loudly with the machine's available list on older
+  builds, which is the designed behavior rather than a regression.
+- Deliberately **not** added, having checked the full 21.0.4.5 matrix: container
+  swaps that duplicate existing capability (MKV carries the same ProRes and
+  H.264/H.265 codecs already covered), standalone JPEG 2000 (the same essence the
+  IMF/DCP targets reach), and legacy formats (AVI, Cineon, MJ2, Panasonic AVC
+  8K). All remain reachable via a `format_candidates` override or a user target.
+- `braw`, `mts` and `wav` expose zero codecs and reject every codec value, so no
+  target is possible for them at all.
+
 ## What's New in v2.93.3
 
 Re-verifies the delivery-target table and the two recorded render API

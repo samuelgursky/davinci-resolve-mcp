@@ -110,9 +110,11 @@ major-version upgrade.
 
 Two findings changed between the builds and should not be treated as fixed facts:
 
-- **PNG.** Not a render format on 19.1.3.7; it *is* one on 21.0.4.5 (along with
-  `jpg` and `webp`). There is still no `png_sequence` target, but the reason is
-  now "not added", not "impossible".
+- **PNG, WebP and HLS.** Not render formats on 19.1.3.7; they *are* on 21.0.4.5.
+  `png_sequence`, `webp_animated` and `hls_h264` therefore resolve on 21.x and
+  fail loudly on 19.x, which is the correct behavior rather than a regression.
+  PNG exposes RGB only — no alpha codec — so it does not replace `dpx_sequence`
+  for transparency.
 - **Zero-codec formats.** `wav` and `gif` on 19.x; `braw`, `mts` and `wav` on
   21.x — `gif` gained codecs, BRAW and MTS lost them. `wav` is the constant, so
   an audio-only WAV target remains inexpressible through
@@ -578,6 +580,63 @@ DELIVERY_TARGETS: Dict[str, DeliveryTarget] = {
         ("RGB 16 bits", "RGB16", "RGB 8 bits"),
         "TIFF frames for stills-oriented or archival handoff.",
     ),
+    "png_sequence": _sequence(
+        "png_sequence", "PNG image sequence", ("PNG", "png"),
+        ("RGB16", "RGB 16 bits", "RGB8", "RGB 8 bits"),
+        "PNG frames for web and motion-graphics handoff.",
+        notes=(
+            "RGB ONLY — Resolve exposes no alpha PNG codec (21.0.4.5 offers just "
+            "'RGB 16 bits' / 'RGB 8 bits'). For transparency use dpx_sequence "
+            "('RGBA 8 bits') or prores4444_master.",
+            "PNG is not a render format on Resolve 19.x; this target resolves on 21.x+.",
+        ),
+    ),
+    # ── Animated web assets ─────────────────────────────────────────────────
+    # Not _web(): that helper pins mp4 and requires a raster. These carry no
+    # audio track at all, so export_audio is False rather than merely unpinned.
+    "gif_animated": DeliveryTarget(
+        id="gif_animated",
+        label="Animated GIF",
+        describe="Looping animated GIF for web/social placement. No audio.",
+        tier="web",
+        format_candidates=("GIF", "gif"),
+        codec_candidates=("Animated_GIF", "Animated GIF"),
+        qc_container="gif",
+        qc_codec="gif",
+        export_audio=False,
+        verified=_VERIFIED,
+        source="Live matrix: GIF render format; ffprobe values measured on a generated .gif.",
+        notes=(
+            "GIF carries no audio and is palette-limited to 256 colours; prefer "
+            "webp_animated where the destination supports it.",
+            "Raster and rate inherit the timeline — set them explicitly for a "
+            "placement with a fixed spec.",
+        ),
+    ),
+    "webp_animated": DeliveryTarget(
+        id="webp_animated",
+        label="Animated WebP",
+        describe="Looping animated WebP for web placement. No audio.",
+        tier="web",
+        format_candidates=("WebP", "webp"),
+        codec_candidates=("Animated_WEBP", "Animated WebP"),
+        export_audio=False,
+        # No QC projection on purpose — see qc_skip_reason. Guessing "webp"/"webp"
+        # would produce failures that say nothing about the deliverable, which is
+        # the exact trap the mp4-reports-as-mov case taught.
+        qc_skip_reason=(
+            "ffprobe container/codec values for animated WebP are unverified: the "
+            "reference machine's ffmpeg has only the webp_pipe still-image demuxer, "
+            "so a rendered animated WebP could not be probed. Measure and fill in "
+            "qc_container/qc_codec on a build with full WebP support."
+        ),
+        verified=_VERIFIED,
+        source="Live matrix: WebP render format (ffprobe side unmeasured).",
+        notes=(
+            "WebP carries no audio track.",
+            "WebP is not a render format on Resolve 19.x; this target resolves on 21.x+.",
+        ),
+    ),
     # ── Broadcast / Avid handoff ────────────────────────────────────────────
     "dnxhr_hq_mxf_opatom": DeliveryTarget(
         id="dnxhr_hq_mxf_opatom",
@@ -644,6 +703,17 @@ DELIVERY_TARGETS: Dict[str, DeliveryTarget] = {
             "need a human. easyDCP variants exist on this install too.",
         ),
     ),
+    "hls_h264": _package(
+        "hls_h264", "HLS package (H.264)",
+        ("HLS", "m3u8"), ("H264", "H.264"),
+        "HTTP Live Streaming package: an .m3u8 playlist plus its segment files.",
+        notes=(
+            "HLS is a PACKAGE: a playlist plus segments, not one file. Bitrate ladders, "
+            "variant playlists and encryption keys are not expressible as a render target "
+            "— this selects the format/codec only.",
+            "HLS is not a render format on Resolve 19.x; this target resolves on 21.x+.",
+        ),
+    ),
 }
 
 VALID_TARGETS = frozenset(DELIVERY_TARGETS)
@@ -676,6 +746,11 @@ TARGET_ALIASES: Dict[str, str] = {
     "dnx_master": "dnxhr_hqx_master",
     "avid": "dnxhr_hq_mxf_opatom",
     "vfx": "exr_sequence",
+    "png": "png_sequence",
+    "gif": "gif_animated",
+    "webp": "webp_animated",
+    "hls": "hls_h264",
+    "streaming": "hls_h264",
 }
 
 #: Fields a caller may override per call. Deliberately excludes id/label/tier/
