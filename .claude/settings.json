@@ -31,7 +31,8 @@
       "Bash(mdfind -name matt_cut_truth.py)",
       "Bash(python3 -c \"import PIL; print\\(PIL.__version__\\)\" 2>&1; ls /System/Library/Fonts/ | grep -i -E \"helvetica|SF|marker|noteworthy\" | head)",
       "Read(//System/Library/Fonts/**)",
-      "Bash(python3 - *)"
+      "Bash(python3 - *)",
+      "Bash(/Users/matusoberuc/MattFrames/business/tools/genbox/genlab/boxrun.sh vo_qc 'cmd.exe /c set HF_HOME=C:\\\\Users\\\\oberu\\\\.cache\\\\huggingface && F:\\\\AI\\\\whisper\\\\venv\\\\Scripts\\\\python.exe F:\\\\AI\\\\film01\\\\vo_qc.py > F:\\\\AI\\\\film01\\\\vo_qc.log 2>&1')"
     ],
     "additionalDirectories": [
       "/Users/matusoberuc/MattFrames/editing/film01/out/assembly/seg"
