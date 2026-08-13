@@ -8,6 +8,7 @@
  * Edit: move_clip, delete_clip, trim_clip, trim_clip_head, split_clip, ripple_timeline
  * Media: relink_media, repoint_media
  * Grade: inject_grades, extract_node_graphs, diff
+ * Nested: list_nested, read_nested, read_nested_titles, set_nested_title_text (compounds + nested timelines)
  */
 
 import fs from 'node:fs/promises';
@@ -86,6 +87,26 @@ const S = {
   repoint_media: z.object({ ...io, mappings: z.array(z.object({}).passthrough()).describe('[{from,to,fromSpec,toSpec}] spec={width,height,frameCount,fps}') }),
   inject_grades: z.object({ ...io, grades: z.array(z.object({}).passthrough()).describe('[{ clipId|resolveId, drxContent }]') }),
   extract_node_graphs: z.object({ drpPath: io.drpPath, includeBodyHex: z.boolean().optional() }),
+  list_nested: z.object({
+    drpPath: io.drpPath,
+  }),
+  read_nested: z.object({
+    drpPath: io.drpPath,
+    name: z.string().describe('Compound or nested-timeline name as it appears in the media pool'),
+  }),
+  read_nested_titles: z.object({
+    drpPath: io.drpPath,
+    name: z.string().describe('Compound or nested-timeline name'),
+  }),
+  set_nested_title_text: z.object({
+    ...io,
+    name: z.string().describe('Compound or nested-timeline name'),
+    titleIndex: z.number().int().nonnegative().optional().describe('Which title inside, if several (default 0)'),
+    text: z.string().optional().describe('New on-screen text. No double quotes.'),
+    font: z.string().optional(),
+    style: z.string().optional(),
+    size: z.number().optional(),
+  }),
   extract_group_grades: z.object({
     drpPath: io.drpPath,
     groups: z.array(z.string()).optional().describe('Color group names; default = all groups in the project'),
@@ -108,7 +129,7 @@ async function writeOp(fnName, drpPath, opts, outputPath) {
 export const drpTool = {
   name: 'drp',
   description:
-    'DaVinci Resolve project (.drp) authoring + editing — offline, no Resolve required. Actions: create_empty_project, assemble_timeline, add_media_clip, place_fusion_title, place_generator, place_transition, move_clip, delete_clip, trim_clip, trim_clip_head, split_clip, ripple_timeline, relink_media, repoint_media, inject_grades, extract_node_graphs, extract_group_grades, diff, extract_lut_refs.',
+    'DaVinci Resolve project (.drp) authoring + editing — offline, no Resolve required. Actions: create_empty_project, assemble_timeline, add_media_clip, place_fusion_title, place_generator, place_transition, move_clip, delete_clip, trim_clip, trim_clip_head, split_clip, ripple_timeline, relink_media, repoint_media, inject_grades, extract_node_graphs, extract_group_grades, diff, extract_lut_refs, list_nested, read_nested, read_nested_titles, set_nested_title_text.',
   async handler({ action, args }) {
     const gen = drp();
 
@@ -220,6 +241,26 @@ export const drpTool = {
         graphs.push(entry);
       }
       return { drpPath: p.drpPath, clipsWithGrade: graphs.length, totalClips: index.clipsById.size, graphs };
+    }
+    // --- Nested sequences: compounds AND nested timelines. The scripting API
+    // cannot walk into a COMPOUND at all (MediaPoolItem.GetTimeline() is None
+    // for Type='Compound'), so these have no live counterpart.
+    if (action === 'list_nested') {
+      const p = S.list_nested.parse(args);
+      return { nested: await gen.listNestedSequences(p.drpPath) };
+    }
+    if (action === 'read_nested') {
+      const p = S.read_nested.parse(args);
+      return await gen.readNestedSequence(p.drpPath, { name: p.name });
+    }
+    if (action === 'read_nested_titles') {
+      const p = S.read_nested_titles.parse(args);
+      return { titles: await gen.readNestedTitles(p.drpPath, { name: p.name }) };
+    }
+    if (action === 'set_nested_title_text') {
+      const p = S.set_nested_title_text.parse(args);
+      const { drpPath, outputPath, ...opts } = p;
+      return writeOp('setNestedTitleText', drpPath, opts, outputPath);
     }
     if (action === 'extract_group_grades') {
       const p = S.extract_group_grades.parse(args);

@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.95.0
+
+Compound clips can now be walked into and edited offline — the one capability
+where the offline tier beats the live scripting API outright.
+
+### Added — `drp` nested-sequence actions
+
+`list_nested`, `read_nested`, `read_nested_titles`, `set_nested_title_text`
+(`resolve-advanced/vendor/drp-format/compound-nav.js`). Enumerate every compound
+clip and nested timeline in a `.drp`, walk into either, and rewrite the title
+text inside.
+
+**A compound clip and a nested timeline are the same shape on disk.** Both appear
+in `MediaPool/Master/MpFolder.xml` as a media-pool element (`Sm2MpCompoundClip` /
+`Sm2MpTimelineClip`) carrying an inline `<Sequence><Sm2Sequence DbId="X">`, and
+the `SeqContainer/<uuid>.xml` whose tracks carry `<Sequence>X</Sequence>` holds
+the contents. The join is on that **Sm2Sequence DbId, not the container's own
+DbId** — which is referenced by nothing else in the package. One asymmetry: a
+compound's contents are rebased to `Start` 0 while a nested timeline's keep
+timeline-absolute TC.
+
+**Why this matters.** `MediaPoolItem.GetTimeline()` (21.0.4+) resolves through
+the timeline handle: it returns the inner Timeline for `Type='Timeline'` and
+**`None` for `Type='Compound'`**, and a compounded Text+ reports
+`GetFusionCompCount() == 0`. So compounding a title severs its text permanently
+as far as scripting is concerned — there is no API route back to it at any
+version. Offline, the distinction does not exist.
+
+Verified end to end on Studio 21.0.4.5: text rewritten offline inside a compound,
+imported into Resolve, re-exported by Resolve, and read back **from Resolve's own
+export** unchanged — so Resolve genuinely parses the write rather than tolerating
+it. Ten unit tests against a committed fixture exported from 21.0.4.5 holding a
+compound-of-media, a compound-of-Text+, and a nested timeline.
+
 ## What's New in v2.94.3
 
 A systematic sweep of catalogued API gaps against **Studio 21.0.4.5**, prompted

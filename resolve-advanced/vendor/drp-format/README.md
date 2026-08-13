@@ -141,4 +141,21 @@ internal-state/cache `FieldsBlob`s (`classifyBlob` flags them; Node has no built
 protobuf blobs' *field names* (wire structure is decoded; names need Resolve's private `.proto`); the
 Fusion comp beyond the title inputs we edit.
 
+**Nested sequences — compounds AND nested timelines (`compound-nav.js`):** enumerate, walk
+into, and rewrite title text inside either. **A compound clip and a nested timeline are the same
+shape on disk:** both appear in `MediaPool/Master/MpFolder.xml` as a media-pool element
+(`Sm2MpCompoundClip` / `Sm2MpTimelineClip`) carrying an inline `<Sequence><Sm2Sequence DbId="X">`,
+and the `SeqContainer/<uuid>.xml` whose tracks carry `<Sequence>X</Sequence>` holds the contents.
+The join is on that **Sm2Sequence DbId, not the container's own DbId** — the container id is
+referenced by nothing else in the package. One asymmetry worth knowing: a compound's contents are
+rebased to `Start` 0, while a nested timeline's keep timeline-absolute TC.
+
+> This is the one place the offline tier beats the live API outright. `MediaPoolItem.GetTimeline()`
+> (21.0.4+) resolves through the timeline handle: it returns the inner Timeline for
+> `Type='Timeline'` and **`None` for `Type='Compound'`**, and a compounded Text+ reports
+> `GetFusionCompCount() == 0`. So compounding a title severs its text permanently as far as
+> scripting is concerned. Offline the distinction does not exist. Verified end to end on Studio
+> 21.0.4.5: text rewritten offline inside a compound, imported, re-exported by Resolve, and read
+> back **from Resolve's own export** unchanged.
+
 **Limit:** media authoring is h264-only (cross-codec needs a per-codec template).
