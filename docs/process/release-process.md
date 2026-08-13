@@ -113,6 +113,26 @@ Resolve validation before release. Use disposable projects and synthetic media
 only. Never modify, transcode, proxy, or create derivatives of source media
 unless the user explicitly requests it.
 
+**Changes to the offline `.drp` authoring tier must run the round-trip harness,
+and a structural readback is NOT sufficient evidence on its own:**
+
+```bash
+RESOLVE_VERIFY=1 venv/bin/python tests/live_drp_roundtrip_verification.py
+```
+
+It authors a `.drp` per primitive, imports it into Resolve, asserts intent
+against structural readback, **and exports the composited frame to assert the
+item is visible on screen.** That last assertion exists because
+`place_fusion_title` passes every structural check — right track, frame,
+duration, type, and correctly-encoded text — while rendering nothing. Anything
+that only diffs `GetStart()`/`GetDuration()` will call that green. Known-broken
+cases are declared in the harness rather than skipped, so a fix reports
+`UNEXPECTED PASS` and fails until the docs describing it are updated.
+
+The same rule generalises: **"the file round-trips" and "Resolve honours it" are
+different claims.** Only a live import establishes the second one. Do not write
+"verified live" in a doc unless a runnable command produced that result.
+
 Examples:
 
 ```bash

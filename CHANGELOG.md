@@ -2,6 +2,53 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.95.2
+
+Adds the live round-trip harness the offline `.drp` tier never had — the absence
+of which is why three unbacked "verified live" claims survived in its README, one
+reaching a shipped `api_truth` recommendation before being caught.
+
+### Added — `tests/live_drp_roundtrip_verification.py`
+
+Authors a `.drp` per primitive, imports it into a running Resolve, asserts intent
+against structural readback, **and exports the composited frame to assert the
+item is actually visible on screen.**
+
+That last assertion is the whole point. `place_fusion_title` satisfies every
+structural check — right track, frame, duration, `PrettyType`, and correctly
+encoded text — while rendering nothing, so a harness that only diffed
+`GetStart()`/`GetDuration()` would have called it green. Visibility is measured
+with `Project.ExportCurrentFrameAsStill` plus a luma pass: an inert item yields
+`max=0` across the entire frame, a real one does not (the live control returns
+`max=255` with ~16k bright pixels).
+
+**Known-broken cases are declared, not skipped.** `place_fusion_title` is
+recorded as `KNOWN BROKEN`; if it starts working the harness reports `UNEXPECTED
+PASS` and fails, forcing the docs that describe it to be updated.
+
+Current state on Studio 21.0.4.5: **7 passed, 1 known-broken, 0 needing
+attention** — media placement, blade, trim, cross-track move, and generator
+visibility all verified end to end.
+
+### Fixed — the `RESOLVE_VERIFY=1` gate was unrunnable
+
+It ran a single test that threw `TODO — implement once fixtures land`, so the
+flag reported a failing suite and everyone learned to ignore it. A gate nobody
+can run green is worse than no gate. It is now a documented skip pointing at the
+harness above, and `RESOLVE_VERIFY=1 npm test` is clean.
+
+### Changed — release process states the rule
+
+"The file round-trips" and "Resolve honours it" are different claims; only a live
+import establishes the second. Changes to the offline `.drp` tier must run the
+harness, and a doc may not say "verified live" unless a runnable command produced
+that result.
+
+The harness is also robust to `DeleteProject`'s session lock: projects opened in
+a session cannot be deleted until Resolve restarts, so it steps off the current
+project, retries, falls back to run-unique names rather than colliding, and
+reports what it could not remove instead of failing silently.
+
 ## What's New in v2.95.1
 
 Withdraws a recommendation this project shipped two releases ago. **`drp

@@ -18,7 +18,6 @@ const os = require('node:os');
 const JSZip = require('jszip');
 
 const drpFormat = require('..');
-const { resolveVerifyTest } = require('./_resolve-verify');
 
 // A plausible-shaped synthetic body. The injector does not parse the bytes,
 // only substitutes them. Hex characters only.
@@ -229,10 +228,19 @@ test('injectGrades: internals — extractDrxBodyHex throws on missing Body', () 
 // the byte-identical-render check requires Resolve. When the env flag is
 // unset the test skips with a clear marker.
 
-resolveVerifyTest('injectGrades: rendered frame matches direct DRX apply', async () => {
-  // The harness's resolve-verifications.md has the full recipe. The actual
-  // implementation will live here once a captured fixture + a Resolve session
-  // is in flight. Until then it's a placeholder that exists to demonstrate
-  // the resolveVerifyTest gate and to surface in the skip list as a TODO.
-  throw new Error('TODO — implement once fixtures/inject-target.drp + Resolve session land');
-});
+// NOT a throwing placeholder any more. It used to `throw new Error('TODO ...')`,
+// which meant RESOLVE_VERIFY=1 reported a FAILING suite and everyone learned to
+// ignore the flag — which is a large part of why this package carried three
+// unbacked "verified live" claims. A gate nobody can run green is worse than no
+// gate. The live round-trip that DOES exist now lives on the Python side, where
+// the Resolve scripting API is reachable directly:
+//
+//   RESOLVE_VERIFY=1 venv/bin/python tests/live_drp_roundtrip_verification.py
+//
+// It authors a .drp per primitive, imports it into Resolve, asserts intent
+// against structural readback AND exports the composited frame to assert the
+// item is actually VISIBLE — the check that catches place_fusion_title, which
+// passes every structural assertion while rendering nothing.
+test.skip('injectGrades: rendered frame matches direct DRX apply '
+  + '(covered by tests/live_drp_roundtrip_verification.py — grade-render compare still TODO)',
+() => {});

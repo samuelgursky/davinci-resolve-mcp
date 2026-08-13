@@ -1,8 +1,24 @@
 # drp-format — offline DaVinci Resolve project authoring & editing
 
 Read, author, and edit **real, importable** DaVinci Resolve 21 projects (`.drp`) and timelines
-(`.drt`) as files — no Resolve required. Everything here is verified by a live round-trip
-(author/edit → `import_project` → `lint`/`clip_where` → re-export decode), not just self-parse.
+(`.drt`) as files — no Resolve required.
+
+> **How to verify a claim in this file.** This README previously said "everything here is verified
+> by a live round-trip". It was not: the gate it referred to threw `TODO — implement once fixtures
+> land`, so nobody ever ran it green, and three unbacked "verified live" claims survived here —
+> one of which reached a shipped `api_truth` recommendation before being caught. The round-trip
+> that actually exists is:
+>
+> ```bash
+> RESOLVE_VERIFY=1 venv/bin/python tests/live_drp_roundtrip_verification.py
+> ```
+>
+> It authors a `.drp` per primitive, imports it into a running Resolve, asserts intent against
+> structural readback, **and exports the composited frame to assert the item is visible on
+> screen.** That last check is the point: `place_fusion_title` satisfies every structural
+> assertion — correct track, frame, duration, type, and text encoded in the blob — while
+> rendering nothing. Structure alone cannot tell you a thing works. Known-broken cases are
+> declared in the harness, so a fix reports `UNEXPECTED PASS` and forces the docs to be updated.
 
 Background + the full schema map: `docs/design/drp-drx-drt-closeout-harness/knowledge/resolve21-schema-reconciliation.md`
 and `.../resolve-authoring-completion.md`.
