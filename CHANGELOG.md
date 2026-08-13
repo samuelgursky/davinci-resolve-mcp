@@ -2,6 +2,50 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.95.1
+
+Withdraws a recommendation this project shipped two releases ago. **`drp
+place_fusion_title` produces a title Resolve never renders**, and v2.93.2/v2.93.3
+told callers to use it.
+
+### Fixed — the offline title is inert
+
+Measured on Studio 21.0.4.5. The placed clip is structurally perfect: right
+track, right frame, right duration, `PrettyType` = `Fusion Title`, and the text
+genuinely is written into the `CompositionBA` — it decodes back. But Resolve
+never instantiates the comp:
+
+| | offline-placed | live-inserted |
+|---|---|---|
+| `GetFusionCompCount()` | 1 | 1 |
+| `GetToolList()` | **`[]`** | `['Template','MediaOut1']` |
+| Inspector Title tab | **blank** | shows `Text+` |
+| Viewer | **black** | renders the text |
+
+Reproduced four ways — alone, inside an edit chain, onto a bundled-template base
+project, and onto a genuine 21.0.4.5 Resolve export. Ruled out: template
+staleness (the bundled clip element is structurally identical to a real one, same
+tags, size differing only by text length) and DbId rewriting (the comp blobs hold
+no DbId references). Root cause open.
+
+It passes every structural readback while being invisible on screen — the exact
+silent-lie shape the `api_truth` ledger exists to catch. The **nested-timeline
+route is unaffected** and remains the working answer.
+
+### Narrowed — it is the Fusion-comp path, not clone-a-template
+
+`place_generator`, built the same way, works: an imported Solid Color shows a
+populated `Generator - Solid Color` Inspector with a live Color parameter. A
+generator's parameters are a protobuf `EffectFiltersBA`, which Resolve reads; a
+title's are a `CompositionBA` Fusion-comp blob, which it does not instantiate.
+
+### Changed — "mapped" no longer implies "Resolve honours it"
+
+The drp-format README's honest-scope section conflated file-level fidelity with
+live behaviour. A blob that survives a write/read cycle has been *encoded*
+correctly; only a live import proves it is *instantiated*. The section now says
+so, and the Fusion-title row carries the warning.
+
 ## What's New in v2.95.0
 
 Compound clips can now be walked into and edited offline — the one capability

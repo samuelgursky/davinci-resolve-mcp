@@ -643,9 +643,23 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "works but is a last resort and is unverifiable from the API "
                        "side; if used, read the landing track back with "
                        "TimelineItem.GetTrackTypeAndIndex() and treat a wrong track as "
-                       "a failure. Offline, the advanced server's drp "
-                       "place_fusion_title places a title by track and frame directly. "
-                       "See issue #74.",
+                       "a failure. DO NOT REACH FOR drp place_fusion_title HERE — an "
+                       "earlier revision of this entry recommended it and that "
+                       "recommendation is WITHDRAWN. Measured on Studio 21.0.4.5: it "
+                       "places a Fusion Title that is structurally perfect — right "
+                       "track, right frame, right duration, PrettyType 'Fusion Title', "
+                       "and the text really is written into the CompositionBA, which "
+                       "decodes back correctly — but Resolve never instantiates the "
+                       "comp. The imported item reports GetFusionCompCount()==1 while "
+                       "GetFusionCompByIndex(1).GetToolList() is EMPTY (a live-inserted "
+                       "Text+ returns ['Template','MediaOut1']), the Edit-page "
+                       "Inspector's Title tab is blank, and the viewer renders nothing. "
+                       "Reproduced four ways: placed alone, placed in an edit chain, "
+                       "onto a bundled-template base project, and onto a genuine "
+                       "21.0.4.5 Resolve export. It therefore passes every structural "
+                       "readback while being invisible on screen — the exact silent-lie "
+                       "shape this ledger exists to catch. The nested-timeline route "
+                       "above is the one that actually works. See issue #74.",
         "tags": ["missing-method", "timeline", "title", "generator", "track"],
         "submit": "missing",
         "issue": 74,

@@ -37,7 +37,7 @@ and `.../resolve-authoring-completion.md`.
 **Place elements (track-targeted — the #74 bypass, offline)**
 | Action | What it does |
 |---|---|
-| `place_fusion_title` | Text+ on a chosen track. Options: `text, font, style, size, vJustify, hJustify, color:{r,g,b}`, `trackIndex`, `startFrame`, `durationFrames` |
+| `place_fusion_title` | ⚠️ **INERT on 21.0.4.5 — placed but not rendered, see below.** Text+ on a chosen track. Options: `text, font, style, size, vJustify, hJustify, color:{r,g,b}`, `trackIndex`, `startFrame`, `durationFrames` |
 | `place_generator` | built-in generator (`generatorName`, e.g. "Solid Color") on a chosen track |
 | `place_transition` | cross-dissolve at an abutting cut (`track`, `atFrame`, `durationFrames`) — clips need handle media |
 
@@ -117,16 +117,40 @@ Selector's current target (V1 in practice), which no API can read or set.
 > locking. Treat it as such: it is not verifiable from the API side, since nothing in the
 > scripting surface can confirm the selector landed where you dragged it.
 
-For export-based workflows, `place_fusion_title` places a title on any track at an exact frame
-offline, with no selector involved.
+> ⚠️ **`place_fusion_title` currently produces an INERT title — do not use it for this.**
+> Measured on Studio 21.0.4.5: the placed clip is structurally perfect (right track, frame and
+> duration, `PrettyType` = `Fusion Title`, and the text really is written into the
+> `CompositionBA` — it decodes back), but **Resolve never instantiates the comp**. The imported
+> item reports `GetFusionCompCount() == 1` while `GetFusionCompByIndex(1).GetToolList()` is
+> **empty** (a live-inserted Text+ returns `['Template','MediaOut1']`), the Inspector's Title tab
+> is blank, and the viewer renders nothing. Reproduced four ways: alone, in an edit chain, onto a
+> bundled-template base, and onto a genuine 21.0.4.5 export. Ruled out so far — template staleness
+> (the bundled clip element is structurally identical to a real one: same tags, size differing
+> only by text length) and DbId rewriting (the comp blobs contain no DbId references). Root cause
+> open. Use the live nested-timeline route until this is fixed.
+>
+> **The defect is specific to the Fusion-comp path, not to clone-a-template.** `place_generator`,
+> built the same way, works: an imported Solid Color shows a populated `Generator - Solid Color`
+> Inspector with a live Color parameter and renders on the timeline. The difference is where the
+> parameters live — a generator's are a protobuf `EffectFiltersBA`, which Resolve reads happily,
+> while a title's are a `CompositionBA` Fusion-comp blob, which it does not instantiate. That is
+> the narrowest place to start looking.
 
 ---
 
 ## What's mapped (honest scope)
 
+> **Read "mapped" as file-level fidelity, not as "Resolve honours it."** Those are different
+> claims and this README conflated them. `place_fusion_title` round-trips byte-for-byte and its
+> text decodes back correctly, yet Resolve builds no comp from it (see the ⚠️ above). A blob that
+> survives a write/read cycle has been *encoded* correctly; only a live import proves it is
+> *instantiated*. Everything below is the first claim. The second is only established where an
+> entry says it was measured against a running Resolve build.
+
 **Fully mapped (read + write, round-trips byte-for-byte):** project packaging; tracks
 (`Sm2TiTrack`+Type+Sequence); clips; source in-points (`<In>`); Fusion titles
-(text/font/style/size/justify/color); generators; transitions; markers; grades (full DRX body);
+(text/font/style/size/justify/color — **encoded correctly but not instantiated by Resolve 21.0.4.5;
+see the ⚠️ above**); generators; transitions; markers; grades (full DRX body);
 media path + resolution + frame-count + fps. **Plus the full Media-Pool metadata layer:** the
 keyed-dict format (`Geometry`/`Time`/`VideoMetadata`/`Proxy`/audio/small `FieldsBlob`) with typed
 values (`keyed-dict.js`); audio config (`TracksBA`/`VirtualAudioTrackBA` → sample-rate/channels/codec
