@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.94.2
+
+Changelog repair. No code changed.
+
+- **v2.93.3 carried two separate `What's New in v2.93.3` sections.** Two sessions
+  were working in one checkout, and one of them ran `git add -A` while the
+  other's edits were still uncommitted — so a delivery-target commit swept up an
+  unrelated `api_truth` correction, and both wrote their own heading under the
+  same version. The two sections are now merged into one entry that describes
+  everything v2.93.3 actually shipped: the delivery-target re-verification **and**
+  the issue #74 nested-timeline finding. The v2.93.3 GitHub release notes, which
+  described only the delivery work, have been amended in place for the same
+  reason. No commit or tag was rewritten — both are public.
+
 ## What's New in v2.94.1
 
 Removes the `hls_h264` target added in v2.94.0 — it could never work — and fixes
@@ -77,9 +91,10 @@ Streaming package. All 32 targets resolve live on Studio 21.0.4.5.
 
 ## What's New in v2.93.3
 
-Re-verifies the delivery-target table and the two recorded render API
-limitations against the **installed** Resolve build (Studio 21.0.4.5), rather
-than the 19.1.3.7 they were first measured on.
+Two independent pieces of work landed in this release, both measured against the
+**installed** build, Studio 21.0.4.5: the delivery-target table re-verified
+against that build rather than the 19.1.3.7 it was first measured on, and a
+correction to the issue #74 ledger entry.
 
 ### Changed
 
@@ -112,9 +127,7 @@ than the 19.1.3.7 they were first measured on.
 
 `docs/reference/api-limitations.md` regenerated from those entries.
 
-## What's New in v2.93.3
-
-Ledger correction, measured live on DaVinci Resolve Studio **21.0.4.5**.
+### Fixed — issue #74: titles can be placed by track and frame after all
 
 - **A native Text+ CAN be placed at an exact track and frame, and stay editable
   — entirely through the public API.** The issue #74 entry has said for two
