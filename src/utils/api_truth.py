@@ -1689,8 +1689,20 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "Descriptions also DRIFT between majors while ids do not — "
                    "every DNx description gained an 'Avid ' prefix in 21.x "
                    "('DNxHR HQ' -> 'Avid DNxHR HQ 12-bit') while the ids "
-                   "(DNxHRHQ, DNxHRLB, DNxHRHQX_10) were unchanged. Key on ids.",
-        "recommended": "Normalize both arguments through the live maps before "
+                   "(DNxHRHQ, DNxHRLB, DNxHRHQX_10) were unchanged. Key on ids. "
+                   "SEPARATELY, the returned map is not a capability contract: a "
+                   "format can ADVERTISE a codec it will not accept. On 21.0.4.5 "
+                   "GetRenderCodecs('m3u8') returns {'H.264': 'H264'} and "
+                   "GetRenderResolutions('m3u8','H264') returns real rasters, yet "
+                   "SetCurrentRenderFormatAndCodec('m3u8', ...) is False for every "
+                   "value tried ('H264', 'H.264', 'h264', '') while ('mp4','H264') "
+                   "succeeds. That is worse than the zero-codec formats, which at "
+                   "least advertise nothing.",
+        "recommended": "Never treat presence in the matrix as proof a pair is "
+                       "usable — set it and read the boolean back "
+                       "(prepare_render_job / prepare_delivery_job do this and "
+                       "refuse to queue on False). Normalize both arguments "
+                       "through the live maps before "
                        "calling: src.utils.render_ids.render_format_id_from_formats "
                        "and render_codec_id_from_codecs accept a description or an "
                        "id and return the id.",

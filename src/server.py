@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.94.0"
+VERSION = "2.94.1"
 
 import base64
 import os
@@ -17007,10 +17007,16 @@ def _resolve_delivery_target_live(proj, p: Dict[str, Any]):
             "timeline_fps": fps,
             "settings": _delivery_targets.to_render_settings(target, timeline_fps=fps),
             "qc_spec": qc_spec,
+            # Surface the target's OWN reason. This used to hard-code an
+            # image-sequence message, which was simply false for any other kind
+            # of target that declines a QC projection.
             "qc_note": (
                 None
                 if qc_spec
-                else "This target renders an image sequence; deliverable_qc probes a single file, so it has no QC spec."
+                else (
+                    target.qc_skip_reason
+                    or "This target has no single-file QC projection."
+                )
             ),
             "loudness_target": loudness,
             "loudness_note": (

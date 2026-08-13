@@ -110,11 +110,15 @@ major-version upgrade.
 
 Two findings changed between the builds and should not be treated as fixed facts:
 
-- **PNG, WebP and HLS.** Not render formats on 19.1.3.7; they *are* on 21.0.4.5.
-  `png_sequence`, `webp_animated` and `hls_h264` therefore resolve on 21.x and
-  fail loudly on 19.x, which is the correct behavior rather than a regression.
-  PNG exposes RGB only — no alpha codec — so it does not replace `dpx_sequence`
-  for transparency.
+- **PNG and WebP.** Not render formats on 19.1.3.7; they *are* on 21.0.4.5, so
+  `png_sequence` and `webp_animated` resolve on 21.x and fail loudly on 19.x,
+  which is correct behavior rather than a regression. PNG exposes RGB only — no
+  alpha codec — so it does not replace `dpx_sequence` for transparency.
+- **A format can advertise a codec it will not accept.** `HLS` (m3u8) returns a
+  codec from `GetRenderCodecs` and real rasters from `GetRenderResolutions`, yet
+  `SetCurrentRenderFormatAndCodec` rejects every value. Resolving a target proves
+  only that the pair is *listed*; the authoritative test is queuing a job, which
+  is why `prepare_delivery_job` refuses to queue on a rejected pair.
 - **Zero-codec formats.** `wav` and `gif` on 19.x; `braw`, `mts` and `wav` on
   21.x — `gif` gained codecs, BRAW and MTS lost them. `wav` is the constant, so
   an audio-only WAV target remains inexpressible through
@@ -703,17 +707,13 @@ DELIVERY_TARGETS: Dict[str, DeliveryTarget] = {
             "need a human. easyDCP variants exist on this install too.",
         ),
     ),
-    "hls_h264": _package(
-        "hls_h264", "HLS package (H.264)",
-        ("HLS", "m3u8"), ("H264", "H.264"),
-        "HTTP Live Streaming package: an .m3u8 playlist plus its segment files.",
-        notes=(
-            "HLS is a PACKAGE: a playlist plus segments, not one file. Bitrate ladders, "
-            "variant playlists and encryption keys are not expressible as a render target "
-            "— this selects the format/codec only.",
-            "HLS is not a render format on Resolve 19.x; this target resolves on 21.x+.",
-        ),
-    ),
+    # No HLS target. `HLS` (m3u8) looks fully supported through the query APIs on
+    # 21.0.4.5 — GetRenderCodecs returns {'H.264': 'H264'} and GetRenderResolutions
+    # returns real rasters — but SetCurrentRenderFormatAndCodec('m3u8', ...) is
+    # rejected for every value tried ('H264', 'H.264', 'h264', ''), while the same
+    # call for mp4/H264 succeeds. The matrix advertises a pair that cannot be
+    # selected, so a target for it would fail 100% of the time.
+    # Verified on Studio 21.0.4.5, 2026-08-12. See api_truth.py.
 }
 
 VALID_TARGETS = frozenset(DELIVERY_TARGETS)
@@ -749,8 +749,6 @@ TARGET_ALIASES: Dict[str, str] = {
     "png": "png_sequence",
     "gif": "gif_animated",
     "webp": "webp_animated",
-    "hls": "hls_h264",
-    "streaming": "hls_h264",
 }
 
 #: Fields a caller may override per call. Deliberately excludes id/label/tier/

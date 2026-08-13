@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 
+from src.utils.delivery_targets import DELIVERY_TARGETS
 from src.server import (
     _list_delivery_targets,
     _prepare_delivery_job,
@@ -498,7 +499,23 @@ class DeliveryTargetTest(unittest.TestCase):
 
         self.assertIsNone(err)
         self.assertIsNone(resolved["qc_spec"])
-        self.assertIn("single file", resolved["qc_note"])
+        # The note must be the TARGET's own reason, not a hard-coded message —
+        # that hard-coding told WebP users their file was an image sequence.
+        self.assertEqual(resolved["qc_note"], DELIVERY_TARGETS["dpx_sequence"].qc_skip_reason)
+        self.assertIn("image sequence", resolved["qc_note"])
+
+    def test_qc_note_reports_each_target_s_own_reason(self):
+        """A target that declines QC for a non-sequence reason must say so."""
+        project = DeliveryTargetProjectStub()
+        project.GetRenderFormats = lambda: {"WebP": "webp"}
+        project.GetRenderCodecs = lambda fmt: {"Animated WebP": "Animated_WEBP"}
+
+        resolved, err = _resolve_delivery_target_live(project, {"target": "webp_animated"})
+
+        self.assertIsNone(err)
+        self.assertIsNone(resolved["qc_spec"])
+        self.assertIn("unverified", resolved["qc_note"])
+        self.assertNotIn("image sequence", resolved["qc_note"])
 
     def test_list_targets_reports_availability_against_the_live_matrix(self):
         result = _list_delivery_targets(DeliveryTargetProjectStub(), {"check_availability": True})

@@ -2,6 +2,39 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.94.1
+
+Removes the `hls_h264` target added in v2.94.0 — it could never work — and fixes
+a QC note that told the truth only for image sequences.
+
+### Fixed
+
+- **`hls_h264` is withdrawn.** It resolved cleanly against the format/codec
+  matrix, which is why it shipped, but it can never render: on Studio 21.0.4.5
+  `GetRenderCodecs('m3u8')` returns `{'H.264': 'H264'}` and
+  `GetRenderResolutions('m3u8', 'H264')` returns real rasters, yet
+  `SetCurrentRenderFormatAndCodec('m3u8', ...)` is False for every value tried
+  (`'H264'`, `'H.264'`, `'h264'`, `''`) while `('mp4', 'H264')` succeeds. Caught
+  by queuing an actual job rather than by resolving a name. A target that always
+  fails is worse than no target, so it is gone along with its `hls` and
+  `streaming` aliases.
+- **`qc_note` reported every target's missing QC projection as an image
+  sequence.** It was hard-coded, so `webp_animated` — which declines QC because
+  its ffprobe values are unmeasured — told callers its output was a many-file
+  sequence. It now surfaces the target's own `qc_skip_reason`.
+
+### Notes
+
+- New API-truth finding, folded into the existing `Project.GetRenderCodecs`
+  entry: **the format/codec matrix is not a capability contract.** A format can
+  advertise a codec, and rasters for it, and still refuse to be selected. That is
+  worse than the zero-codec formats, which at least advertise nothing. Presence
+  in the matrix proves a pair is *listed*, never that it is usable — the
+  authoritative test is setting it and reading the boolean back, which
+  `prepare_render_job` and `prepare_delivery_job` already do.
+- 31 targets, all verified end to end on Studio 21.0.4.5: resolved, queued as a
+  real render job, then deleted.
+
 ## What's New in v2.94.0
 
 Adds four delivery targets for deliverable classes the table did not cover:
