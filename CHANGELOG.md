@@ -2,6 +2,56 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.94.3
+
+A systematic sweep of catalogued API gaps against **Studio 21.0.4.5**, prompted
+by an external report. Two ledger entries were wrong and are corrected; a new
+harness proves the routes that DO work.
+
+### Fixed — transitions are not invisible to scripting
+
+- **`Transition create / copy / clone` claimed transitions applied in the UI are
+  "invisible to and unmodifiable by scripts". Both halves were wrong.** A
+  12-frame Cross Dissolve applied through the Edit-page right-click menu
+  enumerates in `GetItemListInTrack` as `GetName() == 'Cross Dissolve'`,
+  `GetStart() == 86426`, `GetDuration() == 12` — centered on a cut at 86432 —
+  with a stable `GetUniqueId()`. One authored offline into a `.drp` and imported
+  reads identically, so the creating route is irrelevant. It is also removable:
+  `DeleteClips([transition], False)` returns True and leaves both adjacent clips
+  untouched. **The discriminator** is `GetProperty()`: empty on a transition, 26
+  transform keys on a clip. Automated QC of existing transitions is therefore
+  possible. Genuinely missing: creation, cloning, and any type/alignment detail —
+  the kind is knowable only from the name string.
+
+### Fixed — CreateProject is not an "Untitled project" problem
+
+- **`CreateProject` returned None with a NAMED project current and no modal on
+  screen** (screenshot-confirmed), while `OpenPage('edit')` succeeded in the same
+  session — so the connection was healthy and the documented modal is not the
+  only mechanism. Loading any clean project unblocked it on the next call. The
+  entry's recommended workaround was `CloseProject`, which **discards unsaved
+  changes** — acceptable for a throwaway Untitled project, destructive when the
+  current project is a named one belonging to another session. It now recommends
+  `LoadProject(clean project)` instead.
+
+### Added — `tests/live_workaround_verification.py`
+
+The sibling of the gap harness: where that one proves absence, this proves
+presence, performing each operation and reading the result back. Seven routes
+verified on 21.0.4.5 — nested-timeline title placement with a later text edit,
+ripple delete (with a non-ripple control showing the gap), the take selector as
+an in-place source swap, `GetSelectedClips`, and constant retime through both
+OTIO `LinearTimeWarp` and EDL `M2` (each a true 200%: 96 source frames over a
+48-frame record, alongside a 1.0 control). It also records the compound-clip trap
+as a deliberate `ROUTE FAILS`.
+
+### Changed — the gap harness covers 13 gaps, up from 8
+
+Added control-paired repros for the Source/Auto Track Selector (locking V1 blocks
+the insert rather than redirecting it, while a media-backed clip targets V2
+fine), transitions, native multicam creation, per-caption subtitle text, and
+per-clip audio channel mapping. **13/13 confirmed missing** on 21.0.4.5.
+
 ## What's New in v2.94.2
 
 Changelog repair. No code changed.

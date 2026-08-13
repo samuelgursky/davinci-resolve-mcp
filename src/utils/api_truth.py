@@ -525,14 +525,32 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
-        "symbol": "ProjectManager.CreateProject (with a dirty Untitled project)",
+        "symbol": "ProjectManager.CreateProject (blocked by the current project)",
         "object": "ProjectManager",
         "reality": "Returns None and pops a modal 'Save Current Project' dialog "
                    "when the current unsaved/Untitled project blocks the switch. "
-                   "SaveProject() on an Untitled project re-triggers the same modal.",
-        "recommended": "CloseProject(current) to discard the untitled project "
-                       "without a prompt, then CreateProject; restore with "
-                       "LoadProject afterward.",
+                   "SaveProject() on an Untitled project re-triggers the same modal. "
+                   "BROADER THAN 'UNTITLED', measured on Studio 21.0.4.5 "
+                   "(2026-08-12): with a NAMED project current (a conform project "
+                   "left open on the Deliver page), CreateProject returned None for "
+                   "a brand-new name and SaveProject returned False — with NO modal "
+                   "on screen, confirmed by screenshot, so the dialog is not the "
+                   "only mechanism. The connection was healthy throughout: "
+                   "OpenPage('edit') returned True in the same session, and moving "
+                   "to the Edit page did not help. Loading ANY clean project "
+                   "immediately unblocked it — CreateProject succeeded on the very "
+                   "next call. So the trigger is the current project, not the "
+                   "'Untitled' name, and a bare False/None is the only signal.",
+        "recommended": "LoadProject(any clean project) first, then CreateProject; "
+                       "restore the caller's project afterward. PREFER THAT OVER "
+                       "CloseProject, which this entry used to recommend: "
+                       "CloseProject DISCARDS unsaved changes, which is fine for a "
+                       "throwaway Untitled project but destroys work when the "
+                       "current project is a named one belonging to someone else's "
+                       "session — and the failure is NOT limited to Untitled "
+                       "projects, so that is a live risk. Never assume a bare None "
+                       "here means the name is taken; check "
+                       "GetProjectListInCurrentFolder().",
         "tags": ["project", "modal", "silent-failure"],
         "submit": "bug",
     },
@@ -663,11 +681,41 @@ API_TRUTH: List[Dict[str, Any]] = [
     {
         "symbol": "Transition create / copy / clone",
         "object": "Timeline / TimelineItem",
-        "reality": "The scripting API exposes no method to add, read, copy, or "
-                   "clone an edit transition (cross-dissolve, etc.). Transitions "
-                   "applied in the UI are invisible to and unmodifiable by scripts.",
-        "recommended": "Apply/duplicate transitions in the Resolve UI; no scripted "
-                       "equivalent exists.",
+        "reality": "There is no method to ADD or CLONE an edit transition — no "
+                   "AddTransition/CreateTransition/AddVideoTransition on Timeline "
+                   "or TimelineItem (dir(), 21.0.4.5). CORRECTION, measured on "
+                   "Studio 21.0.4.5 (2026-08-12): this entry previously said "
+                   "transitions applied in the UI are 'invisible to and "
+                   "unmodifiable by scripts'. BOTH HALVES WERE WRONG and are "
+                   "withdrawn. A transition IS a first-class timeline item: a "
+                   "12-frame Cross Dissolve applied through the Edit-page "
+                   "right-click menu enumerates in GetItemListInTrack('video', 1) "
+                   "as GetName()=='Cross Dissolve', GetStart()==86426, "
+                   "GetDuration()==12 — centered on a cut at 86432 — with a stable "
+                   "GetUniqueId() and a working GetTrackTypeAndIndex(). A "
+                   "transition authored offline into a .drp and imported reads "
+                   "IDENTICALLY, so the route that created it does not matter. It "
+                   "is also REMOVABLE: Timeline.DeleteClips([transition], False) "
+                   "returns True and deletes it, leaving both adjacent clips at "
+                   "their original starts and durations. THE DISCRIMINATOR between "
+                   "a transition item and a clip item is GetProperty(): a "
+                   "transition returns an EMPTY dict where a video clip returns 26 "
+                   "transform keys; it also has no MediaPoolItem and no Fusion "
+                   "comp. WHAT IS GENUINELY MISSING: creation, cloning, and any "
+                   "type/alignment/parameter detail — the transition's kind is "
+                   "knowable ONLY from its name string, and there is no way to "
+                   "read its alignment (centered/start/end) or edit its duration.",
+        "recommended": "Automated QC of existing transitions IS possible and is "
+                       "the main practical need — enumerate GetItemListInTrack, "
+                       "treat any item whose GetProperty() is empty and whose "
+                       "GetMediaPoolItem() is None as a transition, and read its "
+                       "name, start and duration. Removal is scriptable via "
+                       "Timeline.DeleteClips. To CREATE one, either apply it in the "
+                       "Resolve UI, or author it offline and import: the advanced "
+                       "server's drp place_transition writes a cross dissolve at an "
+                       "abutting cut ({track, atFrame, durationFrames}) and it "
+                       "round-trips into Resolve 21.0.4.5 reading back at the "
+                       "expected centered range.",
         "tags": ["missing-method", "timeline", "transition"],
         "submit": "missing",
     },

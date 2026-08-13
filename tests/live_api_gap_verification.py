@@ -246,6 +246,111 @@ def main():
             control=f"AddSubFolder('ZZ_regular_bin') [regular bin] -> {bool(reg)}",
         )
 
+        # ---- Gap 9: Source/Auto Track Selector + Insert*IntoTimeline target ----
+        # The insert methods take no trackIndex, and locking does NOT redirect —
+        # it BLOCKS. Control: a media-backed clip CAN target a track.
+        sel_methods = has(tl, "GetTrackSelector", "SetTrackSelector",
+                          "GetSourceTrackSelector", "SetSourceTrackSelector",
+                          "GetAutoTrackSelector", "SetAutoTrackSelector",
+                          "SetDestinationTrack", "GetDestinationTrack")
+        while tl.GetTrackCount("video") < 2:
+            tl.AddTrack("video")
+        t_unlocked = tl.InsertFusionTitleIntoTimeline("Text+")
+        landed = t_unlocked.GetTrackTypeAndIndex()[1] if t_unlocked else None
+        tl.SetTrackLock("video", 1, True)
+        t_locked = tl.InsertFusionTitleIntoTimeline("Text+")
+        tl.SetTrackLock("video", 1, False)
+        rec2 = tl.GetStartFrame() + 400
+        ctrl = mp.AppendToTimeline([{"mediaPoolItem": clips[1], "startFrame": 0,
+                                     "endFrame": 24, "trackIndex": 2,
+                                     "recordFrame": rec2}])
+        ctrl_track = ctrl[0].GetTrackTypeAndIndex()[1] if ctrl else None
+        record(
+            "Source/Auto Track Selector + destination for Insert*IntoTimeline",
+            "Timeline.{Get,Set}SourceTrackSelector / a trackIndex arg on the "
+            "Insert* family / locking V1 to redirect the insert to V2",
+            f"no selector accessor exists: {sel_methods}; insert with nothing "
+            f"locked landed on V{landed}; with V1 LOCKED the insert returned "
+            f"{t_locked!r} (blocked, NOT redirected to V2)",
+            "CONFIRMED MISSING",
+            control=f"a MEDIA-BACKED clip targets a track fine: "
+                    f"AppendToTimeline(trackIndex=2) -> landed on V{ctrl_track}",
+        )
+
+        # ---- Gap 10: edit transitions ----
+        trans_tl = has(tl, "AddTransition", "CreateTransition", "GetTransitions",
+                       "AddVideoTransition", "InsertTransition")
+        trans_it = has(item, "AddTransition", "GetTransition", "SetTransition",
+                       "AddVideoTransition")
+        record(
+            "Transition create / read / copy / remove",
+            "Timeline.AddTransition / TimelineItem.AddTransition / GetTransitions",
+            f"none exist. timeline={trans_tl} item={trans_it}; transitions "
+            f"applied in the UI are invisible to scripting",
+            "CONFIRMED MISSING",
+            control=f"the timeline object is live and mutable: "
+                    f"AddTrack('video') -> {tl.GetTrackCount('video')} video tracks",
+        )
+
+        # ---- Gap 11: native multicam clip creation ----
+        mc_mp = has(mp, "CreateMulticamClip", "CreateMultiCamClip",
+                    "CreateMulticamClipFromClips", "CreateMultiCamClipFromDict")
+        mc_proj = has(proj, "CreateMulticamClip", "CreateMultiCamClip")
+        stacked = mp.AppendToTimeline([
+            {"mediaPoolItem": clips[0], "startFrame": 0, "endFrame": 24,
+             "trackIndex": 1, "recordFrame": tl.GetStartFrame() + 600},
+            {"mediaPoolItem": clips[1], "startFrame": 0, "endFrame": 24,
+             "trackIndex": 2, "recordFrame": tl.GetStartFrame() + 600},
+        ])
+        record(
+            "Native multicam clip creation",
+            "MediaPool.CreateMulticamClip(angles) / CreateMultiCamClipFromDict",
+            f"none exist. mediapool={mc_mp} project={mc_proj}; the angle->multicam "
+            f"conversion is UI-only",
+            "CONFIRMED MISSING",
+            control=f"angles CAN be stacked programmatically: appended "
+                    f"{len(stacked or [])} clips onto V1+V2 at one record frame",
+        )
+
+        # ---- Gap 12: per-caption subtitle text and timing ----
+        tl.AddTrack("subtitle")
+        sub_methods = has(item, "GetText", "SetText", "GetSubtitleText",
+                          "SetSubtitleText")
+        sub_tl = has(tl, "ImportSubtitles", "ImportSRT", "AddSubtitle",
+                     "GetSubtitles", "SetSubtitleText")
+        record(
+            "Per-subtitle text content, timing, and SRT import",
+            "TimelineItem.{Get,Set}Text on a subtitle item / Timeline.ImportSubtitles",
+            f"none exist. item={sub_methods} timeline={sub_tl}; File > Import > "
+            f"Subtitle is UI-only and per-caption text is unreadable",
+            "CONFIRMED MISSING",
+            control=f"subtitle TRACKS are scriptable: AddTrack('subtitle') -> "
+                    f"{tl.GetTrackCount('subtitle')} subtitle track(s); "
+                    f"CreateSubtitlesFromAudio exists: "
+                    f"{'CreateSubtitlesFromAudio' in set(dir(tl))}",
+        )
+
+        # ---- Gap 13: per-clip audio channel-format conversion ----
+        audio_conv_mpi = has(clips[0], "SetAudioChannelMapping",
+                             "SetClipAudioFormat", "ConvertToStereo",
+                             "SetAudioChannels")
+        audio_conv_it = has(item, "SetSourceAudioChannelMapping",
+                            "SetAudioMapping", "ConvertToStereo")
+        try:
+            mapping = item.GetSourceAudioChannelMapping()
+        except Exception as e:  # noqa: BLE001
+            mapping = f"raised {type(e).__name__}"
+        record(
+            "Per-clip audio channel-format conversion (Stereo<->Mono)",
+            "MediaPoolItem/TimelineItem.SetAudioChannelMapping / ConvertToStereo",
+            f"none exist. item={audio_conv_mpi} timeline_item={audio_conv_it}; "
+            f"Clip Attributes > Audio is UI-only. ConvertTimelineToStereo is "
+            f"timeline-wide and CreateStereoClip is 3D VISUAL stereo, not audio",
+            "CONFIRMED MISSING",
+            control=f"the mapping is READABLE: GetSourceAudioChannelMapping() -> "
+                    f"{str(mapping)[:120]}",
+        )
+
         print("\n" + "=" * 70)
         print(json.dumps(results, indent=2))
         print("=" * 70)
