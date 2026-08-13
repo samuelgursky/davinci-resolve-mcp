@@ -41,17 +41,69 @@ function _isKeyedForm(b) {
  * (fixed64 LE doubles). The map starts at the implicit (0,0); constant speed has one keyframe,
  * a variable-speed ramp has one keyframe per added speed point.
  */
-function _decodeKeyframes(hex) {
-  if (hex == null) return [];
-  const fields = decodeProtobuf(hex);
-  return fields
-    .filter((f) => f.field === 1 && f.wire === 2)
-    .map((f) => ({ recordSec: f.value.readDoubleLE(1), sourceSec: f.value.readDoubleLE(10) }));
+/**
+ * One keyframe point: an inner message of field 1 (recordSec) and field 2
+ * (sourceSec), both wire type 1 (64-bit double) — tags 0x09 and 0x11.
+ *
+ * Both are OPTIONAL. Protobuf omits a field whose value is the default (0), so
+ * a point can legitimately carry only one of the two, and fixed offsets do not
+ * work. This is not theoretical: a REVERSED clip exported by Resolve 21.0.4.5
+ * encodes its points as `0a 09 11 <double>` (sourceSec only) and
+ * `0a 09 09 <double>` (recordSec only), and the previous fixed-offset reader
+ * — `readDoubleLE(1)` / `readDoubleLE(10)` — threw
+ * "offset out of range … Received 10" on every reversed map. Forward maps only
+ * decoded because both values happened to be non-zero.
+ */
+function _decodeKeyframePoint(buf) {
+  let recordSec = 0;
+  let sourceSec = 0;
+  let i = 0;
+  while (i < buf.length) {
+    const tag = buf[i];
+    if (tag === 0x09 && i + 9 <= buf.length) { recordSec = buf.readDoubleLE(i + 1); i += 9; }
+    else if (tag === 0x11 && i + 9 <= buf.length) { sourceSec = buf.readDoubleLE(i + 1); i += 9; }
+    else break; // unknown tag or truncated — stop rather than misread
+  }
+  return { recordSec, sourceSec };
 }
 
-/** Per-segment speeds from the keyframe points (slope Δsource/Δrecord); starts at (0,0). */
-function _segments(keyframes) {
-  const pts = [{ recordSec: 0, sourceSec: 0 }, ...keyframes];
+/**
+ * Keyframe points plus the map's ORIGIN.
+ *
+ * The origin is not always (0,0). A reversed clip starts at the far end of the
+ * source and walks backwards, and Resolve encodes that starting source offset as
+ * a TOP-LEVEL field 2 double alongside the keyframe messages. Measured on a
+ * reversed clip exported by Studio 21.0.4.5:
+ *
+ *   80 0a 09                      field 160 = 9
+ *   11 5655555555d51740           field 2   = 5.9583  <- origin sourceSec
+ *   0a 09 09 5655555555d51740     field 1   = { recordSec: 5.9583 }
+ *
+ * Reading that as an implicit (0,0) origin yields a segment from (0,0) to
+ * (5.9583, 0) — slope 0 — so a reverse decodes as "speed 0", a plausible-looking
+ * wrong answer rather than an error. With the origin it is (0, 5.9583) to
+ * (5.9583, 0): slope -1, a reverse.
+ */
+function _decodeKeyframes(hex) {
+  if (hex == null) return { origin: { recordSec: 0, sourceSec: 0 }, keyframes: [] };
+  const fields = decodeProtobuf(hex);
+  const originField = fields.find((f) => f.field === 2 && f.wire === 1);
+  const originSource = originField
+    ? (Buffer.isBuffer(originField.value)
+      ? originField.value.readDoubleLE(0)
+      : Number(originField.value))
+    : 0;
+  return {
+    origin: { recordSec: 0, sourceSec: Number.isFinite(originSource) ? originSource : 0 },
+    keyframes: fields
+      .filter((f) => f.field === 1 && f.wire === 2)
+      .map((f) => _decodeKeyframePoint(f.value)),
+  };
+}
+
+/** Per-segment speeds from the keyframe points (slope Δsource/Δrecord). */
+function _segments(keyframes, origin = { recordSec: 0, sourceSec: 0 }) {
+  const pts = [origin, ...keyframes];
   const segs = [];
   for (let i = 1; i < pts.length; i++) {
     const dr = pts[i].recordSec - pts[i - 1].recordSec;
@@ -68,8 +120,8 @@ function decodeTimemap(input) {
     const get = (k) => { const e = entries.find((x) => x.key === k); return e ? e.value : undefined; };
     const recordDurationSec = get('XMax');
     const sourceDurationSec = get('LastValidYOffset');
-    const keyframes = _decodeKeyframes(get('KeyframesBA'));
-    const segments = _segments(keyframes);
+    const { origin, keyframes } = _decodeKeyframes(get('KeyframesBA'));
+    const segments = _segments(keyframes, origin);
     // The EXACT speed lives in the keyframe ratios (source/record per segment); XMax and
     // LastValidYOffset are frame-quantized. `speed` is the first segment's (whole clip if 1 kf);
     // `segments` carries the full variable-speed ramp.

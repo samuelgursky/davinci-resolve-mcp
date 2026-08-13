@@ -2,6 +2,51 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.95.3
+
+Closes the retime entry's explicit `UNTESTED` warning: **reverse and
+variable-speed ramps both work**, and fixes two decoder bugs found proving it.
+
+### Measured — reverse lands through both import routes
+
+On Studio 21.0.4.5. OTIO with a negative `time_scalar` (-1) placed a clip reading
+`GetSourceStartFrame` 95 → `GetSourceEndFrame` 46; EDL with a negative `M2` rate
+(-24.0 at 24fps) read 48 → 0. **The API does expose direction** — a reversed clip
+reports source start GREATER than source end, i.e. a negative span.
+
+### Measured — variable-speed ramps survive Resolve intact
+
+They cannot be expressed in OTIO (`LinearTimeWarp` is a single `time_scalar`,
+constant by construction), but they can be authored offline. A `Sm2TimeMap` built
+with `media-timemap.buildTimemap` carrying two segments — 0–2s record at 0.5×,
+2–4s at 2.0× — was patched into a clip's `MediaTimemapBA`, imported, and
+**re-exported by Resolve with the segments unchanged**. Confirmed independently
+from the API side: the clip read source `0..120` over a 96-frame record, and
+2s@0.5× (24 source frames) + 2s@2.0× (96) is exactly 120.
+
+### Fixed — the timemap decoder reported a reverse as speed 0
+
+Two real bugs in `media-timemap.js`, both exposed by the first reversed map it
+ever saw:
+
+- **Fixed-offset keyframe reads.** Each point omits whichever of
+  `recordSec`/`sourceSec` is zero (protobuf default-omission), so
+  `readDoubleLE(1)`/`readDoubleLE(10)` threw *"offset out of range"* on every
+  reversed map. Forward maps only decoded because both values happened to be
+  non-zero.
+- **A hardcoded (0,0) origin.** A reversed clip starts at the far end of the
+  source, and Resolve encodes that starting offset as a **top-level protobuf
+  field 2** double. Assuming (0,0) made a reverse decode as **speed 0** — a
+  plausible wrong number, which is worse than a crash. It now decodes as −1.
+
+### Trap worth naming
+
+`buildTimemap` returns a **Buffer**. Writing it into the XML without
+`.toString('hex')` embeds mojibake, and the failure is silent: the clip imports
+cleanly and reads `0..0` — indistinguishable from the degenerate-map signature
+the ledger describes for xmeml imports, so it looks like Resolve rejected the
+retime when it is a caller bug. It cost real time here before being caught.
+
 ## What's New in v2.95.2
 
 Adds the live round-trip harness the offline `.drp` tier never had — the absence
