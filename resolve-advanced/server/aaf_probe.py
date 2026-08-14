@@ -147,6 +147,44 @@ def _find_source_clip(segment, depth=0):
     return None
 
 
+def _hop_referenced_clip(mob, ref_clip):
+    """The next SourceClip down the mob chain — through the slot the REFERENCE
+    names, not the first slot that happens to hold one.
+
+    🚨 A SourceClip carries `slot_id`: which slot of the referenced mob it
+    means. A GROUP CLIP (Avid multicam) is an unnamed CompositionMob with one
+    slot per camera, and hopping through the first slot returns CAMERA 1's
+    chain regardless of which camera the editor selected. Measured on a real
+    turnover (CS031, 2026-08-13): ~24 cuts linked a same-day SIBLING camera or
+    take — A015C017 built where the editor cut A082C105 — because both the
+    name chase and the source-position chase took the first-slot shortcut.
+    The wrong name is only the visible half: srcTcFrame accumulated down the
+    wrong camera's chain, so the build placed frames of the wrong source and
+    called them proven.
+
+    Falls back to the first-slot scan only when slot_id is absent or names a
+    slot the mob does not have — the pre-fix behavior, kept for tape-style
+    single-slot mobs where it was always right.
+    """
+    slots = getattr(mob, "slots", None) or []
+    sid = getattr(ref_clip, "slot_id", None)
+    if sid is not None:
+        for slot in slots:
+            try:
+                if getattr(slot, "slot_id", None) == sid:
+                    found = _find_source_clip(getattr(slot, "segment", None))
+                    if found is not None:
+                        return found
+                    break  # the named slot exists but holds no SourceClip — fall back
+            except Exception:
+                continue
+    for slot in slots:
+        found = _find_source_clip(getattr(slot, "segment", None))
+        if found is not None:
+            return found
+    return None
+
+
 def _source_name(clip):
     """Best-effort human name for a SourceClip: the nearest NAMED mob it references.
 
@@ -176,11 +214,10 @@ def _source_name(clip):
         name = _usable_name(mob)
         if name:
             return name
-        nxt = None
-        for slot in getattr(mob, "slots", None) or []:
-            nxt = _find_source_clip(getattr(slot, "segment", None))
-            if nxt is not None:
-                break
+        # Honor the reference's slot_id — group clips have one slot per camera
+        # and the first-slot shortcut returns the wrong member (see
+        # _hop_referenced_clip).
+        nxt = _hop_referenced_clip(mob, current)
         if nxt is None:
             break
         current = nxt
@@ -276,11 +313,10 @@ def _chase_source_position(clip):
             tc = _mob_timecode(mob)
             if tc is not None:
                 timecode = (tc[0], tc[1], tc[2], position)
-        nxt = None
-        for slot in getattr(mob, "slots", None) or []:
-            nxt = _find_source_clip(getattr(slot, "segment", None))
-            if nxt is not None:
-                break
+        # Same slot_id discipline as _source_name: the position/timecode chain
+        # must descend the SELECTED camera of a group clip, or srcTcFrame is
+        # the right frame of the WRONG source.
+        nxt = _hop_referenced_clip(mob, current)
         if nxt is None:
             break
         current = nxt
