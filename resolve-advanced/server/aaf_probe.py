@@ -149,7 +149,9 @@ def _find_source_clip(segment, depth=0):
 
 def _hop_referenced_clip(mob, ref_clip):
     """The next SourceClip down the mob chain — through the slot the REFERENCE
-    names, not the first slot that happens to hold one.
+    names, resolved AT the reference's offset. Returns (clip, position_adjust)
+    or None; callers accumulating physical position must add `position_adjust`
+    after adding the reference's own `start`.
 
     🚨 A SourceClip carries `slot_id`: which slot of the referenced mob it
     means. A GROUP CLIP (Avid multicam) is an unnamed CompositionMob with one
@@ -162,26 +164,89 @@ def _hop_referenced_clip(mob, ref_clip):
     wrong camera's chain, so the build placed frames of the wrong source and
     called them proven.
 
+    🚨 And the slot is only half the address. A group slot's segment can be a
+    SEQUENCE — the camera's whole tape timeline, one component per recording
+    with filler between (measured on KBP R2, 2026-08-14: A-cam slot =
+    [A008C001, filler, A008C002, filler, A009C001]; the Selector's SourceClip
+    entered it at start=123456, inside A008C002, while the first-clip shortcut
+    reported A008C001 with a source TC ~6.8s early — the reference burn-in
+    proved the picture was A008C002 @ 16:34:56:10). The reference's `start` is
+    a position ON that sequence: resolve the covered component, and return the
+    component's own sequence offset as a NEGATIVE adjust so the accumulated
+    position becomes (ref.start − component_offset) + covered_clip.start.
+
     Falls back to the first-slot scan only when slot_id is absent or names a
     slot the mob does not have — the pre-fix behavior, kept for tape-style
     single-slot mobs where it was always right.
     """
     slots = getattr(mob, "slots", None) or []
     sid = getattr(ref_clip, "slot_id", None)
+
+    def resolve_at_offset(segment):
+        """(clip, adjust) for this slot's content at the reference's offset."""
+        if segment is None:
+            return None
+        if type(segment).__name__ == "Sequence":
+            try:
+                offset = int(getattr(ref_clip, "start", 0) or 0)
+            except Exception:
+                offset = 0
+            # 🚨 Two offset conventions live in one structure, and only the
+            # sequence's SHAPE tells them apart — measured against FOUR
+            # independent reference burn-ins (2026-08-14):
+            #   KICK wrapper [Filler 1,  SC 118 @1 ] start=42 → truth 42−0
+            #   KICK wrapper [Filler 21, SC 150 @21] start=43 → truth 43−20
+            #   KBP group A  [SC, Filler, SC, …]     start big → truth raw
+            #   KBP group B  [Filler, SC, Filler, …] start big → truth raw
+            # A consolidate SUBCLIP WRAPPER (exactly one non-filler component,
+            # head filler in front) measures offsets from ONE FRAME INTO the
+            # head filler: shift = rawOffset − 1. A GROUP/tape sequence
+            # (multiple non-filler components) uses raw coordinates, head
+            # filler or not. This is also why the first-clip shortcut mostly
+            # worked: wrapper head fillers are usually 1 frame, making its
+            # error zero — until a 21-frame filler made it +20. The burn-in is
+            # the arbiter here, not the AAF spec — Avid writes what Avid
+            # writes. Interior fillers DO count: real dark space on a group's
+            # tape timeline.
+            comps = getattr(segment, "components", None) or []
+            non_filler = sum(1 for c in comps if type(c).__name__ != "Filler")
+            pad = (
+                1
+                if comps and type(comps[0]).__name__ == "Filler" and non_filler == 1
+                else 0
+            )
+            pos = 0
+            for comp in comps:
+                ln = _length(comp) or 0
+                eff = pos - pad
+                if eff <= offset < eff + ln:
+                    found = _find_source_clip(comp)
+                    # A filler here means this angle is dark at the offset —
+                    # no source to name; let the caller fall back or stop.
+                    return (found, -eff) if found is not None else None
+                pos += ln
+            # Offset past the sequence end — a malformed reference; the old
+            # first-clip answer is the least-wrong fallback, with no adjust.
+        found = _find_source_clip(segment)
+        return (found, 0) if found is not None else None
+
     if sid is not None:
         for slot in slots:
             try:
                 if getattr(slot, "slot_id", None) == sid:
-                    found = _find_source_clip(getattr(slot, "segment", None))
-                    if found is not None:
-                        return found
-                    break  # the named slot exists but holds no SourceClip — fall back
+                    resolved = resolve_at_offset(getattr(slot, "segment", None))
+                    if resolved is not None:
+                        return resolved
+                    break  # the named slot has no SourceClip at the offset — fall back
             except Exception:
                 continue
     for slot in slots:
-        found = _find_source_clip(getattr(slot, "segment", None))
-        if found is not None:
-            return found
+        try:
+            resolved = resolve_at_offset(getattr(slot, "segment", None))
+        except Exception:
+            continue
+        if resolved is not None:
+            return resolved
     return None
 
 
@@ -217,10 +282,10 @@ def _source_name(clip):
         # Honor the reference's slot_id — group clips have one slot per camera
         # and the first-slot shortcut returns the wrong member (see
         # _hop_referenced_clip).
-        nxt = _hop_referenced_clip(mob, current)
-        if nxt is None:
+        hop = _hop_referenced_clip(mob, current)
+        if hop is None:
             break
-        current = nxt
+        current = hop[0]
     # No named mob anywhere in the chain — fall back to the clip's own name.
     return _usable_name(clip) or "UNKNOWN"
 
@@ -315,11 +380,13 @@ def _chase_source_position(clip):
                 timecode = (tc[0], tc[1], tc[2], position)
         # Same slot_id discipline as _source_name: the position/timecode chain
         # must descend the SELECTED camera of a group clip, or srcTcFrame is
-        # the right frame of the WRONG source.
-        nxt = _hop_referenced_clip(mob, current)
-        if nxt is None:
+        # the right frame of the WRONG source. The hop's adjust re-bases a
+        # sequence-slot reference onto the covered component (KBP R2 class).
+        hop = _hop_referenced_clip(mob, current)
+        if hop is None:
             break
-        current = nxt
+        position += hop[1]
+        current = hop[0]
     return position, timecode
 
 
