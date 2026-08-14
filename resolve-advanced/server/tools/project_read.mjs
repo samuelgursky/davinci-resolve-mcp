@@ -29,9 +29,16 @@ const timelineClipsSchema = z.object({ ...dbTarget, timeline: z.string().describ
 // Sm2TiTrack.Sequence (NOT Sm2Sequence_id, which is empty); the sequence carries
 // Sm2Timeline_id. Type: 0=video, 1=audio. The grade Body (DRX-format 0x81+zstd) is
 // reached via Sm2TiItem.pLmVerTable → LmVersion(HasCorrection='1').Body.
+// 🚨 mediaStart (Sm2TiItem.MediaStartTime) is the MEDIA FILE's start time in
+// seconds — NOT the item's in-point. Reading it as the in-point produced two
+// phantom conform bugs in a row (CS031 retractions). The in-point is the "In"
+// column: file-relative source frames, calibrated frame-EXACT against a real
+// turnover's AAF ground truth (A005C004 run: 36069/8863/8919/12804, through-
+// edit continuity intact). Emitted as sourceIn.
 const TIMELINE_CLIPS_SQL = `
  SELECT i.Name AS name, t.Type AS trackType, i.Start AS start, i.Duration AS duration,
- i.MediaReelNumber AS reel, i.MediaStartTime AS mediaStart, i.Sm2TiTrack_id AS trackId,
+ i.MediaReelNumber AS reel, i.MediaStartTime AS mediaStart, i."In" AS sourceIn,
+ i.Sm2TiTrack_id AS trackId,
  lower(hex(v.Body)) AS gradeBody
  FROM Sm2TiItem i
  JOIN Sm2TiTrack t ON i.Sm2TiTrack_id = t.Sm2TiTrack_id
@@ -81,7 +88,11 @@ export function readTimelineClips(dbPath, timeline, trackType = 'all', includeGr
     else if (trackType === 'audio') rows = rows.filter((r) => r.trackType !== 0);
     rows.sort((a, b) => a.trackType - b.trackType || Number(a.start) - Number(b.start));
     // grade Body is large + only needed for ColorTrace — strip it by default to avoid bloat.
-    if (!includeGrade) for (const r of rows) delete r.gradeBody;
+    for (const r of rows) {
+      if (!includeGrade) delete r.gradeBody;
+      // "In" is character varying in the schema; the number is what consumers diff on.
+      if (r.sourceIn != null && r.sourceIn !== '') r.sourceIn = Number(r.sourceIn);
+    }
     return rows;
   } finally {
     db.close();
