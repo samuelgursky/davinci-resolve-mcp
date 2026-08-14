@@ -80,6 +80,28 @@ function count(db, t) {
 
 /** Read a timeline's clips from a Project.db (read-only). Shared by the
  * timeline_clips action + the color_trace tool. trackType: 'video'|'audio'|'all'. */
+/**
+ * Sm2TiItem."In" — the item's file-relative source in-point — arrives in TWO
+ * encodings in one 'character varying' column (both measured on Resolve
+ * 19.1.3 disk DBs, same show):
+ *   - a plain decimal string: '48', '36069' (older/edited rows)
+ *   - a 16-hex-char little-endian DOUBLE of frames/1000: '000000bb7493a83f'
+ *     = 0.048 → 48 (freshly-appended rows)
+ * Calibrated against AAF ground truth on both encodings. Anything else is
+ * null — an unreadable in-point must read as absent, not as 0.
+ */
+function decodeItemIn(v) {
+  if (v == null || v === '') return null;
+  // Two shapes measured on Resolve 19.1.3 disk DBs (same show, different
+  // projects): a plain decimal ('48', '36069'), and a pipe-joined composite
+  // ('48|000000bb7493a83f') whose FIRST field is the frame count — the hex
+  // tail is a packed double with its own (unpinned) meaning and is ignored.
+  // The pipe in the value is also why a naive `sqlite3` CLI dump appears to
+  // grow an extra column. Anything else reads as ABSENT, never as 0.
+  const head = String(v).split('|', 1)[0];
+  return /^-?\d+(\.\d+)?$/.test(head) ? Number(head) : null;
+}
+
 export function readTimelineClips(dbPath, timeline, trackType = 'all', includeGrade = false) {
   const db = openGuarded(dbPath, { writable: false });
   try {
@@ -90,8 +112,7 @@ export function readTimelineClips(dbPath, timeline, trackType = 'all', includeGr
     // grade Body is large + only needed for ColorTrace — strip it by default to avoid bloat.
     for (const r of rows) {
       if (!includeGrade) delete r.gradeBody;
-      // "In" is character varying in the schema; the number is what consumers diff on.
-      if (r.sourceIn != null && r.sourceIn !== '') r.sourceIn = Number(r.sourceIn);
+      r.sourceIn = decodeItemIn(r.sourceIn);
     }
     return rows;
   } finally {
