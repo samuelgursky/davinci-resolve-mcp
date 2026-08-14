@@ -38,6 +38,7 @@ const timelineClipsSchema = z.object({ ...dbTarget, timeline: z.string().describ
 const TIMELINE_CLIPS_SQL = `
  SELECT i.Name AS name, t.Type AS trackType, i.Start AS start, i.Duration AS duration,
  i.MediaReelNumber AS reel, i.MediaStartTime AS mediaStart, i."In" AS sourceIn,
+ i.MediaFilePath AS mediaPath,
  i.Sm2TiTrack_id AS trackId,
  lower(hex(v.Body)) AS gradeBody
  FROM Sm2TiItem i
