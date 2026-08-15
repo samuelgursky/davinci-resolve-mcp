@@ -132,7 +132,7 @@ The MCP server comes in two modes:
 
 | Mode | File | Tools | Best For |
 |------|------|-------|----------|
-| **Compound** (default) | `src/server.py` | 34 | Most users — fast, clean, low context usage |
+| **Compound** (default) | `src/server.py` | 35 | Most users — fast, clean, low context usage |
 | **Full** | `src/resolve_mcp_server.py` | 353 | Power users who want one tool per API method |
 
 The compound server's `timeline_item` tool includes dedicated actions for common workflows:

@@ -162,7 +162,7 @@ before mutating Resolve state.
 
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
-| Compound (default) | `src/server.py` | 34 tools | Most workflows — keeps context lean |
+| Compound (default) | `src/server.py` | 35 tools | Most workflows — keeps context lean |
 | Granular (full) | `src/server.py --full` | 353 tools | Power users needing one tool per API method |
 
 This skill document covers the **compound server** (the default). Each compound
@@ -393,7 +393,7 @@ the work done:
 
 - `timeline(action="detect_gaps_overlaps")`
 - `timeline(action="source_range_report")`
-- `timeline_markers(action="get_thumbnail_image")` at important markers and cuts
+- `timeline_frame(action="capture")` at important markers and cuts
 - Compare each marker name against the Resolve-rendered frame; revise the marker
   or edit if the image contradicts the plan.
 
@@ -1492,7 +1492,39 @@ applied — which is different from reading the source file directly.
 
 Use `get_thumbnail_image` when the MCP client can display image content directly.
 It converts the same Resolve thumbnail payload to PNG bytes without writing a
-file to disk.
+file to disk. Both actions hold the Color page for the read and restore the
+previous page. Prefer `timeline_frame(action="capture")` for new work — it is the
+same capture plus a timecode target, `max_width`, and a full-resolution mode.
+
+**`timeline_frame`** — Capture a timeline frame as viewable image content.
+
+Key actions: `capture(timecode?|frame?, quality?, max_width?, format?, timeline_name?)`,
+`capabilities`
+
+Returns MCP image content, so a multimodal assistant can look at what Resolve is
+rendering — grade, Fusion, titles, transitions — rather than inferring it from
+metadata. (For the raw camera file instead, use
+`media_analysis(action="extract_frames")`.)
+
+- `quality="preview"` (default) is Resolve's thumbnail: fast, small, writes
+  nothing.
+- `quality="full"` grabs a Gallery still for a full-resolution frame, then
+  removes it again. `format` is `png` (default), `jpg`, or `tif`.
+- `max_width` caps the width to conserve context. On `full` this needs ffmpeg;
+  without it the call fails rather than quietly returning a full-size frame.
+- `timecode` accepts absolute (`01:00:15:12`) or elapsed (`00:00:15:12`) time;
+  `frame` is the absolute timeline frame. Omit both to capture the playhead.
+
+A capture is a read: the Color page, the playhead, the current timeline, and the
+Gallery are all restored afterwards.
+
+```
+timeline_frame(action="capture", params={"timecode": "01:00:15:12", "max_width": 1280})
+```
+
+This tool is separate from `timeline` because a tool that returns image content
+cannot declare a `Dict[str, Any]` output schema — FastMCP validates returns
+against it, and image content fails that validation.
 
 **`timeline_ai`** — AI/ML analysis on the current timeline.
 
@@ -2046,15 +2078,33 @@ clip's comp, always pass `clip_id`, `timeline_item_id`, or `timeline_item`.
 
 ## Seeing What Resolve Sees (Visual Context)
 
-The server provides two mechanisms to inspect a frame as Resolve has processed it,
-including color grading, effects, and compositing — not just the raw source file.
+The server provides several mechanisms to inspect a frame as Resolve has processed
+it, including color grading, effects, and compositing — not just the raw source
+file.
+
+**Start here: `timeline_frame(action="capture")`** — Returns the frame at the
+playhead (or at any `timecode`/`frame` you name) as MCP image content, so a
+multimodal assistant can simply look at it. `quality="preview"` is fast and
+writes nothing; `quality="full"` is full resolution; `max_width` bounds the
+context cost. The Color page, playhead, current timeline, and Gallery are all
+restored afterwards.
+
+```
+timeline_frame(action="capture", params={"timecode": "01:00:15:12", "max_width": 1280})
+```
 
 **`timeline_markers(action="get_thumbnail")`** — Returns raw thumbnail data at
 the current playhead position. The response is a dictionary with keys `data`,
-`format`, `width`, `height`, `noOfComponents`, and `depth`.
+`format`, `width`, `height`, `noOfComponents`, and `depth`. Use it when you need
+pixel data for tooling rather than an image to look at.
 
-**`timeline_markers(action="get_thumbnail_image")`** — Converts the same current
-frame thumbnail to PNG bytes and returns MCP image content without writing a file.
+**`timeline_markers(action="get_thumbnail_image")`** — The original image-content
+action, equivalent to `timeline_frame(action="capture")` at default quality with
+no positional arguments. Kept for existing callers.
+
+**`timeline(action="thumbnail_contact_sheet")`** — Many frames at once as a single
+labeled PNG written to the analysis root. Use it to review a stretch of cut rather
+than one moment.
 
 **`gallery_stills(action="grab_and_export", params={...})`** — Grabs a still from
 the current frame on the Color page and returns the image encoded as base64 in the

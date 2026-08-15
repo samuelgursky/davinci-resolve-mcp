@@ -63,7 +63,7 @@ This MCP server controls DaVinci Resolve via its Scripting API. Some tools perfo
 davinci-resolve-mcp/
 ├── install.py                    # Universal installer (macOS/Windows/Linux)
 ├── src/
-│   ├── server.py                # Compound MCP server — 34 tools (default)
+│   ├── server.py                # Compound MCP server — 35 tools (default)
 │   ├── resolve_mcp_server.py    # Thin full-server entrypoint — 353 tools
 │   ├── granular/                # Modular full-server implementation
 │   └── utils/                   # Platform detection, Resolve connection helpers

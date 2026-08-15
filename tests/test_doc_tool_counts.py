@@ -86,6 +86,10 @@ class DocToolCountsDriftTest(unittest.TestCase):
             ("docs/install.md", f"full {gran}-tool server"),
             ("src/resolve_mcp_server.py", f"({gran} granular tools)"),
             ("tests/test_import.py", f"assert total == {gran}"),
+            # test_import.py hard-codes the compound count too. Adding a 35th
+            # tool failed there while this guard passed, because the guard
+            # checked only the granular literal in the same file.
+            ("tests/test_import.py", f'"server.py") == {comp}'),
             ("src/server.py", f"{comp} compound tools"),
             ("docs/contributing.md", f"Compound MCP server — {comp} tools"),
             ("docs/SKILL.md", f"`src/server.py` | {comp} tools"),

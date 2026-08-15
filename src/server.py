@@ -2,7 +2,7 @@
 """
 DaVinci Resolve MCP Server (Compound Tools)
 
-34 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
+35 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
 plus Fusion Fuse, DCTL, and Resolve-page Script authoring tools.
 Each tool groups related operations via an 'action' parameter.
 
@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.95.3"
+VERSION = "2.96.0"
 
 import base64
 import os
@@ -317,14 +317,15 @@ def davinci_resolve_workflow() -> str:
     return """Use this DaVinci Resolve MCP server as a guarded post-production control surface.
 
 Core pattern:
-- Prefer the 34 compound tools and their action names over raw scripting.
+- Prefer the 35 compound tools and their action names over raw scripting.
 - Start by probing state: resolve_control.get_version/get_page, project_manager.get_current, timeline.get_current, and media_pool.probe_media_pool.
 - Before mutating timelines, media pools, render settings, grades, projects, databases, or extensions, prefer the matching probe, capabilities, boundary_report, safe_*, or dry_run action when one exists.
 - Preserve source media integrity. Never transcode, proxy, rewrite, move, rename, or create derivatives of source media unless the user explicitly asks. Analysis output belongs in sidecars or analysis directories.
 - Do not silently downgrade media analysis. Source-safe does not mean no visuals, no transcription, no persistence, no metadata, or no markers. For Resolve-target media analysis, keep visual analysis, transcription, persisted artifacts, metadata writeback, and Media Pool marker writeback enabled unless the user explicitly opts out. Vision uses host_chat_paths by default: analyze actions return absolute frame_paths in a deferred payload; you must read those frames as images and call media_analysis(action="commit_vision", ...) to finalize. Not completing commit_vision leaves the analysis in pending_host_vision_analysis — that is a failure mode, not a success.
 
 Visual feedback:
-- For the current Color-page frame, use timeline_markers(action="get_thumbnail_image") when the client can display MCP images.
+- To see what Resolve renders — grade, Fusion, titles — use timeline_frame(action="capture") when the client can display MCP images. It takes an optional timecode/frame, max_width to bound context cost, and quality="full" for a full-resolution frame; it restores the page, playhead, and timeline afterwards. Look at the frame instead of inferring from metadata.
+- Use timeline(action="thumbnail_contact_sheet") to review many frames at once.
 - Use timeline_markers(action="get_thumbnail") when raw Resolve thumbnail data is needed for tooling.
 - Use project_settings(action="export_frame_as_still") only when a file export is explicitly useful, and write to a temp/stills location rather than near source media.
 
@@ -12887,6 +12888,322 @@ def _thumbnail_data_to_png_bytes(thumbnail_data: Dict[str, Any]) -> bytes:
         + _png_chunk(b"IEND", b"")
     )
 
+
+# ── Playhead frame capture ────────────────────────────────────────────────────
+# Shared by timeline_frame(action="capture") and the older
+# timeline_markers(action="get_thumbnail_image"). Both paths read what Resolve
+# renders — grade, Fusion, titles — not the source file.
+
+_PLAYHEAD_STILL_FORMATS = {"png", "jpg", "tif"}
+
+
+def _box_downscale_rgb(width: int, height: int, raw: bytes, max_width: int) -> Tuple[int, int, bytes]:
+    """Area-average downscale of packed RGB, in pure Python.
+
+    Box-average rather than nearest-neighbour because the caller is usually a
+    vision model: nearest aliases fine detail (titles, credits, hair) into
+    artefacts that read as real image content. Only ever runs on the preview
+    path — Resolve's thumbnail is small enough that a per-pixel Python loop is
+    cheap. The full-resolution path scales with ffmpeg instead, because the same
+    loop over a 4K frame takes seconds.
+    """
+    if max_width <= 0 or width <= max_width:
+        return width, height, raw
+    new_w = max(1, int(max_width))
+    new_h = max(1, int(round(height * new_w / width)))
+    out = bytearray(new_w * new_h * 3)
+    for y in range(new_h):
+        y0 = (y * height) // new_h
+        y1 = max(y0 + 1, ((y + 1) * height) // new_h)
+        for x in range(new_w):
+            x0 = (x * width) // new_w
+            x1 = max(x0 + 1, ((x + 1) * width) // new_w)
+            r = g = b = count = 0
+            for sy in range(y0, y1):
+                row = sy * width * 3
+                for sx in range(x0, x1):
+                    off = row + sx * 3
+                    r += raw[off]
+                    g += raw[off + 1]
+                    b += raw[off + 2]
+                    count += 1
+            dst = (y * new_w + x) * 3
+            out[dst] = r // count
+            out[dst + 1] = g // count
+            out[dst + 2] = b // count
+    return new_w, new_h, bytes(out)
+
+
+def _ffmpeg_scale_to_bytes(src_path: str, max_width: Optional[int], out_format: str) -> Tuple[Optional[bytes], Optional[str]]:
+    """Scale/transcode a still with ffmpeg. Returns (bytes, error_message)."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None, "ffmpeg not found on PATH"
+    suffix = ".jpg" if out_format in ("jpg", "jpeg") else ".png"
+    fd, tmp_out = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    try:
+        args = [ffmpeg, "-y", "-loglevel", "error", "-i", src_path]
+        if max_width:
+            # -2 keeps the height even (required by some encoders) and preserves AR.
+            args += ["-vf", f"scale='min({int(max_width)},iw)':-2:flags=lanczos"]
+        args += ["-frames:v", "1", tmp_out]
+        proc = subprocess.run(args, capture_output=True, timeout=120)
+        if proc.returncode != 0:
+            return None, (proc.stderr.decode("utf-8", "replace").strip() or "ffmpeg failed")[:400]
+        with open(tmp_out, "rb") as handle:
+            return handle.read(), None
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, str(exc)
+    finally:
+        try:
+            os.remove(tmp_out)
+        except OSError:
+            pass
+
+
+def _playhead_seek(tl, p: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Move the playhead if the caller named a position. Returns (original_tc, error).
+
+    original_tc is non-None only when we actually moved, so the caller restores
+    exactly what it disturbed and a read-only capture never touches the playhead.
+    """
+    timecode = p.get("timecode")
+    frame = p.get("frame")
+    if timecode is None and frame is None:
+        return None, None
+    if timecode is None:
+        try:
+            frame_id = int(frame)
+        except (TypeError, ValueError):
+            return None, _err("frame must be an integer", code="INVALID_FRAME", category="invalid_input")
+        timecode, tc_err = _timeline_frame_id_to_timecode(tl, frame_id)
+        if tc_err:
+            return None, tc_err
+    try:
+        original = tl.GetCurrentTimecode()
+    except Exception:
+        original = None
+    target = _playhead_absolute_timecode(tl, timecode)
+    try:
+        moved = bool(tl.SetCurrentTimecode(target))
+    except Exception as exc:
+        return None, _err(f"Failed to move the playhead: {exc}", code="SEEK_FAILED", category="api_error")
+    if not moved:
+        return None, _err(
+            f"Resolve refused the timecode {target!r}",
+            code="SEEK_FAILED", category="invalid_input",
+            remediation="Pass a timecode inside the timeline, as absolute ('01:00:15:12') or elapsed ('00:00:15:12') time.",
+        )
+    return original, None
+
+
+def _playhead_frame_preview(tl, p: Dict[str, Any]):
+    """Current frame via GetCurrentClipThumbnailImage, as MCP image content."""
+    max_width = p.get("max_width", p.get("maxWidth"))
+    with _color_page_for_thumbnails(get_resolve()) as on_color:
+        original_tc, seek_err = _playhead_seek(tl, p)
+        if seek_err:
+            return seek_err
+        try:
+            try:
+                thumbnail = tl.GetCurrentClipThumbnailImage()
+            except Exception as exc:
+                return _err(f"GetCurrentClipThumbnailImage raised: {exc}", code="THUMBNAIL_FAILED", category="api_error")
+            if not thumbnail:
+                return _err(
+                    "Resolve returned no thumbnail for the current frame."
+                    if on_color else
+                    "Resolve returned no thumbnail: GetCurrentClipThumbnailImage only "
+                    "works on the Color page and the automatic switch failed (headless, "
+                    "or the page is locked).",
+                    code="NO_THUMBNAIL", category="precondition",
+                    remediation="Ensure a video item sits under the playhead and the Color page is reachable."
+                    if on_color else
+                    "Open the Color page in Resolve, or use quality='full' which does not depend on the thumbnail API.",
+                )
+            try:
+                width, height, raw = _thumbnail_raw_rgb(thumbnail)
+            except ValueError as exc:
+                return _err(str(exc), code="THUMBNAIL_DECODE_FAILED", category="api_error")
+            if max_width:
+                width, height, raw = _box_downscale_rgb(width, height, raw, int(max_width))
+            return Image(data=_rgb_to_png_bytes(width, height, raw), format="png")
+        finally:
+            if original_tc:
+                try:
+                    tl.SetCurrentTimecode(original_tc)
+                except Exception:
+                    pass
+
+
+def _playhead_frame_full(proj, tl, p: Dict[str, Any]):
+    """Current frame at full resolution via GrabStill + ExportStills."""
+    fmt = str(p.get("format", "png")).lower().lstrip(".")
+    if fmt == "jpeg":
+        fmt = "jpg"
+    if fmt not in _PLAYHEAD_STILL_FORMATS:
+        return _err(
+            f"format must be one of {sorted(_PLAYHEAD_STILL_FORMATS)} for an image response; got {fmt!r}",
+            code="INVALID_FORMAT", category="invalid_input",
+            remediation="Use gallery_stills(action='grab_and_export') for dpx/cin/drx and other non-displayable formats.",
+        )
+    max_width = p.get("max_width", p.get("maxWidth"))
+    if max_width and not shutil.which("ffmpeg"):
+        # Never silently hand back a full-size frame when the caller asked for a
+        # bounded one — max_width is usually a context-budget decision.
+        return _err(
+            "max_width on quality='full' needs ffmpeg to rescale, and ffmpeg is not on PATH",
+            code="FFMPEG_REQUIRED", category="precondition",
+            remediation="Install ffmpeg, drop max_width to get the full-resolution frame, or use quality='preview'.",
+        )
+    if fmt == "tif" and not shutil.which("ffmpeg"):
+        return _err(
+            "format='tif' needs ffmpeg to convert into displayable image content",
+            code="FFMPEG_REQUIRED", category="precondition",
+            remediation="Install ffmpeg, or use format='png' / 'jpg'.",
+        )
+
+    gal = proj.GetGallery()
+    if not gal:
+        return _err("Gallery not available", code="NO_GALLERY", category="precondition")
+    album = gal.GetCurrentStillAlbum()
+    if not album:
+        albums = gal.GetGalleryStillAlbums() or []
+        album = albums[0] if albums else None
+    if not album:
+        return _err("No still album available", code="NO_GALLERY", category="precondition")
+
+    folder = _resolve_safe_dir(os.path.join(tempfile.gettempdir(), "resolve-playhead-frames"))
+    os.makedirs(folder, exist_ok=True)
+    prefix = f"playhead-{int(time.time() * 1000)}"
+
+    with _color_page_for_thumbnails(get_resolve()) as on_color:
+        original_tc, seek_err = _playhead_seek(tl, p)
+        if seek_err:
+            return seek_err
+        still = None
+        try:
+            try:
+                still = tl.GrabStill()
+            except Exception as exc:
+                return _err(f"GrabStill raised: {exc}", code="GRAB_STILL_FAILED", category="api_error")
+            if not still:
+                return _err(
+                    "GrabStill returned nothing."
+                    if on_color else
+                    "GrabStill returned nothing and Resolve could not be switched to the Color page.",
+                    code="GRAB_STILL_FAILED", category="precondition",
+                    remediation="Ensure the Color page is open with a video item under the playhead.",
+                )
+            before = set(os.listdir(folder))
+            exported = False
+            for attempt_fmt in (fmt, "tif", "png"):
+                if album.ExportStills([still], folder, prefix, attempt_fmt):
+                    exported = True
+                    fmt = attempt_fmt
+                    break
+                time.sleep(0.3)
+            if not exported:
+                return _err(
+                    "ExportStills failed",
+                    code="EXPORT_STILL_FAILED", category="api_error",
+                    remediation="Open the Gallery panel on the Color page (Workspace > Gallery) and retry.",
+                )
+            time.sleep(0.3)
+            new_files = [f for f in sorted(set(os.listdir(folder)) - before) if not f.endswith(".drx")]
+            if not new_files:
+                return _err(
+                    "ExportStills reported success but wrote no image file",
+                    code="EXPORT_STILL_FAILED", category="api_error",
+                    state={"folder": folder, "format": fmt},
+                )
+            src_path = os.path.join(folder, new_files[0])
+            out_format = "jpg" if fmt == "jpg" else "png"
+            if max_width or fmt == "tif":
+                data, ff_err = _ffmpeg_scale_to_bytes(src_path, int(max_width) if max_width else None, out_format)
+                if ff_err:
+                    return _err(
+                        f"Failed to rescale the exported still: {ff_err}",
+                        code="RESCALE_FAILED", category="api_error",
+                    )
+            else:
+                with open(src_path, "rb") as handle:
+                    data = handle.read()
+            return Image(data=data, format=out_format)
+        finally:
+            # GrabStill puts a still in the user's gallery; a capture is a read,
+            # so take it back out. Same for the files ExportStills wrote — the
+            # bytes are already in the response.
+            if still:
+                try:
+                    album.DeleteStills([still])
+                except Exception:
+                    pass
+            if original_tc:
+                try:
+                    tl.SetCurrentTimecode(original_tc)
+                except Exception:
+                    pass
+            try:
+                for name in os.listdir(folder):
+                    if name.startswith(prefix):
+                        try:
+                            os.remove(os.path.join(folder, name))
+                        except OSError:
+                            pass
+                if not os.listdir(folder):
+                    os.rmdir(folder)
+            except OSError:
+                pass
+
+
+def _playhead_frame_capture(p: Dict[str, Any]):
+    """Dispatch a playhead capture, honouring an optional timeline_name."""
+    quality = str(p.get("quality", "preview")).lower()
+    if quality not in ("preview", "full"):
+        return _err(
+            f"quality must be 'preview' or 'full'; got {quality!r}",
+            code="INVALID_QUALITY", category="invalid_input",
+        )
+    proj, tl, err = _get_tl()
+    if err:
+        return err
+
+    # A non-current timeline has no playhead of its own, so capturing one means
+    # making it current. Restore the caller's timeline afterwards.
+    wanted = p.get("timeline_name", p.get("timelineName"))
+    original_tl = None
+    if wanted and (tl.GetName() or "") != wanted:
+        target = None
+        for idx in range(1, (proj.GetTimelineCount() or 0) + 1):
+            candidate = proj.GetTimelineByIndex(idx)
+            if candidate and candidate.GetName() == wanted:
+                target = candidate
+                break
+        if not target:
+            return _err(
+                f"No timeline named {wanted!r} in this project",
+                code="TIMELINE_NOT_FOUND", category="invalid_input",
+            )
+        original_tl, tl = tl, target
+        if not proj.SetCurrentTimeline(target):
+            return _err(
+                f"Failed to make {wanted!r} the current timeline",
+                code="SET_TIMELINE_FAILED", category="api_error",
+            )
+    try:
+        if quality == "full":
+            return _playhead_frame_full(proj, tl, p)
+        return _playhead_frame_preview(tl, p)
+    finally:
+        if original_tl is not None:
+            try:
+                proj.SetCurrentTimeline(original_tl)
+            except Exception:
+                pass
+
+
 def _unknown(action, valid):
     return _err(f"Unknown action '{action}'. Valid actions: {', '.join(valid)}")
 
@@ -22464,22 +22781,27 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
         it = tl.GetCurrentVideoItem()
         return {"name": it.GetName(), "id": it.GetUniqueId()} if it else {"name": None, "id": None}
     elif action == "get_thumbnail":
-        thumbnail = tl.GetCurrentClipThumbnailImage()
+        # GetCurrentClipThumbnailImage returns None on every page but Color, and
+        # says nothing about why — hold the Color page for the read rather than
+        # reporting a page problem as a missing thumbnail.
+        with _color_page_for_thumbnails(get_resolve()) as on_color:
+            thumbnail = tl.GetCurrentClipThumbnailImage()
         if thumbnail is None:
             return {
                 "success": False,
                 "thumbnail": None,
-                "error": "Resolve did not return a thumbnail for the current playhead. Open the Color page and ensure a video item is under the playhead.",
+                "error": (
+                    "Resolve did not return a thumbnail for the current playhead. Ensure a video item is under the playhead."
+                    if on_color else
+                    "Resolve did not return a thumbnail: GetCurrentClipThumbnailImage only works on the Color page and the automatic switch failed (headless, or the page is locked)."
+                ),
             }
         return _ser(thumbnail)
     elif action == "get_thumbnail_image":
-        thumbnail = tl.GetCurrentClipThumbnailImage()
-        if not thumbnail:
-            return _err("No thumbnail available. Open the Color page with a current clip selected.")
-        try:
-            return Image(data=_thumbnail_data_to_png_bytes(thumbnail), format="png")
-        except ValueError as exc:
-            return _err(str(exc))
+        # Same capture as timeline_frame(action="capture"), kept here for the
+        # callers that already use it; that tool is the documented surface and
+        # takes timecode/frame/max_width on top of this.
+        return _playhead_frame_preview(tl, p)
     elif action == "annotation_capabilities":
         return _annotation_capabilities()
     elif action == "probe_annotations":
@@ -22502,7 +22824,82 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TOOL 17: timeline_ai
+# TOOL 17: timeline_frame
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+@_guard_missing_params
+def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    """See what Resolve is rendering — capture a timeline frame as a viewable image.
+
+    <when_to_use>
+    - Verifying anything visual: title placement and safe area, framing, a grade,
+      a Fusion comp, a transition, an artefact. Read the frame instead of
+      inferring from metadata.
+    - Confirming an edit landed where you meant it — capture at the cut timecode.
+    - Before and after a change, at the same timecode, to show what moved.
+    </when_to_use>
+
+    Captures Resolve's processed output — grade, Fusion, titles, transitions —
+    not the source file. For the raw camera file use
+    media_analysis(action="extract_frames").
+
+    Actions:
+      capture(timecode?|frame?, quality?, max_width?, format?, timeline_name?) -> MCP image content
+      capabilities() -> {quality_modes, ffmpeg, current_page, playhead, timeline}
+
+    capture parameters:
+      timecode     Absolute ('01:00:15:12') or elapsed ('00:00:15:12') timeline
+                   timecode. Omit to capture the current playhead.
+      frame        Alternative to timecode: absolute timeline frame number.
+      quality      'preview' (default) — Resolve's thumbnail; fast, small, no
+                   files written. 'full' — full-resolution via Gallery still.
+      max_width    Cap the width in pixels to conserve context. 'full' needs
+                   ffmpeg to rescale; without it the call fails rather than
+                   quietly returning a full-size frame.
+      format       'full' only: png (default), jpg, or tif.
+      timeline_name  Capture from a different timeline; it is made current for
+                   the read and the original is restored afterwards.
+
+    Both qualities need the Color page (GetCurrentClipThumbnailImage and
+    GrabStill are Color-page-only); the tool switches there and restores the
+    user's page. A named timecode is restored to the original playhead position
+    afterwards, and 'full' removes the still it grabbed from the Gallery — a
+    capture is a read, not an edit.
+    """
+    p = _params(params)
+    if action == "capture":
+        return _playhead_frame_capture(p)
+    elif action == "capabilities":
+        resolve = get_resolve()
+        try:
+            current_page = resolve.GetCurrentPage() if resolve else None
+        except Exception:
+            current_page = None
+        payload = {
+            "quality_modes": ["preview", "full"],
+            "formats": {"preview": ["png"], "full": sorted(_PLAYHEAD_STILL_FORMATS)},
+            "ffmpeg": bool(shutil.which("ffmpeg")),
+            "max_width_supported": {"preview": True, "full": bool(shutil.which("ffmpeg"))},
+            "current_page": current_page,
+        }
+        _, tl, err = _get_tl()
+        if err:
+            payload["timeline"] = None
+            payload["playhead"] = None
+            payload["note"] = "No current timeline — capture will fail until one is open."
+            return payload
+        payload["timeline"] = tl.GetName()
+        try:
+            payload["playhead"] = tl.GetCurrentTimecode()
+        except Exception:
+            payload["playhead"] = None
+        return payload
+    return _unknown(action, ["capture", "capabilities"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOOL 18: timeline_ai
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
@@ -28071,5 +28468,5 @@ if __name__ == "__main__":
         logger.error(f"Unknown --transport {transport!r}; use stdio|sse|streamable-http")
         sys.exit(2)
 
-    logger.info("Starting DaVinci Resolve MCP Server (34 compound tools)")
+    logger.info("Starting DaVinci Resolve MCP Server (35 compound tools)")
     run_fastmcp_stdio(mcp)

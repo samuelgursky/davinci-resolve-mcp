@@ -2,6 +2,54 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.96.0
+
+New tool **`timeline_frame`** — the assistant can look at what Resolve is
+rendering instead of inferring it from metadata. Closes
+[#146](https://github.com/samuelgursky/davinci-resolve-mcp/issues/146).
+
+### `timeline_frame(action="capture")`
+
+Returns the timeline frame as MCP image content — grade, Fusion, titles,
+transitions, as composited. (For the raw camera file, `media_analysis(action=
+"extract_frames")` is still the right call.)
+
+- `timecode` / `frame` — capture anywhere, not just the playhead. Accepts
+  absolute (`01:00:15:12`) or elapsed (`00:00:15:12`) timecode, matching the
+  marker-parameter contract.
+- `quality` — `preview` (Resolve's thumbnail; fast, writes nothing) or `full`
+  (full resolution via a Gallery still, removed again afterwards).
+- `max_width` — bound the context cost. Preview downscales in-process with an
+  area average; `full` rescales with ffmpeg, and **fails rather than silently
+  returning a full-size frame** when ffmpeg is missing.
+- `format` — `png` (default), `jpg`, or `tif` on the `full` path.
+- `timeline_name` — capture from another timeline; it is made current for the
+  read and the original restored after.
+
+A capture is a read: the Color page, playhead, current timeline, and Gallery all
+come back as the caller left them.
+
+### Why a separate tool rather than an action on `timeline`
+
+FastMCP derives an output schema from a tool's return annotation and validates
+returns against it, so a `-> Dict[str, Any]` tool cannot return image content.
+`timeline_frame` is annotated `-> Any` for that reason — the same reason
+`timeline_markers` already was. The issue asked for a top-level tool, and the
+schema constraint independently forces one.
+
+### Fixed — thumbnail reads no longer misreport a page problem as a missing frame
+
+`GetCurrentClipThumbnailImage` returns `None` on every page except Color, with
+nothing to distinguish that from "no frame here."
+`timeline_markers(action="get_thumbnail")` and `get_thumbnail_image` called it
+bare, so off the Color page they reported a missing thumbnail. Both now hold the
+Color page for the read and restore the previous page — the mitigation
+`thumbnail_contact_sheet` already used. When the switch genuinely cannot happen
+(headless, page locked), the error names the Color-page requirement instead.
+
+`get_thumbnail_image` now shares the `timeline_frame` capture path, so it picks
+up the fix; its contract is unchanged.
+
 ## What's New in v2.95.3
 
 Closes the retime entry's explicit `UNTESTED` warning: **reverse and
