@@ -64,6 +64,9 @@ from src.utils.render_ids import (
     render_format_id_from_formats as _render_format_id_from_formats,
 )
 from src.utils import delivery_targets as _delivery_targets
+from src.utils import cover_candidates as _cover_candidates
+from src.utils import exposure_plan as _exposure_plan
+from src.utils import prebalance as _prebalance
 from src.utils.update_check import (
     check_for_updates,
     clear_update_prompt_preferences,
@@ -3252,6 +3255,174 @@ def _timeline_item_summary(item, track_info=None, *, media_pool_item=None,
     return summary
 
 
+_DETAILED_ITEM_TRACK_TYPES = ("video", "audio", "subtitle")
+
+
+def _timeline_list_items_detailed(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    track_types = p.get("track_types", ["video"])
+    if not isinstance(track_types, list) or not track_types:
+        return _err(
+            "track_types must be a non-empty list",
+            code="INVALID_TRACK_TYPES",
+            category="invalid_input",
+        )
+    if any(not isinstance(value, str) or value not in _DETAILED_ITEM_TRACK_TYPES
+           for value in track_types):
+        return _err(
+            "track_types values must be video, audio, or subtitle",
+            code="INVALID_TRACK_TYPES",
+            category="invalid_input",
+        )
+    if len(set(track_types)) != len(track_types):
+        return _err(
+            "track_types values must be unique",
+            code="INVALID_TRACK_TYPES",
+            category="invalid_input",
+        )
+
+    enabled_only = p.get("enabled_only", True)
+    if not isinstance(enabled_only, bool):
+        return _err(
+            "enabled_only must be a boolean",
+            code="INVALID_ENABLED_ONLY",
+            category="invalid_input",
+        )
+
+    tracks = []
+    items = []
+    warnings = []
+
+    for track_type in track_types:
+        try:
+            track_count = int(tl.GetTrackCount(track_type))
+        except Exception as exc:
+            return _err(
+                f"Could not read {track_type} track count: {exc}",
+                code="TRACK_COUNT_READ_FAILED",
+                category="resolve_api_failed",
+            )
+        for track_index in range(1, track_count + 1):
+            try:
+                raw_enabled = tl.GetIsTrackEnabled(track_type, track_index)
+                if isinstance(raw_enabled, bool):
+                    enabled = raw_enabled
+                elif raw_enabled in (0, 1):
+                    enabled = bool(raw_enabled)
+                else:
+                    raise ValueError(f"unexpected enabled value: {raw_enabled!r}")
+            except Exception as exc:
+                enabled = None
+                warnings.append({
+                    "code": "TRACK_ENABLED_STATE_UNAVAILABLE",
+                    "track_type": track_type,
+                    "track_index": track_index,
+                    "message": str(exc),
+                })
+
+            try:
+                track_items = list(tl.GetItemListInTrack(track_type, track_index) or [])
+            except Exception as exc:
+                return _err(
+                    f"Could not list {track_type} track {track_index}: {exc}",
+                    code="TRACK_ITEMS_READ_FAILED",
+                    category="resolve_api_failed",
+                    state={"track_type": track_type, "track_index": track_index},
+                )
+
+            include = not enabled_only or enabled is not False
+            track_row = {
+                "track_type": track_type,
+                "track_index": track_index,
+                "enabled": enabled,
+                "item_count": len(track_items),
+                "included_item_count": 0,
+            }
+            tracks.append(track_row)
+            if not include:
+                continue
+            for item_index, item in enumerate(track_items):
+                clip_enabled = None
+                if _has_method(item, "GetClipEnabled"):
+                    try:
+                        raw_clip_enabled = item.GetClipEnabled()
+                        if isinstance(raw_clip_enabled, bool):
+                            clip_enabled = raw_clip_enabled
+                        elif raw_clip_enabled in (0, 1):
+                            clip_enabled = bool(raw_clip_enabled)
+                    except Exception as exc:
+                        warnings.append({
+                            "code": "CLIP_ENABLED_STATE_UNAVAILABLE",
+                            "track_type": track_type,
+                            "track_index": track_index,
+                            "item_index": item_index,
+                            "message": str(exc),
+                        })
+                if enabled_only and clip_enabled is False:
+                    continue
+                row = _timeline_item_summary(item, (track_type, track_index))
+                row["item_index"] = item_index
+                media_pool_item = _timeline_item_media_pool_item(item)
+                media_summary = _media_pool_item_summary(media_pool_item) if media_pool_item else None
+                online_status, _ = _safe_clip_call(
+                    media_pool_item, "GetClipProperty", "Online Status"
+                ) if media_pool_item else (None, None)
+                row["file_path"] = media_summary.get("file_path") if media_summary else None
+                row["online_status"] = online_status
+                row["source_fps"] = media_summary.get("fps") if media_summary else None
+                items.append(row)
+                track_row["included_item_count"] += 1
+
+    return _ok(
+        count=len(items),
+        track_types=list(track_types),
+        enabled_only=enabled_only,
+        tracks=tracks,
+        items=items,
+        warnings=warnings,
+    )
+
+
+def _default_exposure_analyzer(path: str, at_seconds: float) -> Dict[str, Any]:
+    measured = _prebalance.measure_frame_levels(path, at_seconds)
+    if not measured.get("success"):
+        return measured
+    proposal = _prebalance.propose_balance(measured["levels"])
+    operations = proposal.get("operations") or {}
+    gain = operations.get("gain") or {}
+    lift = operations.get("lift") or {}
+    return {
+        "success": True,
+        "stats": measured["levels"],
+        "sampled_at_seconds": measured.get("sampled_at_seconds"),
+        "cdl": {
+            "NodeIndex": 1,
+            "Slope": [float(gain.get(channel, 1.0)) for channel in "rgb"],
+            "Offset": [float(lift.get(channel, 0.0)) for channel in "rgb"],
+            "Power": [1.0, 1.0, 1.0],
+            "Saturation": 1.0,
+        },
+        "reasons": proposal.get("reasons") or [],
+    }
+
+
+def _timeline_exposure_plan(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    items = p.get("items")
+    if items is None:
+        inventory = _timeline_list_items_detailed(tl, {"track_types": ["video"], "enabled_only": True})
+        if inventory.get("error"):
+            return inventory
+        items = inventory.get("items") or []
+    if not isinstance(items, list):
+        return _err("items must be a list", code="INVALID_EXPOSURE_ITEMS", category="invalid_input")
+    source_fps = p.get("source_fps")
+    if source_fps is None:
+        try:
+            source_fps = float(tl.GetSetting("timelineFrameRate"))
+        except Exception:
+            source_fps = 30.0
+    return _exposure_plan.build_exposure_plan(items, _default_exposure_analyzer, source_fps=float(source_fps))
+
+
 # Filters the live timeline adapter can populate from a timeline-item summary.
 # Analysis-aware filters in clip_query (analyzed/has_transcription/shot_type/
 # marker_color) require an analysis-DB join not yet wired here; reject them at
@@ -5593,6 +5764,140 @@ def _timeline_apply_look_to_items(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _timeline_apply_drx_and_cdls_bulk(proj, tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    path = p.get("path")
+    specs = p.get("items")
+    if not path or not os.path.isfile(path):
+        return _err(f"DRX file not found: {path}", code="DRX_NOT_FOUND", category="invalid_input")
+    if p.get("require_temp_path", True) and not _grade_temp_path_ok(path):
+        return _err("DRX path must be under the system temp directory unless require_temp_path=False", code="DRX_PATH_NOT_TEMP", category="invalid_input")
+    if not isinstance(specs, list) or not specs:
+        return _err("items must be a non-empty list", code="MISSING_TARGETS", category="invalid_input")
+
+    resolved = []
+    missing = []
+    for spec in specs:
+        if not isinstance(spec, dict) or not spec.get("timeline_item_id"):
+            return _err("each item requires timeline_item_id", code="INVALID_TARGET", category="invalid_input")
+        item = _find_timeline_item_by_id(tl, spec["timeline_item_id"])
+        if item is None:
+            missing.append(spec["timeline_item_id"])
+            continue
+        normalized = None
+        if spec.get("cdl") is not None:
+            validation, err = _validate_cdl_payload(spec["cdl"])
+            if err:
+                return err
+            if not validation["valid"]:
+                return {"success": False, "validation": validation, "timeline_item_id": spec["timeline_item_id"]}
+            normalized = _normalize_cdl(validation["cdl"])
+        graph, source, graph_error = _color_graph_from_params(proj, item, {})
+        if graph_error:
+            return graph_error
+        if not _has_method(graph, "ApplyGradeFromDRX"):
+            return _err("item graph does not expose ApplyGradeFromDRX", code="APPLY_DRX_UNSUPPORTED", category="unsupported")
+        resolved.append({"spec": spec, "item": item, "graph": graph, "source": source, "normalized": normalized})
+    if missing:
+        return {"success": False, "dry_run": bool(p.get("dry_run", True)), "missing": missing, "items": []}
+
+    dry_run = p.get("dry_run", True)
+    preview_items = [{"timeline_item_id": row["spec"]["timeline_item_id"], "has_cdl": row["normalized"] is not None} for row in resolved]
+    if dry_run:
+        return _ok(dry_run=True, path=path, items=preview_items, missing=[])
+    if _confirm_token_required():
+        if "confirm_token" not in p and "confirmToken" not in p:
+            return _issue_confirm_token(
+                action="timeline.apply_drx_and_cdls_bulk",
+                params=p,
+                preview={"operation": "apply_drx_and_cdls_bulk", "path": path, "items": preview_items, "warning": "Replaces every target node graph before applying its CDL."},
+            )
+        blocked = _consume_confirm_token(action="timeline.apply_drx_and_cdls_bulk", params=p)
+        if blocked:
+            return blocked
+
+    # Create every recoverable version before replacing the first graph. A
+    # metadata-only snapshot cannot restore creative work after a partial batch.
+    for row in resolved:
+        item = row["item"]
+        item_id = row["spec"]["timeline_item_id"]
+        row["grade_snapshot"] = _grade_version_snapshot(item, p)
+        backup_name = f"MCP pre-DRX {time.strftime('%Y%m%d-%H%M%S')} {_uuid.uuid4().hex[:8]}"
+        if not _has_method(item, "AddVersion"):
+            return {
+                "success": False,
+                "dry_run": False,
+                "code": "GRADE_BACKUP_UNSUPPORTED",
+                "timeline_item_id": item_id,
+                "items": [],
+            }
+        try:
+            created = bool(item.AddVersion(backup_name, 0))
+            local_versions = list(item.GetVersionNameList(0) or [])
+        except Exception as exc:
+            return {
+                "success": False,
+                "dry_run": False,
+                "code": "GRADE_BACKUP_FAILED",
+                "timeline_item_id": item_id,
+                "error": str(exc),
+                "items": [],
+            }
+        verified = created and backup_name in local_versions
+        row["grade_backup"] = {"name": backup_name, "type": 0, "created": created, "verified": verified}
+        if not verified:
+            return {
+                "success": False,
+                "dry_run": False,
+                "code": "GRADE_BACKUP_FAILED",
+                "timeline_item_id": item_id,
+                "grade_backup": row["grade_backup"],
+                "items": [],
+            }
+
+    results = []
+    grade_mode = p.get("grade_mode", p.get("mode", 0))
+    for row in resolved:
+        item_id = row["spec"]["timeline_item_id"]
+        try:
+            applied = bool(row["graph"].ApplyGradeFromDRX(path, grade_mode))
+        except Exception as exc:
+            applied = False
+            error = str(exc)
+        else:
+            error = None
+        result = {
+            "timeline_item_id": item_id,
+            "grade_snapshot": row["grade_snapshot"],
+            "grade_backup": row["grade_backup"],
+            "drx_applied": applied,
+            "cdl_applied": None,
+            "status": "completed" if applied else "failed",
+        }
+        if error:
+            result["error"] = error
+        if not applied:
+            results.append(result)
+            break
+        if row["normalized"] is not None:
+            try:
+                cdl_applied = bool(row["item"].SetCDL(row["normalized"]))
+            except Exception as exc:
+                cdl_applied = False
+                result["error"] = str(exc)
+            result["cdl_applied"] = cdl_applied
+            if not cdl_applied:
+                result["status"] = "failed"
+        results.append(result)
+        if result["status"] == "failed":
+            break
+    completed_ids = {row["timeline_item_id"] for row in results}
+    for row in resolved:
+        item_id = row["spec"]["timeline_item_id"]
+        if item_id not in completed_ids:
+            results.append({"timeline_item_id": item_id, "status": "untouched", "drx_applied": None, "cdl_applied": None})
+    return {"success": all(row["status"] == "completed" for row in results), "dry_run": False, "path": path, "items": results, "missing": []}
+
+
 def _variant_item_placement(item) -> Dict[str, Any]:
     """Report an appended item's placed frame positions in both frame spaces.
     record_* are TIMELINE frames (GetStart/GetEnd/GetDuration); source_start is
@@ -5934,6 +6239,27 @@ def _timeline_contact_sheet_samples(tl, p: Dict[str, Any]) -> Tuple[Optional[Lis
         for marker in markers[:max_samples]:
             if marker.get("frame") is not None:
                 samples.append({"frame": marker["frame"], "source": "marker", "marker": marker})
+        if not samples:
+            try:
+                start_frame = int(tl.GetStartFrame())
+                end_frame = int(tl.GetEndFrame())
+            except Exception as exc:
+                return None, _err(f"Could not read timeline bounds for uniform sampling: {exc}")
+            duration = end_frame - start_frame
+            if duration > 0:
+                sample_count = min(max_samples, duration)
+                if sample_count == 1:
+                    uniform_frames = [start_frame]
+                else:
+                    last_frame = end_frame - 1
+                    uniform_frames = [
+                        int(round(start_frame + (last_frame - start_frame) * index / (sample_count - 1)))
+                        for index in range(sample_count)
+                    ]
+                samples.extend(
+                    {"frame": frame, "source": "uniform"}
+                    for frame in dict.fromkeys(uniform_frames)
+                )
     return samples, None
 
 
@@ -6011,7 +6337,15 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
     path = os.path.join(sheet_dir, filename)
     with open(path, "wb") as handle:
         handle.write(png_bytes)
+    candidate_rows = _cover_candidates.rank_cover_candidates(sheet_samples)
+    candidate_by_frame = {row.get("frame"): row for row in candidate_rows}
     for sample in sampled:
+        candidate = candidate_by_frame.get(sample.get("frame"))
+        if candidate:
+            sample["cover_metrics"] = {
+                key: candidate[key]
+                for key in ("rank", "score", "brightness", "detail", "clipped", "crushed")
+            }
         sample.pop("thumbnail_rgb", None)
     metadata_path = os.path.splitext(path)[0] + ".json"
     metadata = {
@@ -6040,8 +6374,74 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
         "height": height,
         "sample_count": len(sheet_samples),
         "samples": sampled,
+        "cover_candidates": candidate_rows,
         "project_root": root["project_root"],
     }
+
+
+def _timeline_cover_frame_candidates(proj, tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    selected_frame = p.get("selected_frame")
+    export_path = p.get("export_path")
+    if (selected_frame is None) != (not export_path):
+        return _err("selected_frame and export_path must be supplied together", code="INCOMPLETE_COVER_EXPORT", category="invalid_input")
+    review = _timeline_thumbnail_contact_sheet(proj, tl, p)
+    if not review.get("success"):
+        return review
+    result = {
+        "success": True,
+        "path": review.get("path"),
+        "metadata_path": review.get("metadata_path"),
+        "project_root": review.get("project_root"),
+        "candidates": review.get("cover_candidates") or [],
+        "samples": review.get("samples") or [],
+    }
+    if selected_frame is None and export_path is None:
+        return result
+    export_path = os.path.abspath(export_path)
+    extension = os.path.splitext(export_path)[1].lower()
+    if extension not in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx"}:
+        return _err("export_path must use a supported still-image extension", code="COVER_EXPORT_EXTENSION_INVALID", category="invalid_input")
+    project_root = review.get("project_root")
+    if not project_root:
+        return _err("contact-sheet analysis root is unavailable", code="COVER_EXPORT_ROOT_UNAVAILABLE", category="invalid_state")
+    try:
+        inside_root = os.path.commonpath([export_path, os.path.abspath(project_root)]) == os.path.abspath(project_root)
+    except (OSError, ValueError):
+        inside_root = False
+    if not inside_root:
+        return _err("export_path must be inside the generated analysis root", code="COVER_EXPORT_OUTSIDE_ANALYSIS_ROOT", category="invalid_input")
+    if os.path.exists(export_path):
+        return _err("export_path already exists; refusing to overwrite it", code="COVER_EXPORT_EXISTS", category="invalid_state")
+    inventory = _timeline_list_items_detailed(tl, {"track_types": ["video"], "enabled_only": False})
+    if not inventory.get("error"):
+        source_paths = {
+            os.path.normcase(os.path.abspath(str(row["file_path"])))
+            for row in inventory.get("items", [])
+            if row.get("file_path")
+        }
+        if os.path.normcase(export_path) in source_paths:
+            return _err("export_path matches source media", code="COVER_EXPORT_SOURCE_CONFLICT", category="invalid_input")
+    parent = os.path.dirname(export_path)
+    if not os.path.isdir(parent):
+        return _err(f"export_path parent does not exist: {parent}", code="COVER_EXPORT_PARENT_MISSING", category="invalid_input")
+    timecode, tc_error = _timeline_frame_id_to_timecode(tl, _marker_display_frame(tl, int(selected_frame)))
+    if tc_error:
+        return tc_error
+    original_timecode = None
+    try:
+        original_timecode = tl.GetCurrentTimecode()
+        if not tl.SetCurrentTimecode(timecode):
+            return _err("Resolve rejected selected cover frame", code="COVER_FRAME_SEEK_FAILED", category="resolve_api_failed")
+        exported = bool(proj.ExportCurrentFrameAsStill(export_path))
+    finally:
+        if original_timecode:
+            try:
+                tl.SetCurrentTimecode(original_timecode)
+            except Exception:
+                pass
+    result["export"] = {"success": exported, "path": export_path, "frame": int(selected_frame), "timecode": timecode}
+    result["success"] = exported
+    return result
 
 
 def _timeline_marker_thumbnail_review(proj, tl, p: Dict[str, Any]) -> Dict[str, Any]:
@@ -8220,6 +8620,7 @@ def _media_pool_item_summary(clip):
         "file_path": None,
         "type": None,
         "duration": None,
+        "fps": None,
     }
     media_id, _ = _safe_clip_call(clip, "GetMediaId")
     if media_id is not None:
@@ -8229,6 +8630,7 @@ def _media_pool_item_summary(clip):
         summary["file_path"] = properties.get("File Path") or properties.get("FilePath")
         summary["type"] = properties.get("Type")
         summary["duration"] = properties.get("Duration")
+        summary["fps"] = _parse_rate(properties.get("FPS") or properties.get("Frame Rate"))
     return summary
 
 
@@ -12228,6 +12630,7 @@ def _probe_media_file(path: str):
                 "-v",
                 "error",
                 "-show_streams",
+                "-show_format",
                 "-of",
                 "json",
                 path,
@@ -12258,7 +12661,14 @@ def _probe_media_file(path: str):
     streams = streams if isinstance(streams, list) else []
     video = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
     audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
-    return {"success": True, "path": path, "video": video, "audio": audio, "stream_count": len(streams)}
+    return {
+        "success": True,
+        "path": path,
+        "format": payload.get("format") if isinstance(payload.get("format"), dict) else {},
+        "video": video,
+        "audio": audio,
+        "stream_count": len(streams),
+    }
 
 
 def _proxy_media_signature(probe: Dict[str, Any]):
@@ -15390,6 +15800,7 @@ _PROJECT_KERNEL_ACTIONS = [
     "safe_set_current_database",
     "preset_lifecycle_probe",
     "project_boundary_report",
+    "ensure_project_timeline",
 ]
 
 _PROJECT_MANAGER_METHODS = [
@@ -16277,6 +16688,185 @@ def _project_lint_live(r, pm) -> Dict[str, Any]:
     return _ok(**_project_lint.lint_report(state))
 
 
+def _ensure_project_timeline(resolve_obj, pm, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Idempotently establish one project, source clip, and named timeline."""
+    project_name = p.get("project_name")
+    timeline_name = p.get("timeline_name")
+    source_path = p.get("source_path")
+    settings = p.get("settings") or {}
+    if not all(isinstance(value, str) and value.strip() for value in (project_name, timeline_name, source_path)):
+        return _err("project_name, timeline_name, and source_path are required", code="INVALID_PROJECT_TIMELINE_SETUP", category="invalid_input")
+    if not isinstance(settings, dict):
+        return _err("settings must be an object", code="INVALID_SETTINGS", category="invalid_input")
+    if not os.path.isfile(source_path):
+        return _err(f"source_path is not a readable file: {source_path}", code="SOURCE_NOT_FOUND", category="invalid_input")
+
+    preset_name = p.get("fairlight_preset_name")
+    available_presets: List[str] = []
+    if preset_name:
+        if not _has_method(resolve_obj, "GetFairlightPresets"):
+            return _err(
+                "Resolve does not expose Fairlight preset discovery",
+                code="FAIRLIGHT_PRESETS_UNAVAILABLE",
+                category="unsupported",
+            )
+        try:
+            available_presets = list(resolve_obj.GetFairlightPresets() or [])
+        except Exception as exc:
+            return _err(
+                f"Could not list Fairlight presets: {exc}",
+                code="FAIRLIGHT_PRESETS_UNAVAILABLE",
+                category="resolve_api_failed",
+            )
+        if preset_name not in available_presets:
+            return _err(
+                f"Fairlight preset not found: {preset_name}",
+                code="FAIRLIGHT_PRESET_NOT_FOUND",
+                category="invalid_input",
+                state={"available_presets": available_presets},
+            )
+
+    existing_names = list(pm.GetProjectListInCurrentFolder() or [])
+    project_exists = project_name in existing_names
+    if not bool(p.get("execute", False)):
+        return _ok(dry_run=True, project_name=project_name, timeline_name=timeline_name, stages=[
+            {"stage": "project", "status": "planned", "would_reuse": project_exists},
+            {"stage": "settings", "status": "planned", "settings": settings},
+            {"stage": "media", "status": "planned", "source_path": source_path},
+            {"stage": "timeline", "status": "planned", "timeline_name": timeline_name},
+            {"stage": "save", "status": "planned"},
+        ])
+
+    stages: List[Dict[str, Any]] = []
+    project = pm.LoadProject(project_name) if project_exists else pm.CreateProject(project_name)
+    if not project:
+        return _err(f"Could not {'load' if project_exists else 'create'} project '{project_name}'", code="PROJECT_ENSURE_FAILED", category="resolve_api_failed")
+    stages.append({"stage": "project", "status": "reused" if project_exists else "created"})
+
+    wanted = os.path.normcase(os.path.abspath(source_path))
+    timeline_obj = _find_project_timeline(project, timeline_name)
+    if timeline_obj is not None:
+        timeline_source_paths: List[str] = []
+        try:
+            video_track_count = int(timeline_obj.GetTrackCount("video") or 0)
+            for track_index in range(1, video_track_count + 1):
+                for timeline_item in (timeline_obj.GetItemListInTrack("video", track_index) or []):
+                    media_item = timeline_item.GetMediaPoolItem()
+                    if not media_item:
+                        continue
+                    candidate_path = media_item.GetClipProperty("File Path")
+                    if candidate_path:
+                        timeline_source_paths.append(os.path.normcase(os.path.abspath(candidate_path)))
+        except Exception as exc:
+            return {
+                "success": False,
+                "stages": stages + [{
+                    "stage": "timeline",
+                    "status": "blocked",
+                    "code": "TIMELINE_SOURCE_UNVERIFIED",
+                    "error": str(exc),
+                }],
+            }
+        if wanted not in timeline_source_paths:
+            return {
+                "success": False,
+                "stages": stages + [{
+                    "stage": "timeline",
+                    "status": "blocked",
+                    "code": "TIMELINE_SOURCE_CONFLICT",
+                    "expected_source_path": source_path,
+                    "actual_source_paths": timeline_source_paths,
+                }],
+            }
+
+    settings_match = bool(settings)
+    current_settings: Dict[str, Any] = {}
+    for key, requested in settings.items():
+        try:
+            current_settings[key] = _ser(project.GetSetting(key))
+        except Exception:
+            settings_match = False
+            break
+        if not _project_spec._settings_equal(current_settings[key], requested):
+            settings_match = False
+    if settings_match:
+        stages.append({"stage": "settings", "status": "reused", "settings": current_settings})
+    else:
+        settings_result = _safe_set_project_settings(project, {"settings": settings, "restore": False}) if settings else _ok()
+        if not settings_result.get("success"):
+            return {"success": False, "stages": stages + [{"stage": "settings", "status": "blocked", "result": settings_result}]}
+        stages.append({"stage": "settings", "status": "applied", "result": settings_result})
+
+    media_pool = project.GetMediaPool()
+    if not media_pool:
+        return _err("Project has no Media Pool", code="MEDIA_POOL_UNAVAILABLE", category="resolve_api_failed")
+    def _all_clips(folder):
+        found = list(folder.GetClipList() or [])
+        for child in (folder.GetSubFolderList() or []):
+            found.extend(_all_clips(child))
+        return found
+
+    clip = None
+    for candidate in _all_clips(media_pool.GetRootFolder()):
+        try:
+            candidate_path = candidate.GetClipProperty("File Path")
+            if candidate_path and os.path.normcase(os.path.abspath(candidate_path)) == wanted:
+                clip = candidate
+                break
+        except Exception:
+            continue
+    if clip is None:
+        imported = list(media_pool.ImportMedia([source_path]) or [])
+        clip = imported[0] if imported else None
+        if clip is None:
+            return {"success": False, "stages": stages + [{"stage": "media", "status": "blocked", "code": "MEDIA_IMPORT_FAILED"}]}
+        stages.append({"stage": "media", "status": "imported"})
+    else:
+        stages.append({"stage": "media", "status": "reused"})
+
+    if timeline_obj is None:
+        timeline_obj = media_pool.CreateTimelineFromClips(timeline_name, [clip])
+        if timeline_obj is None:
+            return {"success": False, "stages": stages + [{"stage": "timeline", "status": "blocked", "code": "TIMELINE_CREATE_FAILED"}]}
+        stages.append({"stage": "timeline", "status": "created"})
+    else:
+        stages.append({"stage": "timeline", "status": "reused"})
+    activation_success = None
+    if _has_method(project, "SetCurrentTimeline"):
+        activation_success = bool(project.SetCurrentTimeline(timeline_obj))
+
+    if preset_name:
+        active_timeline = project.GetCurrentTimeline() if _has_method(project, "GetCurrentTimeline") else None
+        requested_id = timeline_obj.GetUniqueId() if _has_method(timeline_obj, "GetUniqueId") else None
+        active_id = active_timeline.GetUniqueId() if active_timeline and _has_method(active_timeline, "GetUniqueId") else None
+        if activation_success is not True or (requested_id is not None and active_id != requested_id):
+            return {
+                "success": False,
+                "stages": stages + [{
+                    "stage": "timeline_activation",
+                    "status": "blocked",
+                    "code": "TIMELINE_ACTIVATION_FAILED",
+                    "requested_timeline_id": requested_id,
+                    "active_timeline_id": active_id,
+                }],
+            }
+        if not bool(project.ApplyFairlightPresetToCurrentTimeline(preset_name)):
+            return {"success": False, "stages": stages + [{"stage": "fairlight_preset", "status": "blocked", "code": "FAIRLIGHT_PRESET_APPLY_FAILED"}]}
+        stages.append({"stage": "fairlight_preset", "status": "applied", "name": preset_name})
+
+    saved = bool(pm.SaveProject())
+    stages.append({"stage": "save", "status": "saved" if saved else "blocked"})
+    return {
+        "success": saved,
+        "dry_run": False,
+        "project_name": project_name,
+        "timeline_name": timeline_name,
+        "timeline_id": timeline_obj.GetUniqueId() if _has_method(timeline_obj, "GetUniqueId") else None,
+        "media_pool_item_id": clip.GetUniqueId() if _has_method(clip, "GetUniqueId") else None,
+        "stages": stages,
+    }
+
+
 @mcp.tool()
 @_guard_missing_params
 def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -16331,6 +16921,8 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 
     if action == "lint":
         return _project_lint_live(r, pm)
+    if action == "ensure_project_timeline":
+        return _ensure_project_timeline(r, pm, p)
     if action in {"diff_to_spec", "plan_spec", "apply_spec"}:
         return _spec_action(r, pm, action, p)
     if action == "project_capabilities":
@@ -16824,6 +17416,8 @@ _RENDER_KERNEL_ACTIONS = [
     "resolve_delivery_target",
     "list_loudness_standards",
     "prepare_delivery_job",
+    "delivery_preflight",
+    "complete_delivery_job",
 ]
 
 
@@ -17438,6 +18032,345 @@ def _prepare_delivery_job(proj, p: Dict[str, Any]):
     return prepared
 
 
+def _render_delivery_preflight(proj, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Collect the evidence needed before a profile-driven delivery."""
+    profile = p.get("profile") or p.get("target") or "instagram_reels"
+    resolved, target_error = _resolve_delivery_target_live(proj, {**p, "target": profile})
+    if target_error:
+        return target_error
+    tl = proj.GetCurrentTimeline()
+    if not tl:
+        return _err("No current timeline", code="NO_CURRENT_TIMELINE", category="invalid_state")
+
+    inventory = _timeline_list_items_detailed(tl, {"track_types": ["video"], "enabled_only": True})
+    if inventory.get("error"):
+        return inventory
+
+    def _setting(name):
+        try:
+            return tl.GetSetting(name)
+        except Exception:
+            return None
+
+    def _method(obj, name):
+        try:
+            return getattr(obj, name)()
+        except Exception:
+            return None
+
+    width = _setting("timelineResolutionWidth")
+    height = _setting("timelineResolutionHeight")
+    fps_value = _setting("timelineFrameRate")
+    try:
+        fps = float(fps_value)
+    except (TypeError, ValueError):
+        fps = None
+    try:
+        start = int(tl.GetStartFrame())
+        end = int(tl.GetEndFrame())
+    except Exception:
+        start = end = None
+
+    qc_video = (resolved.get("qc_spec") or {}).get("video") or (resolved.get("qc_spec") or {})
+    expected_width = qc_video.get("width")
+    expected_height = qc_video.get("height")
+    blockers: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = list(inventory.get("warnings") or [])
+    conform = None
+    continuity = None
+    try:
+        conform = _timeline_conform_snapshot(
+            tl,
+            {"track_types": ["video", "audio"], "include_markers": False},
+        )
+        continuity = _detect_gaps_overlaps_from_snapshot(
+            conform,
+            {"track_types": ["video", "audio"]},
+        )
+        if continuity.get("gap_count"):
+            warnings.append({
+                "code": "TIMELINE_GAPS_DETECTED",
+                "count": continuity["gap_count"],
+            })
+        if continuity.get("overlap_count"):
+            warnings.append({
+                "code": "TIMELINE_OVERLAPS_DETECTED",
+                "count": continuity["overlap_count"],
+            })
+    except Exception as exc:
+        warnings.append({"code": "CONFORM_EVIDENCE_UNAVAILABLE", "error": str(exc)})
+
+    fairlight = None
+    try:
+        fairlight = _fairlight_boundary_report(proj, proj.GetMediaPool(), tl, {})
+        preset_evidence = fairlight.get("fairlight_presets") if isinstance(fairlight, dict) else None
+        if preset_evidence is None or (isinstance(preset_evidence, dict) and preset_evidence.get("error")):
+            warnings.append({"code": "FAIRLIGHT_PRESET_EVIDENCE_UNAVAILABLE"})
+        elif p.get("fairlight_preset_name") and p["fairlight_preset_name"] not in preset_evidence:
+            warnings.append({
+                "code": "FAIRLIGHT_PRESET_NOT_VISIBLE",
+                "name": p["fairlight_preset_name"],
+            })
+    except Exception as exc:
+        warnings.append({"code": "FAIRLIGHT_PRESET_EVIDENCE_UNAVAILABLE", "error": str(exc)})
+    if expected_width is not None and expected_height is not None:
+        if str(width) != str(expected_width) or str(height) != str(expected_height):
+            blockers.append({
+                "code": "DELIVERY_CANVAS_MISMATCH",
+                "expected": {"width": expected_width, "height": expected_height},
+                "actual": {"width": width, "height": height},
+            })
+    offline = [row for row in inventory.get("items", []) if str(row.get("online_status") or "").lower() != "online"]
+    if offline:
+        blockers.append({
+            "code": "OFFLINE_MEDIA",
+            "timeline_item_ids": [row.get("timeline_item_id") for row in offline],
+        })
+    if not inventory.get("items"):
+        blockers.append({"code": "EMPTY_ENABLED_VIDEO_TIMELINE"})
+    duration_frames = (end - start) if start is not None and end is not None else None
+    duration_seconds = (duration_frames / fps) if duration_frames is not None and fps else None
+    cover_samples = None
+    if p.get("include_cover_samples"):
+        cover_samples = _timeline_cover_frame_candidates(
+            proj,
+            tl,
+            {
+                "max_samples": p.get("max_cover_samples", p.get("max_samples", 12)),
+                "analysis_root": p.get("analysis_root"),
+            },
+        )
+        if not cover_samples.get("success"):
+            warnings.append({
+                "code": "COVER_SAMPLE_EVIDENCE_UNAVAILABLE",
+                "error": cover_samples.get("error"),
+            })
+    result = {
+        "success": True,
+        "ready": not blockers,
+        "profile": profile,
+        "project": {"name": _method(proj, "GetName")},
+        "timeline": {
+            "name": _method(tl, "GetName"),
+            "id": _method(tl, "GetUniqueId"),
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "start_frame": start,
+            "end_frame": end,
+            "duration_frames": duration_frames,
+            "duration_seconds": duration_seconds,
+        },
+        "inventory": inventory,
+        "conform": conform,
+        "continuity": continuity,
+        "fairlight": fairlight,
+        "delivery": resolved,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+    if cover_samples is not None:
+        result["cover_samples"] = cover_samples
+    return result
+
+
+def _delivery_output_qc(path: Optional[str], spec: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not path:
+        return {"success": False, "status": "not_run", "code": "OUTPUT_PATH_UNAVAILABLE", "spec": spec}
+    if not os.path.isfile(path):
+        return {"success": False, "status": "failed", "code": "OUTPUT_FILE_MISSING", "path": path, "spec": spec}
+    expected_video = (spec or {}).get("video") or {}
+    if not expected_video:
+        return {"success": False, "status": "unavailable", "code": "QC_SPEC_UNAVAILABLE", "path": path, "spec": spec}
+    probe = _probe_media_file(path)
+    if not probe.get("success"):
+        return {"success": False, "status": "unavailable", "probe": probe, "spec": spec}
+    actual_video = probe.get("video") or {}
+    checks = []
+    expected_container = (spec or {}).get("container")
+    if expected_container:
+        actual_containers = str((probe.get("format") or {}).get("format_name") or "").lower().split(",")
+        checks.append({
+            "field": "container",
+            "expected": expected_container,
+            "actual": (probe.get("format") or {}).get("format_name"),
+            "pass": str(expected_container).lower() in actual_containers,
+        })
+    for field, actual_key in (("width", "width"), ("height", "height"), ("codec", "codec_name")):
+        if field in expected_video:
+            expected = expected_video[field]
+            actual = actual_video.get(actual_key)
+            matches = str(actual).lower() == str(expected).lower() if field == "codec" else str(actual) == str(expected)
+            checks.append({"field": f"video.{field}", "expected": expected, "actual": actual, "pass": matches})
+    if "fps" in expected_video:
+        actual_fps = _parse_rate(actual_video.get("avg_frame_rate") or actual_video.get("r_frame_rate"))
+        expected_fps = float(expected_video["fps"])
+        checks.append({"field": "video.fps", "expected": expected_fps, "actual": actual_fps, "pass": actual_fps is not None and abs(actual_fps - expected_fps) < 0.01})
+    expected_audio = (spec or {}).get("audio") or {}
+    actual_audio = probe.get("audio") or {}
+    for field, actual_key in (
+        ("codec", "codec_name"),
+        ("channels", "channels"),
+        ("sampleRate", "sample_rate"),
+        ("bitDepth", "bits_per_sample"),
+    ):
+        if field not in expected_audio:
+            continue
+        expected = expected_audio[field]
+        actual = actual_audio.get(actual_key)
+        if field == "bitDepth" and actual in (None, 0, "0"):
+            actual = actual_audio.get("bits_per_raw_sample")
+        matches = str(actual).lower() == str(expected).lower() if field == "codec" else str(actual) == str(expected)
+        checks.append({"field": f"audio.{field}", "expected": expected, "actual": actual, "pass": matches})
+    return {"success": all(row["pass"] for row in checks), "status": "passed" if all(row["pass"] for row in checks) else "failed", "path": path, "checks": checks, "probe": probe, "spec": spec}
+
+
+def _render_job_by_id(proj, job_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        jobs = _ser(proj.GetRenderJobList() or [])
+    except Exception:
+        return None
+    for job in jobs if isinstance(jobs, list) else []:
+        if not isinstance(job, dict):
+            continue
+        candidate = job.get("JobId") or job.get("JobID") or job.get("job_id")
+        if str(candidate) == str(job_id):
+            return job
+    return None
+
+
+def _render_job_output_path(job: Optional[Dict[str, Any]], p: Dict[str, Any], prepared: Optional[Dict[str, Any]]) -> Optional[str]:
+    job = job or {}
+    filename = job.get("OutputFilename") or job.get("OutputFileName") or job.get("JobName")
+    target_dir = job.get("TargetDir") or p.get("target_dir") or ((prepared or {}).get("settings") or {}).get("TargetDir")
+    if filename:
+        filename = str(filename)
+        if os.path.isabs(filename):
+            return filename
+        if target_dir:
+            return os.path.join(str(target_dir), filename)
+    return None
+
+
+def _render_complete_delivery_job(proj, p: Dict[str, Any]) -> Dict[str, Any]:
+    profile = p.get("profile") or p.get("target") or "instagram_reels"
+    execute = bool(p.get("execute", False))
+    job_id = p.get("job_id")
+    qc_spec = p.get("qc_spec")
+    prepared = None
+    resolved = None
+    if not job_id:
+        prepared = _prepare_delivery_job(proj, {
+            **p,
+            "target": profile,
+            "dry_run": not execute,
+        })
+        if prepared.get("error") or not prepared.get("success"):
+            return prepared
+        qc_spec = prepared.get("qc_spec")
+        if not execute:
+            return {"success": True, "dry_run": True, "terminal": False, "profile": profile, "prepared": prepared, "qc_spec": qc_spec}
+        job_id = prepared.get("job_id")
+
+    resumed = p.get("job_id") is not None
+    job = _render_job_by_id(proj, job_id)
+    if resumed:
+        resolved, target_error = _resolve_delivery_target_live(proj, {**p, "target": profile})
+        if target_error:
+            return target_error
+        qc_spec = resolved.get("qc_spec")
+        if job is None:
+            return _err(
+                f"Render job not found: {job_id}",
+                code="RENDER_JOB_NOT_FOUND",
+                category="invalid_input",
+            )
+        timeline = proj.GetCurrentTimeline()
+        timeline_name = timeline.GetName() if timeline and _has_method(timeline, "GetName") else None
+        actual_timeline = job.get("TimelineName") or job.get("Timeline")
+        mismatches = []
+        if not actual_timeline:
+            mismatches.append({"field": "timeline", "expected": timeline_name, "actual": None, "reason": "identity unavailable"})
+        elif timeline_name and str(actual_timeline) != str(timeline_name):
+            mismatches.append({"field": "timeline", "expected": timeline_name, "actual": actual_timeline})
+        for field, keys in (
+            ("format", ("Format", "RenderFormat", "format")),
+            ("codec", ("Codec", "RenderCodec", "codec")),
+        ):
+            actual = next((job.get(key) for key in keys if job.get(key) is not None), None)
+            expected = resolved.get(f"{field}_id")
+            if actual is not None and expected is not None and str(actual).lower() != str(expected).lower():
+                mismatches.append({"field": field, "expected": expected, "actual": actual})
+        if mismatches:
+            return _err(
+                "Render job identity does not match the requested delivery",
+                code="RENDER_JOB_IDENTITY_MISMATCH",
+                category="invalid_state",
+                state={"job_id": job_id, "mismatches": mismatches, "job": job},
+            )
+    status = _ser(proj.GetRenderJobStatus(job_id)) if resumed else None
+    status_name = str((status or {}).get("JobStatus") or "").lower()
+    terminal = status_name in {"complete", "failed", "cancelled", "canceled"}
+    already_running = resumed and any(token in status_name for token in ("rendering", "running", "progress"))
+    if resumed and not execute:
+        return {
+            "success": True,
+            "dry_run": True,
+            "terminal": terminal,
+            "would_start": not terminal and not already_running,
+            "would_poll": already_running,
+            "profile": profile,
+            "job_id": job_id,
+            "resumed": True,
+            "status": status,
+            "job": job,
+            "qc_spec": qc_spec,
+        }
+    if not terminal and not already_running:
+        started = bool(proj.StartRendering([job_id], bool(p.get("interactive", False))))
+        if not started:
+            return {"success": False, "terminal": False, "job_id": job_id, "resumed": resumed, "code": "RENDER_START_FAILED", "status": status, "qc_spec": qc_spec}
+
+    max_wait = max(0.0, float(p.get("max_wait_seconds", 300.0)))
+    poll_interval = max(0.0, float(p.get("poll_interval_seconds", 1.0)))
+    deadline = time.monotonic() + max_wait
+    while not terminal:
+        status = _ser(proj.GetRenderJobStatus(job_id))
+        status_name = str((status or {}).get("JobStatus") or "").lower()
+        terminal = status_name in {"complete", "failed", "cancelled", "canceled"}
+        if terminal or time.monotonic() >= deadline:
+            break
+        if poll_interval:
+            time.sleep(poll_interval)
+
+    if not terminal:
+        return {"success": False, "terminal": False, "retryable": True, "code": "RENDER_WAIT_TIMEOUT", "job_id": job_id, "resumed": resumed, "status": status, "qc_spec": qc_spec}
+    output_path = (
+        p.get("output_path")
+        or (status or {}).get("OutputFilename")
+        or (status or {}).get("OutputFileName")
+        or _render_job_output_path(job or _render_job_by_id(proj, job_id), p, prepared)
+    )
+    qc = _delivery_output_qc(output_path, qc_spec) if status_name == "complete" else {"success": False, "status": "not_run"}
+    render_success = status_name == "complete"
+    qc_success = bool(qc.get("success"))
+    return {
+        "success": render_success and qc_success,
+        "render_success": render_success,
+        "qc_success": qc_success,
+        "dry_run": False,
+        "terminal": True,
+        "profile": profile,
+        "job_id": job_id,
+        "resumed": resumed,
+        "prepared": prepared,
+        "status": status,
+        "output_path": output_path,
+        "qc_spec": qc_spec,
+        "qc": qc,
+    }
+
+
 def _render_job_lifecycle_probe(proj, p: Dict[str, Any]):
     prepared = _prepare_render_job(proj, {**p, "dry_run": False, "require_temp_target": True})
     if prepared.get("error") or not prepared.get("success"):
@@ -17558,6 +18491,8 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       list_delivery_targets(tier?, check_availability?) -> {targets, tiers, schema_version}
       resolve_delivery_target(target, overrides?) -> {format_id, codec_id, settings, qc_spec}
       prepare_delivery_job(target, target_dir, overrides?, settings?, custom_name?, dry_run?) -> {success, job_id, qc_spec}
+      delivery_preflight(profile?, include_cover_samples?) -> {ready, blockers, warnings, inventory, delivery, cover_samples?}
+      complete_delivery_job(profile, target_dir?, custom_name?, job_id?, execute?, max_wait_seconds?) -> {success, render_success, qc_success, job_id, status, qc}
 
     Delivery targets are named render intents (`prores422hq_master`, `youtube`,
     `tiktok`, ...). One definition emits both the Resolve render settings and an
@@ -17609,6 +18544,10 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return _standards_err if _standards_err else _ok(**_standards)
     elif action == "prepare_delivery_job":
         return _prepare_delivery_job(proj, p)
+    elif action == "delivery_preflight":
+        return _render_delivery_preflight(proj, p)
+    elif action == "complete_delivery_job":
+        return _render_complete_delivery_job(proj, p)
     elif action == "set_format_and_codec":
         _formats = _render_formats(proj)
         _format_id = _render_format_id_from_formats(_formats, p["format"])
@@ -21875,10 +22814,10 @@ _TIMELINE_ACTIONS = [
     "get_end_frame", "get_start_timecode", "set_start_timecode", "get_track_count",
     "add_track", "delete_track", "get_track_sub_type", "set_track_enable",
     "get_track_enabled", "set_track_lock", "get_track_locked", "get_track_name",
-    "set_track_name", "get_items", "delete_clips", "set_clips_linked", "duplicate",
+    "set_track_name", "get_items", "list_items_detailed", "exposure_plan", "delete_clips", "set_clips_linked", "duplicate",
     "duplicate_clips", "copy_clips", "move_clips", "copy_range", "duplicate_range",
     "overwrite_range", "lift_range", "story_spine_report", "create_variant_from_ranges",
-    "bulk_set_item_properties", "apply_look_to_items", "thumbnail_contact_sheet",
+    "bulk_set_item_properties", "apply_look_to_items", "apply_drx_and_cdls_bulk", "thumbnail_contact_sheet", "cover_frame_candidates",
     "marker_thumbnail_review", "edit_kernel_capabilities", "probe_edit_kernel_item",
     "title_property_scan", "set_title_text", "bulk_set_title_text", "create_compound_clip",
     "create_fusion_clip", "import_into_timeline", "export", "get_setting", "set_setting",
@@ -21975,9 +22914,12 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       bulk_set_item_properties(ops, dry_run?, readback?) -> {results, op_count}
         # example: action_help(name='<action_name>')
       apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?) -> {success}
+      apply_drx_and_cdls_bulk(path, items, require_temp_path?, dry_run?, confirm_token?) -> {success, items}
         # example: action_help(name='<action_name>')
       thumbnail_contact_sheet(frames?|max_samples?, analysis_root?) -> {path, samples}
-        frames are relative to the timeline start (frame 0 = first frame), like marker frameIds.
+      cover_frame_candidates(frames?|max_samples?, selected_frame?, export_path?) -> {candidates, path, export?}
+        markerless timelines use uniform samples; exports must be new files inside analysis_root.
+        Explicit frames are relative to the timeline start (frame 0 = first frame), like marker frameIds.
       marker_thumbnail_review(max_samples?, analysis_root?) -> {path, samples, review_guidance}
       edit_kernel_capabilities() -> {supported, partially_supported, unsupported}
       probe_edit_kernel_item(clip_ids? selected? timeline_item?) -> {items, count}
@@ -22024,6 +22966,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       clear_mark_in_out(type?) -> {success}
       convert_to_stereo() -> {success}
       get_items_in_track(track_type, track_index|index) -> {items}  — alias of get_items
+      list_items_detailed(track_types?, enabled_only?) -> {count, tracks, items, warnings} (items include source_fps when exposed)
+      exposure_plan(items?, source_fps?) -> {success, items, blockers, unique_ranges_analyzed}
       get_voice_isolation_state(track_index) -> {isEnabled, amount}
       set_voice_isolation_state(track_index, state) -> {success}
       extract_source_frame_ranges(handles?, gap_max?, skip_extensions?) -> {timeline_name, frame_ranges, occurrences, ...}
@@ -22238,6 +23182,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return {"name": tl.GetTrackName(p["track_type"], p["index"])}
     elif action == "set_track_name":
         return {"success": bool(tl.SetTrackName(p["track_type"], p["index"], p["name"]))}
+    elif action == "list_items_detailed":
+        return _timeline_list_items_detailed(tl, p)
+    elif action == "exposure_plan":
+        return _timeline_exposure_plan(tl, p)
     elif action in {"get_items", "get_items_in_track"}:
         track_type, track_index, err = _track_selector(p)
         if err:
@@ -22302,8 +23250,12 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _timeline_bulk_set_item_properties(tl, p)
     elif action == "apply_look_to_items":
         return _timeline_apply_look_to_items(tl, p)
+    elif action == "apply_drx_and_cdls_bulk":
+        return _timeline_apply_drx_and_cdls_bulk(proj, tl, p)
     elif action == "thumbnail_contact_sheet":
         return _timeline_thumbnail_contact_sheet(proj, tl, p)
+    elif action == "cover_frame_candidates":
+        return _timeline_cover_frame_candidates(proj, tl, p)
     elif action == "marker_thumbnail_review":
         return _timeline_marker_thumbnail_review(proj, tl, p)
     elif action == "edit_kernel_capabilities":
@@ -23922,6 +24874,35 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
             "returns": "{items: [{name, id, start, end, duration}]}",
             "example": 'timeline(action="get_items", params={"track_type": "video", "index": 1})',
         },
+        "list_items_detailed": {
+            "summary": "List detailed items across requested tracks, omitting confirmed-disabled tracks by default.",
+            "params": "track_types? ([video|audio|subtitle], default [video]), enabled_only? (bool, default true)",
+            "returns": "{success, count, tracks, items: [{track_type, track_index, item_index, timeline_item_id, source_start, source_end, source_fps, media_pool_item_id, file_path, online_status}], warnings}",
+            "example": (
+                'timeline(action="list_items_detailed", params={\n'
+                '  "track_types": ["video"],\n'
+                '  "enabled_only": True\n'
+                '})'
+            ),
+        },
+        "exposure_plan": {
+            "summary": "Analyze each unique online source range and source-frame-rate combination once and return a proposed CDL per timeline item.",
+            "params": "items? (defaults to enabled video inventory), source_fps? (fallback when item metadata has no FPS)",
+            "returns": "{success, items: [{timeline_item_id, source_range, analysis}], blockers, unique_ranges_analyzed}",
+            "example": 'timeline(action="exposure_plan", params={"source_fps": 30})',
+        },
+        "apply_drx_and_cdls_bulk": {
+            "summary": "Create recoverable grade versions, then apply one DRX and optional per-item CDLs to a fully validated item set under one confirmation.",
+            "params": "path, items: [{timeline_item_id, cdl?}], require_temp_path?, dry_run? (default true), confirm_token?",
+            "returns": "{success, dry_run, path, items: [{timeline_item_id, status, drx_applied, cdl_applied}], missing}",
+            "example": 'timeline(action="apply_drx_and_cdls_bulk", params={"path": "<look.drx>", "items": [{"timeline_item_id": "<id>", "cdl": {"NodeIndex": 1, "Slope": [1,1,1], "Offset": [0,0,0], "Power": [1,1,1], "Saturation": 1}}]})',
+        },
+        "cover_frame_candidates": {
+            "summary": "Rank marker or uniform timeline thumbnails using deterministic blankness, clipping, exposure, and detail signals.",
+            "params": "frames?|max_samples?, analysis_root?, selected_frame?+export_path?",
+            "returns": "{success, path, project_root, candidates: [{rank, frame, timecode, score, brightness, detail, clipped, crushed}], export?}; export_path must be new and inside project_root",
+            "example": 'timeline(action="cover_frame_candidates", params={"max_samples": 12})',
+        },
         "get_items_in_track": {
             "summary": "Alias of get_items: list items on one track (name/id/start/end/duration).",
             "params": "track_type (video|audio|subtitle), track_index|index (1-based)",
@@ -24024,6 +25005,40 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
                 'timeline(action="delete_clips", params={\n'
                 '  "clip_ids": ["TimelineItem-abc"], "ripple": True\n'
                 '})  # first call returns confirm_token if ripple=True; re-call with it to delete'
+            ),
+        },
+    },
+    "project_manager": {
+        "ensure_project_timeline": {
+            "summary": "Dry-run or idempotently establish a project, source clip, and named timeline.",
+            "params": "project_name, timeline_name, source_path, settings?, fairlight_preset_name?, execute? (default false)",
+            "returns": "{success, execute, project_name, timeline_name, stages, blockers?}",
+            "example": (
+                'project_manager(action="ensure_project_timeline", params={\n'
+                '  "project_name": "Social Edit", "timeline_name": "Vertical Master",\n'
+                '  "source_path": "<source.mov>",\n'
+                '  "settings": {"timelineResolutionWidth": "1080", "timelineResolutionHeight": "1920"},\n'
+                '  "execute": False\n'
+                '})'
+            ),
+        },
+    },
+    "render": {
+        "delivery_preflight": {
+            "summary": "Read-only readiness report for a profile-driven delivery.",
+            "params": "profile? (default instagram_reels), include_cover_samples?, max_cover_samples?, analysis_root?",
+            "returns": "{ready, blockers, warnings, inventory, timeline, conform, continuity, fairlight, delivery, cover_samples?}",
+            "example": 'render(action="delivery_preflight", params={"profile": "instagram_reels"})',
+        },
+        "complete_delivery_job": {
+            "summary": "Dry-run or identity-check and resume a bounded delivery render; overall success requires strict QC.",
+            "params": "profile, target_dir?, custom_name?, job_id?, execute? (default false), max_wait_seconds?, poll_interval_seconds?",
+            "returns": "{success, render_success, qc_success, job_id, status, terminal, output_path, qc, retryable?}; execute=false never starts a queued job",
+            "example": (
+                'render(action="complete_delivery_job", params={\n'
+                '  "profile": "instagram_reels", "target_dir": "<delivery-dir>",\n'
+                '  "custom_name": "social_master", "execute": False\n'
+                '})'
             ),
         },
     },

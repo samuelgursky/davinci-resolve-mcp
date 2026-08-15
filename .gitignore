@@ -132,3 +132,6 @@ davinci-resolve-mcp-analysis/
 # capture script, and one-off repro scripts. Never shipped. See local/README.md.
 /local/
 .claude/launch.json
+
+# Isolated implementation worktrees created by agent workflows.
+/.worktrees/

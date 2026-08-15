@@ -27,6 +27,12 @@ All actions are under `render(action=...)`.
 | `list_delivery_targets` | Supported | Lists named render intents, optionally filtered by tier and checked against the live format/codec matrix. |
 | `resolve_delivery_target` | Supported | Resolves a named target to live format/codec ids plus its render settings and QC spec. |
 | `prepare_delivery_job` | Supported | Resolves a named target and queues a render job for it, returning the QC spec that verifies the output. |
+| `delivery_preflight` | Supported | Combines timeline settings, enabled-item inventory, conform/Fairlight evidence, offline checks, duration, optional cover samples, and a named target/QC contract into one read-only readiness verdict. |
+| `complete_delivery_job` | Supported | Dry-runs or identity-checks and resumes a named target, returns bounded terminal state and output-path evidence, and requires strict local ffprobe QC for overall success. |
+
+Short-form workflows can pair these with `project_manager.ensure_project_timeline`,
+`timeline.exposure_plan`, `timeline.apply_drx_and_cdls_bulk`, and
+`timeline.cover_frame_candidates` for setup, grading, and cover selection.
 
 ## Delivery Targets
 

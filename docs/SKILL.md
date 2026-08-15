@@ -158,6 +158,33 @@ before mutating Resolve state.
 
 ---
 
+## Profile-driven short-form delivery
+
+Keep platform policy in the calling workflow and use a generic named delivery
+target (`instagram_reels` for Reels):
+
+1. `project_manager.ensure_project_timeline` dry-runs or idempotently creates
+   the project, persistent settings, source import, timeline, and optional
+   Fairlight preset.
+2. After the human edit, `render.delivery_preflight` returns duration, canvas,
+   detailed enabled-item inventory, conform/Fairlight evidence, offline blockers,
+   the target QC contract, and optional cover-sample evidence.
+3. `timeline.exposure_plan` analyzes repeated source ranges once at each
+   source clip's own frame rate, then
+   `timeline.apply_drx_and_cdls_bulk` applies the shared DRX before each
+   per-item CDL under one confirmation after creating a recoverable local grade
+   version for every target.
+4. `timeline.cover_frame_candidates` ranks sampled frames without semantic
+   guessing, falls back to uniform samples on markerless timelines, and can
+   export an explicitly selected frame to a new file inside the analysis root.
+5. `render.complete_delivery_job` prepares or resumes the render, polls to a
+   bounded terminal state, validates resumed-job identity, and returns strict
+   ffprobe QC evidence. Overall `success` requires both render and QC success;
+   `execute=false` never starts a queued job.
+
+Third-party Fairlight plug-in controls remain outside Resolve's public API;
+opening and verifying tools such as Ozone still requires UI assistance.
+
 ## Two Server Modes
 
 | Mode | Entry point | Tool count | Use when |
