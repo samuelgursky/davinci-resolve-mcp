@@ -26,7 +26,7 @@
 npx davinci-resolve-mcp setup
 ```
 
-连接之前，先打开 DaVinci Resolve Studio，把 **Preferences > General > External scripting using** 设为 **Local**。（**免费版**上这个偏好设置不起作用——见下文 [免费版](#免费版应用内桥接)。）npm 启动器会在你的用户应用数据目录下安装一份托管副本，然后运行通用 Python 安装器。安装器会创建虚拟环境、检测 Resolve 路径，并可自动配置 Claude Desktop、Claude Code、Cursor、VS Code、Windsurf、Zed、Continue、Cline、Roo Code、OpenCode 和 JetBrains 系列 IDE。
+连接之前，先打开 DaVinci Resolve Studio，把 **Preferences > General > External scripting using** 设为 **Local**。（**免费版**上这个偏好设置不起作用——见下文 [免费版](#免费版应用内桥接)。）npm 启动器会在你的用户应用数据目录下安装一份托管副本，然后运行通用 Python 安装器。安装器会创建虚拟环境、检测 Resolve 路径，并可自动配置 Claude Desktop、Claude Code、Cursor、VS Code、Windsurf、Zed、Continue、Cline、Roo Code、OpenCode、Codex CLI 和 JetBrains 系列 IDE。
 
 从源码安装：
 

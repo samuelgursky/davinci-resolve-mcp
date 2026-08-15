@@ -50,6 +50,36 @@ Color page for the read and restore the previous page — the mitigation
 `get_thumbnail_image` now shares the `timeline_frame` capture path, so it picks
 up the fix; its contract is unchanged.
 
+### Fixed — the installer configures Codex CLI
+
+The installer claimed Codex support but never wrote its config, so a successful
+install left no `davinci-resolve` entry in `~/.codex/config.toml` — everything
+else (venv, Resolve paths, bridge, server) was in place and only the
+registration was missing. Codex keys MCP servers under a TOML
+`[mcp_servers.<name>]` table, and the installer only knew how to write JSON.
+Closes [#39](https://github.com/samuelgursky/davinci-resolve-mcp/issues/39).
+
+`codex` is now a selectable client (included in `--clients all`), writing
+`$CODEX_HOME/config.toml` (default `~/.codex/config.toml`), and `--manual`
+prints a ready-to-paste TOML block.
+
+The merge is a text splice, not a parse-and-rewrite, so comments and hand
+formatting survive; an existing `[mcp_servers.davinci-resolve]` table has its
+`command`/`args`/`env` replaced in place. Sub-tables of that entry are kept:
+hand-written Codex configs put per-tool approval modes in
+`[mcp_servers.davinci-resolve.tools.<tool>]`, and an installer that dropped them
+would quietly widen what the agent may do without asking. An
+`[mcp_servers.davinci-resolve.env]` sub-table is regenerated in that same shape
+rather than replaced with an inline `env` — TOML rejects a file that spells one
+key both ways.
+
+Paths are escaped as TOML basic strings (Windows backslashes would otherwise
+corrupt the file). The installer refuses to touch a config that is already
+invalid TOML, one that defines the server as an inline key it cannot safely
+rewrite, or a merge result that would not parse — the same
+never-wipe-a-user-config policy the JSON clients follow. Writes are backed up to
+`config.toml.backup` first.
+
 ## What's New in v2.95.3
 
 Closes the retime entry's explicit `UNTESTED` warning: **reverse and

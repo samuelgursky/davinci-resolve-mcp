@@ -23,6 +23,19 @@ assert _spec.loader is not None
 _spec.loader.exec_module(install)
 
 
+def _parse_toml(text):
+    """Parse TOML with whatever reader this interpreter has.
+
+    ``tomllib`` is stdlib only from 3.11 and the project floor is 3.10, so on an
+    older interpreter these assertions fall back to a substring check rather
+    than pulling in a dependency the installer itself does not need.
+    """
+    loader = install._toml_loader()
+    if loader is None:
+        raise unittest.SkipTest("no TOML reader available on this interpreter")
+    return loader.loads(text)
+
+
 class NormalizeCDLTests(unittest.TestCase):
     def test_normalize_cdl_accepts_arrays_and_numbers(self):
         payload = {
@@ -154,12 +167,16 @@ class InstallConfigTests(unittest.TestCase):
         )
 
     def test_generate_manual_config_formats_include_env(self):
-        standard, vscode_fmt, zed_fmt, opencode_fmt = install.generate_manual_config(
+        standard, vscode_fmt, zed_fmt, opencode_fmt, codex_fmt = install.generate_manual_config(
             Path("/tmp/python"),
             Path("/tmp/server.py"),
             "/Resolve/Scripting",
             "/Resolve/fusionscript.so",
         )
+
+        # Codex is TOML, not JSON — checked separately below.
+        self.assertIn("[mcp_servers.davinci-resolve]", codex_fmt)
+        self.assertIn("RESOLVE_SCRIPT_API", codex_fmt)
 
         standard_json = json.loads(standard)
         vscode_json = json.loads(vscode_fmt)
@@ -222,6 +239,51 @@ class InstallConfigTests(unittest.TestCase):
         self.assertIsNotNone(opencode)
         self.assertEqual(opencode["config_key"], "mcp")
         self.assertIn("opencode", str(opencode["get_path"]()))
+
+    def test_codex_is_a_registered_toml_client(self):
+        """Issue #39: the installer claimed Codex support but never wrote
+        ~/.codex/config.toml, so the entry was simply missing after install."""
+        codex = next((c for c in install.MCP_CLIENTS if c["id"] == "codex"), None)
+        self.assertIsNotNone(codex)
+        self.assertEqual(codex["config_key"], "mcp_servers")
+        self.assertEqual(codex["format"], "toml")
+        self.assertTrue(str(codex["get_path"]()).endswith(".codex/config.toml"))
+
+    def test_codex_path_honors_codex_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"CODEX_HOME": tmp}):
+                self.assertEqual(install.codex_config(), Path(tmp) / "config.toml")
+
+    def test_build_codex_block_is_valid_toml(self):
+        block = install.build_codex_block(
+            Path("/tmp/python"),
+            Path("/tmp/server.py"),
+            "/Resolve/Scripting",
+            "/Resolve/fusionscript.so",
+            system="Linux",
+        )
+        parsed = _parse_toml(block)
+        entry = parsed["mcp_servers"]["davinci-resolve"]
+        self.assertEqual(entry["command"], "/tmp/python")
+        self.assertEqual(entry["args"], ["/tmp/server.py"])
+        self.assertEqual(entry["env"]["RESOLVE_SCRIPT_API"], "/Resolve/Scripting")
+        self.assertEqual(entry["env"]["PYTHONPATH"], "/Resolve/Scripting/Modules")
+
+    def test_build_codex_block_escapes_windows_paths(self):
+        # Backslashes are escape characters in a TOML basic string: unescaped,
+        # a Windows path would corrupt the whole config, not just this entry.
+        block = install.build_codex_block(
+            Path(r"C:\Users\sam\venv\Scripts\python.exe"),
+            Path(r"C:\Users\sam\mcp\src\server.py"),
+            r"C:\ProgramData\Blackmagic Design\Scripting",
+            r"C:\ProgramData\Blackmagic Design\fusionscript.dll",
+            system="Windows",
+            python_home=r"C:\Python312",
+        )
+        entry = _parse_toml(block)["mcp_servers"]["davinci-resolve"]
+        self.assertEqual(entry["command"], r"C:\Users\sam\venv\Scripts\python.exe")
+        self.assertEqual(entry["args"], [r"C:\Users\sam\mcp\src\server.py"])
+        self.assertEqual(entry["env"]["PYTHONHOME"], r"C:\Python312")
 
     def test_claude_desktop_prefers_msix_virtualized_path(self):
         """Issue #93: MSIX builds of Claude Desktop read config from a
@@ -441,6 +503,219 @@ class ConfigMergeTests(unittest.TestCase):
             self.assertEqual(entry["command"], ["/tmp/python", "/tmp/server.py"])
             self.assertIn("environment", entry)
             self.assertNotIn("env", entry)
+
+    def _codex_client(self, config_path):
+        return {
+            "id": "codex",
+            "name": "Codex CLI",
+            "get_path": lambda: config_path,
+            "config_key": "mcp_servers",
+            "format": "toml",
+        }
+
+    def _write_codex(self, config_path, **kwargs):
+        return install.write_client_config(
+            self._codex_client(config_path),
+            Path("/tmp/python"),
+            Path("/tmp/server.py"),
+            "/Resolve/Scripting",
+            "/Resolve/fusionscript.so",
+            **kwargs,
+        )
+
+    def test_codex_config_is_created_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / ".codex" / "config.toml"
+
+            success, message = self._write_codex(config_path)
+            self.assertTrue(success, message)
+
+            entry = _parse_toml(config_path.read_text())["mcp_servers"]["davinci-resolve"]
+            self.assertEqual(entry["command"], "/tmp/python")
+            self.assertEqual(entry["args"], ["/tmp/server.py"])
+
+    def test_codex_merge_keeps_other_settings_and_servers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                "# my codex setup\n"
+                'model = "gpt-5-codex"\n'
+                'approval_policy = "on-request"\n'
+                "\n"
+                "[mcp_servers.other]\n"
+                'command = "npx"\n'
+                'args = ["-y", "other-mcp"]\n'
+            )
+
+            success, message = self._write_codex(config_path)
+            self.assertTrue(success, message)
+
+            text = config_path.read_text()
+            parsed = _parse_toml(text)
+            self.assertEqual(parsed["model"], "gpt-5-codex")
+            self.assertEqual(parsed["approval_policy"], "on-request")
+            self.assertEqual(parsed["mcp_servers"]["other"]["command"], "npx")
+            self.assertIn("davinci-resolve", parsed["mcp_servers"])
+            # Comments and hand formatting survive the splice.
+            self.assertIn("# my codex setup", text)
+            # And the original file is backed up before the rewrite.
+            self.assertTrue(config_path.with_suffix(".toml.backup").exists())
+
+    def test_codex_merge_replaces_stale_entry_in_place(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                'model = "gpt-5-codex"\n'
+                "\n"
+                "[mcp_servers.davinci-resolve]\n"
+                'command = "/old/python"\n'
+                'args = ["/old/server.py"]\n'
+                "\n"
+                "[mcp_servers.other]\n"
+                'command = "npx"\n'
+            )
+
+            success, message = self._write_codex(config_path)
+            self.assertTrue(success, message)
+
+            text = config_path.read_text()
+            parsed = _parse_toml(text)
+            self.assertEqual(
+                parsed["mcp_servers"]["davinci-resolve"]["command"], "/tmp/python"
+            )
+            self.assertNotIn("/old/python", text)
+            # The table after ours is untouched, not swallowed by the replacement.
+            self.assertEqual(parsed["mcp_servers"]["other"]["command"], "npx")
+            # Rewriting twice is idempotent — no duplicate table.
+            self._write_codex(config_path)
+            self.assertEqual(config_path.read_text().count("[mcp_servers.davinci-resolve]"), 1)
+
+    def test_codex_invalid_toml_is_not_overwritten(self):
+        if install._toml_loader() is None:
+            self.skipTest("no TOML reader available on this interpreter")
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            garbage = 'model = "gpt-5-codex\n[oops\n'
+            config_path.write_text(garbage)
+
+            success, message = self._write_codex(config_path)
+
+            self.assertFalse(success)
+            self.assertIn("not valid TOML", message)
+            self.assertEqual(config_path.read_text(), garbage)
+
+    def test_codex_inline_definition_is_refused_not_duplicated(self):
+        # An inline `davinci-resolve = { ... }` cannot be spliced line-by-line;
+        # appending a table anyway would define the key twice and make Codex
+        # reject the entire config.
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            original = (
+                "[mcp_servers]\n"
+                'davinci-resolve = { command = "/old/python", args = ["/old/server.py"] }\n'
+            )
+            config_path.write_text(original)
+
+            success, message = self._write_codex(config_path)
+
+            self.assertFalse(success)
+            self.assertIn("manually", message)
+            self.assertEqual(config_path.read_text(), original)
+
+    def test_codex_merge_preserves_per_tool_subtables(self):
+        # A hand-written Codex config puts per-tool approval modes in
+        # [mcp_servers.davinci-resolve.tools.<tool>]. Dropping those on an
+        # update would silently widen what the agent may do without asking.
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                "[mcp_servers.davinci-resolve]\n"
+                'command = "/old/python"\n'
+                'args = ["/old/server.py"]\n'
+                "\n"
+                "[mcp_servers.davinci-resolve.env]\n"
+                'RESOLVE_SCRIPT_API = "/old/api"\n'
+                "\n"
+                "[mcp_servers.davinci-resolve.tools.timeline]\n"
+                'approval_mode = "approve"\n'
+                "\n"
+                "[mcp_servers.other]\n"
+                'command = "npx"\n'
+            )
+
+            success, message = self._write_codex(config_path)
+            self.assertTrue(success, message)
+
+            text = config_path.read_text()
+            entry = _parse_toml(text)["mcp_servers"]["davinci-resolve"]
+            self.assertEqual(entry["command"], "/tmp/python")
+            self.assertEqual(entry["tools"]["timeline"]["approval_mode"], "approve")
+            # env keeps its sub-table shape: TOML rejects a file that defines the
+            # same key both as a sub-table and inline, so the rewrite must not
+            # switch forms.
+            self.assertEqual(entry["env"]["RESOLVE_SCRIPT_API"], "/Resolve/Scripting")
+            self.assertIn("[mcp_servers.davinci-resolve.env]", text)
+            self.assertNotIn("env = {", text)
+            self.assertEqual(_parse_toml(text)["mcp_servers"]["other"]["command"], "npx")
+
+    def test_codex_merge_keeps_per_server_knobs_and_comments(self):
+        # Only command/args/env are ours. Codex's own per-server settings — and
+        # this server is slow enough to start that startup_timeout_sec is a
+        # realistic thing to have tuned — must survive an update.
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                "[mcp_servers.davinci-resolve]\n"
+                "# resolve can take a while to launch\n"
+                "startup_timeout_sec = 120\n"
+                'command = "/old/python"\n'
+                "args = [\n"
+                '  "/old/server.py",\n'
+                "]\n"
+                "tool_timeout_sec = 90\n"
+            )
+
+            success, message = self._write_codex(config_path)
+            self.assertTrue(success, message)
+
+            text = config_path.read_text()
+            entry = _parse_toml(text)["mcp_servers"]["davinci-resolve"]
+            self.assertEqual(entry["command"], "/tmp/python")
+            self.assertEqual(entry["args"], ["/tmp/server.py"])
+            self.assertEqual(entry["startup_timeout_sec"], 120)
+            self.assertEqual(entry["tool_timeout_sec"], 90)
+            self.assertIn("# resolve can take a while to launch", text)
+            # The multi-line args value is replaced, not left behind in pieces.
+            self.assertNotIn("/old/server.py", text)
+
+    def test_codex_merge_with_subtables_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                "[mcp_servers.davinci-resolve]\n"
+                'command = "/old/python"\n'
+                "\n"
+                "[mcp_servers.davinci-resolve.env]\n"
+                'RESOLVE_SCRIPT_API = "/old/api"\n'
+                "\n"
+                "[mcp_servers.davinci-resolve.tools.timeline]\n"
+                'approval_mode = "approve"\n'
+            )
+
+            self._write_codex(config_path)
+            once = config_path.read_text()
+            self._write_codex(config_path)
+            self.assertEqual(config_path.read_text(), once)
+
+    def test_codex_dry_run_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+
+            success, message = self._write_codex(config_path, dry_run=True)
+
+            self.assertTrue(success)
+            self.assertIn("[mcp_servers.davinci-resolve]", message)
+            self.assertFalse(config_path.exists())
 
     def test_strip_jsonc_preserves_comment_markers_inside_strings(self):
         text = '{ "url": "https://example.com", /* drop me */ "a": 1, }'
