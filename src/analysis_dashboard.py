@@ -6624,7 +6624,7 @@ HTML = r"""<!doctype html>
         const query = options.silent ? '&probe=0&reuse=1' : '';
         const headers = {};
         if (state.mediaETag) headers['If-None-Match'] = state.mediaETag;
-        const res = await fetch(`/api/resolve/media?limit=500${query}`, { headers, cache: 'no-store' });
+        const res = await fetch(`/api/resolve/media?${query.replace(/^&/, '')}`, { headers, cache: 'no-store' });
         state.mediaLastRefresh = new Date();
         state.resolveMediaStale = false;
         if (res.status === 304) return;
