@@ -6621,10 +6621,12 @@ HTML = r"""<!doctype html>
         // probe (the server re-applies only the local analysis overlay); manual /
         // first loads do a full Media Pool walk with a fresh probe. The ETag lets
         // an unchanged poll short-circuit to 304 and skip the table re-render.
-        const query = options.silent ? '&probe=0&reuse=1' : '';
+        // No `limit` param: the server applies the media_analysis.inventory_limit
+        // preference, and sending one here would override what the user configured.
+        const query = options.silent ? '?probe=0&reuse=1' : '';
         const headers = {};
         if (state.mediaETag) headers['If-None-Match'] = state.mediaETag;
-        const res = await fetch(`/api/resolve/media?${query.replace(/^&/, '')}`, { headers, cache: 'no-store' });
+        const res = await fetch(`/api/resolve/media${query}`, { headers, cache: 'no-store' });
         state.mediaLastRefresh = new Date();
         state.resolveMediaStale = false;
         if (res.status === 304) return;

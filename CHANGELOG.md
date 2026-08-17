@@ -2,6 +2,28 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.97.1
+
+**The control panel honors `media_analysis.inventory_limit` again.** Thanks to
+[@albertfdp](https://github.com/albertfdp) for finding and fixing this
+([#148](https://github.com/samuelgursky/davinci-resolve-mcp/pull/148)).
+
+### Fixed
+
+- **A configurable preference the panel could never reach.** `/api/resolve/media`
+  falls back to the `media_analysis.inventory_limit` preference (1–10000,
+  default 500) when the request carries no `limit`, and the Preferences pane has
+  always let you set it. But `refreshResolveMedia()` — the panel's only caller of
+  that endpoint, used for the first load, the manual refresh button, and the
+  background poll alike — hardcoded `?limit=500`, so the query param won every
+  time and the preference was inert. On a 3015-clip project the Overview panel
+  showed the first 500 clips and rendered real Media Pool bins as empty. The
+  fetch no longer sends `limit`; the server-side preference applies. Verified
+  against a live 3015-clip project: 3015 clips across 32 bins after the fix.
+
+This is the silent-lie class again — a setting that round-trips through the
+preferences store, reports itself as saved, and changes nothing observable.
+
 ## What's New in v2.97.0
 
 **`timeline_frame(action="capture")` now renders the frame.** v2.96.0 shipped it
