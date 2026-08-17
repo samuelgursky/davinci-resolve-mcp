@@ -17,17 +17,47 @@ transitions, as composited. (For the raw camera file, `media_analysis(action=
 - `timecode` / `frame` — capture anywhere, not just the playhead. Accepts
   absolute (`01:00:15:12`) or elapsed (`00:00:15:12`) timecode, matching the
   marker-parameter contract.
-- `quality` — `preview` (Resolve's thumbnail; fast, writes nothing) or `full`
-  (full resolution via a Gallery still, removed again afterwards).
-- `max_width` — bound the context cost. Preview downscales in-process with an
-  area average; `full` rescales with ffmpeg, and **fails rather than silently
-  returning a full-size frame** when ffmpeg is missing.
-- `format` — `png` (default), `jpg`, or `tif` on the `full` path.
+- `quality` — `frame` (default) renders exactly that frame; `preview` is the
+  same render bounded to 1280px; `thumbnail` is instant but per-clip (below);
+  `still` uses a Gallery still. `full` and `preview` are accepted as the issue's
+  original vocabulary and both map to the render.
+- `max_width` — bound the context cost. Rescales with ffmpeg, and **fails rather
+  than silently returning a full-size frame** when ffmpeg is missing.
+- `format` — `jpg` (default), `png`, or `tif`.
 - `timeline_name` — capture from another timeline; it is made current for the
   read and the original restored after.
 
-A capture is a read: the Color page, playhead, current timeline, and Gallery all
-come back as the caller left them.
+Measured live on Studio 19.1.3.7: 1920x1080 in well under a second, with three
+different timecodes yielding three different images and the rendered burn-in
+matching the requested frame.
+
+### Why the default renders instead of reading a thumbnail
+
+Two cheaper routes were built first and both proved unfit, which is worth
+recording because the failures are silent:
+
+- **`GetCurrentClipThumbnailImage` returns the CLIP's thumbnail, not the frame.**
+  Seeking to 00:00, 01:00, 02:00 and 04:00 within one clip returned
+  byte-identical data every time; the image changed only when the playhead
+  crossed a clip boundary. It also returns `None` whenever Resolve is not the
+  frontmost application, at any delay, and the first read after a page switch or
+  seek can be empty while the viewer catches up.
+- **`ExportStills` returns a bare `False` unless the Gallery panel is open** —
+  across png/jpg/tif/dpx, three destination folders, delays to 3s, with Resolve
+  frontmost. No scripting call can open that panel.
+
+Both are now recorded in `api_truth` and surfaced in
+`docs/reference/api-limitations.md`. This also means the existing
+`timeline(action="thumbnail_contact_sheet")` samples one image per clip rather
+than per frame.
+
+The render route has its own cost, stated plainly rather than hidden: render
+settings are project-level. Format and codec are snapshotted and restored, the
+render job is deleted, and the Deliver page and playhead that rendering pulls
+Resolve onto are put back — but `TargetDir`, `CustomName` and the mark range
+cannot be read back on builds without `GetRenderSettings`, so they are reset to
+the full timeline rather than truly restored. Use `quality="thumbnail"` when
+zero side effects matter more than frame accuracy.
 
 ### Why a separate tool rather than an action on `timeline`
 
@@ -44,10 +74,10 @@ nothing to distinguish that from "no frame here."
 `timeline_markers(action="get_thumbnail")` and `get_thumbnail_image` called it
 bare, so off the Color page they reported a missing thumbnail. Both now hold the
 Color page for the read and restore the previous page — the mitigation
-`thumbnail_contact_sheet` already used. When the switch genuinely cannot happen
-(headless, page locked), the error names the Color-page requirement instead.
+`thumbnail_contact_sheet` already used — and poll rather than trusting a single
+read. When the read stays empty, the error names the foreground requirement.
 
-`get_thumbnail_image` now shares the `timeline_frame` capture path, so it picks
+`get_thumbnail_image` now shares the `timeline_frame` thumbnail path, so it picks
 up the fix; its contract is unchanged.
 
 ### Fixed — the installer configures Codex CLI

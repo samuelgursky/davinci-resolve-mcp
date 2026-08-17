@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 27 missing capabilities, 33 bugs / unreliable behaviors.
+**Totals:** 27 missing capabilities, 35 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -359,6 +359,22 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Node positions are read/written through the FlowView, not the tool. SetPos returns nothing reliable; GetPosTable returns a 1-indexed table (or dict/tuple depending on bridge).
 - **Workaround / current handling:** Use comp.CurrentFrame.FlowView.SetPos(tool, x, y); confirm with GetPosTable and a liberal position parser.
 - **Tags:** fusion, unreliable-return
+
+### Timeline.GetCurrentClipThumbnailImage (foreground only)
+
+- **Object:** `Timeline`
+- **Signature:** `() -> {width, height, format, data} | None`
+- **Behavior:** Being on the Color page is necessary but NOT sufficient: the call also returns None whenever Resolve is not the frontmost application. Measured on Studio 19.1.3.7 — with the Color page open, a clip under the playhead, and GetCurrentVideoItem returning that clip, every read came back None while Resolve sat behind a terminal window, at delays from 0 to 2 seconds; bringing Resolve to the front made the very next read return a 288x162 'RGB 8 bit' thumbnail. Separately, the first read after a page switch or a playhead move can be None while the viewer catches up, so a single failed read proves nothing. The two failure modes are indistinguishable from 'no thumbnail exists' and from each other.
+- **Workaround / current handling:** Poll the read a few times before concluding it failed (src/server.py:_playhead_thumbnail_settled), and when it stays empty, name the foreground requirement in the error rather than reporting a missing frame. Headless callers cannot use this API at all; there is no scripting call to raise Resolve, so a background agent must fall back to a Gallery still or a render.
+- **Tags:** timeline, thumbnail, silent-failure, focus-dependent
+
+### GalleryStillAlbum.ExportStills (Gallery panel must be visible)
+
+- **Object:** `GalleryStillAlbum`
+- **Signature:** `(stills, folder, prefix, format) -> bool`
+- **Behavior:** Returns a bare False, writing nothing, unless the Gallery panel is actually open on the Color page. Measured on Studio 19.1.3.7: Timeline.GrabStill() succeeded and the still landed in the album (count 0 -> 1), yet ExportStills returned False for png, jpg, tif and dpx alike, into three different destination folders, at settle delays of 0.5s, 1.5s and 3.0s, and with Resolve frontmost. Panel visibility is not readable or settable from the scripting API, so a script cannot establish the precondition it depends on, nor distinguish this from a permissions or format failure.
+- **Workaround / current handling:** Treat False as 'the Gallery panel is probably closed' and say so in the error; ask the user to open Workspace > Gallery on the Color page. Do not retry formats hoping one sticks — when the panel is closed they all fail.
+- **Tags:** gallery, stills, silent-failure, ui-dependent
 
 ### MediaPoolItem.GetClipProperty('Transcription')
 

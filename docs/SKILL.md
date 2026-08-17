@@ -1393,10 +1393,12 @@ Key actions:
   crop/composite/audio/property groups to many timeline items in one call
 - `apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?)` — apply a
   normalized CDL and/or copy a source grade to multiple video items
-- `thumbnail_contact_sheet` / `marker_thumbnail_review` — sample Resolve-rendered
-  thumbnails under the project analysis root for visual verification. Resolve
-  only serves these thumbnails on the Color page; the tool switches there
-  automatically and restores the previous page. Expect a page flash in the GUI,
+- `thumbnail_contact_sheet` / `marker_thumbnail_review` — sample Resolve
+  thumbnails under the project analysis root. These are CLIP thumbnails, so the
+  sheet is effectively one image per clip, not per sampled frame — a shot
+  inventory rather than frame evidence. Resolve only serves them on the Color
+  page and only while it is frontmost; the tool switches page automatically and
+  restores the previous one. Expect a page flash in the GUI,
   and note that landing on Color can kick off cache/render work for the current
   clip — on a large timeline the switch is not free
 - `edit_kernel_capabilities` — report supported, partially supported, and
@@ -1486,15 +1488,18 @@ The compound tool accepts `frame`, `frame_id`, and `frameId` aliases.
 
 Note: `get_thumbnail` returns raw pixel data from `GetCurrentClipThumbnailImage()`.
 The dictionary includes `data` (raw bytes as a Python bytes-like object),
-`format`, `width`, `height`, `noOfComponents`, and `depth`. This reflects the
-current frame as rendered by Resolve — including any color grading or effects
-applied — which is different from reading the source file directly.
+`format`, `width`, `height`, `noOfComponents`, and `depth`. This reflects Resolve's processed
+output — including color grading and effects — rather than the source file. It
+is the CLIP's thumbnail, though: every frame of a clip returns the same image, so
+it cannot verify a specific frame. Use `timeline_frame(action="capture")` for
+that.
 
 Use `get_thumbnail_image` when the MCP client can display image content directly.
 It converts the same Resolve thumbnail payload to PNG bytes without writing a
-file to disk. Both actions hold the Color page for the read and restore the
-previous page. Prefer `timeline_frame(action="capture")` for new work — it is the
-same capture plus a timecode target, `max_width`, and a full-resolution mode.
+file to disk. Both actions hold the Color page for the read, restore the
+previous page, and poll rather than trusting a single read; both still need
+Resolve to be the frontmost application. Prefer `timeline_frame(action="capture")`
+for new work — it renders the frame you actually asked for.
 
 **`timeline_frame`** — Capture a timeline frame as viewable image content.
 
@@ -1506,17 +1511,26 @@ rendering — grade, Fusion, titles, transitions — rather than inferring it fr
 metadata. (For the raw camera file instead, use
 `media_analysis(action="extract_frames")`.)
 
-- `quality="preview"` (default) is Resolve's thumbnail: fast, small, writes
-  nothing.
-- `quality="full"` grabs a Gallery still for a full-resolution frame, then
-  removes it again. `format` is `png` (default), `jpg`, or `tif`.
-- `max_width` caps the width to conserve context. On `full` this needs ffmpeg;
-  without it the call fails rather than quietly returning a full-size frame.
+- `quality="frame"` (default) renders exactly that frame — the only
+  frame-accurate route. Full resolution, well under a second, works headless.
+  `preview` is the same render bounded to 1280px.
+- `quality="thumbnail"` is instant and touches nothing, but returns the **clip's**
+  thumbnail — identical for every frame of that clip. Use it to see which clip is
+  under the playhead, never to judge a specific frame. Needs the Color page *and*
+  Resolve frontmost.
+- `quality="still"` uses a Gallery still; requires the Gallery panel to be open.
+- `max_width` caps the width to conserve context (needs ffmpeg; without it the
+  call fails rather than quietly returning a full-size frame). `format` is `jpg`
+  (default), `png`, or `tif`.
 - `timecode` accepts absolute (`01:00:15:12`) or elapsed (`00:00:15:12`) time;
   `frame` is the absolute timeline frame. Omit both to capture the playhead.
 
-A capture is a read: the Color page, the playhead, the current timeline, and the
-Gallery are all restored afterwards.
+The playhead, page, current timeline and Gallery are restored. The render route
+additionally touches project render settings: format and codec are restored and
+the render job is deleted, but `TargetDir`/`CustomName`/mark range cannot be read
+back on builds without `GetRenderSettings`, so they are reset to the full
+timeline rather than restored. Reach for `quality="thumbnail"` when zero side
+effects matter more than accuracy.
 
 ```
 timeline_frame(action="capture", params={"timecode": "01:00:15:12", "max_width": 1280})
@@ -2084,27 +2098,31 @@ file.
 
 **Start here: `timeline_frame(action="capture")`** — Returns the frame at the
 playhead (or at any `timecode`/`frame` you name) as MCP image content, so a
-multimodal assistant can simply look at it. `quality="preview"` is fast and
-writes nothing; `quality="full"` is full resolution; `max_width` bounds the
-context cost. The Color page, playhead, current timeline, and Gallery are all
-restored afterwards.
+multimodal assistant can simply look at it. It renders that one frame, which is
+what makes it frame-accurate; `max_width` bounds the context cost.
 
 ```
 timeline_frame(action="capture", params={"timecode": "01:00:15:12", "max_width": 1280})
 ```
 
-**`timeline_markers(action="get_thumbnail")`** — Returns raw thumbnail data at
-the current playhead position. The response is a dictionary with keys `data`,
-`format`, `width`, `height`, `noOfComponents`, and `depth`. Use it when you need
-pixel data for tooling rather than an image to look at.
+⚠️ **The thumbnail API is per-clip, not per-frame.** `GetCurrentClipThumbnailImage`
+returns the same image for every frame of a given clip — verified by seeking
+within one clip and getting byte-identical data, with the image changing only at
+a clip boundary. It also returns nothing unless Resolve is the frontmost app.
+Everything below is built on it, so none of it can confirm what a *specific*
+frame looks like. Use `timeline_frame` for that.
 
-**`timeline_markers(action="get_thumbnail_image")`** — The original image-content
-action, equivalent to `timeline_frame(action="capture")` at default quality with
-no positional arguments. Kept for existing callers.
+**`timeline_markers(action="get_thumbnail")`** — Raw thumbnail data for the clip
+under the playhead: `data`, `format`, `width`, `height`, `noOfComponents`,
+`depth`. Use it when you need pixel data for tooling.
 
-**`timeline(action="thumbnail_contact_sheet")`** — Many frames at once as a single
-labeled PNG written to the analysis root. Use it to review a stretch of cut rather
-than one moment.
+**`timeline_markers(action="get_thumbnail_image")`** — The same clip thumbnail as
+image content; equivalent to `timeline_frame(action="capture", params={"quality":
+"thumbnail"})`. Kept for existing callers.
+
+**`timeline(action="thumbnail_contact_sheet")`** — A labeled PNG sheet written to
+the analysis root. Because it samples the same API, it is effectively one image
+per clip; treat it as a shot inventory, not as frame evidence.
 
 **`gallery_stills(action="grab_and_export", params={...})`** — Grabs a still from
 the current frame on the Color page and returns the image encoded as base64 in the

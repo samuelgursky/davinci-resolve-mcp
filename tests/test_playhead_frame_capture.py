@@ -7,6 +7,7 @@ capture is a *read*: page, playhead, current timeline, gallery, and the temp
 directory all come back the way the caller left them.
 """
 import base64
+import os
 import unittest
 from unittest import mock
 
@@ -88,6 +89,8 @@ class CapturePreviewTest(unittest.TestCase):
         resolve = resolve or _FakeResolve(page="edit")
         tl = tl if tl is not None else _fake_timeline(resolve)
         proj = proj or mock.Mock()
+        # quality="thumbnail" is this class's subject: the clip-thumbnail route.
+        params = {"quality": "thumbnail", **params}
         with mock.patch.object(s, "get_resolve", return_value=resolve), \
              mock.patch.object(s, "_get_tl", return_value=(proj, tl, None)):
             return s.timeline_frame("capture", params), resolve, tl
@@ -194,7 +197,7 @@ class CaptureFullTest(unittest.TestCase):
              mock.patch.object(s, "_get_tl", return_value=(proj, tl, None)), \
              mock.patch.object(s.shutil, "which", return_value=ffmpeg), \
              mock.patch.object(s, "_ffmpeg_scale_to_bytes", return_value=(b"\x89PNG\r\n\x1a\nsmall", None)):
-            out = s.timeline_frame("capture", {"quality": "full", **params})
+            out = s.timeline_frame("capture", {"quality": "still", **params})
         return out, album, still, written
 
     def test_returns_the_exported_bytes_as_image_content(self):
@@ -232,6 +235,119 @@ class CaptureFullTest(unittest.TestCase):
         self.assertEqual(out["error"]["code"], "EXPORT_STILL_FAILED")
 
 
+class CaptureRenderTest(unittest.TestCase):
+    """quality='frame' — the default, and the only frame-accurate route."""
+
+    def _capture(self, params, rendering=False, job="job-1", status="Complete",
+                 write=True, ffmpeg="/usr/bin/ffmpeg"):
+        """Returns (result, project mock, list of SetRenderSettings payloads)."""
+        resolve = _FakeResolve(page="color")
+        tl = _fake_timeline(resolve)
+        tl.GetStartFrame.return_value = 86400
+        tl.GetEndFrame.return_value = 86544
+        proj = mock.Mock()
+        proj.IsRenderingInProgress.side_effect = [rendering, False]
+        proj.GetCurrentRenderFormatAndCodec.return_value = {"format": "mov", "codec": "H.264"}
+        proj.GetRenderCodecs.return_value = {"JPEG": "YUV420_8"}
+        proj.SetCurrentRenderFormatAndCodec.return_value = True
+        proj.SetRenderSettings.return_value = True
+        proj.AddRenderJob.return_value = job
+        proj.StartRendering.return_value = True
+        proj.GetRenderJobStatus.return_value = {"JobStatus": status}
+
+        calls = []
+        target = {}
+
+        def _settings(payload):
+            calls.append(dict(payload))
+            if payload.get("CustomName"):
+                target["dir"] = payload["TargetDir"]
+                target["name"] = payload["CustomName"]
+            return True
+
+        def _start(jobs, **kwargs):
+            # Resolve writes the file during the render, and appends the frame
+            # number to CustomName.
+            if write and target:
+                os.makedirs(target["dir"], exist_ok=True)
+                with open(os.path.join(target["dir"], f"{target['name']}_00086424.jpg"), "wb") as fh:
+                    fh.write(b"\xff\xd8rendered")
+            return True
+
+        proj.SetRenderSettings.side_effect = _settings
+        proj.StartRendering.side_effect = _start
+        with mock.patch.object(s, "get_resolve", return_value=resolve), \
+             mock.patch.object(s, "_get_tl", return_value=(proj, tl, None)), \
+             mock.patch.object(s.shutil, "which", return_value=ffmpeg), \
+             mock.patch.object(s, "_ffmpeg_scale_to_bytes", return_value=(b"\xff\xd8scaled", None)):
+            out = s.timeline_frame("capture", params)
+        return out, proj, calls
+
+    def test_render_is_the_default_quality(self):
+        out, proj, _ = self._capture({})
+        self.assertIsInstance(out, Image)
+        proj.AddRenderJob.assert_called_once()
+
+    def test_renders_a_single_frame_range(self):
+        out, _, calls = self._capture({"frame": 86424})
+        self.assertIsInstance(out, Image)
+        # MarkIn == MarkOut is what makes this one frame rather than a clip.
+        self.assertEqual(calls[0]["MarkIn"], 86424)
+        self.assertEqual(calls[0]["MarkOut"], 86424)
+        self.assertFalse(calls[0]["SelectAllFrames"])
+
+    def test_render_job_is_deleted_afterwards(self):
+        out, proj, _ = self._capture({})
+        self.assertIsInstance(out, Image)
+        proj.DeleteRenderJob.assert_called_once_with("job-1")
+
+    def test_render_format_is_restored(self):
+        out, proj, _ = self._capture({})
+        self.assertIsInstance(out, Image)
+        self.assertEqual(
+            proj.SetCurrentRenderFormatAndCodec.call_args_list[-1].args,
+            ("mov", "H.264"),
+        )
+
+    def test_mark_range_is_reset_to_the_whole_timeline(self):
+        # It cannot be truly restored (no GetRenderSettings), but it must not be
+        # left pinned to the captured frame.
+        out, _, calls = self._capture({"frame": 86424})
+        self.assertIsInstance(out, Image)
+        self.assertTrue(calls[-1]["SelectAllFrames"])
+        self.assertEqual(calls[-1]["MarkIn"], 86400)
+        self.assertEqual(calls[-1]["MarkOut"], 86544)
+
+    def test_refuses_while_another_render_runs(self):
+        out, _, _ = self._capture({}, rendering=True)
+        self.assertEqual(out["error"]["code"], "RENDER_BUSY")
+
+    def test_failed_render_is_reported(self):
+        out, _, _ = self._capture({}, status="Failed")
+        self.assertEqual(out["error"]["code"], "RENDER_FAILED")
+
+    def test_success_without_a_file_is_reported(self):
+        out, _, _ = self._capture({}, write=False)
+        self.assertEqual(out["error"]["code"], "RENDER_FAILED")
+
+    def test_max_width_without_ffmpeg_is_refused(self):
+        out, _, _ = self._capture({"max_width": 640}, ffmpeg=None)
+        self.assertEqual(out["error"]["code"], "FFMPEG_REQUIRED")
+
+    def test_preview_alias_bounds_the_width(self):
+        # 'preview' from the issue's schema means a fast downscaled frame, not
+        # the clip thumbnail — it must still render, just bounded.
+        out, proj, _ = self._capture({"quality": "preview"})
+        self.assertIsInstance(out, Image)
+        proj.AddRenderJob.assert_called_once()
+        self.assertEqual(out.data, b"\xff\xd8scaled")
+
+    def test_full_alias_maps_to_the_render_route(self):
+        out, proj, _ = self._capture({"quality": "full"})
+        self.assertIsInstance(out, Image)
+        proj.AddRenderJob.assert_called_once()
+
+
 class ToolSurfaceTest(unittest.TestCase):
     def test_unknown_action_lists_valid_actions(self):
         out = s.timeline_frame("screenshot")
@@ -241,7 +357,7 @@ class ToolSurfaceTest(unittest.TestCase):
         with mock.patch.object(s, "get_resolve", return_value=_FakeResolve(page="edit")), \
              mock.patch.object(s, "_get_tl", return_value=(None, None, {"error": "no timeline"})):
             out = s.timeline_frame("capabilities")
-        self.assertEqual(out["quality_modes"], ["preview", "full"])
+        self.assertEqual(out["default_quality"], "frame")
         self.assertEqual(out["current_page"], "edit")
         self.assertIsNone(out["timeline"])
 

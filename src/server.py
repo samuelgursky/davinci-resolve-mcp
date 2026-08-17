@@ -12998,6 +12998,31 @@ def _playhead_seek(tl, p: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[
     return original, None
 
 
+def _playhead_thumbnail_settled(tl, attempts: int = 12, delay: float = 0.3):
+    """Read the thumbnail, giving Resolve time to catch up first.
+
+    Two things make the first read come back empty even when everything is
+    correct: a page switch to Color, and a playhead move — the viewer has not
+    caught up when the very next scripting call lands (measured on Studio
+    19.1.3.7, where the first capture after a switch returned None and later
+    ones on the same timeline succeeded). Poll instead of sleeping a fixed
+    amount, so the common warm case stays immediate.
+    """
+    for attempt in range(attempts):
+        try:
+            thumbnail = tl.GetCurrentClipThumbnailImage()
+        except Exception as exc:
+            return None, _err(
+                f"GetCurrentClipThumbnailImage raised: {exc}",
+                code="THUMBNAIL_FAILED", category="api_error",
+            )
+        if thumbnail:
+            return thumbnail, None
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    return None, None
+
+
 def _playhead_frame_preview(tl, p: Dict[str, Any]):
     """Current frame via GetCurrentClipThumbnailImage, as MCP image content."""
     max_width = p.get("max_width", p.get("maxWidth"))
@@ -13006,10 +13031,9 @@ def _playhead_frame_preview(tl, p: Dict[str, Any]):
         if seek_err:
             return seek_err
         try:
-            try:
-                thumbnail = tl.GetCurrentClipThumbnailImage()
-            except Exception as exc:
-                return _err(f"GetCurrentClipThumbnailImage raised: {exc}", code="THUMBNAIL_FAILED", category="api_error")
+            thumbnail, thumb_err = _playhead_thumbnail_settled(tl)
+            if thumb_err:
+                return thumb_err
             if not thumbnail:
                 return _err(
                     "Resolve returned no thumbnail for the current frame."
@@ -13018,9 +13042,13 @@ def _playhead_frame_preview(tl, p: Dict[str, Any]):
                     "works on the Color page and the automatic switch failed (headless, "
                     "or the page is locked).",
                     code="NO_THUMBNAIL", category="precondition",
-                    remediation="Ensure a video item sits under the playhead and the Color page is reachable."
-                    if on_color else
-                    "Open the Color page in Resolve, or use quality='full' which does not depend on the thumbnail API.",
+                    remediation=(
+                        "Bring DaVinci Resolve to the front — the thumbnail API returns "
+                        "nothing while Resolve is in the background, even on the Color "
+                        "page (measured on Studio 19.1.3.7). Also confirm a video item "
+                        "sits under the playhead."
+                    ) if on_color else
+                    "Open the Color page in Resolve and bring it to the front, or use quality='full'.",
                 )
             try:
                 width, height, raw = _thumbnail_raw_rgb(thumbnail)
@@ -13035,6 +13063,194 @@ def _playhead_frame_preview(tl, p: Dict[str, Any]):
                     tl.SetCurrentTimecode(original_tc)
                 except Exception:
                     pass
+
+
+def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
+    """Render exactly one frame — the only frame-accurate capture route.
+
+    The two cheaper routes cannot do this job (both measured on Studio 19.1.3.7,
+    recorded in api_truth):
+      - GetCurrentClipThumbnailImage returns the CLIP's thumbnail. Seeking within
+        a clip returns byte-identical data; it changes only at a clip boundary.
+      - ExportStills returns bare False unless the Gallery panel is open, which
+        no scripting call can arrange.
+    A single-frame render honours the grade, Fusion and titles, is frame-exact,
+    runs in well under a second, and needs no GUI panel or foreground window.
+
+    The cost is that render settings are project-level state. Format and codec
+    are readable and are restored; the rest (TargetDir, CustomName, mark range)
+    is NOT readable on builds without GetRenderSettings, so this resets those to
+    sane values rather than truly restoring them. Callers who need a strictly
+    side-effect-free read should use quality="thumbnail" and accept per-clip
+    granularity.
+    """
+    fmt = str(p.get("format", "jpg")).lower().lstrip(".")
+    if fmt == "jpeg":
+        fmt = "jpg"
+    if fmt not in ("jpg", "png", "tif"):
+        return _err(
+            f"format must be jpg, png or tif; got {fmt!r}",
+            code="INVALID_FORMAT", category="invalid_input",
+        )
+    max_width = p.get("max_width", p.get("maxWidth"))
+    if max_width and not shutil.which("ffmpeg"):
+        return _err(
+            "max_width needs ffmpeg to rescale, and ffmpeg is not on PATH",
+            code="FFMPEG_REQUIRED", category="precondition",
+            remediation="Install ffmpeg, or drop max_width to get the full-resolution frame.",
+        )
+    if proj.IsRenderingInProgress():
+        return _err(
+            "A render is already in progress",
+            code="RENDER_BUSY", category="precondition", retryable=True,
+            remediation="Wait for the current render to finish, or use quality='thumbnail'.",
+        )
+
+    # Which frame? Default to wherever the playhead already is.
+    frame = p.get("frame")
+    timecode = p.get("timecode")
+    if frame is None and timecode is not None:
+        frame, frame_err = _timeline_timecode_to_frame_id(tl, _playhead_absolute_timecode(tl, timecode))
+        if frame_err:
+            return frame_err
+    elif frame is None:
+        frame, frame_err = _current_timeline_frame_id(tl)
+        if frame_err:
+            return frame_err
+    try:
+        frame = int(frame)
+    except (TypeError, ValueError):
+        return _err("frame must be an integer", code="INVALID_FRAME", category="invalid_input")
+
+    folder = _resolve_safe_dir(os.path.join(tempfile.gettempdir(), "resolve-frame-captures"))
+    os.makedirs(folder, exist_ok=True)
+    name = f"capture-{int(time.time() * 1000)}"
+
+    original_fc = None
+    try:
+        original_fc = proj.GetCurrentRenderFormatAndCodec()
+    except Exception:
+        pass
+    # Rendering pulls Resolve onto the Deliver page and moves the playhead;
+    # measured leaving the user on Deliver at a different frame. Both are ours
+    # to put back.
+    resolve = get_resolve()
+    original_page = None
+    try:
+        original_page = resolve.GetCurrentPage() if resolve else None
+    except Exception:
+        original_page = None
+    original_tc = None
+    try:
+        original_tc = tl.GetCurrentTimecode()
+    except Exception:
+        pass
+
+    job = None
+    try:
+        codecs = proj.GetRenderCodecs("JPEG" if fmt == "jpg" else fmt.upper()) or {}
+        codec = list(codecs.values())[0] if codecs else fmt
+        if not proj.SetCurrentRenderFormatAndCodec(fmt, codec):
+            return _err(
+                f"Resolve refused render format {fmt!r} with codec {codec!r}",
+                code="RENDER_FORMAT_REFUSED", category="api_error",
+                state={"format": fmt, "codec": codec},
+            )
+        applied = proj.SetRenderSettings({
+            "TargetDir": folder,
+            "CustomName": name,
+            "MarkIn": frame,
+            "MarkOut": frame,
+            "SelectAllFrames": False,
+            "ExportVideo": True,
+            "ExportAudio": False,
+        })
+        if not applied:
+            return _err(
+                "SetRenderSettings refused the single-frame range",
+                code="RENDER_SETTINGS_REFUSED", category="api_error",
+                state={"frame": frame},
+            )
+        job = proj.AddRenderJob()
+        if not job:
+            return _err("AddRenderJob returned nothing", code="RENDER_JOB_FAILED", category="api_error")
+        before = set(os.listdir(folder))
+        if not proj.StartRendering([job], isInteractiveMode=False):
+            return _err("StartRendering refused the job", code="RENDER_START_FAILED", category="api_error")
+        waited = 0.0
+        while proj.IsRenderingInProgress() and waited < 120:
+            time.sleep(0.25)
+            waited += 0.25
+        status = _ser(proj.GetRenderJobStatus(job)) or {}
+        if status.get("JobStatus") != "Complete":
+            return _err(
+                f"Render did not complete: {status.get('JobStatus')}",
+                code="RENDER_FAILED", category="api_error",
+                state={"status": status, "frame": frame},
+            )
+        # Resolve appends the frame number to CustomName, so match on the prefix.
+        written = sorted(f for f in set(os.listdir(folder)) - before if f.startswith(name))
+        if not written:
+            return _err(
+                "Render reported success but wrote no file",
+                code="RENDER_FAILED", category="api_error",
+                state={"folder": folder, "frame": frame},
+            )
+        src_path = os.path.join(folder, written[0])
+        out_format = "jpg" if fmt == "jpg" else "png"
+        if max_width or fmt == "tif":
+            data, ff_err = _ffmpeg_scale_to_bytes(src_path, int(max_width) if max_width else None, out_format)
+            if ff_err:
+                return _err(f"Failed to rescale the rendered frame: {ff_err}", code="RESCALE_FAILED", category="api_error")
+        else:
+            with open(src_path, "rb") as handle:
+                data = handle.read()
+        return Image(data=data, format=out_format)
+    finally:
+        if job:
+            try:
+                proj.DeleteRenderJob(job)
+            except Exception:
+                pass
+        if original_fc:
+            try:
+                proj.SetCurrentRenderFormatAndCodec(
+                    original_fc.get("format"), original_fc.get("codec"))
+            except Exception:
+                pass
+        # Best-effort, not a restore: without GetRenderSettings there is nothing
+        # to restore FROM, so put the mark range back to the whole timeline
+        # rather than leaving it pinned to the captured frame.
+        try:
+            proj.SetRenderSettings({
+                "SelectAllFrames": True,
+                "MarkIn": tl.GetStartFrame(),
+                "MarkOut": tl.GetEndFrame(),
+                "CustomName": "",
+            })
+        except Exception:
+            pass
+        try:
+            for f in os.listdir(folder):
+                if f.startswith(name):
+                    try:
+                        os.remove(os.path.join(folder, f))
+                    except OSError:
+                        pass
+            if not os.listdir(folder):
+                os.rmdir(folder)
+        except OSError:
+            pass
+        if original_tc:
+            try:
+                tl.SetCurrentTimecode(original_tc)
+            except Exception:
+                pass
+        if original_page and original_page != "deliver":
+            try:
+                _open_page_serialized(resolve, original_page)
+            except Exception:
+                pass
 
 
 def _playhead_frame_full(proj, tl, p: Dict[str, Any]):
@@ -13158,14 +13374,32 @@ def _playhead_frame_full(proj, tl, p: Dict[str, Any]):
                 pass
 
 
+# quality -> capture route. "frame" renders and is the only frame-accurate one,
+# so it is the default; the aliases exist because issue #146 proposed
+# preview/full, and both of those mean "the frame", just at different sizes.
+_PLAYHEAD_QUALITY_ALIASES = {
+    "frame": "frame",
+    "full": "frame",
+    "preview": "frame",
+    "thumbnail": "thumbnail",
+    "still": "still",
+}
+
+
 def _playhead_frame_capture(p: Dict[str, Any]):
     """Dispatch a playhead capture, honouring an optional timeline_name."""
-    quality = str(p.get("quality", "preview")).lower()
-    if quality not in ("preview", "full"):
+    requested = str(p.get("quality", "frame")).lower()
+    quality = _PLAYHEAD_QUALITY_ALIASES.get(requested)
+    if not quality:
         return _err(
-            f"quality must be 'preview' or 'full'; got {quality!r}",
+            f"quality must be one of {sorted(_PLAYHEAD_QUALITY_ALIASES)}; got {requested!r}",
             code="INVALID_QUALITY", category="invalid_input",
         )
+    # "preview" asked for a fast, downscaled version of the real frame; honour
+    # the intent with a default bound rather than silently rendering full size.
+    if requested == "preview" and not p.get("max_width", p.get("maxWidth")):
+        p = dict(p)
+        p["max_width"] = 1280
     proj, tl, err = _get_tl()
     if err:
         return err
@@ -13193,9 +13427,11 @@ def _playhead_frame_capture(p: Dict[str, Any]):
                 code="SET_TIMELINE_FAILED", category="api_error",
             )
     try:
-        if quality == "full":
+        if quality == "thumbnail":
+            return _playhead_frame_preview(tl, p)
+        if quality == "still":
             return _playhead_frame_full(proj, tl, p)
-        return _playhead_frame_preview(tl, p)
+        return _playhead_frame_render(proj, tl, p)
     finally:
         if original_tl is not None:
             try:
@@ -22846,26 +23082,44 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
 
     Actions:
       capture(timecode?|frame?, quality?, max_width?, format?, timeline_name?) -> MCP image content
-      capabilities() -> {quality_modes, ffmpeg, current_page, playhead, timeline}
+      capabilities() -> {quality_modes, ffmpeg, render_settings_restorable, ...}
 
     capture parameters:
       timecode     Absolute ('01:00:15:12') or elapsed ('00:00:15:12') timeline
                    timecode. Omit to capture the current playhead.
       frame        Alternative to timecode: absolute timeline frame number.
-      quality      'preview' (default) — Resolve's thumbnail; fast, small, no
-                   files written. 'full' — full-resolution via Gallery still.
-      max_width    Cap the width in pixels to conserve context. 'full' needs
-                   ffmpeg to rescale; without it the call fails rather than
+      quality      'frame' (default) renders exactly that frame — the only
+                   frame-accurate route, full resolution, ~1s, works headless.
+                   'preview' is the same render bounded to max_width 1280.
+                   'thumbnail' is instant and touches nothing, but returns the
+                   CLIP's thumbnail (see below). 'still' uses a Gallery still.
+      max_width    Cap the width in pixels to conserve context. Needs ffmpeg on
+                   the render path; without it the call fails rather than
                    quietly returning a full-size frame.
-      format       'full' only: png (default), jpg, or tif.
+      format       jpg (default), png, or tif.
       timeline_name  Capture from a different timeline; it is made current for
                    the read and the original is restored afterwards.
 
-    Both qualities need the Color page (GetCurrentClipThumbnailImage and
-    GrabStill are Color-page-only); the tool switches there and restores the
-    user's page. A named timecode is restored to the original playhead position
-    afterwards, and 'full' removes the still it grabbed from the Gallery — a
-    capture is a read, not an edit.
+    Choosing a quality — the trade-off is accuracy against side effects:
+
+      'frame'/'preview'  Frame-exact. Renders one frame, so it changes
+                   project-level render settings. Format and codec are restored;
+                   TargetDir, CustomName and the mark range cannot be read back
+                   on builds without GetRenderSettings, so they are reset to the
+                   full timeline rather than truly restored. Refuses while
+                   another render is running.
+      'thumbnail'  Changes nothing and returns instantly, but it is NOT frame
+                   accurate: GetCurrentClipThumbnailImage returns the clip's
+                   thumbnail, identical for every frame of that clip (measured
+                   on Studio 19.1.3.7). Use it to see which clip is under the
+                   playhead, never to judge a specific frame. It also needs the
+                   Color page AND Resolve frontmost, or it returns nothing.
+      'still'      Full-resolution Gallery still. Requires the Gallery panel to
+                   be open on the Color page — no scripting call can open it,
+                   so this fails with a bare refusal when it is closed.
+
+    The playhead, the Color page, the current timeline and the Gallery are all
+    restored; a capture is a read of the picture, not an edit of the cut.
     """
     p = _params(params)
     if action == "capture":
@@ -22877,10 +23131,12 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
         except Exception:
             current_page = None
         payload = {
-            "quality_modes": ["preview", "full"],
-            "formats": {"preview": ["png"], "full": sorted(_PLAYHEAD_STILL_FORMATS)},
+            "quality_modes": ["frame", "preview", "thumbnail", "still"],
+            "default_quality": "frame",
+            "frame_accurate": {"frame": True, "preview": True, "thumbnail": False, "still": True},
+            "formats": ["jpg", "png", "tif"],
             "ffmpeg": bool(shutil.which("ffmpeg")),
-            "max_width_supported": {"preview": True, "full": bool(shutil.which("ffmpeg"))},
+            "max_width_supported": bool(shutil.which("ffmpeg")),
             "current_page": current_page,
         }
         _, tl, err = _get_tl()
