@@ -2,6 +2,73 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.97.3
+
+**`source_end` no longer has the start timecode baked into it.** Reported by
+[@TheUnlockr](https://github.com/TheUnlockr) in
+[#147](https://github.com/samuelgursky/davinci-resolve-mcp/issues/147) against
+Studio 21.0.4.5, and confirmed live here on 19.1.3.7.
+
+### Fixed
+
+- **The two source frame fields did not share an origin.** `source_start` comes
+  from `GetSourceStartFrame`, which is file-relative. `source_end` came from
+  `round(GetSourceEndTime x fps)` — and both second-readers answer in the media's
+  TIMECODE space, so on any clip with a non-zero start TC the whole start
+  timecode landed in `source_end`. On the reporter's Canon MP4 starting at
+  04:18:37;25 that produced `source_end` 468800 on a clip 10650 frames long. The
+  two fields could not be differenced, and anything sizing a pull from them —
+  `extract_source_frame_ranges`, `create_variant_from_ranges`, conform and
+  consolidation — was working from a number ~44x the clip's length.
+- `source_end` is now the SPAN between the two second-readers, anchored on
+  `source_start`. The offset cancels in the difference, so the result is
+  file-relative under either convention and needs no timecode parsing, no `Start
+  TC` property read, and no drop-frame arithmetic. On media starting at
+  00:00:00:00 the correction is exactly zero, so nothing moves there.
+- **The `_seconds` pair is rebased to match.** `source_start_seconds` used to
+  disagree with `source_start / source_fps` on any camera clip, despite being
+  documented as seconds into the source file. All four `source_*` fields are now
+  file-relative and say so.
+
+### Why the existing suite could not catch it
+
+The v2.93.0 work that introduced this was live-validated — but with synthetic
+media, which starts at 00:00:00:00. That makes the offset exactly zero, so a
+timecode-absolute reader is indistinguishable from a file-relative one in
+precisely that setup. The new harness closes the gap by generating synthetic
+media that *carries* a timecode.
+
+### Added
+
+- `tests/live_source_timecode_validation.py` — a controlled pair: two clips from
+  the same generator, identical except that one carries `-timecode 04:18:37;25`,
+  both cut into a timeline at a different rate. Any difference in the reported
+  fields is attributable to the timecode and nothing else. 17/17 checks pass on
+  Studio 19.1.3.7.
+- Six unit tests in `tests/test_source_frame_rate.py` pinning the reporter's
+  measured numbers, including that zero-TC media is untouched.
+
+### Documentation
+
+- The `GetSourceStartFrame` api_truth entry claimed the v2.93.0 product was "a
+  SOURCE frame by construction". That holds only for media starting at
+  00:00:00:00; the entry now says so, records the live confirmation, and carries
+  the rate-conversion caveat below.
+
+### Validation
+
+- Live on **DaVinci Resolve Studio 19.1.3.7** (not the 21.0.4.5 of the report):
+  on the timecoded copy `GetSourceStartTime` read 15527.812 s where the
+  file-relative answer is 10.010 s while `GetSourceStartFrame` read 300 — the two
+  readers in different spaces on the same edit point. The pre-fix formula gave
+  465461 on a 1799-frame clip. After the fix the timecoded copy reports exactly
+  what the zero-TC control reports, for every range tried.
+- One caveat the harness deliberately does *not* assert: `source_end` is not the
+  `endFrame` you sent when the rates differ. The record duration quantizes to
+  whole timeline frames, so a 93-source-frame request at 29.97 into a 24 fps
+  timeline consumes ~92.4 and *both* copies report 392. That is rate conversion,
+  not a timecode error.
+
 ## What's New in v2.97.2
 
 **The panel's inventory snapshot survives a large project.** Follow-up to the

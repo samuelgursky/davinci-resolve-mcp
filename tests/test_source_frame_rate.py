@@ -329,5 +329,97 @@ class SourceEndIsComputedInSourceSpaceTest(unittest.TestCase):
                          summary["duration"])
 
 
+class TimecodedMediaSharesTheFileRelativeOriginTest(unittest.TestCase):
+    """Issue #147: a non-zero start timecode must not leak into source_end.
+
+    Resolve's second-readers answer in the media's TIMECODE space, while
+    GetSourceStartFrame is file-relative. `round(GetSourceEndTime x fps)` was
+    therefore a source frame only on media starting at 00:00:00:00 — which is
+    exactly what the v2.93.0 live validation used, so the whole synthetic suite
+    was blind to it by construction.
+
+    The numbers below are the reporter's measured Canon MP4: 29.97 fps, 10650
+    frames, start TC 04:18:37;25 (15517.834 s), cut into a 24 fps timeline for a
+    75-frame record duration.
+    """
+
+    FPS = 29.97
+    CLIP_FRAMES = 10650
+    START_TC_SECONDS = 15517.834
+    SOURCE_START = 3637
+    START_TIME = 15639.187   # TC-absolute, as Resolve reports it
+    END_TIME = 15642.304     # TC-absolute, as Resolve reports it
+
+    def _item(self, **kwargs):
+        start_time, end_time = self.START_TIME, self.END_TIME
+
+        class Timecoded(TimelineItemStub):
+            def GetSourceStartTime(self):
+                return start_time
+
+            def GetSourceEndTime(self):
+                return end_time
+
+        params = {"source_start": self.SOURCE_START, "duration": 75}
+        params.update(kwargs)
+        return Timecoded(MediaPoolItemStub({"FPS": self.FPS}), **params)
+
+    def test_source_end_stays_inside_the_clip(self):
+        summary = _timeline_item_summary(self._item(), ("video", 1))
+        # The bug reported 468800 — 44x the clip's own length.
+        self.assertNotEqual(summary["source_end"], 468800)
+        self.assertLess(summary["source_end"], self.CLIP_FRAMES)
+        self.assertEqual(summary["source_end"], 3730)
+
+    def test_the_two_frame_fields_can_be_differenced(self):
+        summary = _timeline_item_summary(self._item(), ("video", 1))
+        span = summary["source_end"] - summary["source_start"]
+        # 75 record frames at 24 fps is 93.7 source frames at 29.97 — a plain
+        # rate conversion with no retime.
+        self.assertEqual(span, 93)
+
+    def test_the_seconds_share_the_frames_origin(self):
+        # Agreement is to within one frame, not to the decimal: the frame fields
+        # are quantized to frame boundaries while the seconds keep the remainder.
+        summary = _timeline_item_summary(self._item(), ("video", 1))
+        self.assertLess(
+            abs(summary["source_start_seconds"] * self.FPS - summary["source_start"]), 1.0)
+        self.assertLess(
+            abs(summary["source_end_seconds"] * self.FPS - summary["source_end"]), 1.0)
+        # The reported seconds are no longer the raw TC-absolute readings.
+        self.assertLess(summary["source_start_seconds"], self.START_TC_SECONDS)
+
+    def test_the_seconds_span_is_preserved(self):
+        # Rebasing shifts the origin; it must not change the clip's length.
+        summary = _timeline_item_summary(self._item(), ("video", 1))
+        self.assertAlmostEqual(
+            summary["source_end_seconds"] - summary["source_start_seconds"],
+            self.END_TIME - self.START_TIME, places=2)
+
+    def test_zero_timecode_media_is_untouched(self):
+        # The same item with the offset removed: the correction must be exactly
+        # zero, or every existing consumer of zero-TC media moves under them.
+        class ZeroTC(TimelineItemStub):
+            def GetSourceStartTime(self):
+                return 300 / 29.97
+
+            def GetSourceEndTime(self):
+                return 735 / 29.97
+
+        summary = _timeline_item_summary(
+            ZeroTC(MediaPoolItemStub({"FPS": 29.97}), source_start=300, duration=435),
+            ("video", 1))
+        self.assertEqual(summary["source_end"], 735)
+        self.assertAlmostEqual(summary["source_start_seconds"], 300 / 29.97, places=3)
+
+    def test_a_reader_disagreement_still_refuses_an_inverted_span(self):
+        # End before start in TC space: fall back rather than emit a negative
+        # span, exactly as on the uncalibrated path.
+        item = self._item()
+        item.GetSourceEndTime = lambda: self.START_TIME - 5.0
+        summary = _timeline_item_summary(item, ("video", 1))
+        self.assertGreater(summary["source_end"], summary["source_start"])
+
+
 if __name__ == "__main__":
     unittest.main()

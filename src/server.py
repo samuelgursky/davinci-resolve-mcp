@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.97.2"
+VERSION = "2.97.3"
 
 import base64
 import os
@@ -3138,7 +3138,36 @@ def _timeline_item_source_end_frame(item):
         return None
 
 
-def _timeline_item_source_end_exclusive(item, source_start, duration, source_fps):
+def _timeline_item_source_time_offset(item, source_start, source_fps, source_start_origin):
+    """Seconds between the second-readers' origin and the start of the file.
+
+    `GetSourceStartTime`/`GetSourceEndTime` answer in the media's TIMECODE space,
+    so on any clip with a non-zero start TC they carry that offset — a Canon MP4
+    starting at 04:18:37;25 reads 15639.187 s at source frame 3637, not the
+    121.355 s that frame is into the file. `GetSourceStartFrame`, meanwhile, is
+    file-relative. Mixing the two spaces is what made `source_end` exceed the
+    clip's own length by the whole start timecode (#147).
+
+    The offset is recoverable from the item alone, with no timecode parsing and
+    no drop-frame arithmetic: the same edit point read both ways differs by
+    exactly the offset. Returns None when it cannot be established, and 0.0 on
+    media starting at 00:00:00:00 — where every caller below is then a no-op,
+    which is why zero-TC behavior does not move.
+    """
+    if source_start is None or not source_fps:
+        return None
+    # GetLeftOffset counts an audio item in TIMELINE frames, so it is not the
+    # same space as the second-readers and cannot calibrate them.
+    if source_start_origin != "GetSourceStartFrame":
+        return None
+    start_seconds = _timeline_item_source_time(item, "GetSourceStartTime")
+    if start_seconds is None:
+        return None
+    return start_seconds - (source_start / source_fps)
+
+
+def _timeline_item_source_end_exclusive(item, source_start, duration, source_fps,
+                                        source_start_origin=None):
     """The EXCLUSIVE source-space end frame — the contract every caller assumes.
 
     `source_end` has always been exclusive (`src_end_excl` at the append site,
@@ -3161,23 +3190,47 @@ def _timeline_item_source_end_exclusive(item, source_start, duration, source_fps
     the two regimes (see above), so building on it would mean branching on a
     rate comparison this function would first have to reconstruct.
 
+    That product is only a FILE-relative frame when the media starts at
+    00:00:00:00, though. `GetSourceEndTime` answers in the media's timecode
+    space, so on camera footage carrying time-of-day or continuous TC it bakes
+    the start timecode into the number: measured on a Canon MP4 starting at
+    04:18:37;25, it produced source_end 468800 on a clip only 10650 frames long
+    (#147). `source_start` is file-relative, so the two fields stopped sharing an
+    origin and could no longer be differenced.
+
+    The span between the two second-readers is offset-free whichever space they
+    are in, so anchoring that span on the file-relative `source_start` is correct
+    under both conventions and needs no timecode parsing. On zero-TC media it
+    reproduces the plain product exactly, so nothing moves there.
+
     Falls back to the historical `source_start + duration` when the second-reader
     or the rate is unreadable — same value as before, so an older build loses the
     correction rather than the field.
     """
     end_seconds = _timeline_item_source_time(item, "GetSourceEndTime")
     if end_seconds is not None and source_fps:
-        end_frame = int(round(end_seconds * source_fps))
-        # A source end at or before the start means the readers disagree about
-        # this item; the derived value is the safer answer than a negative span.
-        if source_start is None or end_frame > source_start:
-            return end_frame
+        offset = _timeline_item_source_time_offset(
+            item, source_start, source_fps, source_start_origin)
+        if offset is not None:
+            span = int(round((end_seconds - offset) * source_fps)) - source_start
+            # A non-positive span means the readers disagree about this item;
+            # the derived value is safer than an inverted range.
+            if span > 0:
+                return source_start + span
+        else:
+            # No way to calibrate the origin: pre-#147 behavior, which is exact
+            # on media starting at 00:00:00:00 and on every build old enough to
+            # lack GetSourceStartTime that we have measured.
+            end_frame = int(round(end_seconds * source_fps))
+            if source_start is None or end_frame > source_start:
+                return end_frame
     if source_start is not None and duration is not None:
         return source_start + duration
     return None
 
 
-def _timeline_item_source_seconds(item, source_start, source_end, source_fps):
+def _timeline_item_source_seconds(item, source_start, source_end, source_fps,
+                                  source_start_origin=None):
     """(start_seconds, end_seconds) into the source file, or None each.
 
     Prefers Resolve's second-readers, then a source-space frame divided by the
@@ -3185,14 +3238,26 @@ def _timeline_item_source_seconds(item, source_start, source_end, source_fps):
     is ``source_start + timeline_duration``, so on a 24 fps WAV in a 29.97 fps
     timeline it overstates the clip's span by 25% (18.1 s reported for a
     14.5 s clip). An unknown end reads as unknown.
+
+    Both readers answer in the media's TIMECODE space, so they are rebased onto
+    the file-relative origin the frame fields use (#147) — otherwise
+    ``source_start_seconds`` disagrees with ``source_start / source_fps`` on any
+    camera clip, and "seconds into the source file" is not what the field holds.
+    The correction is exactly zero on media starting at 00:00:00:00.
     """
+    offset = _timeline_item_source_time_offset(
+        item, source_start, source_fps, source_start_origin)
     start_seconds = _timeline_item_source_time(item, "GetSourceStartTime")
     if start_seconds is None:
         start_seconds = _source_frames_to_seconds(source_start, source_fps)
+    elif offset is not None:
+        start_seconds = round(start_seconds - offset, 3)
     end_seconds = _timeline_item_source_time(item, "GetSourceEndTime")
     if end_seconds is None:
         end_seconds = _source_frames_to_seconds(
             _timeline_item_source_end_frame(item), source_fps)
+    elif offset is not None:
+        end_seconds = round(end_seconds - offset, 3)
     return start_seconds, end_seconds
 
 
@@ -3221,7 +3286,7 @@ def _timeline_item_summary(item, track_info=None, *, media_pool_item=None,
     # of whichever reader produced source_start, so the audio caveat that blanks
     # source_fps must not blank the end as well.
     source_end = _timeline_item_source_end_exclusive(
-        item, source_start, duration, media_fps)
+        item, source_start, duration, media_fps, source_start_origin)
     source_fps = media_fps
     if source_start_origin == "GetLeftOffset" and (track_info or (None,))[0] == "audio":
         # GetLeftOffset counts an audio item in TIMELINE frames, so pairing it
@@ -3229,7 +3294,7 @@ def _timeline_item_summary(item, track_info=None, *, media_pool_item=None,
         # the frame and leave the rate unknown rather than convert it wrong.
         source_fps = None
     source_start_seconds, source_end_seconds = _timeline_item_source_seconds(
-        item, source_start, source_end, source_fps)
+        item, source_start, source_end, source_fps, source_start_origin)
     summary = {
         "timeline_item_id": _safe_timeline_item_id(item),
         "name": _safe_timeline_item_name(item),
@@ -3238,10 +3303,13 @@ def _timeline_item_summary(item, track_info=None, *, media_pool_item=None,
         "start": start,
         "end": end,
         "duration": duration,
+        # All four source_* fields below are FILE-relative: frame 0 / 0.0 s is the
+        # first frame of the media, whatever timecode the camera stamped on it.
         "source_start": source_start,
-        # EXCLUSIVE source frame. Read from source space via GetSourceEndTime;
-        # falls back to source_start + TIMELINE duration only when that reader or
-        # the media rate is unavailable, which is the old unit-mixed value.
+        # EXCLUSIVE source frame. The span between Resolve's second-readers,
+        # anchored on source_start so a non-zero start timecode cannot leak in;
+        # falls back to source_start + TIMELINE duration only when those readers
+        # or the media rate are unavailable, which is the old unit-mixed value.
         "source_end": source_end,
         "source_fps": source_fps,
         "source_start_seconds": source_start_seconds,
@@ -22275,10 +22343,13 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         freezes the PROJECT's rate at import, so it differs from the timeline whenever
         the project moved afterwards, and dividing by the timeline rate is then wrong by
         minutes. source_fps is null when the rate could not be read; treat the frames as
-        unitless then, do not assume the timeline's. source_end comes from
-        GetSourceEndTime x source_fps, so it is a source frame even when the rates
-        differ; it falls back to source_start + TIMELINE duration (unit-mixed) only when
-        that reader or the rate is unavailable.
+        unitless then, do not assume the timeline's. All four source_* fields are
+        FILE-relative — frame 0 is the head of the media, whatever timecode the camera
+        stamped on it. source_end is the span between Resolve's source second-readers
+        anchored on source_start, so it is a source frame even when the rates differ and
+        even on media with a non-zero start TC (those readers are timecode-absolute; the
+        offset cancels in the span). It falls back to source_start + TIMELINE duration
+        (unit-mixed) only when those readers or the rate are unavailable.
       detect_gaps_overlaps(track_types?, min_gap?) -> {gaps, overlaps}
       source_range_report(handles?, merge?) -> {ranges, occurrences}
       export_timeline_checked(path, format?|type?, subtype?, require_temp_path?, dry_run?, background?) -> {success, path, size | job_id}
