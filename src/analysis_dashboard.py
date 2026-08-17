@@ -5981,7 +5981,10 @@ HTML = r"""<!doctype html>
       const clips = filteredResolveClips(allClips);
       const projectLabel = payload.project?.name || 'Current Resolve project';
       const visibleCounts = summarizeVisibleClips(clips);
-      project.textContent = `${projectLabel} · ${clipLabel(clips.length)}`;
+      // A cached snapshot may hold only the first INVENTORY_SNAPSHOT_MAX_CLIPS
+      // clips; say so rather than letting the prefix read as the clip count.
+      const partialNote = payload.snapshot_partial ? ` (cached preview of ${payload.snapshot_total})` : '';
+      project.textContent = `${projectLabel} · ${clipLabel(clips.length)}${partialNote}`;
       const hasAnalyzableClips = clips.some(clip => clip.analyzable);
       selectBtn.disabled = !hasAnalyzableClips;
       analyzeBtn.disabled = !hasAnalyzableClips;
@@ -6647,16 +6650,60 @@ HTML = r"""<!doctype html>
     // Persist the last good inventory so reopening the dashboard paints the
     // previous snapshot instantly (with a "refreshing" hint) instead of sitting
     // on "connection pending" until the first fetch returns.
+    // localStorage gives us roughly 5MB per origin, and a clip record — file
+    // path, bin path, status reasons, analysis overlay — runs several hundred
+    // bytes. inventory_limit reaches 10000, so a large project overruns the
+    // quota, and the write then throws and leaves the panel with no snapshot at
+    // all. Cache a bounded prefix instead, and carry the real clip count so a
+    // partial snapshot never presents itself as the whole inventory.
+    const INVENTORY_SNAPSHOT_MAX_CLIPS = 750;
+
     function inventorySnapshotKey() {
       return 'resolveMcpInventory:' + (state.activeContext?.project_root || state.boot?.project_root || state.boot?.project_name || 'default');
     }
+    function inventorySnapshotPayload(payload) {
+      const clips = payload.clips || [];
+      if (clips.length <= INVENTORY_SNAPSHOT_MAX_CLIPS) return payload;
+      return {
+        ...payload,
+        clips: clips.slice(0, INVENTORY_SNAPSHOT_MAX_CLIPS),
+        snapshot_partial: true,
+        snapshot_total: clips.length,
+      };
+    }
+    // Drop every cached inventory, including this project's own stale value —
+    // the panel is about to rewrite it, and snapshots for projects the user has
+    // since moved on from are the usual reason the quota is full.
+    function pruneInventorySnapshots() {
+      try {
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i += 1) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('resolveMcpInventory:')) keys.push(key);
+        }
+        keys.forEach(key => localStorage.removeItem(key));
+      } catch (error) {
+        console.warn('Could not prune inventory snapshots', error);
+      }
+    }
     function saveInventorySnapshot(payload) {
       if (!payload?.resolve_available) return;
+      const key = inventorySnapshotKey();
+      const raw = JSON.stringify({ saved_at: Date.now(), payload: inventorySnapshotPayload(payload) });
       try {
-        localStorage.setItem(inventorySnapshotKey(), JSON.stringify({ saved_at: Date.now(), payload }));
+        localStorage.setItem(key, raw);
       } catch (error) {
-        // Quota or serialization failure is non-fatal — the snapshot is a nicety.
-        console.warn('Could not cache inventory snapshot', error);
+        // Out of quota: clear the cached inventories and try once more.
+        pruneInventorySnapshots();
+        try {
+          localStorage.setItem(key, raw);
+        } catch (retryError) {
+          // Still no room — drop our key so a snapshot from an older walk can't
+          // outlive the inventory it described. Non-fatal; the panel just paints
+          // "connection pending" until the first fetch returns.
+          try { localStorage.removeItem(key); } catch (removeError) { /* nothing left to do */ }
+          console.warn('Could not cache inventory snapshot', retryError);
+        }
       }
     }
     function loadInventorySnapshot() {
@@ -7170,7 +7217,11 @@ HTML = r"""<!doctype html>
       const poll = enabled ? `polling every ${Math.round(interval / 1000)}s` : 'polling off';
       const visible = state.resolveMedia?.clips ? clipLabel(filteredResolveClips(state.resolveMedia.clips).length) : 'no media snapshot';
       const prefix = state.mediaRefreshing ? 'refreshing' : poll;
-      const stale = state.resolveMediaStale ? 'cached · ' : '';
+      const stale = state.resolveMediaStale
+        ? (state.resolveMedia?.snapshot_partial
+            ? `cached first ${state.resolveMedia.clips.length} of ${state.resolveMedia.snapshot_total} · `
+            : 'cached · ')
+        : '';
       el.textContent = `${stale}${prefix} · last ${last} · ${visible}${extra ? ` · ${extra}` : ''}`;
     }
 

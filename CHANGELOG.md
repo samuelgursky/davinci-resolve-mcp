@@ -2,6 +2,39 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.97.2
+
+**The panel's inventory snapshot survives a large project.** Follow-up to the
+v2.97.1 fix: now that `inventory_limit` actually reaches the panel, the cache it
+feeds has to cope with what arrives.
+
+### Fixed
+
+- **The localStorage snapshot silently stopped working above ~5MB.** The panel
+  caches the last inventory so reopening it paints the previous view instantly
+  instead of "connection pending". That write was unbounded — and with
+  `inventory_limit` reaching 10000 clips, each carrying a file path, bin path,
+  status reasons, and the analysis overlay, it overruns the per-origin quota. The
+  write then threw, was caught, logged a `console.warn` no one reads, and the
+  instant-paint feature quietly did nothing on exactly the big projects where a
+  slow first fetch makes it worth having. The snapshot is now capped at 750
+  clips; on a quota failure the panel prunes cached inventories (including
+  snapshots for projects the user has moved on from) and retries once, and if
+  that still fails it removes its own key so a snapshot cannot outlive the walk
+  it described.
+- **A truncated snapshot no longer reads as a complete inventory.** A capped
+  snapshot carries `snapshot_partial` and the true clip count, and both surfaces
+  that show a number say so — the header reads `(cached preview of 3015)` and the
+  poll status reads `cached first 750 of 3015`. Capping the cache without this
+  would have re-created the v2.97.1 bug one layer down: a number presented as the
+  inventory that isn't.
+
+### Added
+
+- `tests/test_dashboard_inventory_snapshot.py` — guards that the inventory fetch
+  sends no `limit` of its own (the v2.97.1 regression), that the snapshot stays
+  capped, and that a partial snapshot declares itself.
+
 ## What's New in v2.97.1
 
 **The control panel honors `media_analysis.inventory_limit` again.** Thanks to
