@@ -69,23 +69,29 @@ skill routes, these two walk a whole job:
 - `resolve-tighten-recording` (`.claude/skills/resolve-tighten-recording/SKILL.md`)
   — **subtractive**: remove dead air from one long single-take recording.
 
-Two more sit outside the domain routing:
+Three more sit outside the domain routing:
 
 - `house-style` (`.claude/skills/house-style/SKILL.md`) — accumulated editorial
   corrections, so the same note is not given twice. Claude-only; append to it
   when an editorial decision is corrected.
 - `resolve-session` (`.claude/skills/resolve-session/SKILL.md`) — `/resolve-session`
   connects, confirms edition and bridge, and reports project/timeline/pool state.
+- `release-check` (`.claude/skills/release-check/SKILL.md`) — `/release-check`
+  walks a version bump using [docs/process/release-process.md](process/release-process.md)
+  as the sole source; the skill wraps that doc, it does not duplicate it.
 
 The offline half of every one is the advanced server; see
 [Advanced Server](../resolve-advanced/README.md).
 
 ## Claude Code Hooks and Subagents
 
-Two `PreToolUse` guards enforce rules `AGENTS.md` states in prose. They ship as
-scripts but are **not** wired up by default — the repository does not enable
-hooks on your behalf. Opt in by adding the block below to your own
-`.claude/settings.local.json` (gitignored, so it stays yours):
+Four hooks live in `.claude/hooks/` — two `PreToolUse` guards enforcing rules
+`AGENTS.md` states in prose, and two `PostToolUse` checks that surface
+engineering drift right after the edit that caused it instead of at the next
+test run. All four ship as scripts but are **not** wired up by default — the
+repository does not enable hooks on your behalf. Opt in by adding the block
+below to your own `.claude/settings.local.json` (gitignored, so it stays
+yours):
 
 ```json
 {
@@ -111,13 +117,30 @@ hooks on your behalf. Opt in by adding the block below to your own
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/agent_rules_drift_check.py",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/run_matching_test.py",
+            "timeout": 90
+          }
+        ]
+      }
     ]
   }
 }
 ```
 
 Hooks are read at session start, so restart Claude Code after adding them. The
-two guards are:
+four are:
 
 - `.claude/hooks/frame_verification_guard.py` — denies grade-applying actions on
   `timeline_item_color` until the session has actually looked at a
@@ -127,15 +150,36 @@ two guards are:
 - `.claude/hooks/source_media_guard.py` — denies shell commands that write,
   move, or delete source media outside a scratch root. Reads (`ffprobe`, and
   `ffmpeg` writing into scratch) pass.
+- `.claude/hooks/agent_rules_drift_check.py` — after an edit to anything
+  `generate.mjs` reads (`docs/SKILL.md`, `docs/kernels/README.md`,
+  `resolve-advanced/README.md`, and `generate.mjs` itself, which carries the
+  DOMAINS manifest inline) or to `AGENTS.md`, which it writes, runs
+  `node scripts/agent-rules/generate.mjs --check` and surfaces the result. It
+  distinguishes real drift from a generator that threw before it could look —
+  regenerating fixes the first and not the second. Informational only; never
+  blocks. Skips quietly if `node` isn't on `PATH`. **If `generate.mjs` grows a
+  new input, add it to `SOURCE_PATHS` in the hook** — an unwatched input is a
+  silent hook on exactly the edit it exists to catch.
+- `.claude/hooks/run_matching_test.py` — after an edit to `src/<module>.py`,
+  runs the matching `tests/test_<module>.py` if one exists, using the project
+  venv (`venv/bin/python`) so `pytest` is actually importable. Informational
+  only; skips quietly if there's no matching test file or no working `pytest`.
+  A fast partial net, not coverage: 72 of the 126 modules under `src/` have a
+  matching test under this convention, densely in `src/utils/` and not at all
+  for `src/server.py` or `src/granular/common.py`. Silence means "no matching
+  test file", not "this edit is fine".
 
-Two review subagents in `.claude/agents/` run in their own context so frame
-images stay out of the main session:
+Three review subagents in `.claude/agents/` run in their own context so bulky
+output (frame images, full test transcripts) stays out of the main session:
 
 - `cut-reviewer` — screens an assembled timeline from its frames and reports on
   pacing, shot order, continuity, and coverage gaps.
 - `grade-match-verifier` — measures shot match numerically from rendered frames
   against the project's R−B tolerance, and reports mask pixel counts so an empty
   skin mask cannot pass as a match.
+- `drift-guard-reviewer` — runs the doc/generated-file drift-guard test family
+  (the same checks `npm-publish.yml` runs before every release) and reports
+  which files are stale relative to their source, without fixing them.
 
 ## Authoring References
 
