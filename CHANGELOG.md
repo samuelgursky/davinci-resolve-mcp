@@ -117,6 +117,13 @@ state file and panel pidfile move out of shared locations at the same time.
   response, so an unrelated document sitting in the export folder could reach an
   assistant's context. Only staged files are read now.
 
+  Live-verified after release on Studio 19.1.3.7 (macOS, Color page, Gallery
+  panel open): Resolve's `ExportStills` writes into the staging subdirectory — a
+  257 KB JPEG and its 28 KB `.drx` came back inlined — a bystander file in the
+  same folder survived untouched, the folder itself was kept, and
+  `cleanup: false` moved both files up into it. That subdirectory write was the
+  one claim the offline fixtures could not make.
+
 ### Added
 
 - `tests.test_gallery_still_export_cleanup` runs the action against a real temp
