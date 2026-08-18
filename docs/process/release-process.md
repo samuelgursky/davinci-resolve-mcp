@@ -26,6 +26,14 @@ Every release bump must update all version surfaces:
 - `src/granular/common.py`
 - `install.py`
 - `package.json`
+- `package-lock.json` — regenerate with `npm install --package-lock-only`, do
+  not hand-edit the version. It carries the version in two places and, more
+  importantly, the resolved dependency tree. When it disagrees with
+  `package.json`, **`npm ci` refuses to install at all** (`EUSAGE — Missing: X
+  from lock file`), which breaks CI, fresh clones, and container builds while
+  `npm install` and `npm publish` stay green and hide it. The
+  `tests.test_import` guard `test_package_lock_in_sync` fails the suite on
+  either drift.
 - README version badge
 - README current stats or latest-release summary when they changed
 - `README.zh-CN.md` — the Simplified Chinese translation. Update its version
@@ -62,6 +70,7 @@ Always run static checks before release:
 
 ```bash
 venv/bin/python tests/test_import.py
+npm install --package-lock-only --no-audit --no-fund   # re-stage package-lock.json if it moved
 venv/bin/python scripts/audit_api_parity.py
 venv/bin/python scripts/gen_api_limitations.py --check
 node scripts/agent-rules/generate.mjs --check
@@ -71,6 +80,13 @@ node bin/davinci-resolve-mcp.mjs --version
 npm pack --dry-run
 git diff --check
 ```
+
+`test_import` carries `test_package_lock_in_sync`, which is the actual gate on the
+lockfile: it asserts both version fields and the root dependency blocks match
+`package.json`. Run the `npm install --package-lock-only` line above first so the
+regeneration is in the working tree when the test reads it — that ordering is why
+the check is a regeneration followed by a test, not a `git diff --exit-code`,
+which would fire on the release bump's own legitimate change.
 
 `test_duplicate_definitions` asserts no module-level name is defined twice under
 `src/`. A second `def foo` silently replaces the first, and in a module the size

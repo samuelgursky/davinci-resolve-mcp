@@ -2,6 +2,42 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.97.5
+
+**`npm ci` was failing outright, and nothing in the release path noticed.**
+No server behavior changed; this is packaging and release-process hardening.
+
+### Fixed
+
+- **`package-lock.json` was seven releases stale.** It still carried
+  `2.90.0`, and — the part that actually broke things — two
+  `optionalDependencies` added since then, `js-yaml` and `pg`, were never
+  locked. `npm ci` refuses to install at all when the lockfile and
+  `package.json` disagree, so every reproducible install path failed with
+  `EUSAGE — Missing: js-yaml@4.3.1 from lock file` (plus `pg` and its nine
+  transitive deps). CI, fresh contributor clones, and container builds all hit
+  it. `npm install` and `npm publish` resolve independently of the lockfile
+  and stayed green throughout, which is why it survived seven releases.
+  Regenerated with `npm install --package-lock-only`; `npm ci` now installs
+  175 packages clean.
+
+### Added
+
+- **`tests.test_import::test_package_lock_in_sync`** — asserts both version
+  fields in the lockfile match `package.json`, and that the root
+  `dependencies` / `devDependencies` / `optionalDependencies` blocks match
+  exactly. The second half is the one that matters: the version fields being
+  right is not evidence `npm ci` works, and dependency drift is what actually
+  breaks it. Verified to fail on each drift mode independently.
+
+### Changed
+
+- `docs/process/release-process.md` lists `package-lock.json` under "Files To
+  Update" with the regeneration command, and Required Validation now
+  regenerates the lockfile before `test_import` reads it. The lockfile was
+  never on the checklist, which is why the drift was never a step anyone
+  skipped — it was a step that did not exist.
+
 ## What's New in v2.97.4
 
 **Drift is caught at the edit, not at publish time.** Tooling and docs only —

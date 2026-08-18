@@ -138,6 +138,39 @@ def test_npm_package_metadata():
     assert (PROJECT_ROOT / "bin" / "davinci-resolve-mcp.mjs").exists()
 
 
+def test_package_lock_in_sync():
+    """package-lock.json must track package.json — version AND dependencies.
+
+    `npm ci` refuses to install at all when the two disagree ("Missing: X from
+    lock file"), so a stale lock breaks every reproducible install — CI, a
+    fresh contributor clone, a container build — while `npm install` and
+    `npm publish` stay green and hide it. That is exactly how this drifted
+    seven releases: the version fell behind at 2.90.0, and two
+    optionalDependencies (js-yaml, pg) were added without ever being locked.
+
+    Regenerate with `npm install --package-lock-only`, and commit the result.
+    """
+    package = json.loads((PROJECT_ROOT / "package.json").read_text())
+    lock = json.loads((PROJECT_ROOT / "package-lock.json").read_text())
+    root = lock["packages"][""]
+
+    assert lock["version"] == package["version"], (
+        f"package-lock.json version {lock['version']!r} != package.json "
+        f"{package['version']!r} — run: npm install --package-lock-only"
+    )
+    assert root["version"] == package["version"], (
+        f"package-lock.json packages[''] version {root['version']!r} != "
+        f"package.json {package['version']!r} — run: npm install --package-lock-only"
+    )
+
+    # The block that actually decides whether `npm ci` runs.
+    for block in ("dependencies", "devDependencies", "optionalDependencies"):
+        assert package.get(block, {}) == root.get(block, {}), (
+            f"package.json {block} != package-lock.json packages[''] {block} — "
+            f"npm ci will fail with EUSAGE. Run: npm install --package-lock-only"
+        )
+
+
 def test_utils_syntax():
     utils_dir = PROJECT_ROOT / "src" / "utils"
     for py_file in utils_dir.glob("*.py"):
