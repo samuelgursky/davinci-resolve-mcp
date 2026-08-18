@@ -189,7 +189,8 @@ def _probe_color_transfer(path: str) -> Optional[str]:
         "-show_entries", "stream=color_transfer", "-of", "default=nw=1:nk=1", path,
     ]
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=30, check=False)
+        proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=30, check=False)
     except (subprocess.TimeoutExpired, OSError):
         return None
     value = (proc.stdout or "").strip().lower()

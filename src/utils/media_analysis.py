@@ -335,8 +335,20 @@ def _ensure_path_includes_standard_tool_dirs() -> None:
     /opt/homebrew/bin/ffprobe. Subprocess calls (subprocess.run(["ffprobe"...]))
     then also fail to find the binary. Prepending the standard tool dirs here
     fixes both detection and execution for every importer of this module.
+
+    The interpreter's own script directory is one of them, and it was missing.
+    A console script installed into the server's virtualenv — `pip install
+    openai-whisper` puts `whisper` in `venv/Scripts` on Windows, `venv/bin`
+    elsewhere — is only on PATH when that environment has been *activated*, and
+    nothing activates it: the client launches `venv/python server.py` directly.
+    So the tool was installed, working, and invisible, and `capabilities`
+    reported `whisper_cli.available: false` with no hint as to why (#153, where
+    the workaround that appeared to fix it was a shim placed on PATH by hand).
     """
     candidates = [
+        # The venv this server is running from, first: a tool installed
+        # deliberately alongside it should win over an older copy elsewhere.
+        os.path.dirname(os.path.abspath(sys.executable)),
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
         "/usr/local/bin",

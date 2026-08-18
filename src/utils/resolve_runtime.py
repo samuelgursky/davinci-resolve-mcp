@@ -68,13 +68,23 @@ def _process_lines() -> Optional[List[str]]:
         if platform.system().lower() == "windows":
             # `tasklist` prints no command line, so the flag is invisible there.
             # WMIC does print it and is what makes headless detection possible.
+            #
+            # Decoded explicitly: `text=True` alone decodes with the locale
+            # codepage, which raises UnicodeDecodeError on a byte cp1252 has no
+            # mapping for — and this read is the input to the second-instance
+            # guard, so it must fail to "cannot tell", never to an exception.
+            # ASCII is byte-identical under both codecs, so the matching this
+            # feeds is unchanged; what WMIC emits for a non-ASCII install path
+            # on a non-English Windows is not something we can verify here.
             out = subprocess.run(
                 ["wmic", "process", "where", "name='Resolve.exe'", "get", "CommandLine"],
-                capture_output=True, text=True, timeout=10, check=False,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=10, check=False,
             )
         else:
             out = subprocess.run(
-                ["ps", "-Ao", "command="], capture_output=True, text=True, timeout=10, check=False
+                ["ps", "-Ao", "command="], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=10, check=False,
             )
         if out.returncode != 0 and not out.stdout:
             return None

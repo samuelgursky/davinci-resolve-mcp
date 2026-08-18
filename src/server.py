@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.98.1"
+VERSION = "2.98.2"
 
 import base64
 import os
@@ -1724,8 +1724,8 @@ def _activate_resolve_window() -> Dict[str, Any]:
             import subprocess
             proc = subprocess.run(
                 ["osascript", "-e", 'tell application "DaVinci Resolve" to activate'],
-                capture_output=True, text=True, timeout=5,
-                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1738,8 +1738,8 @@ def _activate_resolve_window() -> Dict[str, Any]:
                 ["powershell", "-NoProfile", "-Command",
                  "$s = New-Object -ComObject WScript.Shell; "
                  "$null = $s.AppActivate('DaVinci Resolve')"],
-                capture_output=True, text=True, timeout=5,
-                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1751,8 +1751,8 @@ def _activate_resolve_window() -> Dict[str, Any]:
         if shutil.which("wmctrl"):
             proc = subprocess.run(
                 ["wmctrl", "-a", "DaVinci Resolve"],
-                capture_output=True, text=True, timeout=5,
-                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1762,8 +1762,8 @@ def _activate_resolve_window() -> Dict[str, Any]:
         if shutil.which("xdotool"):
             proc = subprocess.run(
                 ["xdotool", "search", "--name", "DaVinci Resolve", "windowactivate"],
-                capture_output=True, text=True, timeout=5,
-                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1794,8 +1794,8 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
             )
             proc = subprocess.run(
                 ["osascript", "-e", script],
-                capture_output=True, text=True, timeout=5,
-                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, stdin=subprocess.DEVNULL,
             )
             return {
                 "sent": proc.returncode == 0,
@@ -1810,8 +1810,8 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
                  "Add-Type -AssemblyName System.Windows.Forms; "
                  "Start-Sleep -Milliseconds 150; "
                  "[System.Windows.Forms.SendKeys]::SendWait('+i')"],
-                capture_output=True, text=True, timeout=5,
-                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, stdin=subprocess.DEVNULL,
             )
             return {
                 "sent": proc.returncode == 0,
@@ -1824,8 +1824,8 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
         if shutil.which("xdotool"):
             proc = subprocess.run(
                 ["xdotool", "search", "--name", "DaVinci Resolve", "key", "--window", "%@", "shift+i"],
-                capture_output=True, text=True, timeout=5,
-                stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, stdin=subprocess.DEVNULL,
             )
             return {"sent": proc.returncode == 0, "platform": "linux", "tool": "xdotool", "shortcut": "Shift+I"}
         return {"sent": False, "platform": sys.platform, "note": "no key-send tool found"}
@@ -15286,7 +15286,8 @@ def _port_owner_pid(host: str, port: int) -> Optional[int]:
     try:
         result = subprocess.run(
             ["lsof", "-nP", "-iTCP:" + str(port), "-sTCP:LISTEN", "-t"],
-            capture_output=True, timeout=3, text=True, check=False,
+            capture_output=True, timeout=3, text=True, encoding="utf-8",
+            errors="replace", check=False,
             stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -16561,6 +16562,8 @@ def _make_spec_hook_runner(timeout: float = 120.0):
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             return proc.returncode == 0
         except Exception as exc:
@@ -27141,7 +27144,8 @@ def _validate_lua_syntax(source: str) -> Dict[str, Any]:
         f.write(source)
         tmp = f.name
     try:
-        result = subprocess.run([luac, "-p", tmp], capture_output=True, text=True, timeout=10,
+        result = subprocess.run([luac, "-p", tmp], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=10,
                                 stdin=subprocess.DEVNULL)
         if result.returncode == 0:
             return {"valid": True, "errors": None, "checker": luac}
@@ -27694,6 +27698,12 @@ def _python_env_for_resolve() -> Dict[str, str]:
     env = os.environ.copy()
     env["RESOLVE_SCRIPT_API"] = RESOLVE_API_PATH
     env["RESOLVE_SCRIPT_LIB"] = RESOLVE_LIB_PATH
+    # The child writes its stdout into a pipe, so Python picks the locale
+    # codepage rather than the console's — cp1252 on a default Windows install.
+    # A script that prints a non-Latin-1 character then dies with
+    # UnicodeEncodeError instead of returning its output, and the failure is
+    # attributed to the script rather than to the pipe it was handed (#153).
+    env["PYTHONIOENCODING"] = "utf-8"
     pp = env.get("PYTHONPATH", "")
     if RESOLVE_MODULES_PATH not in pp:
         env["PYTHONPATH"] = (RESOLVE_MODULES_PATH +
@@ -27741,7 +27751,8 @@ def _execute_python_script(path: str, args: List[str],
     cmd = [sys.executable, "-c", _PY_SCRIPT_EXIT_GUARD, path] + [str(a) for a in args]
     try:
         result = safe_run(cmd, env=_python_env_for_resolve(),
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired as e:
         return _err(f"Script timed out after {timeout}s. "
                     f"Partial stdout: {(e.stdout or '')[:1000]}")

@@ -216,7 +216,8 @@ def _process_name(pid: int) -> str:
 
         out = subprocess.run(
             ["ps", "-p", str(pid), "-o", "comm="],
-            capture_output=True, text=True, timeout=5, check=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=5, check=False,
         )
         return (out.stdout or "").strip()
     except Exception:  # pragma: no cover - defensive

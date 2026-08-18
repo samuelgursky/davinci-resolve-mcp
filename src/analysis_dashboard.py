@@ -14569,7 +14569,8 @@ def _launch_claude_code_terminal() -> Dict[str, Any]:
     try:
         check = subprocess.run(
             ["osascript", "-e", 'application "iTerm" is running'],
-            capture_output=True, text=True, timeout=8,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=8,
         )
         iterm_running = (check.stdout or "").strip().lower() == "true"
     except Exception:
@@ -14592,7 +14593,8 @@ def _launch_claude_code_terminal() -> Dict[str, Any]:
     try:
         proc = subprocess.run(
             ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=15,
         )
         if proc.returncode != 0:
             return {"success": False, "error": (proc.stderr or "").strip() or "osascript failed"}
@@ -14623,7 +14625,8 @@ def _native_directory_picker(initial: Optional[str] = None) -> Dict[str, Any]:
             import subprocess
             proc = subprocess.run(
                 ["osascript", "-e", script],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=120,
             )
             if proc.returncode != 0:
                 stderr = (proc.stderr or "").strip()
@@ -15194,7 +15197,11 @@ def _run_advanced_bridge(surface: str, op: str, args: Optional[Dict[str, Any]] =
         # stdin=DEVNULL: never let a child race-read a protocol/stdin stream (api_truth).
         proc = subprocess.run(
             [node, bridge, str(surface), str(op), json.dumps(args or {})],
-            capture_output=True, text=True, timeout=timeout,
+            # The bridge answers in JSON that carries clip and project names;
+            # decoding those with the locale codepage is how a non-ASCII name
+            # turns a working panel call into a UnicodeDecodeError (#153).
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout,
             stdin=subprocess.DEVNULL, cwd=_advanced_root(),
         )
     except subprocess.TimeoutExpired:

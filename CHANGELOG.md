@@ -2,6 +2,71 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.98.2
+
+**A tool installed next to the server was invisible to it.** Reported in
+[#153](https://github.com/samuelgursky/davinci-resolve-mcp/issues/153) by
+@7daysdedicated as an encoding fault in the whisper probe. The probe turned out
+not to be the cause, and the encoding fault turned out to be real somewhere
+else, so both are fixed here.
+
+### Fixed
+
+- **The server's own virtualenv was not searched for command-line tools.**
+  `pip install openai-whisper` writes a `whisper` executable into
+  `venv/Scripts` on Windows and `venv/bin` elsewhere, and that directory is on
+  PATH only while the environment is *activated* — which nothing does, since the
+  client launches `venv/python server.py` directly. So `shutil.which("whisper")`
+  returned None and `capabilities` reported `whisper_cli.available: false` for a
+  tool sitting beside the interpreter looking for it, with nothing in the
+  response to say why. The interpreter's script directory now leads the PATH
+  augmentation that already covered Homebrew and `/usr/local`. Not
+  Windows-specific: the same gap existed on macOS and Linux.
+
+- **Text-mode reads of a child process decoded with the locale codec.** Nineteen
+  `subprocess.run(..., text=True)` calls across the server, panel, and utils had
+  no `encoding=`, so Python used the platform locale — cp1252 on a default
+  Windows install, a codec with no mapping for most of what a media tool prints.
+  A clip name in Japanese from the advanced-server bridge, a localized WMIC
+  banner, or a user script's output was then a `UnicodeDecodeError` raised
+  inside a call whose job was to answer a yes/no question. All nineteen now read
+  UTF-8 with `errors="replace"`, so the answer can be wrong in the last
+  character but never an exception. The WMIC read matters most: it feeds the
+  second-instance guard fixed in v2.97.6, and it must fail to "cannot tell".
+
+- **Child Python processes are handed `PYTHONIOENCODING=utf-8`.** A script run
+  through `resolve_control` writes into a pipe, where Python picks the locale
+  codepage rather than the console's, so printing a non-Latin-1 character killed
+  the script with `UnicodeEncodeError` — and the failure read as the script's
+  fault rather than the pipe's. The transcription path already did this; the
+  script-runner did not.
+
+### Added
+
+- **`tests.test_child_process_text_encoding`** — a static walk over `src/` that
+  fails on any text-mode child read without an explicit `encoding=`. Static
+  because the exception needs a non-UTF-8 locale to reproduce and no machine in
+  this suite has one: the missing argument is visible in the source, the
+  `UnicodeDecodeError` is only visible in Tokyo. The walk carries a test that it
+  can still see an offender, since a guard that quietly matches nothing passes
+  forever. Also covers the venv script directory being on PATH, first, and
+  idempotently.
+
+### Note on the report
+
+The diagnosis in #153 named `whisper --help` as the probe. That string is
+display text in the install-guidance table and is never executed — detection is
+`shutil.which("whisper")` — and the transcription path already decoded UTF-8 and
+already set `PYTHONIOENCODING`. The cause was the PATH gap the report mentioned
+last, in passing, as an aside about `pip`. Worth stating plainly, because the
+reporter's `whisper.cmd` workaround set the encoding *and* put a `whisper` on
+PATH, and only the second half was doing the work.
+
+### Changed
+
+- `docs/install.md` says which environment optional packages have to be
+  installed into, which is the part that was undocumented.
+
 ## What's New in v2.98.1
 
 **The Bash guard could be walked past with a newline.** Reported and fixed in

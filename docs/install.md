@@ -35,6 +35,14 @@ rather than guessing** if it is absent:
 `python scripts/doctor.py` reports which are present. `media_analysis`
 `capabilities` covers the analysis stack in more detail.
 
+**Install them into the environment the server runs from.** A managed install
+uses its own virtualenv, and `pip install` from an unrelated shell puts the
+package somewhere that interpreter never looks. Use the venv's own pip —
+`<install>/venv/bin/pip` (`venv\Scripts\pip.exe` on Windows) — or activate it
+first. Command-line tools that come with a package (`openai-whisper` installs a
+`whisper` executable) are found in that venv's script directory automatically
+since v2.98.2; before that they had to be on PATH by hand.
+
 Model weights carry their own licences, separate from the code that loads them.
 
 > **Python 3.13 / 3.14:** these are **allowed** — setup will use them and warn.
