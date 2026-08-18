@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.97.7-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.98.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-35%20(353%20full)-blue.svg)](#服务器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.97.7 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v2.98.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -75,7 +75,7 @@ launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"
 venv/bin/python -m src.control_panel
 ```
 
-该命令启动一个 localhost 服务器并在浏览器中打开控制面板。想让 AI 编码助手代劳，可以说：**"Open the Resolve MCP control panel for this repo."** 除非你的 Python 环境已激活，否则 agent 应使用 `venv/bin/python -m src.control_panel`。持久化的分析任务在切片成功后会自动刷新本地搜索索引；手动的 Build Index 按钮用于从已有报告重建索引。
+该命令启动一个仅绑定回环地址的服务器，并在浏览器中以带每次启动令牌的 URL（`http://127.0.0.1:8765/#token=…`）打开控制面板——请使用这个完整 URL，面板会拒绝不带令牌的请求。想让 AI 编码助手代劳，可以说：**"Open the Resolve MCP control panel for this repo."** 除非你的 Python 环境已激活，否则 agent 应使用 `venv/bin/python -m src.control_panel`。持久化的分析任务在切片成功后会自动刷新本地搜索索引；手动的 Build Index 按钮用于从已有报告重建索引。
 
 ## 服务器模式
 
@@ -190,7 +190,7 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 
 ## 安全态势
 
-默认服务器是由你的 MCP 客户端启动的本地 stdio 进程；它不暴露网络监听器，也没有内置多用户认证面。工具元数据包含面向 MCP 客户端的安全提示（只读、破坏性、幂等、外部资源操作）。操作边界、确认指引和漏洞报告见 [安全策略](SECURITY.md)。
+默认服务器是由你的 MCP 客户端启动的本地 stdio 进程；它不暴露网络监听器，也没有内置多用户认证面。两个可选的本地 HTTP 面——控制面板与联网 MCP 传输——仅绑定回环地址，每个请求都需要每次启动生成的 bearer 令牌，并校验 Host/Origin 以防 DNS 重绑定和 CSRF。工具元数据包含面向 MCP 客户端的安全提示（只读、破坏性、幂等、外部资源操作）。操作边界、确认指引和漏洞报告见 [安全策略](SECURITY.md)。
 
 ## 关键数据
 

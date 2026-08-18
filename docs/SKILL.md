@@ -327,7 +327,10 @@ venv/bin/python -m src.control_panel
 
 The command starts the local control panel and opens the default browser. Use
 `--no-open` when running in a headless context, then give the user the printed
-localhost URL. The panel is local and single-user; it is an operational surface
+localhost URL **exactly as printed** — it carries a per-launch bearer token in
+its fragment (`#token=…`) and the panel refuses every request without it. The
+panel binds loopback only (a non-loopback host is refused, no override) and is
+single-user; it is an operational surface
 for server status, Resolve clips, source-safe analysis jobs, preferences, and
 diagnostics as those sections are added.
 

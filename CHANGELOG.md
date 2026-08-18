@@ -2,6 +2,83 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.98.0
+
+**The control panel could be driven by any web page you visited.** Reported
+privately, with the chain worked out end to end. Fixed here; the transport
+state file and panel pidfile move out of shared locations at the same time.
+
+### Security
+
+- **`GET /api/mcp/status` handed out the networked-transport bearer token to
+  anyone who could reach the port.** It was the one privileged route with no
+  loopback check, and its payload included the token that authenticates the
+  `--transport streamable-http` MCP instance — i.e. full Resolve control.
+- **No Host or Origin check, and POST bodies of any Content-Type were parsed.**
+  A page on any site could POST to the panel (CSRF), and a DNS-rebinding page
+  could read its responses. Chained: visit a page → it starts the networked
+  transport via `/api/mcp/transport/start` → reads the token from
+  `/api/mcp/status` → owns the MCP toolset.
+- **The bind address was a tool parameter.** `open_control_panel(host=...)`
+  passed straight through, so a prompt could put the unauthenticated panel on
+  `0.0.0.0`.
+
+  What changed:
+
+  - **Per-launch bearer token on every route except the static shell at `/`.**
+    `open_control_panel` mints `secrets.token_urlsafe(32)`, passes it to the
+    child through the environment (not argv, which `ps` shows to every local
+    user), records it 0600, and returns the URL with the token in the
+    **fragment** (`http://127.0.0.1:8765/#token=…`) — browsers never send
+    fragments, so it stays out of request lines and logs. The panel JS keeps
+    it in `localStorage`, sends `Authorization: Bearer …` on every fetch, and
+    exchanges it once (`POST /api/session`) for an `HttpOnly; SameSite=Strict`
+    cookie so thumbnail `<img>` loads work. A bare `http://127.0.0.1:8765` now
+    shows a "Control panel locked" screen pointing back to `open_control_panel`.
+  - **A single gate at the top of `do_GET`/`do_POST`:** `Host` must be a
+    loopback host (defeats DNS rebinding); `Origin`, when present, must be a
+    loopback origin (defeats CSRF); `POST` must be
+    `Content-Type: application/json` (a cross-site form cannot send it, and a
+    cross-site `fetch()` with it needs a CORS preflight the panel never
+    answers). Each check fails closed with 403/415 before any route runs.
+  - **`host` is no longer an AI knob.** `open_control_panel` refuses anything
+    but `127.0.0.1` / `localhost` / `::1` with no override, and
+    `src.analysis_dashboard --host` does the same at argparse — matching the
+    free-edition bridge, which already threw on non-loopback.
+  - **Secrets on disk are private.** The transport state file
+    (`mcp_transport.json`, holds the transport token) leaves
+    `tempfile.gettempdir()`, and the panel pidfile (now holds the panel token)
+    leaves `~/Documents`; both live under `~/.davinci-resolve-mcp/` (0700),
+    written 0600 via the new `src/utils/private_state.py`, with a best-effort
+    `icacls` restriction on Windows. `DAVINCI_RESOLVE_MCP_STATE_DIR` overrides
+    the directory.
+  - **The launcher still recognises a panel it has no token for.** A panel
+    that survived an MCP restart from before this scheme answers 401 with a
+    self-identifying body; `open_control_panel` reports it as `stale_running`
+    (nobody can log in to it) with the `force_restart=true` remediation
+    instead of handing out an unusable URL.
+
+  `SECURITY.md` previously said the server "does not expose a network
+  listener"; it now describes both opt-in local HTTP surfaces (panel and
+  networked transport) and their posture. Kept as-is: the default port stays
+  8765 (with Host/Origin/token in place its guessability is not the barrier)
+  and the transport token is still shown in the panel's MCP card, now behind
+  the panel's own auth.
+
+### Added
+
+- `tests.test_control_panel_auth` boots the real `Handler` on an ephemeral
+  port and asserts each guard over HTTP: `/api/mcp/status` 401 without the
+  token and no transport secret in the 401 body; non-loopback `Host` rejected
+  even with a valid token; `localhost` / `[::1]` / bare `127.0.0.1` accepted;
+  cross-site `Origin` rejected; non-JSON POST → 415; no CORS preflight answer;
+  cookie issued only via bearer, `HttpOnly` + `SameSite=Strict`, then
+  sufficient on its own; wrong token / wrong cookie → 401; the static shell
+  never contains the token. Plus the launcher's 401-probe recognition, the
+  `host=0.0.0.0` refusal, and 0600 on the private state files.
+  `tests.test_open_control_panel` gains the token-unknown → `stale_running`
+  case and asserts the issued URL is the token-bearing one.
+
 ## What's New in v2.97.7
 
 **`grab_and_export` deleted files it never created.** Reported in

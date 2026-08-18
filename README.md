@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.97.7-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.98.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-35%20(353%20full)-blue.svg)](#server-modes)
@@ -103,7 +103,7 @@ Launch the single-user local control panel from the repository root:
 venv/bin/python -m src.control_panel
 ```
 
-The command starts a localhost server and opens the control panel in your browser. To have an AI coding agent do this, ask: **"Open the Resolve MCP control panel for this repo."** Agents should use `venv/bin/python -m src.control_panel` unless your Python environment is already active. Persisted analysis jobs refresh the local search index automatically after successful slices; the manual Build Index action is for rebuilding from existing reports.
+The command starts a loopback-only server and opens the control panel in your browser at a URL that carries a per-launch access token (`http://127.0.0.1:8765/#token=…`) — use that exact URL; the panel refuses requests without it. To have an AI coding agent do this, ask: **"Open the Resolve MCP control panel for this repo."** Agents should use `venv/bin/python -m src.control_panel` unless your Python environment is already active. Persisted analysis jobs refresh the local search index automatically after successful slices; the manual Build Index action is for rebuilding from existing reports.
 
 ## Server Modes
 
@@ -266,7 +266,7 @@ This project treats camera originals and source media as immutable. Analysis too
 
 ## Security Posture
 
-The default server is a local stdio process launched by your MCP client; it does not expose a network listener or built-in multi-user auth surface. Tool metadata includes MCP client-safety hints for read-only, destructive, idempotent, and external-resource operations. See [Security Policy](SECURITY.md) for operational boundaries, confirmation guidance, and vulnerability reporting.
+The default server is a local stdio process launched by your MCP client; it does not expose a network listener or built-in multi-user auth surface. The two opt-in local HTTP surfaces — the control panel and the networked MCP transport — bind loopback only and require a per-launch bearer token on every request, with Host/Origin checks against DNS rebinding and CSRF. Tool metadata includes MCP client-safety hints for read-only, destructive, idempotent, and external-resource operations. See [Security Policy](SECURITY.md) for operational boundaries, confirmation guidance, and vulnerability reporting.
 
 ## Key Stats
 

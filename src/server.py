@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.97.7"
+VERSION = "2.98.0"
 
 import base64
 import os
@@ -14452,9 +14452,13 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         the preset is then named after the file, so pass name when the preset
         should be called something the filename does not say.
       export_user_preferences_preset(name, path) -> {success}  — Resolve 21.0.4+
-      open_control_panel(port?, host?, open_browser?) -> {success, url, pid, port, status}
+      open_control_panel(port?, open_browser?, force_restart?) -> {success, url, pid, port, status}
         — Launches the analysis control panel (src/analysis_dashboard.py) as a background process.
-          Idempotent: returns the existing URL if already running.
+          Idempotent: returns the existing URL if already running. Binds
+          127.0.0.1 ONLY — a `host` other than loopback is refused, there is no
+          override. The returned url carries a per-launch bearer token in its
+          fragment (#token=…); the panel refuses every request without it, so
+          give the user that exact URL, not a bare http://127.0.0.1:8765.
       control_panel_status() -> {running, pid, port, url}
       close_control_panel() -> {success, was_running}
       save_state() -> {state_token, page, current_timeline_id, current_timecode, selected_clip_ids}
@@ -15119,7 +15123,10 @@ def _v2_list_corrections(project_root: str, p: Dict[str, Any]) -> Dict[str, Any]
 # ─── V2 P12: Control panel lifecycle ──────────────────────────────────────────
 
 def _control_panel_pidfile() -> str:
-    return os.path.expanduser("~/Documents/davinci-resolve-mcp-analysis/.control_panel.pid")
+    # Holds the panel's per-launch bearer token alongside pid/port, so it lives
+    # in the 0700 private state dir and is written 0600 — not in ~/Documents.
+    from src.utils.private_state import private_state_dir
+    return os.path.join(private_state_dir(), "control_panel.json")
 
 
 def _control_panel_read_state() -> Optional[Dict[str, Any]]:
@@ -15132,6 +15139,15 @@ def _control_panel_read_state() -> Optional[Dict[str, Any]]:
             return json.load(handle)
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _control_panel_read_token() -> Optional[str]:
+    state = _control_panel_read_state() or {}
+    token = state.get("token")
+    return str(token) if token else None
+
+
+_CONTROL_PANEL_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 def _control_panel_pid_alive(pid: int) -> bool:
@@ -15204,24 +15220,40 @@ def _pick_dashboard_python(repo_root: str) -> Tuple[str, Optional[str]]:
     return _sys.executable, "sys.executable"
 
 
-def _control_panel_probe(host: str, port: int, timeout: float = 1.5) -> Dict[str, Any]:
+def _control_panel_probe(host: str, port: int, timeout: float = 1.5,
+                         token: Optional[str] = None) -> Dict[str, Any]:
     """Probe a port to see whether a dashboard is listening and what version.
 
     Returns ``{"is_dashboard": bool, "version": Optional[str]}``.
 
     - ``is_dashboard`` is True when /api/boot responds with a recognizable
-      dashboard payload (``success: true`` plus a project field). This lets
-      callers distinguish an older dashboard that predates the
-      ``mcp_version`` surface from a non-dashboard process squatting on the
-      port.
+      dashboard payload (``success: true`` plus a project field), OR answers
+      401 with the panel's self-identifying body (a live panel whose token we
+      do not hold). This lets callers distinguish an older dashboard that
+      predates the ``mcp_version`` surface from a non-dashboard process
+      squatting on the port.
     - ``version`` is the reported MCP version, or None if the dashboard
       predates the field.
     """
+    import urllib.error
     import urllib.request
     url = f"http://{host}:{port}/api/boot"
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 401:
+            return {"is_dashboard": False, "version": None}
+        try:
+            payload = json.loads(exc.read().decode("utf-8") or "{}")
+        except Exception:
+            return {"is_dashboard": False, "version": None}
+        if not isinstance(payload, dict) or payload.get("panel") != "davinci-resolve-mcp":
+            return {"is_dashboard": False, "version": None}
+        version = payload.get("mcp_version")
+        return {"is_dashboard": True, "version": str(version) if version else None}
     except Exception:
         return {"is_dashboard": False, "version": None}
     if not isinstance(payload, dict):
@@ -15271,7 +15303,13 @@ def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
     import socket
     import time as _t
 
-    host = p.get("host") or "127.0.0.1"
+    host = str(p.get("host") or "127.0.0.1")
+    if host not in _CONTROL_PANEL_LOOPBACK_HOSTS:
+        return _err(
+            f"host={host!r} refused: the control panel binds loopback only "
+            "(127.0.0.1 / localhost / ::1). It is a single-user local UI and is "
+            "never exposed to the network — there is no override.",
+        )
     port = int(p.get("port") or 8765)
     force_restart = _media_analysis_bool(p.get("force_restart", p.get("forceRestart")), False)
 
@@ -15290,27 +15328,36 @@ def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
     live_version = VERSION
 
     if port_pid is not None and not force_restart:
-        probe = _control_panel_probe(host, port)
-        tracked_url = (existing or {}).get("url") if existing.get("running") else None
-        url = tracked_url or f"http://{host}:{port}"
+        tracked = existing if existing.get("running") else {}
+        tracked_token = _control_panel_read_token() if tracked else None
+        probe = _control_panel_probe(host, port, token=tracked_token)
+        url = tracked.get("url") or f"http://{host}:{port}"
         if probe["is_dashboard"]:
             remote_version = probe["version"]
             # Compare with explicit None handling: an older dashboard that
             # predates the mcp_version field is also stale — it can't honor
-            # newer surfaces and the caller needs to know.
-            if remote_version != live_version:
+            # newer surfaces and the caller needs to know. A panel whose token
+            # we don't hold (untracked survivor) is unusable too: nobody can
+            # log in to it, so it must be relaunched.
+            if remote_version != live_version or not tracked_token:
                 reported = remote_version or "unknown (predates the mcp_version field)"
+                why = (
+                    f"The running control panel reports version {reported} but the "
+                    f"MCP server is at {live_version}."
+                    if remote_version != live_version else
+                    "The running control panel's launch token is not on record, so "
+                    "its URL cannot be issued."
+                )
                 return {
                     "success": True,
                     "status": "stale_running",
-                    "url": url,
+                    "url": url if tracked_token else None,
                     "pid": port_pid,
                     "port": port,
                     "running_version": remote_version,
                     "live_version": live_version,
                     "remediation": (
-                        f"The running control panel reports version {reported} but the "
-                        f"MCP server is at {live_version}. Re-call open_control_panel with "
+                        f"{why} Re-call open_control_panel with "
                         "force_restart=true to terminate the stale process and relaunch."
                     ),
                 }
@@ -15377,6 +15424,14 @@ def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
     else:
         cmd.append("--no-open")
 
+    # Per-launch bearer token. Passed via the environment (never argv, which
+    # `ps` would show to every local user) and recorded 0600 in the pidfile so
+    # later status/already-running calls can hand out the same URL.
+    import secrets as _secrets
+    panel_token = _secrets.token_urlsafe(32)
+    child_env = dict(os.environ)
+    child_env["DAVINCI_PANEL_TOKEN"] = panel_token
+
     # Detach so the dashboard outlives this MCP call.
     log_path = os.path.join(os.path.expanduser("~/Documents/davinci-resolve-mcp-analysis"), ".control_panel.log")
     try:
@@ -15389,6 +15444,7 @@ def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
         proc = subprocess.Popen(
             cmd,
             cwd=repo_root,
+            env=child_env,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -15437,13 +15493,16 @@ def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
             f"(pid {proc.pid}). Check {log_path} for details.",
         )
 
-    # Write the pidfile so subsequent calls find it
-    url = f"http://{host}:{port}"
+    # Write the pidfile so subsequent calls find it. The token travels in the
+    # URL fragment — browsers never send fragments, so it stays out of every
+    # request line and log.
+    url = f"http://{host}:{port}/#token={panel_token}"
     state = {
         "pid": proc.pid,
         "port": port,
         "host": host,
         "url": url,
+        "token": panel_token,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "project_name": project_name,
         "project_id": project_id,
@@ -15453,9 +15512,8 @@ def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
         "python_source": python_source,
     }
     try:
-        os.makedirs(os.path.dirname(_control_panel_pidfile()), exist_ok=True)
-        with open(_control_panel_pidfile(), "w", encoding="utf-8") as handle:
-            json.dump(state, handle, indent=2)
+        from src.utils.private_state import write_private_json
+        write_private_json(_control_panel_pidfile(), state)
     except OSError:
         pass  # non-fatal; status-check will just spawn a new one next time
 
