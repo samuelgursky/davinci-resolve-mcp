@@ -83,8 +83,13 @@ def _process_lines() -> Optional[List[str]]:
         return None
 
 
+def _matches_pattern(executable: str) -> bool:
+    """Does this bare executable path name a Resolve application?"""
+    return any(executable.endswith(pattern) for pattern in RESOLVE_PROCESS_PATTERNS)
+
+
 def _is_resolve_command(line: str) -> bool:
-    """Is this command line a Resolve *executable*, not merely a mention of one?
+    r"""Is this command line a Resolve *executable*, not merely a mention of one?
 
     A plain substring test matches any process whose command line happens to
     contain the path — including a shell running a script that references it.
@@ -96,8 +101,22 @@ def _is_resolve_command(line: str) -> bool:
     flags. So strip trailing flag tokens and require what remains to *end* with
     the pattern. That survives the spaces in "DaVinci Resolve.app" (no splitting
     on whitespace) while rejecting a path buried mid-command.
+
+    Windows quotes that path. WMIC prints the executable wrapped in double
+    quotes whenever it contains spaces, which the default install path always
+    does (`"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"`),
+    so the line ends in `"` and `endswith("Resolve.exe")` was false on every
+    stock Windows machine — `runtime_mode` reported nothing running while the
+    same server was driving that very instance, and the second-instance guard
+    in `get_resolve()` lost its input. Reported in #150. A leading quote means
+    the executable is exactly what sits inside the first quoted span; anything
+    after the closing quote is arguments, and the flag loop never sees it.
     """
     text = line.strip()
+    if text.startswith('"'):
+        close = text.find('"', 1)
+        if close > 1:
+            return _matches_pattern(text[1:close])
     while True:
         stripped = text.rstrip()
         cut = stripped.rfind(" -")
@@ -109,7 +128,7 @@ def _is_resolve_command(line: str) -> bool:
         if not candidate:
             break
         text = candidate
-    return any(text.endswith(pattern) for pattern in RESOLVE_PROCESS_PATTERNS)
+    return _matches_pattern(text)
 
 
 def resolve_processes() -> Optional[List[str]]:

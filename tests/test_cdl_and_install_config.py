@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -374,6 +375,67 @@ class InstallConfigTests(unittest.TestCase):
     def test_windows_stdio_helper_disables_newline_translation(self):
         source = (PROJECT_ROOT / "src" / "utils" / "mcp_stdio.py").read_text()
         self.assertIn('newline=""', source)
+
+
+class ConsoleEncodingTests(unittest.TestCase):
+    """Regression coverage for issue #150: a successful install ending in a
+    traceback.
+
+    The installer prints box-drawing and check-mark glyphs. A Windows console
+    carries them, but a redirected stdout falls back to the locale code page —
+    cp1252 by default — and the summary divider raises UnicodeEncodeError after
+    every client has already been configured. Reported against
+    `npx davinci-resolve-mcp setup --clients manual 2>&1 | tail`.
+    """
+
+    class _Stream:
+        def __init__(self, encoding):
+            self.encoding = encoding
+            self.calls = []
+
+        def reconfigure(self, **kwargs):
+            self.calls.append(kwargs)
+            if "encoding" in kwargs:
+                self.encoding = kwargs["encoding"]
+
+    def test_a_code_page_that_cannot_carry_the_glyphs_is_reconfigured(self):
+        out, err = self._Stream("cp1252"), self._Stream("cp1252")
+        with patch.object(install.sys, "stdout", out), patch.object(install.sys, "stderr", err):
+            install._ensure_glyph_capable_stdio()
+        for stream in (out, err):
+            self.assertEqual(stream.calls, [{"encoding": "utf-8", "errors": "replace"}])
+
+    def test_a_capable_stream_keeps_its_own_encoding(self):
+        """Only the streams that would crash are touched — a console that is
+        already right must not be re-encoded underneath the user."""
+        out = self._Stream("utf-8")
+        with patch.object(install.sys, "stdout", out), patch.object(install.sys, "stderr", out):
+            install._ensure_glyph_capable_stdio()
+        self.assertEqual(out.calls, [])
+
+    def test_the_glyph_probe_covers_what_the_installer_actually_prints(self):
+        """The probe is the whole gate: a glyph the installer prints but the
+        probe omits would encode-check clean and still crash at the summary."""
+        source = INSTALL_PATH.read_text(encoding="utf-8")
+        for glyph in ("\u2500", "\u2192", "\u2713", "\u2298"):
+            with self.subTest(glyph=glyph):
+                self.assertIn(glyph, source, "glyph is no longer printed; prune the probe")
+                self.assertIn(glyph, install._GLYPH_PROBE)
+
+    def test_a_redirected_cp1252_run_prints_the_divider_instead_of_crashing(self):
+        """End to end, in a child interpreter with a piped stdout: this is the
+        exact shape of the reported failure, and it fails without the guard."""
+        script = (
+            "import sys; sys.path.insert(0, %r); import install\n"
+            "print('  ' + '\u2500' * 50)\n"
+        ) % str(PROJECT_ROOT)
+        env = dict(os.environ, PYTHONIOENCODING="cp1252")
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(PROJECT_ROOT), env=env, capture_output=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        self.assertIn("\u2500" * 50, proc.stdout.decode("utf-8", "replace"))
 
 
 class ConfigMergeTests(unittest.TestCase):

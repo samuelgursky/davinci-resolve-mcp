@@ -37,7 +37,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.97.5"
+VERSION = "2.97.6"
 # Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
 # Resolve's scripting bridge loads into newer interpreters on recent builds
 # (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
@@ -45,6 +45,42 @@ VERSION = "2.97.5"
 # so we proceed with a heads-up rather than refusing to run.
 SUPPORTED_PYTHON_MIN = (3, 10)
 PYTHON_ABI_RISK_MIN = (3, 13)
+
+# ─── Console encoding ─────────────────────────────────────────────────────────
+# This installer prints box-drawing and check-mark glyphs. On Windows a console
+# stdout carries them fine, but a *redirected* stdout falls back to the locale
+# code page — cp1252 on a default Windows install — and the first '─' raises
+# UnicodeEncodeError. It fires at the summary, after every client is already
+# configured, so a successful install ends in a traceback and reads as a failed
+# run. Reported in #150 against
+# `npx davinci-resolve-mcp setup --clients manual 2>&1 | tail`.
+#
+# Only streams that cannot already carry the glyphs are touched, so a correctly
+# configured console keeps its own encoding. 'replace' is belt-and-braces: no
+# output path is worth a traceback.
+
+_GLYPH_PROBE = "─→✓⊘•"
+
+def _ensure_glyph_capable_stdio():
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        encoding = getattr(stream, "encoding", None)
+        if reconfigure is None or not encoding:
+            continue
+        try:
+            _GLYPH_PROBE.encode(encoding)
+            continue
+        except (LookupError, UnicodeEncodeError):
+            pass
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
+
+_ensure_glyph_capable_stdio()
 
 # ─── Colors (disabled on Windows cmd without ANSI support) ────────────────────
 

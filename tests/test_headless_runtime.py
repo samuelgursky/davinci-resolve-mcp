@@ -81,6 +81,44 @@ class RuntimeModeTests(unittest.TestCase):
                 with mock.patch.object(rr.subprocess, "run", return_value=_ps(command)):
                     self.assertTrue(rr.runtime_mode()["running"], command)
 
+    def test_windows_quotes_the_executable_and_it_is_still_an_instance(self) -> None:
+        """WMIC wraps the command line in double quotes when the executable path
+        contains spaces, which the default Windows install path always does.
+
+        The line then *ends* with `"`, so `endswith("Resolve.exe")` was False on
+        every stock Windows machine: `runtime_mode` reported `running: false,
+        instances: 0` while the same server was driving that very instance over
+        the scripting API, and the second-instance guard in `get_resolve()` —
+        which asks exactly this question before auto-launching — was reading a
+        permanent "nothing is running". Reported in #150.
+        """
+        exe = r'"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"'
+        # Trailing whitespace included: it is what WMIC actually prints.
+        for command in (exe, exe + "  ", exe + " -nogui", r"C:\BMD\Resolve.exe"):
+            with self.subTest(command=command):
+                with mock.patch.object(rr.subprocess, "run", return_value=_ps(command)):
+                    mode = rr.runtime_mode()
+                self.assertTrue(mode["running"], command)
+                self.assertEqual(mode["instances"], 1)
+        with mock.patch.object(rr.subprocess, "run", return_value=_ps(exe + " -nogui")):
+            self.assertTrue(rr.is_headless())
+        with mock.patch.object(rr.subprocess, "run", return_value=_ps(exe)):
+            self.assertFalse(rr.is_headless(), "a quoted GUI instance must not read as headless")
+
+    def test_a_quoted_launcher_that_names_resolve_is_not_an_instance(self) -> None:
+        """The quoted-executable path must not become a substring test by another
+        route: what sits inside the first quoted span is the executable, and
+        everything after the closing quote is arguments."""
+        for command in (
+            r'"C:\Windows\System32\cmd.exe" /c start "" "C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe" -nogui',
+            r'"C:\Windows\explorer.exe"',
+        ):
+            with self.subTest(command=command):
+                with mock.patch.object(rr.subprocess, "run", return_value=_ps(command)):
+                    mode = rr.runtime_mode()
+                self.assertFalse(mode["running"], command)
+                self.assertEqual(mode["instances"], 0)
+
     def test_a_second_instance_is_counted(self) -> None:
         """Two Resolves is a conflict to report, not a mode to average."""
         with mock.patch.object(rr.subprocess, "run", return_value=_ps(f"{self.GUI}\n{self.HEADLESS}\n")):

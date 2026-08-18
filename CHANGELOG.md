@@ -2,6 +2,60 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.97.6
+
+**On Windows the server could not see the Resolve it was driving.** Reported in
+[#150](https://github.com/samuelgursky/davinci-resolve-mcp/issues/150) with the
+root cause traced, the fix proposed, and a case table — all of it correct.
+
+### Fixed
+
+- **`runtime_mode` reported `running: false, instances: 0` on every stock
+  Windows install.** WMIC wraps a command line in double quotes when the
+  executable path contains spaces, which the default install path always does
+  (`"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"`). The
+  line therefore *ends* with `"`, and `_is_resolve_command()` required it to end
+  with `Resolve.exe`. The trailing-flag stripper above the test did not help: it
+  removes ` -flag` tokens and leaves the closing quote as the final character.
+  A leading quote is now read for what it is — the executable is what sits
+  inside the first quoted span, and everything after the closing quote is
+  arguments. That also tightens rejection: `"…\cmd.exe" /c start … Resolve.exe`
+  is a launcher, not an instance.
+
+  The reading was the visible half. The consequential half is that
+  `get_resolve()` asks this same question before auto-launching, precisely so a
+  failed connect to a live Resolve does not open a second application — the
+  guard whose comment records being "reported three times before it was
+  traced". On Windows its input was a permanent `False`, so the path it exists
+  to block was open: connect fails (modal dialog, mid-launch, scripting toggled
+  off) → "nothing is running" → launch a second Resolve. `_not_connected_error()`
+  reads the same signal, so a Windows user whose Resolve *was* running got the
+  "not running, auto-launch failed, check your Studio install" text instead of
+  the preference or bridge fix that actually applied. `headless` was
+  unreachable too — it is only computed once something is found running, so
+  `-nogui` instances were indistinguishable on Windows.
+
+- **A successful install ended in a traceback under a redirected stdout.** The
+  installer prints box-drawing and check-mark glyphs. A Windows console carries
+  them, but redirecting stdout falls back to the locale code page — cp1252 by
+  default — and `print(f"  {'─' * 50}")` in the summary raised
+  `UnicodeEncodeError` after every client had already been configured, so a
+  working run looked like a failed one
+  (`npx davinci-resolve-mcp setup --clients manual 2>&1 | tail`). Streams that
+  cannot encode those glyphs are now reconfigured to UTF-8 with
+  `errors="replace"`; a console that can already carry them is left alone
+  rather than re-encoded underneath the user.
+
+### Added
+
+- `tests.test_headless_runtime` covers the quoted Windows command line —
+  bare, trailing-whitespace (what WMIC actually prints), and `-nogui` — plus
+  the quoted-launcher line that must still be rejected, so the fix cannot
+  become a substring test by another route. `tests.test_cdl_and_install_config`
+  gains `ConsoleEncodingTests`, including a child interpreter run with
+  `PYTHONIOENCODING=cp1252` and a piped stdout: the exact shape of the reported
+  failure. Both suites fail on the pre-fix code.
+
 ## What's New in v2.97.5
 
 **`npm ci` was failing outright, and nothing in the release path noticed.**
