@@ -1637,6 +1637,11 @@ Key actions:
   Returns `{files, format, folder, cleaned_up}` where each file entry includes
   `data_base64` for image files and `data` (text) for `.drx` grade files.
   `cleanup` defaults to `true` — files are deleted from disk after being inlined.
+  Only files this call produced are removed: the export goes to a private
+  staging directory inside `folder_path`, so anything else written there
+  meanwhile is untouched, and `folder_path` itself is removed only if the call
+  created it and left it empty. With `cleanup: false` the files are moved up
+  into `folder_path` without overwriting anything already there.
   Requires Color page with Gallery panel visible.
 - `delete_stills(still_indices)`
 

@@ -2,6 +2,55 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.97.7
+
+**`grab_and_export` deleted files it never created.** Reported in
+[#151](https://github.com/samuelgursky/davinci-resolve-mcp/issues/151).
+
+### Fixed
+
+- **The cleanup step removed a directory diff, not the export.** It listed the
+  caller's folder before the export and again after, and treated the difference
+  as "what this call produced" — so anything that appeared in that window was
+  attributed to the call, inlined into the response, and deleted: a background
+  render, a file copy, a cloud sync, or a second `grab_and_export`. It then
+  finished with `os.rmdir(folder_path)`, removing a directory the caller had
+  chosen and this server had not created.
+
+  `_resolve_safe_dir` made the overlap concrete rather than theoretical. Every
+  sandbox/temp path is redirected to one shared `~/Documents/resolve-stills`,
+  which is also the folder the documented `/tmp/...` examples land in, so two
+  calls aimed at different temp folders arrived in the same place and each swept
+  up the other's output.
+
+  The export now goes to a private staging directory created inside
+  `folder_path` for that one call, so what it produced is known by construction
+  instead of inferred. Cleanup removes that directory and nothing else;
+  `folder_path` is removed only when this call created it and left it empty. A
+  folder the caller already had is theirs, empty or not. With `cleanup: false`
+  the files move up into `folder_path` under a non-colliding name rather than
+  overwriting a still already sitting there — Resolve numbers stills per export,
+  so a second call collides with the first by default.
+
+  Deletion is now confined to one helper that refuses any path it did not name,
+  which is the property that was missing: the old code path could be handed the
+  caller's folder and delete its contents.
+
+  The inlining half matters too. A file that was never ours was read into the
+  response, so an unrelated document sitting in the export folder could reach an
+  assistant's context. Only staged files are read now.
+
+### Added
+
+- `tests.test_gallery_still_export_cleanup` runs the action against a real temp
+  filesystem with a fake album that writes the way Resolve does, because the
+  defect was in what the filesystem looked like afterwards, not in any return
+  value: a bystander file written *during* the export must survive and must not
+  appear inlined; a pre-existing folder must not be removed; a folder the call
+  created must still be cleaned up; `cleanup: false` must not overwrite; and no
+  staging directory may survive any exit path, including the two early error
+  returns. All fail on 2.97.6.
+
 ## What's New in v2.97.6
 
 **On Windows the server could not see the Resolve it was driving.** Reported in

@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.97.6"
+VERSION = "2.97.7"
 
 import base64
 import os
@@ -1288,6 +1288,50 @@ def _resolve_safe_dir(path):
     if _is_sandbox:
         return os.path.join(os.path.expanduser("~"), "Documents", "resolve-stills")
     return path
+
+#: Prefix of the private per-call directory `gallery_stills(grab_and_export)`
+#: exports into. Named so that the only thing this server ever deletes is a
+#: directory it created itself, in this call, for this purpose. Deliberately not
+#: a dot-directory: Resolve's still exporter is particular about where it will
+#: write (see `_resolve_safe_dir`, which exists because it fails silently into
+#: sandbox paths), and an ordinary subdirectory is the least exotic thing to
+#: hand it.
+STILL_STAGING_PREFIX = "resolve-mcp-still-"
+
+
+def _discard_still_staging(staging: str) -> None:
+    """Remove a still-export staging directory, and refuse anything else.
+
+    The name check is not ceremony. The step it replaces removed whatever the
+    before/after diff of the caller's folder happened to show, and then removed
+    the folder itself — so this helper is the one place a delete can happen, and
+    it declines any path that is not a directory this server named. See #151.
+    """
+    if not staging or not os.path.basename(staging).startswith(STILL_STAGING_PREFIX):
+        return
+    if not os.path.isdir(staging):
+        return
+    shutil.rmtree(staging, ignore_errors=True)
+
+
+def _unused_path(path: str) -> str:
+    """`path`, or the first `name_1.ext`, `name_2.ext`… that does not exist yet.
+
+    Used when moving exported stills into the caller's folder: a still named
+    like one already sitting there is a collision to step around, not a file to
+    overwrite.
+    """
+    import uuid
+
+    if not os.path.exists(path):
+        return path
+    stem, ext = os.path.splitext(path)
+    for n in range(1, 1000):
+        candidate = f"{stem}_{n}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+    return f"{stem}_{uuid.uuid4().hex}{ext}"
+
 
 # Error envelope categories (agentic-flow improvements A1/D1) — see the retryable
 # default policy. Lock these names; downstream agents and tests route on them.
@@ -25253,7 +25297,12 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     keeping the live GalleryStill reference (more reliable than separate grab + export).
     Requires Color page. Automatically produces a companion .drx grade file.
     File data is inlined in the response (DRX as text, images as base64).
-    cleanup (default true) deletes exported files from disk after inlining.
+    cleanup (default true) deletes the exported files after inlining. Only files
+    this call produced are ever removed: the export goes to a private staging
+    directory inside folder_path, so anything else written there meanwhile is
+    untouched, and folder_path itself is removed only if this call created it
+    and left it empty. With cleanup false the files are moved up into
+    folder_path without overwriting anything already there.
     """
     p = _params(params)
     _, proj, err = _check()
@@ -25302,31 +25351,53 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
             return _err("No stills to export")
         return {"success": bool(album.ExportStills(stills, p["folder_path"], p.get("prefix", "still"), p.get("format", "dpx")))}
     elif action == "grab_and_export":
-        import time, os
+        import time, os, shutil, uuid
         folder_path = p.get("folder_path")
         if not folder_path:
             return _err("folder_path is required")
         prefix = p.get("prefix", "still")
         fmt = p.get("format", "dpx")
         delete_after = p.get("delete_after", True)
+        cleanup = p.get("cleanup", True)
         # Redirect sandbox/temp paths that Resolve can't access
         folder_path = _resolve_safe_dir(folder_path)
+        folder_pre_existed = os.path.isdir(folder_path)
         os.makedirs(folder_path, exist_ok=True)
-        # Snapshot directory before export
-        before = set(os.listdir(folder_path))
+        # Export into a private staging directory instead of straight into
+        # folder_path, so "what this call produced" is known by construction.
+        #
+        # It used to be a before/after diff of folder_path, which is not the
+        # same question: anything that appeared in that folder during the export
+        # window — a background render, a copy, a cloud sync, a second
+        # grab_and_export — was attributed to this call, inlined into the
+        # response, and then deleted by the cleanup step. `_resolve_safe_dir`
+        # makes that concrete rather than theoretical: every sandbox/temp path
+        # is redirected to the one shared ~/Documents/resolve-stills folder, so
+        # two overlapping calls each swept up the other's output. The old
+        # cleanup also finished with `os.rmdir(folder_path)`, removing a
+        # directory the caller had chosen and this server did not create.
+        # Reported in #151.
+        #
+        # A staging directory is inside folder_path on purpose: same volume and
+        # same permissions, so if Resolve can export to folder_path it can
+        # export here, and the finished files move up with a rename.
+        staging = os.path.join(folder_path, f"{STILL_STAGING_PREFIX}{uuid.uuid4().hex}")
+        os.makedirs(staging)
         # Grab still — requires Color page with a clip under the playhead
         _, tl, err2 = _get_tl()
         if err2:
+            _discard_still_staging(staging)
             return err2
         still = tl.GrabStill()
         if not still:
+            _discard_still_staging(staging)
             return _err("GrabStill failed — ensure Color page is active with a clip under the playhead")
         time.sleep(0.5)
         # Export using the live still reference with format fallback chain
         export_ok = False
         used_format = fmt
         for try_fmt in [fmt, "tif", "dpx"]:
-            result = album.ExportStills([still], folder_path, prefix, try_fmt)
+            result = album.ExportStills([still], staging, prefix, try_fmt)
             if result:
                 export_ok = True
                 used_format = try_fmt
@@ -25336,15 +25407,19 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
         if delete_after:
             album.DeleteStills([still])
         if not export_ok:
+            _discard_still_staging(staging)
             return _err("ExportStills failed — ensure the Gallery panel is open on the Color page (Workspace > Gallery)")
         # Wait for filesystem
         time.sleep(0.3)
-        # Find new files
-        after = set(os.listdir(folder_path))
-        new_files = sorted(after - before)
+        try:
+            exported = sorted(os.listdir(staging))
+        except OSError:
+            exported = []
         file_details = []
-        for f in new_files:
-            fpath = os.path.join(folder_path, f)
+        for f in exported:
+            fpath = os.path.join(staging, f)
+            if not os.path.isfile(fpath):
+                continue
             entry = {"name": f, "path": fpath, "size": os.path.getsize(fpath)}
             # Inline file data so cleanup can safely remove files
             try:
@@ -25361,20 +25436,30 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
             except OSError:
                 pass
             file_details.append(entry)
-        # Cleanup: remove exported files now that data is inlined (default: True)
-        cleanup = p.get("cleanup", True)
         if cleanup:
-            for f in file_details:
+            # Only the staging directory is removed, and only ever the files
+            # this call put in it. folder_path is left alone unless this call
+            # created it and it is still empty — a folder the caller already had
+            # is theirs, empty or not.
+            _discard_still_staging(staging)
+            if not folder_pre_existed:
                 try:
-                    os.remove(f["path"])
+                    if os.path.isdir(folder_path) and not os.listdir(folder_path):
+                        os.rmdir(folder_path)
                 except OSError:
                     pass
-            # Remove the directory if empty
-            try:
-                if os.path.isdir(folder_path) and not os.listdir(folder_path):
-                    os.rmdir(folder_path)
-            except OSError:
-                pass
+        else:
+            # Keeping the files: move them up into the folder the caller asked
+            # for, never overwriting something already there.
+            for entry in file_details:
+                dest = _unused_path(os.path.join(folder_path, entry["name"]))
+                try:
+                    shutil.move(entry["path"], dest)
+                except OSError:
+                    continue
+                entry["name"] = os.path.basename(dest)
+                entry["path"] = dest
+            _discard_still_staging(staging)
         return {"files": file_details, "format": used_format, "folder": folder_path, "cleaned_up": cleanup}
     elif action == "delete_stills":
         stills = album.GetStills() or []
