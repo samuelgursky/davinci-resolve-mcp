@@ -139,8 +139,16 @@ def is_media(token: str) -> bool:
 def split_commands(command: str) -> List[str]:
     """Split on shell separators so `ffprobe x && rm y` is checked as two.
 
-    Newlines are separators too: a multi-line block with a harmless first line
-    must not hide the mutating lines after it (fitfam trap row 23, 2026-08-12).
+    Newlines are separators too, and that was a hole worth naming: a multi-line
+    block was one segment, so `argv0` came from the first line and a harmless
+    one returned before anything under it was looked at. `mkdir -p x` then a
+    newline then `mv camera.mov x/` passed, while the same two joined by `;`
+    denied — the same command to a shell, two answers from the guard.
+
+    The cost of splitting on newlines is that any multi-line text carried inside
+    a command — a heredoc body, a commit message — is read as commands too, so a
+    message that merely *quotes* `rm camera.mov` is denied. That is the right way
+    round for a tripwire: rephrase, or write the text to a file first.
     """
     return [part for part in re.split(r"&&|\|\||;|\||\n", command) if part.strip()]
 
@@ -169,11 +177,19 @@ def endangered_targets(segment: str) -> List[str]:
     destructive = argv0 in DESTRUCTIVE
 
     if argv0 in {"ffmpeg", "avconv"}:
-        # ffmpeg reads every -i and writes the trailing operand. The output must be
-        # checked even when it equals an input — `ffmpeg -i x.mp4 x.mp4` is the
-        # unrecoverable in-place overwrite, not an operand to exempt (trap row 23b).
-        outputs = [a for a in args[-1:] if not a.startswith("-")]
-        return [t for t in outputs if is_media(t) and not is_scratch(t)]
+        # ffmpeg reads every -i and writes the trailing operand. That operand is
+        # checked even when it also appears as an input: `ffmpeg -i x.mp4 x.mp4`
+        # is the in-place overwrite this hook exists to stop, and exempting an
+        # output for matching an input exempted exactly that command.
+        #
+        # The one trailing token that is not an output is the value of a `-i`
+        # immediately before it — `ffmpeg -i master.mov` prints stream info and
+        # writes nothing. Denying a read would only teach an agent to route
+        # around the guard to look at a file.
+        trailing = args[-1:] if args and not args[-1].startswith("-") else []
+        if len(args) >= 2 and args[-2] == "-i":
+            trailing = []
+        return [t for t in trailing if is_media(t) and not is_scratch(t)]
 
     if argv0 == "cp":
         # Only the destination is at risk.

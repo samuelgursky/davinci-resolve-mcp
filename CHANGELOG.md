@@ -2,6 +2,55 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.98.1
+
+**The Bash guard could be walked past with a newline.** Reported and fixed in
+[#152](https://github.com/samuelgursky/davinci-resolve-mcp/pull/152) by
+@fitfam, who found both holes by executing payloads against the hook rather
+than reading it.
+
+### Fixed
+
+- **`split_commands()` did not split on newlines.** It knew `&&`, `||`, `;` and
+  `|`, so a multi-line block was a single segment: `argv0` came from the first
+  line, and a non-mutating first line returned before anything under it was
+  looked at. `mkdir -p footage/_superseded` then a newline then
+  `mv footage/clip.mp4 footage/_superseded/` passed, while the same two commands
+  joined by `;` denied. Either answer is defensible on its own; giving two
+  different answers to what a shell treats as the same command is what made the
+  guard trainable around.
+
+- **The ffmpeg branch exempted an output that equalled an input.** The output
+  operand was dropped when it matched a `-i` value — which is exactly
+  `ffmpeg -i master.mp4 master.mp4`, the in-place overwrite the hook's own deny
+  message calls unrecoverable. Independent of the first hole: the single-line
+  form was allowed too.
+
+### Changed
+
+- The trailing operand is no longer read as an output when it is the value of a
+  `-i` immediately before it. `ffmpeg -i master.mov` prints stream info and
+  writes nothing, and denying a read is how a guard teaches an agent to route
+  around it. `ffmpeg -i x.mp4 x.mp4` still denies — the token there is not
+  preceded by `-i`.
+
+### Added
+
+- **`tests.test_source_media_guard`** — the hook had no tests, which is why two
+  holes in it needed a payload matrix to find. It runs the hook the way the
+  harness does, a PreToolUse payload on stdin and a decision on stdout, and
+  fails on exactly the four rows this release fixes. The newline/`;` pair is
+  asserted as a pair: not that either answer is right, but that the guard cannot
+  give two.
+
+### Note
+
+- Splitting on newlines means multi-line text carried *inside* a command — a
+  heredoc body, a commit message — is now read as commands too, so text that
+  merely quotes `rm camera.mov` is denied. That is the right way round for a
+  tripwire; write the text to a file first. #152 was itself blocked this way on
+  its first attempt, by the fix it was proposing.
+
 ## What's New in v2.98.0
 
 **The control panel could be driven by any web page you visited.** Reported
