@@ -137,8 +137,12 @@ def is_media(token: str) -> bool:
 
 
 def split_commands(command: str) -> List[str]:
-    """Split on shell separators so `ffprobe x && rm y` is checked as two."""
-    return [part for part in re.split(r"&&|\|\||;|\|", command) if part.strip()]
+    """Split on shell separators so `ffprobe x && rm y` is checked as two.
+
+    Newlines are separators too: a multi-line block with a harmless first line
+    must not hide the mutating lines after it (fitfam trap row 23, 2026-08-12).
+    """
+    return [part for part in re.split(r"&&|\|\||;|\||\n", command) if part.strip()]
 
 
 def endangered_targets(segment: str) -> List[str]:
@@ -165,9 +169,10 @@ def endangered_targets(segment: str) -> List[str]:
     destructive = argv0 in DESTRUCTIVE
 
     if argv0 in {"ffmpeg", "avconv"}:
-        # ffmpeg reads every -i and writes the trailing operand.
-        inputs = {args[i + 1] for i, a in enumerate(args) if a == "-i" and i + 1 < len(args)}
-        outputs = [a for a in args[-1:] if not a.startswith("-") and a not in inputs]
+        # ffmpeg reads every -i and writes the trailing operand. The output must be
+        # checked even when it equals an input — `ffmpeg -i x.mp4 x.mp4` is the
+        # unrecoverable in-place overwrite, not an operand to exempt (trap row 23b).
+        outputs = [a for a in args[-1:] if not a.startswith("-")]
         return [t for t in outputs if is_media(t) and not is_scratch(t)]
 
     if argv0 == "cp":
