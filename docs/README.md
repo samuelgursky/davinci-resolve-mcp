@@ -150,14 +150,24 @@ four are:
 - `.claude/hooks/source_media_guard.py` — denies shell commands that write,
   move, or delete source media outside a scratch root. Reads (`ffprobe`, and
   `ffmpeg` writing into scratch) pass.
-- `.claude/hooks/agent_rules_drift_check.py` — after an edit to `AGENTS.md`,
-  `docs/kernels/*`, `docs/guides/*`, or `resolve-advanced/README.md`, runs
-  `node scripts/agent-rules/generate.mjs --check` and surfaces the result.
-  Informational only; never blocks. Skips quietly if `node` isn't on `PATH`.
+- `.claude/hooks/agent_rules_drift_check.py` — after an edit to anything
+  `generate.mjs` reads (`docs/SKILL.md`, `docs/kernels/README.md`,
+  `resolve-advanced/README.md`, and `generate.mjs` itself, which carries the
+  DOMAINS manifest inline) or to `AGENTS.md`, which it writes, runs
+  `node scripts/agent-rules/generate.mjs --check` and surfaces the result. It
+  distinguishes real drift from a generator that threw before it could look —
+  regenerating fixes the first and not the second. Informational only; never
+  blocks. Skips quietly if `node` isn't on `PATH`. **If `generate.mjs` grows a
+  new input, add it to `SOURCE_PATHS` in the hook** — an unwatched input is a
+  silent hook on exactly the edit it exists to catch.
 - `.claude/hooks/run_matching_test.py` — after an edit to `src/<module>.py`,
   runs the matching `tests/test_<module>.py` if one exists, using the project
   venv (`venv/bin/python`) so `pytest` is actually importable. Informational
   only; skips quietly if there's no matching test file or no working `pytest`.
+  A fast partial net, not coverage: 72 of the 126 modules under `src/` have a
+  matching test under this convention, densely in `src/utils/` and not at all
+  for `src/server.py` or `src/granular/common.py`. Silence means "no matching
+  test file", not "this edit is fine".
 
 Three review subagents in `.claude/agents/` run in their own context so bulky
 output (frame images, full test transcripts) stays out of the main session:

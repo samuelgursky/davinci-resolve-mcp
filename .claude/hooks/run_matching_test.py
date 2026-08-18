@@ -2,9 +2,17 @@
 """PostToolUse check: run the one test file an edited module maps to.
 
 tests/ follows a src/<module>.py -> tests/test_<module>.py naming convention
-across 300+ files. Running the full suite after every edit is too slow for
-inline feedback; this hook runs just the matching test file, so a broken
-change surfaces before the session moves on.
+for 72 of the 126 modules under src/ — densely in src/utils/, not at all for
+src/server.py, src/granular/common.py, or src/control_panel.py, which is where
+most edits land. Running the full suite after every edit is too slow for
+inline feedback; this hook runs just the matching test file, so a broken change
+surfaces before the session moves on. It is a fast partial net, not coverage:
+silence here means "no matching test file", not "this edit is fine".
+
+The lookup is by stem, so src/api/foo.py and src/foo.py both resolve to
+tests/test_foo.py. Only __init__.py collides today, but a future same-named
+module in two packages would run the wrong test file and report it as this
+edit's result.
 
 Informational only: it never blocks the edit, and it skips silently when
 there is no matching test file or the edited file isn't under src/. Reads the
