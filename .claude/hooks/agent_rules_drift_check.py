@@ -6,12 +6,12 @@ file (.cursor/rules, .windsurf/rules, .clinerules, .roo/rules, .continue/rules,
 .github/copilot-instructions.md, and the AGENTS.md domain-routing block).
 tests/test_agent_rules_drift.py fails if any of those go stale relative to
 their sources without a regeneration — but that is only caught at test time.
-The sources are the four files generate.mjs actually reads (docs/SKILL.md,
+The sources are the three files generate.mjs actually reads (docs/SKILL.md,
 docs/kernels/README.md, resolve-advanced/README.md) plus the DOMAINS manifest
 inlined in generate.mjs itself; AGENTS.md is an output, so an edit there can
-also leave it stale. This hook runs
-the same `--check` the test does, right after an edit to one of the sources,
-so drift surfaces immediately instead of at the next test run.
+also leave it stale. This hook runs the same `--check` the test does, right
+after an edit to one of those, so drift surfaces immediately instead of at the
+next test run.
 
 Informational only: it never blocks the edit. If node is missing, the
 generator is missing, or the edited file isn't a generator source, it exits

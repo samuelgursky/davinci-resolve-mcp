@@ -2,6 +2,53 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.97.4
+
+**Drift is caught at the edit, not at publish time.** Tooling and docs only —
+no server behavior changed, and no Resolve live run was required or performed.
+
+### Added
+
+- **Two opt-in `PostToolUse` hooks** in `.claude/hooks/`. Like the two existing
+  `PreToolUse` guards, they ship as scripts and are **not** wired up by default;
+  opt in via your own gitignored `.claude/settings.local.json` (the block is in
+  [docs/README.md](docs/README.md)).
+  - `agent_rules_drift_check.py` runs `node scripts/agent-rules/generate.mjs
+    --check` after an edit to anything the generator actually reads
+    (`docs/SKILL.md`, `docs/kernels/README.md`, `resolve-advanced/README.md`,
+    and `generate.mjs` itself, which carries the DOMAINS manifest inline) or to
+    `AGENTS.md`, which it writes. It separates the generator's two exit-1
+    paths: real staleness always prints `N agent-rule file(s) are stale`, a
+    throw never does — and telling a session to regenerate when the generator
+    is the thing that crashed sends it in a circle. Watching outputs but not
+    inputs was the original bug: bumping the compound tool count in
+    `docs/SKILL.md` left five generated files stale and the hook said nothing.
+    **A new generator input has to be added to `SOURCE_PATHS` or the hook goes
+    silent on exactly the edit it exists for.**
+  - `run_matching_test.py` runs the matching `tests/test_<module>.py` after an
+    edit under `src/`, resolving the project venv (`venv/bin/python`) before
+    `python3` so `pytest` is importable rather than reporting a false failure.
+    A fast partial net, not coverage: 72 of the 126 modules under `src/` follow
+    the convention, densely in `src/utils/` and not at all for `src/server.py`,
+    `src/granular/common.py`, or `src/control_panel.py`. Silence means "no
+    matching test file", not "this edit is fine".
+- **`drift-guard-reviewer` subagent** (`.claude/agents/`) — runs the drift-guard
+  test family plus the adjacent checks `npm-publish.yml` runs before every
+  publish, on demand and in its own context. It reports what is stale and which
+  regeneration command fixes it; it does not fix anything.
+- **`release-check` skill** (`/release-check`) — a thin wrapper that reads and
+  follows [docs/process/release-process.md](docs/process/release-process.md)
+  from disk. It deliberately does not restate the checklist: a second copy can
+  drift from the original, which `CLAUDE.md` prohibits.
+
+### Changed
+
+- `docs/README.md` documents all four hooks, all three subagents, and the new
+  skill in place, including the opt-in JSON block.
+
+Contributed by [@Grimthereapper](https://github.com/Grimthereapper) in
+[#149](https://github.com/samuelgursky/davinci-resolve-mcp/pull/149).
+
 ## What's New in v2.97.3
 
 **`source_end` no longer has the start timecode baked into it.** Reported by
