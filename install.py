@@ -284,6 +284,21 @@ def find_resolve_paths():
             lib_path = expanded
             break
 
+    if lib_path is None:
+        # The literal candidates above only cover a default install. An explicit
+        # override wins outright; failing that, ask where Resolve actually is.
+        # Skipping this is what wrote an empty RESOLVE_SCRIPT_LIB into working
+        # configs and left the server importing a DLL that was never there.
+        env_lib = os.environ.get("RESOLVE_SCRIPT_LIB")
+        if env_lib and os.path.isfile(env_lib):
+            lib_path = env_lib
+        else:
+            try:
+                from src.utils.platform import discover_scripting_lib
+                lib_path = discover_scripting_lib()
+            except Exception:
+                lib_path = None
+
     return api_path, lib_path
 
 
@@ -520,7 +535,14 @@ def get_python_base_install(python_path):
 
 
 def build_server_env(python_path, api_path, lib_path, system=SYSTEM, python_home=None):
-    """Build the env block used by all generated stdio MCP configs."""
+    """Build the env block used by all generated stdio MCP configs.
+
+    Keys whose value is empty are omitted rather than written as "". An empty
+    `RESOLVE_SCRIPT_LIB` is worse than an absent one: it reads as configured in
+    the config file, while `DaVinciResolveScript.py` treats it as unset and
+    silently reverts to its own hardcoded install path — so a machine with
+    Resolve elsewhere fails with a DLL-load error that names nothing useful.
+    """
     api_value = str(api_path or "")
     lib_value = str(lib_path or "")
     env = {
@@ -528,6 +550,7 @@ def build_server_env(python_path, api_path, lib_path, system=SYSTEM, python_home
         "RESOLVE_SCRIPT_LIB": lib_value,
         "PYTHONPATH": str(Path(api_value) / "Modules") if api_value else "",
     }
+    env = {key: value for key, value in env.items() if value}
 
     if system == "Windows":
         env["PYTHONHOME"] = str(python_home or get_python_base_install(python_path))
@@ -1921,7 +1944,13 @@ def main():
     if lib_path:
         print(f"  Library:   {green(lib_path)}")
     else:
-        print(f"  Library:   {yellow('Not found')} {dim('(optional — API path is sufficient)')}")
+        # Not optional, whatever this line used to claim: DaVinciResolveScript
+        # is a thin wrapper that loads this binary, so without it every tool
+        # fails at import. Saying "API path is sufficient" here sent people
+        # looking at their Resolve edition and their preferences instead.
+        print(f"  Library:   {red('Not found')} {dim('(required — the scripting API cannot load without it)')}")
+        print(f"  {dim('Set RESOLVE_SCRIPT_LIB to the fusionscript library inside your Resolve install,')}")
+        print(f"  {dim('or start Resolve and re-run setup so its location can be read from the process.')}")
 
     resolve_running = check_resolve_running()
     if resolve_running:
@@ -2122,6 +2151,7 @@ def main():
     if interactive:
         print_step(5, total_steps, "Verification")
 
+    verification_failed = False
     if api_path:
         success, message = verify_resolve_connection(python_path, api_path, lib_path)
         try:
@@ -2171,13 +2201,28 @@ def main():
             else:
                 print(f"  Connected: {green(message)}")
         else:
-            print(f"  Verify:    {yellow(message)}")
+            verification_failed = True
+            print(f"  Verify:    {red(message)}")
+            if "DLL load failed" in message or "cannot open shared object" in message:
+                # This is the shape of a wrong or missing library path, and it
+                # is the one failure the installer can diagnose precisely. Say
+                # so before offering the interpreter theory below — a reader who
+                # is told "try another Python" first will go and do that.
+                print(
+                    f"             The scripting library named by RESOLVE_SCRIPT_LIB did not load. "
+                    f"Current value: {lib_path or dim('(not set)')}"
+                )
+                print(
+                    "             Point RESOLVE_SCRIPT_LIB at the fusionscript library inside your "
+                    "Resolve install, or start Resolve and re-run setup."
+                )
             if py_abi_risk:
                 print(
                     f"             On Python 3.13+ this may be an ABI mismatch with Resolve's "
                     f"scripting library — try Python 3.10-3.12 if it persists."
                 )
     else:
+        verification_failed = True
         print(f"  {yellow('Skipped')} — Resolve API path not detected")
 
     # ══════════════════════════════════════════════════════════════════════
@@ -2185,7 +2230,25 @@ def main():
     # ══════════════════════════════════════════════════════════════════════
 
     print(f"\n  {'═' * 50}")
-    if configured or show_manual:
+    if verification_failed and (configured or show_manual):
+        # Writing the configs is not the job; a working connection is. Reporting
+        # "Setup complete!" over a failed verification is how an install that
+        # never worked gets handed to the user as finished — the error scrolls
+        # past mid-output and the last line says success.
+        print(f"  {yellow(bold('Setup incomplete — the scripting API did not load.'))}")
+        if configured:
+            print(f"  Configured: {', '.join(configured)} {dim('(written, but the server will fail to start)')}")
+        print()
+        print(f"  {bold('Fix the verification error above, then re-run:')}")
+        print(f"    {cyan('python install.py')}")
+        print()
+        print(f"  {dim(f'Server: {server_path}')}")
+        print(f"  {dim(f'Python: {python_path}')}")
+        if api_path:
+            print(f"  {dim(f'API:    {api_path}')}")
+        if lib_path:
+            print(f"  {dim(f'Library: {lib_path}')}")
+    elif configured or show_manual:
         print(f"  {green(bold('Setup complete!'))}")
         if configured:
             print(f"  Configured: {', '.join(configured)}")

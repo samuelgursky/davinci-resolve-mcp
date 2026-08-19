@@ -122,11 +122,21 @@ def _is_resolve_command(line: str) -> bool:
     the executable is exactly what sits inside the first quoted span; anything
     after the closing quote is arguments, and the flag loop never sees it.
     """
+    return _matches_pattern(_executable_from_line(line))
+
+
+def _executable_from_line(line: str) -> str:
+    """The executable path from a command line, with argument tokens removed.
+
+    Split out of `_is_resolve_command` so the install-location lookup below
+    agrees with the "is this Resolve" test about where the path ends. See that
+    function's docstring for why the quoting and flag-stripping rules are these.
+    """
     text = line.strip()
     if text.startswith('"'):
         close = text.find('"', 1)
         if close > 1:
-            return _matches_pattern(text[1:close])
+            return text[1:close]
     while True:
         stripped = text.rstrip()
         cut = stripped.rfind(" -")
@@ -138,7 +148,7 @@ def _is_resolve_command(line: str) -> bool:
         if not candidate:
             break
         text = candidate
-    return _matches_pattern(text)
+    return text
 
 
 def resolve_processes() -> Optional[List[str]]:
@@ -147,6 +157,52 @@ def resolve_processes() -> Optional[List[str]]:
     if lines is None:
         return None
     return [line for line in lines if _is_resolve_command(line)]
+
+
+#: Where the scripting library sits relative to the Resolve executable. The
+#: library ships *inside* the application, so the running executable's own path
+#: is the only locator that is right by construction — every hardcoded install
+#: root is a guess about where the user chose to put Resolve.
+_LIB_RELATIVE_TO_EXECUTABLE = {
+    "windows": ("fusionscript.dll",),
+    "darwin": ("../Libraries/Fusion/fusionscript.so",),
+    "linux": (
+        "../libs/Fusion/fusionscript.so",
+        "../libs/fusionscript.so",
+        "fusionscript.so",
+    ),
+}
+
+
+def running_resolve_lib() -> Optional[str]:
+    """Scripting library of the *running* Resolve, or None.
+
+    Blackmagic's own `DaVinciResolveScript.py` falls back to one hardcoded
+    install path per platform, and this project's defaults mirror it. A Resolve
+    installed anywhere else — a second drive, an external volume, a custom
+    directory — is therefore invisible to both, and the failure is silent: the
+    module imports, the DLL behind it does not load, and the user is told the
+    edition or the preference is at fault.
+
+    The running process settles it without guessing. Returns None when nothing
+    is running, the process list is unavailable, or the derived path does not
+    exist; callers keep their existing defaults in that case.
+    """
+    processes = resolve_processes()
+    if not processes:
+        return None
+    suffixes = _LIB_RELATIVE_TO_EXECUTABLE.get(platform.system().lower(), ())
+    for line in processes:
+        executable_dir = os.path.dirname(_executable_from_line(line))
+        if not executable_dir:
+            continue
+        for suffix in suffixes:
+            candidate = os.path.normpath(
+                os.path.join(executable_dir, *suffix.split("/"))
+            )
+            if os.path.isfile(candidate):
+                return candidate
+    return None
 
 
 def runtime_mode() -> Dict[str, Any]:

@@ -64,12 +64,103 @@ def get_resolve_paths():
     env_lib = os.environ.get("RESOLVE_SCRIPT_LIB")
     if env_lib and os.path.isfile(env_lib):
         lib_path = env_lib
+    elif not os.path.isfile(lib_path):
+        # No usable override and nothing at the default: look for the real
+        # install before handing back a path we already know is not there.
+        # The default is kept as the return value when discovery finds nothing,
+        # so the failure message still names the location people expect.
+        lib_path = discover_scripting_lib(platform_name) or lib_path
 
     return {
         "api_path": api_path,
         "lib_path": lib_path,
         "modules_path": modules_path
     }
+
+
+def _windows_lib_candidates():
+    r"""Plausible `fusionscript.dll` locations on this machine.
+
+    `%PROGRAMFILES%` is not a constant — a 64-bit install can sit under
+    `%PROGRAMW6432%` — and Resolve is routinely moved to a second drive
+    because the application and its caches are large. Only fixed drives that
+    exist are probed, two fixed paths each, no directory walk: this runs on
+    every connection attempt and must stay cheap. A: and B: are skipped so a
+    machine with a floppy-mapped letter does not stall on the probe.
+    """
+    relative = os.path.join("Blackmagic Design", "DaVinci Resolve", "fusionscript.dll")
+    candidates = []
+    for variable in ("PROGRAMFILES", "PROGRAMW6432", "PROGRAMFILES(X86)"):
+        base = os.environ.get(variable)
+        if base:
+            candidates.append(os.path.join(base, relative))
+    for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+        drive = f"{letter}:\\"
+        if not os.path.isdir(drive):
+            continue
+        candidates.append(os.path.join(drive, relative))
+        candidates.append(os.path.join(drive, "Program Files", relative))
+    return candidates
+
+
+def _macos_lib_candidates():
+    """The App Store bundle as well as the installer one.
+
+    The default above names `/Applications/DaVinci Resolve/DaVinci Resolve.app`.
+    The App Store build installs to `/Applications/DaVinci Resolve.app` instead —
+    the same class of miss as a Windows install on another drive, and
+    `resolve_runtime.MACOS_RESOLVE_APPS` already records both.
+    """
+    inside_bundle = os.path.join("Contents", "Libraries", "Fusion", "fusionscript.so")
+    bundles = (
+        "/Applications/DaVinci Resolve/DaVinci Resolve.app",
+        "/Applications/DaVinci Resolve.app",
+    )
+    return [os.path.join(bundle, inside_bundle) for bundle in bundles]
+
+
+def _linux_lib_candidates():
+    """The documented /opt layouts, both of which Blackmagic has shipped."""
+    return [
+        "/opt/resolve/libs/Fusion/fusionscript.so",
+        "/opt/resolve/libs/fusionscript.so",
+        "/opt/resolve/bin/fusionscript.so",
+    ]
+
+
+def discover_scripting_lib(platform_name=None):
+    """Locate the scripting library of a Resolve installed outside the default.
+
+    Order: the running Resolve first — its executable path is the install
+    location, so it needs no guessing and covers every platform — then the
+    conventional roots for that platform, for when Resolve is not up at the
+    moment (installer runs, cold starts).
+
+    Returns None when nothing is found, which leaves the caller's default in
+    place rather than substituting a second guess.
+    """
+    if platform_name is None:
+        platform_name = get_platform()
+
+    try:
+        from src.utils.resolve_runtime import running_resolve_lib
+        running = running_resolve_lib()
+    except Exception:
+        running = None
+    if running and os.path.isfile(running):
+        return running
+
+    by_platform = {
+        'windows': _windows_lib_candidates,
+        'darwin': _macos_lib_candidates,
+        'linux': _linux_lib_candidates,
+    }
+    builder = by_platform.get(platform_name)
+    candidates = builder() if builder else []
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
 
 def get_resolve_plugin_paths():
     """Get platform-specific paths for Resolve plugin install dirs.
