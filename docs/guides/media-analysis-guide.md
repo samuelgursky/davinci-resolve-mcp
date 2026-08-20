@@ -79,6 +79,52 @@ which ffmpeg && ffmpeg -version 2>&1 | head -1
 which whisper 2>/dev/null || which whisper-cpp 2>/dev/null || python3 -c "import whisper" 2>/dev/null
 ```
 
+One or more HTTP transcription adapters can be registered without installing a
+transcription module into the Resolve MCP Python environment. Providers are
+selected as `http:<id>`, in configuration order:
+
+```bash
+export DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS='[
+  {
+    "id": "audiobox-local",
+    "label": "Audiobox local",
+    "base_url": "http://127.0.0.1:8000",
+    "model": "mlx-community/Qwen3-ASR-1.7B-8bit",
+    "request_body": {"provider": "mlx"}
+  },
+  {
+    "id": "studio-asr",
+    "label": "Studio ASR",
+    "base_url": "https://asr.example.com",
+    "headers": {"Authorization": "Bearer replace-me"},
+    "health_path": "/ready",
+    "transcribe_path": "/v1/transcribe",
+    "field_map": {"audio": "input_path"},
+    "response_field": "result"
+  }
+]'
+```
+
+Each provider requires `id` and `base_url`. Optional fields are `label`,
+`model`, `health_path`, `transcribe_path`, `health_field`, `health_value`,
+`headers`, `request_body`, `field_map`, and `response_field`. Authentication
+headers are used for health and transcription requests but are omitted from
+capability reports.
+
+The default adapter contract uses `GET /health` with `{"status":"ok"}` and
+`POST /stt`. Its JSON request includes `audio`, `output_path`, `format`,
+`verbose`, `allow_download`, and optional `model` and `language` fields.
+`request_body` adds adapter-specific values, while `field_map` renames standard
+request fields. The response may return a transcript object, a JSON-encoded
+transcript string, or plain text under `response_field` (default
+`transcript`). The normalized transcript object uses `text` and `segments`.
+
+[Audiobox MLX Audio Router](https://github.com/double2tea/Audiobox) is one
+adapter implementation, not a built-in backend requirement. Other local,
+network, or cloud-backed adapters can be added through configuration without
+changing MCP source code. Model download behavior follows the existing
+`allow_model_download` transcription option.
+
 FFprobe is required. If missing:
 - macOS: `brew install ffmpeg`
 - Linux: `sudo apt install ffmpeg` or `sudo dnf install ffmpeg`
@@ -749,6 +795,48 @@ When analysis reveals potential issues, always alert the user:
 - **Interlaced content** — Set deinterlacing mode before editing
 - **Missing audio** — No audio streams detected
 - **Extremely high bitrate** — Verify storage can sustain real-time playback
+
+---
+
+## Known Limitation: word timestamps lie around immediate retakes
+
+**Transcripts do not report a re-read sentence twice.** When a speaker
+immediately re-reads a line — the ordinary way people self-correct while
+recording — whisper emits the text **once**, aligns it to the **first** take, and
+absorbs "pause + entire second take" into the duration of a **single word**.
+Measured on real Chinese material: one single-character word spanning **6.06 s**,
+another **4.4 s**, where real speech runs 4–7 chars/s. Reproduced on English with
+the identical signature: the word *"lives"* carrying **2.42 s**. Issue #125.
+
+Everything downstream of the transcript inherits it:
+
+- **Retake and false-start detection never fires** for this class — the
+  transcript says the sentence was spoken cleanly, once.
+- **`rank_takes` undercounts restarts**, so a take that stumbled and recovered
+  can outscore one that did not. Its `caveat` field says so at runtime.
+- **Word-level cuts near a swallow land inside speech**, because the timestamps
+  inflate around the absorption point.
+- **`plan_transcript_tighten` is structurally blind here** — its false-start
+  heuristic only sees restarts the transcript reports.
+
+**Silence detection cannot rescue it.** The swallowed span is not silence: in the
+original measurement it was breathing and keyboard noise peaking at **−12.1 dB**,
+*louder* than the adjacent real speech at −16.7 dB. A silence-based pass recalled
+**3 of 17** ground-truth instances at any threshold.
+
+**What the analysis output gives you.** Transcript-reading results carry
+`possible_swallowed_retakes`: words whose duration exceeds an absolute bar
+(default **1.2 s**), which is language-agnostic and computed from data the
+pipeline already has. Treat it as a **flag, not a cut point** — where inside the
+stretched word the second take begins is precisely what the swallow destroyed, so
+those need a human ear or a re-transcription of the isolated window before
+anything is removed.
+
+**Read the empty case correctly.** No flags is *weak evidence, not proof*. A
+swallow smeared across several words instead of concentrated in one will not
+clear the bar, and that case is expected to exist. The bar itself is a usable
+default chosen from limited data — 17 real instances in Chinese, confirmed by a
+single genuine English swallow in synthetic material — not a tuned constant.
 
 ---
 

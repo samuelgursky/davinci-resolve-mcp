@@ -10,7 +10,7 @@
  * - Protobuf encoding/decoding
  * - Validation and correction
  *
- * Used across the The project platform for consistent DRX handling.
+ * Used across the platform for consistent DRX handling.
  *
  * @module drx-parameters
  *

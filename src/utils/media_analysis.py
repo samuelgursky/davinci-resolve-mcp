@@ -17,11 +17,15 @@ import os
 import platform as _platform
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -331,8 +335,20 @@ def _ensure_path_includes_standard_tool_dirs() -> None:
     /opt/homebrew/bin/ffprobe. Subprocess calls (subprocess.run(["ffprobe"...]))
     then also fail to find the binary. Prepending the standard tool dirs here
     fixes both detection and execution for every importer of this module.
+
+    The interpreter's own script directory is one of them, and it was missing.
+    A console script installed into the server's virtualenv — `pip install
+    openai-whisper` puts `whisper` in `venv/Scripts` on Windows, `venv/bin`
+    elsewhere — is only on PATH when that environment has been *activated*, and
+    nothing activates it: the client launches `venv/python server.py` directly.
+    So the tool was installed, working, and invisible, and `capabilities`
+    reported `whisper_cli.available: false` with no hint as to why (#153, where
+    the workaround that appeared to fix it was a shim placed on PATH by hand).
     """
     candidates = [
+        # The venv this server is running from, first: a tool installed
+        # deliberately alongside it should win over an older copy elsewhere.
+        os.path.dirname(os.path.abspath(sys.executable)),
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
         "/usr/local/bin",
@@ -354,6 +370,9 @@ _ensure_path_includes_standard_tool_dirs()
 ANALYSIS_DIR_NAME = "davinci-resolve-mcp-analysis"
 HIDDEN_ANALYSIS_DIR_NAME = ".davinci-resolve-mcp-analysis"
 ANALYSIS_VERSION = "0.2"
+
+HTTP_TRANSCRIPTION_PROVIDERS_ENV = "DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS"
+HTTP_TRANSCRIPTION_BACKEND_PREFIX = "http:"
 ANALYSIS_INDEX_FILENAME = "index.sqlite"
 ANALYSIS_REGISTRY_FILENAME = "analysis_registry.json"
 ANALYSIS_INDEX_SCHEMA_VERSION = 1
@@ -1606,6 +1625,115 @@ def install_plan_for(tool_name: str, platform_id: Optional[str] = None) -> Dict[
     }
 
 
+def _http_provider_endpoint(provider: Dict[str, Any], path_key: str) -> str:
+    path = str(provider[path_key]).strip()
+    if path.startswith(("http://", "https://")):
+        return path
+    return f"{provider['base_url']}/{path.lstrip('/')}"
+
+
+def _load_http_transcription_providers(env: Dict[str, str]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    raw = (env.get(HTTP_TRANSCRIPTION_PROVIDERS_ENV) or "").strip()
+    if not raw:
+        return [], None
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return [], f"{HTTP_TRANSCRIPTION_PROVIDERS_ENV} is not valid JSON: {exc}"
+    if not isinstance(entries, list):
+        return [], f"{HTTP_TRANSCRIPTION_PROVIDERS_ENV} must be a JSON array"
+
+    providers: List[Dict[str, Any]] = []
+    seen_ids = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            return [], f"HTTP transcription provider at index {index} must be an object"
+        provider_id = str(entry.get("id") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", provider_id):
+            return [], f"HTTP transcription provider at index {index} has an invalid id"
+        if provider_id in seen_ids:
+            return [], f"Duplicate HTTP transcription provider id: {provider_id}"
+        seen_ids.add(provider_id)
+
+        base_url = str(entry.get("base_url") or "").strip().rstrip("/")
+        parsed_url = urllib.parse.urlparse(base_url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            return [], f"HTTP transcription provider '{provider_id}' base_url must use http:// or https://"
+        headers = entry.get("headers") or {}
+        request_body = entry.get("request_body") or {}
+        field_map = entry.get("field_map") or {}
+        if not isinstance(headers, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in headers.items()):
+            return [], f"HTTP transcription provider '{provider_id}' headers must be a string map"
+        if not isinstance(request_body, dict):
+            return [], f"HTTP transcription provider '{provider_id}' request_body must be an object"
+        if not isinstance(field_map, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in field_map.items()):
+            return [], f"HTTP transcription provider '{provider_id}' field_map must be a string map"
+
+        label = str(entry.get("label") or provider_id).strip() or provider_id
+        providers.append({
+            "id": provider_id,
+            "label": label,
+            "base_url": base_url,
+            "model": str(entry.get("model") or "").strip() or None,
+            "health_path": str(entry.get("health_path") or "/health").strip(),
+            "transcribe_path": str(entry.get("transcribe_path") or "/stt").strip(),
+            "health_field": str(entry.get("health_field") or "status").strip(),
+            "health_value": entry.get("health_value", "ok"),
+            "response_field": str(entry.get("response_field", "transcript")).strip(),
+            "headers": dict(headers),
+            "request_body": dict(request_body),
+            "field_map": dict(field_map),
+        })
+    return providers, None
+
+
+def _detect_http_transcription_providers(env: Dict[str, str]) -> Dict[str, Any]:
+    providers, config_error = _load_http_transcription_providers(env)
+    if config_error:
+        return {
+            "available": False,
+            "configured": True,
+            "config_env": HTTP_TRANSCRIPTION_PROVIDERS_ENV,
+            "error": config_error,
+            "providers": [],
+        }
+
+    detected = []
+    for provider in providers:
+        public = {
+            "id": provider["id"],
+            "label": provider["label"],
+            "url": provider["base_url"],
+            "model": provider["model"],
+            "backend": f"{HTTP_TRANSCRIPTION_BACKEND_PREFIX}{provider['id']}",
+        }
+        try:
+            request = urllib.request.Request(
+                _http_provider_endpoint(provider, "health_path"),
+                headers=provider["headers"],
+                method="GET",
+            )
+            with urllib.request.urlopen(request, timeout=1.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("health response must be a JSON object")
+            if payload.get(provider["health_field"]) != provider["health_value"]:
+                raise ValueError(
+                    f"health field '{provider['health_field']}' did not equal the configured ready value"
+                )
+            public.update({"available": True, "api_version": payload.get("api_version")})
+        except (OSError, ValueError) as exc:
+            public.update({"available": False, "error": str(exc)})
+        detected.append(public)
+
+    return {
+        "available": any(provider["available"] for provider in detected),
+        "configured": bool(providers),
+        "config_env": HTTP_TRANSCRIPTION_PROVIDERS_ENV,
+        "providers": detected,
+    }
+
+
 def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Detect available analysis helpers without installing or downloading."""
     env = env if env is not None else os.environ
@@ -1618,6 +1746,7 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     mlx_whisper = importlib.util.find_spec("mlx_whisper") is not None
     cv2 = importlib.util.find_spec("cv2") is not None
     provider = env.get("DAVINCI_RESOLVE_MCP_VISION_PROVIDER")
+    http_transcription = _detect_http_transcription_providers(env)
 
     sync_events = detect_sync_event_capabilities()
 
@@ -1653,6 +1782,7 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
             "whisper_cli": _tool_entry("whisper_cli", bool(whisper_cli), {"path": whisper_cli}),
             "whisper_cpp": _tool_entry("whisper_cpp", bool(whisper_cpp), {"path": whisper_cpp}),
             "mlx_whisper": _tool_entry("mlx_whisper", bool(mlx_whisper), {"python_module": "mlx_whisper"}),
+            "http_transcription": http_transcription,
             "opencv": _tool_entry("opencv", bool(cv2), {"python_module": "cv2"}),
             "ollama_embeddings": _tool_entry(
                 "ollama_embeddings",
@@ -1672,8 +1802,12 @@ def detect_capabilities(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         },
         "embeddings": embedding_caps,
         "transcription": {
-            "available": bool(whisper_cli or whisper_cpp or mlx_whisper),
+            "available": bool(http_transcription["available"] or whisper_cli or whisper_cpp or mlx_whisper),
             "backends": [
+                provider["backend"]
+                for provider in http_transcription["providers"]
+                if provider["available"]
+            ] + [
                 name for name, available in (
                     ("whisper_cli", bool(whisper_cli)),
                     ("whisper_cpp", bool(whisper_cpp)),
@@ -1730,12 +1864,13 @@ def install_guidance(capabilities: Optional[Dict[str, Any]] = None) -> Dict[str,
         missing["transcription"] = {
             "required_for": ["transcription analysis", "default Resolve media analysis"],
             "options": [
+                f"Configure one or more HTTP providers with {HTTP_TRANSCRIPTION_PROVIDERS_ENV}",
                 "Install/configure whisper CLI",
                 "Install/configure whisper-cpp",
                 "Install mlx-whisper on supported Apple Silicon systems",
             ],
             "macos": "Ask the user before running: brew install whisper-cpp, or configure another supported local Whisper backend.",
-            "note": "The MCP server must not install these automatically.",
+            "note": "The MCP server must not install backends or download model files automatically.",
         }
     if not tools.get("opencv", {}).get("available"):
         missing["opencv"] = {
@@ -2254,23 +2389,105 @@ def build_plan(
     }
 
 
-def _run_command(args: List[str], timeout: int = COMMAND_TIMEOUT_SECONDS) -> Tuple[int, str, str]:
+def _kill_process_tree(pid: int) -> None:
+    """Best-effort: terminate pid and its descendants, not just the direct child.
+
+    Popen.kill() reaches only the immediate child. On Windows a bare-name PATH
+    lookup can resolve to a wrapper — a Chocolatey/npm shim, a pip console
+    script — that runs the real work as a grandchild, which a single-PID kill
+    leaves untouched. Measured: `ffmpeg` on PATH was a 392KB shim, and a 5s
+    timeout against an ~82s real ffmpeg pass had no effect at all, because the
+    surviving grandchild still held the stdout/stderr handles it had inherited
+    and the follow-up read blocked until it finished on its own.
+
+    Failure here is never fatal. The caller is already on its error path and
+    owes its own caller a (code, stdout, stderr) tuple, so this must not raise:
+    `taskkill` can be absent from PATH and `killpg` can return EPERM, which is
+    why the whole branch catches OSError rather than only ProcessLookupError.
+    """
     try:
-        proc = subprocess.run(
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                check=False,
+            )
+        else:
+            os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+# How long to wait for the pipes to drain after a tree kill. The kill is
+# best-effort, so this read has to be bounded: anything that escaped it still
+# holds the inherited pipe handles, and an unbounded read there would hang for
+# exactly the reason the kill exists.
+_POST_KILL_DRAIN_SECONDS = 5
+
+
+def _run_command(
+    args: List[str],
+    timeout: int = COMMAND_TIMEOUT_SECONDS,
+    env: Optional[Dict[str, str]] = None,
+) -> Tuple[int, str, str]:
+    """Run args to completion and return (returncode, stdout, stderr).
+
+    Spawned via Popen rather than subprocess.run so a timeout can kill the whole
+    process tree instead of one PID — see _kill_process_tree.
+
+    `env=None` inherits this process's environment, matching what subprocess.run
+    did. Pass an explicit mapping for a child that must not inherit it: on
+    Windows this server sets PYTHONHOME so the fusionscript bridge can find
+    Resolve's Python, and a child that is itself a *different* Python (the
+    whisper CLI) dies loading a foreign stdlib against its own C extensions.
+
+    Returns 124 on timeout, 127 when the binary cannot be spawned.
+    """
+    popen_kwargs: Dict[str, Any] = {}
+    if os.name == "nt":
+        # Isolates the child from console signals sent to the server. Note this
+        # is not what makes the tree kill work — taskkill /T walks parent-child
+        # links, not process groups. start_new_session is load-bearing on POSIX,
+        # where killpg needs the child to lead a group of its own.
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+    try:
+        proc = subprocess.Popen(
             args,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            **popen_kwargs,
         )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
-        stderr_tail = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
-        return 124, stdout, f"Command timed out after {timeout}s. {stderr_tail}".strip()
     except OSError as exc:
         return 127, "", str(exc)
-    stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
-    stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
-    return proc.returncode, stdout, stderr
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(proc.pid)
+        abandoned = False
+        try:
+            stdout, stderr = proc.communicate(timeout=_POST_KILL_DRAIN_SECONDS)
+        except subprocess.TimeoutExpired:
+            # A descendant outlived the tree kill and still holds the pipes.
+            # Give up the output rather than block — a stalled caller is a
+            # worse outcome than a timeout report with no stderr tail.
+            stdout, stderr = b"", b""
+            abandoned = True
+        stdout_s = stdout.decode("utf-8", errors="replace") if stdout else ""
+        stderr_s = stderr.decode("utf-8", errors="replace") if stderr else ""
+        detail = " Output abandoned: a descendant survived the kill." if abandoned else ""
+        return 124, stdout_s, f"Command timed out after {timeout}s.{detail} {stderr_s}".strip()
+    except BaseException:
+        # subprocess.run kills the child on any exception on the way out;
+        # Popen does not. Under the server's threaded dispatch a cancellation
+        # or KeyboardInterrupt here would otherwise leave an orphaned tree.
+        _kill_process_tree(proc.pid)
+        raise
+    stdout_s = stdout.decode("utf-8", errors="replace") if stdout else ""
+    stderr_s = stderr.decode("utf-8", errors="replace") if stderr else ""
+    return proc.returncode, stdout_s, stderr_s
 
 
 def _write_json(path: str, payload: Dict[str, Any]) -> None:
@@ -3901,7 +4118,28 @@ def _transcribe_with_whisper_cli(path: str, artifacts: Dict[str, Any], transcrip
     ]
     if transcription.get("language"):
         cmd.extend(["--language", str(transcription["language"])])
-    code, _, stderr = _run_command(cmd, timeout=int(transcription.get("timeout", 1800)))
+    # PYTHONHOME/PYTHONPATH point this server at Resolve's bundled Python so
+    # DaVinciResolveScript imports. Inherited by a child that is itself a
+    # *different* Python, they corrupt its stdlib resolution — and the whisper
+    # CLI is exactly that: a Python program, frequently on another interpreter
+    # entirely. Measured: whisper under Python 3.14 inheriting a 3.10
+    # PYTHONHOME loads 3.10's stdlib against its own compiled extensions and
+    # dies on `AssertionError: SRE module mismatch`. That crash is fast, not a
+    # hang; it only reads as one when something else delays the response.
+    #
+    # This is the shipped Windows configuration, not a local quirk: install.py
+    # writes PYTHONHOME into generated client configs (see docs/install.md,
+    # issue #26), and server.py sets it on Windows whenever it isn't already
+    # set. So every Windows install hands a foreign PYTHONHOME to every child
+    # it spawns, and any Python-based tool added here needs the same scrub.
+    #
+    # PYTHONIOENCODING=utf-8 is unrelated: it avoids a UnicodeEncodeError in
+    # whisper's own argparse help text on a non-UTF-8 console.
+    whisper_env = dict(os.environ)
+    whisper_env.pop("PYTHONHOME", None)
+    whisper_env.pop("PYTHONPATH", None)
+    whisper_env["PYTHONIOENCODING"] = "utf-8"
+    code, _, stderr = _run_command(cmd, timeout=int(transcription.get("timeout", 1800)), env=whisper_env)
     if code != 0:
         return {"success": False, "backend": "whisper_cli", "error": stderr.strip() or "whisper CLI failed"}
     json_files = sorted(Path(work_dir).glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -3930,6 +4168,92 @@ def _transcribe_with_mlx_whisper(path: str, artifacts: Dict[str, Any], transcrip
         **kwargs,
     )
     payload = _normalize_transcript_payload(raw, "mlx_whisper", transcription.get("language"))
+    _write_transcript_artifacts(payload, artifacts)
+    return payload
+
+
+def _transcribe_with_http_provider(
+    path: str,
+    artifacts: Dict[str, Any],
+    transcription: Dict[str, Any],
+    provider: Dict[str, Any],
+) -> Dict[str, Any]:
+    backend = f"{HTTP_TRANSCRIPTION_BACKEND_PREFIX}{provider['id']}"
+    model = str(transcription.get("model") or provider.get("model") or "").strip()
+    transcript_json = artifacts.get("transcript_json") or artifacts["analysis_json"]
+    output_base = os.path.splitext(transcript_json)[0]
+    canonical_payload = {
+        "audio": path,
+        "output_path": output_base,
+        "format": "json",
+        "verbose": False,
+        "allow_download": _coerce_bool(transcription.get("allow_model_download"), default=False),
+    }
+    if model:
+        canonical_payload["model"] = model
+    if transcription.get("language"):
+        canonical_payload["language"] = transcription["language"]
+    request_payload = dict(provider.get("request_body") or {})
+    field_map = provider.get("field_map") or {}
+    for key, value in canonical_payload.items():
+        request_payload[field_map.get(key, key)] = value
+    headers = {"Content-Type": "application/json"}
+    headers.update(provider.get("headers") or {})
+    request = urllib.request.Request(
+        _http_provider_endpoint(provider, "transcribe_path"),
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=int(transcription.get("timeout", 1800))) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace").strip()
+        return {
+            "success": False,
+            "backend": backend,
+            "provider": provider["label"],
+            "error": detail or f"HTTP transcription provider returned HTTP {exc.code}",
+        }
+    except (OSError, ValueError) as exc:
+        return {"success": False, "backend": backend, "provider": provider["label"], "error": str(exc)}
+
+    if not isinstance(response_payload, dict):
+        return {
+            "success": False,
+            "backend": backend,
+            "provider": provider["label"],
+            "error": "HTTP transcription response must be a JSON object.",
+        }
+    response_field = provider.get("response_field")
+    if response_field and response_field not in response_payload:
+        return {
+            "success": False,
+            "backend": backend,
+            "provider": provider["label"],
+            "error": f"HTTP transcription response did not include '{response_field}'.",
+        }
+    raw_transcript = response_payload[response_field] if response_field else response_payload
+    if isinstance(raw_transcript, str):
+        try:
+            raw = json.loads(raw_transcript)
+        except json.JSONDecodeError:
+            raw = {"text": raw_transcript, "segments": []}
+    else:
+        raw = raw_transcript
+    if not isinstance(raw, dict):
+        return {
+            "success": False,
+            "backend": backend,
+            "provider": provider["label"],
+            "error": "HTTP transcription payload must resolve to a JSON object or text string.",
+        }
+
+    payload = _normalize_transcript_payload(raw, backend, transcription.get("language"))
+    payload["provider"] = provider["label"]
+    if response_payload.get("model") or model:
+        payload["model"] = response_payload.get("model") or model
     _write_transcript_artifacts(payload, artifacts)
     return payload
 
@@ -3975,6 +4299,20 @@ def _transcribe(path: str, artifacts: Dict[str, Any], options: Dict[str, Any], c
             payload = {"success": True, "backend": backend, "language": transcription.get("language", "unknown"), "segments": segments, "text": " ".join(s.get("text", "") for s in segments)}
             _write_transcript_artifacts(payload, artifacts)
             return payload
+        if isinstance(backend, str) and backend.startswith(HTTP_TRANSCRIPTION_BACKEND_PREFIX):
+            providers, config_error = _load_http_transcription_providers(os.environ)
+            if config_error:
+                return {"success": False, "backend": backend, "error": config_error}
+            provider_id = backend[len(HTTP_TRANSCRIPTION_BACKEND_PREFIX):]
+            provider = next((item for item in providers if item["id"] == provider_id), None)
+            if provider is None:
+                return {
+                    "success": False,
+                    "status": "skipped",
+                    "backend": backend,
+                    "reason": f"HTTP transcription provider '{provider_id}' is not configured.",
+                }
+            return _transcribe_with_http_provider(path, artifacts, transcription, provider)
         if backend in {"whisper_cli", "mlx_whisper"}:
             if not _coerce_bool(transcription.get("allow_model_download"), default=False):
                 return {
@@ -4016,7 +4354,13 @@ def _transcribe(path: str, artifacts: Dict[str, Any], options: Dict[str, Any], c
     # original branches below so behaviour stays identical for those.
     if result is not None and result.get("status") != "fallthrough":
         return result
-    if backend in {"mock", "local_mock", "whisper_cli", "mlx_whisper"}:
+    if (
+        backend in {"mock", "local_mock", "whisper_cli", "mlx_whisper"}
+        or (
+            isinstance(backend, str)
+            and backend.startswith(HTTP_TRANSCRIPTION_BACKEND_PREFIX)
+        )
+    ):
         return result if result is not None else {"success": False, "backend": backend}
     elif backend == "whisper_cpp":
         if not transcription.get("model_path"):

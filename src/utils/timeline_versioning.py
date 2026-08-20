@@ -30,6 +30,8 @@ import os
 import re
 import time
 import uuid
+
+from src.utils.resolve_probe import has_method
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.utils import actor_identity, timeline_brain_db
@@ -280,12 +282,12 @@ def _resolve_media_pool_item_id(item: Any) -> Optional[str]:
     """
     try:
         mpi = item.GetMediaPoolItem()
-        if mpi is not None and hasattr(mpi, "GetUniqueId"):
+        if has_method(mpi, "GetUniqueId"):
             return str(mpi.GetUniqueId())
     except Exception:
         pass
     try:
-        return str(item.GetUniqueId()) if hasattr(item, "GetUniqueId") else None
+        return str(item.GetUniqueId()) if has_method(item, "GetUniqueId") else None
     except Exception:
         return None
 

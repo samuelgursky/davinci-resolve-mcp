@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import threading
@@ -44,10 +45,13 @@ from src.utils.media_analysis_jobs import (
     run_batch_job_slice,
 )
 from src.utils.platform import setup_environment
+from src.utils.resolve_connection import connect_resolve
+from src.utils.resolve_probe import has_method
 from src.utils.analysis_memory import read_panel_state, write_panel_state
 from src.utils import brain_edits as _brain_edits
 from src.utils import timeline_versioning as _timeline_versioning
 from src.utils import timeline_brain_db as _timeline_brain_db
+from src.control_panel_i18n import localization_script
 
 
 HTML = r"""<!doctype html>
@@ -614,6 +618,33 @@ HTML = r"""<!doctype html>
       align-items: center;
       gap: var(--space-2);
       min-width: 0;
+    }
+    .language-switch {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 2px;
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elevated-1);
+    }
+    .language-switch button {
+      min-height: 26px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 2px;
+      background: transparent;
+      color: var(--text-tertiary);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .language-switch button:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+    .language-switch button.active {
+      background: var(--accent-brand-muted);
+      color: var(--accent-brand-hover);
     }
     .version-badge {
       position: relative;
@@ -2504,15 +2535,56 @@ HTML = r"""<!doctype html>
     .ai-op-btn.danger { background: #b4452f; }
     .ai-caps-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
       gap: var(--space-2);
       margin-top: var(--space-2);
     }
     .ai-caps-item {
+      display: grid;
+      grid-template-columns: 9px minmax(0, 1fr) auto;
+      align-items: center;
+      column-gap: 8px;
+      row-gap: 2px;
+      padding: var(--space-2) 0;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: var(--text-xs);
+    }
+    .ai-build-summary {
       display: flex;
       align-items: center;
-      gap: 8px;
-      font-size: var(--text-xs);
+      justify-content: space-between;
+      gap: var(--space-3);
+      padding: var(--space-3);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-sm);
+      background: var(--bg-elevated-1);
+      margin-bottom: var(--space-3);
+    }
+    .ai-build-summary strong { color: var(--text-primary); }
+    .ai-build-count { color: var(--text-secondary); font-size: var(--ops-text-label); }
+    .ai-caps-extra { grid-column: 2 / -1; }
+    .ai-caps-status {
+      grid-column: 3;
+      grid-row: 1;
+      color: var(--text-tertiary);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .ai-caps-status.available { color: var(--accent-success); }
+    .ai-section-unavailable > :not(.caps-section-head),
+    .ai-section-unavailable .caps-section-hint {
+      display: none;
+    }
+    .ai-section-unavailable .caps-section-head {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0;
+    }
+    .ai-section-status {
+      color: var(--accent-warning);
+      font-size: 10px;
+      font-weight: 600;
     }
     .ai-caps-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
     .ai-caps-dot.on { background: #34a853; }
@@ -3902,7 +3974,19 @@ HTML = r"""<!doctype html>
       .settings-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 620px) {
+      main { padding-bottom: var(--space-3); }
+      .lab-footer {
+        position: static;
+        height: auto;
+        min-height: 112px;
+      }
       .overview-grid { grid-template-columns: 1fr; }
+      .nav-left { flex: 0 0 auto; }
+      .wordmark span:first-child { display: none; }
+      .nav-links > .github-icon-link { display: none; }
+      .version-badge .version-label { display: none; }
+      .version-badge { padding: 0 8px; }
+      .language-switch button { padding: 0 6px; }
     }
   </style>
 </head>
@@ -3968,6 +4052,10 @@ HTML = r"""<!doctype html>
       </div>
     </nav>
     <div class="nav-links">
+      <div class="language-switch" role="group" aria-label="Interface language">
+        <button type="button" data-locale="zh-CN" aria-pressed="false">中文</button>
+        <button type="button" data-locale="en" aria-pressed="false">EN</button>
+      </div>
       <button id="versionBadge" class="version-badge" type="button" aria-label="MCP version and updates" title="MCP version">
         <span class="version-label">MCP</span>
         <span class="version-number" id="versionNumber">…</span>
@@ -4295,7 +4383,7 @@ HTML = r"""<!doctype html>
     <section class="span-12">
       <div class="section-top">
         <div>
-          <h2>Resolve 21 AI Console</h2>
+          <h2>Resolve AI Console</h2>
           <p class="section-sub">Run Resolve's local AI operations on the current Media Pool folder or a specific clip. These run on Resolve's GPU/AI engine — the analysis and slate ops are safe and reversible; <strong>motion-deblur</strong> and <strong>speech generation</strong> create new media files and ask for confirmation first. Source media is never modified. Every run is recorded in the <em>Resolve 21 AI ops</em> ledger (Preferences → Caps + Safety).</p>
         </div>
       </div>
@@ -4304,8 +4392,8 @@ HTML = r"""<!doctype html>
         <div class="caps-section-hint">Checking which AI methods this Resolve build exposes…</div>
       </div>
 
-      <div class="caps-section" style="margin-top:12px;">
-        <div class="caps-section-head"><div class="caps-section-title">Governance</div>
+      <div class="caps-section" id="aiGovernanceSection" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Governance <span class="ai-section-status"></span></div>
           <div class="caps-section-hint">Per-session limits for the two media-creating ops (deblur, speech). In <strong>Advisory</strong> mode you're warned in the confirm dialog but never blocked; in <strong>Enforce</strong> mode an over-tier run is refused until you raise the tier, relax the mode, or consciously override. Pick the tier that matches the job.</div></div>
         <div id="aiGovTiers" class="caps-preset-cards" role="radiogroup" aria-label="AI governance tier"></div>
         <div class="review-view-toggle" id="aiGovMode" role="radiogroup" aria-label="Governance mode" style="margin-top:10px;">
@@ -4348,8 +4436,8 @@ HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <div class="caps-section" style="margin-top:12px;">
-        <div class="caps-section-head"><div class="caps-section-title">Motion deblur</div>
+      <div class="caps-section" id="aiMotionDeblurSection" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Motion deblur <span class="ai-section-status"></span></div>
           <div class="caps-section-hint">Renders new deblurred media. Creates files; asks for confirmation. Leave fields blank for Resolve defaults.</div></div>
         <div class="settings-grid">
           <label>Format <input id="aiDeblurFormat" type="text" placeholder="mov"></label>
@@ -4361,8 +4449,8 @@ HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <div class="caps-section" style="margin-top:12px;">
-        <div class="caps-section-head"><div class="caps-section-title">Speech generator</div>
+      <div class="caps-section" id="aiSpeechSection" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Speech generator <span class="ai-section-status"></span></div>
           <div class="caps-section-hint">AI text-to-speech. Requires the AI Speech Generator Extra. Creates a new audio item; asks for confirmation.</div></div>
         <div class="settings-grid">
           <label style="grid-column:1/-1;">Text <textarea id="aiSpeechText" rows="2" placeholder="Text to synthesize"></textarea></label>
@@ -4377,8 +4465,8 @@ HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <div class="caps-section" style="margin-top:12px;">
-        <div class="caps-section-head"><div class="caps-section-title">Session</div>
+      <div class="caps-section" id="aiSessionSection" style="margin-top:12px;">
+        <div class="caps-section-head"><div class="caps-section-title">Session <span class="ai-section-status"></span></div>
           <div class="caps-section-hint">Quiet Resolve's background tasks for this session before heavy work. Resets on restart.</div></div>
         <div class="ai-op-row"><button class="ai-op-btn ghost" data-ai-op="disable_background_tasks">Disable background tasks</button></div>
       </div>
@@ -4959,6 +5047,46 @@ HTML = r"""<!doctype html>
   </footer>
 
   <script>
+    /* CONTROL_PANEL_I18N */
+
+    // ─── Panel auth ─────────────────────────────────────────────────────
+    // The launcher hands the per-launch bearer token over in the URL
+    // fragment (#token=…). Fragments never leave the browser, so the token
+    // is not in any request line or log. It is kept in localStorage for this
+    // origin, sent as Authorization on every fetch, and exchanged once for an
+    // HttpOnly cookie (POST /api/session) so <img src="/api/…"> loads work.
+    const PANEL_TOKEN_KEY = 'davinci_panel_token';
+    function captureLaunchToken() {
+      const m = window.location.hash.match(/^#token=([A-Za-z0-9_-]+)(?:&(.*))?$/);
+      if (!m) return;
+      try { localStorage.setItem(PANEL_TOKEN_KEY, m[1]); } catch (_) { /* private mode */ }
+      const rest = m[2] ? `#${m[2]}` : window.location.pathname + window.location.search;
+      history.replaceState(null, '', rest);
+    }
+    function panelToken() {
+      try { return localStorage.getItem(PANEL_TOKEN_KEY) || ''; } catch (_) { return ''; }
+    }
+    function authHeaders(extra = {}) {
+      const token = panelToken();
+      return token ? { Authorization: `Bearer ${token}`, ...extra } : { ...extra };
+    }
+    // Runs before anything else in this script so no request goes out tokenless.
+    captureLaunchToken();
+    let panelLockShown = false;
+    function showPanelLocked() {
+      if (panelLockShown) return;
+      panelLockShown = true;
+      document.body.innerHTML = `
+        <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0f14;color:#e6edf3;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+          <div style="max-width:520px;padding:32px;border:1px solid #1f2937;border-radius:8px;background:#111827;">
+            <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Control panel locked</div>
+            <div style="color:#9ca3af;">This panel only answers to the URL it was launched with — the one containing its
+            per-launch token. Ask your MCP client to run
+            <code style="color:#1E90FF;">resolve_control(action="open_control_panel")</code>
+            and open the URL it returns.</div>
+          </div>
+        </div>`;
+    }
     const state = {
       boot: null,
       projects: null,
@@ -5139,9 +5267,13 @@ HTML = r"""<!doctype html>
 
     async function api(path, options = {}) {
       const res = await fetch(path, {
-        headers: { 'Content-Type': 'application/json' },
         ...options,
+        headers: authHeaders({ 'Content-Type': 'application/json', ...(options.headers || {}) }),
       });
+      if (res.status === 401) {
+        showPanelLocked();
+        throw new Error('Control panel is not authorized — reopen it from your MCP client.');
+      }
       const payload = await res.json();
       if (!res.ok || payload.success === false) {
         throw new Error(payload.error || res.statusText);
@@ -5845,6 +5977,7 @@ HTML = r"""<!doctype html>
       renderOverview();
       renderDiagnostics();
       renderProjects();
+      if (_aiConsoleInit) renderAiConsole();
       refreshRecentRootsDropdown();
     }
 
@@ -5891,7 +6024,10 @@ HTML = r"""<!doctype html>
       const clips = filteredResolveClips(allClips);
       const projectLabel = payload.project?.name || 'Current Resolve project';
       const visibleCounts = summarizeVisibleClips(clips);
-      project.textContent = `${projectLabel} · ${clipLabel(clips.length)}`;
+      // A cached snapshot may hold only the first INVENTORY_SNAPSHOT_MAX_CLIPS
+      // clips; say so rather than letting the prefix read as the clip count.
+      const partialNote = payload.snapshot_partial ? ` (cached preview of ${payload.snapshot_total})` : '';
+      project.textContent = `${projectLabel} · ${clipLabel(clips.length)}${partialNote}`;
       const hasAnalyzableClips = clips.some(clip => clip.analyzable);
       selectBtn.disabled = !hasAnalyzableClips;
       analyzeBtn.disabled = !hasAnalyzableClips;
@@ -6370,6 +6506,13 @@ HTML = r"""<!doctype html>
     }
 
     async function boot() {
+      if (!panelToken()) {
+        showPanelLocked();
+        return;
+      }
+      // Exchange the bearer token for the HttpOnly session cookie first so
+      // thumbnail <img> loads (which cannot carry headers) are authorized.
+      await api('/api/session', { method: 'POST', body: '{}' });
       state.boot = await api('/api/boot');
       state.activeContext = state.boot.active_context || {
         project_name: state.boot.project_name,
@@ -6531,10 +6674,13 @@ HTML = r"""<!doctype html>
         // probe (the server re-applies only the local analysis overlay); manual /
         // first loads do a full Media Pool walk with a fresh probe. The ETag lets
         // an unchanged poll short-circuit to 304 and skip the table re-render.
-        const query = options.silent ? '&probe=0&reuse=1' : '';
-        const headers = {};
+        // No `limit` param: the server applies the media_analysis.inventory_limit
+        // preference, and sending one here would override what the user configured.
+        const query = options.silent ? '?probe=0&reuse=1' : '';
+        const headers = authHeaders();
         if (state.mediaETag) headers['If-None-Match'] = state.mediaETag;
-        const res = await fetch(`/api/resolve/media?limit=500${query}`, { headers, cache: 'no-store' });
+        const res = await fetch(`/api/resolve/media${query}`, { headers, cache: 'no-store' });
+        if (res.status === 401) { showPanelLocked(); return; }
         state.mediaLastRefresh = new Date();
         state.resolveMediaStale = false;
         if (res.status === 304) return;
@@ -6555,16 +6701,60 @@ HTML = r"""<!doctype html>
     // Persist the last good inventory so reopening the dashboard paints the
     // previous snapshot instantly (with a "refreshing" hint) instead of sitting
     // on "connection pending" until the first fetch returns.
+    // localStorage gives us roughly 5MB per origin, and a clip record — file
+    // path, bin path, status reasons, analysis overlay — runs several hundred
+    // bytes. inventory_limit reaches 10000, so a large project overruns the
+    // quota, and the write then throws and leaves the panel with no snapshot at
+    // all. Cache a bounded prefix instead, and carry the real clip count so a
+    // partial snapshot never presents itself as the whole inventory.
+    const INVENTORY_SNAPSHOT_MAX_CLIPS = 750;
+
     function inventorySnapshotKey() {
       return 'resolveMcpInventory:' + (state.activeContext?.project_root || state.boot?.project_root || state.boot?.project_name || 'default');
     }
+    function inventorySnapshotPayload(payload) {
+      const clips = payload.clips || [];
+      if (clips.length <= INVENTORY_SNAPSHOT_MAX_CLIPS) return payload;
+      return {
+        ...payload,
+        clips: clips.slice(0, INVENTORY_SNAPSHOT_MAX_CLIPS),
+        snapshot_partial: true,
+        snapshot_total: clips.length,
+      };
+    }
+    // Drop every cached inventory, including this project's own stale value —
+    // the panel is about to rewrite it, and snapshots for projects the user has
+    // since moved on from are the usual reason the quota is full.
+    function pruneInventorySnapshots() {
+      try {
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i += 1) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('resolveMcpInventory:')) keys.push(key);
+        }
+        keys.forEach(key => localStorage.removeItem(key));
+      } catch (error) {
+        console.warn('Could not prune inventory snapshots', error);
+      }
+    }
     function saveInventorySnapshot(payload) {
       if (!payload?.resolve_available) return;
+      const key = inventorySnapshotKey();
+      const raw = JSON.stringify({ saved_at: Date.now(), payload: inventorySnapshotPayload(payload) });
       try {
-        localStorage.setItem(inventorySnapshotKey(), JSON.stringify({ saved_at: Date.now(), payload }));
+        localStorage.setItem(key, raw);
       } catch (error) {
-        // Quota or serialization failure is non-fatal — the snapshot is a nicety.
-        console.warn('Could not cache inventory snapshot', error);
+        // Out of quota: clear the cached inventories and try once more.
+        pruneInventorySnapshots();
+        try {
+          localStorage.setItem(key, raw);
+        } catch (retryError) {
+          // Still no room — drop our key so a snapshot from an older walk can't
+          // outlive the inventory it described. Non-fatal; the panel just paints
+          // "connection pending" until the first fetch returns.
+          try { localStorage.removeItem(key); } catch (removeError) { /* nothing left to do */ }
+          console.warn('Could not cache inventory snapshot', retryError);
+        }
       }
     }
     function loadInventorySnapshot() {
@@ -7078,7 +7268,11 @@ HTML = r"""<!doctype html>
       const poll = enabled ? `polling every ${Math.round(interval / 1000)}s` : 'polling off';
       const visible = state.resolveMedia?.clips ? clipLabel(filteredResolveClips(state.resolveMedia.clips).length) : 'no media snapshot';
       const prefix = state.mediaRefreshing ? 'refreshing' : poll;
-      const stale = state.resolveMediaStale ? 'cached · ' : '';
+      const stale = state.resolveMediaStale
+        ? (state.resolveMedia?.snapshot_partial
+            ? `cached first ${state.resolveMedia.clips.length} of ${state.resolveMedia.snapshot_total} · `
+            : 'cached · ')
+        : '';
       el.textContent = `${stale}${prefix} · last ${last} · ${visible}${extra ? ` · ${extra}` : ''}`;
     }
 
@@ -7794,23 +7988,33 @@ HTML = r"""<!doctype html>
       clear_audio_classification: 'clear_audio_classification',
       analyze_for_intellisearch: 'analyze_for_intellisearch',
       analyze_for_slate: 'analyze_for_slate',
+      transcribe_audio: 'transcribe_audio',
+      clear_transcription: 'clear_transcription',
       remove_motion_blur: 'remove_motion_blur',
       generate_speech: 'generate_speech',
       disable_background_tasks: 'disable_background_tasks',
     };
+    const AI_OP_REQUIRES_21 = new Set([
+      'perform_audio_classification', 'clear_audio_classification',
+      'analyze_for_intellisearch', 'analyze_for_slate', 'remove_motion_blur',
+      'generate_speech', 'disable_background_tasks',
+    ]);
     let _aiConsoleInit = false;
 
     function renderAiConsole() {
       const feats = (state.boot?.resolve?.ai_features) || {};
       const features = feats.features || {};
       const requiresExtra = feats.requires_extra || {};
+      const version = state.boot?.resolve?.version_string || 'unknown';
       const capsEl = $('aiConsoleCaps');
       if (capsEl) {
         if (state.boot?.resolve?.available !== true) {
           capsEl.innerHTML = '<div class="caps-section-hint">Resolve is not connected. Open a project in DaVinci Resolve, then reload.</div>';
         } else {
-          const items = Object.keys(AI_OP_LABELS)
-            .filter(op => op in AI_OP_FEATURE)
+          const ops = Object.keys(AI_OP_LABELS).filter(op => op in AI_OP_FEATURE);
+          const availableCount = ops.filter(op => !!features[AI_OP_FEATURE[op]]).length;
+          const items = ops
+            .sort((a, b) => Number(!!features[AI_OP_FEATURE[b]]) - Number(!!features[AI_OP_FEATURE[a]]))
             .map(op => {
               const key = AI_OP_FEATURE[op];
               const on = !!features[key];
@@ -7818,13 +8022,45 @@ HTML = r"""<!doctype html>
               return `<div class="ai-caps-item"><span class="ai-caps-dot ${on ? 'on' : 'off'}"></span>`
                 + `<span>${escapeHtml(AI_OP_LABELS[op])}</span>`
                 + (extra ? `<span class="ai-caps-extra">· needs ${escapeHtml(extra)}</span>` : '')
+                + `<span class="ai-caps-status ${on ? 'available' : ''}">${on ? 'Available now' : (AI_OP_REQUIRES_21.has(op) ? 'Requires Resolve 21+' : 'Unavailable on this build')}</span>`
                 + `</div>`;
             }).join('');
-          capsEl.innerHTML = `<div class="caps-section-head"><div class="caps-section-title">Available on this Resolve build</div>`
-            + `<div class="caps-section-hint">A grey dot means the method is absent (older Resolve). "needs …" means the method is present but requires that Extra to actually run — install via Extras Download Manager.</div></div>`
+          capsEl.innerHTML = `<div class="ai-build-summary"><strong>DaVinci Resolve ${escapeHtml(version)}</strong><span class="ai-build-count">${availableCount} of ${ops.length} AI console actions available now</span></div>`
+            + `<div class="caps-section-head"><div class="caps-section-title">Available on this Resolve build</div>`
+            + `<div class="caps-section-hint">Unavailable actions are disabled. Resolve 21 methods may also require the named Extra from Extras Download Manager.</div></div>`
             + `<div class="ai-caps-grid">${items}</div>`;
         }
       }
+      document.querySelectorAll('#panel-aiconsole .ai-op-btn').forEach(btn => {
+        const feature = AI_OP_FEATURE[btn.dataset.aiOp];
+        const available = feature ? !!features[feature] : false;
+        btn.disabled = !available;
+        btn.title = available ? '' : (AI_OP_REQUIRES_21.has(btn.dataset.aiOp)
+          ? 'Requires DaVinci Resolve 21 or newer'
+          : 'Unavailable on this Resolve build');
+      });
+      const speakerDetection = $('aiSpeakerDetection');
+      if (speakerDetection) {
+        const resolveMajor = Number(state.boot?.resolve?.version?.[0] || 0);
+        speakerDetection.disabled = resolveMajor < 21;
+        speakerDetection.title = resolveMajor < 21 ? 'Speaker detection requires DaVinci Resolve 21 or newer' : '';
+      }
+      const sectionAvailability = {
+        aiGovernanceSection: !!features.remove_motion_blur || !!features.generate_speech,
+        aiMotionDeblurSection: !!features.remove_motion_blur,
+        aiSpeechSection: !!features.generate_speech,
+        aiSessionSection: !!features.disable_background_tasks,
+      };
+      Object.entries(sectionAvailability).forEach(([id, available]) => {
+        const section = $(id);
+        if (!section) return;
+        section.classList.toggle('ai-section-unavailable', !available);
+        const status = section.querySelector('.ai-section-status');
+        if (status) status.textContent = available ? '' : 'Requires Resolve 21+';
+        section.querySelectorAll('input, textarea, select, button').forEach(control => {
+          control.disabled = !available;
+        });
+      });
       // Slate color dropdown (once).
       const sel = $('aiSlateColor');
       if (sel && !sel.options.length) {
@@ -7924,7 +8160,7 @@ HTML = r"""<!doctype html>
         refreshResolveAiOps().catch(() => {});
         refreshGovernance().catch(() => {});
       } finally {
-        buttons.forEach(b => { b.disabled = false; });
+        renderAiConsole();
       }
     }
 
@@ -7960,6 +8196,9 @@ HTML = r"""<!doctype html>
           <div class="caps-preset-card-stats">${stats}</div>
         </button>`;
       }).join('');
+      if ($('aiGovernanceSection')?.classList.contains('ai-section-unavailable')) {
+        el.querySelectorAll('button').forEach(button => { button.disabled = true; });
+      }
     }
     function renderGovUsage() {
       const el = $('aiGovUsage');
@@ -11405,7 +11644,7 @@ HTML = r"""<!doctype html>
       if (!Array.isArray(clipIds) || !clipIds.length) return;
       const result = await fetch('/api/clips/export', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ clip_ids: clipIds, format }),
       });
       if (!result.ok) {
@@ -11779,9 +12018,11 @@ HTML = r"""<!doctype html>
 </html>
 """
 
+HTML = HTML.replace("/* CONTROL_PANEL_I18N */", localization_script())
+
 
 def _safe_call(obj: Any, method_name: str, *args: Any) -> Tuple[Any, Optional[str]]:
-    if obj is None or not hasattr(obj, method_name):
+    if not has_method(obj, method_name):
         return None, f"{method_name} unavailable"
     try:
         return getattr(obj, method_name)(*args), None
@@ -11817,9 +12058,33 @@ def _serialize_resolve(func):
     return wrapper
 
 
+def _bridge_requested() -> bool:
+    """Has the operator asked for the in-app bridge?
+
+    Read at call time rather than at import, so a panel started before the
+    variable was set still honours it.
+    """
+    try:
+        from src.utils import resolve_bridge_client
+
+        return resolve_bridge_client.bridge_enabled()
+    except Exception:  # pragma: no cover - the client is optional
+        return False
+
+
 def _connect_resolve_read_only() -> Tuple[Any, Optional[str]]:
     global _RESOLVE_ENV_READY
     with _RESOLVE_API_LOCK:
+        # Blackmagic's module ships with the *installer*, not the App Store
+        # build, so a free-edition machine has no Developer/Scripting/Modules
+        # tree and both the environment setup and the import fail. Returning
+        # here made the control panel unreachable on exactly the configuration
+        # the bridge exists for: the MCP server connects fine over the bridge
+        # while the panel — a separate process with its own connector — reports
+        # "Resolve unavailable". `connect_resolve` accepts None in bridge mode,
+        # and this returned before ever calling it (server.py:_try_connect
+        # carries the same guard for the same reason).
+        bridge_on = _bridge_requested()
         # Environment + sys.path setup is pure overhead and never goes stale, so
         # run it once per process rather than on every connection.
         if not _RESOLVE_ENV_READY:
@@ -11832,18 +12097,39 @@ def _connect_resolve_read_only() -> Tuple[Any, Optional[str]]:
                         sys.path.append(candidate)
                 _RESOLVE_ENV_READY = True
             except Exception as exc:
+                if not bridge_on:
+                    return None, f"Resolve scripting API unavailable: {exc}"
+        dvr_script = None
+        try:
+            import DaVinciResolveScript as _dvr_script  # type: ignore
+
+            dvr_script = _dvr_script
+        except Exception as exc:
+            if not bridge_on:
                 return None, f"Resolve scripting API unavailable: {exc}"
         try:
-            import DaVinciResolveScript as dvr_script  # type: ignore
-        except Exception as exc:
-            return None, f"Resolve scripting API unavailable: {exc}"
-        try:
-            resolve = dvr_script.scriptapp("Resolve")
+            resolve = connect_resolve(dvr_script)
         except Exception as exc:
             return None, f"Resolve connection failed: {exc}"
         if resolve is None:
-            return None, "DaVinci Resolve is not connected. Open Resolve Studio with a project loaded."
+            return None, _not_connected_message(bridge_on)
         return resolve, None
+
+
+def _not_connected_message(bridge_on: bool) -> str:
+    """Name the fix that applies, rather than assuming Studio.
+
+    The old text sent every reader to "open Resolve Studio", which is wrong
+    advice for a free-edition user — the edition external scripting refuses by
+    design, and the one the bridge exists to reach.
+    """
+    if bridge_on:
+        return ("The in-app bridge is enabled but not answering. In Resolve, run "
+                "Workspace > Scripts > resolve_bridge; launching Resolve cannot start it.")
+    return ("DaVinci Resolve is not connected. On Studio, enable Preferences > General > "
+            "'External scripting using' = Local. On the free edition, install the in-app "
+            "bridge and run Workspace > Scripts > resolve_bridge — once running it is used "
+            "automatically, no environment variable needed.")
 
 
 @_serialize_resolve
@@ -11890,6 +12176,8 @@ def _resolve_ai_features(resolve: Any) -> Dict[str, Any]:
         "generate_speech": has(project, "GenerateSpeech"),
         "perform_audio_classification": has(folder, "PerformAudioClassification"),
         "clear_audio_classification": has(folder, "ClearAudioClassification"),
+        "transcribe_audio": has(folder, "TranscribeAudio"),
+        "clear_transcription": has(folder, "ClearTranscription"),
         "analyze_for_intellisearch": has(folder, "AnalyzeForIntellisearch"),
         "analyze_for_slate": has(folder, "AnalyzeForSlate"),
         "remove_motion_blur": has(folder, "RemoveMotionBlur"),
@@ -14192,6 +14480,75 @@ def _request_is_loopback(handler: BaseHTTPRequestHandler) -> bool:
     return addr in {"127.0.0.1", "::1", "localhost"}
 
 
+# ─── Panel request gate ───────────────────────────────────────────────────────
+# Every request passes through Handler._gate() before any route runs:
+#   1. Host header must name a loopback host  → defeats DNS rebinding.
+#   2. Origin header (when present) must be a loopback origin → defeats CSRF
+#      from any web page (browsers always attach Origin to cross-site POSTs).
+#   3. POST bodies must be application/json → a cross-site form post can't
+#      satisfy it, and a cross-site fetch() with that header needs a CORS
+#      preflight, which this server never answers.
+#   4. Everything except the static shell at "/" needs the panel bearer token
+#      (Authorization header, or the HttpOnly cookie set by POST /api/session
+#      so <img> loads work). The token is generated per launch and handed to
+#      the browser in the URL fragment, which never reaches the server.
+PANEL_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+PANEL_PUBLIC_GET_PATHS = frozenset({"/"})
+PANEL_COOKIE_NAME = "davinci_panel_token"
+PANEL_TOKEN_ENV = "DAVINCI_PANEL_TOKEN"
+
+
+def resolve_panel_token() -> str:
+    """Token from $DAVINCI_PANEL_TOKEN (set by the MCP launcher) or a fresh one."""
+    return os.environ.get(PANEL_TOKEN_ENV) or secrets.token_urlsafe(32)
+
+
+def _host_header_name(value: Optional[str]) -> str:
+    """Return the host part of a Host header (port stripped, lowercased)."""
+    raw = (value or "").strip().lower()
+    if not raw:
+        return ""
+    if raw.startswith("["):
+        end = raw.find("]")
+        return raw[: end + 1] if end != -1 else raw
+    if raw.count(":") == 1:
+        return raw.split(":", 1)[0]
+    return raw
+
+
+def _host_is_loopback(value: Optional[str]) -> bool:
+    return _host_header_name(value) in PANEL_LOOPBACK_HOSTS
+
+
+def _origin_is_loopback(value: Optional[str]) -> bool:
+    try:
+        parsed = urlparse((value or "").strip())
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").lower()
+    return host in PANEL_LOOPBACK_HOSTS
+
+
+def _cookie_value(cookie_header: Optional[str], name: str) -> Optional[str]:
+    for part in (cookie_header or "").split(";"):
+        key, sep, val = part.strip().partition("=")
+        if sep and key.strip() == name:
+            return val.strip()
+    return None
+
+
+def _request_presents_token(handler: BaseHTTPRequestHandler, token: str) -> bool:
+    if not token:
+        return False
+    auth = handler.headers.get("Authorization") or ""
+    if auth.startswith("Bearer ") and secrets.compare_digest(auth[len("Bearer "):].strip(), token):
+        return True
+    cookie = _cookie_value(handler.headers.get("Cookie"), PANEL_COOKIE_NAME)
+    return bool(cookie) and secrets.compare_digest(cookie, token)
+
+
 def _launch_claude_code_terminal() -> Dict[str, Any]:
     """Open a Terminal/iTerm window at the MCP server's project root running
     the ``claude`` CLI. macOS only — other platforms return a clipboard-only
@@ -14212,7 +14569,8 @@ def _launch_claude_code_terminal() -> Dict[str, Any]:
     try:
         check = subprocess.run(
             ["osascript", "-e", 'application "iTerm" is running'],
-            capture_output=True, text=True, timeout=8,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=8,
         )
         iterm_running = (check.stdout or "").strip().lower() == "true"
     except Exception:
@@ -14235,7 +14593,8 @@ def _launch_claude_code_terminal() -> Dict[str, Any]:
     try:
         proc = subprocess.run(
             ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=15,
         )
         if proc.returncode != 0:
             return {"success": False, "error": (proc.stderr or "").strip() or "osascript failed"}
@@ -14266,7 +14625,8 @@ def _native_directory_picker(initial: Optional[str] = None) -> Dict[str, Any]:
             import subprocess
             proc = subprocess.run(
                 ["osascript", "-e", script],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=120,
             )
             if proc.returncode != 0:
                 stderr = (proc.stderr or "").strip()
@@ -14837,7 +15197,11 @@ def _run_advanced_bridge(surface: str, op: str, args: Optional[Dict[str, Any]] =
         # stdin=DEVNULL: never let a child race-read a protocol/stdin stream (api_truth).
         proc = subprocess.run(
             [node, bridge, str(surface), str(op), json.dumps(args or {})],
-            capture_output=True, text=True, timeout=timeout,
+            # The bridge answers in JSON that carries clip and project names;
+            # decoding those with the locale codepage is how a non-ASCII name
+            # turns a working panel call into a UnicodeDecodeError (#153).
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout,
             stdin=subprocess.DEVNULL, cwd=_advanced_root(),
         )
     except subprocess.TimeoutExpired:
@@ -14918,6 +15282,7 @@ def _inventory_prefs() -> Tuple[int, Optional[set]]:
 
 class Handler(BaseHTTPRequestHandler):
     state: DashboardState
+    token: str = ""
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return
@@ -15006,14 +15371,77 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    def _gate(self) -> bool:
+        """Run the request through the panel security gate; False = already answered."""
+        path = urlparse(self.path).path
+        if not _host_is_loopback(self.headers.get("Host")):
+            self._json(
+                {"success": False, "error": "Rejected: Host header is not a loopback host (DNS-rebinding guard)."},
+                HTTPStatus.FORBIDDEN,
+            )
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None and not _origin_is_loopback(origin):
+            self._json(
+                {"success": False, "error": "Rejected: cross-site origin (CSRF guard)."},
+                HTTPStatus.FORBIDDEN,
+            )
+            return False
+        if self.command == "POST":
+            ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if ctype != "application/json":
+                self._json(
+                    {"success": False, "error": "POST requests must be Content-Type: application/json."},
+                    HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                )
+                return False
+        if self.command == "GET" and path in PANEL_PUBLIC_GET_PATHS:
+            return True
+        if _request_presents_token(self, getattr(self, "token", "") or ""):
+            return True
+        # The launcher probes this on 401 to recognise a live panel + its version
+        # without a token, so the payload names itself.
+        self._json(
+            {
+                "success": False,
+                "error": "unauthorized: this control panel requires its launch token. "
+                         "Reopen it from your MCP client (resolve_control action=open_control_panel) "
+                         "and use the returned URL.",
+                "panel": "davinci-resolve-mcp",
+                "mcp_version": _mcp_version(),
+            },
+            HTTPStatus.UNAUTHORIZED,
+        )
+        return False
+
+    def _set_session_cookie(self) -> None:
+        """POST /api/session (bearer-authenticated) → HttpOnly cookie for <img> loads."""
+        raw = json.dumps({"success": True}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header(
+            "Set-Cookie",
+            f"{PANEL_COOKIE_NAME}={self.token}; Path=/; HttpOnly; SameSite=Strict",
+        )
+        self.end_headers()
+        self.wfile.write(raw)
+
     def do_GET(self) -> None:
         try:
+            if not self._gate():
+                return
             self._route_get()
         except Exception as exc:  # pragma: no cover - runtime safety for dashboard users
             self._json({"success": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def do_POST(self) -> None:
         try:
+            if not self._gate():
+                return
+            if urlparse(self.path).path == "/api/session":
+                self._set_session_cookie()
+                return
             self._route_post()
         except Exception as exc:  # pragma: no cover
             self._json({"success": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -15683,9 +16111,19 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"success": False, "error": "Not found"}, HTTPStatus.NOT_FOUND)
 
 
+def _loopback_host(value: str) -> str:
+    """argparse type: the panel binds loopback only — anything else is refused."""
+    if value not in PANEL_LOOPBACK_HOSTS:
+        raise argparse.ArgumentTypeError(
+            f"control panel host must be loopback (127.0.0.1 / localhost / ::1), got {value!r} — "
+            "the panel is a single-user local UI and is never bound to a routable interface"
+        )
+    return value
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the local Resolve MCP control panel.")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="127.0.0.1", type=_loopback_host)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--project-name", default="Dashboard Analysis")
     parser.add_argument("--project-id", default="dashboard")
@@ -15718,10 +16156,15 @@ def main() -> None:
     args = parse_args()
     state = DashboardState(args.project_name, args.project_id, args.analysis_root)
     Handler.state = state
+    Handler.token = resolve_panel_token()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    url = f"http://{args.host}:{args.port}"
-    print(f"DaVinci Resolve MCP: {url}")
-    print(f"Project analysis root: {state.project_root}")
+    # The token rides in the URL fragment: browsers keep fragments client-side,
+    # so it never appears in a request line, proxy log, or Referer.
+    url = f"http://{args.host}:{args.port}/#token={Handler.token}"
+    # flush: under --no-open the URL (with its token) is the only handle the
+    # operator gets, and a piped/redirected stdout would otherwise hold it back.
+    print(f"DaVinci Resolve MCP: {url}", flush=True)
+    print(f"Project analysis root: {state.project_root}", flush=True)
     threading.Thread(target=_warm_inventory_cache, args=(state.project_root,), daemon=True).start()
     if args.open:
         webbrowser.open(url)

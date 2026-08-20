@@ -1,0 +1,15 @@
+{"_start": "editorial.take_selector", "phase": "state"}
+{"_start": "editorial.take_selector", "phase": "body"}
+{"probe": "editorial.take_selector", "category": "editorial", "outcome": "ok", "value": "'False/1/True/True'", "seconds": 0.02, "mode": "headless", "detail": "", "note": "", "catalogue": "v4-fa0daa777032"}
+{"_start": "editorial.nested_timeline", "phase": "state"}
+{"_start": "editorial.nested_timeline", "phase": "body"}
+{"probe": "editorial.nested_timeline", "category": "editorial", "outcome": "ok", "value": "'True/1'", "seconds": 0.23, "mode": "headless", "detail": "", "note": "", "catalogue": "v4-fa0daa777032"}
+{"_start": "editorial.set_clips_linked", "phase": "state"}
+{"_start": "editorial.set_clips_linked", "phase": "body"}
+{"probe": "editorial.set_clips_linked", "category": "editorial", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "headless", "detail": "", "note": "", "catalogue": "v4-fa0daa777032"}
+{"_start": "projectlevel.render_preset_roundtrip", "phase": "state"}
+{"_start": "projectlevel.render_preset_roundtrip", "phase": "body"}
+{"probe": "projectlevel.render_preset_roundtrip", "category": "projectlevel", "outcome": "ok", "value": "'True/True'", "seconds": 0.03, "mode": "headless", "detail": "", "note": "", "catalogue": "v4-fa0daa777032"}
+{"_start": "projectlevel.multi_job_queue", "phase": "state"}
+{"_start": "projectlevel.multi_job_queue", "phase": "body"}
+{"probe": "projectlevel.multi_job_queue", "category": "projectlevel", "outcome": "ok", "value": "'3/3'", "seconds": 0.86, "mode": "headless", "detail": "", "note": "", "catalogue": "v4-fa0daa777032"}

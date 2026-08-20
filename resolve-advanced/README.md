@@ -83,11 +83,17 @@ Each dispatches on an `action`. Highlights:
   reverse-clip DB repair, sequence lineage store + diff, per-cut frame QC.
 - **`color_trace`** — cross-project clip matching → a trace plan for carrying grades across a re-conform.
 - **`project_read` / `project_db`** — read/patch the Resolve project DB (SQLite or Postgres).
+  Includes `list_subtitle_styles` / `set_subtitle_style` — caption font family/size/weight/italic
+  and normalised position, which the scripting API cannot touch at all. Whole-track (not
+  per-caption); project must be CLOSED and Resolve fully quit + relaunched afterwards.
 - **`pipeline`** — the DB-as-truth pipeline foundation (see below).
 - **`deliverable`** — deliverable QC / compliance: `deliverable_qc` (ffprobe a render vs its spec →
   pass/fail per field), `loudness_qc` (ebur128 LUFS/true-peak/LRA), `reframe_blanking_check`,
   `conform_completeness`, `re_delivery_diff`, `render_manifest` (build/reconcile), `expand_deliverable`
-  (texted/textless/stems/slate/leader entities). Report-only (`gate: review` — never auto-pass-clear).
+  (texted/textless/stems/slate/leader entities), `spec_from_authored` (authored deliverable vocabulary —
+  codec display names, `"1920x1080"`, `"-16 LUFS"`, naming templates — into a `deliverable_qc` spec plus a
+  `loudness_qc` target, reporting anything it could not map). Report-only (`gate: review` — never
+  auto-pass-clear).
 - **`media`** — media front-end / AE: `ingest_verify` (hash seal/verify/dupes-by-hash), `media_inventory`
   (fps/codec/colorspace/TC + card gaps), `sync` (TC picture↔sound + drift/MOS), `relink_manifest`,
   `rename_plan` (refuses camera originals) / `reel_normalize`, `turnover_package`, `project_hygiene`.
@@ -95,7 +101,9 @@ Each dispatches on an `action`. Highlights:
   **.prproj via gunzip+XML** — pass the file PATH for the binary ones), `list_sequences` (one picker entry
   point across xml/edl/otio/drt/drp/aaf/prproj), `convert_to_interchange` (author OTIO/EDL/DRT that Resolve
   imports, from events or a parsed source — **the .prproj→Resolve conform bridge**, no Premiere needed;
-  editorial timing/cuts/transitions/speed carry, per-clip effects/color do not),
+  editorial timing/cuts/transitions carry, per-clip effects/color do not; speed/reverse carry on
+  the `otio` and `edl` targets only — `drt` has no per-clip speed field and reports every retime it
+  flattens in `flattened`),
   `turnover_changelist` (moved/retimed/replaced/new/gone + timing silent-lie guards), `conform_manifest`,
   `marker_roundtrip`.
 - **`provenance`** — provenance / audit: `gallery_lineage`, `grade_provenance` ("why is this graded this
@@ -169,6 +177,25 @@ status + install hints):
 
 Missing features fail with a clear, actionable message rather than crashing; the server logs a one-line
 "needs setup" summary to stderr at startup.
+
+> **Pinning the AAF interpreter.** `aaf_probe.py` runs under `AAF_PROBE_PYTHON`, falling back to
+> `PYTHON` and then plain `python3` on PATH. `install.py` sets that pin **only inside the `mcpServers`
+> JSON entry it writes**, so a host that spawns this advanced server some other way must pin it itself —
+> otherwise the reader resolves a `python3` without `pyaaf2` and honest-refuses every AAF.
+
+### AAF multi-layer reading — what it does and does not tell you
+Avid exports a multi-layer video timeline as a `NestedScope` segment holding one nested `Sequence` per
+layer; those layers are traversed and numbered `V1..Vn`. Each parsed sequence also carries an
+`unhandled` map (component class → count) so a structural miss is visible rather than arriving as a
+plausible-looking short event list. Three limits are deliberate:
+
+- **Motion Control retimes are flagged, not quantified** — `effect: "Motion Control"` with `speed: 100`,
+  because the ratio is not recoverable offline. Reading `speed` alone reports them as full speed.
+- **Effect-only layers produce no events.** A layer wrapping `ScopeReference` (subtitle burns, blends,
+  mattes) applies to what shows through from below and references no media of its own. OTIO materializes
+  such layers as tracks of gaps, so its track count can exceed the number of layers with media.
+- **Only `NestedScope` layers are numbered.** Non-nested slots keep the flat `V`/`A` label, which is what
+  `editorial.mjs`'s `track === 'A'` audio-follows-video heuristic reads.
 
 ## Provenance & license
 Vendored libraries are clean offline format-interop and deterministic compute code: no secrets, no

@@ -22,13 +22,21 @@ class TimelineStub:
     catch absolute/relative mixups.
     """
 
-    def __init__(self, fps="24", current_timecode="01:00:00:12", start_frame=86400):
+    def __init__(
+        self,
+        fps="24",
+        current_timecode="01:00:00:12",
+        start_frame=86400,
+        start_timecode="01:00:00:00",
+    ):
         self.fps = fps
         self.current_timecode = current_timecode
         self.start_frame = start_frame
+        self.start_timecode = start_timecode
         self.add_calls = []
         self.deleted_frames = []
         self.update_custom_data_calls = []
+        self.set_timecode_calls = []
 
     def GetSetting(self, name):
         if name == "timelineFrameRate":
@@ -42,6 +50,15 @@ class TimelineStub:
         if self.start_frame is None:
             raise RuntimeError("GetStartFrame unavailable")
         return self.start_frame
+
+    def GetStartTimecode(self):
+        if self.start_timecode is None:
+            raise RuntimeError("GetStartTimecode unavailable")
+        return self.start_timecode
+
+    def SetCurrentTimecode(self, timecode):
+        self.set_timecode_calls.append(timecode)
+        return True
 
     def AddMarker(self, *args):
         self.add_calls.append(args)
@@ -139,6 +156,23 @@ class TimelineMarkerParamTest(unittest.TestCase):
 
         self.assertEqual(_strip_versioning(out), {"success": True, "frame": 240})
 
+    def test_add_elapsed_and_absolute_timecode_agree_on_nonzero_start(self):
+        # Same non-zero start as the measured set_current_timecode contract
+        # (start 00:59:50:00 @ 24 = frame 86160): the elapsed TC 00:00:21:03
+        # and the absolute TC 01:00:11:03 both mean relative frame 507.
+        self.timeline.start_frame = 86160
+        self.timeline.start_timecode = "00:59:50:00"
+
+        out_elapsed = compound.timeline_markers(
+            "add", {"timecode": "00:00:21:03", "color": "red"}
+        )
+        out_absolute = compound.timeline_markers(
+            "add", {"timecode": "01:00:11:03", "color": "red"}
+        )
+
+        self.assertEqual(_strip_versioning(out_elapsed), {"success": True, "frame": 507})
+        self.assertEqual(_strip_versioning(out_absolute), {"success": True, "frame": 507})
+
     def test_add_timecode_on_zero_start_timeline(self):
         self.timeline.start_frame = 0
 
@@ -157,6 +191,65 @@ class TimelineMarkerParamTest(unittest.TestCase):
         out = compound.timeline_markers("add", {"color": "green"})
 
         self.assertEqual(_strip_versioning(out), {"success": True, "frame": 86412})
+
+    def test_set_current_timecode_lifts_elapsed_below_start(self):
+        # Measured on Studio 19.1.3.7 (timeline start 00:59:50:00 @ 24):
+        # SetCurrentTimecode('00:00:21:03') returns False with no error info,
+        # while '01:00:11:03' succeeds — so the documented elapsed-TC
+        # conversion must lift sub-start timecodes before calling Resolve.
+        self.timeline.start_frame = 86160
+        self.timeline.start_timecode = "00:59:50:00"
+
+        out = compound.timeline_markers(
+            "set_current_timecode", {"timecode": "00:00:21:03"}
+        )
+
+        self.assertEqual(_strip_versioning(out), {"success": True})
+        self.assertEqual(self.timeline.set_timecode_calls, ["01:00:11:03"])
+
+    def test_set_current_timecode_absolute_passes_through(self):
+        self.timeline.start_frame = 86160
+        self.timeline.start_timecode = "00:59:50:00"
+
+        compound.timeline_markers("set_current_timecode", {"timecode": "01:00:11:03"})
+
+        self.assertEqual(self.timeline.set_timecode_calls, ["01:00:11:03"])
+
+    def test_set_current_timecode_zero_start_passes_through(self):
+        self.timeline.start_frame = 0
+        self.timeline.start_timecode = "00:00:00:00"
+
+        compound.timeline_markers("set_current_timecode", {"timecode": "00:00:21:03"})
+
+        self.assertEqual(self.timeline.set_timecode_calls, ["00:00:21:03"])
+
+    def test_set_current_timecode_unparseable_passes_through(self):
+        # Resolve stays the arbiter of strings the parser cannot read.
+        compound.timeline_markers("set_current_timecode", {"timecode": "chapter-3"})
+
+        self.assertEqual(self.timeline.set_timecode_calls, ["chapter-3"])
+
+    def test_set_current_timecode_lifts_elapsed_drop_frame(self):
+        # 29.97 DF timeline starting 01:00:00;00 (frame 107892). One elapsed
+        # DF minute (00:01:00;02 -> frame 1800) must land at 01:01:00;02 in
+        # drop-frame notation, not at the non-drop 01:01:00;12-style TC a
+        # naive divmod would produce.
+        self.timeline.fps = "29.97"
+        self.timeline.start_frame = 107892
+        self.timeline.start_timecode = "01:00:00;00"
+
+        compound.timeline_markers("set_current_timecode", {"timecode": "00:01:00;02"})
+
+        self.assertEqual(self.timeline.set_timecode_calls, ["01:01:00;02"])
+
+    def test_frame_id_to_timecode_drop_frame_round_trips(self):
+        for frame in (0, 2, 1799, 1800, 3597, 3598, 17981, 17982, 107892, 109692):
+            tc = compound._frame_id_to_timecode(
+                frame, 29.97, separator=";", drop_frame=True
+            )
+            back, err = compound._timecode_to_frame_id(tc, 29.97)
+            self.assertIsNone(err, tc)
+            self.assertEqual(back, frame, tc)
 
     def test_delete_at_frame_accepts_frame_id_alias(self):
         out = compound.timeline_markers("delete_at_frame", {"frameId": 123})

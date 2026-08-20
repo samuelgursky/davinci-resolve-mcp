@@ -1,11 +1,13 @@
 # DaVinci Resolve MCP Server
 
-[![Version](https://img.shields.io/badge/version-2.62.3-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+English | [简体中文](README.zh-CN.md)
+
+[![Version](https://img.shields.io/badge/version-2.98.3-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
-[![Tools](https://img.shields.io/badge/MCP%20Tools-34%20(341%20full)-blue.svg)](#server-modes)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-35%20(353%20full)-blue.svg)](#server-modes)
 [![Advanced](https://img.shields.io/badge/Advanced%20(offline)-18%20tools-blueviolet.svg)](#server-modes)
-[![Tested](https://img.shields.io/badge/Live%20Tested-98.5%25-green.svg)](docs/reference/api-coverage.md#test-results)
+[![Tested](https://img.shields.io/badge/Live%20Tested-93.6%25-green.svg)](docs/reference/api-coverage.md#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
@@ -22,7 +24,7 @@ A local browser control panel ships with the server for inspecting Resolve state
 npx davinci-resolve-mcp setup
 ```
 
-Before connecting, open DaVinci Resolve Studio and set **Preferences > General > External scripting using** to **Local**. The npm launcher installs a managed copy under your user application-data directory, then runs the universal Python installer. The installer creates a virtual environment, detects Resolve paths, and can configure Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Zed, Continue, Cline, Roo Code, OpenCode, and JetBrains IDEs.
+Before connecting, open DaVinci Resolve Studio and set **Preferences > General > External scripting using** to **Local**. (On the **free edition** that preference does not help — see [Free edition](#free-edition-in-app-bridge) below.) The npm launcher installs a managed copy under your user application-data directory, then runs the universal Python installer. The installer creates a virtual environment, detects Resolve paths, and can configure Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Zed, Continue, Cline, Roo Code, OpenCode, Codex CLI, and JetBrains IDEs.
 
 For source installs:
 
@@ -36,6 +38,63 @@ For platform paths, client-specific config, and manual setup, see [Installation 
 
 The installer and server check the latest GitHub release for MCP updates. Checks are best-effort and throttled; the server never blocks MCP startup for a prompt. The installer can prompt, snooze, ignore a release, disable checks, or apply an opt-in safe auto-update for clean git checkouts.
 
+## Free edition (in-app bridge)
+
+Blackmagic gates *external* scripting to Studio: on the free edition
+`scriptapp("Resolve")` refuses a foreign process, whatever the preference says.
+The **Workspace ▸ Scripts** menu is not gated — a script launched from it is
+handed the live `resolve` object on any edition — so the server can reach the
+free edition through a small script that runs *inside* Resolve and re-exports it
+over an authenticated loopback listener.
+
+```bash
+python scripts/install_resolve_bridge.py
+# restart Resolve, open a project, then: Workspace > Scripts > resolve_bridge
+```
+
+Once that listener is running it is used **automatically** whenever external
+scripting is unavailable — no environment variable required. Setting
+`DAVINCI_RESOLVE_BRIDGE=1` *forces* the bridge instead: it becomes the only
+transport tried, so a bridge that stops answering reports its own fault rather
+than quietly falling back to another transport. Use it when the bridge is the
+path you intend to depend on.
+
+On **macOS**, Resolve looks for Python 3 in exactly two places: the
+`PYTHON3HOME` environment variable, then `/usr/local/bin/python3`. Homebrew,
+pyenv, uv and conda land in neither, so the script silently never appears in the
+menu. A python.org install works because its installer creates
+`/usr/local/bin/python3` — but you do not need one: point Resolve at the
+interpreter you already have, no `sudo` required.
+
+```bash
+launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"
+```
+
+Use `launchctl setenv`, not `export` — Resolve is launched from the Dock and
+never sees your shell's environment. Restart Resolve afterwards. A Lua canary is
+installed alongside so you can tell "Python not detected" apart from a wrong
+folder.
+
+Validated on free 21.0.3.7 and Studio 19.1.3.7, both macOS. The Windows paths
+added in v2.70.1 (issue #106) shipped unverified; reports on free 21.0.1.11
+(issue #109) and free 21.0.3.7 (issue #112) have since shown the bridge
+installing, listing and serving from **both** `%PROGRAMDATA%` and `%APPDATA%` on
+Windows 11, so those paths are now confirmed rather than assumed. Linux is
+confirmed as well: a report on free 20.3.2.9 (issue #129, Fedora 43) shows the
+bridge installing to `~/.local/share/DaVinciResolve/Fusion/Scripts/Utility`,
+listing against the system Python — Linux has none of this discovery problem —
+and serving end-to-end. No platform now rests on an assumption: macOS was
+validated directly, Windows and Linux on user reports.
+
+Note that the bridge holds its port for as long as it serves. Before v2.70.3 a
+Windows bridge could outlive Resolve and block the next session's listener; if
+you are on an older build and a bridge stops answering, check for a stale
+`fuscript.exe` still holding the port.
+
+This is the documented in-app path, not a licence circumvention, but Blackmagic
+could close it — treat it as a supported-until-it-is-not tier. Loopback only,
+HMAC-signed requests, one-use nonces.
+
 ## Local Control Panel
 
 Launch the single-user local control panel from the repository root:
@@ -44,14 +103,14 @@ Launch the single-user local control panel from the repository root:
 venv/bin/python -m src.control_panel
 ```
 
-The command starts a localhost server and opens the control panel in your browser. To have an AI coding agent do this, ask: **"Open the Resolve MCP control panel for this repo."** Agents should use `venv/bin/python -m src.control_panel` unless your Python environment is already active. Persisted analysis jobs refresh the local search index automatically after successful slices; the manual Build Index action is for rebuilding from existing reports.
+The command starts a loopback-only server and opens the control panel in your browser at a URL that carries a per-launch access token (`http://127.0.0.1:8765/#token=…`) — use that exact URL; the panel refuses requests without it. To have an AI coding agent do this, ask: **"Open the Resolve MCP control panel for this repo."** Agents should use `venv/bin/python -m src.control_panel` unless your Python environment is already active. Persisted analysis jobs refresh the local search index automatically after successful slices; the manual Build Index action is for rebuilding from existing reports.
 
 ## Server Modes
 
 | Mode | Entry point | Tools | Best for |
 |------|-------------|-------|----------|
-| Compound | `src/server.py` | 34 | Default mode for most assistants. Related Resolve operations are grouped behind action parameters to keep context usage low. |
-| Full / granular | `src/server.py --full` or `src/resolve_mcp_server.py` | 341 | Power users who want one MCP tool per Resolve API method. |
+| Compound | `src/server.py` | 35 | Default mode for most assistants. Related Resolve operations are grouped behind action parameters to keep context usage low. |
+| Full / granular | `src/server.py --full` or `src/resolve_mcp_server.py` | 353 | Power users who want one MCP tool per Resolve API method. |
 
 The compound server is recommended unless you specifically need the granular one-tool-per-method surface.
 
@@ -160,25 +219,66 @@ The open-source servers are complete and fully functional on their own.
 | Render and deliver | Format/codec matrix probing, render settings validation, queued job lifecycle checks, guarded Quick Export |
 | Extension authoring | Fuse, DCTL, ACES DCTL, and Resolve-page Lua/Python script lifecycle helpers with safe MCP-marked install/remove |
 
+## Optional Extras
+
+The core install is deliberately small: Python, ffmpeg, and the Resolve scripting
+API. Some features need more, and **each one refuses honestly with its own
+install line rather than degrading into a guess** — a fabricated tempo or an
+invented level produces confident, wrong output, which is worse than no feature.
+
+Run `python scripts/doctor.py` to see which of these you have.
+
+| Extra | Unlocks | Licence |
+|---|---|---|
+| **ffmpeg** on PATH | Silence detection, dead-space markers, level measurement, audio analysis. The single most useful thing to install. | LGPL/GPL — invoked as a subprocess, never bundled |
+| `pip install numpy` | Colour pre-balance, reference-still matching, sound-density audit | BSD |
+| `pip install librosa` | Beat, bar and phrase detection for music-driven cutting | ISC |
+| `pip install -U openai-whisper` | Transcription, and everything word-level built on it | MIT |
+| `pip install open_clip_torch` | Visual similarity and `find_similar` | MIT |
+| `pip install transformers` | CLAP audio embeddings | Apache-2.0 |
+| `pip install opencv-python` | Additional frame analysis | Apache-2.0 |
+
+`media_analysis` action `capabilities` reports the analysis stack in detail and
+tells you what each missing piece would enable.
+
+**Nothing here is bundled.** Model weights carry their own licences separate from
+the code that loads them; check them before commercial use.
+
+## What This Does Not Do
+
+Knowing where a tool stops is worth as much as knowing what it does, and it is
+cheaper to read it here than to discover it mid-project.
+
+| Not supported | Why, and what you get instead |
+|---|---|
+| **Choosing the best take** | Performance is most of what makes a take right, and none of it is measurable from a waveform or a transcript. `rank_takes` ranks *fluency* — fillers, restarts, script coverage — and says so in every response. The take that plays is regularly the least fluent one, because the hesitation is often the acting. Use it to find the clean safety take, not to choose the read. |
+| **Cutting to music** | No beat or downbeat detection yet. Speech-driven tools will read a music bed as one long region and are the wrong instrument for it. |
+| **Judging a cut** | Nothing here has an opinion about whether an edit is good. Every destructive action is plan → review → confirm for that reason. |
+| **Replacing an editor** | The output is a first-pass assembly, in the assistant-editor sense: ingest, sync, organize, string out, flag problems. It is a starting point you cut, not a finished cut. Defaults are deliberately **generous** — a first assembly is supposed to run long, because trimming is fast and visible while recovering discarded material is slow and invisible. |
+| **Modifying your source media** | By design and without exception — see below. |
+
+Anything analyzed but unverifiable is reported as unverified, never folded into
+"fine". An empty result means "nothing found", never "nothing to find".
+
 ## Source Media Safety
 
 This project treats camera originals and source media as immutable. Analysis tools read source files and write reports only to sidecar, scratch, or project analysis directories; confirmed metadata publishing writes only to Resolve's project database. The server must not modify, transcode, proxy, or create derivatives of source media unless the user explicitly asks for that. See [Media Analysis Guide](docs/guides/media-analysis-guide.md) for the detailed source-safe workflow.
 
 ## Security Posture
 
-The default server is a local stdio process launched by your MCP client; it does not expose a network listener or built-in multi-user auth surface. Tool metadata includes MCP client-safety hints for read-only, destructive, idempotent, and external-resource operations. See [Security Policy](SECURITY.md) for operational boundaries, confirmation guidance, and vulnerability reporting.
+The default server is a local stdio process launched by your MCP client; it does not expose a network listener or built-in multi-user auth surface. The two opt-in local HTTP surfaces — the control panel and the networked MCP transport — bind loopback only and require a per-launch bearer token on every request, with Host/Origin checks against DNS rebinding and CSRF. Tool metadata includes MCP client-safety hints for read-only, destructive, idempotent, and external-resource operations. See [Security Policy](SECURITY.md) for operational boundaries, confirmation guidance, and vulnerability reporting.
 
 ## Key Stats
 
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **34** compound / **341** granular (live server) |
+| MCP Tools | **35** compound / **353** granular (live server) |
 | Advanced (offline) tools | **18** — .drp/.drt/.drx + DB authoring, no Resolve running |
 | Kernel Actions | **136** guarded workflow actions across 9 compound tools |
-| API Methods Covered | **336/336** (100%) |
-| Methods Live Tested | **331/336** (98.5%) |
-| Live Test Pass Rate | **331/331** (100%) |
-| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio |
+| API Methods Covered | **361/361** (100%) |
+| Methods Live Tested | **338/361** (93.6%) |
+| Live Test Pass Rate | **338/338** (100%) |
+| Tested Against | DaVinci Resolve 19.1.3 Studio + Resolve 20.3.2 Studio + Resolve 21.0.2 Studio + Resolve 21.0.3 **free** (via the in-app bridge) |
 
 For method-by-method status, see [API Coverage and Test Results](docs/reference/api-coverage.md). For current workflow support, see [Kernel Action Coverage](docs/kernels/README.md).
 
@@ -196,6 +296,7 @@ For method-by-method status, see [API Coverage and Test Results](docs/reference/
 | [Media Analysis Guide](docs/guides/media-analysis-guide.md) | Source-safe FFprobe, FFmpeg, Whisper, sidecar, and analysis-root workflows |
 | [Multicam Setup Helper Guide](docs/guides/multicam-setup-guide.md) | Stacked timeline prep, helper/API boundary, and Resolve UI conversion steps |
 | [Editorial Decision Guide](docs/guides/editorial-decision-guide.md) | Project-owned editorial craft guidance for analysis and timeline decisions |
+| [Conforming an Avid AAF](docs/guides/conforming-an-avid-aaf.md) | Why all three Resolve-native routes fail on a consolidated turnover, and which one is dangerous |
 | [Color Decision Guide](docs/guides/color-decision-guide.md) | Project-owned color correction guidance and Resolve color API boundaries |
 | [Contributing and Project Layout](docs/contributing.md) | Contribution workflow, platform support, security notes, repository structure |
 | [Security Policy](SECURITY.md) | Local stdio trust boundary, tool metadata, confirmation guidance, reporting |
@@ -206,11 +307,13 @@ Extension authoring references live in [docs/authoring](docs/authoring/). Resolv
 
 ## Requirements
 
-- DaVinci Resolve Studio 18.5+ on macOS, Windows, or Linux. The free edition does not support external scripting.
+- DaVinci Resolve 18.5+ on macOS, Windows, or Linux. **Studio** supports external scripting directly. The **free edition** does not — Blackmagic gates external scripting to Studio — but it is still reachable through the [in-app bridge](#free-edition-in-app-bridge), which runs inside Resolve from the ungated **Workspace ▸ Scripts** menu.
 - Python 3.10+ (3.10-3.12 is the lowest-risk range). Python 3.13/3.14 also work on recent Resolve builds (verified on Studio 20.3.2); older builds may fail to connect on 3.13+, in which case use 3.10-3.12.
-- Resolve external scripting set to **Local**.
+- Resolve external scripting set to **Local** (Studio). On the free edition this
+  preference has no effect — use the [in-app bridge](#free-edition-in-app-bridge)
+  instead.
 
-Resolve 19.1.3 remains the compatibility baseline. Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2. Resolve 21.0 scripting additions (audio classification, speaker-detection transcription, IntelliSearch, slate analysis, motion-deblur, speech generation, session background-task control) are exposed behind runtime capability detection, so they stay inert on older builds and activate automatically on Resolve 21+.
+Resolve 19.1.3 remains the compatibility baseline. Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2. Resolve 21.0 scripting additions (audio classification, speaker-detection transcription, IntelliSearch, slate analysis, motion-deblur, speech generation, session background-task control) are exposed behind runtime capability detection, so they stay inert on older builds and activate automatically on Resolve 21+. They are live-tested on Studio 21.0.2.4 — see the [Resolve 21 delta](docs/reference/api-coverage.md#resolve-21-delta-detail). Note that `AnalyzeForIntellisearch`, `AnalyzeForSlate` and `GenerateSpeech` each require a separately-downloaded AI Extras pack, and Resolve reports a missing pack inconsistently (some return `False`, others an error string), so these actions report `success: false` with the Resolve-supplied reason rather than guessing.
 
 ## Development
 

@@ -2,6 +2,4104 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.98.3
+
+**`fusion_comp` could never delete a Fusion keyframe.** Reported in
+[#155](https://github.com/samuelgursky/davinci-resolve-mcp/issues/155) by
+@Andrei-59, with the root cause already identified: the handler called a method
+that does not exist. The diagnosis was correct, and the suggested replacement is
+confirmed here against a live build.
+
+### Fixed
+
+- **`delete_keyframe` called `RemoveKeyFrame()` on a Fusion Input.** No such
+  method exists there. Keyframes do not live on the Input — they live on the
+  spline modifier connected to it, which is what `add_keyframe` attaches via
+  `AddModifier(input_name, "BezierSpline")`. The action now reaches that spline
+  through `inp.GetConnectedOutput().GetTool()` and calls `DeleteKeyFrames(time)`
+  on it. Introduced with the tool in v2.1.0 and broken for every input, every
+  frame, and every tool since; there is no version of the server in which it
+  worked.
+
+- **The failure surfaced as `'NoneType' object is not callable`.** The
+  fusionscript bridge resolves an unknown attribute to `None` instead of raising
+  `AttributeError`, so the bad lookup succeeded silently and only died at the
+  callsite — an error naming neither the method nor the object. Every branch of
+  the action now returns the normal error envelope: `FUSION_INPUT_NOT_ANIMATED`
+  when the input has no modifier, `FUSION_KEYFRAME_NOT_FOUND` when nothing is
+  keyed at that frame (the frame list is included in `state`),
+  `FUSION_DELETE_KEYFRAMES_UNSUPPORTED` when the modifier has no removal method,
+  and `INVALID_FRAME` for a non-numeric `time`. The existing `_has_method` guard
+  — which exists precisely for this silent-`None` class — is applied before the
+  call rather than after it.
+
+- **Success is verified by readback, not by the return value.** Live testing
+  showed `DeleteKeyFrames()` returns `None` whether or not it removed anything,
+  so trusting the return would have reported failure on every successful
+  delete — and trusting the absence of an exception would have reported success
+  on every silent no-op. The handler re-reads the keyframe list and returns
+  `FUSION_DELETE_KEYFRAME_NOOP` if the frame is still there. On success it
+  returns `{success, time, remaining_keyframes}`.
+
+### Testing
+
+- `tests/test_fusion_comp_targeting.py` gains eleven `delete_keyframe` cases,
+  including a regression test that models the bridge's silent-`None` attribute
+  lookup and asserts the handler never reaches for `RemoveKeyFrame` on the
+  Input. The action previously had no test coverage at all.
+- `tests/live_fusion_delete_keyframe_validation.py` is a new self-contained live
+  harness: it creates a scratch project, inserts a Fusion composition clip (no
+  media needed), and reports which keyframe methods the Input and the spline
+  actually expose before asserting the delete.
+
+### Verified live
+
+Validated on **DaVinci Resolve Studio 19.1.3.7** (macOS). `RemoveKeyFrame`
+confirmed absent on the Input and resolving to `None`; `DeleteKeyFrames`
+confirmed present on the `BezierSpline` and confirmed to remove the key. The
+reporter's exact reproduction — `add_keyframe` then `delete_keyframe` on the
+same tool/input/frame — was run end-to-end through the patched handler and
+succeeds. Not re-verified on Studio 21.0.4.5, the reporter's build.
+
+## What's New in v2.98.2
+
+**A tool installed next to the server was invisible to it.** Reported in
+[#153](https://github.com/samuelgursky/davinci-resolve-mcp/issues/153) by
+@7daysdedicated as an encoding fault in the whisper probe. The probe turned out
+not to be the cause, and the encoding fault turned out to be real somewhere
+else, so both are fixed here.
+
+### Fixed
+
+- **The server's own virtualenv was not searched for command-line tools.**
+  `pip install openai-whisper` writes a `whisper` executable into
+  `venv/Scripts` on Windows and `venv/bin` elsewhere, and that directory is on
+  PATH only while the environment is *activated* — which nothing does, since the
+  client launches `venv/python server.py` directly. So `shutil.which("whisper")`
+  returned None and `capabilities` reported `whisper_cli.available: false` for a
+  tool sitting beside the interpreter looking for it, with nothing in the
+  response to say why. The interpreter's script directory now leads the PATH
+  augmentation that already covered Homebrew and `/usr/local`. Not
+  Windows-specific: the same gap existed on macOS and Linux.
+
+- **Text-mode reads of a child process decoded with the locale codec.** Nineteen
+  `subprocess.run(..., text=True)` calls across the server, panel, and utils had
+  no `encoding=`, so Python used the platform locale — cp1252 on a default
+  Windows install, a codec with no mapping for most of what a media tool prints.
+  A clip name in Japanese from the advanced-server bridge, a localized WMIC
+  banner, or a user script's output was then a `UnicodeDecodeError` raised
+  inside a call whose job was to answer a yes/no question. All nineteen now read
+  UTF-8 with `errors="replace"`, so the answer can be wrong in the last
+  character but never an exception. The WMIC read matters most: it feeds the
+  second-instance guard fixed in v2.97.6, and it must fail to "cannot tell".
+
+- **Child Python processes are handed `PYTHONIOENCODING=utf-8`.** A script run
+  through `resolve_control` writes into a pipe, where Python picks the locale
+  codepage rather than the console's, so printing a non-Latin-1 character killed
+  the script with `UnicodeEncodeError` — and the failure read as the script's
+  fault rather than the pipe's. The transcription path already did this; the
+  script-runner did not.
+
+### Added
+
+- **`tests.test_child_process_text_encoding`** — a static walk over `src/` that
+  fails on any text-mode child read without an explicit `encoding=`. Static
+  because the exception needs a non-UTF-8 locale to reproduce and no machine in
+  this suite has one: the missing argument is visible in the source, the
+  `UnicodeDecodeError` is only visible in Tokyo. The walk carries a test that it
+  can still see an offender, since a guard that quietly matches nothing passes
+  forever. Also covers the venv script directory being on PATH, first, and
+  idempotently.
+
+### Note on the report
+
+The diagnosis in #153 named `whisper --help` as the probe. That string is
+display text in the install-guidance table and is never executed — detection is
+`shutil.which("whisper")` — and the transcription path already decoded UTF-8 and
+already set `PYTHONIOENCODING`. The cause was the PATH gap the report mentioned
+last, in passing, as an aside about `pip`. Worth stating plainly, because the
+reporter's `whisper.cmd` workaround set the encoding *and* put a `whisper` on
+PATH, and only the second half was doing the work.
+
+### Changed
+
+- `docs/install.md` says which environment optional packages have to be
+  installed into, which is the part that was undocumented.
+
+## What's New in v2.98.1
+
+**The Bash guard could be walked past with a newline.** Reported and fixed in
+[#152](https://github.com/samuelgursky/davinci-resolve-mcp/pull/152) by
+@fitfam, who found both holes by executing payloads against the hook rather
+than reading it.
+
+### Fixed
+
+- **`split_commands()` did not split on newlines.** It knew `&&`, `||`, `;` and
+  `|`, so a multi-line block was a single segment: `argv0` came from the first
+  line, and a non-mutating first line returned before anything under it was
+  looked at. `mkdir -p footage/_superseded` then a newline then
+  `mv footage/clip.mp4 footage/_superseded/` passed, while the same two commands
+  joined by `;` denied. Either answer is defensible on its own; giving two
+  different answers to what a shell treats as the same command is what made the
+  guard trainable around.
+
+- **The ffmpeg branch exempted an output that equalled an input.** The output
+  operand was dropped when it matched a `-i` value — which is exactly
+  `ffmpeg -i master.mp4 master.mp4`, the in-place overwrite the hook's own deny
+  message calls unrecoverable. Independent of the first hole: the single-line
+  form was allowed too.
+
+### Changed
+
+- The trailing operand is no longer read as an output when it is the value of a
+  `-i` immediately before it. `ffmpeg -i master.mov` prints stream info and
+  writes nothing, and denying a read is how a guard teaches an agent to route
+  around it. `ffmpeg -i x.mp4 x.mp4` still denies — the token there is not
+  preceded by `-i`.
+
+### Added
+
+- **`tests.test_source_media_guard`** — the hook had no tests, which is why two
+  holes in it needed a payload matrix to find. It runs the hook the way the
+  harness does, a PreToolUse payload on stdin and a decision on stdout, and
+  fails on exactly the four rows this release fixes. The newline/`;` pair is
+  asserted as a pair: not that either answer is right, but that the guard cannot
+  give two.
+
+### Note
+
+- Splitting on newlines means multi-line text carried *inside* a command — a
+  heredoc body, a commit message — is now read as commands too, so text that
+  merely quotes `rm camera.mov` is denied. That is the right way round for a
+  tripwire; write the text to a file first. #152 was itself blocked this way on
+  its first attempt, by the fix it was proposing.
+
+## What's New in v2.98.0
+
+**The control panel could be driven by any web page you visited.** Reported
+privately, with the chain worked out end to end. Fixed here; the transport
+state file and panel pidfile move out of shared locations at the same time.
+
+### Security
+
+- **`GET /api/mcp/status` handed out the networked-transport bearer token to
+  anyone who could reach the port.** It was the one privileged route with no
+  loopback check, and its payload included the token that authenticates the
+  `--transport streamable-http` MCP instance — i.e. full Resolve control.
+- **No Host or Origin check, and POST bodies of any Content-Type were parsed.**
+  A page on any site could POST to the panel (CSRF), and a DNS-rebinding page
+  could read its responses. Chained: visit a page → it starts the networked
+  transport via `/api/mcp/transport/start` → reads the token from
+  `/api/mcp/status` → owns the MCP toolset.
+- **The bind address was a tool parameter.** `open_control_panel(host=...)`
+  passed straight through, so a prompt could put the unauthenticated panel on
+  `0.0.0.0`.
+
+  What changed:
+
+  - **Per-launch bearer token on every route except the static shell at `/`.**
+    `open_control_panel` mints `secrets.token_urlsafe(32)`, passes it to the
+    child through the environment (not argv, which `ps` shows to every local
+    user), records it 0600, and returns the URL with the token in the
+    **fragment** (`http://127.0.0.1:8765/#token=…`) — browsers never send
+    fragments, so it stays out of request lines and logs. The panel JS keeps
+    it in `localStorage`, sends `Authorization: Bearer …` on every fetch, and
+    exchanges it once (`POST /api/session`) for an `HttpOnly; SameSite=Strict`
+    cookie so thumbnail `<img>` loads work. A bare `http://127.0.0.1:8765` now
+    shows a "Control panel locked" screen pointing back to `open_control_panel`.
+  - **A single gate at the top of `do_GET`/`do_POST`:** `Host` must be a
+    loopback host (defeats DNS rebinding); `Origin`, when present, must be a
+    loopback origin (defeats CSRF); `POST` must be
+    `Content-Type: application/json` (a cross-site form cannot send it, and a
+    cross-site `fetch()` with it needs a CORS preflight the panel never
+    answers). Each check fails closed with 403/415 before any route runs.
+  - **`host` is no longer an AI knob.** `open_control_panel` refuses anything
+    but `127.0.0.1` / `localhost` / `::1` with no override, and
+    `src.analysis_dashboard --host` does the same at argparse — matching the
+    free-edition bridge, which already threw on non-loopback.
+  - **Secrets on disk are private.** The transport state file
+    (`mcp_transport.json`, holds the transport token) leaves
+    `tempfile.gettempdir()`, and the panel pidfile (now holds the panel token)
+    leaves `~/Documents`; both live under `~/.davinci-resolve-mcp/` (0700),
+    written 0600 via the new `src/utils/private_state.py`, with a best-effort
+    `icacls` restriction on Windows. `DAVINCI_RESOLVE_MCP_STATE_DIR` overrides
+    the directory.
+  - **The launcher still recognises a panel it has no token for.** A panel
+    that survived an MCP restart from before this scheme answers 401 with a
+    self-identifying body; `open_control_panel` reports it as `stale_running`
+    (nobody can log in to it) with the `force_restart=true` remediation
+    instead of handing out an unusable URL.
+
+  `SECURITY.md` previously said the server "does not expose a network
+  listener"; it now describes both opt-in local HTTP surfaces (panel and
+  networked transport) and their posture. Kept as-is: the default port stays
+  8765 (with Host/Origin/token in place its guessability is not the barrier)
+  and the transport token is still shown in the panel's MCP card, now behind
+  the panel's own auth.
+
+### Added
+
+- `tests.test_control_panel_auth` boots the real `Handler` on an ephemeral
+  port and asserts each guard over HTTP: `/api/mcp/status` 401 without the
+  token and no transport secret in the 401 body; non-loopback `Host` rejected
+  even with a valid token; `localhost` / `[::1]` / bare `127.0.0.1` accepted;
+  cross-site `Origin` rejected; non-JSON POST → 415; no CORS preflight answer;
+  cookie issued only via bearer, `HttpOnly` + `SameSite=Strict`, then
+  sufficient on its own; wrong token / wrong cookie → 401; the static shell
+  never contains the token. Plus the launcher's 401-probe recognition, the
+  `host=0.0.0.0` refusal, and 0600 on the private state files.
+  `tests.test_open_control_panel` gains the token-unknown → `stale_running`
+  case and asserts the issued URL is the token-bearing one.
+
+## What's New in v2.97.7
+
+**`grab_and_export` deleted files it never created.** Reported in
+[#151](https://github.com/samuelgursky/davinci-resolve-mcp/issues/151).
+
+### Fixed
+
+- **The cleanup step removed a directory diff, not the export.** It listed the
+  caller's folder before the export and again after, and treated the difference
+  as "what this call produced" — so anything that appeared in that window was
+  attributed to the call, inlined into the response, and deleted: a background
+  render, a file copy, a cloud sync, or a second `grab_and_export`. It then
+  finished with `os.rmdir(folder_path)`, removing a directory the caller had
+  chosen and this server had not created.
+
+  `_resolve_safe_dir` made the overlap concrete rather than theoretical. Every
+  sandbox/temp path is redirected to one shared `~/Documents/resolve-stills`,
+  which is also the folder the documented `/tmp/...` examples land in, so two
+  calls aimed at different temp folders arrived in the same place and each swept
+  up the other's output.
+
+  The export now goes to a private staging directory created inside
+  `folder_path` for that one call, so what it produced is known by construction
+  instead of inferred. Cleanup removes that directory and nothing else;
+  `folder_path` is removed only when this call created it and left it empty. A
+  folder the caller already had is theirs, empty or not. With `cleanup: false`
+  the files move up into `folder_path` under a non-colliding name rather than
+  overwriting a still already sitting there — Resolve numbers stills per export,
+  so a second call collides with the first by default.
+
+  Deletion is now confined to one helper that refuses any path it did not name,
+  which is the property that was missing: the old code path could be handed the
+  caller's folder and delete its contents.
+
+  The inlining half matters too. A file that was never ours was read into the
+  response, so an unrelated document sitting in the export folder could reach an
+  assistant's context. Only staged files are read now.
+
+  Live-verified after release on Studio 19.1.3.7 (macOS, Color page, Gallery
+  panel open): Resolve's `ExportStills` writes into the staging subdirectory — a
+  257 KB JPEG and its 28 KB `.drx` came back inlined — a bystander file in the
+  same folder survived untouched, the folder itself was kept, and
+  `cleanup: false` moved both files up into it. That subdirectory write was the
+  one claim the offline fixtures could not make.
+
+### Added
+
+- `tests.test_gallery_still_export_cleanup` runs the action against a real temp
+  filesystem with a fake album that writes the way Resolve does, because the
+  defect was in what the filesystem looked like afterwards, not in any return
+  value: a bystander file written *during* the export must survive and must not
+  appear inlined; a pre-existing folder must not be removed; a folder the call
+  created must still be cleaned up; `cleanup: false` must not overwrite; and no
+  staging directory may survive any exit path, including the two early error
+  returns. All fail on 2.97.6.
+
+## What's New in v2.97.6
+
+**On Windows the server could not see the Resolve it was driving.** Reported in
+[#150](https://github.com/samuelgursky/davinci-resolve-mcp/issues/150) with the
+root cause traced, the fix proposed, and a case table — all of it correct.
+
+### Fixed
+
+- **`runtime_mode` reported `running: false, instances: 0` on every stock
+  Windows install.** WMIC wraps a command line in double quotes when the
+  executable path contains spaces, which the default install path always does
+  (`"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"`). The
+  line therefore *ends* with `"`, and `_is_resolve_command()` required it to end
+  with `Resolve.exe`. The trailing-flag stripper above the test did not help: it
+  removes ` -flag` tokens and leaves the closing quote as the final character.
+  A leading quote is now read for what it is — the executable is what sits
+  inside the first quoted span, and everything after the closing quote is
+  arguments. That also tightens rejection: `"…\cmd.exe" /c start … Resolve.exe`
+  is a launcher, not an instance.
+
+  The reading was the visible half. The consequential half is that
+  `get_resolve()` asks this same question before auto-launching, precisely so a
+  failed connect to a live Resolve does not open a second application — the
+  guard whose comment records being "reported three times before it was
+  traced". On Windows its input was a permanent `False`, so the path it exists
+  to block was open: connect fails (modal dialog, mid-launch, scripting toggled
+  off) → "nothing is running" → launch a second Resolve. `_not_connected_error()`
+  reads the same signal, so a Windows user whose Resolve *was* running got the
+  "not running, auto-launch failed, check your Studio install" text instead of
+  the preference or bridge fix that actually applied. `headless` was
+  unreachable too — it is only computed once something is found running, so
+  `-nogui` instances were indistinguishable on Windows.
+
+- **A successful install ended in a traceback under a redirected stdout.** The
+  installer prints box-drawing and check-mark glyphs. A Windows console carries
+  them, but redirecting stdout falls back to the locale code page — cp1252 by
+  default — and `print(f"  {'─' * 50}")` in the summary raised
+  `UnicodeEncodeError` after every client had already been configured, so a
+  working run looked like a failed one
+  (`npx davinci-resolve-mcp setup --clients manual 2>&1 | tail`). Streams that
+  cannot encode those glyphs are now reconfigured to UTF-8 with
+  `errors="replace"`; a console that can already carry them is left alone
+  rather than re-encoded underneath the user.
+
+### Added
+
+- `tests.test_headless_runtime` covers the quoted Windows command line —
+  bare, trailing-whitespace (what WMIC actually prints), and `-nogui` — plus
+  the quoted-launcher line that must still be rejected, so the fix cannot
+  become a substring test by another route. `tests.test_cdl_and_install_config`
+  gains `ConsoleEncodingTests`, including a child interpreter run with
+  `PYTHONIOENCODING=cp1252` and a piped stdout: the exact shape of the reported
+  failure. Both suites fail on the pre-fix code.
+
+## What's New in v2.97.5
+
+**`npm ci` was failing outright, and nothing in the release path noticed.**
+No server behavior changed; this is packaging and release-process hardening.
+
+### Fixed
+
+- **`package-lock.json` was seven releases stale.** It still carried
+  `2.90.0`, and — the part that actually broke things — two
+  `optionalDependencies` added since then, `js-yaml` and `pg`, were never
+  locked. `npm ci` refuses to install at all when the lockfile and
+  `package.json` disagree, so every reproducible install path failed with
+  `EUSAGE — Missing: js-yaml@4.3.1 from lock file` (plus `pg` and its nine
+  transitive deps). CI, fresh contributor clones, and container builds all hit
+  it. `npm install` and `npm publish` resolve independently of the lockfile
+  and stayed green throughout, which is why it survived seven releases.
+  Regenerated with `npm install --package-lock-only`; `npm ci` now installs
+  175 packages clean.
+
+### Added
+
+- **`tests.test_import::test_package_lock_in_sync`** — asserts both version
+  fields in the lockfile match `package.json`, and that the root
+  `dependencies` / `devDependencies` / `optionalDependencies` blocks match
+  exactly. The second half is the one that matters: the version fields being
+  right is not evidence `npm ci` works, and dependency drift is what actually
+  breaks it. Verified to fail on each drift mode independently.
+
+### Changed
+
+- `docs/process/release-process.md` lists `package-lock.json` under "Files To
+  Update" with the regeneration command, and Required Validation now
+  regenerates the lockfile before `test_import` reads it. The lockfile was
+  never on the checklist, which is why the drift was never a step anyone
+  skipped — it was a step that did not exist.
+
+## What's New in v2.97.4
+
+**Drift is caught at the edit, not at publish time.** Tooling and docs only —
+no server behavior changed, and no Resolve live run was required or performed.
+
+### Added
+
+- **Two opt-in `PostToolUse` hooks** in `.claude/hooks/`. Like the two existing
+  `PreToolUse` guards, they ship as scripts and are **not** wired up by default;
+  opt in via your own gitignored `.claude/settings.local.json` (the block is in
+  [docs/README.md](docs/README.md)).
+  - `agent_rules_drift_check.py` runs `node scripts/agent-rules/generate.mjs
+    --check` after an edit to anything the generator actually reads
+    (`docs/SKILL.md`, `docs/kernels/README.md`, `resolve-advanced/README.md`,
+    and `generate.mjs` itself, which carries the DOMAINS manifest inline) or to
+    `AGENTS.md`, which it writes. It separates the generator's two exit-1
+    paths: real staleness always prints `N agent-rule file(s) are stale`, a
+    throw never does — and telling a session to regenerate when the generator
+    is the thing that crashed sends it in a circle. Watching outputs but not
+    inputs was the original bug: bumping the compound tool count in
+    `docs/SKILL.md` left five generated files stale and the hook said nothing.
+    **A new generator input has to be added to `SOURCE_PATHS` or the hook goes
+    silent on exactly the edit it exists for.**
+  - `run_matching_test.py` runs the matching `tests/test_<module>.py` after an
+    edit under `src/`, resolving the project venv (`venv/bin/python`) before
+    `python3` so `pytest` is importable rather than reporting a false failure.
+    A fast partial net, not coverage: 72 of the 126 modules under `src/` follow
+    the convention, densely in `src/utils/` and not at all for `src/server.py`,
+    `src/granular/common.py`, or `src/control_panel.py`. Silence means "no
+    matching test file", not "this edit is fine".
+- **`drift-guard-reviewer` subagent** (`.claude/agents/`) — runs the drift-guard
+  test family plus the adjacent checks `npm-publish.yml` runs before every
+  publish, on demand and in its own context. It reports what is stale and which
+  regeneration command fixes it; it does not fix anything.
+- **`release-check` skill** (`/release-check`) — a thin wrapper that reads and
+  follows [docs/process/release-process.md](docs/process/release-process.md)
+  from disk. It deliberately does not restate the checklist: a second copy can
+  drift from the original, which `CLAUDE.md` prohibits.
+
+### Changed
+
+- `docs/README.md` documents all four hooks, all three subagents, and the new
+  skill in place, including the opt-in JSON block.
+
+Contributed by [@Grimthereapper](https://github.com/Grimthereapper) in
+[#149](https://github.com/samuelgursky/davinci-resolve-mcp/pull/149).
+
+## What's New in v2.97.3
+
+**`source_end` no longer has the start timecode baked into it.** Reported by
+[@TheUnlockr](https://github.com/TheUnlockr) in
+[#147](https://github.com/samuelgursky/davinci-resolve-mcp/issues/147) against
+Studio 21.0.4.5, and confirmed live here on 19.1.3.7.
+
+### Fixed
+
+- **The two source frame fields did not share an origin.** `source_start` comes
+  from `GetSourceStartFrame`, which is file-relative. `source_end` came from
+  `round(GetSourceEndTime x fps)` — and both second-readers answer in the media's
+  TIMECODE space, so on any clip with a non-zero start TC the whole start
+  timecode landed in `source_end`. On the reporter's Canon MP4 starting at
+  04:18:37;25 that produced `source_end` 468800 on a clip 10650 frames long. The
+  two fields could not be differenced, and anything sizing a pull from them —
+  `extract_source_frame_ranges`, `create_variant_from_ranges`, conform and
+  consolidation — was working from a number ~44x the clip's length.
+- `source_end` is now the SPAN between the two second-readers, anchored on
+  `source_start`. The offset cancels in the difference, so the result is
+  file-relative under either convention and needs no timecode parsing, no `Start
+  TC` property read, and no drop-frame arithmetic. On media starting at
+  00:00:00:00 the correction is exactly zero, so nothing moves there.
+- **The `_seconds` pair is rebased to match.** `source_start_seconds` used to
+  disagree with `source_start / source_fps` on any camera clip, despite being
+  documented as seconds into the source file. All four `source_*` fields are now
+  file-relative and say so.
+
+### Why the existing suite could not catch it
+
+The v2.93.0 work that introduced this was live-validated — but with synthetic
+media, which starts at 00:00:00:00. That makes the offset exactly zero, so a
+timecode-absolute reader is indistinguishable from a file-relative one in
+precisely that setup. The new harness closes the gap by generating synthetic
+media that *carries* a timecode.
+
+### Added
+
+- `tests/live_source_timecode_validation.py` — a controlled pair: two clips from
+  the same generator, identical except that one carries `-timecode 04:18:37;25`,
+  both cut into a timeline at a different rate. Any difference in the reported
+  fields is attributable to the timecode and nothing else. 17/17 checks pass on
+  Studio 19.1.3.7.
+- Six unit tests in `tests/test_source_frame_rate.py` pinning the reporter's
+  measured numbers, including that zero-TC media is untouched.
+
+### Documentation
+
+- The `GetSourceStartFrame` api_truth entry claimed the v2.93.0 product was "a
+  SOURCE frame by construction". That holds only for media starting at
+  00:00:00:00; the entry now says so, records the live confirmation, and carries
+  the rate-conversion caveat below.
+
+### Validation
+
+- Live on **DaVinci Resolve Studio 19.1.3.7** (not the 21.0.4.5 of the report):
+  on the timecoded copy `GetSourceStartTime` read 15527.812 s where the
+  file-relative answer is 10.010 s while `GetSourceStartFrame` read 300 — the two
+  readers in different spaces on the same edit point. The pre-fix formula gave
+  465461 on a 1799-frame clip. After the fix the timecoded copy reports exactly
+  what the zero-TC control reports, for every range tried.
+- One caveat the harness deliberately does *not* assert: `source_end` is not the
+  `endFrame` you sent when the rates differ. The record duration quantizes to
+  whole timeline frames, so a 93-source-frame request at 29.97 into a 24 fps
+  timeline consumes ~92.4 and *both* copies report 392. That is rate conversion,
+  not a timecode error.
+
+## What's New in v2.97.2
+
+**The panel's inventory snapshot survives a large project.** Follow-up to the
+v2.97.1 fix: now that `inventory_limit` actually reaches the panel, the cache it
+feeds has to cope with what arrives.
+
+### Fixed
+
+- **The localStorage snapshot silently stopped working above ~5MB.** The panel
+  caches the last inventory so reopening it paints the previous view instantly
+  instead of "connection pending". That write was unbounded — and with
+  `inventory_limit` reaching 10000 clips, each carrying a file path, bin path,
+  status reasons, and the analysis overlay, it overruns the per-origin quota. The
+  write then threw, was caught, logged a `console.warn` no one reads, and the
+  instant-paint feature quietly did nothing on exactly the big projects where a
+  slow first fetch makes it worth having. The snapshot is now capped at 750
+  clips; on a quota failure the panel prunes cached inventories (including
+  snapshots for projects the user has moved on from) and retries once, and if
+  that still fails it removes its own key so a snapshot cannot outlive the walk
+  it described.
+- **A truncated snapshot no longer reads as a complete inventory.** A capped
+  snapshot carries `snapshot_partial` and the true clip count, and both surfaces
+  that show a number say so — the header reads `(cached preview of 3015)` and the
+  poll status reads `cached first 750 of 3015`. Capping the cache without this
+  would have re-created the v2.97.1 bug one layer down: a number presented as the
+  inventory that isn't.
+
+### Added
+
+- `tests/test_dashboard_inventory_snapshot.py` — guards that the inventory fetch
+  sends no `limit` of its own (the v2.97.1 regression), that the snapshot stays
+  capped, and that a partial snapshot declares itself.
+
+## What's New in v2.97.1
+
+**The control panel honors `media_analysis.inventory_limit` again.** Thanks to
+[@albertfdp](https://github.com/albertfdp) for finding and fixing this
+([#148](https://github.com/samuelgursky/davinci-resolve-mcp/pull/148)).
+
+### Fixed
+
+- **A configurable preference the panel could never reach.** `/api/resolve/media`
+  falls back to the `media_analysis.inventory_limit` preference (1–10000,
+  default 500) when the request carries no `limit`, and the Preferences pane has
+  always let you set it. But `refreshResolveMedia()` — the panel's only caller of
+  that endpoint, used for the first load, the manual refresh button, and the
+  background poll alike — hardcoded `?limit=500`, so the query param won every
+  time and the preference was inert. On a 3015-clip project the Overview panel
+  showed the first 500 clips and rendered real Media Pool bins as empty. The
+  fetch no longer sends `limit`; the server-side preference applies. Verified
+  against a live 3015-clip project: 3015 clips across 32 bins after the fix.
+
+This is the silent-lie class again — a setting that round-trips through the
+preferences store, reports itself as saved, and changes nothing observable.
+
+## What's New in v2.97.0
+
+**`timeline_frame(action="capture")` now renders the frame.** v2.96.0 shipped it
+reading Resolve's thumbnail API; live validation on Studio 19.1.3.7 showed that
+API cannot do the job, so the default route changed. Callers using `preview` or
+`full` keep working and now get a frame-accurate image.
+
+### Measured — the thumbnail API is per-CLIP, not per-frame
+
+`GetCurrentClipThumbnailImage` returns the same image for every frame of a clip.
+Seeking to 00:00, 01:00, 02:00 and 04:00 within one clip returned
+**byte-identical data every time**; the image changed only when the playhead
+crossed a clip boundary. Two further conditions make it fail silently:
+
+- It returns `None` whenever Resolve is **not the frontmost application**, at any
+  delay, even on the Color page with a clip under the playhead.
+- The first read after a page switch or a playhead move can be empty while the
+  viewer catches up, so a single failed read proves nothing.
+
+None of this is distinguishable from "no frame here."
+
+### Measured — `ExportStills` needs the Gallery panel open
+
+It returns a bare `False`, writing nothing, unless the Gallery panel is visible
+on the Color page — across png/jpg/tif/dpx, three destination folders, settle
+delays of 0.5s/1.5s/3.0s, with Resolve frontmost. `GrabStill` succeeds; only the
+export fails. No scripting call can open that panel.
+
+### So `capture` renders one frame
+
+`MarkIn == MarkOut` on a still-image render. Frame-exact, full resolution, well
+under a second, and it needs no GUI panel and no foreground window. Verified
+live: three timecodes produced three different images, and the rendered burn-in
+matched the requested frame.
+
+`quality` is now `frame` (default), `preview` (same render bounded to 1280px),
+`thumbnail` (the instant per-clip image), and `still` (Gallery still). `full` and
+`preview` from the original issue schema both map to the render.
+
+**The cost, stated rather than hidden:** render settings are project-level.
+Format and codec are snapshotted and restored, the render job is deleted, and
+the Deliver page and playhead that rendering pulls Resolve onto are put back —
+but `TargetDir`, `CustomName` and the mark range cannot be read back on builds
+without `GetRenderSettings`, so they are reset to the full timeline rather than
+truly restored. `quality="thumbnail"` remains for callers who need a strictly
+side-effect-free read and can live with per-clip granularity. A capture also
+refuses while another render is running.
+
+### Corrected — docs that claimed per-frame accuracy
+
+`docs/SKILL.md` said `get_thumbnail` "reflects the current frame as rendered by
+Resolve." It reflects the clip. `timeline(action="thumbnail_contact_sheet")`
+samples the same API, so it is a shot inventory, not frame evidence; both are
+now described accurately. Both API findings are recorded in `api_truth` and
+regenerated into `docs/reference/api-limitations.md`.
+
+### Fixed — thumbnail reads poll instead of trusting one call
+
+`timeline_markers(action="get_thumbnail")` and `get_thumbnail_image` now hold the
+Color page, poll for the viewer to catch up, and name the foreground requirement
+when the read stays empty.
+
+## What's New in v2.96.0
+
+New tool **`timeline_frame`** — the assistant can look at what Resolve is
+rendering instead of inferring it from metadata. Closes
+[#146](https://github.com/samuelgursky/davinci-resolve-mcp/issues/146).
+
+### `timeline_frame(action="capture")`
+
+Returns the timeline frame as MCP image content — grade, Fusion, titles,
+transitions, as composited. (For the raw camera file, `media_analysis(action=
+"extract_frames")` is still the right call.)
+
+- `timecode` / `frame` — capture anywhere, not just the playhead. Accepts
+  absolute (`01:00:15:12`) or elapsed (`00:00:15:12`) timecode, matching the
+  marker-parameter contract.
+- `quality` — `preview` (Resolve's thumbnail; fast, writes nothing) or `full`
+  (full resolution via a Gallery still, removed again afterwards).
+- `max_width` — bound the context cost. Preview downscales in-process with an
+  area average; `full` rescales with ffmpeg, and **fails rather than silently
+  returning a full-size frame** when ffmpeg is missing.
+- `format` — `png` (default), `jpg`, or `tif` on the `full` path.
+- `timeline_name` — capture from another timeline; it is made current for the
+  read and the original restored after.
+
+A capture is a read: the Color page, playhead, current timeline, and Gallery all
+come back as the caller left them.
+
+### Why a separate tool rather than an action on `timeline`
+
+FastMCP derives an output schema from a tool's return annotation and validates
+returns against it, so a `-> Dict[str, Any]` tool cannot return image content.
+`timeline_frame` is annotated `-> Any` for that reason — the same reason
+`timeline_markers` already was. The issue asked for a top-level tool, and the
+schema constraint independently forces one.
+
+### Fixed — thumbnail reads no longer misreport a page problem as a missing frame
+
+`GetCurrentClipThumbnailImage` returns `None` on every page except Color, with
+nothing to distinguish that from "no frame here."
+`timeline_markers(action="get_thumbnail")` and `get_thumbnail_image` called it
+bare, so off the Color page they reported a missing thumbnail. Both now hold the
+Color page for the read and restore the previous page — the mitigation
+`thumbnail_contact_sheet` already used. When the switch genuinely cannot happen
+(headless, page locked), the error names the Color-page requirement instead.
+
+`get_thumbnail_image` now shares the `timeline_frame` capture path, so it picks
+up the fix; its contract is unchanged.
+
+### Fixed — the installer configures Codex CLI
+
+The installer claimed Codex support but never wrote its config, so a successful
+install left no `davinci-resolve` entry in `~/.codex/config.toml` — everything
+else (venv, Resolve paths, bridge, server) was in place and only the
+registration was missing. Codex keys MCP servers under a TOML
+`[mcp_servers.<name>]` table, and the installer only knew how to write JSON.
+Closes [#39](https://github.com/samuelgursky/davinci-resolve-mcp/issues/39).
+
+`codex` is now a selectable client (included in `--clients all`), writing
+`$CODEX_HOME/config.toml` (default `~/.codex/config.toml`), and `--manual`
+prints a ready-to-paste TOML block.
+
+The merge is a text splice, not a parse-and-rewrite, so comments and hand
+formatting survive; an existing `[mcp_servers.davinci-resolve]` table has its
+`command`/`args`/`env` replaced in place. Sub-tables of that entry are kept:
+hand-written Codex configs put per-tool approval modes in
+`[mcp_servers.davinci-resolve.tools.<tool>]`, and an installer that dropped them
+would quietly widen what the agent may do without asking. An
+`[mcp_servers.davinci-resolve.env]` sub-table is regenerated in that same shape
+rather than replaced with an inline `env` — TOML rejects a file that spells one
+key both ways.
+
+Paths are escaped as TOML basic strings (Windows backslashes would otherwise
+corrupt the file). The installer refuses to touch a config that is already
+invalid TOML, one that defines the server as an inline key it cannot safely
+rewrite, or a merge result that would not parse — the same
+never-wipe-a-user-config policy the JSON clients follow. Writes are backed up to
+`config.toml.backup` first.
+
+## What's New in v2.95.3
+
+Closes the retime entry's explicit `UNTESTED` warning: **reverse and
+variable-speed ramps both work**, and fixes two decoder bugs found proving it.
+
+### Measured — reverse lands through both import routes
+
+On Studio 21.0.4.5. OTIO with a negative `time_scalar` (-1) placed a clip reading
+`GetSourceStartFrame` 95 → `GetSourceEndFrame` 46; EDL with a negative `M2` rate
+(-24.0 at 24fps) read 48 → 0. **The API does expose direction** — a reversed clip
+reports source start GREATER than source end, i.e. a negative span.
+
+### Measured — variable-speed ramps survive Resolve intact
+
+They cannot be expressed in OTIO (`LinearTimeWarp` is a single `time_scalar`,
+constant by construction), but they can be authored offline. A `Sm2TimeMap` built
+with `media-timemap.buildTimemap` carrying two segments — 0–2s record at 0.5×,
+2–4s at 2.0× — was patched into a clip's `MediaTimemapBA`, imported, and
+**re-exported by Resolve with the segments unchanged**. Confirmed independently
+from the API side: the clip read source `0..120` over a 96-frame record, and
+2s@0.5× (24 source frames) + 2s@2.0× (96) is exactly 120.
+
+### Fixed — the timemap decoder reported a reverse as speed 0
+
+Two real bugs in `media-timemap.js`, both exposed by the first reversed map it
+ever saw:
+
+- **Fixed-offset keyframe reads.** Each point omits whichever of
+  `recordSec`/`sourceSec` is zero (protobuf default-omission), so
+  `readDoubleLE(1)`/`readDoubleLE(10)` threw *"offset out of range"* on every
+  reversed map. Forward maps only decoded because both values happened to be
+  non-zero.
+- **A hardcoded (0,0) origin.** A reversed clip starts at the far end of the
+  source, and Resolve encodes that starting offset as a **top-level protobuf
+  field 2** double. Assuming (0,0) made a reverse decode as **speed 0** — a
+  plausible wrong number, which is worse than a crash. It now decodes as −1.
+
+### Trap worth naming
+
+`buildTimemap` returns a **Buffer**. Writing it into the XML without
+`.toString('hex')` embeds mojibake, and the failure is silent: the clip imports
+cleanly and reads `0..0` — indistinguishable from the degenerate-map signature
+the ledger describes for xmeml imports, so it looks like Resolve rejected the
+retime when it is a caller bug. It cost real time here before being caught.
+
+## What's New in v2.95.2
+
+Adds the live round-trip harness the offline `.drp` tier never had — the absence
+of which is why three unbacked "verified live" claims survived in its README, one
+reaching a shipped `api_truth` recommendation before being caught.
+
+### Added — `tests/live_drp_roundtrip_verification.py`
+
+Authors a `.drp` per primitive, imports it into a running Resolve, asserts intent
+against structural readback, **and exports the composited frame to assert the
+item is actually visible on screen.**
+
+That last assertion is the whole point. `place_fusion_title` satisfies every
+structural check — right track, frame, duration, `PrettyType`, and correctly
+encoded text — while rendering nothing, so a harness that only diffed
+`GetStart()`/`GetDuration()` would have called it green. Visibility is measured
+with `Project.ExportCurrentFrameAsStill` plus a luma pass: an inert item yields
+`max=0` across the entire frame, a real one does not (the live control returns
+`max=255` with ~16k bright pixels).
+
+**Known-broken cases are declared, not skipped.** `place_fusion_title` is
+recorded as `KNOWN BROKEN`; if it starts working the harness reports `UNEXPECTED
+PASS` and fails, forcing the docs that describe it to be updated.
+
+Current state on Studio 21.0.4.5: **7 passed, 1 known-broken, 0 needing
+attention** — media placement, blade, trim, cross-track move, and generator
+visibility all verified end to end.
+
+### Fixed — the `RESOLVE_VERIFY=1` gate was unrunnable
+
+It ran a single test that threw `TODO — implement once fixtures land`, so the
+flag reported a failing suite and everyone learned to ignore it. A gate nobody
+can run green is worse than no gate. It is now a documented skip pointing at the
+harness above, and `RESOLVE_VERIFY=1 npm test` is clean.
+
+### Changed — release process states the rule
+
+"The file round-trips" and "Resolve honours it" are different claims; only a live
+import establishes the second. Changes to the offline `.drp` tier must run the
+harness, and a doc may not say "verified live" unless a runnable command produced
+that result.
+
+The harness is also robust to `DeleteProject`'s session lock: projects opened in
+a session cannot be deleted until Resolve restarts, so it steps off the current
+project, retries, falls back to run-unique names rather than colliding, and
+reports what it could not remove instead of failing silently.
+
+## What's New in v2.95.1
+
+Withdraws a recommendation this project shipped two releases ago. **`drp
+place_fusion_title` produces a title Resolve never renders**, and v2.93.2/v2.93.3
+told callers to use it.
+
+### Fixed — the offline title is inert
+
+Measured on Studio 21.0.4.5. The placed clip is structurally perfect: right
+track, right frame, right duration, `PrettyType` = `Fusion Title`, and the text
+genuinely is written into the `CompositionBA` — it decodes back. But Resolve
+never instantiates the comp:
+
+| | offline-placed | live-inserted |
+|---|---|---|
+| `GetFusionCompCount()` | 1 | 1 |
+| `GetToolList()` | **`[]`** | `['Template','MediaOut1']` |
+| Inspector Title tab | **blank** | shows `Text+` |
+| Viewer | **black** | renders the text |
+
+Reproduced four ways — alone, inside an edit chain, onto a bundled-template base
+project, and onto a genuine 21.0.4.5 Resolve export. Ruled out: template
+staleness (the bundled clip element is structurally identical to a real one, same
+tags, size differing only by text length) and DbId rewriting (the comp blobs hold
+no DbId references). Root cause open.
+
+It passes every structural readback while being invisible on screen — the exact
+silent-lie shape the `api_truth` ledger exists to catch. The **nested-timeline
+route is unaffected** and remains the working answer.
+
+### Narrowed — it is the Fusion-comp path, not clone-a-template
+
+`place_generator`, built the same way, works: an imported Solid Color shows a
+populated `Generator - Solid Color` Inspector with a live Color parameter. A
+generator's parameters are a protobuf `EffectFiltersBA`, which Resolve reads; a
+title's are a `CompositionBA` Fusion-comp blob, which it does not instantiate.
+
+### Changed — "mapped" no longer implies "Resolve honours it"
+
+The drp-format README's honest-scope section conflated file-level fidelity with
+live behaviour. A blob that survives a write/read cycle has been *encoded*
+correctly; only a live import proves it is *instantiated*. The section now says
+so, and the Fusion-title row carries the warning.
+
+## What's New in v2.95.0
+
+Compound clips can now be walked into and edited offline — the one capability
+where the offline tier beats the live scripting API outright.
+
+### Added — `drp` nested-sequence actions
+
+`list_nested`, `read_nested`, `read_nested_titles`, `set_nested_title_text`
+(`resolve-advanced/vendor/drp-format/compound-nav.js`). Enumerate every compound
+clip and nested timeline in a `.drp`, walk into either, and rewrite the title
+text inside.
+
+**A compound clip and a nested timeline are the same shape on disk.** Both appear
+in `MediaPool/Master/MpFolder.xml` as a media-pool element (`Sm2MpCompoundClip` /
+`Sm2MpTimelineClip`) carrying an inline `<Sequence><Sm2Sequence DbId="X">`, and
+the `SeqContainer/<uuid>.xml` whose tracks carry `<Sequence>X</Sequence>` holds
+the contents. The join is on that **Sm2Sequence DbId, not the container's own
+DbId** — which is referenced by nothing else in the package. One asymmetry: a
+compound's contents are rebased to `Start` 0 while a nested timeline's keep
+timeline-absolute TC.
+
+**Why this matters.** `MediaPoolItem.GetTimeline()` (21.0.4+) resolves through
+the timeline handle: it returns the inner Timeline for `Type='Timeline'` and
+**`None` for `Type='Compound'`**, and a compounded Text+ reports
+`GetFusionCompCount() == 0`. So compounding a title severs its text permanently
+as far as scripting is concerned — there is no API route back to it at any
+version. Offline, the distinction does not exist.
+
+Verified end to end on Studio 21.0.4.5: text rewritten offline inside a compound,
+imported into Resolve, re-exported by Resolve, and read back **from Resolve's own
+export** unchanged — so Resolve genuinely parses the write rather than tolerating
+it. Ten unit tests against a committed fixture exported from 21.0.4.5 holding a
+compound-of-media, a compound-of-Text+, and a nested timeline.
+
+## What's New in v2.94.3
+
+A systematic sweep of catalogued API gaps against **Studio 21.0.4.5**, prompted
+by an external report. Two ledger entries were wrong and are corrected; a new
+harness proves the routes that DO work.
+
+### Fixed — transitions are not invisible to scripting
+
+- **`Transition create / copy / clone` claimed transitions applied in the UI are
+  "invisible to and unmodifiable by scripts". Both halves were wrong.** A
+  12-frame Cross Dissolve applied through the Edit-page right-click menu
+  enumerates in `GetItemListInTrack` as `GetName() == 'Cross Dissolve'`,
+  `GetStart() == 86426`, `GetDuration() == 12` — centered on a cut at 86432 —
+  with a stable `GetUniqueId()`. One authored offline into a `.drp` and imported
+  reads identically, so the creating route is irrelevant. It is also removable:
+  `DeleteClips([transition], False)` returns True and leaves both adjacent clips
+  untouched. **The discriminator** is `GetProperty()`: empty on a transition, 26
+  transform keys on a clip. Automated QC of existing transitions is therefore
+  possible. Genuinely missing: creation, cloning, and any type/alignment detail —
+  the kind is knowable only from the name string.
+
+### Fixed — CreateProject is not an "Untitled project" problem
+
+- **`CreateProject` returned None with a NAMED project current and no modal on
+  screen** (screenshot-confirmed), while `OpenPage('edit')` succeeded in the same
+  session — so the connection was healthy and the documented modal is not the
+  only mechanism. Loading any clean project unblocked it on the next call. The
+  entry's recommended workaround was `CloseProject`, which **discards unsaved
+  changes** — acceptable for a throwaway Untitled project, destructive when the
+  current project is a named one belonging to another session. It now recommends
+  `LoadProject(clean project)` instead.
+
+### Added — `tests/live_workaround_verification.py`
+
+The sibling of the gap harness: where that one proves absence, this proves
+presence, performing each operation and reading the result back. Seven routes
+verified on 21.0.4.5 — nested-timeline title placement with a later text edit,
+ripple delete (with a non-ripple control showing the gap), the take selector as
+an in-place source swap, `GetSelectedClips`, and constant retime through both
+OTIO `LinearTimeWarp` and EDL `M2` (each a true 200%: 96 source frames over a
+48-frame record, alongside a 1.0 control). It also records the compound-clip trap
+as a deliberate `ROUTE FAILS`.
+
+### Changed — the gap harness covers 13 gaps, up from 8
+
+Added control-paired repros for the Source/Auto Track Selector (locking V1 blocks
+the insert rather than redirecting it, while a media-backed clip targets V2
+fine), transitions, native multicam creation, per-caption subtitle text, and
+per-clip audio channel mapping. **13/13 confirmed missing** on 21.0.4.5.
+
+## What's New in v2.94.2
+
+Changelog repair. No code changed.
+
+- **v2.93.3 carried two separate `What's New in v2.93.3` sections.** Two sessions
+  were working in one checkout, and one of them ran `git add -A` while the
+  other's edits were still uncommitted — so a delivery-target commit swept up an
+  unrelated `api_truth` correction, and both wrote their own heading under the
+  same version. The two sections are now merged into one entry that describes
+  everything v2.93.3 actually shipped: the delivery-target re-verification **and**
+  the issue #74 nested-timeline finding. The v2.93.3 GitHub release notes, which
+  described only the delivery work, have been amended in place for the same
+  reason. No commit or tag was rewritten — both are public.
+
+## What's New in v2.94.1
+
+Removes the `hls_h264` target added in v2.94.0 — it could never work — and fixes
+a QC note that told the truth only for image sequences.
+
+### Fixed
+
+- **`hls_h264` is withdrawn.** It resolved cleanly against the format/codec
+  matrix, which is why it shipped, but it can never render: on Studio 21.0.4.5
+  `GetRenderCodecs('m3u8')` returns `{'H.264': 'H264'}` and
+  `GetRenderResolutions('m3u8', 'H264')` returns real rasters, yet
+  `SetCurrentRenderFormatAndCodec('m3u8', ...)` is False for every value tried
+  (`'H264'`, `'H.264'`, `'h264'`, `''`) while `('mp4', 'H264')` succeeds. Caught
+  by queuing an actual job rather than by resolving a name. A target that always
+  fails is worse than no target, so it is gone along with its `hls` and
+  `streaming` aliases.
+- **`qc_note` reported every target's missing QC projection as an image
+  sequence.** It was hard-coded, so `webp_animated` — which declines QC because
+  its ffprobe values are unmeasured — told callers its output was a many-file
+  sequence. It now surfaces the target's own `qc_skip_reason`.
+
+### Notes
+
+- New API-truth finding, folded into the existing `Project.GetRenderCodecs`
+  entry: **the format/codec matrix is not a capability contract.** A format can
+  advertise a codec, and rasters for it, and still refuse to be selected. That is
+  worse than the zero-codec formats, which at least advertise nothing. Presence
+  in the matrix proves a pair is *listed*, never that it is usable — the
+  authoritative test is setting it and reading the boolean back, which
+  `prepare_render_job` and `prepare_delivery_job` already do.
+- 31 targets, all verified end to end on Studio 21.0.4.5: resolved, queued as a
+  real render job, then deleted.
+
+## What's New in v2.94.0
+
+Adds four delivery targets for deliverable classes the table did not cover:
+image sequences for web/graphics, animated web assets, and an HTTP Live
+Streaming package. All 32 targets resolve live on Studio 21.0.4.5.
+
+### Added
+
+- **`png_sequence`** — PNG frames for web and motion-graphics handoff. Resolve
+  exposes **RGB only** (no alpha codec), so the target says so and points at
+  `dpx_sequence` (`RGBA 8 bits`) or `prores4444_master` when transparency is
+  actually needed. Alias: `png`.
+- **`gif_animated`** — looping animated GIF. No audio track at all, so
+  `ExportAudio` is False rather than merely unpinned. Its QC projection uses
+  ffprobe values measured on a generated file (`container: gif`, `codec: gif`).
+  Alias: `gif`.
+- **`webp_animated`** — looping animated WebP. Ships with **no QC projection**:
+  the reference machine's ffmpeg has only the `webp_pipe` still-image demuxer, so
+  a rendered animated WebP could not be probed and the ffprobe values are
+  unmeasured. `qc_skip_reason` says exactly that. Guessing `webp`/`webp` would
+  have produced QC failures about vocabulary rather than about the deliverable —
+  the same trap as mp4 reporting its container as `mov`. Alias: `webp`.
+- **`hls_h264`** — HTTP Live Streaming package (`.m3u8` playlist plus segments),
+  in the `package` tier alongside IMF and DCP. Bitrate ladders, variant playlists
+  and encryption keys are not expressible as a render target. Aliases: `hls`,
+  `streaming`.
+
+### Notes
+
+- PNG, WebP and HLS are **not render formats on Resolve 19.x**. These targets
+  resolve on 21.x and fail loudly with the machine's available list on older
+  builds, which is the designed behavior rather than a regression.
+- Deliberately **not** added, having checked the full 21.0.4.5 matrix: container
+  swaps that duplicate existing capability (MKV carries the same ProRes and
+  H.264/H.265 codecs already covered), standalone JPEG 2000 (the same essence the
+  IMF/DCP targets reach), and legacy formats (AVI, Cineon, MJ2, Panasonic AVC
+  8K). All remain reachable via a `format_candidates` override or a user target.
+- `braw`, `mts` and `wav` expose zero codecs and reject every codec value, so no
+  target is possible for them at all.
+
+## What's New in v2.93.3
+
+Two independent pieces of work landed in this release, both measured against the
+**installed** build, Studio 21.0.4.5: the delivery-target table re-verified
+against that build rather than the 19.1.3.7 it was first measured on, and a
+correction to the issue #74 ledger entry.
+
+### Changed
+
+- **Delivery-target provenance now reflects both builds.** `VERIFIED_ON` reads
+  21.0.4.5 (23 formats / 326 pairs) with the original 19.1.3.7 measurement
+  (20 formats / 271 pairs) kept alongside it. All 28 targets resolve on 21.0.4.5.
+- **The module now records why candidate ordering matters.** Codec **ids were
+  stable** across the two majors while **descriptions were not** — every DNx
+  description gained an `"Avid "` prefix in 21.x (`"DNxHR HQ"` →
+  `"Avid DNxHR HQ 12-bit"`) while `DNxHRHQ`, `DNxHRLB` and `DNxHRHQX_10` did not
+  move. The targets that survived the upgrade did so because their candidate list
+  contained the real id, so ids now lead every list and descriptions follow.
+- **Corrected a claim that went stale between builds.** The module asserted "PNG
+  is not a render format at all", which was true on 19.1.3.7 and is false on
+  21.0.4.5 (`png`, `jpg` and `webp` are all render formats there). There is still
+  no `png_sequence` target, but the reason is now "not added", not "impossible".
+
+### Fixed
+
+- **`api_truth.py`: the zero-codec format list was presented as fixed.** It is
+  build-specific — `wav` and `gif` on 19.1.3.7, but `braw`, `mts` and `wav` on
+  21.0.4.5 (`gif` gained codecs; BRAW and MTS lost them). `wav` is affected on
+  both, so an audio-only WAV deliverable remains inexpressible through
+  `SetCurrentRenderFormatAndCodec`, which rejects every value including the empty
+  string.
+- **The description-vs-id trap is re-confirmed unchanged on 21.0.4.5** —
+  `('mp4', 'H.264')` still returns False while `('mp4', 'H264')` returns True,
+  two major versions after it was first recorded. The entry now carries evidence
+  from both builds and notes that descriptions drift while ids do not.
+
+`docs/reference/api-limitations.md` regenerated from those entries.
+
+### Fixed — issue #74: titles can be placed by track and frame after all
+
+- **A native Text+ CAN be placed at an exact track and frame, and stay editable
+  — entirely through the public API.** The issue #74 entry has said for two
+  months to "accept the limitation." That was wrong about the outcome, and the
+  recommendation is replaced. `InsertFusionTitleIntoTimeline` really does take no
+  track/frame/duration and really does produce a source-less item — but it is not
+  the only door. Put the title on its **own timeline**, then place *that*
+  timeline's media pool item (`Type='Timeline'`) with `AppendToTimeline`'s
+  clipInfo `trackIndex`/`recordFrame`. Measured: lands on the requested track at
+  the requested frame, exactly.
+
+- **The text survives the nesting.** `placedItem.GetMediaPoolItem().GetTimeline()`
+  (Resolve 21.0.4+) opens the inner timeline; the Text+ there still reports
+  `GetFusionCompCount() == 1`, so
+  `GetFusionCompByIndex(1).FindTool("Template").SetInput("StyledText", …)` works
+  and persists across processes. Duration is controllable the same way —
+  `duration = endFrame - startFrame`, `endFrame` exclusive, verified at 1, 119 and
+  120 frames. It composes: a PNG plus two titles each placed by `trackIndex` into
+  one container timeline, and that container placed as a single clip, with every
+  element still individually reachable and editable through the nesting.
+
+- **Compound clips are the trap.** `CreateCompoundClip` also gives a source-less
+  title a MediaPoolItem and also places correctly — but it **severs the text**.
+  `FusionCompCount` drops 1 → 0, and `GetTimeline()` returns `None` for
+  `Type='Compound'` while working correctly for `Type='Timeline'`, so nothing gets
+  back to the Text+. Nest, never compound, when the text must stay editable.
+
+- Two constraints recorded with the route: every placed instance shares one media
+  pool item, so a text edit propagates to all of them (use one source timeline per
+  distinct card); and placements must not overlap on a track or the append is
+  silently rejected.
+
+## What's New in v2.93.2
+
+Documentation and ledger correction, validated live against DaVinci Resolve
+Studio **21.0.4.5** (version read from the running instance, not assumed).
+
+- **A false "verified live" workaround for issue #74 is withdrawn, and the real
+  mechanism is documented.** `resolve-advanced/vendor/drp-format/README.md`
+  claimed that locking the video tracks below your target redirects
+  `InsertFusionTitleIntoTimeline` to that track, and called it verified live. It
+  shipped with no test, log, or evidence file, and it contradicted the
+  `api_truth` ledger entry written twelve days earlier from an explicit test
+  matrix. A third party independently reproduced the ledger's version on
+  21.0.4.5, so the two claims were re-measured on one rig, one fresh
+  3-video-track timeline per arm so no insert could fail on a collision:
+
+  | Arm | Setup | `InsertFusionTitleIntoTimeline("Text+")` |
+  |---|---|---|
+  | A | nothing locked | lands on **V1** |
+  | B | V1 locked via `Timeline.SetTrackLock` | returns **`None`** |
+  | C | V1 locked by **clicking the padlock in the UI** | returns **`None`** |
+  | D | nothing locked, source patch dragged to V2 in the UI | lands on **V2** |
+
+  B and C are identical, which kills the standing theory that a GUI lock
+  advances the selector where the API lock does not. Locking blocks the target;
+  it never re-targets. The README claim is withdrawn as false and the ledger
+  entry — previously measured on 21.0.0 — is confirmed on the newest build.
+
+- **The destination is the patch panel, not the lock state.** Arm D is the
+  finding: dragging the source patch badge onto V2 in the Edit page sends the
+  next insert to V2. The per-track badge column in the track header is the
+  auto-track-selector toggle; the source patch badge appears only on the patched
+  track, and dragging that is what re-targets. The capability exists in the
+  application and is reachable only by GUI automation — so the request to
+  Blackmagic is read/write access to the patch panel, which is smaller and
+  better defined than adding `trackIndex` to all six `Insert*IntoTimeline`
+  methods. The route is unverifiable from the API side (nothing in the scripting
+  surface confirms where the selector landed), so read the landing track back
+  with `TimelineItem.GetTrackTypeAndIndex()` and treat a wrong track as a
+  failure. Offline, `drp place_fusion_title` remains deterministic.
+
+## What's New in v2.93.1
+
+Documentation only; no behavior changed and no Resolve validation required.
+
+- **The immediate-retake blind spot is now in the media-analysis guide.** Issue
+  #125 asked for three things; the `rank_takes` caveat and the
+  `possible_swallowed_retakes` flag shipped in v2.83.0, but the documented
+  limitation never did — the guide had zero mentions of retakes, so the only way
+  to learn that word timestamps are untrustworthy around an immediate re-read was
+  to already be looking at output that flagged one. The new section states what
+  whisper does (emits a re-read sentence once, aligns it to the first take, and
+  absorbs pause-plus-second-take into a single word), names every feature that
+  inherits it, and records why silence detection cannot substitute — the
+  swallowed span measured **−12.1 dB** against adjacent speech at −16.7 dB, and a
+  silence pass recalled **3 of 17**. It is explicit that the flag is never a cut
+  point, and that no flags is weak evidence rather than proof.
+
+## What's New in v2.93.0
+
+`source_end` is a source frame again, and the guidance v2.91.0 shipped about WAV
+frame rates was wrong. Both found by measuring rather than reasoning, live on
+Studio 19.1.3.7 with synthetic media in a disposable project.
+
+### Fixed
+
+- **`source_end` was `source_start + duration`, and that duration is a TIMELINE
+  duration.** So the sum was unit-mixed the moment the media and timeline rates
+  differed. Measured against the `endFrame` actually sent, it overshot by
+  **+24, +26, +108 and +149 frames** on a WAV counting at 24 in a 29.97 timeline
+  — and `extract_source_frame_ranges` builds pull ranges out of it, reporting
+  widths of 543 and 749 for clips that consume 435 and 600 source frames.
+  The direction was safe (a longer pull); the number was wrong, and anything
+  sizing an archive, a consolidation or a pull list inherited it.
+
+  It is now `round(GetSourceEndTime × source_fps)`. Seconds carry no frame-rate
+  assumption, so the product is a source frame by construction, and the field
+  stays **EXCLUSIVE** exactly as every caller already read it. Over 8 items in
+  both regimes it equals the `endFrame` sent every time, and it reproduces the
+  old value wherever the old value was already right — so no matched-rate
+  consumer moves, which the full suite confirms without a single existing
+  expectation changing. It falls back to the old sum only when the second-reader
+  or the rate is unreadable.
+
+- **`GetSourceEndFrame` was the obvious candidate and it is not usable raw.**
+  Measured over 12 items, it is **exclusive when the source and timeline rates
+  match and inclusive when they differ** — off by one in exactly the case a
+  caller reaches for it. Not a media-type split either: the same WAV imported at
+  29.97 into a 29.97 timeline reads exclusive like video, and only the mismatch
+  flips it. Building on it would have meant branching on a rate comparison the
+  code would first have to reconstruct.
+
+### Corrected
+
+- **A WAV is not 24 fps.** v2.91.0's ledger entry said a WAV "carries no frame
+  rate, so Resolve falls back to 24" and told callers to treat one as 24 fps.
+  That is wrong. A WAV takes the **project's `timelineFrameRate` at import** and
+  freezes it: one 400.000 s file imported at 24 reads `FPS 24.0` /
+  `Duration 00:06:40:00`, the same file imported at 29.97 reads `29.97` /
+  `00:06:39:18`, and changing the project rate after import leaves the clip on
+  its original rate. So the trap is "the project moved after import", not "audio
+  is always 24" — and a WAV imported at 29.97 has no mismatch at all. Anyone who
+  followed the old advice on such a file would have converted a correct number
+  into a wrong one. Corrected in the ledger, the `resolve-rough-cut` traps table,
+  the `probe_timeline_structure` and `create_variant_from_ranges` action help,
+  and the helper docstrings: every site now says read the rate, never assume it.
+
+### Validation
+
+- Suite: 2628 passed, 1 skipped (7 new cases covering both regimes, the rounding
+  boundaries, and each fallback). Static checks and drift guards clean.
+- Live on **Studio 19.1.3.7**, ffmpeg-generated synthetic media, disposable
+  project deleted after each run. The first measurement pass was discarded and
+  redone: it zipped `AppendToTimeline`'s return against the request list, two
+  entries came back unreadable, and the resulting misalignment looked exactly
+  like reader noise. Every number above comes from appending one range at a time.
+- **Not tested here:** Resolve 21.x, and retimed clips — there is no clip-speed
+  API to build one from, so whether the new route also fixes the retime case
+  (where the old arithmetic is wrong for the same reason) is untested.
+
+## What's New in v2.92.0
+
+Two corrections to advice this project was giving confidently and wrongly, both
+from issues filed by users who hit them.
+
+### Fixed
+
+- **`PYTHON3HOME` satisfies the macOS bridge preflight — uv/pixi/conda need no
+  `sudo`.** The preflight demanded a *framework* Python and sent everyone else
+  to a system-wide python.org install, which managed machines often forbid.
+  `uv`, `pixi` and conda-forge ship no `--enable-framework` build at all, so
+  their users got the warning no matter what they did. Reported by @rusanivsky
+  in #143, who had free Resolve 21.0.4.5 serving the bridge on uv-managed
+  CPython 3.12.13 with no python.org Python on the machine.
+
+  Framework-ness was never the variable. In `fusionscript.so` — read here on
+  Studio 19.1.3.7, a January 2025 binary — every `Python.framework` reference is
+  Python **2.7**, and there is no `Python.framework/Versions/3` string anywhere.
+  Python 3 is found through `PYTHON3HOME`, else `/usr/local/bin/python3`, then
+  probed for `sys.prefix` and dlopened as `<prefix>/lib/libpython3.X.dylib`.
+  python.org installs work because that installer creates
+  `/usr/local/bin/python3` — verified here, where it is a symlink into
+  `Python.framework/Versions/3.11`. Homebrew (`/opt/homebrew`), pyenv, uv and
+  conda land in neither place, which is the whole of the "framework Pythons
+  only" folklore.
+
+  The preflight now accepts either route and reports both. `PYTHON3HOME` is read
+  with `launchctl getenv`, never `os.environ`: Resolve is GUI-launched and
+  inherits launchd's environment, so reading our own shell would report a hit in
+  exactly the case that does not work. A `PYTHON3HOME` exported in the shell but
+  absent from launchd is called out, because it is the natural thing to try. The
+  old advice is corrected in the Lua canary, the `BRIDGE_UNAVAILABLE`
+  remediation, both READMEs and `docs/SKILL.md`.
+
+### Added
+
+- **Domain skills ask the build what it cannot do.** v2.89.0 taught
+  `get_version` to report a connected build's missing surfaces, but only the
+  session skill ever asked — an agent entering through
+  `/timeline_edit_workflow` or `/color_grade_workflow` got identical guidance
+  whatever it was attached to. That is the hole @magwa101 fell into on DR 21 in
+  #132. `resolve-edit`, `resolve-color`, `resolve-conform` and
+  `resolve-media-analysis` now name the gated surfaces in their own domain, with
+  the floor and what to do instead, sourced from `resolve_versions.VERSION_GATES`
+  rather than prose. Each section also has to say that an empty list means
+  nothing *recorded* is missing, that probes use `name in dir(obj)` and never
+  bare `hasattr` (which returns `True` for every name on a Resolve object), and
+  that *gated* is not *absent* — clip speed is unreachable on every build and no
+  upgrade will help.
+- `tests/test_skill_version_gates.py` fails when a skill quotes a floor the
+  ledger disagrees with. Confirmed it bites by mis-stating a floor and watching
+  it fail, not by trusting a green run.
+
+### Validation
+
+- Suite: 2621 passed, 1 skipped. Static checks and drift guards clean.
+- The binary strings and the `/usr/local/bin/python3` mechanism were confirmed
+  here on Studio 19.1.3.7. **Not reproduced here:** the live positive on free
+  21.0.4.5 with uv Python — that is the reporter's, and is labelled as such in
+  the code comment.
+- No Resolve scripting behavior changed; the bridge change is installer
+  preflight and advice text.
+
+## What's New in v2.91.0
+
+A timeline item's source frames are counted in the **media's** frame rate, not
+the timeline's — and a WAV carries no native rate, so Resolve reports **24** for
+it. Read back at the timeline rate a WAV offset lands minutes from the real
+position in the file, and nothing errors: `source_end` is derived as
+`source_start + timeline_duration`, so the start/end pair stays internally
+consistent whatever rate the caller assumed. Reported and measured by
+@rusanivsky in #144.
+
+### Added
+
+- **`source_fps` beside the frames.** Every timeline-item summary now carries
+  the rate its source frames are counted in, plus `source_start_seconds` /
+  `source_end_seconds`, so the frame number always arrives with its unit
+  attached. The rate is read from the media-pool item's `FPS` property, never
+  assumed; an unreadable rate reports `null` so callers see *unknown* rather
+  than a guess.
+- **The reader that produced the value is tracked**, because the two do not
+  agree on units: on an audio item `GetLeftOffset` counts in **timeline** frames
+  while `GetSourceStartFrame` counts in **source** frames — 60687 vs 75784 for
+  the same edit point. On that fallback the summary reports `source_fps: null`
+  rather than pairing a timeline-frame number with the media rate.
+- **`create_variant_from_ranges`' per-range `track_index`** — 1-based within
+  `track_type`, missing tracks added — was accepted but undocumented, so
+  multicam angles collapsed onto V1 for anyone who did not read the source. Now
+  in the action help, the action list, the example, and `docs/SKILL.md`.
+- The trap is in the `api_truth` ledger and in `resolve-rough-cut`'s verified
+  traps table.
+
+### Fixed
+
+- **`source_end_seconds` was the same unit lie the field was added to stop.**
+  `source_end` is `source_start + duration`, and that duration comes from
+  `GetDuration` — a **timeline** duration. Converting the sum at the media rate
+  compounds the very mix-up being guarded. The seconds now come from
+  `GetSourceStartTime` / `GetSourceEndTime`, which answer in seconds with no
+  rate inference at all, then from `GetSourceEndFrame / source_fps`, and read
+  `null` rather than convert the derived value. `source_end` itself is
+  unchanged — no consumer moves — but it is now annotated as unit-mixed where
+  it is assigned, in the probe action help, and in the ledger.
+
+### Validation
+
+- Suite: 2613 passed, 1 skipped. `gen_api_limitations.py --check` clean.
+- **Live on Studio 19.1.3.7** with synthetic media, which also shows the trap is
+  not a 21.x regression. A 300 s 48 kHz WAV reports `FPS 24`; appending its
+  source frames 4800–5235 to a 29.97 fps timeline yields a timeline duration of
+  **543** (= 435 × 29.97/24), so `source_end` came back **5343** where the true
+  source end is 5235 — `source_end / 24` reports **222.625 s** against a real
+  **218.133 s**, 4.49 s out on a clip 18.1 s long. The patched code reports
+  218.133 s. The matching 29.97 video item was unaffected either way (24.524 s
+  read vs 24.525 s derived). Both second-readers exist on 19.1.3.7.
+- Not tested here: the 21.0.3.7 measurements in the ledger entry, which are
+  @rusanivsky's and are labelled as such.
+
+## What's New in v2.90.0
+
+AAF turnovers parsed by `editorial.parse_interchange` on the advanced server now
+carry their animation curves, the transforms nobody had interpreted, and the
+effects that occupy record time while emitting nothing. All three were losses a
+consumer could not see, because the parse reported itself complete.
+
+### Added
+
+- **Keyframe curves ship instead of the word "varying".** A `VaryingValue` was
+  read for its values alone, and only to answer "one number or more than one" —
+  `ControlPoint.time` was never asked for, so every animated reframe reached a
+  consumer as `"varying"`: enough to refuse the clip, never enough to rebuild
+  it. Transform stages now carry `keyframes[<AvidParamName>]` and retimes carry
+  `speedCurve.playRate` / `speedCurve.sourceOffset`, each with its interpolation
+  and its points as `{t, v, frame}`.
+- **`domain` names which rule produced `frame`,** because the two curve families
+  do not share a time domain and a single conversion rule would have been wrong
+  by an effect's whole length on one of them. Measured over all 2047 control
+  points of an 878-event Avid picture turnover: transform params are normalized
+  over the effect span with the endpoint inclusive (`frame = t x (length - 1)`,
+  which lands 1243 of 1254 points on an integer frame against 278 under
+  `length`), while speed maps are already in frames. Keys outside `0..1` are
+  kept rather than clamped — 107 of 1254 sit before the first frame or past the
+  last, which is what Avid leaves when an animated clip is trimmed. A curve with
+  one unreadable point is refused whole; interpolating through a missing key
+  produces a confident wrong animation.
+- **`passthrough` stages carry the four uninterpreted transform operations**
+  (SBlend_v2, Stabilize_2, MaskImage_2, 2DMatteKey_2) that were previously
+  discarded whole — 22 events on the fixture. Their numbers travel in
+  `rawParams`, deliberately not `params`: the same parameter *name* carries
+  different units on different operations (SBlend's `DVE_POS_X_U` runs to -315
+  where Stabilize's runs to -0.92 on the same show), so there is nothing to
+  normalize, and a 2DMatteKey `AFX_POS_X_U` of 500 promoted into `params` would
+  become a ~960px shift of a clip nobody repositioned.
+- **`effectsWithoutEvents` closes a hole `unhandled` structurally cannot see.**
+  An effect can be modelled perfectly and still emit nothing — the group is
+  walked, its inputs are walked, and they contain no `SourceClip`. On the
+  fixture `unhandled` reads `{}` (a complete parse) while 29 SubCap titles
+  occupy real record time and reach the consumer as nothing whatsoever. Charged
+  once, to the innermost cause.
+- **`speedRatioFromCurve`** — the rate the offset curve itself implies, emitted
+  only when that curve is straight, so no variable timewarp is ever averaged
+  into a single number.
+
+### Fixed
+
+- **The declared AAF `SpeedRatio` rational is the source span truncated to whole
+  frames, and 7 of 18 constant retimes on the fixture disagree with their own
+  curve** — `201/112 = 1.794643` where the curve says `201.6/112 = 1.80`, and at
+  worst `31/19 = 1.631579` against a curve reading `1.70`, a 4% speed error in a
+  number an operator is handed to type in by hand. Every curve slope lands on a
+  rate an editor would actually dial (1.7, 1.8, 2.0, 0.75); every declared value
+  is that rate spoiled by rounding. Both ship under their own names and neither
+  is substituted for the other.
+- **Variable timewarps are reconstructible.** The offset curve is dense (up to
+  387 points at half-frame steps) and describes where every record frame reads
+  from, taking the 4 variable timewarps on the fixture from "flagged, rebuild
+  from nothing" to fully described — including one reverse ramp whose offset
+  runs 301.0 to -0.78. Reverse read off the curve agreed with the declared flag
+  9 of 9, in both directions.
+
+### Validation
+
+- Every pre-existing field is byte-identical on the fixture, verified by a
+  structural diff of the full 878-event parse against the previous output; event
+  count, `unhandled`, and all existing counters are unchanged.
+- 10 new tests in `resolve-advanced/test/aaf-sequences.test.mjs`.
+- No DaVinci Resolve scripting behavior changed; this is offline interchange
+  parsing, so no live Resolve validation was required.
+
+## What's New in v2.89.0
+
+The build gates this server already enforced are now gates an agent can ask
+about, and the capability probe those gates run on no longer lies. Issue #132,
+reported by @magwa101.
+
+### Added
+
+- **`get_version` reports what the connected build is missing.** A new `build`
+  block carries `unavailable_on_this_build` — every recorded API surface this
+  build does not have — plus `known_gates` and the caveat that an absence from
+  that list is not a promise a method exists. #132 happened in a session that
+  opened with `get_version` and was told a number and nothing the number ruled
+  out. `get_resolve_version_fields` gains the same list on the granular server.
+- **The version-gate registry went from 7 recorded surfaces to 41.**
+  `_requires_method(obj, "GetLayoutPresetList", "21.0.4")` appears 44 times
+  across the two servers and gates 31 distinct symbols, but
+  `check_version_support` — the call `resolve-session` step 2 tells an agent to
+  make — answered from a ledger that knew seven of them. So the one question an
+  agent is instructed to ask returned `unknown` for surfaces this server was
+  already routing on. On Studio 19.1.3.7 the session preflight named 7 missing
+  surfaces; it now names 40. The new floors are labelled `documented` rather
+  than `measured`: they come from Blackmagic's release documentation, not a live
+  bisect here, and an agent relaying one should be able to say which.
+- **`tests/test_version_gate_drift.py`** fails when a call site and the ledger
+  disagree, and when a bare method name is gated at two different builds on two
+  different classes (which would make a bare-name lookup a coin flip). A table
+  copied by hand is exactly what drifts back apart.
+- **`src/utils/resolve_probe.py`** — `has_method` and `api_constant`, with the
+  measurement behind them. A companion guard fails the suite on a bare `hasattr`
+  with a Resolve-shaped attribute name.
+
+### Fixed
+
+- **29 capability probes across `src/` used `hasattr` on Resolve API objects,
+  where it is a constant `True`** (measured on Studio 19.1.3.7 across 42 checks,
+  recorded in `api_truth`; re-confirmed live for this release —
+  `hasattr(project, 'GenerateSpeech')` returns `True` on a build that has no
+  such method). It failed in two shapes that look nothing alike:
+  - `if not hasattr(clip, "RemoveMotionBlur")` is a dead branch, so the
+    "requires Resolve 21+" refusal never fired and the call below it raised
+    `AttributeError` on an older build. Eleven of these were the granular
+    server's Resolve 21 AI guards.
+  - `getattr(r, n) if hasattr(r, n) else n` never reaches its `else`, so a build
+    without the constant got `None` where the author wrote a string fallback —
+    no exception, no refusal, just a `None` travelling on into `Export()`. This
+    reached granular timeline export and `ExportLUT`, and three constant
+    lookups on the compound server. Confirmed live: a name Resolve does not
+    define returned `None` under the old form and now falls back correctly.
+    The fallback keys on `is None`, not truthiness, because `EXPORT_AAF` is
+    genuinely `0.0`.
+- **The granular AI tools reported a missing Extras pack as success.** Resolve's
+  AI methods return the reason as a *string* when the pack is absent, and
+  `bool("Required package ... is not installed.")` is `True`. The compound
+  server has normalized that since the 21.0.2.4 measurement; the granular one
+  had not, so folder and clip audio classification returned `{"success": true}`
+  for a call that did not run, and `RemoveMotionBlur` / `GenerateSpeech` walked
+  a string into `.GetName()`. All now route through `_ai_result`, which reports
+  the failure and carries Resolve's own reason.
+- **`Project.ApplyFairlightPresetToCurrentTimeline` was recorded on `Timeline`.**
+  The shipped README lists it under Project and the server calls it there; the
+  method's name is what made the wrong attribution look right.
+
+### Validation
+
+Suite 2560 → 2580. Live-checked against the running Studio 19.1.3.7 for the
+probe semantics, the refusal path, the constant fallback, and the `get_version`
+preflight (40 of 41 gates unavailable, as expected on that build). The Resolve 21
+and 21.0.4 surfaces themselves remain untested here — this machine cannot run
+them — and the Extras-pack failure paths are pinned by a stub that reproduces
+the measured attribute-fabrication behaviour rather than by a live 21 build.
+
+## What's New in v2.88.0
+
+The twelve Resolve 21.0.4 surfaces that only existed on the compound server now
+exist on the granular one too. Issue #140, PR #142 by @legionsound.
+
+### Added
+
+- **Twelve granular tools closing the 21.0.4 delta.** `get_layout_preset_list`,
+  `get_burn_in_preset_list` and `delete_burn_in_preset`; the six
+  `*_user_preferences_preset` tools; `get_project_attributes_in_current_folder`;
+  `get_clip_timeline`; and `get_selected_timeline_items`. Each is guarded with
+  `_requires_method` at 21.0.4, so an older build gets a named version error
+  rather than an attribute crash, and each returns the same shape its compound
+  counterpart does. `get_selected_timeline_items` is deliberately not called
+  `get_selected_clips` — that name belongs to the Media Pool selection tool, and
+  the collision was the confusion the issue reported. The granular server is now
+  353 tools.
+- **`load_user_preferences_preset` carries the SESSION-WIDE warning** in its
+  docstring, matching the compound action. It swaps the user's global Resolve
+  preferences, not a project setting.
+
+### Fixed
+
+- **Four places still said 341 after the count moved to 353, and the guard that
+  exists to catch exactly that was not looking at any of them.** The literal in
+  `tests/test_import.py` was the one that bit: that file is pytest-style, so
+  `unittest discover` never collects it, and a green 2560-test run said nothing
+  while `python tests/test_import.py` — the smoke step in the publish workflow
+  and step one of the release process — failed. The other three were the startup
+  log line in `src/resolve_mcp_server.py`, `docs/install.md` (which had also been
+  quoting 32 compound tools since the compound server reached 34), and the badge,
+  server-modes table and metrics table in `README.zh-CN.md`. All six files are in
+  `test_doc_tool_counts` now, along with the English README's Tools badge, so the
+  next count change fails offline instead of at publish time.
+
+### Validation
+
+- 2560 offline tests OK; `python tests/test_import.py` exits 0; agent-rules
+  drift check in sync.
+- The twelve 21.0.4 methods were exercised live on Studio 21.0.4.5 by the
+  contributor — full round-trips for the layout, burn-in and user-preferences
+  preset families, project attributes across 8 projects, and both branches of
+  `get_clip_timeline`. `LoadUserPreferencesPreset` was deliberately not executed,
+  by them or here. The validation machine for this repo runs 19.1.3, so the live
+  results stay attributed to the reporter in `docs/reference/api-coverage.md`.
+- What could be checked live here was: against a running Studio 19.1.3.7, the
+  new tools return their named `requires DaVinci Resolve 21.0.4+` error rather
+  than crashing on a missing attribute — the guard path exercised against a real
+  Resolve object, not a stub.
+
+## What's New in v2.87.2
+
+A refused `SetSetting` now says why, when the ledger already knows. Issue #141,
+reported by @jus-kim.
+
+### Fixed
+
+- **`project_settings set_setting` returned a bare `{"success": false}` for a
+  key that can never be written.** `Project.SetSetting('timelinePlaybackFrameRate')`
+  refuses every value form, before and after a timeline exists — measured in
+  PR #99, written into `api_truth`, published in `api-limitations.md`, and
+  invisible at the one moment it mattered. A bare `false` reads as *your value
+  was wrong*, which sends a caller into retrying string, int, and float for a
+  key with no writable path at all. A refusal now carries the ledger entry for
+  that key: what is really happening, and the UI step that is the way through.
+  `timeline set_setting` gets the same treatment.
+- The match is deliberately narrow. It requires the exact quoted key on the
+  right object — `Project.SetSetting('x')` will not be handed to a `Timeline`
+  refusal, and a substring like `timeline` will not collect the
+  `timelinePlaybackFrameRate` entry. An unmeasured refusal stays bare, because
+  inventing an explanation for a failure nobody measured is the thing this
+  ledger exists to prevent. The write is always attempted first, so a key that
+  starts working in a later build reports plain success.
+
+### Documentation
+
+- **The `timelinePlaybackFrameRate` ledger entry carries the second report.**
+  Issue #141 confirms it independently on **Resolve 20.2**, against a freshly
+  created project whose timeline rate already read 60 — so a matching
+  `timelineFrameRate` does not unlock the write, which the PR #99 measurement
+  alone left open. The reporter's workaround is now recorded too: for repeat
+  setups, duplicate a project that already carries the wanted playback rate
+  rather than creating one and trying to write it.
+
+## What's New in v2.87.1
+
+Follow-up evidence from @legionsound on PR #139, plus the process fix for the
+tooling failure that PR exposed.
+
+### Changed
+
+- **`import_user_preferences_preset` now says what the preset ended up called.**
+  The no-name path was the one branch in v2.87.0 with nothing behind it — it
+  calls the single-argument binding, which would have been a `TypeError` rather
+  than a graceful failure if the binding wanted two positionals. Round-tripped
+  on Studio 21.0.4.5 (export → delete → import both ways): the single-arg form
+  returns `True`, and the imported preset is **named after the file**. The
+  answer now carries that, so a caller who passed no name knows to read the
+  name back with `list_user_preferences_presets` instead of guessing.
+
+### Documentation
+
+- **`api-coverage.md`: the import/export rows carry the round-trip**, not
+  `dir()` membership. Still 🔬 and still 23 untested of 361 — the counting
+  convention is unchanged, because none of this was executed here. What changed
+  is the strength of the contributor's evidence behind two of the rows.
+- **`AGENTS.md` now states how the API snapshot must be refreshed:** copy the
+  shipped `Developer/Scripting/README.txt` over it wholesale, never hand-add the
+  lines you already know about. A hand-patch carries a newer `Last Updated:`
+  header while hiding everything you did not know to look for — which is
+  precisely how the file sat eight weeks stale at 26 May 2026 while ten
+  documented 21.0.4 methods went unwired. The v2.87.0 snapshot was verified as a
+  wholesale replace (md5 `d732b3f6c1da08dc516bc8f80c5acd92`, byte-identical to
+  the 21.0.4.5 shipped file per the contributor).
+
+## What's New in v2.87.0
+
+The ten Resolve 21.0.4 scripting surfaces that the 24 Jul 2026 README refresh
+documented beyond the three wired in v2.86.0. Contributed by @legionsound
+(PR #139), who reported them as issues #135–#138 from Studio 21.0.4.5.
+
+### Added
+
+- **`layout_presets` gains `list`** (`Resolve.GetLayoutPresetList`). The tool
+  had six actions and every one of them took a preset name the caller had no
+  way to enumerate.
+- **`render_presets` gains `list_burnin` and `delete_burnin`**
+  (`Resolve.GetBurnInPresetList` / `DeleteBurnInPreset`). `list_burnin` is the
+  missing half of the burn-in surface: the `DataBurnIn` render setting and both
+  `load_burnin_preset` actions take a name nothing could list.
+- **`resolve_control` gains the six `*_user_preferences_preset` actions** —
+  `list`, `save`, `load`, `delete`, `import`, `export`. Two caveats are carried
+  in the docstrings and answers rather than left to be discovered:
+  `load_user_preferences_preset` is **session-wide** (it swaps the user's global
+  Resolve preferences, not a project setting), and
+  `import_user_preferences_preset` answers with the README's own caveat that the
+  imported preset is *not* auto-loaded, so a caller follows with `load` instead
+  of stopping early.
+- **`project_manager` gains `list_attributes`**
+  (`ProjectManager.GetProjectAttributesInCurrentFolder`) — `lastModifiedDate`,
+  `creationDate`, `notes`, and `liveCollaborationMode` per project in the
+  current folder, without loading any project.
+
+All ten are `_requires_method`-guarded at 21.0.4, advertised in the capability
+and preset-lifecycle probes, and covered by 21 stub contract cases in
+`tests/test_resolve2104_preset_actions.py` (answers, name-required errors,
+pre-21.0.4 guards, `_unknown` listings, capability advertisement on both a
+21.0.4 and a legacy stub).
+
+### Documentation
+
+- **`docs/reference/resolve_scripting_api.txt` was the 26 May 2026 README** —
+  which is exactly why this delta went unnoticed. It is now the 24 Jul 2026
+  text these wrappers came from.
+- **`api-coverage.md`: 351 → 361 methods**, with the ten new rows marked 🔬 and
+  carrying the contributor's Studio 21.0.4.5 results as a contributor report,
+  not as validation of ours — this machine runs Studio 19.1.3 and free 21.0.3,
+  neither of which is 21.0.4. `LoadUserPreferencesPreset` is recorded as
+  deliberately unexecuted even by the reporter, same class as
+  `DisableBackgroundTasksForCurrentResolveSession`.
+- **The README key stats were stale at 349** since the v2.86.0 surfaces landed;
+  both READMEs and the live-tested badge now read 361 covered / 338 live-tested
+  (93.6%), and the English tested-against row picks up the free 21.0.3 build the
+  coverage doc already listed.
+
+## What's New in v2.86.4
+
+The issue #132 follow-up, which turned out not to be a tool bug at all. No
+behavior changed in any tool.
+
+### Fixed
+
+- **The skills told an assistant to "route the user to the UI" and stopped
+  there, so it invented the directions.** In issue #132 a user was sent hunting
+  for a retime dropdown "in the lower left of the clip"; the keyframe tray was
+  never mentioned. That direction exists nowhere in this repo — no skill, doc,
+  or ledger entry describes where any Resolve control sits. The assistant
+  improvised the handoff and delivered it in the same confident register as the
+  API facts around it, which had been measured, so the user had no way to tell
+  the two apart. `resolve-edit` now carries the rule: **never improvise UI
+  geography.** Name the operation, say you cannot see the user's screen, and
+  treat a UI pointer already written into a skill (the playback-frame-rate path
+  in `resolve-rough-cut`) as the only kind to quote — verbatim, never extended
+  from memory. Where no pointer exists, point at Blackmagic's manual for their
+  build rather than supplying one. `resolve-rough-cut` picks up the same guard
+  at its own UI handoff.
+
+  Deliberately **not** fixed by adding the correct location. This repo verifies
+  API behavior and has no mechanism to version-guard a UI claim — every
+  `api_truth` entry is stamped with the build it was measured on because
+  unstamped claims rot, and UI geography moves between builds, pages and
+  layouts with no drift guard that would catch it going stale. The reporter hit
+  this on Resolve 21; the validation machine here is Studio 19.1.3.7, so
+  confirming a location here and publishing it for 21 would be the exact move
+  v2.82.1 exists to correct. Thanks to @magwa101 for coming back with the
+  detail that relocated the bug.
+
+## What's New in v2.86.3
+
+A Simplified Chinese phrasing fix from the reviewer who asked for it when #122
+merged. No behavior changed.
+
+### Documentation
+
+- **The Linux bridge sentence in `README.zh-CN.md` now reads as native Chinese.**
+  `直接对系统 Python 列出脚本` was translationese; it is now
+  `用系统 Python 就能直接枚举脚本`. The same sentence picks up two terms the
+  macOS paragraph three lines above was already using — `framework 版 Python`
+  (the `版` was missing) and `枚举` for script enumeration — so the two
+  paragraphs describe the same Resolve behavior with the same words. The claim
+  itself is unchanged: the issue #129 Fedora 43 report still stands behind it.
+  Thanks to @chenyuxiaojin (PR #134).
+
+## What's New in v2.86.2
+
+Two free-edition/render limitations found while trying to photograph a styled
+caption, both of the "returns success, does nothing" shape.
+
+### Documented
+
+- **Studio-gated calls on the free edition raise a modal that blocks LATER
+  calls.** The reference documents that a Studio-only function returns `False` on
+  the free edition. It does not mention that Resolve also throws a modal upsell
+  dialog, and that while it is up, *unrelated* API calls fail too. Confirmed on
+  free 21.0.3.7 over the bridge: `CreateSubtitlesFromAudio` and `TranscribeAudio`
+  each returned `False` and raised the dialog, after which `SaveProject` returned
+  `False` on every attempt until a human dismissed it. Nothing in any return
+  value names the dialog, so an automated caller sees a cascade of unexplained
+  failures and blames whatever it called next. Detect the edition first rather
+  than discovering the gate by tripping it.
+
+- **A render with `ExportSubtitle` / `SubtitleFormat: BurnIn` produced no
+  subtitles at all** — no burned-in pixels, no embedded stream, no sidecar —
+  despite `SetRenderSettings` reporting success. Recorded as an observation, not
+  asserted as a Resolve bug: an unmet precondition (a Deliver-page toggle, output
+  enablement) is equally consistent with what was seen. Either way the guidance
+  holds — verify the artifact, never the boolean.
+
+## What's New in v2.86.1
+
+Corrects `api-coverage.md` where today's live work on the free edition made it
+inaccurate.
+
+### Documentation
+
+- **`GetFairlightPresets` is now recorded as verified from both sides** — live on
+  20.3.2 Studio and 21.0.3 free, and confirmed *absent* on 19.1.3, which pins the
+  20.2.2 floor rather than assuming it.
+- **`ApplyFairlightPresetToCurrentTimeline` says what its ⚠️ actually means.** It
+  was reported as "accepts call; returns False without a named preset", which
+  reads like a quirk. The real state: it has never been exercised against a
+  genuinely saved preset, so no `True` path has ever been observed. The API
+  cannot create a preset, and `GetFairlightPresets` returned an empty map on both
+  machines, so clearing this needs a preset saved in the Fairlight UI first. The
+  entry now says so.
+- **The tested-against list includes Resolve 21.0.3 free**, reached through the
+  in-app bridge, and the notes that said the validation machine "runs 19.1.3" now
+  name both builds present.
+
+## What's New in v2.86.0
+
+The Resolve 21.0.4 scripting-API surfaces, plus a `project_db` fix found while
+validating the subtitle-style work against the free edition over the new
+automatic bridge.
+
+### Added
+
+- **The three new Resolve 21.0.4 scripting-API surfaces are wired** (PR #133),
+  with the 21.0.4 settings keys advertised in the render tool docstring.
+  `AddFrameHandles` warns when Resolve silently ignores it rather than reporting
+  a success that did not happen, and the `get_timeline` path is guarded; both
+  are covered by tests.
+
+### Fixed
+
+- **`project_db` resolved by `projectName` only ever searched the Studio project
+  library.** The free edition ships from the App Store and runs **sandboxed**, so
+  its library is not under Application Support at all — it lives inside the app
+  container, under a differently-named root (`Resolve Project Library`, not
+  `Resolve Disk Database`). Every free-edition user hit `no Project.db found`
+  and had to supply an absolute path they had no reason to know. Both roots are
+  now searched, Studio first, results deduplicated, and a miss names both paths
+  it looked in. Confirmed on free 21.0.3.7, macOS.
+
+  macOS-only by design: the sandbox container is an Apple construct, and where
+  the free edition keeps its library on Windows and Linux is not verified here,
+  so nothing is guessed for those platforms — `projectDb` still takes an
+  explicit path.
+
+### Validation
+
+- **Subtitle caption styling is now confirmed on BOTH editions.** v2.82.0 proved
+  the write path on Studio 19.1.3; it now also passes on free 21.0.3 with
+  *identical* behaviour — Resolve parses the uncompressed `0x80` payload, and on
+  its next re-serialisation of that track writes the style back as `0x81` zstd
+  with the font descriptor and position preserved exactly, dropping the same
+  neighbouring key both times. A freshly added subtitle track carries no style
+  blob on either version.
+
+- **The automatic bridge fallback shipped in v2.85.0 is confirmed live.** The
+  free edition connected with no `DAVINCI_RESOLVE_BRIDGE` set — the transport it
+  refuses outright — so the fallback is what carried the session.
+
+- **`GetFairlightPresets` works on 21.0.3**, returning a preset map. It is absent
+  on 19.1.3, confirming the 20.2.2+ floor from both sides. `apply_fairlight_preset`
+  still awaits a genuinely saved preset (issue #128).
+
+## What's New in v2.85.0
+
+The free edition now works with no environment variable at all — start the
+in-Resolve bridge and the server finds it.
+
+### Changed
+
+- **The in-app bridge is used automatically when external scripting is
+  unavailable.** Previously it was strictly opt-in: without
+  `DAVINCI_RESOLVE_BRIDGE=1` the bridge was never tried, so a free-edition user
+  who had installed and started it still got a connection error until they also
+  set a variable — a chicken-and-egg the error text had to explain.
+  `connect_resolve` now falls back to the bridge when a direct transport yields
+  nothing, including when Blackmagic's Python module is missing entirely (the
+  bridge does not need it, which is the whole reason it reaches editions the
+  module cannot).
+
+  `DAVINCI_RESOLVE_BRIDGE=1` keeps its exact previous meaning and is now a
+  *force* flag: the bridge becomes the only transport tried, so a bridge that
+  stops answering reports its own fault instead of silently degrading to another
+  path. That property is why the fallback runs *after* a direct attempt rather
+  than before — it can only engage where the old code had already given up, so
+  it cannot mask a broken bridge.
+
+### Fixed
+
+- **Five surfaces described the variable as required**, which the change above
+  turns from true into false. The worst was `scripts/doctor.py` — the tool people
+  run precisely when they are confused — reporting "the bridge is installed but
+  will not be used". Also corrected: the launcher banner every free-edition user
+  sees on startup (the one quoted in issue #109), the `install.py` post-install
+  hint, a `src/server.py` log line, and the `BridgeUnavailable` message in the
+  bridge client. English and Chinese READMEs, `docs/SKILL.md` and the session
+  skill updated to match.
+
+- **A drift guard now fails the build if that text contradicts the connector
+  again.** It rejects the specific phrasings that assert the variable is
+  required, and requires any surface naming the variable to also say it *forces*
+  the bridge — naming it without saying what it does is how the old wording read
+  as "required" while being technically true.
+
+## What's New in v2.84.0
+
+Guidance now depends on the build you are actually connected to, and the README
+speaks Chinese.
+
+### Added
+
+- **Version-aware routing** (issue #132). The scripting API changes per **patch**
+  release, so "Resolve 21" is not a label you can reason from: `GetFairlightPresets`
+  exists on 20.2.2 and not 19.1.3, and three surfaces reported in 21.0.4 are
+  absent from 21.0.2. Skills and `api_truth` previously gave identical guidance
+  whatever was connected, which is how an agent ends up insisting a method is
+  there when it is not — exactly the report in #132.
+
+  `utils/resolve_versions.py` parses the three shapes Resolve reports a version
+  in (the `GetVersion()` list, `GetVersionString()`, and prose), compares them
+  patch-precisely, and holds `VERSION_GATES` — only surfaces with evidence, each
+  tagged **measured / reported / vendor** so a relayed fact can state how strong
+  it is. All shipped gates were confirmed `dir()`-absent on live 19.1.3.7.
+
+- **`resolve_control check_version_support(symbol?, resolve_version?)`** — does
+  *this* build have that method? Omit `symbol` for every recorded gate the build
+  does not clear. **`api_truth` now takes `resolve_version`** and annotates each
+  fact with whether it was measured on an older, newer or identical build.
+  Neither ever connects: `api_truth` is the one call that still answers when
+  Resolve is down, and that is worth keeping.
+
+  Two defaults carry the weight. **`unknown` means probe, not yes** — most of the
+  API has never been version-bisected, and a false "available" is the failure
+  being fixed. And the ledger-wide `VERIFIED_ON` stamp is **never** attributed to
+  an individual fact: most entries record their real build in prose, so stamping
+  each of them would invent a measurement that never happened.
+
+- **`README.zh-CN.md`** — Simplified Chinese translation (PR #122,
+  @chenyuxiaojin), brought current rather than merged at its original v2.80.1.
+  `docs/process/release-process.md` now lists it among the surfaces every release
+  must update, naming deletion as an acceptable outcome: because the file states
+  which release it matches, going stale turns it into a false claim rather than
+  vague oldness — and no CI check can catch that, since a lagging translation is
+  still valid Markdown.
+
+### Changed
+
+- **The skills ask the build before promising a capability.** `resolve-session`
+  gains a step that asks what the build *cannot* do before any project or
+  timeline is read, and reports both the Resolve build and `mcp.version` — a
+  running server keeps executing the version it started with, so `git pull` does
+  not refresh its ledger until restart. `resolve-audio`, `resolve-delivery`,
+  `resolve-edit` and `resolve-media-pool` each carry the specific gate that bites
+  them rather than a generic reminder; `resolve-color`, `resolve-conform` and
+  `resolve-fusion` deliberately get nothing, since no gates are recorded for them.
+- `resolve-edit` now states plainly that **there is no clip-speed API at any
+  version** — `set_retime` sets retime *quality* and returns `True` for doing so,
+  which is the misread behind #132.
+
+### Fixed
+
+- **An `api_truth` entry that had been UNRESOLVED is now partly settled**, because
+  writing the probe advice required knowing what a probe actually does. The entry
+  asked for five real borrowed method names to be re-run; done on 19.1.3.7 over
+  the direct connection, 42 checks across seven object types. No fabrication —
+  every one was `getattr`-callable `False` and `dir()`-absent, agreeing in all 42
+  cases. The same run showed **bare `hasattr()` returns `True` for every name on
+  every Resolve object**, real or invented: it is not a weak probe, it carries no
+  information at all. Bridge-side fabrication remains untested, so the
+  `dir()`-membership recommendation stands.
+
+## What's New in v2.83.0
+
+Transcript-reading features now say what they cannot see, and the clip-colour
+work that shipped undocumented in v2.82.1 is written down.
+
+### Added
+
+- **`possible_swallowed_retake` flags on `plan_transcript_tighten` and
+  `rank_takes`** (issue #125, measured by @chenyuxiaojin). When a speaker
+  re-reads a sentence immediately, whisper emits the text **once**, aligns it to
+  the first take, and absorbs "pause + entire second take" into the duration of
+  a single word. Every transcript-reading feature inherits that: the plan cannot
+  propose removing a restart it was never told happened, and fluency scoring
+  ranks a take that stumbled and recovered above one that did not. Energy
+  detection cannot cover for it either — in the original measurement the
+  swallowed span peaked at **-12.1 dB against adjacent real speech at -16.7 dB**,
+  so `silencedetect` recalled 3 of 17 instances at any threshold.
+
+  The detector is one absolute bar: any word longer than 1.2s. That is
+  deliberately dumber than two designs that were tried and measured on English
+  material first. A characters-per-second gate — which worked on the original
+  Chinese — fires on **0 of 50** English segments, so it is retired rather than
+  made configurable. Scoring each word against the distribution of its *own*
+  durations elsewhere in the take missed the swallow entirely and produced 8
+  false positives, all function words, for a structural reason worth keeping:
+  the words that absorb retakes are content words, and content words are rare
+  within a single take, so they never accumulate a distribution to score
+  against. The plain bar found exactly one stretched word in 191.5s and it was
+  the swallow point.
+
+  It emits a flag and never a cut point, because where inside the stretched word
+  the second take begins is exactly what the swallow destroyed. The English
+  confirmation rests on **n=1** in synthetic material; the Chinese measurement it
+  generalises from had 17 real instances.
+
+- The `rank_takes` caveat now states the undercount directly rather than leaving
+  it to be discovered.
+
+### Changed
+
+- The `SetClipColor` `api_truth` entry records the sharper form of the trap
+  (@chenyuxiaojin): it is not that a decoy vocabulary exists, it is that the
+  decoy **half-works**. Five names live in both palettes, so probing from the
+  marker constants scores 5 of 16 — which reads as an unreliable API rather than
+  as a wrong vocabulary. A clean 0-for-8 would have exposed the mechanism at
+  once.
+
+### Note on v2.82.1
+
+The clip-colour fix described below shipped **in v2.82.1**, whose release notes
+described only the subtitle-style version correction. The code was correct and
+released; only its documentation was missing. Recorded here rather than by
+rewriting a published release.
+
+## What's New in v2.82.1
+
+Corrects the Resolve version the v2.82.0 subtitle-style validation was actually
+run against — and, undocumented at the time, fixes `SetClipColor`.
+
+### Fixed
+
+- **`SetClipColor`'s value space, enumerated live** (issue #124, reported by
+  @chenyuxiaojin). The accepted set is exactly the 16 Edit-page clip colours —
+  Orange, Apricot, Yellow, Lime, Olive, Green, Teal, Navy, Blue, Purple, Violet,
+  Pink, Tan, Beige, Brown, Chocolate — and it is **identical on `TimelineItem`
+  and `MediaPoolItem`**, which the report flagged as unmeasured. Everything else
+  is refused with a bare `False`, the empty string included. The scripting
+  reference documents `colorName` as a bare string with no enumerated values
+  while exporting the *marker* palette as constants, so the only colour
+  vocabulary reachable from the API surface is the wrong one.
+- **A second failure the report did not contain: on generator and title items
+  `SetClipColor` returns `True` and the colour does not persist.** `GetClipColor`
+  still reads empty immediately after. A media-backed item on the same timeline
+  in the same session persists correctly, so the bool is honest for some items
+  and a lie for others with nothing in the return value to separate them.
+- All three call sites now read the colour back instead of returning the bare
+  bool, and a refusal names the measured-valid set. The set is deliberately
+  **not** enforced: it was measured on one build, and hard-rejecting an unlisted
+  name would turn a working call into a failure on a Resolve we have not seen.
+
+- **v2.82.0 claimed the subtitle-style write path was confirmed on Resolve 21.
+  It was confirmed on Resolve Studio 19.1.3.** The validation itself stands —
+  Resolve opened the patched track and re-serialised it to its own zstd form
+  with the patched values intact — but it was run against 19.1.3, which is the
+  build that was installed. Corrected in `api_truth`, the codec header, and the
+  changelog. If anything this widens the supported range rather than narrowing
+  it, but the version on the claim has to be the one actually tested.
+- **`GetFairlightPresets` / `ApplyFairlightPresetToCurrentTimeline` require
+  Resolve 20.2.2+**, now recorded in the `api_truth` Fairlight entry. On 19.1.3
+  both are absent (confirmed live), so on older builds the per-parameter gap
+  really is the whole story and the preset workaround is unavailable.
+
+## What's New in v2.82.0
+
+Caption styling, which the scripting API cannot touch at all, is now readable
+and writable — plus a correction to a claim this repo was about to send to
+Blackmagic.
+
+### Added
+
+- **`project_db list_subtitle_styles` / `set_subtitle_style`** — read and patch
+  the caption style on a subtitle track: font family, point size, weight,
+  italic, and normalised on-screen position. The scripting API exposes none of
+  this (subtitle `TimelineItem`s return only the 21 transform/composite
+  properties, and every `subtitleFontName`/`subtitlePreset`-shaped setting key
+  returns `None`), but the style is persisted in `Sm2TiTrack.FieldsBlob` for
+  `Type = 2` tracks: a keyed-dict holding an `EffectFiltersBA` payload whose
+  effect 136 carries a Qt `QFont::toString()` descriptor (param 18) and a
+  position vector (param 17). New codec at
+  `resolve-advanced/vendor/drp-format/subtitle-style.js`.
+
+  Verified live on Resolve Studio 19.1.3 (2026-08-06): a patched track opens without error
+  and, once Resolve next re-serialises it, is written back out in Resolve's own
+  zstd form with the patched values intact — so Resolve genuinely parses the
+  write rather than passing the bytes through. Read side verified against a
+  real project carrying 12 subtitle tracks.
+
+  Caveats, all reported by the tool: this is a whole-**track** style and not
+  per-caption, the project must be CLOSED, Resolve must be fully quit and
+  relaunched afterwards, and the track must already carry a style blob — a
+  freshly added subtitle track has none until it is styled once in the UI.
+
+  Only the font descriptor and position are named. The neighbouring parameters
+  vary across real projects but have not been correlated against the UI, so
+  they round-trip untouched and are reported as opaque rather than guessed at.
+
+### Fixed
+
+- **The `api_truth` Fairlight entry claimed more was missing than actually is.**
+  It read "only voice-isolation state and channel-mapping reads are scriptable",
+  which omits `Project.ApplyFairlightPresetToCurrentTimeline(name)` — already
+  exposed as `project_settings apply_fairlight_preset`, with the names coming
+  from `resolve_control get_fairlight_presets`. The real gap is *per-parameter*
+  control (volume/pan/EQ/automation/FairlightFX), not the whole surface. Since
+  this text generates `docs/reference/api-limitations.md`, the incorrect claim
+  was headed for the Blackmagic submission. The subtitle-styling entry got the
+  same treatment: it claimed no workaround existed, which the above now closes.
+
+### Documented
+
+- **AI Audio Assistant has no scripting method** — logged with the reason, which
+  is *not* that it is a menu command: the API has no generic menu-invocation
+  hook, so scriptability is per-feature, and `DetectSceneCuts`, `Stabilize`,
+  `SmartReframe` and `TranscribeAudio` are all menu commands that do have
+  methods. For a repeatable mix, save the Assistant's result as a Fairlight
+  preset once and apply it per-timeline (issues #127, #128).
+
+## What's New in v2.81.0
+
+One render bug where every readback agreed and the file disagreed, plus the two
+community skill contributions that were open against it.
+
+### Fixed
+
+- **`prepare_render_job` inherited the Deliver page's loaded preset, and could
+  queue an mp4 that rendered with no video stream** (issue #123, reported with
+  a full measurement by @chenyuxiaojin). `SetRenderSettings` applies the keys a
+  caller passes *on top of* whatever render state the Deliver page is holding
+  rather than replacing it, and a loaded preset carries more state than those
+  keys. Measured 2026-07-08: after an MP3 render through the stock **Audio
+  Only** preset, a job queued with an explicit `ExportVideo: true` and an `.mp4`
+  target returned `settings_success: true` and a real `job_id`, `list_jobs`
+  reported `IsExportVideo: true`, and the rendered file held only an AAC stream.
+  The single visible tell was 18 minutes of material "rendering" in ~10 seconds.
+
+  No caller-side check could have caught it, and the reason is worse than the
+  bug itself: the scripting API documents neither `GetRenderSettings` nor
+  `GetCurrentRenderPresetName`, so the inherited state cannot be read at all.
+  Detection is unreachable; only pinning is.
+
+### Added
+
+- **`from_preset` on `prepare_render_job`** (and through
+  `prepare_delivery_job`) runs `LoadRenderPreset` before the explicit settings
+  go on top, so a caller pins the base state instead of inheriting one.
+  `PresetName` flipping to `Custom` once the explicit settings land is expected.
+  The name is validated against `GetRenderPresetList` first, because
+  `LoadRenderPreset` refuses an unknown name with a bare `False` that is
+  indistinguishable from any other refusal — and a `False` of either kind now
+  refuses to queue rather than falling through to an inheriting render.
+- **An inherited-state warning** when a job asks for `ExportVideo: true` without
+  a pin, naming the risk and saying plainly that the job readback is not a
+  witness for the rendered file — verify a `codec_type=video` stream before
+  reporting a deliverable. The `before` snapshot now also reports
+  `settings_readable: false` and what is unreadable, instead of leaving the gap
+  unnamed.
+- **`resolve-tighten-recording` skill** (PR #126, @chenyuxiaojin) — the
+  subtractive counterpart to `resolve-rough-cut`: one long single-take recording
+  in, a tightened variant timeline out, original untouched. Measured live
+  against Studio 21.0.1.11 on a real 28.5-minute recording. Its centerpiece is
+  the coordinate-system trap between plan `keep_ranges` (source frames,
+  exclusive end) and `structural_diff.added` (record frames) — feed one where
+  the other is expected and every clip lands at the wrong moment of the right
+  file, with correct cut lengths and no error. Also documents the three classes
+  of content silence-driven tightening cannot hear, including the whisper
+  swallowed-retake blind spot (issue #125).
+
+### Changed
+
+- **`resolve-rough-cut` reconciled with the `api_truth` ledger** (PR #115,
+  @bolnet). Two rows contradicted the ledger the skill itself points at. Import
+  order was backwards — `ImportMedia` has no destination parameter and always
+  lands in the *current* folder, so the bin must be created and made current
+  *before* importing. And the traps table still asserted that a comp attached to
+  a media clip "never renders", a blanket claim the ledger retracted on
+  2026-08-02: a comp wired `MediaIn → Blur → MediaOut` does render, and an
+  unrooted `MediaOut` fails the render job outright rather than being silently
+  bypassed. Every row now names the build it was confirmed on, and a note
+  records that a **running** MCP keeps executing the version it started with, so
+  `git pull` does not refresh the ledger until restart.
+- The skill index in `docs/README.md` now lists the two end-to-end assembly
+  recipes (`resolve-rough-cut`, `resolve-tighten-recording`), neither of which
+  had ever appeared there, and `resolve-edit` points at the tighten skill.
+
+## What's New in v2.80.2
+
+Agent tooling only. Ten Claude Code skills that this repository has shipped and
+advertised were never loading; they load now. No runtime behavior changed and
+nothing under `src/` was touched.
+
+### Fixed
+
+- **The ten `.claude/skills/` domain skills were invisible to every agent.**
+  Claude Code discovers skills at `.claude/skills/<name>/SKILL.md`. All ten were
+  loose `.md` files at the top level of that directory — a layout the loader
+  does not scan — so `resolve-color`, `resolve-edit`, `resolve-conform`,
+  `resolve-delivery`, `resolve-audio`, `resolve-fusion`, `resolve-media-pool`,
+  `resolve-media-analysis`, `resolve-rough-cut`, and `resolve-mcp` never
+  appeared in a session, while the generated domain-routing block in `AGENTS.md`
+  and the index in `docs/README.md` both listed them as available. The failure
+  was silent: no warning, no error, no degraded mode. Each skill now lives in a
+  directory named for its frontmatter `name` (recorded as 100% renames, so
+  history follows), and both `docs/README.md` and
+  `scripts/agent-rules/README.md` — the file consulted when authoring a new
+  skill — state the directory requirement so the next one is not written back
+  into the bug.
+
+### Added
+
+- **Two opt-in `PreToolUse` guard scripts** for rules `AGENTS.md` has only ever
+  stated in prose. They ship as scripts and are deliberately *not* wired
+  repo-wide; `docs/README.md` carries the block to paste into a personal
+  gitignored `.claude/settings.local.json`. `frame_verification_guard.py`
+  refuses grade-applying actions on `timeline_item_color` until the session has
+  actually looked at a Resolve-rendered frame, and asks before `safe_copy_grade`
+  / `bulk_match_to_hero` push a whole-grade artifact across clips; `dry_run`
+  passes through. `source_media_guard.py` refuses shell commands that write,
+  move, or delete source media outside a scratch root — paths are normalized and
+  matched by whole path component, and a derivative-output directory
+  (`proxies`/`renders`/`exports`) exempts a *write* but never a delete or a
+  move, so a camera card with an `exports` folder is still a camera card. Its
+  docstring states what it cannot catch — extension-less directory deletes,
+  `find -delete`, `xargs rm`, and scripts that write media themselves — because
+  it is a tripwire for the common direct mistake, not a sandbox.
+- **Two review subagents** in `.claude/agents/`, run in their own context so
+  frame images stay out of the main session. `cut-reviewer` screens an assembled
+  timeline from its frames and is told explicitly that a metadata summary is not
+  a review, because assembling through an API succeeds loudly and fails quietly.
+  `grade-match-verifier` measures shot match numerically against the project's
+  R−B tolerance and must report the pixel count behind every masked
+  measurement — a near-empty skin mask returns a delta near zero and reads as a
+  perfect match.
+- **Two skills outside the domain routing.** `house-style` accumulates editorial
+  corrections so the same note is not given twice, and `/resolve-session`
+  reports connection, edition, project, timeline, and media-pool state before
+  editing begins.
+
+### Validation
+
+- Full offline suite: 2460 passed, 1 skipped — level with the v2.80.1 baseline,
+  as expected for a change that touches no runtime code.
+- Both guard scripts exercised against a 26-case matrix covering deny, ask, and
+  silent-allow: `ffprobe` reads, `ffmpeg` into scratch, `ffmpeg` overwriting a
+  card, chained `ffprobe && rm`, redirection onto a media file, glob `rm`,
+  quoted paths, writes into `renders`/`proxies`/`exports`, deletes out of those
+  same directories, `..` traversal, and ordinary repo commands (`git status`,
+  the test runner, `npm run build`).
+- No live Resolve validation: no behavior changed.
+
+## What's New in v2.80.1
+
+A correction to the retime measurement contract published in v2.80.0, and a fix
+for a documented timecode conversion that never happened.
+
+### Fixed
+
+- **`timeline_markers.set_current_timecode` now honors the documented
+  elapsed-timecode conversion.** The tool doc has always said timecodes before
+  the timeline start are treated as elapsed time and converted automatically —
+  but only marker actions did the conversion. `set_current_timecode` passed the
+  raw string to `Timeline.SetCurrentTimecode`, which refuses sub-start
+  timecodes with a bare `False` and no error info (measured on Studio 19.1.3.7:
+  on a timeline starting `00:59:50:00`, `00:00:21:03` failed while
+  `01:00:11:03` succeeded). The wrapper now lifts elapsed timecodes by the
+  start frame — `00:00:21:03` lands the playhead at `01:00:11:03` — with
+  drop-frame-correct formatting on DF timelines. Absolute timecodes and strings
+  the parser cannot read pass through unchanged. Marker `add()`'s conversion
+  was re-verified live on a non-zero-start timeline (elapsed `00:00:21:03` →
+  relative frame 507) and was already correct.
+
+### Documentation
+
+- **🚩 Correction to v2.80.0's retime witness — the recommended instrument
+  cannot see retimes.** The v2.80.0 retime entry recommended reading
+  `GetLeftOffset`/`GetRightOffset` to tell whether a retime was built. A
+  calibration with the confound removed (the SAME clip twice in ONE timeline,
+  one copy hand-set to 200%, Studio 19.1.3.7) proves that pair reads the
+  WARPED domain — position ÷ speed, span always equal to the record span — so
+  it is exact for placement and structurally blind for speed. The corrected
+  entry installs the calibrated model: judge speed by the
+  `GetSourceStartFrame`/`GetSourceEndFrame` span vs the record duration (the
+  200% copy read span 96 vs 48; a 0/0 read on xmeml-imported timelines is
+  UNKNOWN, never "no retime"), cross-checked by the `Sm2TimeMap` slope in a
+  saved Project.db or the `EXPORT_EDL` M2 rate.
+- **Two import routes DO build constant retimes**, now documented with their
+  emission rules: OTIO `LinearTimeWarp` through `ImportTimelineFromFile` (200%
+  and 50% measured; `source_range.duration` is the RECORD span — the
+  `time_scalar` handles source consumption; source frames timecode-absolute)
+  and EDL `M2` in the exact shape Resolve's own `EXPORT_EDL` writes (200%
+  measured; event-line source span equals the record span; `* FROM CLIP NAME:`
+  drives linking). Reverse and varying-speed maps remain untested as import
+  routes and the entry says so.
+- `docs/reference/api-limitations.md` regenerated; the `GetSourceStartFrame`
+  off-by-one entry now scopes its GetLeftOffset advice to 100%-speed placement.
+
+### Validation
+
+- Full offline suite: 2460 passed, 1 skipped (up exactly the 7 new tests from
+  the 2453 baseline).
+- Live Resolve Studio 19.1.3.7: new
+  `tests/live_playhead_timecode_validation.py` harness — raw refusal control,
+  elapsed lift to `01:00:11:03`, absolute pass-through, and marker add() at
+  relative frame 507 all verified against a disposable project.
+
+## What's New in v2.80.0
+
+Three community PRs from @staahlarkitektur, all found on Windows, all real. Each is merged with
+its diagnosis intact and a fix on top for what the patch didn't reach.
+
+### Added
+
+- **`background=true` now actually runs the analysis.** `background`/`async_job` were accepted on
+  `analyze_clip` / `analyze_bin` / `analyze_file` / `analyze_project` / `analyze_sequence` and
+  silently ignored — the call ran the whole analysis inline and returned no `job_id`, which from
+  the caller's side is indistinguishable from a hang (#119). The two async opt-ins are now
+  distinct and both do what their names say:
+  - `prefer_handle=true` — creates the durable batch job and hands it back **queued**. Nothing
+    runs until you call `run_batch_job_slice`. Unchanged contract.
+  - `background=true` / `async_job=true` — creates the job **and drives it to completion
+    off-thread**, matching what `background` means on every other tool in this server. Poll
+    `batch_job_status` until `completed` / `completed_with_errors` / `canceled`.
+
+  Aliasing the two, as the PR proposed, would have replaced one silence with a quieter one: a job
+  that nothing ever advanced, polled forever. The runner deliberately does **not** hold the
+  Resolve busy gate — analysis drives ffmpeg, whisper and vision over file paths and touches the
+  scripting bridge nowhere, so holding it for an hour of transcription would lock the editor out
+  for nothing. A process-wide slice lock bounds the real cost instead: queued analyses interleave
+  a clip at a time rather than starting N ffmpeg passes at once.
+
+### Fixed
+
+- **A timeout could take 82 seconds to report a 5-second limit.** `subprocess.run(timeout=...)`
+  kills only the direct child. On Windows a bare-name PATH lookup can resolve to a shim
+  (Chocolatey, npm, a pip console script) that runs the real work as a grandchild, so the kill hit
+  the wrapper while the real `ffmpeg` kept running — and the follow-up read blocked on the pipe
+  handles it had inherited. Measured on a Chocolatey-managed machine: `ffmpeg` on PATH was a 392KB
+  shim, and a 5s timeout against an ~82s pass returned after the full 82s with "timed out after
+  5s" attached to complete, correct output (#120). `_run_command` now spawns via `Popen` in its own
+  session/process group and kills the whole tree. Beyond the PR: the kill helper no longer raises
+  (`killpg` returns EPERM, `taskkill` can be missing from PATH — either escaped and broke the
+  return contract mid-failure), the read after the kill is bounded and says so when it gives up
+  rather than hanging on a survivor, and a cancellation mid-run kills the tree instead of orphaning
+  it. Fixes every `_run_command` caller at once — the whisper CLI and every ffmpeg pass in
+  `_readthrough_analysis`, `silence_ripple`, and `deep_vision`.
+- **The whisper CLI inherited a `PYTHONHOME` that killed it.** `PYTHONHOME`/`PYTHONPATH` point this
+  server at Resolve's bundled Python so `DaVinciResolveScript` imports. Inherited by a child that
+  is itself a *different* Python, they corrupt its stdlib resolution — and whisper's CLI is exactly
+  that. Measured: whisper on 3.14 inheriting a 3.10 `PYTHONHOME` dies on `AssertionError: SRE
+  module mismatch` (#118). The whisper subprocess now gets a scrubbed environment. This is the
+  **shipped Windows configuration**, not a local quirk: `install.py` writes `PYTHONHOME` into
+  generated client configs (issue #26) and `server.py` sets it on Windows whenever it isn't
+  already set, so every Windows install hands a foreign `PYTHONHOME` to every child it spawns.
+
+### Corrected in the merged PRs
+
+- The documented async return shape was wrong — `{job_id, status}` was advertised, the real
+  envelope is `{success, job, plan}` with the id at `job.job_id`. Now documented as it is, plus
+  `running` and a `note` naming the next call so the queued and running routes can't be confused.
+- The async divert ran *after* `dry_run` was resolved from the `dry_run_first_default` preference,
+  so a user with that preference on still got `background=true` swallowed in silence. An explicit
+  `dry_run` still wins; an inherited one no longer does.
+- A code comment attributed the whisper failure to a silent stall with an ffmpeg child at 0% CPU —
+  a diagnosis the PR's own description retracted, and one that belongs to the shim problem above.
+
+## What's New in v2.79.2
+
+A published contract was **wrong**. This release corrects it. If you read the retime entry in
+v2.79.0 or v2.79.1 and built anything on it, read this.
+
+### Corrected
+
+- **The `Clip speed / retime ratio and speed ramps` entry stated a rule that does not exist,
+  and missed the hazard that does.** The interchange half of that entry claimed *"any
+  `<in>`/`<pproTicksIn>` inconsistency is silently REJECTED, measured in BOTH orientations."*
+  **That claim is false and has been removed.** It came from an emitter that wrote
+  `ticks = in × ticks-per-frame` at every speed — so what it measured was its own malformed
+  files being refused, not a rule of Resolve's importer. In a real Premiere FCP7 export a
+  retimed clip's `<in>` and `pproTicksIn` are *supposed* to disagree, by exactly the speed
+  ratio: `<in>`/`<out>` are the post-retime (warped) domain and span the **record** duration,
+  `pproTicksIn/Out` carry the **true source** position, and `<duration>` is the file length in
+  the warped domain. The entry now states that convention with the tick arithmetic shown
+  (254016000000/24 = 10584000000 ticks per frame), and notes that
+  `resolve-advanced/server/prproj.mjs` already derives Premiere speed from the same tick
+  geometry.
+- **The graphdict evidence has been replaced.** The "dead in FOUR separate shapes / 0 of 2
+  landed" table and the "200% clip emitted `in 200 / out 296` clamped to `out 248`" line
+  described that same malformed input being normalized, and did not support the conclusion
+  they were cited for. Re-tested on 19.1.3.7 in Premiere's actual convention — one 100%
+  control clip plus one 200% clip per timeline — the document imports, the control lands
+  correct, and the retimed clip reads back `src 1500..1548`: a 48-frame source span over a
+  48-frame record span, i.e. no retime. Identical result with the graphdict removed. **The
+  conclusion is unchanged** — the scripting-API xmeml import builds no retime — only the
+  evidence behind it.
+- **The real hazard, previously absent, is now documented.** **Resolve reads `<in>` literally
+  as the true source frame**, honouring neither the ticks nor the graphdict. So importing a
+  genuine Premiere XML that contains retimes places every retimed clip at `in ÷ ratio` — the
+  200% clip above lands on source frame 1957 instead of 3914. No error, cut lengths still
+  correct, every clip linked and online, timeline renders. It reads as a good conform while
+  sitting at the wrong moment of the right file — the same failure class as the Avid AAF
+  camera-file link, and `docs/guides/conforming-an-avid-aaf.md` now cross-references it.
+- **The claim is scoped honestly.** All of it describes the **scripting-API** import
+  (`ImportTimelineFromFile`). Resolve's **UI** importer (File > Import > Timeline) is
+  **untested**, and that is how editors usually conform a Premiere XML — the entry no longer
+  implies otherwise. The existing "no positive control" caveat is kept: no clip *known* to be
+  retimed has been read back through `GetLeftOffset`/`GetRightOffset`, because there is no
+  scripting path to create one.
+
+The `SetProperty`/`GetProperty` half of the entry was re-measured on 19.1.3.7 and is
+unaffected. `docs/reference/api-limitations.md` is generated from `src/utils/api_truth.py` and
+was regenerated.
+
+### Validation
+
+- `gen_api_limitations.py --check`, `test_api_limitations_doc`, static/drift guards,
+  `audit_api_parity.py`, agent-rules drift, `--help`/`--version`, `npm pack --dry-run`,
+  `git diff --check`: clean.
+- Docs-only; no code path changed, so no live Resolve validation was required.
+
+## What's New in v2.79.1
+
+One redirect that was never written, in a dispatcher whose other container formats all have one.
+
+### Fixed
+
+- **`parse_interchange` told `.drt`/`.drp` callers the format was unknown — for formats the
+  same package parses.** `parseInterchange(format, content)` gives AAF and `.prproj` explicit,
+  helpful redirects to their path-based readers, but `drt` and `drp` had no case at all and
+  fell through to `unknown format 'drt' (edl|otio|xml|xmeml|fcp7|aaf|prproj)`. Meanwhile
+  `list_sequences` in the same cluster parses both by path, and the tool description advertises
+  it. So the cluster supports DRT, documents that it supports DRT, then tells the
+  content-shaped caller it does not. The failure is silent downstream: a consumer that reads
+  "unknown format" (or hands `{ content }` to `drt.parse`, whose schema wants `{ drtPath }`)
+  records **zero events**, and an empty sequence is indistinguishable from an unsupported one.
+  `parseInterchange` now throws the same shape of redirect the AAF and `.prproj` cases throw —
+  naming the ZIP container, `parseDRT(path)`, and the two callable entry points — and the
+  `default:` message lists `drt|drp` among the known formats. The `editorial`
+  `parse_interchange` schema accepts `drt`/`drp` so the tool-level caller gets that redirect
+  instead of a bare enum rejection, and `drt.parse` / `list_sequences` / `validate` now name
+  the path argument they wanted rather than emitting a raw zod issue dump.
+
+### Validation
+
+- `resolve-advanced` suite: 778 tests, 748 pass, 30 skipped, 0 fail (4 new assertions, written
+  first and confirmed failing on v2.79.0).
+- Static/drift checks, `--help`/`--version`, `npm pack --dry-run`, `git diff --check`: clean.
+- No Resolve behavior changed; this path never touches the Resolve API, so live validation was
+  not required.
+
+## What's New in v2.79.0
+
+Six silent failures in the conform path, found by conforming a real Avid picture turnover
+and cross-checking every step against Resolve's own behaviour on 19.1.3. The common shape:
+a call that reports success, or reports nothing at all, and leaves you with a timeline you
+believe is right.
+
+### Fixed
+
+- **`convert_to_interchange` promised speed survives the DRT target. It does not.** The DRT
+  spec builder read four fields per event — start, duration, in, mediaFilePath — and never
+  read `speed` or `reverse`. One level down is why: the DRT clip schema has no per-clip speed
+  field at all, so there is nothing to write a retime into. A 200% clip and a reversed clip
+  both landed at 100% forward and the caller was told the conversion succeeded — inside the
+  module whose own description opens by naming "flattened retime → flag, skip-not-fake" as
+  its guarantee. Since carrying speed through was not available, the `drt` target now returns
+  **`flattened`**: one entry per retimed or reversed event, with its index, recIn, speed,
+  reverse, source and reason. It is always an array (empty when there are no retimes), so a
+  caller can tell "none to lose" from "this build is too old to report". `otio` (LinearTimeWarp)
+  and `edl` (M2) still carry retimes and are now named as the targets to use for a cut that
+  has them.
+- **The vendored FCP7 emitter produced XML that Resolve 19.1.3 imports as nothing.** Three
+  defects, all failing the same silent way — a clean-looking file and a Resolve that does
+  nothing. (1) The file def had no `<timecode>` element; Resolve rejects the ENTIRE import
+  over one absent block, not the one clip. (2) `<pathurl>` got XML escaping where it needed
+  URL escaping, now percent-encoded per segment so `/` separators survive. (3) The sequence
+  had no `<rate>`, which bisection showed was the single element standing between "no
+  timeline" and a working import. Because a *wrong* timecode block is as fatal as a missing
+  one, the emitter never guesses: clips whose media timecode is unknown emit no block and are
+  reported through `fcp7TimecodeCoverage()`, which `buildPackage` attaches as `fcp7Timecode`
+  with an `importable` flag.
+- **Importing a timeline into the never-saved `Untitled Project` silently no-opped.** Resolve
+  accepted the call, created nothing, and named no cause; the generic "Resolve created no
+  timeline" error that came back pointed at missing media and `sanitize_media` — the wrong
+  road, because the file is fine. `import_timeline_checked` now refuses before the call with
+  a remediation naming the project state. **Behaviour change:** a call that previously
+  returned a generic error now refuses earlier with a different message. The refusal is hard
+  and has no override flag, because the call cannot succeed either way.
+- **OTIO authored by `convert_to_interchange` would not import into Resolve.** Filed as a
+  scripting-API limitation; it was not one. Exporting a timeline with `EXPORT_OTIO` and
+  feeding Resolve's own file back proved the API imports OTIO fine — what it refuses is a
+  document that is valid OTIO but not Resolve-shaped. The decisive requirement is that source
+  frames be **timecode-absolute**: media starting at 01:00:00:00 has an available range at
+  frame 86400, and 0-based source offsets put the clip outside it. The emitter now mirrors
+  Resolve's own shape (Clip.2 with a `media_references` map, `available_range`, bare
+  `target_url`, `global_start_time`) and takes each event's origin via `mediaStartTcFrame` or
+  an absolute `srcTcFrame`. Events whose origin had to be assumed come back in
+  **`mediaOriginAssumed`** rather than producing a file that imports as nothing.
+- **`.otio` failures were misdiagnosed as missing media.** A `.otio` is JSON, so the
+  sanitize/relink pass cannot parse it and its advice never applied. `sanitize_media` is now
+  N/A for `.otio` as it already was for `.aaf`, and the no-timeline remediation names the
+  document's shape and the frame origin instead.
+
+### Documentation
+
+- `api_truth`: the retime entry now records that **the read side is as dead as the write
+  side** — `GetProperty('Speed'|'PlaybackSpeed'|'RetimeSpeed'|'ClipSpeed')` all return None on
+  19.1.3.7, and the keyless property dict carries no speed value at all. It also records that
+  the interchange route is closed (scalar speed filter ignored, `graphdict` dead in four
+  shapes, `reverse` dropped, in↔pproTicks inconsistency rejected in both orientations) and the
+  trap that makes it expensive to find: Resolve's own FCP7 export writes a degenerate Time
+  Remap, so `EXPORT_FCP_7_XML` cannot witness a speed. Each claim now says which Resolve
+  version it was measured on.
+- `api_truth`: **`AppendToTimeline` does not overwrite an overlapping record** — the earlier
+  item wins and the later append is dropped, leaving a silently short timeline.
+- `api_truth`: **placements from an errored append chunk are not durable across a save** — a
+  timeline verified at 573 items held 500 afterward. Every in-session read agrees with the
+  wrong number; only a post-save read catches it.
+- `api_truth`: `CreateTimelineFromClips`' clipInfo has **no track field** while
+  `AppendToTimeline`'s does, with the empty-timeline + `add_track` + per-clip append workaround.
+- `api_truth`: what Resolve's OTIO importer actually requires, and how to debug a refusal by
+  diffing against an `EXPORT_OTIO` file.
+- **New guide — `docs/guides/conforming-an-avid-aaf.md`.** Three Resolve-native mechanisms
+  measured against one real turnover; all three fail. The most convincing-looking one fails
+  worst: "Link to source camera files" links 878 of 882 items with **only 144 correct — 734
+  wrong takes, 84%** — and then renders as a fully conformed timeline, with no offline media
+  and no warning. The guide explains why the matching lands on adjacent takes and says plainly
+  that the only witness which catches it is a frame comparison against a reference.
+
+### Validation
+
+- 2417 Python unit tests, 744 Node advanced tests, plus 8 fixture-free packaging tests, all
+  green. `packaging.test.js` also no longer fails to load on a fresh clone: it read a
+  git-ignored fixture at module scope, which took the fixture-free tests down with it.
+- Live-validated on DaVinci Resolve Studio 19.1.3.7 with synthetic media: the fixed FCP7 XML
+  imports 2 items / 2 linked where the same file with its timecode blocks stripped imports
+  nothing; the authored `.otio` imports 3 items / 3 linked and re-reads frame-exact.
+
+## What's New in v2.78.1
+
+`Timeline.DeleteClips` is page-gated. Contributed by
+[@billcarroll](https://github.com/billcarroll) in
+[#117](https://github.com/samuelgursky/davinci-resolve-mcp/pull/117).
+
+### Fixed
+
+- **Every delete-capable action failed whenever the UI was left on another page.**
+  `Timeline.DeleteClips` deterministically returns False and deletes nothing off
+  the Edit page (verified: Fairlight), retries included — the readback-and-retry
+  helper from v2.71.1 handles a *flaky* False correctly, but retrying cannot clear
+  a page gate. Live verification on Studio 21.0: three identical retries against
+  132 valid, unlocked, present items all returned False with all 132 still on the
+  track; one `OpenPage("edit")` and the same call returned True and left 0. Track
+  lock and enable state were clear throughout — a page gate, not a lock.
+  `timeline` `delete_clips` / `move_clips` / `overwrite_range` / `lift_range` /
+  `apply_cuts` and `edit_engine execute_swap` now hold the Edit page for the call
+  and restore the caller's page after.
+
+The guard is serialized through `page_lock`, alongside the existing Color-page
+guard for thumbnail capture: Resolve has one globally-active page, so an
+unserialized switch-work-restore races every other page-switching operation, and
+under the threaded dispatch from v2.62.0 a concurrent thumbnail capture flipping
+to Color mid-delete would land the delete on the wrong page — reintroducing this
+same bug. `apply_cuts` holds the guard once around its loop rather than per cut,
+which would otherwise cost 2N page flips for N cuts.
+
+The `api_truth` entry is restructured into the two distinct failures now known to
+share this call: wrong page (deterministic, mechanism identified, verified) and
+flaky first attempt (one observation, cause not established — and the entry now
+records that the page state at the time was not captured, so it cannot be ruled in
+or out as the first failure in disguise).
+
+## What's New in v2.78.0
+
+The AAF probe reports where in the *source* an event actually lives, not where it
+lives in the consolidated fragment the AAF happens to reference.
+
+### Fixed
+
+- **`srcIn`/`srcOut` were handle offsets, not positions in the take.** A
+  `SourceClip`'s `start` is an offset into whatever mob it references *directly*,
+  and for consolidated media that mob is a per-cut fragment carrying handles — not
+  the take. On a real turnover 774 of 878 events reported `srcIn <= 45`, and one
+  take used thirteen times reported `srcIn 40` all thirteen times; two cuts of one
+  take cannot both begin at frame 42 of it. A consumer placing those numbers
+  against camera originals lands on the right cut of the right take showing the
+  **wrong moment**, and the number fits inside the file, so no range check catches
+  it. The consumer measured 2 of 526 cuts matching its picture reference before
+  this.
+
+### Added
+
+- **Physical source position and timecode per event** — `srcPos`, `srcTcFrame`,
+  `srcTc`, `srcTcFps`, `srcTcDrop`. The chase sums `start` down the mob chain and
+  reads the nearest mob's timecode slot, so a consumer that links camera originals
+  can place `sourceTc − fileStartTc` instead of a fragment-relative number. Emitted
+  only when actually read: a chain that adds nothing emits nothing rather than
+  restating `srcIn`, and per-sequence `sourcePositionCoverage` counters let a
+  consumer distinguish "this AAF carries none" from "this probe is too old to emit
+  it." `srcIn`/`srcOut` are unchanged — this is additive.
+
+Verified on the fixture: 869/878 events carry `srcPos`, 876 carry source timecode,
+and the take used thirteen times separates into thirteen distinct positions.
+Frame-exact against an independent witness — at the frame the turnover's own
+picture reference burned 21:19:28:21, the probe says 21:19:28:21.
+
+## What's New in v2.77.0
+
+Folder addressing fails loud instead of quietly answering about whichever bin the
+UI happens to have open. Contributed by [@billcarroll](https://github.com/billcarroll)
+in [#116](https://github.com/samuelgursky/davinci-resolve-mcp/pull/116).
+
+### Fixed
+
+- **An unresolvable folder address no longer falls back to the current bin.**
+  `media_pool add_subfolder` and `media_pool get_timeline_mattes` resolved their
+  folder argument with `_navigate_folder(...) or fallback`, so a typo'd path was
+  dropped and the action proceeded against the current bin (or root) with a
+  `success` envelope. For a read that is a wrong answer indistinguishable from a
+  right one; for `add_subfolder` it creates the folder wherever the UI happens to
+  be pointed. All three sites now share one resolver that returns
+  `FOLDER_NOT_FOUND` / `invalid_input` when a supplied address does not resolve,
+  with remediation naming `get_subfolders`.
+- **A bad folder path came back marked retryable.** The `folder` tool did already
+  error on an unresolvable `path`, but with a bare message, so the envelope
+  defaulted to `resolve_api_failed` and told the caller to retry an address that
+  would never resolve. It is now `invalid_input`, non-retryable — the caller's to
+  fix.
+
+### Added
+
+- **`folder_id` is accepted as a folder address**, alongside `path`, on the
+  `folder` tool, `media_pool add_subfolder`, and `media_pool get_timeline_mattes`.
+  `get_subfolders` hands out ids, and having no way to spend them is what invited
+  agents to guess a `folder_id` argument that no action read — which was silently
+  dropped, returned the current bin's contents with `success`, and made the tools
+  look like they ignored their arguments. Omitting every address still means what
+  it did before: the current folder for the `folder` tool, the root folder for the
+  two `media_pool` actions.
+
+### Known limitation
+
+Only `path`/`folder_path`/`folderPath` and `folder_id`/`folderId` are recognised
+as addresses. Any other invented key (`id`, `bin`, `folderName`) is still dropped,
+and the action still answers about its default folder with `success`. This release
+narrows the silent-wrong-folder class to a known key set rather than closing it;
+closing it needs unknown-parameter rejection at the dispatch layer.
+
+## What's New in v2.76.0
+
+Three AAF conform-fidelity fixes found by placing a full 83-minute Avid turnover and
+cross-checking it against Resolve's own native import of the same file.
+
+### Fixed
+
+- **AAF transitions did not subtract from record advancement.** In the AAF Edit
+  Protocol a Transition does not occupy record time, it *overlaps* its neighbours:
+  `sequence length == sum(components) − sum(transitions)`. The walker annotated the
+  clip after a dissolve but never rewound the record position, so **every later event
+  on that track was late by the cumulative transition time** — silent, track-local,
+  and invisible on any timeline without a dissolve. On a real turnover a single
+  59-frame dissolve put 651 subsequent V1 events 59 frames past Resolve's native
+  import of the same AAF (probe 566/2586/2652 vs native 507/2527/2593); the fixed
+  probe reproduces the native positions exactly. The independent cross-check: each
+  layer's walked length used to overshoot its own DECLARED length by exactly that
+  layer's transition sum (V1 +59, V6 +77, dissolve-free layers +0) — with the
+  subtraction, walked equals declared on every layer. A leading transition clamps at
+  the sequence start rather than producing a negative record position.
+
+### Added
+
+- **Sequence start timecode.** `list_sequences` and `parse_interchange` now report
+  `startTimecode`, `startFrame`, `startTimecodeFps` and `startTimecodeDrop` per AAF
+  sequence. A conform that places events without it builds at Resolve's default
+  01:00:00:00 while the AAF starts at 00:59:50:00 — every clip ten seconds out, and
+  only visible against a linked picture reference. Avid writes one timecode slot *per
+  common rate* (a real turnover carried seven — 86160@24, 89750@25, 107592@30-drop,
+  107700@30, 215400@60, all naming the same instant), so the slot matching the
+  editorial edit rate is chosen and the rate the frame number is expressed in is always
+  reported. An AAF with no timecode slot emits explicit nulls, never a guessed start.
+- **Per-clip geometry** — the Avid transform parameters behind Resolve's "Use sizing
+  information" import option. Clips wrapped in `PaintResize_v2`, `SpatialAdapter` or
+  `FlipHoriz_2` carry a `geometry` list in application order (innermost first: 84 of
+  the fixture's clips nest a SpatialAdapter inside a PaintResize, so a single field
+  would have dropped a stage). Scale is emitted as a percent — proven, not assumed,
+  because 212 of 285 resize groups sit at exactly 100 — and the source/framing
+  rectangles yield the unit-free `reformatScaleX/Y` (0.744792 on the fixture: a 2.39:1
+  source letterboxed into a 16:9 framing). Parameters whose units the fixture does
+  *not* pin down — position, crop, and the absolute rectangle unit — pass through raw
+  under Avid's own names rather than being reinterpreted into a normalized field that
+  might ship an inversion, the lesson from `SpeedRatio` being stored as the inverse of
+  play rate. Animated parameters are named in `varying` and carry no single value.
+
+### Documentation
+
+- `api_truth`: **`TimelineItem.GetSourceStartFrame` reads one frame off on some
+  items** while `GetLeftOffset` is exact on the same items — so a conform that
+  verifies placement with `GetSourceStartFrame` reports phantom off-by-one drift on
+  correctly placed clips, and would hide a real one-frame error just as easily.
+  `docs/reference/api-limitations.md` regenerated.
+- The two timeline kernels no longer describe AAF as an honest refuse; it has parsed
+  via pyaaf2 since v2.73.x.
+
+### Validation
+
+- 2391 Python unit tests, 505 Node advanced tests (40 in the AAF suite, up from 26).
+- All release static checks and drift guards green.
+- Verified offline against a real 878-event multi-layer Avid picture turnover.
+- No Resolve scripting behavior changed — `aaf_probe.py` never touches the Resolve
+  API — so no live Resolve validation was required.
+
+## What's New in v2.75.0
+
+The offline AAF reader now recovers retime ratios instead of only flagging them.
+
+### Added
+
+- **Motion Control speed recovery.** OperationGroup parameters are read: a
+  constant `SpeedRatio` emits `speedRatio` (play rate) and corrects `speed`, so
+  consumers reading only `speed` are no longer told 100 for a 175% clip. Variable
+  timewarps (multi-point speed maps) report `speedVarying: true` rather than a
+  fabricated number — the reader's honest-refuse contract extends to speeds.
+  Note the stored AAF rational is RECORD/SOURCE (Edit Protocol output-over-input),
+  the inverse of play rate; the reader emits play rate, verified against the
+  length identity (sourceLen = recordLen / |ratio|) and Avid's own speed maps.
+
+### Fixed
+
+- **Motion Control events inflated `recOut`.** Record advancement used the inner
+  source clip's length instead of the OperationGroup's declared record length, so
+  fast-motion clips claimed more record time than they occupy (and slow motion
+  claimed less). On a real 83-minute turnover this produced 40 spurious record
+  overlaps; with the declared length driving advancement, one remains — a
+  two-input blend genuinely sharing its record span.
+
+## What's New in v2.74.0
+
+### Added
+
+- **`drp-format/set-framerate` — relabel a `.drp` timeline frame rate in place.**
+  `setTimelineFrameRate(drpInput, targetFps)` rewrites the timeline
+  `<FrameRate>` blob(s) to a new fps while leaving every clip's integer
+  Start/Duration/In/Out and every clip-level `<MediaFrameRate>` untouched — a
+  relabel, not a retime. Use it to fix a contaminated rate tag (e.g. an export
+  step that stamped 23.976 onto a 24.000 timeline whose frames are correct).
+  Offline-only by necessity: Resolve locks a timeline's frame rate once the
+  timeline exists, so an imported `.drp` can never be relabelled through
+  Resolve itself. `readTimelineFrameRates(drpInput)` reports the current
+  rate(s) without modifying anything. Both are exported from the `drp-format`
+  index; five node:test cases cover relabel, `MediaFrameRate` isolation,
+  idempotence, and input validation.
+
+### Fixed
+
+- Corrected a garbled doc comment in `drx-parameters/index.js`.
+
+## What's New in v2.73.2
+
+Two honesty fixes in the conform path, both found by running a real 83-minute
+Avid AAF turnover end to end. Neither adds tool surface; `detect_missing_media`
+gains two additive response fields.
+
+### Fixed
+
+- **`detect_missing_media` counted an unknown item as a present one.** A timeline
+  item with no media pool item has no file path and no offline marker, so it fell
+  through to `present` — absence of information reported as presence. An AAF
+  imported with `importSourceClips=false` yields 882 such items, and the probe
+  answered `present_count: 882, missing_count: 0` while every one of them returned
+  `None` from `GetMediaPoolItem()`. The payload contradicted itself: the diagnosis
+  already said `unique_media_pool_item_count: 0`.
+
+  Those items now report under `unlinked` / `unlinked_count` and never inflate
+  `present_count`. They are deliberately **not** folded into `missing`: those rows
+  drive relink plans keyed on `media_pool_item_id`, and there is no pool item here
+  to relink. When a timeline is entirely unlinked the diagnosis says so, instead of
+  "No offline media detected" — technically true and completely misleading.
+
+- **The "Resolve created no timeline" remediation named the wrong fix.** It advised
+  converting the file to FCP7 XML / FCPXML. The far more common cause is that
+  `importSourceClips` defaults to `True`, so Resolve tries to pull in the sequence's
+  source clips and fails the entire import when those paths do not resolve — the
+  normal state of a turnover, whose paths belong to the offline editor.
+  `import_source_clips=false` lands the timeline offline and now leads the
+  remediation. Note `sourceClipsPath` does not rescue it: Resolve matches source
+  clips by the filenames recorded in the sequence, so an AAF referencing Avid MXF
+  finds nothing in a folder of differently-named finishing media.
+
+## What's New in v2.73.1
+
+Packaging fix. The npm package shipped the AAF reader's Node half without its
+Python half, so offline AAF preview could never have worked from an npm install.
+
+### Fixed
+
+- **`aaf_probe.py` was missing from the published npm package.** The `files`
+  allowlist was written in v2.58.0 as `resolve-advanced/server/**/*.mjs`, and
+  when `aaf_probe.py` landed in v2.59.0 the allowlist was not extended. `aaf.mjs`
+  shipped and shelled out to a file that did not exist on disk, so every
+  `parse_interchange` / `list_sequences` call against a `.aaf` failed for
+  npm-installed users. Repository clones were unaffected, which is why it
+  survived a year of releases unnoticed.
+
+  The failure was at least loud rather than a fake parse — but its remediation
+  was actively misleading. The probe exited 2 (`can't open file …aaf_probe.py`),
+  which fell through to the generic branch and appended "Install the offline AAF
+  reader (`pip install pyaaf2`)". Installing pyaaf2 cannot fix a file that was
+  never packaged, so the message sent anyone who hit it down a dead end.
+
+  This means the v2.73.0 multi-layer AAF fix did not reach npm users at all;
+  2.73.1 is what actually delivers it.
+
+## What's New in v2.73.0
+
+The offline AAF reader could not read a multi-layer Avid timeline, and said so
+in the worst possible way: `ok: true` with an empty event list, indistinguishable
+from an empty timeline. Any caller gating on a successful parse would proceed to
+conform nothing.
+
+### Fixed
+
+- **AAF: multi-layer timelines returned zero events while reporting success.**
+  Avid exports a multi-layer video timeline as a `NestedScope` segment, which the
+  offline reader never traversed — `NestedScope` carries `.slots`, not
+  `.components`, so the whole timeline fell through the walker's lone-`SourceClip`
+  fallback and emitted nothing. Two further drops sat on the same path and had to
+  be fixed with it: `OperationGroup.segments` holds a nested `Sequence` rather than
+  a direct `SourceClip`, so effect-wrapped clips — the majority of any real
+  turnover — were dropped even once `NestedScope` was traversed; and source-name
+  resolution stopped one mob hop short of the MasterMob, because Avid routes
+  timeline clips through an unnamed intermediate `CompositionMob`, resolving most
+  clips to `UNKNOWN`. `Selector` segments are now followed (via the AAF `Selected`
+  property — pyaaf2 does not expose it as an attribute), and non-editorial slots
+  are skipped by media kind rather than segment class, so `Pulldown`-wrapped
+  timecode tracks no longer leak through as editorial.
+
+  Verified against a real 83-minute Avid picture turnover: **0 → 878 events**
+  across 5 layers, **0 `UNKNOWN` sources** (779 distinct camera rolls), no
+  unhandled component classes, ~1.5 s.
+
+### Added
+
+- AAF probe and `listAafSequences` now report an `unhandled` map (component class
+  → count) per sequence. A structural miss is visible instead of masquerading as
+  an empty timeline.
+
+### Known limitations, stated deliberately
+
+- **Motion Control retimes are flagged, not quantified.** They carry
+  `effect: "Motion Control"` with `speed: 100`, because the ratio is not
+  recoverable offline. A consumer reading `speed` alone will treat them as full
+  speed. Pre-existing behaviour, preserved on purpose — flag over fabricate.
+- **Effect-only layers correctly produce no events.** Layers that wrap
+  `ScopeReference` (subtitle burns, blends, mattes) apply to what shows through
+  from below and reference no media of their own. OTIO reports such layers as
+  tracks of gaps, so its track count can exceed the number of layers with media;
+  "6 layers" is not "6 layers with media". Events were not fabricated to make the
+  counts match.
+- **Only `NestedScope` layers are numbered `V1..Vn`.** Non-nested slots keep the
+  flat `V`/`A` label, a deliberate scope limit that keeps the blast radius off
+  simple AAFs — notably `editorial.mjs`'s `track === 'A'` audio-follows-video
+  heuristic, which reads that label.
+
+## What's New in v2.72.1
+
+Documentation only. The API coverage page stated its method counts in four
+places and they disagreed; the cause turned out to be structural rather than
+clerical.
+
+### The Resolve 21 surface was never counted
+
+None of the Resolve 21 methods appeared in the Complete API Reference tables —
+the tables the `API Methods Covered` denominator counts — although the server
+has wrapped, released and live-tested them since v2.28.1. So `337/337 (100%)`
+described a surface that excluded nine methods across four classes, and the
+`336 → 337` bump for `ResetIntellisearchAnalysis` added one to a count whose
+table did not list it.
+
+Thirteen rows added, one per method per object class, since a wrapper on
+`Folder` and one on `MediaPoolItem` can fail independently. Signatures taken
+from the bundled 21.0.2 scripting reference. `TranscribeAudio` was already
+listed — its Resolve 21 change is the optional `useSpeakerDetection` argument,
+accepted but producing identical transcripts either way — so those rows are
+annotated rather than duplicated.
+
+Every summary figure is now derived from the tables: **349 covered, 338 live
+tested, 11 untested**.
+
+### The counting convention is now written down
+
+Two of the three disagreements came from it being implicit:
+
+- A method that could not be executed is **not** counted as a pass. The old
+  "Resolve 21 delta 8/9" counted Extras-blocked methods as passes, contradicting
+  the prose directly above it and overstating coverage exactly where the risk is
+  highest.
+- The phase table counts **methods, not assertions**, which is why its Total
+  equals Methods Live Tested. That ambiguity is what made two figures look
+  independently wrong.
+
+`tests/test_api_coverage_arithmetic.py` derives all four figures from the
+reference tables and fails if any disagrees, so the tables stay the single
+source. It was checked against both drift shapes: a hand-edited summary figure,
+and a row removed from a table.
+
+## What's New in v2.72.0
+
+Resolve 21's AI methods report a missing Extras pack as an error *string*, not
+the documented bool — and a non-empty string is truthy. Live-validated against
+Studio 21.0.2.4 by @AghisSs in #107.
+
+### The trap
+
+The methods do not agree on how they refuse. With only AI Motion Deblur
+installed:
+
+| Method | Return when the pack is absent |
+|---|---|
+| `AnalyzeForSlate` | `False` |
+| `AnalyzeForIntellisearch` | `"Required package 'AI Intellisearch - Faster' is not installed."` |
+| `GenerateSpeech` | `"Required Package, 'AI Speech Generator' is not Installed."` |
+
+So `bool(result)` reported **success for analysis that never ran** across eight
+call sites, and `generate_speech` let the string past its guard into
+`.GetName()`, raising `AttributeError: 'str' object has no attribute 'GetName'`.
+
+`_ai_result` / `_ai_result_payload` now treat any string as a failure and
+surface its text as the error. That message is the only machine-readable signal
+that a pack is missing, since nothing in the scripting API enumerates installed
+Extras.
+
+`remove_motion_blur` is routed through the same helper. It needs the AI Motion
+Deblur Extra like its siblings and reproduced *both* failures — the
+`AttributeError` on the clip path, and a silent `success: true` with
+`created: []` in the confirm-gated folder path that renders new media. Both were
+live-tested with the Extra installed, so the absent-pack return was never
+observable.
+
+### Also
+
+- `project_settings("reset_intellisearch_analysis")` — documented in the 21.0.2
+  scripting README and present in `dir(project)`, but absent from the copy the
+  repo bundled, so it was never wrapped.
+- A live validation harness for the Resolve 21 delta, source-safe: synthetic
+  media in a temp dir, disposable project, teardown that restores the
+  originally-open project.
+- `api_truth` entries for the string-return bug, the undiscoverable Extras gap,
+  and `AnalyzeForSlate`'s documented `resolve.MARKER_*` constants, which do not
+  exist on the handle at all.
+- The `hasattr` attribute-fabrication entry is scoped as **unresolved**. The
+  21.0.2.4 control probe used an invented name, while the 21.0.0 evidence it
+  overturns used real method names borrowed from other object types — so it does
+  not refute the original record. `_has_method` is what every `_requires_method`
+  version gate is built on, and a gate that silently passes is the failure this
+  ledger exists to prevent.
+
+## What's New in v2.71.1
+
+`Timeline.DeleteClips` can lie about whether it worked. #111 recorded four
+behaviours from a live edit session; #114 mitigates the first of them. Both by
+@billcarroll.
+
+### DeleteClips readback-and-retry
+
+`Timeline.DeleteClips` can return `False` on a first call even when every item
+passed is a valid, present `TimelineItem`, with an identical retry succeeding.
+`_timeline_delete_clips_verified` reads the tracks back on a `False` and retries
+once if the items are still there. All four timeline call sites route through
+it: the `delete_clips` action, `lift_range`, `duplicate_clips` and `copy_range`.
+
+The readback is deliberately **tri-state**. A walk that raised, enumerated no
+track at all, or covered items whose unique ID cannot be read is `unknown`, not
+`absent` — so an unverifiable delete is never reported as success, and never
+spends a second destructive call buying information it cannot read. An earlier
+draft collapsed unknown into absent, which turned a failed delete into a
+reported success; that is the exact silent-lie class this series exists to
+remove, so it is worth naming.
+
+The `ripple=True` non-idempotence of a retry is recorded in the docstring rather
+than claimed to be solved: if the first call deleted some items and left others,
+the retry passes the original list back in, stale handles included. It could not
+be made to misbehave against a fake.
+
+### Four edit-session behaviours recorded
+
+- **`DeleteClips` flaky first attempt.** The entry states plainly that the cause
+  is **unknown**, and specifically that this is *not* the
+  `ProjectManager.DeleteProject` shape — that one has an identified mechanism
+  which retrying does not clear, whereas a single retry cleared this in the one
+  instance seen. One observation is not a mechanism.
+- **`DeleteClips` leaves linked audio.** The API deletes exactly the items
+  passed; the UI's linked-selection behaviour does not apply, so orphaned audio
+  collides with later appends.
+- **`AppendToTimeline` mixed-fps duration floor.** Source-to-timeline frame
+  conversion rounds down, landing a planned range one frame short.
+- **`ImportMedia` current-folder only.** No destination parameter; imports land
+  in the current bin.
+
+## What's New in v2.71.0
+
+Keyed metadata getters honor a list of keys, and `delete_timelines` names the
+parameter it wants. Reported and fixed by @billcarroll in #113, from live
+cataloguing work.
+
+### Keyed getters silently returned everything
+
+Resolve's keyed getters take one string. Handed a list they ignore it and return
+the full dict, so a caller asking for three fields silently received all of them
+with no signal that the request had been dropped — the kind of thing that reads
+as working until someone counts.
+
+`get_metadata`, `get_third_party_metadata` and `get_clip_property` now share a
+`_keyed_get` helper that subsets locally, since there is no batch getter to
+delegate to. An empty or non-string list is a clear error rather than a silent
+superset.
+
+Missing keys deliberately report differently through the two forms: the list
+form maps them to `null`, which separates "absent" from "present but empty"; the
+string form still returns Resolve's `""`. All three actions document both the
+list form and that divergence.
+
+### `delete_timelines` leaked a KeyError
+
+Called with `timeline_names`, or without `timeline_ids` at all, it raised a bare
+`KeyError('timeline_ids')`. It now returns a proper error naming the expected
+parameter, and when `timeline_names` was passed it says explicitly that
+timelines are matched by unique ID rather than by name.
+
+## What's New in v2.70.4
+
+Three silent-failure fixes from community reports, plus the Windows bridge
+follow-ups from #112's live confirmation.
+
+### Thumbnails silently failed off the Color page (#110, @billcarroll)
+
+`Timeline.GetCurrentClipThumbnailImage` returns data only while Resolve is on
+the Color page — Blackmagic's own reference documents it as returning data "for
+current media in the Color Page". `thumbnail_contact_sheet` (and
+`marker_thumbnail_review`, which routes through it) reported "No thumbnail
+available at frame" for every sample from any other page, which reads as an
+empty timeline rather than a page requirement.
+
+A shared `color_page_for_thumbnails` context manager in `page_lock.py` switches
+under the existing page lock and restores the previous page after. The granular
+server's thumbnail tool shares it and gained a real error message in place of a
+bare `{"success": false}`. Where the current page cannot be read, no switch is
+attempted at all, so a skipped restore can never strand the user on Color.
+
+### probe_media_pool truncated silently, and good script runs reported failure (#108, @billcarroll)
+
+`_folder_probe` reported `subfolder_count` from the list it had *expanded*, so
+at the default depth every unexpanded folder looked like an empty leaf. In the
+field, a drive-rename relink sweep trusted `subfolder_count: 0` and skipped
+about 40 populated bins and 573 clips. The count is now the real
+`GetSubFolderList()` length at every level, and folders carry `truncated: true`
+at the cutoff so a walker can descend.
+
+Separately, `fusionscript`'s RemoteApp thread can SIGSEGV during interpreter
+teardown *after* a spawned script has finished its work, turning exit 0 into
+-11 and a successful run into `success: false`. Scripts now run via `runpy` and
+hard-exit before teardown. The guard catches `SystemExit`, so a script ending in
+`sys.exit(0)` cannot reopen the race, and repoints `sys.path[0]` at the script's
+directory — under `-c` it points at the server's cwd, which would break sibling
+imports and let stray files shadow real modules. The cost of `os._exit` (atexit
+handlers skipped, non-daemon threads not joined) is documented on the action.
+
+### Bridge: a dead listener no longer reads as a live one (#112)
+
+`serve()` treated "the serve thread is alive" as "the bridge is serving".
+`serve_forever()` keeps its thread alive, so that is a narrower question than it
+appears, and a bridge was reported lingering with nothing on its port while the
+serve loop kept polling. That divergence is not explained here, but a process
+running with no listener is useless either way, so the exit condition now asks
+the socket directly.
+
+The Win32 prototypes are declared rather than relying on ctypes' default
+int-sized handle. The default is safe by documented contract, but the reporter
+had to derive that from Microsoft's interop documentation to rule out
+truncation; declaring the signatures spares the next reader the exercise.
+
+**The v2.70.3 Windows fix is now confirmed on real hardware.** ZontarLives ran a
+same-machine control: on v2.70.2 the bridge outlived Resolve indefinitely; on
+v2.70.3 it exits 0.23s after. `_process_is_alive` returned `None` for pid 4
+(System), confirming that access-denied reads as unknown rather than death
+against a genuinely protected process.
+
+## What's New in v2.70.3
+
+The free-edition bridge could never notice Resolve exiting on Windows, so it
+orphaned itself and blocked the next session. Reported in issue #112 by
+@ZontarLives, with a self-contained repro.
+
+### The bug
+
+`serve()` detected host exit with a single test:
+
+```python
+if os.getppid() != expected_parent:
+    break
+```
+
+That is a POSIX signal. When a parent dies, POSIX reparents the orphan to init
+and the value changes. **Windows does not reparent** — the parent pid is a
+static field in the process record, so `os.getppid()` returns the dead parent's
+pid forever and the check can never fire.
+
+The consequence is not a cosmetic leak. The orphaned `fuscript.exe` keeps port
+49632 and keeps accepting connections while holding a dead `resolve` handle, so
+the next Resolve session's bridge cannot bind, and the client sees:
+
+```
+bridge_timeout: Resolve did not answer in time - check for an open modal dialog,
+which blocks its scripting API entirely
+```
+
+against a socket that `Get-NetTCPConnection` reports as healthily `LISTENING`.
+Every surface-level check passes and the suggested cause is a red herring, which
+is what made it expensive to diagnose.
+
+### The fix
+
+Liveness is now asked directly instead of inferred from a pid changing:
+
+- `parent_has_exited()` keeps the reparent test as the fast path where it works,
+  then checks whether the parent pid still resolves to a live process, then
+  whether that process still name-matches `PARENT_MARKERS`. The last step also
+  catches pid reuse, which the old check would have misread as "Resolve exited".
+- On Windows liveness comes from `OpenProcess` + `WaitForSingleObject` via
+  `ctypes`. Only "no such process" counts as death: access-denied and every
+  other error are *unknown*, and unknown never ends the session — the module's
+  standing rule is that a bridge which exits early is worse than one that
+  lingers.
+- `_process_name()` gained a Windows branch (`QueryFullProcessImageNameW`). It
+  previously tried `/proc` then `ps`, so it returned an empty string on every
+  Windows machine. `scripts/resolve_bridge_probe.py` gets the same treatment.
+
+Binding failures now name the likely cause and the way out, rather than
+surfacing a bare "address already in use" that sends people to check firewalls.
+
+The Windows branch is injectable so it is tested off Windows — a constant
+`getppid` plus a simulated liveness answer. The platform difference is precisely
+what kept this invisible to everyone developing on macOS or Linux.
+
+### Also confirmed
+
+`%APPDATA%` now joins `%PROGRAMDATA%` as a verified Windows bridge location; the
+#112 report served reads from it against free 21.0.3.7. README and `docs/SKILL.md`
+updated, along with guidance that a bridge which stops answering while
+`LISTENING` is a stale process rather than a modal dialog.
+
+### Also in this release
+
+Two offline guard tests built their "not a temp path" target from `os.getcwd()`,
+which failed — and wrote a real `look.cube` into the working directory — whenever
+the suite ran from a directory under `/tmp`. `tests/_paths.py` makes them
+independent of where the suite runs.
+
+## What's New in v2.70.2
+
+The control panel could never reach the free edition, even with a perfectly
+healthy in-app bridge. Reported in issue #109 by @alpaolo.
+
+### The bug
+
+The panel runs as a separate process from the MCP server and has its own Resolve
+connector. That connector returned as soon as `import DaVinciResolveScript`
+failed:
+
+```python
+try:
+    import DaVinciResolveScript as dvr_script
+except Exception as exc:
+    return None, f"Resolve scripting API unavailable: {exc}"
+```
+
+On the free edition that import is exactly what fails — Blackmagic's module ships
+with the installer, not the App Store build, so there is no
+`Developer/Scripting/Modules` tree to import from. The panel returned there,
+before ever calling `connect_resolve`, whose entire purpose is that it accepts
+`None` in bridge mode:
+
+> `dvr_script` may be None in bridge mode: the bridge does not need Blackmagic's
+> module at all, which is precisely why it reaches editions the module cannot.
+
+So the reporter saw the bridge listening, the MCP server connected, and the panel
+insisting "Resolve unavailable" — all at the same time, all correct.
+
+`_try_connect` in `src/server.py` already carried this guard, with a comment
+recording the same diagnosis from when it bit the server. The panel's connector
+was missed. That makes it the third connector overlooked when a transport was
+added, after the network-scripting one in v2.64.0.
+
+### The fix
+
+The panel now consults the bridge first and treats both the environment setup and
+the module import as optional when it is enabled — the same ordering the MCP
+server uses.
+
+The not-connected message no longer assumes Studio. It used to send every reader
+to "open Resolve Studio with a project loaded", which is poor advice for a
+free-edition user, since free is the one edition external scripting refuses by
+design. It now names the fix that fits the situation, and says something
+different depending on whether the bridge is enabled.
+
+### Windows bridge: `%PROGRAMDATA%` now confirmed
+
+v2.70.1 shipped Windows script paths unverified. The #109 report was made on free
+21.0.1.11 with the bridge installed, listed and serving from `%PROGRAMDATA%`, so
+that half is now confirmed rather than assumed. `%APPDATA%` remains untested.
+
+## What's New in v2.70.1
+
+Windows support for the free-edition in-app bridge, and the end of doctor.py's
+macOS-only path assumptions. Reported in issue #106 by @kacemmosbah8-afk.
+
+### The bug
+
+`script_targets()` in `scripts/install_resolve_bridge.py` enumerated macOS and
+Linux candidates only. There was no Windows branch at all, so the candidate list
+came back empty on every Windows machine and the installer exited with:
+
+```
+No writable DaVinci Resolve Scripts/Utility folder found. Is Resolve installed?
+```
+
+on installs where Resolve was demonstrably present. Since the in-app bridge is
+the *only* route to the free edition — external scripting is Studio-gated by
+Blackmagic — Windows free-edition users had no working path to this server at
+all. The bridge shipped in v2.68.0; it has been macOS/Linux-only that whole time.
+
+Windows now targets the two Scripts/Utility trees Blackmagic documents, per-user
+first because `%PROGRAMDATA%` typically needs an elevated prompt:
+
+- `%APPDATA%\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility`
+- `%PROGRAMDATA%\Blackmagic Design\DaVinci Resolve\Fusion\Scripts\Utility`
+
+Three traps came out of implementing that, each now pinned by a test:
+
+- **The per-user tree carries a `Support` segment the all-users tree does not.**
+  They are not one layout under two roots; deriving either from the other lands
+  in a folder Resolve never scans.
+- **Blackmagic's own README writes the per-user root as `%APPDATA%\Roaming\...`,
+  which is wrong** — `%APPDATA%` already *is* `...\AppData\Roaming`. Transcribing
+  it verbatim yields `AppData\Roaming\Roaming\...`: a real, creatable folder that
+  is silently never read.
+- **Resolve does not create its `Fusion\Scripts` tree until a script is
+  installed**, so gating on that tree existing — or on its parent being writable
+  — skips a fresh free-edition install, the exact build the bridge exists for.
+  The candidates are gated on Resolve's product folder instead, mirroring how the
+  macOS sandbox container is handled.
+
+`install()` no longer aborts when one target is unwritable. The `%PROGRAMDATA%`
+tree needs elevation, and Windows `os.access(W_OK)` reports the read-only flag
+rather than the ACL, so it cannot be screened out in advance — without this, the
+newly added candidate would have crashed the installer on every non-elevated
+Windows account *after* it had already succeeded into the per-user tree. Skips
+are reported in `warnings`; only a clean sweep is fatal, and that error now names
+the folders and the reason instead of asking whether Resolve is installed.
+
+### The macOS framework-Python alarm was firing off macOS
+
+`python_preflight()` looked for a framework Python under `/Library/Frameworks`,
+a path that cannot exist on Windows or Linux — so it always found nothing and
+emitted the macOS remediation, telling the reporter (running a working python.org
+3.12.9) to install the Python they already had. Linux had the same false alarm.
+The check is now macOS-only. The Lua canary still ships everywhere, so a genuine
+enumeration failure stays diagnosable.
+
+### doctor.py was macOS-only too
+
+`scripts/doctor.py` hardcoded macOS defaults for `RESOLVE_APP`,
+`RESOLVE_SCRIPT_API` and `RESOLVE_SCRIPT_LIB`. Run standalone — that is, without
+the environment variables the npm/`install.py` flow injects — it reported four
+`[FAIL]` lines naming a `.app` bundle and `fusionscript.so` on a Windows 11
+machine that had neither, while `install.py` detected that same install
+correctly. Two tables describing one thing, one of them platform-blind. Linux was
+equally affected.
+
+doctor now selects per-platform candidates, and picks the first that exists so
+the reported path matches reality. macOS values are byte-identical to before.
+A new `tests/test_doctor_paths.py` drift guard asserts every path doctor names
+also appears in `install.py`'s `RESOLVE_PATHS`, so the two cannot diverge again.
+Claude Desktop's config path is now MSIX-aware on Windows as well, matching the
+issue #93 fix that `install.py` already had.
+
+### Scope — what is and is not verified
+
+The path construction is unit-tested, and a simulated Windows run exercises the
+installer end to end. **No Windows hardware has confirmed that Resolve actually
+lists the bridge from these folders.** The reporter verified the folders exist
+and are writable; issue #104 is precedent that "the folder exists" and "Resolve
+reads it" are different claims. The README and `docs/SKILL.md` say so plainly
+rather than implying Windows is a supported, tested tier.
+
+Suite: 2312 → 2336.
+
+## What's New in v2.70.0
+
+Headless (`-nogui`) Resolve, measured rather than assumed — and the finding
+reverses this project's working belief about it.
+
+### The measurement
+
+A GUI run and a `-nogui` run of the same Resolve Studio 19.1.3.7 were probed
+identically and differenced: 139 read-only API probes plus 13 write scenarios
+covering pages, media pool, timeline editing, colour, Fusion comps, Gallery,
+render-to-disk, interchange export, layout presets, playhead and project
+settings. 238 paired observations.
+
+**Zero capabilities worked with a UI and failed without one.** Render to disk,
+AAF/EDL/FCPXML/DRT/OTIO export, `ExportCurrentFrameAsStill`, `GrabStill`, Fusion
+comp create/delete, colour groups, and even UI layout presets all behave
+identically headless.
+
+**Scope, stated up front:** that is a result about *capability* and about
+modals. It is **not** a stability result. The probe's render was 2 seconds of
+640×360 H.264; long renders, JPEG 2000 decode out of DCP MXF, ProRes-into-MXF
+writes and repeated jobs in one session are all untested, and there is a field
+report of headless crashing *on completion of writes* for exactly that class of
+job. The docs and the runtime guidance say so rather than letting the matrix
+be read as a blanket endorsement.
+
+The one difference actually found runs the other way, and it is the one an agent
+cares about: **a GUI Resolve can raise a modal dialog no script can dismiss;
+headless cannot.** The trigger is project switching, and the obvious defence fails —
+`ProjectManager.SaveProject()` returns `False` for the default never-saved
+`Untitled Project`, which is exactly the project that raises the prompt.
+Headless returns the same `False` and switches anyway.
+
+Two earlier notes are corrected: `ExportCurrentFrameAsStill` was recorded as a
+headless-only failure and works headless; `ExportStills` was recorded the same
+way and fails in *both* modes (its documented cause is Gallery panel visibility,
+which no headless session and no panel-closed GUI session can satisfy).
+
+### Fixed
+
+- **`timeline(action="get_items_in_track")` returned object reprs, not items.**
+  The handler passed `GetItemListInTrack`'s result to `_ser`, which has no
+  TimelineItem branch and falls through to `str(obj)`, so callers got
+  `["<PyRemoteObject at 0x…>", …]` instead of clip data. The docstring's claim of
+  "full serialization of each item" was never true. The sibling `get_items`
+  takes the same params through the same `_track_selector` and calls the same API
+  method, so the two are now one handler and `get_items_in_track` is documented
+  as its alias — there was no richer per-item serializer to preserve. Thanks
+  [@billcarroll](https://github.com/billcarroll) (#105).
+
+### Added
+
+- `resolve_control(action="runtime_mode")` — is Resolve up, and does it have a
+  UI? Answers with no connection needed, and carries the mode-specific guidance
+  with it. **There is no API tell**: a headless instance returns a real page from
+  `GetCurrentPage()` and identical product/version strings, so this reads the
+  process argv, which is the only place `-nogui` appears. `headless` is `null`
+  when undeterminable — never read that as `false`.
+- `resolve_control(action="launch", params={"headless": true})`, plus
+  `DAVINCI_RESOLVE_HEADLESS=1` to make auto-launch headless. Launching the other
+  mode while an instance is running returns `RESOLVE_MODE_CONFLICT` instead of
+  starting a second one that would fight the singleton.
+- `src/utils/resolve_runtime.py` — mode detection and launch-command
+  construction. Headless launch runs the binary inside the app bundle, because
+  `open -a` hands the argument list to LaunchServices, which discards `-nogui`
+  and gives you a window with no error.
+- `scripts/resolve_headless.py` — batch/CI entry point: `status`, `guard`,
+  `start`, `stop`, and `run -- <cmd>` which only stops what it started.
+- `scripts/headless_differential.py` + `src/utils/headless_differential.py` —
+  the harness that produced the above, rerunnable after a Resolve upgrade.
+- `docs/reference/headless-cli.md` — verified flags, environment variables,
+  launch/teardown recipes, singleton rules, and the flags found in the
+  application binary but deliberately *not* exercised.
+- `docs/reference/headless-capability-matrix.md` — the generated differential.
+- Three `api_truth` entries: the `SaveProject`/modal trap, the absence of any
+  headless API tell, and the corrected `ExportStills` reality.
+
+### Validation
+
+- Offline suite 2280 → 2305 (`tests/test_headless_runtime.py`, 25 tests).
+- Live: full differential recorded in both modes on Resolve Studio 19.1.3.7,
+  scratch project created and deleted per run, GUI session restored afterwards.
+  Measured teardown 2.1s via `Quit()`, headless boot to scriptable under 3s,
+  scripting listener on TCP 15000 in both modes.
+
+## What's New in v2.69.3
+
+Ships the v2.69.2 bundle, which never reached npm. Same fixes, plus the one that
+stopped it publishing.
+
+### Fixed
+
+- **The offline guard failed the publish workflow instead of guarding it.**
+  `tests/__init__.py` installs the guard before any test module loads, and the
+  guard imports `src.server` — which imports `anyio`. The publish workflow
+  installs only pyflakes, by design: the static drift guards are pure AST
+  readers that deliberately run without the runtime stack. So every module
+  argument raised at import, six of them turned into six `_FailedTest` errors,
+  and the npm publish failed with what looked like six broken guards rather than
+  one missing package.
+
+  This shipped in v2.69.1's tail (the guard moved under `unittest` after that
+  tag was cut), so v2.69.2 was the first release to run it and the first to fail.
+
+  A missing third-party package now skips the swap: if `src.server` cannot be
+  imported there is no live-Resolve entry point to neuter, so the guard is
+  vacuously satisfied. The skip is narrow on purpose — a `ModuleNotFoundError`
+  naming something under `src/`, or any non-import error, still propagates.
+  Swallowing those would leave the static guards silently vacuous, which is a
+  worse failure than the one being fixed since it fails open.
+
+### Added
+
+- `tests/test_offline_guard.py` — five tests, including the two that matter:
+  a broken import inside `src/` must still raise, and a non-import error must
+  never be swallowed. A skip that fails open would be indistinguishable from a
+  passing suite.
+
+### Validation
+
+- Offline suite 2247 → 2252. Reproduced the CI failure locally against an
+  interpreter without `anyio` (six errors before, clean after), rather than
+  inferring it from the workflow log.
+
+## What's New in v2.69.2
+
+Community bug-fix bundle: #100, #101 and #102, plus the installer half of #104.
+The headline is that a fresh clone had stopped working entirely.
+
+### Fixed
+
+- **A fresh install produced a server that could not start** (issue #103, PR
+  #101 by @Mastaish). `install.py` installed `mcp[cli]` with no upper bound, and
+  the MCP Python SDK published 2.0.0 — which restructured the package and
+  dropped `mcp.server.fastmcp`, the module `src/server.py` imports. Every clone
+  after that release died at import, surfacing to the user as nothing more
+  informative than "Server disconnected".
+
+  The contributed fix caps the SDK in `requirements.txt`, which `install.py`
+  installs second. That works, but the unpinned first call still downloads 2.x
+  and its `httpx2` tree before downgrading it, and the fix evaporates silently
+  if the install order ever changes — so the cap is now on the `pip install`
+  call as well. `McpSdkPinTest` guards both sites, reading the actual string
+  literals rather than matching text: `install.py` discusses `mcp[cli]` in prose
+  too, and a first cut of that guard was satisfied by a comment. It is
+  conditional on `server.py` still importing `mcp.server.fastmcp`, so it retires
+  itself when the server is ported to the 2.x layout instead of blocking it.
+
+- **The Advanced (Node) suite was not running at all on Node 20+** (PR #102 by
+  @double2tea). `node --test` resolves a bare directory argument as a module
+  entry point on Node 20 and later, so the suite exited with `MODULE_NOT_FOUND`
+  at 4 failures and 0 passes — a shape that reads more like a broken checkout
+  than 731 skipped tests. Explicit test-file globs restore the full run on 18,
+  20 and 22 alike.
+
+- **`RESOLVE_SCRIPT_API` / `RESOLVE_SCRIPT_LIB` were silently overwritten** (PR
+  #100 by @abbc400). `get_resolve_paths()` returned only platform defaults, and
+  `src/server.py` writes those straight back into `os.environ` — so a client
+  that had correctly pointed at a Resolve installed outside `/Applications` had
+  its setting discarded at import. Every other signal looked healthy (Resolve
+  running, external scripting Local, `fuscript` listening) while `scriptapp()`
+  returned `None`. The override now wins, but only when the path exists, so a
+  stale variable cannot shadow a working default install.
+
+- **The bridge installer wrote to a tree Resolve did not read** (issue #104,
+  reported by @RananjayRaj). Which script tree the free App Store build scans is
+  not decidable from outside Resolve: this installer was measured on a machine
+  where the documented Blackmagic Design tree listed, and #104 reports the exact
+  opposite on the same 21.0.3.7 build — the documented tree listed nothing, not
+  even the Lua canary (which rules out the framework-Python explanation and
+  points at the folder), while the Fusion standalone tree listed everything with
+  no restart.
+
+  Rather than pick a winner from two contradictory measurements, both container
+  trees now receive the files, documented path first. This stays inside the
+  sandbox: outside a container that path really is Fusion's own tree and is
+  still not targeted.
+
+- **`--probe-only` reported success on a machine with no Resolve installed**
+  (also #104). A container outlives the app that created it, and the container's
+  existence is precisely what makes the installer target it — so a stale
+  container from an uninstalled Resolve produced a clean success listing files
+  that had genuinely been written and would never be read. The installer now
+  warns when no app bundle can be found, honoring `RESOLVE_APP` as
+  `scripts/doctor.py` already does. It warns rather than refuses: not every
+  legitimate install location can be enumerated, and refusing wrongly would
+  block a working install.
+
+### Validation
+
+- Offline suite 2237 → 2247 (six new installer-target tests, one pin guard).
+  Advanced Node suite 731 tests / 701 pass on Node 18.
+- The new guards were verified to fail against the pre-fix code, not merely to
+  pass against the fix.
+- No DaVinci Resolve scripting behavior changed; the path-resolution change is
+  env-var-gated with defaults unchanged. Live Resolve validation not required.
+
+## What's New in v2.69.1
+
+Bug fix. The Studio bridge differential no longer reports the Deliver page its
+own render probes navigated to as a transport difference.
+
+### Fixed
+
+- **A clean bridge produced a red result on any run that did not start on
+  Deliver.** Run live on Studio 19.1.3.7, the differential reported
+  `resolve.GetCurrentPage` as a `value_mismatch` — bridge `edit`, native
+  `deliver` — and it reproduced on command: start on Edit, one difference; start
+  on Deliver, none. The transport was never involved. The harness's own render
+  probes navigate Resolve to the Deliver page, and the bridge pass runs before
+  the native pass, so the native pass read a page the bridge pass had moved. Read
+  at the same instant the two transports always agreed.
+
+  Adding the method to `VOLATILE_METHODS` would have turned red green and thrown
+  away the signal — a bridge that genuinely reports the wrong page is exactly
+  what this harness exists to catch. Instead each pass now records the page on
+  the way in and on the way out, and the value is compared **only when both
+  passes prove it held still**. If both were stable and the values still
+  disagree, that is the transport, and it is reported as before. A page that
+  cannot be read counts as unknown rather than stable, so an unreadable page
+  disables the comparison instead of quietly restoring the false positive.
+
+  `page_compared_by_value` and both passes' before/after values now ride in the
+  report either way. "The page was not compared" is a fact about the run, and
+  burying it would recreate the silence this fixes.
+
+### Added
+
+- `tests/test_bridge_differential.py` — the module's first tests, 13 of them,
+  including the one that matters: a stable page that genuinely disagrees must
+  still be reported, or the fix is a mute button rather than a fix. The absence
+  of any coverage here is why the false positive shipped.
+
+### Validation
+
+- Static checks and the full unit suite: 2243 → 2256 tests, pyflakes clean.
+- Live Resolve validation on Studio 19.1.3.7 after the fix: 142 probes, 0
+  differences, 110/112 read methods, started from the Edit page that previously
+  failed.
+
+## What's New in v2.69.0
+
+The free edition is documented as reachable, silence ripple stops clipping
+speech at the cut, and the editorial surface grows a set of review-first
+planners: dead-space markers, craft-aware cut points, conform QC, colour
+pre-balance, beat detection, turnover manifests, and a project journal.
+
+Two themes run through the additions. **Nothing new executes** — every planner
+proposes and reports, and the existing plan → confirm → execute path is
+unchanged. And **unverified is never reported as clean**: an item that could not
+be analysed, a check that could not run, a handle that could not be measured and
+a take with no transcript are each reported as such rather than folded into a
+passing result.
+
+### Changed
+
+- **`plan_silence_ripple` guard bands are now 2 pre-head / 4 post-tail frames**
+  (previously 0 and 1 — effectively none). This changes default output for any
+  caller that does not pass explicit handles.
+
+  The old defaults cut exactly on `silencedetect`'s gate crossings, which are not
+  word boundaries. `s` is marked when amplitude falls below the gate, but a
+  word's decay and the room reverb after it stay audible below it, so cutting
+  from `s` clipped the release. `e` is marked when amplitude rises back above the
+  gate, and a soft attack (s, f, th, or any unstressed syllable) crosses later
+  than the word actually begins, so `e` sat *inside* the next word and cutting up
+  to it ate the onset.
+
+  The onset guard is the larger of the two because that is the asymmetry users
+  hear: reviewers of the first public tutorial for this project independently
+  reported that "the first split seconds of your clips are trimmed so the audio
+  is a bit cut off". At 24 fps the new guards are 83 ms and 167 ms; at 30 fps,
+  67 ms and 133 ms — both inside the range dialogue editors use by hand.
+
+  Pass `pre_head_frames` / `post_tail_frames` explicitly to restore the previous
+  behaviour.
+
+### Fixed
+
+- **The docs told free-edition users the door was closed.** v2.68.0 shipped the
+  in-app bridge, which reaches the free edition through the ungated
+  **Workspace > Scripts** menu, but README's Requirements section still said "the
+  free edition does not support external scripting" 195 lines below the section
+  documenting the bridge, and `docs/install.md` said the same with no mention of
+  the bridge at all. The claim is true about *external* scripting and false as
+  users read it — the first large public tutorial for this project pinned a
+  correction telling viewers the method "REQUIRES the Studio Version".
+
+  README, `docs/install.md`, `install.py` and the MCP server's own `instructions`
+  now state the limit and the remedy together. `install.py` also grew the branch
+  it was missing: Resolve running, healthy interpreter, no connection is the
+  free-edition signature, and it used to print "Not running — start Resolve".
+
+### Added
+
+**Editorial**
+
+- `edit_engine.plan_dead_space_markers` — **the review gate.** Finds dead space
+  with the same calibrated detection as `plan_silence_ripple`, but proposes
+  Resolve markers instead of assembling a variant, so an editor can see every
+  gap before agreeing to lose it. Red = confident; yellow = the gate only just
+  cleared its separation floor. Items that could not be analysed are reported
+  and are explicitly **not** certified clean.
+- `tightness` (`generous` default | `balanced` | `tight`) on the dead-space
+  planner. The default is deliberately the loosest: a first assembly is meant to
+  run long, because trimming is fast and visible while recovering material the
+  machine discarded is slow and invisible. Guard bands are floored regardless of
+  preset — `tight` removes more *gaps*, never more *speech*.
+- Syntactic pause classification in `plan_transcript_tighten`. A pause after a
+  full stop must be markedly longer before it is proposed for removal than the
+  acoustically identical pause mid-phrase; the first is usually breathing room
+  and the second usually is not. Unpunctuated transcripts are flagged low
+  confidence rather than treated as all-removable.
+- `edit_engine.rank_takes` — ranks takes on **measurable fluency** (fillers,
+  restarts, script coverage) and states in every response that fluency is not
+  quality. It never names a best take.
+- `edit_engine.plan_beat_cuts` — beat, bar and phrase cut points for
+  music-driven cutting, frame-snapped. Requires the optional `librosa` extra and
+  honest-refuses without it.
+- `edit_engine.plan_string_out` / `propose_structure` — assembly for footage
+  with no speech, from shots and motion rather than silence; and a no-script
+  mode that proposes a structure and requires approval.
+- `edit_engine.plan_broll` — places B-roll against A-roll beats. Placement only:
+  relevance is the caller's and is never re-scored, protected beats are never
+  covered, and an explicit beat choice is honoured or refused, never moved.
+- `edit_engine.rule_of_six_audit` and `split_edit_audit` — audits against the
+  classical weighted cut criteria, and J/L-cut classification. The audit is
+  explicit that the two heaviest criteria are not measurable and reports its own
+  coverage; there is deliberately no composite score.
+
+**Finishing and colour**
+
+- `edit_engine.conform_lint` — the online editor's pre-turnover checklist:
+  frame-rate mismatch, offline media, duplicate source timecode, buried layers,
+  fragile effects, missing reel names, duplicate usage. Checks that could not run
+  are listed in `not_checked`.
+- `edit_engine.plan_prebalance` and `plan_reference_match` — neutral technical
+  pre-balance, and matching to a graded reference still. Curves, vignettes,
+  saturation, qualifiers and windows are refused **in code**; midtones are left
+  warm by design. Reference matching is end-points-only and says so.
+- `edit_engine.plan_turnover` — sound / VFX / colour turnover manifests with
+  per-destination handle floors and a timecode-burned picture reference required
+  in all three. Manifests, not exports.
+- Plans now carry a `handle_report`: keep ranges that leave too little source
+  media at a join for a dissolve, a slip or an audio crossfade.
+
+**Reporting**
+
+- `edit_engine.plan_report` and `include_report` on every audit — Markdown
+  renderings covering what would change (in timecode, with a reason per cut),
+  what was deliberately left alone, what could not be verified, and what needs a
+  human. Off by default for token cost; every audit advertises it.
+- `journal` — ingest log, append-only known issues, session-prep summary with
+  value figures, technical handoff document, status summary, and a picture-lock
+  fingerprint with drift detection.
+- `first_impression` — timestamped capture of a first viewing, sealed once
+  locked. There is deliberately no unlock.
+
+**Documentation**
+
+- **Optional extras are now documented up front** — README and `docs/install.md`
+  list what each extra unlocks and under which licence, and `scripts/doctor.py`
+  reports which are present. Four of the features added in this release need
+  `numpy` or `librosa`; they refuse honestly with the install line, but a user
+  reading the README previously had no way to know before hitting the refusal.
+  "Setup too hard" was one of the loudest complaints this release answers, and
+  shipping features behind an undocumented `pip install` is the same failure.
+
+**Guards**
+
+- `tests/test_free_edition_docs_drift.py` — a guard that does not forbid stating
+  the free-edition limitation, but requires that any file stating it also names
+  the bridge. Broad enough to catch a new phrasing rather than only the sentences
+  fixed here, and it asserts the remedy exists (the README anchor and the
+  installer script the docs promise).
+- `tests/test_attribution_drift.py` — keeps named third parties out of the
+  committed tree entirely. Stores SHA-256 digests rather than the names it
+  forbids, so the guard is not itself the one file containing them.
+- `resolve-advanced` now carries an MIT `LICENSE` in its published tarball, and
+  the three vendored workspaces declare `"license": "MIT"`.
+
+## What's New in v2.68.2
+
+Bug fixes. The server no longer opens a second DaVinci Resolve, and a failed
+connection now tells the caller what is actually wrong.
+
+### Fixed
+
+- **The server launched Resolve when one was already running — usually the wrong
+  one.** The free edition refuses external scripting by design, so on a machine
+  where only it is running `scriptapp("Resolve")` always returns None.
+  `get_resolve()` read that as *"Resolve is not running"* and ran `open` on the
+  application; with both editions installed that started **Studio**, a second and
+  different application, on every tool call.
+
+  `resolve_is_running()` now answers the question that was being assumed. It
+  returns None when it cannot tell, deliberately — "cannot tell" must never decay
+  into "nothing is running", because that is the answer that leads to launching
+  something. A genuinely absent Resolve is still launched, as documented, and the
+  macOS candidate list now contains **both** editions rather than only the
+  installer path.
+- **The error a caller received described something that had not happened.**
+  Eleven sites asserted that Resolve was not running, that starting it had been
+  tried and failed, and that the reader should check their Studio install. After
+  the fix above none of that was true, and the accurate guidance was only reaching
+  the log. `_not_connected_error()` derives the message from the situation and
+  names the applicable remedy — external scripting on Studio, or the in-app bridge
+  on the free edition, including the framework-Python prerequisite. Three codes:
+  `SCRIPTING_UNAVAILABLE`, `BRIDGE_UNAVAILABLE`, `RESOLVE_NOT_RUNNING`.
+- **Those two are marked `retryable: false`.** The `not_connected` category
+  defaults to retryable because auto-launch may succeed next time; neither of
+  these can — one needs a preference changed, the other a script started inside
+  Resolve — and reporting them as retryable sends an agent into a loop it cannot
+  win.
+- **The offline test suite opened Resolve, and connected to whatever was running.**
+  A stub-based audio test reached for `AUDIO_SYNC_*`, which are attributes on the
+  *live* object, so it called `get_resolve()`, found nothing, and started Resolve;
+  when Resolve *was* open it connected instead, making the test's result depend on
+  the state of the machine. `tests/conftest.py` closes both suite-wide and names
+  any launch attempt in the terminal summary.
+- **`src/server.py` reported the wrong tool count to every agent.** Its module
+  docstring said "34 compound tools" while the agent-facing workflow prompt and
+  the startup log line said 32. The drift guard only required the correct number
+  to appear *somewhere* in the file, so the wrong one shipped. It now rejects any
+  other count in front of that phrase, and counts decorators from the parsed
+  syntax tree rather than by matching text — a docstring mentioning
+  `@mcp.tool()` had been counted as a 35th tool.
+- **The bridge harness graded the wrong clip and reported a known trap as a
+  finding.** It took the first video item, which is often a generator or title
+  that has no MediaPoolItem and answers None to every node query, so the grading
+  surface read as unreachable; it now takes the first gradeable item. And it
+  passed the codec *description* `"H.264"` to `SetCurrentRenderFormatAndCodec`,
+  which only accepts the id `"H264"`, making that observation permanently false
+  for a documented reason.
+
+### Changed
+
+- `scripts/install_resolve_bridge.py` no longer claims Resolve ignores Fusion's
+  standalone script tree. Measured on free 21.0.3.7: markers left in two
+  undocumented container paths both appeared under Workspace ▸ Scripts, so Lite
+  scans more locations than the README documents. Install behaviour is unchanged —
+  the documented paths work, and each extra target is another chance for the macOS
+  App Management prompt to stall the copy — but the stated reason is now the true
+  one.
+
+### Validated
+
+Free edition alone (21.0.3.7, App Store), Studio never launched at any point,
+confirmed by process check after every stage: 165/165 read-shaped MCP actions
+clean with Blackmagic's module blocked; 109/112 API read methods exercised; render
+to a non-empty file with `set_format` true; AAF/DRT/EDL/FCPXML all written;
+SetLUT clears and reads back. Suite 1913 passing.
+
+## What's New in v2.68.1
+
+Bug fix. A missing tool argument now returns the structured error envelope the
+rest of the surface uses, instead of escaping as a raw `KeyError`.
+
+### Fixed
+
+- **A missing argument reached the client as an unroutable crash.** Actions read
+  `p["track_type"]` directly; when the key was absent the resulting `KeyError`
+  escaped the action, escaped the tool, and arrived as
+  `ToolError: Error executing tool timeline: 'track_type'` — no code, no
+  category, no remediation. Walking the whole surface found **99 of 512 declared
+  actions** failing this way across 16 tools (`timeline`, `graph`, `render`,
+  `media_pool`, `media_storage`, `fusion_comp`, `folder`, `gallery_stills`,
+  `layout_presets`, `project_settings`, `project_manager_*`, `render_presets`,
+  `resolve_control`, `timeline_markers`). They now return, for example:
+
+      {"error": {"message": "'track_type' is required",
+                 "code": "MISSING_TRACK_TYPE", "category": "invalid_input",
+                 "retryable": false, "remediation": "...", "state": {...}}}
+
+  `retryable: false` matters as much as the code: an input error the caller must
+  fix was previously reported through a path that defaulted to retryable, which
+  sends an agent into a loop it cannot win.
+
+  The mechanism is a params dict whose missing keys raise a dedicated
+  `KeyError` subclass, caught at the tool boundary. Catching plain `KeyError`
+  there would have been simpler and wrong — it cannot tell a missing argument
+  from an internal lookup failure on some other dict, so our own bugs would have
+  been relabelled as the caller's mistake. `contracts.validate` remains the
+  preferred tool where a type, range or enum also needs checking, and the actions
+  already using it are unchanged.
+
+### Added
+
+- `tests/test_tool_argument_validation.py` walks **every declared action** with an
+  empty params dict and asserts none leaks a `KeyError`. Reading the source cannot
+  find this class — `p[...]` after a guard is correct and `p[...]` without one is a
+  bug — so the walk executes each branch against a stub Resolve. It fails on the
+  pre-fix tree and runs in 2 s.
+
+### Changed
+
+- `test_doc_tool_counts` counts `@mcp.tool()` decorators from the parsed syntax
+  tree rather than by matching the text. A docstring explaining where the
+  decorator has to sit was counted as a 35th tool; prose that mentions a
+  decorator is not a tool.
+
+## What's New in v2.68.0
+
+Six engines that let an agent judge its own output before shipping it — audio
+loudness, silence calibration, image QC, transcript editing, captions — plus the
+**in-app bridge**, which reaches the **free edition** of DaVinci Resolve, whose
+external scripting API refuses foreign processes entirely.
+
+### Added
+
+- **Audio delivery QC.** Delivery targets carry a named loudness contract
+  (`web`, `podcast`, `ebu_r128`, `atsc_a85`, `ott_dialogue_gated`) and project it
+  into the existing `loudness_qc` vocabulary. Dialogue-gated standards emit no
+  gradeable `integrated` figure — `loudness_qc` measures full-program, so grading
+  a dialogue-gated number against it produces a verdict that means nothing; it
+  travels as advisory metadata with the reason stated. No shipped target names a
+  standard, because a ProRes master has no inherent programme loudness.
+  `render(action='list_loudness_standards')`.
+- **Auto-calibrated silence gate.** `plan_silence_ripple` derives the threshold
+  from each clip's own dynamics instead of a fixed −30 dB. The metric is `astats`
+  **RMS trough** paired with RMS peak: `mean_volume` tracks programme level, and
+  `Noise floor dB` moved 19 dB between two fixtures sharing an identical noise
+  bed purely because one was quieter for longer. Against ground truth the fixed
+  threshold was wrong on all four fixtures. When calibration cannot be trusted
+  the item is **kept whole** rather than stripped — a fixed threshold applied to
+  material it does not suit is not a degraded answer, it is a wrong one.
+- **Image QC.** `media_analysis(action='assess_grade')` gives an agent
+  deterministic grounds to reject its own grade: tonal frame, noise
+  amplification, banding, highlight posterization and clipping growth, with
+  validated **CIEDE2000** (all 33 Sharma/Wu/Dalal reference pairs to 4 dp). A
+  clean grade costs zero tokens; vision is spent only where the numbers cannot
+  settle it. Non-display-referred working spaces are **refused, never guessed** —
+  the right transform depends on camera and project colour management, which a
+  frame cannot tell you.
+- **Word-level transcript editing.** `edit_engine(action='plan_transcript_tighten')`
+  removes fillers, false starts and over-long pauses at word boundaries with a
+  reason per cut, and `search_spoken_content` searches word timings across a
+  whole shoot to build selects. A lexical axis alongside `find_similar`'s
+  semantic-visual one.
+- **Captions.** `media_analysis(action='generate_captions')` emits SRT and WebVTT
+  under broadcast line rules, plus chapters and YouTube description text.
+- **The in-app bridge — live read and write control of the FREE edition.**
+  Opt-in with `DAVINCI_RESOLVE_BRIDGE=1`; unset changes nothing for existing
+  installs. A script launched from Workspace ▸ Scripts is handed the live
+  `resolve` object on any edition and re-exports it over an authenticated
+  loopback listener, which `connect_resolve` uses as a third transport beside
+  Local and Network. Existing call sites need no changes. This is the documented
+  in-app path, not a licence circumvention — but Blackmagic could close it, so
+  treat it as supported-until-it-is-not.
+- **`shutdown` and `reload` for the bridge.** The launcher blocks (correctly — a
+  Scripts-menu script is a child process, so a daemon thread dies the instant it
+  returns), which used to mean a stale in-Resolve copy could only be replaced by
+  quitting Resolve. `reload` re-imports the runtime from disk in place, and
+  refuses before stopping if the new sources will not compile.
+
+### Fixed
+
+- **The bridge was unreachable on the machine it exists for.** `_try_connect`
+  returned on `dvr_script is None` before calling `connect_resolve`, the function
+  that accepts None in bridge mode. Blackmagic's scripting module ships with the
+  *installer*, not the App Store build, so a free-edition-only machine has no
+  `Developer/Scripting/Modules` tree and the import fails. Verified by blocking
+  the import against a healthy live bridge: `get_resolve()` answered None.
+- **Auto-launch started the wrong Resolve, or one nobody asked for.** The macOS
+  path list contained only the installer location, so a free-only machine found
+  nothing and a machine with both always started Studio. In bridge mode it now
+  refuses outright: launching cannot create a listener that only a Scripts-menu
+  run creates.
+- **Interchange export over the bridge was degrading silently.** Resolve's API
+  constants (`EXPORT_AAF`, `AUDIO_SYNC_*`) are plain attributes and `dir()` does
+  not list them — measured on 21.0.3.7, `dir(resolve)` returns 34 names with no
+  `EXPORT_*` among them while the constants read back as real values. The proxy
+  could only call methods, so `hasattr` said False and the server fell through to
+  handing Resolve the bare string `"EXPORT_AAF"`.
+- **The proxy broke every chain longer than one call.** Every live Resolve object
+  reports `type(obj).__name__ == "PyRemoteObject"` — root 34 methods, Project 49,
+  TimelineItem 88, one class name — so caching method sets on it let the first
+  object touched define `hasattr` for everything after. Method sets are now keyed
+  on provenance, and absence is re-verified against the object itself.
+- **Bridge error codes never crossed the transport.** Every surface code was
+  flattened to `operation_failed`, so `stale_handle` (re-fetch) and
+  `ambiguous_locator` (disambiguate) arrived as one undifferentiated failure.
+
+### Validated live
+
+On **DaVinci Resolve 21.0.3.7 (App Store, free, sandboxed)**, with Blackmagic's
+scripting module blocked to reproduce a free-only machine: 34 tools, 583 declared
+actions, **165 read-shaped actions attempted, 145 clean, zero bridge-attributable
+failures**; 109 of the 112 API read methods the tools actually call exercised on
+the live object graph; a render completed to a non-empty file; AAF/DRT/EDL/FCPXML
+all written by `Timeline.Export`; 400 clips appended in 1.23 s and enumerated at
+0.81 ms/item; an evicted handle refusing with `stale_handle` rather than
+resolving to another object; and reads *and* writes continuing to work with a
+native file dialog open, because the bridge runs in its own process.
+
+`scripts/bridge_differential.py --mode differential` diffs the bridge against
+native scripting on one Studio instance. That comparison has **not** been run
+yet, so the evidenced claim is that the bridge carries the surface the tools use
+on the free edition — not that it is byte-identical to native scripting.
+
+## What's New in v2.67.1
+
+Documentation correction. No code changes — v2.67.0 already ships the correct
+behavior.
+
+### Changed
+
+- **`docs/kernels/render-deliver-kernel.md` no longer quotes a format/codec count
+  as portable.** It presented "23 formats and 99 format/codec pairs" as the
+  expected probe result; a live probe on Studio 19.1.3.7 found 20 formats and 271
+  pairs. Both mentions now carry the build they came from and point at probing
+  the machine in hand (`probe_render_matrix`, or `list_delivery_targets` with
+  `check_availability`) instead of comparing against a fixed number.
+- The kernel's boundary list now records the two traps the delivery-target work
+  verified live: codec **descriptions are not codec ids** (`H.264` vs `H264`, not
+  only the ProRes family), and some formats expose **no codecs at all** (`Wave`,
+  `GIF` on 19.1.3.7) and cannot be selected through this API.
+
+## What's New in v2.67.0
+
+Adds **delivery targets** — named render intents that carry their own QC spec —
+and fixes a silent render-codec bug found while designing them.
+
+### Fixed
+
+- **Render codec display names were rejected.** `GetRenderCodecs` returns
+  `{description: id}`, but the codec was passed to
+  `SetCurrentRenderFormatAndCodec`, `GetRenderResolutions`, and
+  `prepare_render_job` **raw** while the format was normalized. Verified live on
+  Studio 19.1.3.7: `('mov', 'Apple ProRes 422 HQ')` returns False while
+  `('mov', 'ProRes422HQ')` returns True — and the same holds for
+  `('mp4', 'H.264')` vs `('mp4', 'H264')`. Any render set by the codec name shown
+  in the Deliver page failed, across every codec family. This is the codec half
+  of the format-id fix (issue #59).
+- **A rejected format/codec no longer queues a job anyway.**
+  `prepare_render_job` previously applied settings and called `AddRenderJob()`
+  even when `SetCurrentRenderFormatAndCodec` returned False, reporting
+  `success: True` with `format_success: False` buried in the payload — a queued
+  job that would render in the *previously set* codec. It now returns
+  `RENDER_FORMAT_CODEC_REJECTED` with the machine's available codecs and queues
+  nothing. `set_format_and_codec` returns the same structured error instead of a
+  bare `success: False`.
+- **The granular server never received the issue #59 fix.**
+  `get_render_codecs` passed a raw display name, and
+  `set_current_render_format_and_codec` passed both format and codec raw. The
+  resolvers now live in `src/utils/render_ids.py` and are shared by both servers,
+  so the two cannot drift apart again.
+
+### Added
+
+- **Delivery targets** (`src/utils/delivery_targets.py`) — 28 named render
+  intents across master / web / sequence / broadcast / package tiers, every one
+  resolved live against Resolve Studio 19.1.3.7 (20 formats / 271 pairs). One
+  definition projects onto both Resolve `SetRenderSettings` keys and the
+  ffprobe-shaped spec `deliverable_qc` consumes, so a render and the check that
+  verifies it come from the same source. New `render` actions:
+  `list_delivery_targets`, `resolve_delivery_target`, `prepare_delivery_job`.
+  - Ids describe the deliverable (`prores422hq_master`, `h264_1080p_web`);
+    platform names (`youtube`, `tiktok`, `avid`, `stems`) are **aliases**, so a
+    platform changing its guidance repoints an alias instead of rewriting a target.
+  - Format and codec are ordered **candidate lists** resolved against the live
+    matrix, because codec descriptions vary by Resolve version, license, and
+    installed IO plugins. An unavailable target fails with the machine's actual
+    available lists; `list_delivery_targets` with `check_availability` reports
+    what this install can render.
+  - User-defined targets load from `logs/delivery-targets.json` (override with
+    `DAVINCI_RESOLVE_MCP_DELIVERY_TARGETS`); a malformed entry is skipped with a
+    warning rather than taking out the shipped set.
+- **`deliverable(action="spec_from_authored")`** on the advanced server —
+  projects the authored deliverable vocabulary (codec display names,
+  `"1920x1080"`, `"-16 LUFS"`, `<SHOW>_<EP>_<YYYYMMDD>.mov` naming templates)
+  onto a `deliverable_qc` spec plus a `loudness_qc` target. Anything it cannot
+  map is reported in `unmapped[]` rather than dropped.
+- **The `deliver` apply contract now carries QC specs.**
+  `APPLY_CONTRACT.deliver` emits `qc[]` alongside each deliverable, so a render
+  job travels with the spec that will verify it. Previously a stub.
+- **`tests.test_duplicate_definitions`** — static guard against a module-level
+  name being defined twice under `src/`. pyflakes does not catch this (it only
+  reports redefinition of an *unused* name), and the dangerous case is exactly
+  the one it misses. Added to the release validation set.
+
+### Notes
+
+- Bitrate is deliberately not encoded in delivery targets: Resolve exposes no
+  bitrate render-setting key, only `VideoQuality`, whose type varies per codec.
+- Image-sequence and package (IMF/DCP) targets return no QC spec —
+  `deliverable_qc` probes a single file, and those render many files or a
+  directory. Every such target carries an explicit `qc_skip_reason`, so a missing
+  check is always explained rather than silent.
+- **There is no audio-only WAV target.** The `Wave` format exposes zero codecs
+  and `SetCurrentRenderFormatAndCodec('wav', …)` rejects every value tried,
+  including the empty string. Recorded in `src/utils/api_truth.py` and the
+  generated `docs/reference/api-limitations.md`.
+- The live pass corrected candidate spellings that were wrong: plain
+  `"DNxHR HQX"` / `"DNxHR 444"` do not exist (live labels carry a bit depth),
+  DPX/TIFF codecs are `"RGB 10 bits"` not `"RGB 10-bit"`, and PNG is not a
+  Resolve render format.
+- `container` is `"mov"` for both `.mov` and `.mp4`: ffprobe reports
+  `format_name=mov,mp4,m4a,3gp,3g2,mj2` for each and only the first token is
+  kept, so `video.codec` is what discriminates them.
+
+## What's New in v2.66.0
+
+Generalizes the HTTP transcription backend introduced in v2.65.0 into a
+configuration-driven registry, so additional local, network, or cloud-backed
+adapters no longer require MCP source changes. Contributed in PR #97 by
+@double2tea.
+
+### Changed
+
+- **Pluggable HTTP transcription providers** (PR #97, @double2tea) — the
+  MLX-specific router backend is replaced by an ordered registry of HTTP
+  transcription providers registered via
+  `DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS` (a JSON array). Each entry
+  requires `id` and `base_url`; optional adapter fields cover `label`, `model`,
+  `health_path`, `transcribe_path`, `health_field`, `health_value`, `headers`,
+  `request_body`, `field_map`, and `response_field`. Configured providers are
+  selected as stable `http:<id>` backend names and preferred in transcription
+  capability ordering. Auth headers are sent on health and transcription
+  requests but kept out of capability reports, and malformed configuration
+  fails fast. Response handling now accepts a transcript object, a JSON-encoded
+  transcript string, or plain text under the configured `response_field`.
+  Audiobox is documented as one adapter example rather than a core requirement.
+
+### Removed
+
+- The `DAVINCI_RESOLVE_MCP_MLX_AUDIO_URL` / `DAVINCI_RESOLVE_MCP_MLX_AUDIO_MODEL`
+  environment variables added in v2.65.0 are superseded by the generic provider
+  registry above. To keep an Audiobox/MLX router, register it as a provider:
+  `[{"id":"audiobox-local","base_url":"http://127.0.0.1:8000","request_body":{"provider":"mlx"}}]`.
+
+### Validation
+
+- `tests/test_media_analysis.py` and the analysis caps/runs/store suites pass
+  (153 on the merged tree); static checks and drift guards pass.
+- No DaVinci Resolve scripting behavior changed: the change is confined to the
+  stdlib HTTP transcription path and is gated behind an env var. Live Resolve
+  validation not required.
+
+## What's New in v2.65.0
+
+Bundles two community contributions from @double2tea: an optional HTTP
+transcription backend and a localized, build-aware control panel. Both are
+opt-in and change no default behavior — with neither configured, existing
+transcription backends and the English panel work exactly as before.
+
+### Added
+
+- **MLX Audio Router transcription backend** (PR #95, @double2tea) — an optional
+  HTTP transcription backend that runs outside the Resolve MCP Python
+  environment. Enabled only when `DAVINCI_RESOLVE_MCP_MLX_AUDIO_URL` is set and a
+  bounded `GET /health` probe succeeds; an optional
+  `DAVINCI_RESOLVE_MCP_MLX_AUDIO_MODEL` overrides the router's default model.
+  When configured and healthy it is preferred in transcription capability
+  ordering, and its response is normalized into the existing JSON/SRT/VTT
+  transcript artifacts. Standard-library only (`urllib`); the MCP server never
+  installs, starts, or downloads anything on the router's behalf, and existing
+  Whisper backends are untouched when no URL is set.
+- **Control panel localization (English / Simplified Chinese)** (PR #96,
+  @double2tea) — a persistent language switch on the local control panel.
+  English remains the authored, canonical UI; the browser stores only the
+  selected locale in `localStorage` and the initial locale follows browser
+  preferences. Translation runs client-side over the DOM (text nodes plus
+  `aria-label`/`title`/`placeholder`) and is fully reversible; no server API or
+  persisted project data changes.
+- **Build-aware AI console** (PR #96, @double2tea) — the Resolve AI console now
+  uses the runtime capability payload to disable actions the connected Resolve
+  build cannot execute, distinguishing "Requires Resolve 21+" from "Unavailable
+  on this build" and surfacing the Resolve 20 transcription methods
+  (`TranscribeAudio` / `ClearTranscription`). Narrow-screen navigation and the
+  mobile footer were also improved.
+
+### Validation
+
+- Static checks and drift guards pass; `tests/test_media_analysis.py` (110),
+  `tests/test_control_panel_i18n.py` + `tests/test_control_panel_ai_capabilities.py`
+  + `tests/test_open_control_panel.py` (14) pass on the merged tree.
+- No DaVinci Resolve scripting behavior changed: PR #95 is a self-contained
+  HTTP/stdlib backend gated behind an env var, and PR #96 changes only the
+  control panel's client-side HTML/JS. Live Resolve validation not required.
+
+## What's New in v2.64.0
+
+Adds opt-in support for DaVinci Resolve's **Network** external-scripting mode
+(PR #91… correction: PR #94, by @double2tea), so the MCP can drive a Resolve
+instance addressed by IP — including a Resolve running on the same machine with
+`External scripting using = Network`. Contributed in PR #94 by @double2tea,
+with two additional connection sites hardened during adoption. Local mode is
+unchanged and remains the default.
+
+### Added
+
+- **Resolve Network scripting mode** — set `RESOLVE_SCRIPT_HOST` to the Resolve
+  host IP (`127.0.0.1` on the same machine) to route connections through
+  Resolve's explicit IP-targeted `scriptapp("Resolve", host, timeout)` overload.
+  `RESOLVE_SCRIPT_TIMEOUT` (positive finite seconds, default 5) bounds the
+  connection wait. When `RESOLVE_SCRIPT_HOST` is absent, the server uses the
+  one-argument Local discovery exactly as before. A shared `connect_resolve`
+  helper centralizes this behavior; the compound server, granular server,
+  analysis dashboard, `scripts/doctor.py`, and the installer's post-install
+  connection probe all route through it. The installer copies
+  `RESOLVE_SCRIPT_HOST`/`RESOLVE_SCRIPT_TIMEOUT` into generated client configs
+  when present in its environment.
+- **`doctor.py` Network flags** — `python3 scripts/doctor.py --resolve-host
+  <ip> [--resolve-timeout <seconds>]` runs the read-only connection check
+  against a Network-mode host.
+
+### Security
+
+- Network scripting permits remote control of Resolve. Documentation (SKILL.md,
+  install.md) advises using Local mode when remote access is unnecessary, and
+  otherwise restricting access with host firewall and network controls.
+
+### Validation
+
+- Live-validated on DaVinci Resolve Studio 19.1.3.7: Local mode (one-argument
+  discovery) and Network mode (`--resolve-host 127.0.0.1 --resolve-timeout 8`)
+  both connect through the shared `connect_resolve` helper. PR author validated
+  against Studio 20.3.2.9 in Network mode. Full offline suite: 1514 tests.
+
+## What's New in v2.63.2
+
+Installer fix for Windows MSIX builds of Claude Desktop (issue #93, reported by
+@corolorn). No tool-surface change.
+
+### Fixed
+
+- **Installer writes Claude Desktop config to the MSIX-virtualized path on
+  Windows** — Claude Desktop for Windows ships as an MSIX package (even from
+  the official website), and MSIX filesystem virtualization redirects the
+  app's config to
+  `%LOCALAPPDATA%\Packages\Claude_<publisherhash>\LocalCache\Roaming\Claude\claude_desktop_config.json`.
+  The installer previously wrote to the documented `%APPDATA%\Claude\` path,
+  which the MSIX-packaged app never reads, so the server silently never
+  appeared. The installer now detects the containerized path (publisher hash
+  globbed, not hard-coded) and writes there when present, falling back to
+  `%APPDATA%\Claude\` for non-MSIX installs. Documented both locations in
+  `docs/install.md`.
+
+## What's New in v2.63.1
+
+Documentation-only. Records the `Graph.SetLUT` master-LUT-dir behavior (from the
+v2.62.3 fix) in the canonical reference surfaces. No code or tool-surface change.
+
+### Documentation
+
+- **`api_truth` + api-limitations report** — added a `Graph.SetLUT` entry
+  (`submit: bug`, #90): `SetLUT` resolves LUT paths only against the master
+  (system) LUT dir and configured custom paths, never the per-user dir the
+  `dctl` tool installs to; an absolute user-dir path fails too, and
+  `RefreshLUTList()` does not help, while a master-subfolder path resolves.
+  Verified live on Studio 19.1.3.7 (same behavior reported on 21.0.2 in #90).
+  Regenerated `docs/reference/api-limitations.md`.
+- **`docs/notes/lut-notes.md`** — corrected a misleading claim that any valid
+  absolute path resolves (an absolute path into the user LUT dir does not),
+  added a "master LUT dir only" section, and documented the per-user install
+  location.
+- **`docs/notes/dctl-notes.md`** — noted the same caveat on the `set_lut`
+  action, including that `set_lut` now auto-relocates into the master dir.
+
+## What's New in v2.63.0
+
+Waveform silence ripple for the edit engine (PR #91, by @EliteSystemsAI),
+adopted with follow-up hardening and live-validated in Resolve Studio.
+
+### Added
+
+- **`plan_silence_ripple` / `execute_silence_ripple`** — waveform-driven dead-air
+  removal that mirrors Resolve's *Ripple Delete Silence* dialog (ffmpeg
+  `silencedetect` → keep-range variant assembly). Tunable `threshold_db`,
+  `min_strip_frames`, `pre_head_frames`, and `post_tail_frames`. Original
+  timeline is never mutated; execution is confirm-gated like `execute_tighten`.
+  New module: `src/utils/silence_ripple.py`; tests in
+  `tests/test_silence_ripple.py` and `tests/test_edit_engine.py`.
+
+### Fixed (hardening on the PR before release)
+
+- **Skipped items ride along whole** — timeline items without a readable media
+  file path now emit a full-range keep (video + mirrored audio) so the
+  assembled variant never silently loses content; only items with no media
+  reference at all are omitted, and the `skipped` reason says so explicitly.
+- **All audio streams are merged before detection** — production MXF often
+  carries one mono PCM stream per channel, and ffmpeg's default stream
+  selection could land on a dead scratch channel, reading entire takes as
+  silence. Detection now merges every audio stream (silence only when ALL
+  channels are silent — Resolve's dialog semantics), with a single-stream
+  fallback if `amerge` refuses the graph. Found by live validation on 5-stream
+  interview masters.
+- **No pointless video decode** — silence detection runs with `-vn`, so 4K
+  ProRes sources no longer decode picture just to scan audio.
+- **Clear failure modes** — a missing ffmpeg binary now reports itself instead
+  of "no silence regions found", and a plan whose keep ranges are empty
+  (source quieter than `threshold_db` throughout) carries an explicit warning
+  and is refused at execution.
+
 ## What's New in v2.62.3
 
 A single grading fix (PR #90, by @Mldphotohraphie), extended and hardened. No
@@ -14,9 +4112,10 @@ new tool surface.
   `Graph.SetLUT()` resolves LUT paths (relative names *and* absolute paths)
   only against the master (system) LUT directory. A freshly installed LUT could
   therefore never be applied, and `set_lut` always returned
-  `{"success": false}`. Verified live on Resolve Studio 21: `SetLUT` fails for a
-  user-dir LUT even after `RefreshLUTList()` and even via an absolute user-dir
-  path, so relocation into the master dir is genuinely required. On a `SetLUT`
+  `{"success": false}`. Verified live on Resolve Studio 19.1.3.7: `SetLUT` fails
+  for a user-dir LUT even after `RefreshLUTList()` and even via an absolute
+  user-dir path, so relocation into the master dir is genuinely required. (The
+  originating report, PR #90, observed the same on Studio 21.0.2.) On a `SetLUT`
   failure the server now locates the LUT, stages it under a namespaced
   `MCP/` subfolder of the master LUT dir (avoiding basename collisions with
   stock/vendor LUTs), calls `RefreshLUTList()`, and retries. No behavior change

@@ -1,5 +1,10 @@
 # Node (resolve-advanced — the davinci-resolve-advanced-mcp server + vendored libs)
+# No trailing slash: a trailing slash matches directories only, so a SYMLINK
+# named node_modules (handy for pointing a git worktree at the primary tree's
+# installed deps) slipped past these and got committed once. Match both.
+node_modules
 node_modules/
+resolve-advanced/node_modules
 resolve-advanced/node_modules/
 
 # Python (envs, build artifacts, caches)
@@ -109,6 +114,18 @@ docs/_design/
 # Resolve MCP media analysis artifacts
 .davinci-resolve-mcp-analysis/
 davinci-resolve-mcp-analysis/
+
+# Export artifacts at the repo root. Backstop only: tests must not write into
+# the working directory at all (see tests/_paths.py), but a guard-rejection
+# test that stops rejecting writes a real file, and one such look.cube reached
+# a PR before anyone noticed. Root-anchored so genuine fixtures under tests/
+# and docs/ are unaffected.
+/*.cube
+/*.dctl
+/*.drx
+/*.mov
+/*.mp4
+/*.wav
 
 # Local scratch / personal tooling attached to this project.
 # Holds design docs, calibration references, release-notes drafts, the screenshot

@@ -5,8 +5,17 @@ for inspecting Resolve state, running source-safe media analysis, drilling into
 analyzed clips and shots, fixing analysis output inline, reviewing timeline
 edit history, driving Resolve's local AI operations, and managing preferences.
 
-The panel is a local HTTP server (default `http://127.0.0.1:8765`). It does not
-expose a network listener beyond loopback and does not modify source media.
+The panel is a local HTTP server (default `http://127.0.0.1:8765`). It binds
+loopback only — a non-loopback `--host` / `host` is refused, with no override —
+and does not modify source media.
+
+Every launch mints a per-launch bearer token. The launcher hands it to the
+browser in the URL fragment (`http://127.0.0.1:8765/#token=…`); the panel
+answers 401 to every request that doesn't carry it, so **use the exact URL the
+launcher prints or `open_control_panel` returns** — a bare
+`http://127.0.0.1:8765` shows a "Control panel locked" screen. Requests with a
+non-loopback `Host` or `Origin`, or a non-JSON `POST`, are rejected outright
+(DNS-rebinding / CSRF guards). See `SECURITY.md` for the full posture.
 
 ## Launching the panel
 
@@ -22,7 +31,11 @@ resolve_control(action="open_control_panel")
 ```
 
 Once running, `resolve_control(action="control_panel_status")` checks the
-pidfile and `resolve_control(action="close_control_panel")` stops it.
+pidfile (`~/.davinci-resolve-mcp/control_panel.json`, 0600 — it holds the
+token) and returns the token-bearing URL; `resolve_control(action="close_control_panel")`
+stops it. A panel whose token is not on record (e.g. one that survived an MCP
+restart from before this scheme) is reported as `stale_running`; re-call
+`open_control_panel` with `force_restart=true` to relaunch it.
 
 ## Navigation and deep links
 

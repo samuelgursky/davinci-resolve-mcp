@@ -10,6 +10,7 @@
  *
  * VERIFY against the live server's real action names/args before finalizing (first real-footage session).
  */
+import { deliverableSpecsFromAuthored } from './deliverable-spec-bridge.mjs';
 
 // stage → the Python action(s) + how each action's args derive from the resolved config.
 export const APPLY_CONTRACT = {
@@ -43,8 +44,22 @@ export const APPLY_CONTRACT = {
   qc: [{ action: 'noop', argsFrom: () => ({ note: 'qc is deterministic in Node (gamut_legal/deliverable_qc/verify_grade) — no live apply' }) }],
   deliver: [
     {
+      // The emitted job carries the QC spec that will later verify it, so the
+      // render and its check come from one authored definition instead of being
+      // re-derived by hand after the fact. Loudness is deliberately separate —
+      // it is not a deliverable_qc field (see deliverable-spec-bridge.mjs).
       action: 'render.add_job',
-      argsFrom: (c) => ({ deliverables: c?.deliverables ?? c ?? null, note: 'expand deliverable entities → render preset + naming' }),
+      argsFrom: (c) => {
+        const deliverables = c?.deliverables ?? (Array.isArray(c) ? c : null);
+        const projected = deliverableSpecsFromAuthored(deliverables ?? []);
+        const unmapped = projected.flatMap((p) => (p.unmapped || []).map((u) => (p.id ? `${p.id}: ${u}` : u)));
+        return {
+          deliverables: deliverables ?? c ?? null,
+          qc: projected.map((p) => ({ id: p.id, spec: p.spec, loudnessTarget: p.loudnessTarget })),
+          ...(unmapped.length ? { unmapped } : {}),
+          note: 'render per deliverable, then deliverable_qc each output against its qc[].spec (and loudness_qc against qc[].loudnessTarget)',
+        };
+      },
     },
   ],
 };

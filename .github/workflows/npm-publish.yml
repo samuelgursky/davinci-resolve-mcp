@@ -4,6 +4,18 @@ on:
   push:
     tags:
       - "v*"
+  # Manual re-trigger. A tag push is single-shot: if Actions cannot allocate a
+  # runner (2026-08-06 outage — the v2.84.0 tag registered no run at all), there
+  # is nothing to re-run and the only other recovery is deleting and re-pushing
+  # a published tag. `gh run rerun` is not a substitute either: it re-presents
+  # the consumed single-use OIDC token and fails provenance with
+  # IDENTITY_TOKEN_READ_ERROR. A fresh dispatch mints a fresh token.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or ref to publish (e.g. v2.84.0). Defaults to the selected branch."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -15,6 +27,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          # Empty on a tag push, which checkout treats as "use the triggering ref".
+          ref: ${{ inputs.ref || '' }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -35,10 +50,16 @@ jobs:
         # tool action lists in sync with dispatch, control-panel guide in
         # sync with the panel's navigation and screenshots, the
         # Blackmagic-facing api-limitations.md in sync with the api_truth ledger,
-        # and the tool counts quoted across the docs in sync with reality.
+        # the tool counts quoted across the docs in sync with reality, and the
+        # mcp[cli] cap that keeps a fresh install working (issue #103).
+        #
+        # tests.test_import is listed here as well as in the smoke step above:
+        # that step runs the module's run_all(), which only picks up bare
+        # test_-prefixed functions, so a TestCase in the same file would
+        # otherwise never run in CI.
         run: |
           pip install pyflakes
-          python -m unittest tests.test_static_undefined_names tests.test_action_list_drift tests.test_panel_docs_drift tests.test_api_limitations_doc tests.test_doc_tool_counts
+          python -m unittest tests.test_static_undefined_names tests.test_action_list_drift tests.test_panel_docs_drift tests.test_api_limitations_doc tests.test_doc_tool_counts tests.test_import
 
       - name: Run Node CLI smoke tests
         run: |

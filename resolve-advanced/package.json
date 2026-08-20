@@ -15,7 +15,8 @@
   "files": [
     "server/**/*.mjs",
     "vendor/**",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
@@ -37,9 +38,9 @@
     "_comment": "audio (split/trim/convert) + conform frame ops need system ffmpeg/ffprobe on PATH (NOT bundled — FFmpeg binaries are GPL; this package stays MIT). Install ffmpeg yourself: brew install ffmpeg."
   },
   "scripts": {
-    "test": "node --test vendor/drp-format/__tests__/ vendor/drt-format/__tests__/ vendor/drx-codec/__tests__/ test/",
-    "test:libs": "node --test vendor/drp-format/__tests__/ vendor/drt-format/__tests__/ vendor/drx-codec/__tests__/",
-    "test:server": "node --test test/"
+    "test": "node --test vendor/drp-format/__tests__/*.test.js vendor/drt-format/__tests__/*.test.js vendor/drx-codec/__tests__/*.test.js test/*.test.mjs",
+    "test:libs": "node --test vendor/drp-format/__tests__/*.test.js vendor/drt-format/__tests__/*.test.js vendor/drx-codec/__tests__/*.test.js",
+    "test:server": "node --test test/*.test.mjs"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -4,7 +4,8 @@ stdio remains the default. The `sse` and `streamable-http` modes bind to
 loopback (127.0.0.1) by default and REQUIRE a bearer token on every request, so
 turning networking on never silently exposes Resolve. The token comes from
 ``$DAVINCI_MCP_TOKEN`` or is generated and logged at startup. A small state file
-lets the control panel show the live connection URL + token.
+(0600, under the per-user private state dir — never a shared tempdir) lets the
+control panel show the live connection URL + token.
 
 Security posture:
 - Default host is loopback; a non-loopback bind logs a loud warning.
@@ -16,14 +17,19 @@ import json
 import logging
 import os
 import secrets
-import tempfile
 import time
+
+from src.utils.private_state import private_state_dir, write_private_json
 
 logger = logging.getLogger("davinci-resolve-mcp")
 
-TRANSPORT_STATE_PATH = os.path.join(
-    tempfile.gettempdir(), "davinci_resolve_mcp_transport.json"
-)
+
+def _state_path() -> str:
+    return os.path.join(private_state_dir(), "mcp_transport.json")
+
+
+# Resolved lazily so DAVINCI_RESOLVE_MCP_STATE_DIR set by a test harness is honored.
+TRANSPORT_STATE_PATH = _state_path()
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -32,7 +38,7 @@ def resolve_token():
     tok = os.environ.get("DAVINCI_MCP_TOKEN")
     if tok:
         return tok, False
-    return secrets.token_urlsafe(24), True
+    return secrets.token_urlsafe(32), True
 
 
 def _auth_middleware_cls(token):
@@ -56,17 +62,16 @@ def _auth_middleware_cls(token):
 
 def write_transport_state(transport, host, port, token):
     try:
-        with open(TRANSPORT_STATE_PATH, "w", encoding="utf-8") as fh:
-            json.dump({
-                "transport": transport,
-                "host": host,
-                "port": port,
-                "url": f"http://{host}:{port}",
-                "token": token,
-                "loopback": host in LOOPBACK_HOSTS,
-                "pid": os.getpid(),
-                "started_at": time.time(),
-            }, fh)
+        write_private_json(TRANSPORT_STATE_PATH, {
+            "transport": transport,
+            "host": host,
+            "port": port,
+            "url": f"http://{host}:{port}",
+            "token": token,
+            "loopback": host in LOOPBACK_HOSTS,
+            "pid": os.getpid(),
+            "started_at": time.time(),
+        })
     except OSError as exc:
         logger.warning("could not write transport state: %s", exc)
 

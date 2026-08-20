@@ -1,0 +1,3178 @@
+{
+  "counts": {
+    "parity": 86,
+    "flaky": 0,
+    "hang_headless": 0,
+    "hang_gui": 0,
+    "headless_degraded": 2,
+    "gui_degraded": 0,
+    "both_hang": 0,
+    "both_failed": 14,
+    "divergent": 3,
+    "untested": 0
+  },
+  "findings": [
+    {
+      "probe": "app.current_page",
+      "verdict": "parity",
+      "gui": {
+        "probe": "app.current_page",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'edit'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "app.current_page",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'edit'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "app-global state the sweep itself moves; compared by outcome only",
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.fusion_current_comp",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "app.fusion_current_comp",
+        "category": "app",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "app.fusion_current_comp",
+        "category": "app",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.fusion_handle",
+      "verdict": "parity",
+      "gui": {
+        "probe": "app.fusion_handle",
+        "category": "app",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "app.fusion_handle",
+        "category": "app",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.keyframe_mode",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "app.keyframe_mode",
+        "category": "app",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "app.keyframe_mode",
+        "category": "app",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.media_storage",
+      "verdict": "parity",
+      "gui": {
+        "probe": "app.media_storage",
+        "category": "app",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "app.media_storage",
+        "category": "app",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.mounted_volumes",
+      "verdict": "parity",
+      "gui": {
+        "probe": "app.mounted_volumes",
+        "category": "app",
+        "outcome": "ok",
+        "value": "13",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "app.mounted_volumes",
+        "category": "app",
+        "outcome": "ok",
+        "value": "13",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.product_name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "app.product_name",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'DaVinci Resolve Studio'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "app.product_name",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'DaVinci Resolve Studio'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "app.version_string",
+      "verdict": "parity",
+      "gui": {
+        "probe": "app.version_string",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'19.1.3.7'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "app.version_string",
+        "category": "app",
+        "outcome": "ok",
+        "value": "'19.1.3.7'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "audio.add_delete_track",
+      "verdict": "parity",
+      "gui": {
+        "probe": "audio.add_delete_track",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.05,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "audio.add_delete_track",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.04,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "audio.set_track_name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "audio.set_track_name",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "audio.set_track_name",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "audio.track_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "audio.track_count",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "audio.track_count",
+        "category": "audio",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.group_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.group_roundtrip",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "color.group_roundtrip",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.node_graph",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.node_graph",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "color.node_graph",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.node_label",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.node_label",
+        "category": "color",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "color.node_label",
+        "category": "color",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.node_lut",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.node_lut",
+        "category": "color",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "color.node_lut",
+        "category": "color",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.num_nodes",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.num_nodes",
+        "category": "color",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "color.num_nodes",
+        "category": "color",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.reset_all_grades",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.reset_all_grades",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "color.reset_all_grades",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.set_cdl",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.set_cdl",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "color.set_cdl",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.set_node_enabled",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.set_node_enabled",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "color.set_node_enabled",
+        "category": "color",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "color.tools_in_node",
+      "verdict": "parity",
+      "gui": {
+        "probe": "color.tools_in_node",
+        "category": "color",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "color.tools_in_node",
+        "category": "color",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "editorial.compound_clip",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "editorial.compound_clip",
+        "category": "editorial",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "TypeError: 'NoneType' object is not callable",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "editorial.compound_clip",
+        "category": "editorial",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "editorial.fusion_clip",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "editorial.fusion_clip",
+        "category": "editorial",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "TypeError: 'NoneType' object is not callable",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "editorial.fusion_clip",
+        "category": "editorial",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "editorial.nested_timeline",
+      "verdict": "headless_degraded",
+      "gui": {
+        "probe": "editorial.nested_timeline",
+        "category": "editorial",
+        "outcome": "ok",
+        "value": "'True/1'",
+        "seconds": 0.3,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "editorial.nested_timeline",
+        "category": "editorial",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "AttributeError: 'NoneType' object has no attribute 'CreateEmptyTimeline'",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "succeeded with a UI, failed without one",
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "editorial.set_clips_linked",
+      "verdict": "headless_degraded",
+      "gui": {
+        "probe": "editorial.set_clips_linked",
+        "category": "editorial",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.01,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "editorial.set_clips_linked",
+        "category": "editorial",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "succeeded with a UI, failed without one",
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "editorial.take_selector",
+      "verdict": "divergent",
+      "gui": {
+        "probe": "editorial.take_selector",
+        "category": "editorial",
+        "outcome": "ok",
+        "value": "'False/0/None/None'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "editorial.take_selector",
+        "category": "editorial",
+        "outcome": "ok",
+        "value": "'None/None/None/None'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "both returned, values differ",
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "export.aaf",
+      "verdict": "parity",
+      "gui": {
+        "probe": "export.aaf",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.03,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "export.aaf",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "export.drt",
+      "verdict": "parity",
+      "gui": {
+        "probe": "export.drt",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.01,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "export.drt",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.01,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "export.edl",
+      "verdict": "parity",
+      "gui": {
+        "probe": "export.edl",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "export.edl",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "export.fcpxml",
+      "verdict": "parity",
+      "gui": {
+        "probe": "export.fcpxml",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "export.fcpxml",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "export.otio",
+      "verdict": "parity",
+      "gui": {
+        "probe": "export.otio",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "export.otio",
+        "category": "interchange",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "fusion.add_delete_comp",
+      "verdict": "parity",
+      "gui": {
+        "probe": "fusion.add_delete_comp",
+        "category": "fusion",
+        "outcome": "ok",
+        "value": "'True/False'",
+        "seconds": 0.12,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "fusion.add_delete_comp",
+        "category": "fusion",
+        "outcome": "ok",
+        "value": "'True/False'",
+        "seconds": 0.12,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "fusion.comp_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "fusion.comp_count",
+        "category": "fusion",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "fusion.comp_count",
+        "category": "fusion",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "gallery.album_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "gallery.album_count",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "gallery.album_count",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "gallery.export_current_frame",
+      "verdict": "parity",
+      "gui": {
+        "probe": "gallery.export_current_frame",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.04,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "gallery.export_current_frame",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.04,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "gallery.export_stills",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "gallery.export_stills",
+        "category": "gallery",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.05,
+        "mode": "gui",
+        "detail": "",
+        "note": "fails in BOTH modes without a visible Gallery panel",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "gallery.export_stills",
+        "category": "gallery",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.04,
+        "mode": "headless",
+        "detail": "",
+        "note": "fails in BOTH modes without a visible Gallery panel",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "gallery.handle",
+      "verdict": "parity",
+      "gui": {
+        "probe": "gallery.handle",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "gallery.handle",
+        "category": "gallery",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.duration",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.duration",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "48",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "item.duration",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "48",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.flag_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.flag_roundtrip",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "item.flag_roundtrip",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.left_offset",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.left_offset",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "item.left_offset",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "0",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.marker_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.marker_roundtrip",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "item.marker_roundtrip",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.media_pool_item",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.media_pool_item",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "item.media_pool_item",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.name",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "'probe_source.mov'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "item.name",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "'probe_source.mov'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.set_clip_color",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.set_clip_color",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "item.set_clip_color",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "item.set_zoom_property",
+      "verdict": "parity",
+      "gui": {
+        "probe": "item.set_zoom_property",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "'True/1.25'",
+        "seconds": 0.01,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "item.set_zoom_property",
+        "category": "timeline_item",
+        "outcome": "ok",
+        "value": "'True/1.25'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "layout.delete_preset",
+      "verdict": "parity",
+      "gui": {
+        "probe": "layout.delete_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.01,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "layout.delete_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "layout.export_preset",
+      "verdict": "parity",
+      "gui": {
+        "probe": "layout.export_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "layout.export_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "layout.load_preset",
+      "verdict": "parity",
+      "gui": {
+        "probe": "layout.load_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.18,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "layout.load_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "layout.save_preset",
+      "verdict": "parity",
+      "gui": {
+        "probe": "layout.save_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "layout.save_preset",
+        "category": "layout",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "lifecycle.create_project",
+      "verdict": "parity",
+      "gui": {
+        "probe": "lifecycle.create_project",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 3.21,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "lifecycle.create_project",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 3.97,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "lifecycle.delete_after_close_releases_lock",
+      "verdict": "parity",
+      "gui": {
+        "probe": "lifecycle.delete_after_close_releases_lock",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "'without_close=False/with_close=False'",
+        "seconds": 3.75,
+        "mode": "gui",
+        "detail": "",
+        "note": "LoadProject-away does NOT release the lock; CloseProject does",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "lifecycle.delete_after_close_releases_lock",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "'without_close=False/with_close=False'",
+        "seconds": 4.57,
+        "mode": "headless",
+        "detail": "",
+        "note": "LoadProject-away does NOT release the lock; CloseProject does",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "lifecycle.load_and_close",
+      "verdict": "parity",
+      "gui": {
+        "probe": "lifecycle.load_and_close",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "'True/True/False'",
+        "seconds": 3.23,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "lifecycle.load_and_close",
+        "category": "lifecycle",
+        "outcome": "ok",
+        "value": "'True/True/False'",
+        "seconds": 4.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "longop.auto_sync_audio",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "longop.auto_sync_audio",
+        "category": "longop",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "needs >= 2 pool items, at least one video and one audio",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "longop.auto_sync_audio",
+        "category": "longop",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "AttributeError: 'NoneType' object has no attribute 'GetRootFolder'",
+        "note": "needs >= 2 pool items, at least one video and one audio",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "longop.create_subtitles_from_audio",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "longop.create_subtitles_from_audio",
+        "category": "longop",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "Studio AI; enum-keyed settings dict",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "longop.create_subtitles_from_audio",
+        "category": "longop",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "Studio AI; enum-keyed settings dict",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "longop.link_unlink_proxy",
+      "verdict": "parity",
+      "gui": {
+        "probe": "longop.link_unlink_proxy",
+        "category": "longop",
+        "outcome": "ok",
+        "value": "'None/None'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "longop.link_unlink_proxy",
+        "category": "longop",
+        "outcome": "ok",
+        "value": "'None/None'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "longop.transcribe_audio",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "longop.transcribe_audio",
+        "category": "longop",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "Studio AI; may need a language model present",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "longop.transcribe_audio",
+        "category": "longop",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "Studio AI; may need a language model present",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_color",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_color",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/color'",
+        "seconds": 0.12,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "page.open_color",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/color'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_cut",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_cut",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/cut'",
+        "seconds": 0.04,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "page.open_cut",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/cut'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_deliver",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_deliver",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/deliver'",
+        "seconds": 0.04,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "page.open_deliver",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/deliver'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_edit",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_edit",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/edit'",
+        "seconds": 0.07,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "page.open_edit",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/edit'",
+        "seconds": 0.03,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_fairlight",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_fairlight",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/fairlight'",
+        "seconds": 0.05,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "page.open_fairlight",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/fairlight'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_fusion",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_fusion",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/fusion'",
+        "seconds": 1.37,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "page.open_fusion",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/fusion'",
+        "seconds": 0.16,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "page.open_media",
+      "verdict": "parity",
+      "gui": {
+        "probe": "page.open_media",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/media'",
+        "seconds": 0.12,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "page.open_media",
+        "category": "pages",
+        "outcome": "ok",
+        "value": "'True/media'",
+        "seconds": 0.03,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.current_database",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.current_database",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "{'DbType': 'Disk', 'DbName': 'Local Database'}",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pm.current_database",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "{'DbType': 'Disk', 'DbName': 'Local Database'}",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.current_folder",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.current_folder",
+        "category": "project_manager",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pm.current_folder",
+        "category": "project_manager",
+        "outcome": "empty",
+        "value": "''",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.current_project_name_on_untitled",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.current_project_name_on_untitled",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "'Untitled Project'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pm.current_project_name_on_untitled",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "'Untitled Project'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.database_list",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.database_list",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "2",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pm.database_list",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "2",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.export_project",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.export_project",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.02,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pm.export_project",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.folder_list",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.folder_list",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pm.folder_list",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.project_list_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.project_list_count",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pm.project_list_count",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pm.save_named_project",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pm.save_named_project",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.02,
+        "mode": "gui",
+        "detail": "",
+        "note": "the control for save_untitled_project: must work in both modes",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pm.save_named_project",
+        "category": "project_manager",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "the control for save_untitled_project: must work in both modes",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.add_subfolder",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pool.add_subfolder",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.04,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pool.add_subfolder",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.02,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.append_to_timeline",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "pool.append_to_timeline",
+        "category": "media_pool",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.07,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pool.append_to_timeline",
+        "category": "media_pool",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.clip_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pool.clip_count",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "2",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pool.clip_count",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "2",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.clip_marker_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pool.clip_marker_roundtrip",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "'None/0'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pool.clip_marker_roundtrip",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "'None/0'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.clip_resolution",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "pool.clip_resolution",
+        "category": "media_pool",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pool.clip_resolution",
+        "category": "media_pool",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.root_folder",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pool.root_folder",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pool.root_folder",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.set_clip_color",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "pool.set_clip_color",
+        "category": "media_pool",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pool.set_clip_color",
+        "category": "media_pool",
+        "outcome": "none",
+        "value": "None",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "pool.set_clip_metadata",
+      "verdict": "parity",
+      "gui": {
+        "probe": "pool.set_clip_metadata",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "'None/None'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "pool.set_clip_metadata",
+        "category": "media_pool",
+        "outcome": "ok",
+        "value": "'None/None'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "project.read_frame_rate",
+      "verdict": "parity",
+      "gui": {
+        "probe": "project.read_frame_rate",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "24.0",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "project.read_frame_rate",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "24.0",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "project.set_colour_science",
+      "verdict": "parity",
+      "gui": {
+        "probe": "project.set_colour_science",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'True/davinciYRGB'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "project.set_colour_science",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'True/davinciYRGB'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "project.set_resolution",
+      "verdict": "parity",
+      "gui": {
+        "probe": "project.set_resolution",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'True/1920'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "project.set_resolution",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'True/1920'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "project.setting_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "project.setting_count",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "project.setting_count",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "project.unique_id_shape",
+      "verdict": "parity",
+      "gui": {
+        "probe": "project.unique_id_shape",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'str'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "project.unique_id_shape",
+        "category": "project_settings",
+        "outcome": "ok",
+        "value": "'str'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "projectlevel.archive_project",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "projectlevel.archive_project",
+        "category": "projectlevel",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "writes a .dra bundle; media excluded to keep it small",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "projectlevel.archive_project",
+        "category": "projectlevel",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "writes a .dra bundle; media excluded to keep it small",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "projectlevel.export_burn_in_preset",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "projectlevel.export_burn_in_preset",
+        "category": "projectlevel",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "projectlevel.export_burn_in_preset",
+        "category": "projectlevel",
+        "outcome": "false",
+        "value": "False",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "projectlevel.multi_job_queue",
+      "verdict": "divergent",
+      "gui": {
+        "probe": "projectlevel.multi_job_queue",
+        "category": "projectlevel",
+        "outcome": "ok",
+        "value": "'3/3'",
+        "seconds": 0.41,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "projectlevel.multi_job_queue",
+        "category": "projectlevel",
+        "outcome": "ok",
+        "value": "'0/0'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "both returned, values differ",
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "projectlevel.render_preset_roundtrip",
+      "verdict": "divergent",
+      "gui": {
+        "probe": "projectlevel.render_preset_roundtrip",
+        "category": "projectlevel",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.07,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "projectlevel.render_preset_roundtrip",
+        "category": "projectlevel",
+        "outcome": "ok",
+        "value": "'None/None'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "reason": "both returned, values differ",
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.codec_count_mov",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.codec_count_mov",
+        "category": "render",
+        "outcome": "ok",
+        "value": "63",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "render.codec_count_mov",
+        "category": "render",
+        "outcome": "ok",
+        "value": "63",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.format_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.format_count",
+        "category": "render",
+        "outcome": "ok",
+        "value": "20",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "render.format_count",
+        "category": "render",
+        "outcome": "ok",
+        "value": "20",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.job_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.job_roundtrip",
+        "category": "render",
+        "outcome": "ok",
+        "value": "'1/True'",
+        "seconds": 0.14,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "render.job_roundtrip",
+        "category": "render",
+        "outcome": "ok",
+        "value": "'1/True'",
+        "seconds": 0.13,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.preset_count",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.preset_count",
+        "category": "render",
+        "outcome": "ok",
+        "value": "31",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "render.preset_count",
+        "category": "render",
+        "outcome": "ok",
+        "value": "31",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.set_format_codec",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.set_format_codec",
+        "category": "render",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.03,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "render.set_format_codec",
+        "category": "render",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.01,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "render.to_disk",
+      "verdict": "parity",
+      "gui": {
+        "probe": "render.to_disk",
+        "category": "render",
+        "outcome": "ok",
+        "value": "'Complete/1'",
+        "seconds": 1.36,
+        "mode": "gui",
+        "detail": "",
+        "note": "the delivery path end to end; the only probe that writes real pixels",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "render.to_disk",
+        "category": "render",
+        "outcome": "ok",
+        "value": "'Complete/1'",
+        "seconds": 1.28,
+        "mode": "headless",
+        "detail": "",
+        "note": "the delivery path end to end; the only probe that writes real pixels",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.add_delete_track",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.add_delete_track",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.02,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.add_delete_track",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/True'",
+        "seconds": 0.01,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.current_video_item",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.current_video_item",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.current_video_item",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.duplicate",
+      "verdict": "both_failed",
+      "gui": {
+        "probe": "timeline.duplicate",
+        "category": "timeline",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "TypeError: 'NoneType' object is not callable",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.duplicate",
+        "category": "timeline",
+        "outcome": "raised",
+        "value": null,
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "TypeError: 'NoneType' object is not callable",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.grab_still",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.grab_still",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.11,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.grab_still",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.07,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.marker_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.marker_roundtrip",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/1'",
+        "seconds": 0.09,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.marker_roundtrip",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/1'",
+        "seconds": 0.03,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'PROBE_TL'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'PROBE_TL'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.set_current_timecode",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.set_current_timecode",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.set_current_timecode",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.set_name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.set_name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "documented to fail on the ACTIVE timeline",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.set_name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "documented to fail on the ACTIVE timeline",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.set_track_name",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.set_track_name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/PROBE_TRACK'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.set_track_name",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'True/PROBE_TRACK'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.start_timecode",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.start_timecode",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'01:00:00:00'",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.start_timecode",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "'01:00:00:00'",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.track_count_video",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.track_count_video",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.track_count_video",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "1",
+        "seconds": 0.0,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    },
+    {
+      "probe": "timeline.track_enable_roundtrip",
+      "verdict": "parity",
+      "gui": {
+        "probe": "timeline.track_enable_roundtrip",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.02,
+        "mode": "gui",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "headless": {
+        "probe": "timeline.track_enable_roundtrip",
+        "category": "timeline",
+        "outcome": "ok",
+        "value": "True",
+        "seconds": 0.01,
+        "mode": "headless",
+        "detail": "",
+        "note": "",
+        "catalogue": "v4-fa0daa777032"
+      },
+      "runs": {
+        "gui": 2,
+        "headless": 2
+      }
+    }
+  ],
+  "probe_count": 105,
+  "runs": {
+    "gui": 2,
+    "headless": 2
+  },
+  "generated_at": "2026-08-02T12:04:34+00:00"
+}

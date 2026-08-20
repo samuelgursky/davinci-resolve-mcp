@@ -24,6 +24,38 @@ All actions are under `render(action=...)`.
 | `quick_export_capabilities` | Supported | Lists Quick Export presets and enforced safety guards. |
 | `safe_quick_export` | Supported dry-run | Validates temp target, forces `EnableUpload=False`, and requires `allow_render=True` before actual Quick Export execution. |
 | `export_render_boundary_report` | Supported | Combines capabilities, settings snapshot, format matrix, and Quick Export capabilities. |
+| `list_delivery_targets` | Supported | Lists named render intents, optionally filtered by tier and checked against the live format/codec matrix. |
+| `resolve_delivery_target` | Supported | Resolves a named target to live format/codec ids plus its render settings and QC spec. |
+| `prepare_delivery_job` | Supported | Resolves a named target and queues a render job for it, returning the QC spec that verifies the output. |
+
+## Delivery Targets
+
+A delivery target is a **named render intent** (`prores422hq_master`,
+`h264_1080p_web`, `dnxhr_hqx_master`, ...) defined once in
+`src/utils/delivery_targets.py` and projected two ways: onto Resolve
+`SetRenderSettings` keys, and onto the ffprobe-shaped spec the advanced server's
+`deliverable_qc` consumes. The render and the check that verifies it therefore
+come from one definition.
+
+- **Ids describe the deliverable; platform names are aliases.** `youtube`,
+  `tiktok`, `reels` and friends point at spec-descriptive ids. When a platform
+  changes its guidance you repoint an alias rather than rewrite a target, so no
+  committed id can become a lie about what it produces.
+- **Format and codec are candidate lists**, resolved against the live matrix at
+  call time. Codec description strings vary by Resolve version, license, and
+  installed IO plugins, so a target names the spellings it knows and the first
+  available one wins.
+- **Unavailable targets fail loudly** with `DELIVERY_TARGET_FORMAT_UNAVAILABLE` /
+  `DELIVERY_TARGET_CODEC_UNAVAILABLE` and the machine's actual available lists.
+  Use `list_delivery_targets` with `check_availability` to see what this install
+  can render before planning around it.
+- **The QC spec asserts only what the render settings pin.** Bitrate is not
+  encoded (Resolve exposes no bitrate key — only `VideoQuality`, whose type
+  varies per codec), and image-sequence targets carry no QC spec at all because
+  `deliverable_qc` probes a single file.
+- Users can add targets in `logs/delivery-targets.json` (override the path with
+  `DAVINCI_RESOLVE_MCP_DELIVERY_TARGETS`). A malformed entry is skipped with a
+  warning rather than taking out the shipped set.
 
 ## Supported Boundaries
 
@@ -47,7 +79,17 @@ All actions are under `render(action=...)`.
   readback as version/page dependent and still validates and applies settings
   through `SetRenderSettings`.
 - Render format and codec availability is machine, OS, license, and plugin
-  dependent. The final live probe found 23 formats and 99 format/codec pairs.
+  dependent, and it varies a lot: a live probe found 23 formats / 99 pairs on one
+  build, and 20 formats / 271 pairs on Studio 19.1.3.7. Treat neither figure as
+  the expected count — probe the machine you are on
+  (`probe_render_matrix`, or `list_delivery_targets` with `check_availability`).
+- Codec **descriptions are not codec ids**. `GetRenderCodecs` returns
+  `{description: id}` and every setter wants the id, so the name shown in the
+  Deliver page is rejected — for `H.264` (`H264`) just as much as for
+  `Apple ProRes 422 HQ` (`ProRes422HQ`). `src/utils/render_ids.py` normalizes
+  either form; see `docs/reference/api-limitations.md`.
+- Some formats expose **no codecs at all** (`Wave`, `GIF` on 19.1.3.7) and then
+  reject every codec value, so they cannot be selected through this API.
 - Some settings may be accepted but not readable for coercion checks on builds
   where `GetRenderSettings` is unavailable.
 - Quick Export actual execution is intentionally gated behind
@@ -93,7 +135,7 @@ Rules an agent must know:
 - **Deps.** `deliverable`/`media` QC needs **ffmpeg + ffprobe on PATH** (GPL, not
   bundled) — call the advanced `capabilities` tool for status + install hints.
 
-See the `resolve-delivery` skill (`.claude/skills/delivery.md`) for the
+See the `resolve-delivery` skill (`.claude/skills/resolve-delivery/SKILL.md`) for the
 craft ↔ live ↔ offline routing.
 
 ## Live Evidence
@@ -119,6 +161,8 @@ Result:
 
 The live harness created and deleted a disposable project named
 `_mcp_render_deliver_probe_1778342107`, generated synthetic media, probed 23
-formats and 99 format/codec pairs, rendered one tiny synthetic output, wrote
+formats and 99 format/codec pairs **on that build** (a later probe on Studio
+19.1.3.7 saw 20 formats / 271 pairs — the counts are not portable), rendered one
+tiny synthetic output, wrote
 JSON and Markdown reports, and removed the generated media and render output
 directories after the report was written.

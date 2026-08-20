@@ -1,0 +1,276 @@
+{"_start": "app.product_name", "phase": "state"}
+{"_start": "app.product_name", "phase": "body"}
+{"probe": "app.product_name", "category": "app", "outcome": "ok", "value": "'DaVinci Resolve Studio'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "app.version_string", "phase": "state"}
+{"_start": "app.version_string", "phase": "body"}
+{"probe": "app.version_string", "category": "app", "outcome": "ok", "value": "'19.1.3.7'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "app.current_page", "phase": "state"}
+{"_start": "app.current_page", "phase": "body"}
+{"probe": "app.current_page", "category": "app", "outcome": "ok", "value": "'edit'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "app.keyframe_mode", "phase": "state"}
+{"_start": "app.keyframe_mode", "phase": "body"}
+{"probe": "app.keyframe_mode", "category": "app", "outcome": "none", "value": "None", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "app.fusion_handle", "phase": "state"}
+{"_start": "app.fusion_handle", "phase": "body"}
+{"probe": "app.fusion_handle", "category": "app", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "app.fusion_current_comp", "phase": "state"}
+{"_start": "app.fusion_current_comp", "phase": "body"}
+{"probe": "app.fusion_current_comp", "category": "app", "outcome": "false", "value": "False", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "app.media_storage", "phase": "state"}
+{"_start": "app.media_storage", "phase": "body"}
+{"probe": "app.media_storage", "category": "app", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "app.mounted_volumes", "phase": "state"}
+{"_start": "app.mounted_volumes", "phase": "body"}
+{"probe": "app.mounted_volumes", "category": "app", "outcome": "ok", "value": "13", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "page.open_media", "phase": "state"}
+{"_start": "page.open_media", "phase": "body"}
+{"probe": "page.open_media", "category": "pages", "outcome": "ok", "value": "'True/media'", "seconds": 0.06, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "page.open_cut", "phase": "state"}
+{"_start": "page.open_cut", "phase": "body"}
+{"probe": "page.open_cut", "category": "pages", "outcome": "ok", "value": "'True/cut'", "seconds": 0.05, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "page.open_edit", "phase": "state"}
+{"_start": "page.open_edit", "phase": "body"}
+{"probe": "page.open_edit", "category": "pages", "outcome": "ok", "value": "'True/edit'", "seconds": 0.05, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "page.open_fusion", "phase": "state"}
+{"_start": "page.open_fusion", "phase": "body"}
+{"probe": "page.open_fusion", "category": "pages", "outcome": "ok", "value": "'True/fusion'", "seconds": 1.1, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "page.open_color", "phase": "state"}
+{"_start": "page.open_color", "phase": "body"}
+{"probe": "page.open_color", "category": "pages", "outcome": "ok", "value": "'True/color'", "seconds": 0.06, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "page.open_fairlight", "phase": "state"}
+{"_start": "page.open_fairlight", "phase": "body"}
+{"probe": "page.open_fairlight", "category": "pages", "outcome": "ok", "value": "'True/fairlight'", "seconds": 0.04, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "page.open_deliver", "phase": "state"}
+{"_start": "page.open_deliver", "phase": "body"}
+{"probe": "page.open_deliver", "category": "pages", "outcome": "ok", "value": "'True/deliver'", "seconds": 0.03, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pm.current_database", "phase": "state"}
+{"_start": "pm.current_database", "phase": "body"}
+{"probe": "pm.current_database", "category": "project_manager", "outcome": "ok", "value": "{'DbType': 'Disk', 'DbName': 'Local Database'}", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pm.database_list", "phase": "state"}
+{"_start": "pm.database_list", "phase": "body"}
+{"probe": "pm.database_list", "category": "project_manager", "outcome": "ok", "value": "2", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pm.project_list_count", "phase": "state"}
+{"_start": "pm.project_list_count", "phase": "body"}
+{"probe": "pm.project_list_count", "category": "project_manager", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pm.folder_list", "phase": "state"}
+{"_start": "pm.folder_list", "phase": "body"}
+{"probe": "pm.folder_list", "category": "project_manager", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pm.current_folder", "phase": "state"}
+{"_start": "pm.current_folder", "phase": "body"}
+{"probe": "pm.current_folder", "category": "project_manager", "outcome": "empty", "value": "''", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pm.save_named_project", "phase": "state"}
+{"_start": "pm.save_named_project", "phase": "body"}
+{"probe": "pm.save_named_project", "category": "project_manager", "outcome": "ok", "value": "True", "seconds": 0.15, "mode": "gui", "detail": "", "note": "the control for save_untitled_project: must work in both modes", "catalogue": "v3-61b7128e7651"}
+{"_start": "pm.current_project_name_on_untitled", "phase": "state"}
+{"_start": "pm.current_project_name_on_untitled", "phase": "body"}
+{"probe": "pm.current_project_name_on_untitled", "category": "project_manager", "outcome": "ok", "value": "'Untitled Project'", "seconds": 0.05, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pm.export_project", "phase": "state"}
+{"_start": "pm.export_project", "phase": "body"}
+{"probe": "pm.export_project", "category": "project_manager", "outcome": "ok", "value": "'True/True'", "seconds": 0.08, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "project.setting_count", "phase": "state"}
+{"_start": "project.setting_count", "phase": "body"}
+{"probe": "project.setting_count", "category": "project_settings", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "project.read_frame_rate", "phase": "state"}
+{"_start": "project.read_frame_rate", "phase": "body"}
+{"probe": "project.read_frame_rate", "category": "project_settings", "outcome": "ok", "value": "24.0", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "project.set_resolution", "phase": "state"}
+{"_start": "project.set_resolution", "phase": "body"}
+{"probe": "project.set_resolution", "category": "project_settings", "outcome": "ok", "value": "'True/1920'", "seconds": 0.01, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "project.set_colour_science", "phase": "state"}
+{"_start": "project.set_colour_science", "phase": "body"}
+{"probe": "project.set_colour_science", "category": "project_settings", "outcome": "ok", "value": "'True/davinciYRGB'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "project.unique_id_shape", "phase": "state"}
+{"_start": "project.unique_id_shape", "phase": "body"}
+{"probe": "project.unique_id_shape", "category": "project_settings", "outcome": "ok", "value": "'str'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pool.root_folder", "phase": "state"}
+{"_start": "pool.root_folder", "phase": "body"}
+{"probe": "pool.root_folder", "category": "media_pool", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pool.clip_count", "phase": "state"}
+{"_start": "pool.clip_count", "phase": "body"}
+{"probe": "pool.clip_count", "category": "media_pool", "outcome": "ok", "value": "2", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pool.add_subfolder", "phase": "state"}
+{"_start": "pool.add_subfolder", "phase": "body"}
+{"probe": "pool.add_subfolder", "category": "media_pool", "outcome": "ok", "value": "True", "seconds": 0.03, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pool.clip_resolution", "phase": "state"}
+{"_start": "pool.clip_resolution", "phase": "body"}
+{"probe": "pool.clip_resolution", "category": "media_pool", "outcome": "none", "value": "None", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pool.set_clip_color", "phase": "state"}
+{"_start": "pool.set_clip_color", "phase": "body"}
+{"probe": "pool.set_clip_color", "category": "media_pool", "outcome": "none", "value": "None", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pool.set_clip_metadata", "phase": "state"}
+{"_start": "pool.set_clip_metadata", "phase": "body"}
+{"probe": "pool.set_clip_metadata", "category": "media_pool", "outcome": "ok", "value": "'None/None'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pool.clip_marker_roundtrip", "phase": "state"}
+{"_start": "pool.clip_marker_roundtrip", "phase": "body"}
+{"probe": "pool.clip_marker_roundtrip", "category": "media_pool", "outcome": "ok", "value": "'None/0'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "pool.append_to_timeline", "phase": "state"}
+{"_start": "pool.append_to_timeline", "phase": "body"}
+{"probe": "pool.append_to_timeline", "category": "media_pool", "outcome": "false", "value": "False", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.name", "phase": "state"}
+{"_start": "timeline.name", "phase": "body"}
+{"probe": "timeline.name", "category": "timeline", "outcome": "ok", "value": "'PROBE_TL'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.track_count_video", "phase": "state"}
+{"_start": "timeline.track_count_video", "phase": "body"}
+{"probe": "timeline.track_count_video", "category": "timeline", "outcome": "ok", "value": "1", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.start_timecode", "phase": "state"}
+{"_start": "timeline.start_timecode", "phase": "body"}
+{"probe": "timeline.start_timecode", "category": "timeline", "outcome": "ok", "value": "'01:00:00:00'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.set_current_timecode", "phase": "state"}
+{"_start": "timeline.set_current_timecode", "phase": "body"}
+{"probe": "timeline.set_current_timecode", "category": "timeline", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.current_video_item", "phase": "state"}
+{"_start": "timeline.current_video_item", "phase": "body"}
+{"probe": "timeline.current_video_item", "category": "timeline", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.marker_roundtrip", "phase": "state"}
+{"_start": "timeline.marker_roundtrip", "phase": "body"}
+{"probe": "timeline.marker_roundtrip", "category": "timeline", "outcome": "ok", "value": "'True/1'", "seconds": 0.09, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.add_delete_track", "phase": "state"}
+{"_start": "timeline.add_delete_track", "phase": "body"}
+{"probe": "timeline.add_delete_track", "category": "timeline", "outcome": "ok", "value": "'True/True'", "seconds": 0.02, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.set_track_name", "phase": "state"}
+{"_start": "timeline.set_track_name", "phase": "body"}
+{"probe": "timeline.set_track_name", "category": "timeline", "outcome": "ok", "value": "'True/PROBE_TRACK'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.track_enable_roundtrip", "phase": "state"}
+{"_start": "timeline.track_enable_roundtrip", "phase": "body"}
+{"probe": "timeline.track_enable_roundtrip", "category": "timeline", "outcome": "ok", "value": "True", "seconds": 0.02, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.set_name", "phase": "state"}
+{"_start": "timeline.set_name", "phase": "body"}
+{"probe": "timeline.set_name", "category": "timeline", "outcome": "ok", "value": "True", "seconds": 0.02, "mode": "gui", "detail": "", "note": "documented to fail on the ACTIVE timeline", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.duplicate", "phase": "state"}
+{"_start": "timeline.duplicate", "phase": "body"}
+{"probe": "timeline.duplicate", "category": "timeline", "outcome": "raised", "value": null, "seconds": 0.0, "mode": "gui", "detail": "TypeError: 'NoneType' object is not callable", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "timeline.grab_still", "phase": "state"}
+{"_start": "timeline.grab_still", "phase": "body"}
+{"probe": "timeline.grab_still", "category": "timeline", "outcome": "ok", "value": "True", "seconds": 0.12, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "item.name", "phase": "state"}
+{"_start": "item.name", "phase": "body"}
+{"probe": "item.name", "category": "timeline_item", "outcome": "ok", "value": "'probe_source.mov'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "item.duration", "phase": "state"}
+{"_start": "item.duration", "phase": "body"}
+{"probe": "item.duration", "category": "timeline_item", "outcome": "ok", "value": "48", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "item.left_offset", "phase": "state"}
+{"_start": "item.left_offset", "phase": "body"}
+{"probe": "item.left_offset", "category": "timeline_item", "outcome": "ok", "value": "0", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "item.set_zoom_property", "phase": "state"}
+{"_start": "item.set_zoom_property", "phase": "body"}
+{"probe": "item.set_zoom_property", "category": "timeline_item", "outcome": "ok", "value": "'True/1.25'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "item.marker_roundtrip", "phase": "state"}
+{"_start": "item.marker_roundtrip", "phase": "body"}
+{"probe": "item.marker_roundtrip", "category": "timeline_item", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "item.flag_roundtrip", "phase": "state"}
+{"_start": "item.flag_roundtrip", "phase": "body"}
+{"probe": "item.flag_roundtrip", "category": "timeline_item", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "item.set_clip_color", "phase": "state"}
+{"_start": "item.set_clip_color", "phase": "body"}
+{"probe": "item.set_clip_color", "category": "timeline_item", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "item.media_pool_item", "phase": "state"}
+{"_start": "item.media_pool_item", "phase": "body"}
+{"probe": "item.media_pool_item", "category": "timeline_item", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "color.node_graph", "phase": "state"}
+{"_start": "color.node_graph", "phase": "body"}
+{"probe": "color.node_graph", "category": "color", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "color.num_nodes", "phase": "state"}
+{"_start": "color.num_nodes", "phase": "body"}
+{"probe": "color.num_nodes", "category": "color", "outcome": "ok", "value": "1", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "color.node_label", "phase": "state"}
+{"_start": "color.node_label", "phase": "body"}
+{"probe": "color.node_label", "category": "color", "outcome": "empty", "value": "''", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "color.node_lut", "phase": "state"}
+{"_start": "color.node_lut", "phase": "body"}
+{"probe": "color.node_lut", "category": "color", "outcome": "empty", "value": "''", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "color.tools_in_node", "phase": "state"}
+{"_start": "color.tools_in_node", "phase": "body"}
+{"probe": "color.tools_in_node", "category": "color", "outcome": "ok", "value": "0", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "color.set_node_enabled", "phase": "state"}
+{"_start": "color.set_node_enabled", "phase": "body"}
+{"probe": "color.set_node_enabled", "category": "color", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "color.reset_all_grades", "phase": "state"}
+{"_start": "color.reset_all_grades", "phase": "body"}
+{"probe": "color.reset_all_grades", "category": "color", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "color.group_roundtrip", "phase": "state"}
+{"_start": "color.group_roundtrip", "phase": "body"}
+{"probe": "color.group_roundtrip", "category": "color", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "color.set_cdl", "phase": "state"}
+{"_start": "color.set_cdl", "phase": "body"}
+{"probe": "color.set_cdl", "category": "color", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "gallery.handle", "phase": "state"}
+{"_start": "gallery.handle", "phase": "body"}
+{"probe": "gallery.handle", "category": "gallery", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "gallery.album_count", "phase": "state"}
+{"_start": "gallery.album_count", "phase": "body"}
+{"probe": "gallery.album_count", "category": "gallery", "outcome": "ok", "value": "1", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "gallery.export_stills", "phase": "state"}
+{"_start": "gallery.export_stills", "phase": "body"}
+{"probe": "gallery.export_stills", "category": "gallery", "outcome": "false", "value": "False", "seconds": 0.05, "mode": "gui", "detail": "", "note": "fails in BOTH modes without a visible Gallery panel", "catalogue": "v3-61b7128e7651"}
+{"_start": "gallery.export_current_frame", "phase": "state"}
+{"_start": "gallery.export_current_frame", "phase": "body"}
+{"probe": "gallery.export_current_frame", "category": "gallery", "outcome": "ok", "value": "'True/True'", "seconds": 0.04, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "fusion.comp_count", "phase": "state"}
+{"_start": "fusion.comp_count", "phase": "body"}
+{"probe": "fusion.comp_count", "category": "fusion", "outcome": "ok", "value": "0", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "fusion.add_delete_comp", "phase": "state"}
+{"_start": "fusion.add_delete_comp", "phase": "body"}
+{"probe": "fusion.add_delete_comp", "category": "fusion", "outcome": "ok", "value": "'True/False'", "seconds": 0.13, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "render.format_count", "phase": "state"}
+{"_start": "render.format_count", "phase": "body"}
+{"probe": "render.format_count", "category": "render", "outcome": "ok", "value": "20", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "render.codec_count_mov", "phase": "state"}
+{"_start": "render.codec_count_mov", "phase": "body"}
+{"probe": "render.codec_count_mov", "category": "render", "outcome": "ok", "value": "63", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "render.preset_count", "phase": "state"}
+{"_start": "render.preset_count", "phase": "body"}
+{"probe": "render.preset_count", "category": "render", "outcome": "ok", "value": "31", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "render.set_format_codec", "phase": "state"}
+{"_start": "render.set_format_codec", "phase": "body"}
+{"probe": "render.set_format_codec", "category": "render", "outcome": "ok", "value": "True", "seconds": 0.03, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "render.job_roundtrip", "phase": "state"}
+{"_start": "render.job_roundtrip", "phase": "body"}
+{"probe": "render.job_roundtrip", "category": "render", "outcome": "ok", "value": "'1/True'", "seconds": 0.13, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "render.to_disk", "phase": "state"}
+{"_start": "render.to_disk", "phase": "body"}
+{"probe": "render.to_disk", "category": "render", "outcome": "ok", "value": "'Complete/1'", "seconds": 1.3, "mode": "gui", "detail": "", "note": "the delivery path end to end; the only probe that writes real pixels", "catalogue": "v3-61b7128e7651"}
+{"_start": "export.aaf", "phase": "state"}
+{"_start": "export.aaf", "phase": "body"}
+{"probe": "export.aaf", "category": "interchange", "outcome": "ok", "value": "'True/True'", "seconds": 0.02, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "export.edl", "phase": "state"}
+{"_start": "export.edl", "phase": "body"}
+{"probe": "export.edl", "category": "interchange", "outcome": "ok", "value": "'True/True'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "export.fcpxml", "phase": "state"}
+{"_start": "export.fcpxml", "phase": "body"}
+{"probe": "export.fcpxml", "category": "interchange", "outcome": "ok", "value": "'True/True'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "export.drt", "phase": "state"}
+{"_start": "export.drt", "phase": "body"}
+{"probe": "export.drt", "category": "interchange", "outcome": "ok", "value": "'True/True'", "seconds": 0.06, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "export.otio", "phase": "state"}
+{"_start": "export.otio", "phase": "body"}
+{"probe": "export.otio", "category": "interchange", "outcome": "ok", "value": "'True/True'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "audio.track_count", "phase": "state"}
+{"_start": "audio.track_count", "phase": "body"}
+{"probe": "audio.track_count", "category": "audio", "outcome": "ok", "value": "1", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "audio.add_delete_track", "phase": "state"}
+{"_start": "audio.add_delete_track", "phase": "body"}
+{"probe": "audio.add_delete_track", "category": "audio", "outcome": "ok", "value": "'True/True'", "seconds": 0.05, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "audio.set_track_name", "phase": "state"}
+{"_start": "audio.set_track_name", "phase": "body"}
+{"probe": "audio.set_track_name", "category": "audio", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "layout.save_preset", "phase": "state"}
+{"_start": "layout.save_preset", "phase": "body"}
+{"probe": "layout.save_preset", "category": "layout", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "layout.export_preset", "phase": "state"}
+{"_start": "layout.export_preset", "phase": "body"}
+{"probe": "layout.export_preset", "category": "layout", "outcome": "ok", "value": "'True/True'", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "layout.load_preset", "phase": "state"}
+{"_start": "layout.load_preset", "phase": "body"}
+{"probe": "layout.load_preset", "category": "layout", "outcome": "ok", "value": "True", "seconds": 0.2, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "layout.delete_preset", "phase": "state"}
+{"_start": "layout.delete_preset", "phase": "body"}
+{"probe": "layout.delete_preset", "category": "layout", "outcome": "ok", "value": "True", "seconds": 0.0, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "lifecycle.create_project", "phase": "state"}
+{"_start": "lifecycle.create_project", "phase": "body"}
+{"probe": "lifecycle.create_project", "category": "lifecycle", "outcome": "ok", "value": "True", "seconds": 3.3, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "lifecycle.load_and_close", "phase": "state"}
+{"_start": "lifecycle.load_and_close", "phase": "body"}
+{"probe": "lifecycle.load_and_close", "category": "lifecycle", "outcome": "ok", "value": "'True/True/False'", "seconds": 3.3, "mode": "gui", "detail": "", "note": "", "catalogue": "v3-61b7128e7651"}
+{"_start": "lifecycle.delete_after_close_releases_lock", "phase": "state"}
+{"_start": "lifecycle.delete_after_close_releases_lock", "phase": "body"}
+{"probe": "lifecycle.delete_after_close_releases_lock", "category": "lifecycle", "outcome": "ok", "value": "'without_close=False/with_close=False'", "seconds": 3.83, "mode": "gui", "detail": "", "note": "LoadProject-away does NOT release the lock; CloseProject does", "catalogue": "v3-61b7128e7651"}

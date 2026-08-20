@@ -186,7 +186,8 @@ The kernel above restructures a *running* timeline. The companion advanced serve
 (`davinci-resolve-advanced`, see `resolve-advanced/README.md`) authors/diffs
 timelines and reasons over editorial interchange with **no Resolve running**:
 
-- **`editorial`** — `parse_interchange` (EDL/OTIO/XMEML; **AAF = honest refuse**),
+- **`editorial`** — `parse_interchange` (EDL/OTIO/XMEML natively; **AAF via pyaaf2**,
+  multi-layer Avid turnovers included — honest refuse only when pyaaf2 is absent),
   `turnover_changelist` (moved/retimed/replaced/new/gone between two cuts, with
   timing silent-lie guards), `conform_manifest`, `marker_roundtrip`.
 - **`drt`** — `.drt` timeline file authoring + structural diff.
@@ -195,7 +196,7 @@ Use these to answer "what changed between v3 and v4" or to hand a conform an
 accurate change list without opening either timeline. For conforming/relinking
 that change list, see the Timeline Conform / Interchange kernel and the
 `resolve-conform` skill; for the edit ↔ offline routing, see the `resolve-edit`
-skill (`.claude/skills/timeline-edit.md`).
+skill (`.claude/skills/resolve-edit/SKILL.md`).
 
 ## Development Guardrails
 

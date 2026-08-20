@@ -26,8 +26,22 @@ Every release bump must update all version surfaces:
 - `src/granular/common.py`
 - `install.py`
 - `package.json`
+- `package-lock.json` — regenerate with `npm install --package-lock-only`, do
+  not hand-edit the version. It carries the version in two places and, more
+  importantly, the resolved dependency tree. When it disagrees with
+  `package.json`, **`npm ci` refuses to install at all** (`EUSAGE — Missing: X
+  from lock file`), which breaks CI, fresh clones, and container builds while
+  `npm install` and `npm publish` stay green and hide it. The
+  `tests.test_import` guard `test_package_lock_in_sync` fails the suite on
+  either drift.
 - README version badge
 - README current stats or latest-release summary when they changed
+- `README.zh-CN.md` — the Simplified Chinese translation. Update its version
+  badge and the `本翻译对应 vX.Y.Z 版 README` line, and carry over any
+  substantive English change. **If you cannot keep it current, delete the file
+  and the language switcher at the top of `README.md`** — a translation that
+  silently lags is worse than no translation, because its version line then
+  makes a claim that is false. No drift guard covers this; it is a human check.
 - `CHANGELOG.md` latest release entry
 - `docs/reference/api-limitations.md` when any `submit`-tagged entry in
   `src/utils/api_truth.py` was added or changed (a newly documented Resolve API
@@ -56,15 +70,30 @@ Always run static checks before release:
 
 ```bash
 venv/bin/python tests/test_import.py
+npm install --package-lock-only --no-audit --no-fund   # re-stage package-lock.json if it moved
 venv/bin/python scripts/audit_api_parity.py
 venv/bin/python scripts/gen_api_limitations.py --check
 node scripts/agent-rules/generate.mjs --check
-venv/bin/python -m unittest tests.test_static_undefined_names tests.test_action_list_drift tests.test_panel_docs_drift tests.test_doc_tool_counts tests.test_agent_rules_drift
+venv/bin/python -m unittest tests.test_static_undefined_names tests.test_duplicate_definitions tests.test_action_list_drift tests.test_panel_docs_drift tests.test_doc_tool_counts tests.test_agent_rules_drift
 node bin/davinci-resolve-mcp.mjs --help
 node bin/davinci-resolve-mcp.mjs --version
 npm pack --dry-run
 git diff --check
 ```
+
+`test_import` carries `test_package_lock_in_sync`, which is the actual gate on the
+lockfile: it asserts both version fields and the root dependency blocks match
+`package.json`. Run the `npm install --package-lock-only` line above first so the
+regeneration is in the working tree when the test reads it — that ordering is why
+the check is a regeneration followed by a test, not a `git diff --exit-code`,
+which would fire on the release bump's own legitimate change.
+
+`test_duplicate_definitions` asserts no module-level name is defined twice under
+`src/`. A second `def foo` silently replaces the first, and in a module the size
+of `src/server.py` the two can be thousands of lines apart with different
+signatures. pyflakes does **not** catch this — it only reports redefinition of an
+*unused* name, so the dangerous case (first definition used, then shadowed)
+passes clean.
 
 The drift guards (undefined names in `src/`, tool action lists vs dispatch,
 control-panel guide vs panel navigation/screenshots, api-limitations vs the
@@ -99,6 +128,26 @@ Behavior changes that touch DaVinci Resolve scripting must also have a live
 Resolve validation before release. Use disposable projects and synthetic media
 only. Never modify, transcode, proxy, or create derivatives of source media
 unless the user explicitly requests it.
+
+**Changes to the offline `.drp` authoring tier must run the round-trip harness,
+and a structural readback is NOT sufficient evidence on its own:**
+
+```bash
+RESOLVE_VERIFY=1 venv/bin/python tests/live_drp_roundtrip_verification.py
+```
+
+It authors a `.drp` per primitive, imports it into Resolve, asserts intent
+against structural readback, **and exports the composited frame to assert the
+item is visible on screen.** That last assertion exists because
+`place_fusion_title` passes every structural check — right track, frame,
+duration, type, and correctly-encoded text — while rendering nothing. Anything
+that only diffs `GetStart()`/`GetDuration()` will call that green. Known-broken
+cases are declared in the harness rather than skipped, so a fix reports
+`UNEXPECTED PASS` and fails until the docs describing it are updated.
+
+The same rule generalises: **"the file round-trips" and "Resolve honours it" are
+different claims.** Only a live import establishes the second one. Do not write
+"verified live" in a doc unless a runnable command produced that result.
 
 Examples:
 

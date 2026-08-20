@@ -57,6 +57,12 @@ _BROW = {"left": 105, "right": 334}
 _FACE_BOX = {"top": 10, "bottom": 152}
 
 EAR_BLINK_THRESHOLD = 0.21
+#: Every entry point checks `capabilities()["available"]` or raises up front,
+#: so helpers below assume cv2/mediapipe are present.
+_OPTIONAL_DEPENDENCY_CONTRACT = (
+    "opencv-python + mediapipe: run_face_strata refuses via capabilities() before any helper runs"
+)
+
 EAR_MIN_CLOSED_FRAMES = 1
 EAR_MAX_CLOSED_SECONDS = 0.5  # longer than this is eyes-closed, not a blink
 

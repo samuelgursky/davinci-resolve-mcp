@@ -6,15 +6,30 @@ guards so this runs in the dependency-light publish gate):
   - granular  = `@mcp.tool(` decorators across `src/granular/*.py`
   - advanced  = entries in the `TOOLS` array in `resolve-advanced/server/index.mjs`
 
-Docs (README, contributing, SKILL, api-coverage, copilot-instructions) quote those
-counts by hand and drift. This asserts the docs still match — a stale count fails the
-offline suite and the release publish gate instead of shipping wrong numbers.
+Docs (README, README.zh-CN, install, contributing, SKILL, api-coverage,
+copilot-instructions) quote those counts by hand and drift. This asserts the docs still
+match — a stale count fails the offline suite and the release publish gate instead of
+shipping wrong numbers.
+
+Two non-doc places quote the granular count too, and both are checked here because
+neither fails on its own in the offline suite: the startup log line in
+`src/resolve_mcp_server.py`, and the literal in `tests/test_import.py`. That file is
+pytest-style, so `unittest discover` does not collect it — its stale `341` survived a
+green 2560-test run and would only have surfaced in the publish gate, which runs it as
+a script.
 
 Fix drift by updating the docs to the printed counts, not by loosening this test.
-(`@mcp.tool(` matches both the bare `()` and the `(annotations=...)` forms; the static
-counts are cross-checked against the runtime tool registry and agree: 34 / 341.)
+The counts are cross-checked against the runtime tool registry and agree: 34 / 353.
+
+Decorators are counted from the **parsed syntax tree**, not by matching the text
+`@mcp.tool(`. A regex counts the string wherever it appears, including inside a
+docstring — which is how a comment explaining where a decorator has to sit once
+reported a 35th tool and failed this guard. Prose that mentions the decorator is
+not a tool, and a guard that cannot tell the difference reports drift that is not
+there.
 """
 
+import ast
 import pathlib
 import re
 import unittest
@@ -22,12 +37,22 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+def _is_mcp_tool(decorator: ast.expr) -> bool:
+    """`@mcp.tool()` and `@mcp.tool(annotations=...)`, bare or called."""
+    node = decorator.func if isinstance(decorator, ast.Call) else decorator
+    return isinstance(node, ast.Attribute) and node.attr == "tool" and (
+        isinstance(node.value, ast.Name) and node.value.id == "mcp"
+    )
+
+
 def _count_decorators(*rel_globs: str) -> int:
     total = 0
     for rel in rel_globs:
-        base = ROOT
-        for path in sorted(base.glob(rel)):
-            total += len(re.findall(r"@mcp\.tool\(", path.read_text()))
+        for path in sorted(ROOT.glob(rel)):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    total += sum(1 for d in node.decorator_list if _is_mcp_tool(d))
     return total
 
 
@@ -51,7 +76,20 @@ class DocToolCountsDriftTest(unittest.TestCase):
             ("README.md", f"**{comp}** compound / **{gran}** granular"),
             ("README.md", f"Advanced (offline) tools | **{adv}**"),
             ("README.md", f"Advanced%20(offline)-{adv}%20tools"),
+            ("README.md", f"MCP%20Tools-{comp}%20({gran}%20full)"),
+            ("README.zh-CN.md", f"MCP%20Tools-{comp}%20({gran}%20full)"),
+            ("README.zh-CN.md", f"`src/resolve_mcp_server.py` | {gran} |"),
+            ("README.zh-CN.md", f"**{comp}** 复合 / **{gran}** 细粒度"),
             ("resolve-advanced/README.md", f"## Tools ({adv})"),
+            ("docs/install.md", f"`src/server.py` | {comp} |"),
+            ("docs/install.md", f"`src/resolve_mcp_server.py` | {gran} |"),
+            ("docs/install.md", f"full {gran}-tool server"),
+            ("src/resolve_mcp_server.py", f"({gran} granular tools)"),
+            ("tests/test_import.py", f"assert total == {gran}"),
+            # test_import.py hard-codes the compound count too. Adding a 35th
+            # tool failed there while this guard passed, because the guard
+            # checked only the granular literal in the same file.
+            ("tests/test_import.py", f'"server.py") == {comp}'),
             ("src/server.py", f"{comp} compound tools"),
             ("docs/contributing.md", f"Compound MCP server — {comp} tools"),
             ("docs/SKILL.md", f"`src/server.py` | {comp} tools"),
@@ -67,6 +105,19 @@ class DocToolCountsDriftTest(unittest.TestCase):
             text = (ROOT / rel).read_text()
             if needle not in text:
                 stale.append(f"{rel}: expected to contain {needle!r}")
+
+        # Presence is not enough. `src/server.py` said "34 compound tools" in its
+        # module docstring and "32 compound tools" in the agent-facing workflow
+        # prompt, and the presence check above passed on the first while the second
+        # went out to every agent. Any *other* number in front of the phrase is
+        # drift, wherever it sits.
+        for rel in ("src/server.py", "docs/SKILL.md", "docs/contributing.md"):
+            text = (ROOT / rel).read_text()
+            for wrong in re.findall(r"\b(\d+)\s+compound tools", text):
+                if int(wrong) != comp:
+                    stale.append(
+                        f"{rel}: says {wrong!r} compound tools; there are {comp}"
+                    )
 
         self.assertEqual(
             stale,

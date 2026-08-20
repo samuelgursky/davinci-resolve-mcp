@@ -117,3 +117,59 @@ test('identityTimemap builds a [02][end,0,end,0,end] map', () => {
   assert.strictEqual(b.seconds.length, 5);
   assert.strictEqual(Math.round(b.seconds[0] * (30000 / 1001)), 4575);
 });
+
+// --- Reverse maps: the origin is NOT always (0,0) ---------------------------
+// Captured from a clip reversed via EDL M2 / OTIO negative time_scalar and
+// exported by DaVinci Resolve Studio 21.0.4.5. Two things here used to break:
+//   1. Each keyframe point omits whichever of recordSec/sourceSec is 0 —
+//      protobuf default-omission — so the old fixed-offset reader
+//      (readDoubleLE(1) / readDoubleLE(10)) threw "offset out of range".
+//   2. The starting source offset is a TOP-LEVEL field 2 double. Assuming a
+//      (0,0) origin made a reverse decode as speed 0 — a plausible wrong
+//      number rather than an error, which is the worse failure.
+const REVERSED_KEYFRAMES_BA = '800a09115655555555d517400a09095655555555d51740';
+
+function reversedMapHex() {
+  const { encodeKeyedDict } = require('../keyed-dict');
+  const T_DOUBLE = 6; const T_STRING = 10; const T_BYTES = 12;
+  return encodeKeyedDict({
+    hdr: 1,
+    entries: [
+      { key: 'YMin', type: T_DOUBLE, subType: 0, value: -1 },
+      { key: 'YMax', type: T_DOUBLE, subType: 0, value: -1 },
+      { key: 'XMax', type: T_DOUBLE, subType: 0, value: 5.958333333333334 },
+      { key: 'UniqueId', type: T_STRING, subType: 0, value: '4dbe3e42-ab1e-4b93-8118-67fdc376c962' },
+      { key: 'LastValidYOffset', type: T_DOUBLE, subType: 0, value: 5.958333333333333 },
+      { key: 'KeyframesBA', type: T_BYTES, subType: 0, value: REVERSED_KEYFRAMES_BA },
+      { key: 'DbType', type: T_STRING, subType: 0, value: 'Sm2TimeMap' },
+    ],
+  }).toString('hex');
+}
+
+test('decodeTimemap: a reversed map decodes without throwing', () => {
+  assert.doesNotThrow(() => decodeTimemap(reversedMapHex()));
+});
+
+test('decodeTimemap: a reversed map reports NEGATIVE speed, not 0', () => {
+  const d = decodeTimemap(reversedMapHex());
+  assert.equal(d.segments.length, 1);
+  assert.equal(d.segments[0].speed, -1);
+  assert.ok(d.segments[0].speed < 0, 'reverse must not decode as speed 0');
+});
+
+test('_decodeKeyframePoint: a point may omit either value (protobuf default 0)', () => {
+  // sourceSec-only and recordSec-only points both appear in one real reversed map.
+  const d = decodeTimemap(reversedMapHex());
+  assert.equal(d.recordDurationSec, 5.958333333333334);
+  assert.equal(d.sourceDurationSec, 5.958333333333333);
+});
+
+test('forward maps are unaffected by the origin fix', () => {
+  const fwd = buildTimemap({
+    keyframes: [{ recordSec: 2, sourceSec: 1 }, { recordSec: 4, sourceSec: 5 }],
+    sourceDurationSec: 6, recordDurationSec: 4, uniqueId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+  });
+  const d = decodeTimemap(fwd.toString('hex'));
+  assert.equal(d.variable, true);
+  assert.deepEqual(d.segments.map((s) => s.speed), [0.5, 2]);
+});

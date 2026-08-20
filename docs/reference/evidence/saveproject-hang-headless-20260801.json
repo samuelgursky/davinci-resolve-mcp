@@ -1,0 +1,46 @@
+[
+  {
+    "step": "GetProjectManager",
+    "outcome": "ok",
+    "seconds": 0.0,
+    "value": "<BlackmagicFusion.PyRemoteObject object at 0x10471aff0>",
+    "database_after": "unchecked"
+  },
+  {
+    "step": "GetCurrentDatabase (baseline)",
+    "outcome": "ok",
+    "seconds": 0.0,
+    "value": "{'DbType': 'Disk', 'DbName': 'Local Database'}",
+    "database_after": {
+      "DbType": "Disk",
+      "DbName": "Local Database"
+    }
+  },
+  {
+    "step": "GetProjectListInCurrentFolder",
+    "outcome": "ok",
+    "seconds": 0.0,
+    "value": "241",
+    "database_after": {
+      "DbType": "Disk",
+      "DbName": "Local Database"
+    }
+  },
+  {
+    "step": "GetCurrentProject().GetName()",
+    "outcome": "ok",
+    "seconds": 0.0,
+    "value": "'Untitled Project'",
+    "database_after": {
+      "DbType": "Disk",
+      "DbName": "Local Database"
+    }
+  },
+  {
+    "step": "SaveProject (incumbent)",
+    "outcome": "HUNG",
+    "seconds": 51.8,
+    "value": "None",
+    "database_after": "unchecked"
+  }
+]

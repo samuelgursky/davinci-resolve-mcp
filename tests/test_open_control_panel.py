@@ -33,12 +33,15 @@ class ControlPanelStaleDetection(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def _write_state(self, pid: int) -> None:
+    def _write_state(self, pid: int, token: str | None = "tok-abc") -> None:
+        state = {
+            "pid": pid, "port": 8765, "host": "127.0.0.1",
+            "url": f"http://127.0.0.1:8765/#token={token}" if token else "http://127.0.0.1:8765",
+        }
+        if token:
+            state["token"] = token
         with open(self.pidfile, "w", encoding="utf-8") as fh:
-            json.dump({
-                "pid": pid, "port": 8765, "host": "127.0.0.1",
-                "url": "http://127.0.0.1:8765",
-            }, fh)
+            json.dump(state, fh)
 
     def test_stale_running_when_remote_version_differs(self) -> None:
         self._write_state(99999)
@@ -64,6 +67,35 @@ class ControlPanelStaleDetection(unittest.TestCase):
             result = server._open_control_panel({})
         self.assertEqual(result["status"], "already_running")
         self.assertEqual(result["running_version"], "2.24.1")
+        # The issued URL is the token-bearing launch URL, not a bare origin.
+        self.assertEqual(result["url"], "http://127.0.0.1:8765/#token=tok-abc")
+
+    def test_stale_running_when_tracked_but_token_unknown(self) -> None:
+        # A pidfile predating the token field (or a survivor whose token was
+        # lost) can't be issued a usable URL — nobody can log in — so it must
+        # be relaunched even when the version matches.
+        self._write_state(99999, token=None)
+        with mock.patch.object(server, "_control_panel_pid_alive", return_value=True), \
+             mock.patch.object(server, "_port_owner_pid", return_value=99999), \
+             mock.patch.object(server, "_control_panel_probe",
+                               return_value={"is_dashboard": True, "version": "2.24.1"}), \
+             mock.patch.object(server, "VERSION", "2.24.1"):
+            result = server._open_control_panel({})
+        self.assertEqual(result["status"], "stale_running")
+        self.assertIsNone(result["url"])
+        self.assertIn("token", result["remediation"])
+        self.assertIn("force_restart=true", result["remediation"])
+
+    def test_refuses_non_loopback_host(self) -> None:
+        # The bind address is not an AI-controllable knob: anything but
+        # loopback is refused outright, before any port/probe work.
+        with mock.patch.object(server, "_port_owner_pid") as owner:
+            result = server._open_control_panel({"host": "0.0.0.0"})
+        owner.assert_not_called()
+        self.assertFalse(result.get("success"))
+        err = result.get("error")
+        msg = err.get("message") if isinstance(err, dict) else str(err)
+        self.assertIn("loopback only", msg)
 
     def test_stale_running_when_remote_version_missing(self) -> None:
         # Older dashboards that predate the mcp_version field are stale too —

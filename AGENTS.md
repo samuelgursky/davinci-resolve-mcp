@@ -73,7 +73,13 @@ semantics.
   `docs/reference/api-limitations.md` — when you document a new Resolve API
   limitation, add a `submit`-tagged entry to `src/utils/api_truth.py` and
   regenerate with `scripts/gen_api_limitations.py` (a drift guard enforces it)
-- Bundled Resolve API text: `docs/reference/resolve_scripting_api.txt`
+- Bundled Resolve API text: `docs/reference/resolve_scripting_api.txt` — refresh
+  it by copying the shipped `Developer/Scripting/README.txt` over it wholesale,
+  never by hand-adding the lines you already know about. The file's only value
+  is that a diff against it is trustworthy; a hand-patch carries a newer
+  `Last Updated:` header while still hiding everything you did not know to look
+  for. That is exactly how it sat eight weeks stale at 26 May 2026 while ten
+  documented 21.0.4 methods went unwired (PR #139)
 
 ## Key Paths
 

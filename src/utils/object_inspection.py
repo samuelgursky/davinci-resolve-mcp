@@ -14,6 +14,8 @@ import inspect
 import logging
 from typing import Any, Dict, List, Optional, Union, Callable
 
+from src.utils.resolve_probe import has_method
+
 logger = logging.getLogger(__name__)
 
 
@@ -170,7 +172,7 @@ def get_lua_table_keys(lua_table: Any) -> List[str]:
     keys = []
     
     # Check for DaVinci-specific Lua table iteration methods
-    if hasattr(lua_table, 'GetKeyList'):
+    if has_method(lua_table, 'GetKeyList'):
         try:
             # Some DaVinci Resolve objects have a GetKeyList() method
             return lua_table.GetKeyList()
@@ -210,7 +212,7 @@ def convert_lua_to_python(lua_obj: Any) -> Any:
         return lua_obj
         
     # Try to convert Lua tables to Python dicts or lists
-    if hasattr(lua_obj, 'GetKeyList') or hasattr(lua_obj, '__iter__'):
+    if has_method(lua_obj, 'GetKeyList') or hasattr(lua_obj, '__iter__'):
         keys = get_lua_table_keys(lua_obj)
         
         # If we found keys, convert to dict

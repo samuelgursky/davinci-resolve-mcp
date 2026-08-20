@@ -1,0 +1,244 @@
+{
+  "metadata": {
+    "mode": "headless",
+    "headless": true,
+    "recorded_at": "2026-08-02T00:58:04+00:00",
+    "version": "19.1.3.7"
+  },
+  "formats": {
+    "drt": {
+      "exported": true,
+      "import_path": "/Users/samuelgursky/Movies/relink_exports_20260801_205804/relink.drt",
+      "imported": true,
+      "cut": [
+        {
+          "track": 1,
+          "start": 86400,
+          "duration": 191,
+          "left_offset": 0,
+          "source": "rt_source_1.mov",
+          "resolved": false,
+          "dir": "/Users/samuelgursky/Movies/relink_origin"
+        },
+        {
+          "track": 1,
+          "start": 86591,
+          "duration": 47,
+          "left_offset": 24,
+          "source": "rt_source_2.mov",
+          "resolved": false,
+          "dir": "/Users/samuelgursky/Movies/relink_origin"
+        },
+        {
+          "track": 1,
+          "start": 86638,
+          "duration": 47,
+          "left_offset": 48,
+          "source": "rt_source_1.mov",
+          "resolved": false,
+          "dir": "/Users/samuelgursky/Movies/relink_origin"
+        }
+      ],
+      "relinked": 0,
+      "total": 3,
+      "frame_exact": true,
+      "resolved_dirs": [
+        "/Users/samuelgursky/Movies/relink_origin"
+      ]
+    },
+    "fcpxml_1_10": {
+      "exported": true,
+      "import_path": "/Users/samuelgursky/Movies/relink_exports_20260801_205804/relink.fcpxml/Info.fcpxml",
+      "imported": true,
+      "cut": [
+        {
+          "track": 1,
+          "start": 86400,
+          "duration": 191,
+          "left_offset": 0,
+          "source": "rt_source_1.mov",
+          "resolved": true,
+          "dir": "/Users/samuelgursky/Movies/relink_moved"
+        },
+        {
+          "track": 1,
+          "start": 86591,
+          "duration": 47,
+          "left_offset": 24,
+          "source": "rt_source_2.mov",
+          "resolved": true,
+          "dir": "/Users/samuelgursky/Movies/relink_moved"
+        },
+        {
+          "track": 1,
+          "start": 86638,
+          "duration": 47,
+          "left_offset": 48,
+          "source": "rt_source_1.mov",
+          "resolved": true,
+          "dir": "/Users/samuelgursky/Movies/relink_moved"
+        }
+      ],
+      "relinked": 3,
+      "total": 3,
+      "frame_exact": true,
+      "resolved_dirs": [
+        "/Users/samuelgursky/Movies/relink_moved"
+      ]
+    },
+    "fcp7xml": {
+      "exported": true,
+      "import_path": "/Users/samuelgursky/Movies/relink_exports_20260801_205804/relink.xml",
+      "imported": true,
+      "cut": [
+        {
+          "track": 1,
+          "start": 86400,
+          "duration": 191,
+          "left_offset": 0,
+          "source": "rt_source_1.mov",
+          "resolved": true,
+          "dir": "/Users/samuelgursky/Movies/relink_moved"
+        },
+        {
+          "track": 1,
+          "start": 86591,
+          "duration": 47,
+          "left_offset": 24,
+          "source": "rt_source_2.mov",
+          "resolved": true,
+          "dir": "/Users/samuelgursky/Movies/relink_moved"
+        },
+        {
+          "track": 1,
+          "start": 86638,
+          "duration": 47,
+          "left_offset": 48,
+          "source": "rt_source_1.mov",
+          "resolved": true,
+          "dir": "/Users/samuelgursky/Movies/relink_moved"
+        }
+      ],
+      "relinked": 3,
+      "total": 3,
+      "frame_exact": true,
+      "resolved_dirs": [
+        "/Users/samuelgursky/Movies/relink_moved"
+      ]
+    },
+    "aaf": {
+      "exported": true,
+      "import_path": "/Users/samuelgursky/Movies/relink_exports_20260801_205804/relink.aaf",
+      "imported": true,
+      "cut": [
+        {
+          "track": 1,
+          "start": 86400,
+          "duration": 191,
+          "left_offset": 0,
+          "source": "rt_source_1.mov",
+          "resolved": true,
+          "dir": "/Users/samuelgursky/Movies/relink_moved"
+        },
+        {
+          "track": 1,
+          "start": 86591,
+          "duration": 47,
+          "left_offset": 24,
+          "source": "rt_source_2.mov",
+          "resolved": true,
+          "dir": "/Users/samuelgursky/Movies/relink_moved"
+        },
+        {
+          "track": 1,
+          "start": 86638,
+          "duration": 47,
+          "left_offset": 48,
+          "source": "rt_source_1.mov",
+          "resolved": true,
+          "dir": "/Users/samuelgursky/Movies/relink_moved"
+        }
+      ],
+      "relinked": 3,
+      "total": 3,
+      "frame_exact": true,
+      "resolved_dirs": [
+        "/Users/samuelgursky/Movies/relink_moved"
+      ]
+    },
+    "otio": {
+      "exported": true,
+      "import_path": "/Users/samuelgursky/Movies/relink_exports_20260801_205804/relink.otio",
+      "imported": false
+    },
+    "edl": {
+      "exported": true,
+      "import_path": "/Users/samuelgursky/Movies/relink_exports_20260801_205804/relink.edl",
+      "imported": true,
+      "cut": [
+        {
+          "track": 1,
+          "start": 86400,
+          "duration": 191,
+          "left_offset": 0,
+          "source": "rt_source_1.mov",
+          "resolved": false,
+          "dir": "/Users/samuelgursky/Movies/relink_origin"
+        },
+        {
+          "track": 1,
+          "start": 86591,
+          "duration": 47,
+          "left_offset": 24,
+          "source": "rt_source_2.mov",
+          "resolved": false,
+          "dir": "/Users/samuelgursky/Movies/relink_origin"
+        },
+        {
+          "track": 1,
+          "start": 86638,
+          "duration": 47,
+          "left_offset": 48,
+          "source": "rt_source_1.mov",
+          "resolved": false,
+          "dir": "/Users/samuelgursky/Movies/relink_origin"
+        }
+      ],
+      "relinked": 0,
+      "total": 3,
+      "frame_exact": true,
+      "resolved_dirs": [
+        "/Users/samuelgursky/Movies/relink_origin"
+      ]
+    }
+  },
+  "reference": [
+    {
+      "track": 1,
+      "start": 86400,
+      "duration": 191,
+      "left_offset": 0,
+      "source": "rt_source_1.mov",
+      "resolved": true,
+      "dir": "/Users/samuelgursky/Movies/relink_origin"
+    },
+    {
+      "track": 1,
+      "start": 86591,
+      "duration": 47,
+      "left_offset": 24,
+      "source": "rt_source_2.mov",
+      "resolved": true,
+      "dir": "/Users/samuelgursky/Movies/relink_origin"
+    },
+    {
+      "track": 1,
+      "start": 86638,
+      "duration": 47,
+      "left_offset": 48,
+      "source": "rt_source_1.mov",
+      "resolved": true,
+      "dir": "/Users/samuelgursky/Movies/relink_origin"
+    }
+  ]
+}

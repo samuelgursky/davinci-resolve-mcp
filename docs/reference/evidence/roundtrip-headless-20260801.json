@@ -1,0 +1,628 @@
+{
+  "metadata": {
+    "mode": "headless",
+    "headless": true,
+    "recorded_at": "2026-08-02T00:32:09+00:00",
+    "version": "19.1.3.7"
+  },
+  "formats": {
+    "drt": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_drt.drt",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_drt.drt",
+        "is_bundle": false,
+        "bundle_member": null,
+        "bytes": 19260
+      },
+      "imports": {
+        "reuse_pool": {
+          "imported": true,
+          "seconds": 0.4,
+          "name": "rt_drt",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          },
+          "cleaned": true,
+          "structure_matches": true
+        }
+      }
+    },
+    "fcpxml_1_10": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_fcpxml_1_10.fcpxml",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_fcpxml_1_10.fcpxml/Info.fcpxml",
+        "is_bundle": true,
+        "bundle_member": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_fcpxml_1_10.fcpxml/Info.fcpxml",
+        "bytes": 2908
+      },
+      "imports": {
+        "reuse_pool": {
+          "imported": true,
+          "seconds": 0.1,
+          "name": "RT_fcpxml_1_10_reuse_pool",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          },
+          "cleaned": true,
+          "structure_matches": true
+        },
+        "import_source": {
+          "imported": true,
+          "seconds": 0.1,
+          "name": "RT_fcpxml_1_10_import_source",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          },
+          "cleaned": true,
+          "structure_matches": true
+        }
+      }
+    },
+    "fcp7xml": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_fcp7xml.xml",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_fcp7xml.xml",
+        "is_bundle": false,
+        "bundle_member": null,
+        "bytes": 42663
+      },
+      "imports": {
+        "reuse_pool": {
+          "imported": true,
+          "seconds": 0.1,
+          "name": "RT_fcp7xml_reuse_pool",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          },
+          "cleaned": true,
+          "structure_matches": true
+        },
+        "import_source": {
+          "imported": true,
+          "seconds": 0.1,
+          "name": "RT_fcp7xml_import_source",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          },
+          "cleaned": true,
+          "structure_matches": true
+        }
+      }
+    },
+    "aaf": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_aaf.aaf",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_aaf.aaf",
+        "is_bundle": false,
+        "bundle_member": null,
+        "bytes": 315392
+      },
+      "imports": {
+        "reuse_pool": {
+          "imported": true,
+          "seconds": 0.1,
+          "name": "RT_aaf_reuse_pool",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          },
+          "cleaned": true,
+          "structure_matches": true
+        },
+        "import_source": {
+          "imported": true,
+          "seconds": 0.1,
+          "name": "RT_aaf_import_source",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          },
+          "cleaned": true,
+          "structure_matches": true
+        }
+      }
+    },
+    "otio": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_otio.otio",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_otio.otio",
+        "is_bundle": false,
+        "bundle_member": null,
+        "bytes": 84743
+      },
+      "imports": {
+        "reuse_pool": {
+          "imported": true,
+          "seconds": 0.1,
+          "name": "RT_otio_reuse_pool",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": null
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": null
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": null
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": null
+            }
+          ],
+          "linkage": {
+            "linked": 0,
+            "offline": 4
+          },
+          "cleaned": true,
+          "structure_matches": true
+        },
+        "import_source": {
+          "imported": true,
+          "seconds": 0.1,
+          "name": "RT_otio_import_source",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          },
+          "cleaned": true,
+          "structure_matches": true
+        }
+      }
+    },
+    "edl": {
+      "export": {
+        "exported": true,
+        "path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_edl.edl",
+        "import_path": "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/exports/rt_edl.edl",
+        "is_bundle": false,
+        "bundle_member": null,
+        "bytes": 512
+      },
+      "imports": {
+        "reuse_pool": {
+          "imported": true,
+          "seconds": 0.1,
+          "name": "RT_edl_reuse_pool",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          },
+          "cleaned": true,
+          "structure_matches": true
+        },
+        "import_source": {
+          "imported": true,
+          "seconds": 0.1,
+          "name": "RT_edl_import_source",
+          "fingerprint": [
+            {
+              "track": 1,
+              "index": 0,
+              "start": 86400,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 1,
+              "start": 86591,
+              "duration": 47,
+              "left_offset": 24,
+              "source": "rt_source_2.mov"
+            },
+            {
+              "track": 1,
+              "index": 2,
+              "start": 86638,
+              "duration": 47,
+              "left_offset": 48,
+              "source": "rt_source_1.mov"
+            },
+            {
+              "track": 1,
+              "index": 3,
+              "start": 86685,
+              "duration": 191,
+              "left_offset": 0,
+              "source": "rt_source_2.mov"
+            }
+          ],
+          "linkage": {
+            "linked": 4,
+            "offline": 0
+          },
+          "cleaned": true,
+          "structure_matches": true
+        }
+      }
+    }
+  },
+  "setup": {
+    "project": "ROUNDTRIP_20260801_203209",
+    "media": [
+      "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/rt_source_1.mov",
+      "/Users/samuelgursky/Movies/resolve_roundtrip_fixture/rt_source_2.mov"
+    ],
+    "source_frames": 192,
+    "reference_fingerprint": [
+      {
+        "track": 1,
+        "index": 0,
+        "start": 86400,
+        "duration": 191,
+        "left_offset": 0,
+        "source": "rt_source_1.mov"
+      },
+      {
+        "track": 1,
+        "index": 1,
+        "start": 86591,
+        "duration": 47,
+        "left_offset": 24,
+        "source": "rt_source_2.mov"
+      },
+      {
+        "track": 1,
+        "index": 2,
+        "start": 86638,
+        "duration": 47,
+        "left_offset": 48,
+        "source": "rt_source_1.mov"
+      },
+      {
+        "track": 1,
+        "index": 3,
+        "start": 86685,
+        "duration": 191,
+        "left_offset": 0,
+        "source": "rt_source_2.mov"
+      }
+    ],
+    "reference_linkage": {
+      "linked": 4,
+      "offline": 0
+    }
+  },
+  "teardown": {
+    "closed": true,
+    "restored": true,
+    "deleted": true
+  }
+}

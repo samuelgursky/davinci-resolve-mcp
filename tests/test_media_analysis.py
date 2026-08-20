@@ -2,9 +2,12 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 from typing import Any, Dict, Optional
@@ -25,6 +28,7 @@ from src.server import (
     _media_analysis_provenance_metadata,
     _media_analysis_records_from_target,
     _media_analysis_report_metadata_candidates,
+    _media_analysis_async_mode,
     _publish_clip_metadata_from_analysis,
     setup,
 )
@@ -58,6 +62,8 @@ from src.utils.media_analysis import (
     execute_plan,
     execute_plan_async,
     executing_clips,
+    _kill_process_tree,
+    _run_command,
     plan_requires_capabilities,
     load_report,
     mark_registry_stale_for_clip,
@@ -74,6 +80,8 @@ from src.utils.media_analysis import (
     stable_clip_directory,
     stable_clip_hash,
     stable_clip_match_hashes,
+    _load_http_transcription_providers,
+    _transcribe_with_http_provider,
     update_analysis_registry,
     vision_is_pending_host_analysis,
 )
@@ -82,9 +90,11 @@ from src.utils.media_analysis_jobs import (
     cancel_batch_job,
     create_batch_job,
     create_batch_job_from_paths,
+    join_batch_job_runner,
     list_batch_jobs,
     resume_batch_job,
     run_batch_job_slice,
+    start_batch_job_runner,
 )
 
 
@@ -725,6 +735,133 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertTrue(caps["vision"]["enabled_by_default"])
         self.assertEqual(caps["vision"]["default_provider"], HOST_CHAT_PATHS_PROVIDER)
         self.assertTrue(caps["vision"]["available"])
+
+    @unittest.mock.patch("src.utils.media_analysis.urllib.request.urlopen")
+    def test_capability_detection_prefers_multiple_configured_http_providers(self, urlopen):
+        response = unittest.mock.MagicMock()
+        response.read.return_value = json.dumps({"status": "ok", "api_version": 7}).encode("utf-8")
+        urlopen.return_value.__enter__.return_value = response
+
+        providers = [
+            {
+                "id": "audiobox-local",
+                "label": "Audiobox",
+                "base_url": "http://127.0.0.1:8000/",
+                "headers": {"Authorization": "Bearer hidden"},
+                "request_body": {"provider": "mlx"},
+            },
+            {
+                "id": "studio-asr",
+                "base_url": "https://asr.example.test",
+                "health_path": "/ready",
+                "transcribe_path": "/v1/transcribe",
+            },
+        ]
+        caps = detect_capabilities(env={
+            "DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS": json.dumps(providers)
+        })
+
+        tool = caps["tools"]["http_transcription"]
+        self.assertTrue(tool["available"])
+        self.assertEqual([item["id"] for item in tool["providers"]], ["audiobox-local", "studio-asr"])
+        self.assertNotIn("headers", tool["providers"][0])
+        self.assertNotIn("request_body", tool["providers"][0])
+        self.assertEqual(caps["transcription"]["backends"][:2], ["http:audiobox-local", "http:studio-asr"])
+        health_requests = [call.args[0] for call in urlopen.call_args_list]
+        self.assertEqual(health_requests[0].get_header("Authorization"), "Bearer hidden")
+        self.assertEqual(health_requests[1].full_url, "https://asr.example.test/ready")
+
+    def test_http_provider_configuration_fails_fast(self):
+        providers, error = _load_http_transcription_providers({
+            "DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS": json.dumps([
+                {"id": "duplicate", "base_url": "http://127.0.0.1:8000"},
+                {"id": "duplicate", "base_url": "https://asr.example.test"},
+            ])
+        })
+
+        self.assertEqual(providers, [])
+        self.assertEqual(error, "Duplicate HTTP transcription provider id: duplicate")
+
+    @unittest.mock.patch("src.utils.media_analysis.urllib.request.urlopen")
+    def test_http_provider_customizes_request_and_writes_normalized_artifacts(self, urlopen):
+        response = unittest.mock.MagicMock()
+        response.read.return_value = json.dumps({
+            "model": "mlx-community/Qwen3-ASR-1.7B-8bit",
+            "result": {
+                "language": "zh",
+                "text": "你好世界",
+                "segments": [{"start": 0.0, "end": 1.25, "text": "你好世界"}],
+            },
+        }, ensure_ascii=False).encode("utf-8")
+        urlopen.return_value.__enter__.return_value = response
+        provider_config = [{
+            "id": "audiobox-local",
+            "label": "Audiobox local",
+            "base_url": "http://127.0.0.1:8000",
+            "model": "mlx-community/Qwen3-ASR-1.7B-8bit",
+            "headers": {"Authorization": "Bearer test-token"},
+            "request_body": {"provider": "mlx"},
+            "field_map": {"audio": "input_path"},
+            "response_field": "result",
+        }]
+        providers, error = _load_http_transcription_providers({
+            "DAVINCI_RESOLVE_MCP_TRANSCRIPTION_HTTP_PROVIDERS": json.dumps(provider_config)
+        })
+        self.assertIsNone(error)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = {
+                "analysis_json": os.path.join(tmp, "analysis.json"),
+                "transcript_json": os.path.join(tmp, "transcript.json"),
+                "transcript_srt": os.path.join(tmp, "transcript.srt"),
+                "transcript_vtt": os.path.join(tmp, "transcript.vtt"),
+            }
+            result = _transcribe_with_http_provider(
+                "/tmp/source.wav",
+                artifacts,
+                {"allow_model_download": False},
+                providers[0],
+            )
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["backend"], "http:audiobox-local")
+            self.assertEqual(result["provider"], "Audiobox local")
+            self.assertEqual(result["text"], "你好世界")
+            self.assertTrue(os.path.exists(artifacts["transcript_json"]))
+            with open(artifacts["transcript_srt"], encoding="utf-8") as handle:
+                self.assertIn("你好世界", handle.read())
+
+        request = urlopen.call_args.args[0]
+        request_payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(request_payload["provider"], "mlx")
+        self.assertEqual(request_payload["input_path"], "/tmp/source.wav")
+        self.assertNotIn("audio", request_payload)
+        self.assertFalse(request_payload["allow_download"])
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-token")
+
+    @unittest.mock.patch("src.utils.media_analysis.urllib.request.urlopen")
+    def test_http_provider_rejects_missing_response_field(self, urlopen):
+        response = unittest.mock.MagicMock()
+        response.read.return_value = json.dumps({"error": "not ready"}).encode("utf-8")
+        urlopen.return_value.__enter__.return_value = response
+        provider = {
+            "id": "studio-asr",
+            "label": "Studio ASR",
+            "base_url": "https://asr.example.test",
+            "transcribe_path": "/stt",
+            "response_field": "result",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _transcribe_with_http_provider(
+                "/tmp/source.wav",
+                {"analysis_json": os.path.join(tmp, "analysis.json")},
+                {},
+                provider,
+            )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "HTTP transcription response did not include 'result'.")
 
     def test_request_capabilities_report_host_chat_paths_vision(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3794,6 +3931,81 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("Analysis index not found", (result["error"].get("message","") if isinstance(result["error"], dict) else result["error"]))
 
+    def test_batch_job_runner_drives_the_job_to_completion(self):
+        """background=true has to leave the work actually running.
+
+        start_batch_job only ever created a row at status "queued" that nothing
+        advanced, so a caller who passed background=true — which starts the work
+        off-thread everywhere else in this server — got a job that sat there. The
+        runner is the missing half: it drives slices until the job reaches a
+        terminal status, with no caller intervention at all.
+        """
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "source")
+            analysis_dir = os.path.join(tmp, "analysis")
+            os.makedirs(source_dir)
+            sources = [os.path.join(source_dir, f"runner_{n}.mp4") for n in ("a", "b")]
+            for source in sources:
+                self._write_synthetic_media(source)
+            records = [
+                {"clip_id": f"clip-{n}", "clip_name": os.path.basename(path), "file_path": path, "media_id": f"media-{n}"}
+                for n, path in zip(("a", "b"), sources)
+            ]
+            created = create_batch_job(
+                project_name="Runner Project",
+                project_id="project-runner",
+                records=records,
+                target={"type": "file_list"},
+                params={
+                    "analysis_root": analysis_dir,
+                    "depth": "standard",
+                    "max_analysis_frames": 2,
+                    "transcription": {
+                        "enabled": True,
+                        "backend": "mock",
+                        "segments": [{"start": 0, "end": 1.0, "text": "Runner transcript."}],
+                    },
+                    "vision": {"enabled": True, "provider": "mock"},
+                },
+                name="Runner batch",
+            )
+            job = created["job"]
+            root = job["project_root"]
+            self.assertEqual(job["status"], "queued")
+            self.assertEqual(job["pending_clips"], 2)
+
+            started = start_batch_job_runner(root, job["job_id"])
+            self.assertTrue(started["started"])
+            # A second start must not spawn a competing pump — two runners would
+            # race for the same pending rows.
+            self.assertFalse(start_batch_job_runner(root, job["job_id"])["started"])
+
+            self.assertTrue(join_batch_job_runner(root, job["job_id"], timeout=300))
+            final = batch_job_status(root, job["job_id"])
+            self.assertEqual(final["status"], "completed")
+            self.assertEqual(final["succeeded_clips"], 2)
+            self.assertEqual(final["pending_clips"], 0)
+
+    def test_batch_job_runner_declines_a_finished_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            created = create_batch_job(
+                project_name="Runner Project",
+                project_id="project-runner-empty",
+                records=[],
+                target={"type": "file_list"},
+                params={"analysis_root": os.path.join(tmp, "analysis")},
+                name="Empty batch",
+            )
+            job = created["job"]
+            root = job["project_root"]
+            cancel_batch_job(root, job["job_id"])
+            started = start_batch_job_runner(root, job["job_id"])
+            self.assertFalse(started["started"])
+            self.assertIn("canceled", started["reason"])
+            self.assertFalse(start_batch_job_runner(root, "no-such-job")["started"])
+
     def test_batch_job_slice_runs_and_builds_index(self):
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             self.skipTest("ffmpeg/ffprobe not installed")
@@ -4631,6 +4843,179 @@ class InventoryCacheReuseTests(unittest.TestCase):
                 self.dash._current_resolve_project_id = original
             self.assertTrue(payload["resolve_available"])
             self.assertEqual(payload["counts"]["total"], 2)
+
+
+class RunCommandTimeoutKillsProcessTreeTests(unittest.TestCase):
+    """A timeout must actually cut the wait short, not relabel a
+    normally-completing (or genuinely stalled) child as 'timed out' after
+    waiting out its full natural runtime. Popen.kill() reaches only the direct
+    child; on Windows a PATH lookup can resolve to a shim whose real work
+    happens in a grandchild that survives untouched, still holding the pipes.
+    Measured before the fix: a 5s timeout against an ~82s ffmpeg pass returned
+    after the full 82s, with 'timed out after 5s' attached to complete,
+    correct output."""
+
+    def test_timeout_returns_well_before_natural_completion(self):
+        # sys.executable, not an external binary — no shim/wrapper can sit on
+        # PATH in front of it, so this isolates the kill-tree mechanism itself
+        # from the shim-specific scenario in the original repro.
+        natural_runtime = 5
+        args = [sys.executable, "-c", f"import time; time.sleep({natural_runtime})"]
+        start = time.monotonic()
+        code, _stdout, stderr = _run_command(args, timeout=1)
+        elapsed = time.monotonic() - start
+        self.assertEqual(code, 124)
+        self.assertIn("timed out", stderr)
+        # Generous bound, not a tight one: proves the kill actually cut the wait
+        # short (vs. the pre-fix behavior of waiting out the full natural
+        # runtime) without flaking on a slow/loaded CI runner.
+        self.assertLess(elapsed, natural_runtime - 1)
+
+    def test_normal_completion_is_unaffected(self):
+        code, stdout, _stderr = _run_command(
+            [sys.executable, "-c", "print('ok')"], timeout=10
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("ok", stdout)
+
+
+@unittest.skipIf(os.name == "nt", "POSIX-only branch of _kill_process_tree")
+class KillProcessTreePosixTests(unittest.TestCase):
+    def test_uses_killpg_with_sigkill(self):
+        with unittest.mock.patch("os.killpg") as mock_killpg:
+            _kill_process_tree(12345)
+        mock_killpg.assert_called_once_with(12345, signal.SIGKILL)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows-only branch of _kill_process_tree")
+class KillProcessTreeWindowsTests(unittest.TestCase):
+    def test_uses_taskkill_with_tree_flag(self):
+        with unittest.mock.patch("subprocess.run") as mock_run:
+            _kill_process_tree(12345)
+        mock_run.assert_called_once_with(
+            ["taskkill", "/F", "/T", "/PID", "12345"],
+            capture_output=True, check=False,
+        )
+
+
+class KillProcessTreeIsBestEffortTests(unittest.TestCase):
+    """A kill helper on an error path must not raise. taskkill can be missing
+    from PATH and killpg can return EPERM; either escaping would break
+    _run_command's (code, stdout, stderr) contract at the exact moment the
+    caller is already handling a failure."""
+
+    def test_os_error_from_the_platform_call_is_swallowed(self):
+        target = "subprocess.run" if os.name == "nt" else "os.killpg"
+        with unittest.mock.patch(target, side_effect=PermissionError("EPERM")):
+            _kill_process_tree(12345)  # must not raise
+
+
+class RunCommandPostKillDrainIsBoundedTests(unittest.TestCase):
+    """The tree kill is best-effort, so the read that follows it must be
+    bounded. A descendant that escaped the kill still holds the inherited
+    pipes, and an unbounded read there hangs for the very reason the kill
+    exists."""
+
+    def test_returns_even_when_the_kill_does_not_take(self):
+        import src.utils.media_analysis as _ma
+
+        natural_runtime = 6
+        args = [sys.executable, "-c", f"import time; time.sleep({natural_runtime})"]
+        with unittest.mock.patch.object(_ma, "_kill_process_tree"), \
+                unittest.mock.patch.object(_ma, "_POST_KILL_DRAIN_SECONDS", 1):
+            start = time.monotonic()
+            code, _stdout, stderr = _run_command(args, timeout=1)
+            elapsed = time.monotonic() - start
+        self.assertEqual(code, 124)
+        self.assertIn("timed out", stderr)
+        self.assertIn("abandoned", stderr.lower())
+        self.assertLess(elapsed, natural_runtime - 1)
+class RunCommandEnvOverrideTests(unittest.TestCase):
+    """_run_command must let a caller pass a scrubbed env for a subprocess that
+    shouldn't inherit this server's own PYTHONHOME/PYTHONPATH — set so
+    DaVinciResolveScript imports, but fatal to a *different* Python interpreter
+    such as whisper's CLI, which dies on `AssertionError: SRE module mismatch`
+    loading a foreign stdlib against its own compiled extensions."""
+
+    def test_explicit_env_replaces_inherited_environment(self):
+        # Mirrors the real fix's pattern: copy the parent env, pop one key, pass
+        # the result as env=. The child must not see the popped variable, even
+        # though it's set in this test process's own environment.
+        os.environ["_RUN_COMMAND_ENV_TEST_MARKER"] = "should-not-be-seen"
+        try:
+            custom_env = dict(os.environ)
+            custom_env.pop("_RUN_COMMAND_ENV_TEST_MARKER", None)
+            code, stdout, _stderr = _run_command(
+                [sys.executable, "-c",
+                 "import os; print(os.environ.get('_RUN_COMMAND_ENV_TEST_MARKER', 'MISSING'))"],
+                env=custom_env,
+            )
+        finally:
+            del os.environ["_RUN_COMMAND_ENV_TEST_MARKER"]
+        self.assertEqual(code, 0)
+        self.assertIn("MISSING", stdout)
+
+    def test_default_env_none_still_inherits_parent(self):
+        # Backward compatibility: omitting env= must preserve the pre-fix
+        # behavior of inheriting the full parent environment.
+        os.environ["_RUN_COMMAND_ENV_TEST_MARKER"] = "present"
+        try:
+            code, stdout, _stderr = _run_command(
+                [sys.executable, "-c", "import os; print(os.environ.get('_RUN_COMMAND_ENV_TEST_MARKER', 'MISSING'))"]
+            )
+        finally:
+            del os.environ["_RUN_COMMAND_ENV_TEST_MARKER"]
+        self.assertEqual(code, 0)
+        self.assertIn("present", stdout)
+class MediaAnalysisAsyncModeTests(unittest.TestCase):
+    """`background`/`async_job` used to be accepted on analyze_clip/analyze_bin/etc
+    and silently ignored — the call ran to completion inline with no job_id, which
+    from the caller's side is indistinguishable from a hang.
+
+    They are not aliases for prefer_handle. prefer_handle hands back a queued job
+    for the caller to drive; background promises the work is under way, which is
+    what it means on every other tool in this server. Collapsing the two would
+    have swapped one silence for a quieter one: a job nothing ever advanced."""
+
+    def test_prefer_handle_queues_without_running(self):
+        self.assertEqual(_media_analysis_async_mode({"prefer_handle": True}), "queued")
+
+    def test_background_runs_the_job(self):
+        self.assertEqual(_media_analysis_async_mode({"background": True}), "running")
+
+    def test_async_job_runs_the_job(self):
+        self.assertEqual(_media_analysis_async_mode({"async_job": True}), "running")
+
+    def test_background_wins_over_prefer_handle(self):
+        # Asking for both is asking for the stronger guarantee.
+        self.assertEqual(
+            _media_analysis_async_mode({"prefer_handle": True, "background": True}), "running"
+        )
+
+    def test_string_true_values_are_coerced(self):
+        self.assertEqual(_media_analysis_async_mode({"background": "true"}), "running")
+        self.assertEqual(_media_analysis_async_mode({"prefer_handle": "yes"}), "queued")
+
+    def test_no_opt_in_is_synchronous(self):
+        self.assertIsNone(_media_analysis_async_mode({}))
+        self.assertIsNone(_media_analysis_async_mode({"prefer_handle": False, "background": False}))
+
+    def test_explicit_dry_run_suppresses_every_opt_in(self):
+        for opt in ("prefer_handle", "background", "async_job"):
+            self.assertIsNone(_media_analysis_async_mode({opt: True, "dry_run": True}), opt)
+
+    def test_defaulted_dry_run_does_not_swallow_an_explicit_async_request(self):
+        # dry_run here came from the dry_run_first_default preference, not the
+        # call. Letting it win would silently hand back a plan to a caller that
+        # explicitly asked for a job — the same silence this change closes.
+        self.assertEqual(
+            _media_analysis_async_mode({"background": True, "dry_run": True}, dry_run_explicit=False),
+            "running",
+        )
+        self.assertEqual(
+            _media_analysis_async_mode({"prefer_handle": True, "dry_run": True}, dry_run_explicit=False),
+            "queued",
+        )
 
 
 if __name__ == "__main__":

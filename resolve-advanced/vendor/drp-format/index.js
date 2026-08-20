@@ -142,6 +142,13 @@ module.exports = {
   trimClip: require('./splice-clips').trimClip,
   trimClipHead: require('./splice-clips').trimClipHead,
   splitClip: require('./splice-clips').splitClip,
+  // Nested sequences — compounds AND nested timelines (compound-nav.js). The
+  // scripting API cannot walk into a compound at all: MediaPoolItem.GetTimeline()
+  // returns None for Type='Compound' while working for Type='Timeline'.
+  listNestedSequences: require('./compound-nav').listNestedSequences,
+  readNestedSequence: require('./compound-nav').readNestedSequence,
+  readNestedTitles: require('./compound-nav').readNestedTitles,
+  setNestedTitleText: require('./compound-nav').setNestedTitleText,
   rippleTimeline: require('./splice-clips').rippleTimeline,
 
   // Create a fresh, importable Resolve project (one empty timeline) from a bundled template.
@@ -152,6 +159,10 @@ module.exports = {
 
   // Author a project with one media clip referencing an arbitrary h264 file, from scratch [P8].
   addMediaClip: require('./author-project').addMediaClip,
+
+  // Relabel the timeline frame rate tag in place (not a retime — frame counts untouched).
+  setTimelineFrameRate: require('./set-framerate').setTimelineFrameRate,
+  readTimelineFrameRates: require('./set-framerate').readTimelineFrameRates,
 
   // Offline media relink — repoint media to new paths in the Media Pool blobs (no Resolve).
   relinkMedia: require('./relink-media').relinkMedia,

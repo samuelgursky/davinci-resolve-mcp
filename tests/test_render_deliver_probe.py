@@ -1,17 +1,22 @@
-import os
 import tempfile
 import unittest
 
+from src.utils.delivery_targets import DELIVERY_TARGETS
 from src.server import (
+    _list_delivery_targets,
+    _prepare_delivery_job,
     _prepare_render_job,
     _probe_render_matrix,
+    _resolve_delivery_target_live,
     _quick_export_capabilities,
     _render_capabilities,
+    _render_codec_id,
     _render_job_lifecycle_probe,
     _safe_quick_export,
     _safe_set_render_settings,
     _validate_render_settings_action,
 )
+from tests._paths import NON_TEMP_EXISTING_DIR
 
 
 class RenderProjectStub:
@@ -61,9 +66,12 @@ class RenderProjectStub:
         return {"mp4": "mp4", "QuickTime": "mov"}
 
     def GetRenderCodecs(self, render_format):
+        # Values are the REAL ids from Resolve Studio 19.1.3.7 (probed 2026-07-27).
+        # Note H.264 -> "H264": the description and the id differ here too, so a
+        # fixture using {"H.264": "H.264"} understates the codec-id bug.
         self.codec_queries.append(render_format)
         if render_format == "mp4":
-            return {"H.264": "H.264", "H.265": "H.265"}
+            return {"H.264": "H264", "H.265": "H265"}
         if render_format == "mov":
             return {
                 "Apple ProRes 422 LT": "ProRes422LT",
@@ -145,12 +153,47 @@ class RenderDeliverProbeTest(unittest.TestCase):
         self.assertEqual(project.resolution_queries[0], ("mov", "ProRes422LT"))
 
     def test_validate_render_settings_requires_temp_target_when_requested(self):
+        # Not os.getcwd() — under a worktree in /tmp that IS a temp target and
+        # the guard correctly permits it. The directory has to exist, or the
+        # validator reports "does not exist" and never reaches the temp check.
+        # See tests/_paths.py.
         result = _validate_render_settings_action(
-            {"settings": {"TargetDir": os.getcwd(), "SelectAllFrames": True}, "require_temp_target": True}
+            {"settings": {"TargetDir": NON_TEMP_EXISTING_DIR, "SelectAllFrames": True},
+             "require_temp_target": True}
         )
 
         self.assertFalse(result["valid"])
         self.assertIn("TargetDir must be under the system temp directory", result["errors"][0])
+
+    def test_validate_render_settings_accepts_2104_keys(self):
+        result = _validate_render_settings_action(
+            {"settings": {"UseFullExtents": False, "AddFrameHandles": 12, "DataBurnIn": "None"}}
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["unknown_keys"], [])
+        self.assertEqual(result["warnings"], [])
+
+    def test_validate_render_settings_types_2104_keys(self):
+        result = _validate_render_settings_action(
+            {"settings": {"UseFullExtents": "yes", "AddFrameHandles": -3, "DataBurnIn": 7}}
+        )
+
+        self.assertFalse(result["valid"])
+        joined = " ".join(result["errors"])
+        self.assertIn("UseFullExtents must be a boolean", joined)
+        self.assertIn("AddFrameHandles must be >= 0", joined)
+        self.assertIn("DataBurnIn must be a string", joined)
+
+    def test_validate_render_settings_warns_handles_ignored_under_full_extents(self):
+        # Resolve accepts the combination but silently ignores the handle count —
+        # the validator stays valid and says so out loud instead.
+        result = _validate_render_settings_action(
+            {"settings": {"UseFullExtents": True, "AddFrameHandles": 12}}
+        )
+
+        self.assertTrue(result["valid"])
+        self.assertIn("AddFrameHandles is ignored while UseFullExtents is true", result["warnings"][0])
 
     def test_safe_set_render_settings_reports_diff_and_restores(self):
         project = RenderProjectStub()
@@ -183,6 +226,93 @@ class RenderDeliverProbeTest(unittest.TestCase):
         self.assertEqual(result["job_id"], "job-1")
         self.assertEqual(project.format_codec["format"], "mp4")
 
+    def test_prepare_render_job_warns_that_preset_state_is_inherited(self):
+        """Issue #123: an unpinned video job inherits unreadable Deliver state.
+
+        The measured failure returned success=True with IsExportVideo=True on the
+        job and an mp4 with no video stream on disk, so the warning is the only
+        place a caller learns the readback is not a witness.
+        """
+        project = RenderProjectStub()
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "custom_name": "unpinned_video",
+                "settings": {"ExportVideo": True},
+            },
+        )
+
+        self.assertTrue(result["success"])
+        codes = [w["code"] for w in result.get("warnings", [])]
+        self.assertIn("RENDER_PRESET_STATE_INHERITED", codes)
+
+    def test_prepare_render_job_from_preset_pins_state_before_settings(self):
+        """LoadRenderPreset must run BEFORE SetRenderSettings.
+
+        Reversed, the preset overwrites the caller's explicit keys instead of
+        being overwritten by them — the same wrong file, arrived at backwards.
+        """
+        project = RenderProjectStub()
+        calls = []
+        project.LoadRenderPreset = lambda name: (calls.append(("load", name)), True)[1]
+        original_set = project.SetRenderSettings
+        project.SetRenderSettings = lambda s: (calls.append(("set", dict(s))), original_set(s))[1]
+
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "custom_name": "pinned_video",
+                "from_preset": "H.264 Master",
+                "settings": {"ExportVideo": True},
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["preset_pinned"], {"preset": "H.264 Master", "loaded": True})
+        self.assertEqual([c[0] for c in calls], ["load", "set"])
+        # Pinning replaces the warning — the base state is no longer a guess.
+        self.assertNotIn(
+            "RENDER_PRESET_STATE_INHERITED",
+            [w["code"] for w in result.get("warnings", [])],
+        )
+
+    def test_prepare_render_job_rejects_unknown_preset_without_queueing(self):
+        project = RenderProjectStub()
+
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "from_preset": "Audio Only",
+                "settings": {"ExportVideo": True},
+            },
+        )
+
+        self.assertFalse(result.get("success"))
+        self.assertEqual(result["error"]["code"], "RENDER_PRESET_NOT_FOUND")
+        self.assertEqual(result["error"]["state"]["available_presets"], ["H.264 Master"])
+        self.assertEqual(project.jobs, {})
+
+    def test_prepare_render_job_refuses_when_preset_load_returns_false(self):
+        """A bare False must not fall through to an inheriting render."""
+        project = RenderProjectStub()
+        project.LoadRenderPreset = lambda name: False
+
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "from_preset": "H.264 Master",
+                "settings": {"ExportVideo": True},
+            },
+        )
+
+        self.assertFalse(result.get("success"))
+        self.assertEqual(result["error"]["code"], "RENDER_PRESET_LOAD_FAILED")
+        self.assertEqual(project.jobs, {})
+
     def test_prepare_render_job_normalizes_display_format_name(self):
         project = RenderProjectStub()
 
@@ -200,12 +330,265 @@ class RenderDeliverProbeTest(unittest.TestCase):
         self.assertTrue(result["format_success"])
         self.assertEqual(project.format_codec, {"format": "mov", "codec": "ProRes422LT"})
 
+    def test_prepare_render_job_normalizes_display_codec_name(self):
+        """Codec display names must resolve to ids, like formats do.
+
+        Live-confirmed on Resolve Studio 19.1.3.7: the description and id differ
+        for BOTH families ('Apple ProRes 422 HQ'->'ProRes422HQ', 'H.264'->'H264'),
+        and SetCurrentRenderFormatAndCodec rejects the description in each case.
+        """
+        project = RenderProjectStub()
+
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "custom_name": "prores_hq_master",
+                "format": "QuickTime",
+                "codec": "Apple ProRes 422 HQ",
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["format_success"])
+        self.assertEqual(project.format_codec, {"format": "mov", "codec": "ProRes422HQ"})
+
+    def test_prepare_render_job_refuses_to_queue_when_format_codec_rejected(self):
+        """A rejected format/codec must not leave a job queued in the previous codec."""
+
+        class RejectingStub(RenderProjectStub):
+            def SetCurrentRenderFormatAndCodec(self, render_format, codec):
+                return False
+
+        project = RejectingStub()
+        result = _prepare_render_job(
+            project,
+            {
+                "target_dir": tempfile.gettempdir(),
+                "custom_name": "bogus",
+                "format": "QuickTime",
+                "codec": "NotARealCodec",
+            },
+        )
+
+        self.assertIn("error", result)
+        self.assertEqual(result["error"]["code"], "RENDER_FORMAT_CODEC_REJECTED")
+        self.assertEqual(result["error"]["category"], "invalid_input")
+        self.assertEqual(result["error"]["state"]["resolved_format_id"], "mov")
+        self.assertIn("Apple ProRes 422 HQ", result["error"]["state"]["available_codecs"])
+        self.assertEqual(project.jobs, {}, "no job may be queued when the codec was rejected")
+
+    def test_render_codec_id_accepts_label_id_and_unknown(self):
+        project = RenderProjectStub()
+
+        self.assertEqual(_render_codec_id(project, "QuickTime", "Apple ProRes 422 LT"), "ProRes422LT")
+        self.assertEqual(_render_codec_id(project, "mov", "ProRes422HQ"), "ProRes422HQ")
+        self.assertEqual(_render_codec_id(project, "mp4", "H.264"), "H264")
+        # Unknown codecs pass through unchanged for Resolve to reject.
+        self.assertEqual(_render_codec_id(project, "mov", "Nope"), "Nope")
+
     def test_render_job_lifecycle_probe_deletes_probe_job(self):
         project = RenderProjectStub()
         result = _render_job_lifecycle_probe(project, {"target_dir": tempfile.gettempdir()})
 
         self.assertTrue(result["success"])
         self.assertEqual(project.deleted, ["job-1"])
+
+
+class TimelineStub:
+    def __init__(self, fps="23.976"):
+        self._fps = fps
+
+    def GetSetting(self, key):
+        return self._fps if key == "timelineFrameRate" else None
+
+
+_UNSET = object()
+
+
+class DeliveryTargetProjectStub(RenderProjectStub):
+    """Render stub that also answers GetCurrentTimeline, for fps inheritance."""
+
+    def __init__(self, timeline=_UNSET):
+        super().__init__()
+        self._timeline = TimelineStub() if timeline is _UNSET else timeline
+
+    def GetCurrentTimeline(self):
+        return self._timeline
+
+
+class DeliveryTargetTest(unittest.TestCase):
+    def test_resolve_maps_target_to_live_format_and_codec_ids(self):
+        project = DeliveryTargetProjectStub()
+
+        resolved, err = _resolve_delivery_target_live(project, {"target": "prores422hq_master"})
+
+        self.assertIsNone(err)
+        self.assertEqual(resolved["format_id"], "mov")
+        self.assertEqual(resolved["codec_id"], "ProRes422HQ")
+        self.assertEqual(resolved["target"], "prores422hq_master")
+
+    def test_platform_alias_resolves(self):
+        resolved, err = _resolve_delivery_target_live(DeliveryTargetProjectStub(), {"target": "youtube"})
+
+        self.assertIsNone(err)
+        self.assertEqual((resolved["format_id"], resolved["codec_id"]), ("mp4", "H264"))
+        self.assertEqual(resolved["settings"]["FormatWidth"], 1920)
+
+    def test_master_inherits_timeline_fps_into_settings_and_qc_spec(self):
+        resolved, _ = _resolve_delivery_target_live(
+            DeliveryTargetProjectStub(), {"target": "prores422hq_master"}
+        )
+
+        self.assertAlmostEqual(resolved["timeline_fps"], 23.976)
+        self.assertAlmostEqual(resolved["settings"]["FrameRate"], 23.976)
+        self.assertAlmostEqual(resolved["qc_spec"]["video"]["fps"], 23.976)
+
+    def test_missing_timeline_does_not_break_resolution(self):
+        resolved, err = _resolve_delivery_target_live(
+            DeliveryTargetProjectStub(timeline=None), {"target": "youtube"}
+        )
+
+        self.assertIsNone(err)
+        self.assertIsNone(resolved["timeline_fps"])
+
+    def test_unknown_target_errors_with_the_known_list(self):
+        _, err = _resolve_delivery_target_live(DeliveryTargetProjectStub(), {"target": "betamax"})
+
+        self.assertEqual(err["error"]["code"], "UNKNOWN_DELIVERY_TARGET")
+        self.assertIn("prores422hq_master", err["error"]["state"]["known_targets"])
+
+    def test_missing_target_param_errors(self):
+        _, err = _resolve_delivery_target_live(DeliveryTargetProjectStub(), {})
+
+        self.assertEqual(err["error"]["code"], "MISSING_TARGET")
+
+    def test_unavailable_codec_errors_with_what_this_machine_has(self):
+        """The stub exposes no DNxHR, standing in for a license/plugin gap."""
+        _, err = _resolve_delivery_target_live(
+            DeliveryTargetProjectStub(), {"target": "dnxhr_hqx_master"}
+        )
+
+        self.assertEqual(err["error"]["code"], "DELIVERY_TARGET_CODEC_UNAVAILABLE")
+        self.assertEqual(err["error"]["category"], "unsupported")
+        self.assertIn("Apple ProRes 422 HQ", err["error"]["state"]["available_codecs"])
+
+    def test_unavailable_format_errors_before_codec_lookup(self):
+        _, err = _resolve_delivery_target_live(
+            DeliveryTargetProjectStub(),
+            {"target": "prores422hq_master", "overrides": {"format_candidates": ["Betamax"]}},
+        )
+
+        self.assertEqual(err["error"]["code"], "DELIVERY_TARGET_FORMAT_UNAVAILABLE")
+        self.assertIn("available_formats", err["error"]["state"])
+
+    def test_overrides_flow_through_to_settings(self):
+        resolved, _ = _resolve_delivery_target_live(
+            DeliveryTargetProjectStub(), {"target": "youtube", "overrides": {"width": 1280, "height": 720}}
+        )
+
+        self.assertEqual(resolved["settings"]["FormatWidth"], 1280)
+        self.assertEqual(resolved["qc_spec"]["video"]["width"], 1280)
+
+    def test_sequence_target_reports_no_qc_spec_with_a_reason(self):
+        project = DeliveryTargetProjectStub()
+        project.GetRenderFormats = lambda: {"DPX": "dpx"}
+        project.GetRenderCodecs = lambda fmt: {"RGB 10 bits": "RGB10"}
+
+        resolved, err = _resolve_delivery_target_live(project, {"target": "dpx_sequence"})
+
+        self.assertIsNone(err)
+        self.assertIsNone(resolved["qc_spec"])
+        # The note must be the TARGET's own reason, not a hard-coded message —
+        # that hard-coding told WebP users their file was an image sequence.
+        self.assertEqual(resolved["qc_note"], DELIVERY_TARGETS["dpx_sequence"].qc_skip_reason)
+        self.assertIn("image sequence", resolved["qc_note"])
+
+    def test_qc_note_reports_each_target_s_own_reason(self):
+        """A target that declines QC for a non-sequence reason must say so."""
+        project = DeliveryTargetProjectStub()
+        project.GetRenderFormats = lambda: {"WebP": "webp"}
+        project.GetRenderCodecs = lambda fmt: {"Animated WebP": "Animated_WEBP"}
+
+        resolved, err = _resolve_delivery_target_live(project, {"target": "webp_animated"})
+
+        self.assertIsNone(err)
+        self.assertIsNone(resolved["qc_spec"])
+        self.assertIn("unverified", resolved["qc_note"])
+        self.assertNotIn("image sequence", resolved["qc_note"])
+
+    def test_list_targets_reports_availability_against_the_live_matrix(self):
+        result = _list_delivery_targets(DeliveryTargetProjectStub(), {"check_availability": True})
+
+        targets = result["targets"]
+        self.assertTrue(targets["prores422hq_master"]["available"])
+        self.assertTrue(targets["h264_1080p_web"]["available"])
+        self.assertFalse(targets["dnxhr_hqx_master"]["available"])
+        self.assertIn("codec", targets["dnxhr_hqx_master"]["unavailable_reason"])
+        self.assertFalse(targets["dpx_sequence"]["available"])
+        self.assertIn("format", targets["dpx_sequence"]["unavailable_reason"])
+
+    def test_list_targets_without_availability_does_not_touch_the_matrix(self):
+        project = DeliveryTargetProjectStub()
+        result = _list_delivery_targets(project, {})
+
+        self.assertFalse(result["availability_checked"])
+        self.assertEqual(project.codec_queries, [])
+        self.assertNotIn("available", result["targets"]["prores422hq_master"])
+
+    def test_list_targets_filters_by_tier(self):
+        result = _list_delivery_targets(DeliveryTargetProjectStub(), {"tier": "web"})
+
+        self.assertTrue(all(e["tier"] == "web" for e in result["targets"].values()))
+        self.assertNotIn("prores422hq_master", result["targets"])
+
+    def test_list_targets_rejects_an_unknown_tier(self):
+        result = _list_delivery_targets(DeliveryTargetProjectStub(), {"tier": "bogus"})
+
+        self.assertEqual(result["error"]["code"], "UNKNOWN_DELIVERY_TIER")
+
+    def test_prepare_delivery_job_queues_with_resolved_ids_and_carries_the_qc_spec(self):
+        project = DeliveryTargetProjectStub()
+
+        result = _prepare_delivery_job(
+            project,
+            {
+                "target": "prores422hq_master",
+                "target_dir": tempfile.gettempdir(),
+                "custom_name": "ep01_master",
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(project.format_codec, {"format": "mov", "codec": "ProRes422HQ"})
+        self.assertEqual(result["delivery_target"], "prores422hq_master")
+        self.assertEqual(result["qc_spec"]["video"]["codec"], "prores")
+        self.assertEqual(project.settings["CustomName"], "ep01_master")
+
+    def test_prepare_delivery_job_lets_explicit_settings_win_over_the_target(self):
+        project = DeliveryTargetProjectStub()
+
+        result = _prepare_delivery_job(
+            project,
+            {
+                "target": "youtube",
+                "target_dir": tempfile.gettempdir(),
+                "settings": {"FormatWidth": 1280, "FormatHeight": 720},
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(project.settings["FormatWidth"], 1280)
+
+    def test_prepare_delivery_job_does_not_queue_when_the_target_is_unavailable(self):
+        project = DeliveryTargetProjectStub()
+
+        result = _prepare_delivery_job(
+            project, {"target": "dnxhr_hqx_master", "target_dir": tempfile.gettempdir()}
+        )
+
+        self.assertEqual(result["error"]["code"], "DELIVERY_TARGET_CODEC_UNAVAILABLE")
+        self.assertEqual(project.jobs, {})
         self.assertEqual(project.GetRenderJobList(), [])
 
     def test_safe_quick_export_dry_run_forces_upload_off(self):

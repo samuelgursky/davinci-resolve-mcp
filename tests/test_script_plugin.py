@@ -669,7 +669,15 @@ class TestScriptExecution(unittest.TestCase):
             'name': 'LuaNoResolve', 'category': 'Utility', 'language': 'lua',
         })
         self.assertIn('error', r)
-        self.assertIn("isn't running", (r["error"].get("message","") if isinstance(r["error"], dict) else r["error"]))
+        # Assert the contract, not the prose. The message is now derived from
+        # whether a Resolve is actually running, so matching its wording made this
+        # test pass or fail according to what the developer had open. `category` is
+        # what a caller routes on and it does not move.
+        error = r["error"]
+        self.assertIsInstance(error, dict)
+        self.assertEqual(error["category"], "not_connected")
+        self.assertIn(error["code"],
+                      {"RESOLVE_NOT_RUNNING", "SCRIPTING_UNAVAILABLE", "BRIDGE_UNAVAILABLE"})
 
     # ── run_inline Python ──────────────────────────────────────────────────
 
@@ -744,6 +752,84 @@ class TestScriptExecution(unittest.TestCase):
             'source': 'return 1', 'language': 'lua',
         })
         self.assertIn('error', r)
+
+
+class TestPythonScriptExitGuard(unittest.TestCase):
+    """The runner must survive fusionscript's segfault-at-exit race.
+
+    fusionscript can SIGSEGV during interpreter teardown after the script has
+    finished, flipping a good run to exit -11 / success:false. The runner
+    hard-exits before teardown; these tests simulate the crash with an atexit
+    handler that raises SIGSEGV.
+    """
+
+    def _run(self, source, args=()):
+        from src.server import _execute_python_script
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(source)
+            path = f.name
+        try:
+            with patch('src.server.get_resolve', return_value=None):
+                return _execute_python_script(path, list(args), timeout=30)
+        finally:
+            os.unlink(path)
+
+    @unittest.skipUnless(os.name == 'posix', 'SIGSEGV via os.kill is POSIX-only')
+    def test_segfault_at_exit_does_not_flip_success(self):
+        r = self._run(
+            "import atexit, os, signal\n"
+            "atexit.register(lambda: os.kill(os.getpid(), signal.SIGSEGV))\n"
+            "print('work done')\n"
+        )
+        self.assertTrue(r['success'], r)
+        self.assertEqual(r['exit_code'], 0)
+        self.assertIn('work done', r['stdout'])
+
+    def test_argv_and_failure_exit_codes_are_preserved(self):
+        r = self._run("import sys\nprint(sys.argv[1])\nsys.exit(3)\n", args=['hello'])
+        self.assertFalse(r['success'])
+        self.assertEqual(r['exit_code'], 3)
+        self.assertIn('hello', r['stdout'])
+
+    @unittest.skipUnless(os.name == 'posix', 'SIGSEGV via os.kill is POSIX-only')
+    def test_sys_exit_zero_plus_segfault_at_exit_still_succeeds(self):
+        # sys.exit(0) raises SystemExit; if the guard let it propagate, the
+        # interpreter would take the normal teardown path and the simulated
+        # fusionscript crash would flip the run to exit -11.
+        r = self._run(
+            "import atexit, os, signal, sys\n"
+            "atexit.register(lambda: os.kill(os.getpid(), signal.SIGSEGV))\n"
+            "print('work done')\n"
+            "sys.exit(0)\n"
+        )
+        self.assertTrue(r['success'], r)
+        self.assertEqual(r['exit_code'], 0)
+        self.assertIn('work done', r['stdout'])
+
+    def test_script_directory_is_on_sys_path_for_sibling_imports(self):
+        from src.server import _execute_python_script
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, 'helper.py'), 'w') as f:
+                f.write("VALUE = 'from-sibling'\n")
+            path = os.path.join(d, 'main.py')
+            with open(path, 'w') as f:
+                f.write("import helper\nprint(helper.VALUE)\n")
+            with patch('src.server.get_resolve', return_value=None):
+                r = _execute_python_script(path, [], timeout=30)
+        self.assertTrue(r['success'], r)
+        self.assertIn('from-sibling', r['stdout'])
+
+    def test_exception_gives_traceback_and_exit_1(self):
+        r = self._run("raise ValueError('boom')\n")
+        self.assertFalse(r['success'])
+        self.assertEqual(r['exit_code'], 1)
+        self.assertIn('ValueError: boom', r['stderr'])
+
+    def test_sys_exit_message_lands_on_stderr_with_exit_1(self):
+        r = self._run("import sys\nsys.exit('bad input')\n")
+        self.assertFalse(r['success'])
+        self.assertEqual(r['exit_code'], 1)
+        self.assertIn('bad input', r['stderr'])
 
 
 if __name__ == '__main__':

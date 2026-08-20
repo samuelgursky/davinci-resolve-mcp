@@ -33,6 +33,13 @@ try:  # numpy is present in most installs but is not a hard requirement.
 except ImportError:  # pragma: no cover - exercised on minimal installs
     _np = None
 
+#: Compute helpers below take numpy arrays as arguments and are only reachable
+#: through entry points that call `_require("numpy")`. Declared so the contract
+#: is greppable instead of living in one comment two hundred lines down.
+_OPTIONAL_DEPENDENCY_CONTRACT = (
+    "numpy: every analyzer entry point gates on _require('numpy'); compute helpers assume it"
+)
+
 PROSODY_SOURCE = "prosody_v1"
 PROSODY_VERSION = "1.0.0"
 BEATGRID_SOURCE = "beatgrid_v1"
