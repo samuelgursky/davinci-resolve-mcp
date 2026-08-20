@@ -2,6 +2,65 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.98.3
+
+**`fusion_comp` could never delete a Fusion keyframe.** Reported in
+[#155](https://github.com/samuelgursky/davinci-resolve-mcp/issues/155) by
+@Andrei-59, with the root cause already identified: the handler called a method
+that does not exist. The diagnosis was correct, and the suggested replacement is
+confirmed here against a live build.
+
+### Fixed
+
+- **`delete_keyframe` called `RemoveKeyFrame()` on a Fusion Input.** No such
+  method exists there. Keyframes do not live on the Input — they live on the
+  spline modifier connected to it, which is what `add_keyframe` attaches via
+  `AddModifier(input_name, "BezierSpline")`. The action now reaches that spline
+  through `inp.GetConnectedOutput().GetTool()` and calls `DeleteKeyFrames(time)`
+  on it. Introduced with the tool in v2.1.0 and broken for every input, every
+  frame, and every tool since; there is no version of the server in which it
+  worked.
+
+- **The failure surfaced as `'NoneType' object is not callable`.** The
+  fusionscript bridge resolves an unknown attribute to `None` instead of raising
+  `AttributeError`, so the bad lookup succeeded silently and only died at the
+  callsite — an error naming neither the method nor the object. Every branch of
+  the action now returns the normal error envelope: `FUSION_INPUT_NOT_ANIMATED`
+  when the input has no modifier, `FUSION_KEYFRAME_NOT_FOUND` when nothing is
+  keyed at that frame (the frame list is included in `state`),
+  `FUSION_DELETE_KEYFRAMES_UNSUPPORTED` when the modifier has no removal method,
+  and `INVALID_FRAME` for a non-numeric `time`. The existing `_has_method` guard
+  — which exists precisely for this silent-`None` class — is applied before the
+  call rather than after it.
+
+- **Success is verified by readback, not by the return value.** Live testing
+  showed `DeleteKeyFrames()` returns `None` whether or not it removed anything,
+  so trusting the return would have reported failure on every successful
+  delete — and trusting the absence of an exception would have reported success
+  on every silent no-op. The handler re-reads the keyframe list and returns
+  `FUSION_DELETE_KEYFRAME_NOOP` if the frame is still there. On success it
+  returns `{success, time, remaining_keyframes}`.
+
+### Testing
+
+- `tests/test_fusion_comp_targeting.py` gains eleven `delete_keyframe` cases,
+  including a regression test that models the bridge's silent-`None` attribute
+  lookup and asserts the handler never reaches for `RemoveKeyFrame` on the
+  Input. The action previously had no test coverage at all.
+- `tests/live_fusion_delete_keyframe_validation.py` is a new self-contained live
+  harness: it creates a scratch project, inserts a Fusion composition clip (no
+  media needed), and reports which keyframe methods the Input and the spline
+  actually expose before asserting the delete.
+
+### Verified live
+
+Validated on **DaVinci Resolve Studio 19.1.3.7** (macOS). `RemoveKeyFrame`
+confirmed absent on the Input and resolving to `None`; `DeleteKeyFrames`
+confirmed present on the `BezierSpline` and confirmed to remove the key. The
+reporter's exact reproduction — `add_keyframe` then `delete_keyframe` on the
+same tool/input/frame — was run end-to-end through the patched handler and
+succeeds. Not re-verified on Studio 21.0.4.5, the reporter's build.
+
 ## What's New in v2.98.2
 
 **A tool installed next to the server was invisible to it.** Reported in

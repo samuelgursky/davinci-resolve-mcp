@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.98.2"
+VERSION = "2.98.3"
 
 import base64
 import os
@@ -26582,6 +26582,121 @@ def _fusion_set_text_plus(comp, p: Dict[str, Any]) -> Dict[str, Any]:
         comp.Unlock()
 
 
+def _fusion_keyframe_frames(inp) -> List[float]:
+    """Frame positions currently keyed on `inp`, as a sorted list.
+
+    Fusion's `GetKeyFrames()` returns {1-based index: frame_position}; the
+    frames are the VALUES, not the keys. Frames come back as floats.
+    """
+    try:
+        kfs = inp.GetKeyFrames()
+    except Exception:
+        return []
+    if not kfs:
+        return []
+    return sorted(float(frame) for frame in kfs.values())
+
+
+def _fusion_input_spline(inp):
+    """The modifier/spline tool driving `inp`, or None when it is not animated.
+
+    Keyframes do not live on the Input object -- they live on the spline
+    connected to it, which is what `add_keyframe` attaches via AddModifier.
+    """
+    try:
+        connected = inp.GetConnectedOutput()
+    except Exception:
+        return None
+    if connected is None:
+        return None
+    if not _has_method(connected, "GetTool"):
+        return None
+    try:
+        return connected.GetTool()
+    except Exception:
+        return None
+
+
+def _fusion_delete_keyframe(tool, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove one keyframe from an animated Fusion input. (issue #155)
+
+    The original implementation called `inp.RemoveKeyFrame(time)`. No such
+    method exists on a Fusion Input, and the fusionscript bridge resolves an
+    unknown attribute to None rather than raising AttributeError -- so the
+    lookup succeeded silently and every call died at the callsite as an opaque
+    `'NoneType' object is not callable`. The action had never worked.
+
+    Deletion happens on the spline, reached the same way `add_keyframe`
+    created it, and every step that can be absent is checked before it is
+    called. The result is verified by reading the keyframe list back, because
+    a Fusion call returning without error is not proof it did anything.
+    """
+    tool_name = p["tool_name"]
+    input_name = p["input_name"]
+    inp = tool[input_name]
+    if not inp:
+        return _err(
+            f"Input '{input_name}' not found on tool '{tool_name}'",
+            code="FUSION_INPUT_NOT_FOUND", category="invalid_input",
+        )
+
+    try:
+        time = float(p["time"])
+    except (TypeError, ValueError):
+        return _err(
+            f"time must be a frame number, got {p['time']!r}",
+            code="INVALID_FRAME", category="invalid_input",
+        )
+
+    spline = _fusion_input_spline(inp)
+    if spline is None:
+        return _err(
+            f"Input '{input_name}' on tool '{tool_name}' is not animated, so it "
+            "has no keyframe to delete",
+            code="FUSION_INPUT_NOT_ANIMATED", category="precondition",
+            remediation="Use add_keyframe first; it attaches the spline that holds keyframes.",
+            state={"tool_name": tool_name, "input_name": input_name},
+        )
+
+    if not _has_method(spline, "DeleteKeyFrames"):
+        return _err(
+            f"The modifier on '{tool_name}.{input_name}' has no DeleteKeyFrames method",
+            code="FUSION_DELETE_KEYFRAMES_UNSUPPORTED", category="unsupported",
+            reason="Only spline modifiers (e.g. BezierSpline) support keyframe removal.",
+            state={"tool_name": tool_name, "input_name": input_name},
+        )
+
+    before = _fusion_keyframe_frames(inp)
+    if not any(abs(frame - time) < 1e-6 for frame in before):
+        return _err(
+            f"No keyframe at frame {time:g} on '{tool_name}.{input_name}'",
+            code="FUSION_KEYFRAME_NOT_FOUND", category="precondition",
+            state={"tool_name": tool_name, "input_name": input_name,
+                   "time": time, "keyframes": before},
+        )
+
+    try:
+        spline.DeleteKeyFrames(time)
+    except Exception as exc:
+        return _err(
+            f"DeleteKeyFrames({time:g}) raised: {exc}",
+            code="FUSION_DELETE_KEYFRAME_FAILED", category="resolve_api_failed",
+            state={"tool_name": tool_name, "input_name": input_name, "time": time},
+        )
+
+    after = _fusion_keyframe_frames(inp)
+    if any(abs(frame - time) < 1e-6 for frame in after):
+        return _err(
+            f"DeleteKeyFrames({time:g}) returned without error but the keyframe "
+            f"is still on '{tool_name}.{input_name}'",
+            code="FUSION_DELETE_KEYFRAME_NOOP", category="resolve_api_failed",
+            state={"tool_name": tool_name, "input_name": input_name,
+                   "time": time, "keyframes_before": before, "keyframes_after": after},
+        )
+
+    return _ok(time=time, remaining_keyframes=after)
+
+
 def _fusion_get_text_plus(comp, p: Dict[str, Any]) -> Dict[str, Any]:
     """Read the text of a Fusion Text+ tool / title template. (issue #73)"""
     tool, err = _fusion_find_text_tool(comp, p)
@@ -26627,7 +26742,9 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       get_attrs(tool_name) -> {attrs}
       add_keyframe(tool_name, input_name, time, value) -> {success}
       get_keyframes(tool_name, input_name) -> {keyframes}
-      delete_keyframe(tool_name, input_name, time) -> {success}
+      delete_keyframe(tool_name, input_name, time) -> {success, time, remaining_keyframes}
+        Deletes on the spline attached to the input. Structured errors when the
+        input is not animated or has no keyframe at that frame.
       get_comp_info() -> {name, tool_count, attrs}
       get_position(tool_name) -> {tool_name, x, y}  — read a node's FlowView position
       set_position(tool_name, x, y) -> {success, x, y, readback}  — move a node
@@ -26923,11 +27040,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             return _err(f"Tool '{p['tool_name']}' not found")
         comp.Lock()
         try:
-            inp = tool[p["input_name"]]
-            if not inp:
-                return _err(f"Input '{p['input_name']}' not found on tool '{p['tool_name']}'")
-            inp.RemoveKeyFrame(p["time"])
-            return _ok()
+            return _fusion_delete_keyframe(tool, p)
         finally:
             comp.Unlock()
 
