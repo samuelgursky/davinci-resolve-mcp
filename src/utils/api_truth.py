@@ -407,10 +407,10 @@ API_TRUTH: List[Dict[str, Any]] = [
         "symbol": "Composition.Lock (suppresses render invalidation for value writes)",
         "object": "Composition (Fusion, via TimelineItem comps)",
         "signature": "Lock() / Unlock()",
-        "reality": "A value write performed between Comp.Lock() and "
-                   "Comp.Unlock() — SetInput(), or Input.SetExpression() — is "
-                   "stored in the graph and reads back correctly from "
-                   "GetInput(), but is NOT applied when the timeline is "
+        "reality": "A numeric tool.SetInput() performed between Comp.Lock() "
+                   "and Comp.Unlock(), when that write is the only thing the "
+                   "call does, is stored in the graph and reads back correctly "
+                   "from GetInput() but is NOT applied when the timeline is "
                    "rendered. Measured live on Studio 19.1.3.7 (2026-08-21) "
                    "with MediaIn -> Blur(XBlurSize 20) -> MediaOut on a "
                    "media-backed clip: written under the lock the delivered "
@@ -427,7 +427,15 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "suppresses the parameter-change invalidation that a value "
                    "write depends on. Lock() is widely recommended for "
                    "batching Fusion edits, which is how this reaches "
-                   "production code.",
+                   "production code. SCOPE, measured by reintroducing the lock "
+                   "at each site and re-rendering: it reproduces for a bare "
+                   "numeric SetInput (2 of 6 call paths tested) and does NOT "
+                   "reproduce when the same call also wraps the write in "
+                   "StartUndo/EndUndo, performs an AddTool, or writes a string "
+                   "to StyledText (4 of 6). Which of those rescues the write is "
+                   "not established — only that they do. Treat the safe cases as "
+                   "unexplained rather than proven safe, and keep value writes "
+                   "outside the lock everywhere.",
         "recommended": "Never hold a comp lock across a value write. Lock only "
                        "structural work (AddTool/ConnectInput) and set inputs "
                        "outside it. Because every readback the API offers "

@@ -2,6 +2,69 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.98.6
+
+**Correcting the scope of the v2.98.5 Fusion fix, and covering all six paths
+with a render.** v2.98.5 removed a `Comp.Lock()` from six Fusion value writes and
+described all six as the same bug. Only two of them were proven with a render at
+the time; the other four were changed by inference. Extending the live harness to
+cover the remaining four showed that inference was too broad.
+
+Every site was mutation-checked by reintroducing the lock and re-rendering on
+Studio 19.1.3.7:
+
+| call path | with the lock back |
+| --- | --- |
+| `set_input` | **PSNR inf — suppressed** |
+| `safe_set_inputs` | **PSNR inf — suppressed** |
+| `bulk_set_inputs` | unchanged, still rendered |
+| `bulk_set_expressions` | unchanged, still rendered |
+| `add_fusion_mask` | unchanged, still rendered |
+| `set_text_plus` | unchanged, still rendered |
+
+The two that break are the two where the locked write is the only thing the call
+does. The four that survive each do something else in the same call that appears
+to invalidate the graph anyway — `bulk_set_inputs` and `bulk_set_expressions`
+wrap the write in `StartUndo`/`EndUndo`, `add_fusion_mask` performs an `AddTool`,
+and `set_text_plus` writes a string rather than a number. **Which of those is the
+rescuing mechanism is not established** — only that the four do not reproduce.
+
+No code changed back. Removing the lock from a single write buys nothing and
+costs nothing, and treating the four as merely unexplained rather than proven
+safe is the conservative reading. What changed is the claim: `api_truth`,
+`docs/SKILL.md` and the AST guard's failure message now state the measured scope
+instead of "any value write".
+
+If you read the v2.98.5 notes and concluded every Fusion parameter this server
+ever wrote was ignored at render, that was overstated — it was true for
+`set_input` and `safe_set_inputs`.
+
+### Tests
+
+`tests/live_fusion_value_write_validation.py` grows from two cases to six,
+covering every site the fix touched:
+
+```
+set_input: PSNR 24.375987 -> APPLIED at render
+safe_set_inputs: PSNR 24.375987 -> APPLIED at render
+set_text_plus: PSNR 13.33844 -> APPLIED at render
+bulk_set_expressions: PSNR 24.375987 -> APPLIED at render
+bulk_set_inputs: PSNR 24.375987 -> APPLIED at render
+add_fusion_mask: PSNR 30.369794 -> APPLIED at render
+```
+
+The `set_text_plus` case builds a rooted `MediaIn -> Merge -> MediaOut` graph
+with the Text+ in the foreground — a comp whose MediaOut is fed only by a Text+
+is bypassed at render for an unrelated reason and would have failed for the
+wrong cause. The `add_fusion_mask` case cannot use a baseline/after comparison,
+because a default-sized mask still changes the render; it builds the same graph
+twice, once with a default mask and once with an explicitly tiny one, and
+requires the two renders to differ.
+
+Four of the six cases do not discriminate the lock. They are kept because they
+still prove the write reaches the render — the property that matters, and the
+one no readback can check.
+
 ## What's New in v2.98.5
 
 **Every Fusion parameter this server wrote was ignored at render.** A value

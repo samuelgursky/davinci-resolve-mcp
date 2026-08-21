@@ -1691,10 +1691,13 @@ Target a comp either from a timeline item (pass `clip_id`, `timeline_item_id`, o
 page comp (omit timeline scope).
 
 READBACK IS NOT PROOF FOR FUSION PARAMETERS. Up to v2.98.4 every value write
-here ran inside a `Comp.Lock()`, and a value written under a comp lock is stored
-in the graph and returned by `get_input` while the RENDER ignores it entirely
-(Studio 19.1.3.7: PSNR inf vs the no-comp baseline — the delivered file was
-bit-identical to no comp at all). Fixed in v2.98.5, and guarded by
+here ran inside a `Comp.Lock()`. For `set_input` and `safe_set_inputs` that was
+load-bearing: the value is stored in the graph and returned by `get_input` while
+the RENDER ignores it entirely (Studio 19.1.3.7: PSNR inf vs the no-comp
+baseline — the delivered file was bit-identical to no comp at all). The other
+four locked paths did not reproduce it, so the blast radius was narrower than
+first reported; the locks came off all six regardless. Fixed in v2.98.5
+(measurement corrected in v2.98.6), and guarded by
 `tests/test_fusion_value_write_lock.py` plus the rendered-frame harness
 `tests/live_fusion_value_write_validation.py`. The lesson outlives the bug: a
 Fusion parameter that reads back correctly has proven nothing about the output,

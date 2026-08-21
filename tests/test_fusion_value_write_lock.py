@@ -16,6 +16,14 @@ The variable was isolated against the comp handle (AddFusionComp,
 GetFusionCompByIndex and GetFusionCompByName all render), the node name, and
 the write form. Only the lock around the write decides it.
 
+Scope, established later by mutation-checking every site (v2.98.6): this
+reproduces for `set_input` and `safe_set_inputs` — where the locked write is the
+only thing the call does — and NOT for `bulk_set_inputs`, `bulk_set_expressions`,
+`add_fusion_mask` or `set_text_plus`, each of which does something else in the
+same call that appears to invalidate the graph anyway. Since the rescuing
+mechanism is unidentified, this guard still refuses a lock around ANY value
+write rather than trying to encode which ones get away with it.
+
 This is a STATIC guard because the real proof needs a render: see
 `tests/live_fusion_value_write_validation.py`, which measures it end to end.
 A static guard is still worth having — the failure is invisible to every
@@ -91,10 +99,13 @@ class FusionValueWriteLockTests(unittest.TestCase):
         self.assertEqual(
             offenders,
             [],
-            "Fusion value write(s) wrapped in comp.Lock()/Unlock() — the value will "
-            "read back correctly and be IGNORED at render (Studio 19.1.3.7, PSNR inf "
-            "vs baseline). Move the write outside the lock; structural edits "
-            "(AddTool/ConnectInput) may stay locked.\nOffenders: " + ", ".join(offenders),
+            "Fusion value write(s) wrapped in comp.Lock()/Unlock(). Measured on "
+            "Studio 19.1.3.7, a bare numeric SetInput under a lock reads back "
+            "correctly and is IGNORED at render (PSNR inf vs baseline). Four other "
+            "locked call paths did not reproduce it, but which mechanism rescues "
+            "them is unknown — so no value write gets a lock. Move the write "
+            "outside; structural edits (AddTool/ConnectInput) may stay locked."
+            "\nOffenders: " + ", ".join(offenders),
         )
 
     def test_the_guard_can_actually_see_a_violation(self) -> None:
