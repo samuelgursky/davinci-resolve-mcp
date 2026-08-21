@@ -2,6 +2,77 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.99.0
+
+Editorial safety fixes driven by a real data-loss incident: a 2026-08-19
+session used `move_clips` with a record offset smaller than the item duration
+to "open a gap", `AppendToTimeline` returned null-id items for every duplicate,
+the code counted them as successes, and the delete phase removed 26 source
+clips. Everything below was live-verified on Studio 21.0.4 on sandbox
+timelines (dry-run plan, execute, layout readback, and property survival).
+
+### Added
+
+- **`timeline.ripple_insert`** — insert media-pool source ranges at a record
+  point and shift ALL later video/audio items right by the inserted duration.
+  There is no ripple-insert primitive in the scripting API, and shifting items
+  by duplicate-then-delete corrupts the timeline when the shift is smaller
+  than an item (the null-id failure above). This action instead plans a
+  rebuild: capture every later item's pool media + source trim, delete the
+  tail (verified), re-append it shifted, then place the inserts into the
+  opened gap — tail first, so the worst mid-failure state is a gap, never
+  lost content. Dry-run by default with straddler/blocker/locked-track/
+  subtitle detection; execution is confirm-token gated, archives the timeline
+  first (destructive-hook registry), holds the Edit page for the rebuild, and
+  ends with a full position readback. Shifted items are re-created from pool
+  media with transform/crop/composite/retime properties re-applied; grades,
+  keyframes, transitions, and link state on shifted items are NOT preserved
+  (the pre-mutation archive keeps them). Offline coverage in
+  `tests/test_ripple_insert.py` mirrors the live-verified geometry, and
+  `tests/live_ripple_insert_validation.py` re-runs the full flow (plan,
+  confirm token, execute, layout readback, property survival) against a live
+  Resolve on a disposable project with synthetic media.
+
+### Fixed
+
+- **`timeline.move_clips` can no longer delete unverified sources.** A
+  duplicate now counts as verified only when a live item or a real id was
+  recovered from the timeline (`duplicate_verified` in each result row).
+  Null-id appends are kept as successes for the duplicate phase but their
+  sources are NOT deleted, with an explicit warning; linked-item moves only
+  queue sources whose every linked duplicate verified. This is the fix for
+  the 26-clip loss.
+- **`safe_set_cdl` / `apply_look_to_items` node preflight.** `SetCDL` has no
+  readback (no `GetCDL`) and returns a bare False on a missing node. Both
+  paths now read `item.GetNodeGraph().GetNumNodes()` first (NodeIndex is
+  1-based; `TimelineItem.GetNumNodes` is deprecated) and return a structured
+  reason on a preflight miss plus a clip-type-aware diagnosis when `SetCDL`
+  itself returns False.
+- **`create_magic_mask` returns structured HITL instead of a bare false.**
+  Magic Mask v2 isolates via operator clicks (manual ch. 139; strokes are
+  legacy v1) and the API cannot place clicks, so with none present the call
+  can only fail. It now returns `needs_hitl` with the exact Color-page steps,
+  and mode aliases are normalized (`'Forward'` → `'F'`). The granular
+  `ti_create_magic_mask` default mode `'Forward'` — rejected verbatim by the
+  API — is fixed the same way.
+
+### Documentation
+
+- api_truth: three new ledger entries (AppendToTimeline null-id items,
+  CreateMagicMask needs clicks, SetCDL write-only) and a conflicting later
+  measurement recorded on the existing AddFusionComp entry, with the variable
+  isolated: on Studio 21.0.4.5 a wired MediaIn -> Blur -> MediaOut comp — the
+  exact configuration that rendered on 19.1.3.7 in the 2026-08-02
+  measurement — delivered a render bit-identical to the no-comp baseline
+  (ffmpeg PSNR inf), as did a Transform variant. The conflict tracks the
+  Resolve build, not the tool; prove Fusion claims with rendered frames,
+  never comp readback. The isolation run is reusable:
+  `tests/live_ripple_insert_validation.py` (phase 2).
+- `docs/reference/api-limitations.md` regenerated; WYSIWYG proof guidance in
+  `docs/SKILL.md`, `gallery_stills`, `fusion_comp`, and
+  `thumbnail_contact_sheet` docstrings (thumbnails are decoded from source
+  media and are not evidence of Fusion or grade output).
+
 ## What's New in v2.98.3
 
 **`fusion_comp` could never delete a Fusion keyframe.** Reported in
