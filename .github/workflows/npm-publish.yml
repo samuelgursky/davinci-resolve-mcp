@@ -67,9 +67,50 @@ jobs:
           node bin/davinci-resolve-mcp.mjs --version
 
       - name: Run setup dry run
+        shell: bash
         run: |
+          # The runner has no Resolve, so verification MUST fail here and setup
+          # MUST exit non-zero — that is the contract this step exists to pin
+          # (a zero over an install whose scripting API cannot load is how
+          # "Setup complete!" over a dead install shipped in the first place).
+          # What is checked is that the summary line and the exit status agree,
+          # in whichever direction the environment takes them, and that setup
+          # got far enough to print a summary at all rather than crashing.
           export DAVINCI_RESOLVE_MCP_INSTALL_ROOT="$(mktemp -d)"
-          node bin/davinci-resolve-mcp.mjs setup --dry-run --no-venv --clients manual --update-policy never
+          set +e
+          out="$(node bin/davinci-resolve-mcp.mjs setup --dry-run --no-venv --clients manual --update-policy never 2>&1)"
+          status=$?
+          set -e
+          echo "$out"
+          echo "--- setup exited with status $status ---"
+
+          if grep -qE 'Traceback \(most recent call last\)' <<<"$out"; then
+            echo "::error::setup crashed with a traceback"
+            exit 1
+          fi
+
+          incomplete=0
+          grep -qE 'Setup incomplete|Environment incomplete' <<<"$out" && incomplete=1
+          complete=0
+          grep -qE 'Setup complete!|Environment ready!' <<<"$out" && complete=1
+
+          if [ "$incomplete" -eq 0 ] && [ "$complete" -eq 0 ]; then
+            echo "::error::setup printed no summary line"
+            exit 1
+          fi
+          if [ "$incomplete" -eq 1 ] && [ "$complete" -eq 1 ]; then
+            echo "::error::setup printed both a success and a failure summary"
+            exit 1
+          fi
+          if [ "$incomplete" -eq 1 ] && [ "$status" -eq 0 ]; then
+            echo "::error::setup reported incomplete but exited 0 — the bug #154 fixed"
+            exit 1
+          fi
+          if [ "$complete" -eq 1 ] && [ "$status" -ne 0 ]; then
+            echo "::error::setup reported success but exited $status"
+            exit 1
+          fi
+          echo "summary line and exit status agree"
 
       - name: Check npm package contents
         run: npm pack --dry-run
