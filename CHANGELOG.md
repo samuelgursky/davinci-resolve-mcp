@@ -2,6 +2,73 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.98.4
+
+**Setup reported success over an install that could never work.** Reported and
+fixed in [#154](https://github.com/samuelgursky/davinci-resolve-mcp/pull/154) by
+@DadManBlues, from a DaVinci Resolve Studio 21.0.4 install on `F:\Blackmagic
+Design\DaVinci Resolve` (Windows 11). The chain: `RESOLVE_PATHS["Windows"]["lib"]`
+held a single hardcoded `C:\Program Files\...` candidate, so `find_resolve_paths()`
+returned `lib_path=None`; `build_server_env()` wrote that out as
+`"RESOLVE_SCRIPT_LIB": ""`, which reads as configured in the config file but is
+falsy to the loader, so it fell back to the same missing path; the connection
+check then failed with `DLL load failed` in the middle of the output, and the
+installer's last line said `Setup complete!`. Every tool afterwards failed with
+`SCRIPTING_UNAVAILABLE`, whose remediation pointed at the Resolve edition and the
+External-scripting preference — both already correct.
+
+### Fixed
+
+- **Resolve is now found outside the default install location.**
+  `resolve_runtime.running_resolve_lib()` derives the scripting library from the
+  running Resolve's own image path, which needs no guessing on any platform, and
+  `platform.discover_scripting_lib()` covers cold installs: `%PROGRAMFILES%` /
+  `%PROGRAMW6432%` / `%PROGRAMFILES(X86)%` plus the existing drive letters on
+  Windows (two fixed paths each, no directory walk), both bundle locations on
+  macOS — the App Store build installs to `/Applications/DaVinci Resolve.app`
+  rather than `/Applications/DaVinci Resolve/DaVinci Resolve.app`, the same class
+  of miss — and the `/opt/resolve` layouts on Linux. Discovery runs only when the
+  platform default is absent and no usable env override exists, and the default
+  is kept when discovery finds nothing, so the error message still names the
+  location people expect.
+- **Empty environment values are omitted rather than written.**
+  `build_server_env()` no longer emits `"RESOLVE_SCRIPT_LIB": ""`.
+- **A failed verification is no longer reported as success.** The `Library: Not
+  found (optional — API path is sufficient)` line was wrong and is corrected; a
+  DLL-load failure is diagnosed explicitly, naming the current
+  `RESOLVE_SCRIPT_LIB`, before the Python 3.13+ ABI theory; and setup ends in
+  `Setup incomplete — the scripting API did not load.`, still listing any configs
+  it wrote and marking them non-functional.
+
+### Fixed in follow-up review
+
+- **The no-clients branch still printed `Environment ready!`** over a failed
+  verification, and **`main()` returned `None` either way**, so
+  `npx davinci-resolve-mcp setup` in a script or CI saw exit status 0 over a dead
+  install — the same lie as `Setup complete!`, one block further down. The
+  summary line and the exit status now agree.
+- **Two bare `except Exception` fallbacks narrowed to `ImportError`.** A defect
+  raised inside `running_resolve_lib()` or `discover_scripting_lib()` would have
+  been laundered into "nothing found" and the caller would have gone on to report
+  the platform default — this repo's recurring silent-fallback bug class.
+- **`_windows_lib_candidates` docstring corrected.** It claimed only fixed drives
+  are probed (there is no `GetDriveTypeW` check, so a connected network drive is
+  probed too) and that it runs on every connection attempt (`get_resolve_paths()`
+  is import-time, so the real cost is one `ps`/`wmic` spawn at server startup, and
+  only when the default is already missing).
+
+### Tests
+
+`tests/test_scripting_lib_discovery.py` (21 cases): library derivation on Windows
+and macOS layouts, WMIC-quoted command lines, the three `None` paths, the
+per-platform candidate lists, override-beats-discovery precedence, the surviving
+platform default, the omitted empty key, both reporting behaviours, and the exit
+status in all three of its states. The `GetResolvePathsDiscoveryTests` cases force
+the platform default absent — without that they check nothing on a machine where
+Resolve *is* at the default path, and on macOS they fail outright; neither the
+Linux CI box nor the Windows machine that prompted the fix shows it, because on
+both the default is already missing for real.
+
 ## What's New in v2.98.3
 
 **`fusion_comp` could never delete a Fusion keyframe.** Reported in

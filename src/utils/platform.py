@@ -83,10 +83,17 @@ def _windows_lib_candidates():
 
     `%PROGRAMFILES%` is not a constant — a 64-bit install can sit under
     `%PROGRAMW6432%` — and Resolve is routinely moved to a second drive
-    because the application and its caches are large. Only fixed drives that
-    exist are probed, two fixed paths each, no directory walk: this runs on
-    every connection attempt and must stay cheap. A: and B: are skipped so a
-    machine with a floppy-mapped letter does not stall on the probe.
+    because the application and its caches are large. Every drive letter that
+    responds to `isdir` is probed, two fixed paths each, no directory walk;
+    A: and B: are skipped so a machine with a floppy-mapped letter does not
+    stall. No drive-type check is made, so a mapped network drive that happens
+    to be connected is probed too — the cost is bounded (two `isfile` calls)
+    and the alternative is a `GetDriveTypeW` ctypes call for a case that only
+    arises once, on the path where the default was already missing.
+
+    This is reached from `get_resolve_paths()`, which runs at import time, so
+    the real cost is one `ps`/`wmic` spawn at server startup and only when the
+    platform default is absent.
     """
     relative = os.path.join("Blackmagic Design", "DaVinci Resolve", "fusionscript.dll")
     candidates = []
@@ -142,11 +149,14 @@ def discover_scripting_lib(platform_name=None):
     if platform_name is None:
         platform_name = get_platform()
 
+    # Relative import and a narrow except: this repo has had a run of
+    # silent-fallback bugs, and a bare `except Exception` here would swallow a
+    # real defect inside running_resolve_lib() as "Resolve is not running".
     try:
-        from src.utils.resolve_runtime import running_resolve_lib
-        running = running_resolve_lib()
-    except Exception:
-        running = None
+        from .resolve_runtime import running_resolve_lib
+    except ImportError:
+        running_resolve_lib = None
+    running = running_resolve_lib() if running_resolve_lib else None
     if running and os.path.isfile(running):
         return running
 

@@ -184,6 +184,26 @@ class CandidateListTests(unittest.TestCase):
             self.assertIsNone(platform_utils.discover_scripting_lib("plan9"))
 
 
+def _default_lib_absent():
+    """Make the platform default missing, whatever this machine has installed.
+
+    `get_resolve_paths()` only reaches discovery when the default is not on
+    disk, so a test that does not force that condition checks nothing on a
+    machine where Resolve *is* at the default location — and on macOS it does
+    not merely pass vacuously, it fails, because the real default comes back
+    instead of the stub. Neither of the machines this change was written on
+    shows it: a Linux box has no `/Applications`, and the Windows box that
+    prompted the fix has Resolve on `F:`, so on both the default is already
+    absent for real and the branch runs by accident.
+    """
+    real_isfile = os.path.isfile
+    return mock.patch.object(
+        platform_utils.os.path,
+        "isfile",
+        lambda path: False if "DaVinci Resolve" in str(path) else real_isfile(path),
+    )
+
+
 class GetResolvePathsDiscoveryTests(unittest.TestCase):
     def test_discovery_fills_in_a_missing_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -192,7 +212,8 @@ class GetResolvePathsDiscoveryTests(unittest.TestCase):
                 pass
             with mock.patch.object(platform_utils, "get_platform", return_value="darwin"), \
                     mock.patch.object(platform_utils, "discover_scripting_lib", return_value=lib), \
-                    mock.patch.dict(os.environ, _env_without_overrides(), clear=True):
+                    mock.patch.dict(os.environ, _env_without_overrides(), clear=True), \
+                    _default_lib_absent():
                 paths = platform_utils.get_resolve_paths()
             self.assertEqual(paths["lib_path"], lib)
 
@@ -207,7 +228,8 @@ class GetResolvePathsDiscoveryTests(unittest.TestCase):
             env["RESOLVE_SCRIPT_LIB"] = override
             with mock.patch.object(platform_utils, "get_platform", return_value="darwin"), \
                     mock.patch.object(platform_utils, "discover_scripting_lib", return_value=discovered), \
-                    mock.patch.dict(os.environ, env, clear=True):
+                    mock.patch.dict(os.environ, env, clear=True), \
+                    _default_lib_absent():
                 paths = platform_utils.get_resolve_paths()
             self.assertEqual(paths["lib_path"], override)
 
@@ -216,7 +238,8 @@ class GetResolvePathsDiscoveryTests(unittest.TestCase):
         the default is what the error message needs to name."""
         with mock.patch.object(platform_utils, "get_platform", return_value="darwin"), \
                 mock.patch.object(platform_utils, "discover_scripting_lib", return_value=None), \
-                mock.patch.dict(os.environ, _env_without_overrides(), clear=True):
+                mock.patch.dict(os.environ, _env_without_overrides(), clear=True), \
+                _default_lib_absent():
             paths = platform_utils.get_resolve_paths()
         self.assertEqual(
             paths["lib_path"],
@@ -267,6 +290,75 @@ class InstallerEnvTests(unittest.TestCase):
                     mock.patch.dict(os.environ, env, clear=True):
                 _, lib_path = install.find_resolve_paths()
         self.assertEqual(lib_path, override)
+
+class SetupExitStatusTests(unittest.TestCase):
+    """The summary line and the exit status have to agree with each other.
+
+    `Setup complete!` over a dead install was the headline bug. Two ways out of
+    the same block survived the first fix: the no-clients branch still printed
+    `Environment ready!`, and `main()` returned None either way, so
+    `npx davinci-resolve-mcp setup` in a script or CI saw a zero over an install
+    that could not load the API. Both are pinned here because both are invisible
+    in a normal interactive run on a working machine.
+    """
+
+    @staticmethod
+    def _run_main(*, clients, healthy):
+        import contextlib
+        import io
+
+        dead = {
+            key: {"api": ["/nonexistent/api"], "lib": ["/nonexistent/fusionscript.so"]}
+            for key in install.RESOLVE_PATHS
+        }
+        buf = io.StringIO()
+        argv = ["install.py", "--clients", clients, "--dry-run", "--no-venv"]
+        with mock.patch.object(
+                install, "RESOLVE_PATHS",
+                install.RESOLVE_PATHS if healthy else dead), \
+                mock.patch.dict(os.environ, _env_without_overrides(), clear=True), \
+                mock.patch.object(sys, "argv", argv), \
+                contextlib.redirect_stdout(buf):
+            try:
+                code = install.main()
+            except SystemExit as exc:  # pragma: no cover - defensive
+                code = exc.code
+        return code, buf.getvalue()
+
+    def test_a_failed_verification_exits_non_zero(self) -> None:
+        code, out = self._run_main(clients="manual", healthy=False)
+        self.assertEqual(code, 1)
+        self.assertIn("Setup incomplete", out)
+        self.assertNotIn("Setup complete!", out)
+
+    def test_the_no_clients_branch_is_not_reported_ready_when_verification_failed(self) -> None:
+        code, out = self._run_main(clients="", healthy=False)
+        self.assertEqual(code, 1)
+        self.assertIn("Environment incomplete", out)
+        self.assertNotIn("Environment ready!", out)
+
+    def test_a_working_install_still_reports_ready_and_exits_zero(self) -> None:
+        """The regression that matters in the other direction: an installer that
+        called every machine broken would be worse than the bug it replaced."""
+        code, out = self._run_main(clients="", healthy=True)
+        self.assertEqual(code, 0)
+        self.assertIn("Environment ready!", out)
+
+
+class DiscoveryDoesNotSwallowRealErrorsTests(unittest.TestCase):
+    """A defect inside the process probe must not read as 'Resolve is not up'.
+
+    The first cut caught bare `Exception` around the `running_resolve_lib`
+    import and call, which is how a silent-fallback bug gets a second life: any
+    error raised inside discovery would have been laundered into "nothing
+    found", and the caller would have gone on to report the platform default.
+    """
+
+    def test_an_error_inside_the_process_probe_propagates(self) -> None:
+        with mock.patch.object(rr, "running_resolve_lib",
+                               side_effect=RuntimeError("probe is broken")):
+            with self.assertRaises(RuntimeError):
+                platform_utils.discover_scripting_lib("darwin")
 
 
 if __name__ == "__main__":

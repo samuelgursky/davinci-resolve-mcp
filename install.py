@@ -37,7 +37,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.98.3"
+VERSION = "2.98.4"
 # Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
 # Resolve's scripting bridge loads into newer interpreters on recent builds
 # (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
@@ -293,11 +293,14 @@ def find_resolve_paths():
         if env_lib and os.path.isfile(env_lib):
             lib_path = env_lib
         else:
+            # Narrow except: an ImportError here means the helper is absent,
+            # which is a real answer. Anything else raised *inside* discovery is
+            # a defect and must not be laundered into "no library found".
             try:
                 from src.utils.platform import discover_scripting_lib
-                lib_path = discover_scripting_lib()
-            except Exception:
-                lib_path = None
+            except ImportError:
+                discover_scripting_lib = None
+            lib_path = discover_scripting_lib() if discover_scripting_lib else None
 
     return api_path, lib_path
 
@@ -2267,18 +2270,32 @@ def main():
         if api_path:
             print(f"  {dim(f'API:    {api_path}')}")
     elif not selected_ids:
-        print(f"  {green(bold('Environment ready!'))}")
-        print(f"  Run {cyan('python install.py --clients all')} to configure MCP clients later.")
+        # Same rule as the configured branch above: a failed verification is
+        # never "ready". Nothing was written here, so the remedy is the error
+        # itself rather than a re-run to fix a config.
+        if verification_failed:
+            print(f"  {yellow(bold('Environment incomplete — the scripting API did not load.'))}")
+            print(f"  {dim('No client configs were written.')}")
+            print()
+            print(f"  {bold('Fix the verification error above, then re-run:')}")
+            print(f"    {cyan('python install.py')}")
+        else:
+            print(f"  {green(bold('Environment ready!'))}")
+            print(f"  Run {cyan('python install.py --clients all')} to configure MCP clients later.")
     else:
         print(f"  {yellow('No clients configured.')}")
         print(f"  Run {cyan('python install.py')} again to retry.")
 
     print()
+    # Exit status has to agree with the summary line above. `npx
+    # davinci-resolve-mcp setup` is run from scripts and CI, where a zero over a
+    # dead install is the same lie as "Setup complete!" was.
+    return 1 if verification_failed else 0
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main() or 0)
     except KeyboardInterrupt:
         print(f"\n\n  {dim('Interrupted.')}\n")
         sys.exit(1)
