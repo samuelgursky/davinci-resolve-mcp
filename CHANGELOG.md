@@ -2,6 +2,67 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.98.5
+
+**Every Fusion parameter this server wrote was ignored at render.** A value
+write (`SetInput` / `SetExpression`) wrapped in `Comp.Lock()`/`Unlock()` is
+stored in the graph and reads back correctly — `GetInput` returns it, and so
+did this server's own `get_input` — while the delivered render ignores it
+completely. Found on 2026-08-21 while re-running a Fusion isolation on Studio
+19.1.3.7 to settle a conflicting measurement reported in
+[#156](https://github.com/samuelgursky/davinci-resolve-mcp/pull/156).
+
+Measured on Studio 19.1.3.7 with `MediaIn -> Blur(XBlurSize 20) -> MediaOut` on
+a media-backed clip, rendering the same 48 frames to H.264 each time:
+
+| value written via | render vs no-comp baseline |
+| --- | --- |
+| `fusion_comp set_input` (write inside `Comp.Lock()`) | PSNR **inf** — bit-identical, ignored |
+| the same write, lock removed | PSNR **24.38 dB**, 2.0 MB → 727 KB |
+| raw `tool.XBlurSize = 20.0` | PSNR **24.38 dB** |
+| raw `tool.SetInput("XBlurSize", 20)` | PSNR **24.38 dB** |
+
+The variable was isolated against the comp handle (`AddFusionComp`,
+`GetFusionCompByIndex` and `GetFusionCompByName` all render), the node name, and
+the write form. Only the lock around the write decides it. **Structural** edits
+are unaffected — `AddTool` and `ConnectInput` inside a lock render normally — so
+this is not "Lock is unsafe"; the lock suppresses the parameter-change
+invalidation that a value write depends on.
+
+### Fixed
+
+- **Six value-write sites no longer hold a comp lock across the write:**
+  `fusion_comp set_input`, `fusion_comp safe_set_inputs`, `bulk_set_inputs`,
+  `bulk_set_expressions`, the Text+ writer behind `set_text`, and
+  `add_mask` — where the lock spanned `AddTool` *and* every input write, so a
+  mask was created at default size and position and every parameter the caller
+  passed did nothing. Structural work keeps its lock; in `add_mask` the lock now
+  closes after the node is created and renamed.
+
+### Why this went unnoticed
+
+Every readback the API offers agreed with the value that was written. This is
+the failure mode the repo's own guidance describes — prove a Fusion or grade
+claim with a rendered frame, never with readback — except the cause was ours,
+not Resolve's. It also explains an unknown share of past "the comp was ignored"
+reports, which look identical from the API side.
+
+### Tests
+
+- `tests/live_fusion_value_write_validation.py` — renders a baseline, writes a
+  blur size through the compound tool, renders again, and asserts PSNR actually
+  moved. Disposable project, synthetic media, restores the previous project.
+- `tests/test_fusion_value_write_lock.py` — AST guard failing any value write
+  that sits inside a `Comp.Lock()`/`Unlock()` region, with a self-check that the
+  guard can still see a known-bad shape.
+
+Both were mutation-checked against the pre-fix code: reintroducing the lock in
+`set_input` makes the live harness report `PSNR inf -> IGNORED at render` and
+fails the offline guard.
+
+- `api_truth`: new `Composition.Lock` entry; the `AddFusionComp` entry records
+  that its 2026-08-02 rooted-comp result **reproduced** on 19.1.3.7 (PSNR 24.38 dB).
+
 ## What's New in v2.98.4
 
 **Setup reported success over an install that could never work.** Reported and

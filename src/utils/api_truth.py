@@ -404,6 +404,44 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
+        "symbol": "Composition.Lock (suppresses render invalidation for value writes)",
+        "object": "Composition (Fusion, via TimelineItem comps)",
+        "signature": "Lock() / Unlock()",
+        "reality": "A value write performed between Comp.Lock() and "
+                   "Comp.Unlock() — SetInput(), or Input.SetExpression() — is "
+                   "stored in the graph and reads back correctly from "
+                   "GetInput(), but is NOT applied when the timeline is "
+                   "rendered. Measured live on Studio 19.1.3.7 (2026-08-21) "
+                   "with MediaIn -> Blur(XBlurSize 20) -> MediaOut on a "
+                   "media-backed clip: written under the lock the delivered "
+                   "H.264 render is bit-identical to the no-comp baseline "
+                   "(ffmpeg PSNR inf); the identical write with the lock "
+                   "removed renders at PSNR 24.38 dB and the file shrinks "
+                   "2.0 MB -> 727 KB, as a blur should. The variable was "
+                   "isolated against the comp handle (AddFusionComp, "
+                   "GetFusionCompByIndex and GetFusionCompByName all render), "
+                   "the node name, and the write form (attribute assignment "
+                   "and SetInput both render unlocked). STRUCTURAL edits are "
+                   "unaffected: AddTool and ConnectInput inside a lock render "
+                   "normally, so the lock is not broadly unsafe — it "
+                   "suppresses the parameter-change invalidation that a value "
+                   "write depends on. Lock() is widely recommended for "
+                   "batching Fusion edits, which is how this reaches "
+                   "production code.",
+        "recommended": "Never hold a comp lock across a value write. Lock only "
+                       "structural work (AddTool/ConnectInput) and set inputs "
+                       "outside it. Because every readback the API offers "
+                       "agrees with the value that was written, this failure "
+                       "is invisible without a render — prove Fusion "
+                       "parameter changes with a delivered frame or "
+                       "gallery_stills grab_and_export, never with GetInput.",
+        "tags": ["fusion", "silent-failure", "render", "readback"],
+        "submit": "bug",
+        "mitigation": ["_FUSION_VALUE_WRITE_NOTE",
+                       "tests/live_fusion_value_write_validation.py",
+                       "tests/test_fusion_value_write_lock.py"],
+    },
+    {
         "symbol": "TimelineItem.AddFusionComp / LoadFusionCompByName",
         "object": "TimelineItem (media-backed clip)",
         "reality": "A Fusion composition created on a media clip through the API "
@@ -434,7 +472,16 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "either. Contrast InsertFusionTitleIntoTimeline, whose comp "
                    "DOES render — text set via SetInput('StyledText') appears in "
                    "the output — so this is specific to comps attached to "
-                   "media-backed clips, not to Fusion through the API generally.",
+                   "media-backed clips, not to Fusion through the API generally. "
+                   "REPRODUCED 2026-08-21 on Studio 19.1.3.7: a rooted "
+                   "MediaIn -> Blur -> MediaOut comp built entirely through "
+                   "the API renders (PSNR 24.38 dB vs the no-comp baseline), "
+                   "so the 2026-08-02 correction stands. Note that an "
+                   "important share of 'the comp was ignored' readings are "
+                   "NOT this entry at all but the Composition.Lock bug above "
+                   "— a parameter written under a comp lock reads back "
+                   "correctly and never reaches the render, which looks "
+                   "identical from the API side.",
         "recommended": "Wire the graph so MediaOut descends from MediaIn — that "
                        "is the difference between a comp that renders and one "
                        "that is silently bypassed, and it is what made this look "

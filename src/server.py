@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.98.4"
+VERSION = "2.98.5"
 
 import base64
 import os
@@ -25841,6 +25841,35 @@ def _fusion_group_settings_splice_inputs(p: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# Why no comp.Lock() around Fusion VALUE writes.
+#
+# Wrapping a value write (SetInput / SetExpression) in comp.Lock()/Unlock()
+# leaves the value fully readable — GetInput returns it, and so does this
+# server's own get_input — while the RENDER ignores it entirely. Measured live
+# on Studio 19.1.3.7 with a MediaIn -> Blur(XBlurSize 20) -> MediaOut comp on a
+# media-backed clip: identical graph, identical readback, delivered render
+# bit-identical to the no-comp baseline (ffmpeg PSNR inf). Removing the lock
+# from the write renders at PSNR 24.38 dB and the file shrinks 2.0 MB -> 727 KB,
+# as a blur should. The variable was isolated against the comp handle
+# (AddFusionComp / GetFusionCompByIndex / GetFusionCompByName all render), the
+# node name, and the write form (attribute assignment and SetInput both render
+# unlocked) — only the lock around the write decides it.
+#
+# STRUCTURAL edits are a different case and KEEP their lock: AddTool,
+# ConnectInput and friends invalidate the render through another path and were
+# verified to render while locked. So this is not "Lock is unsafe", it is
+# "Lock suppresses the parameter-change invalidation that a value write needs".
+#
+# This is why grade/Fusion claims are proven with a rendered frame and never
+# with comp readback: every readback the API offers agreed the value was set.
+_FUSION_VALUE_WRITE_NOTE = (
+    "Fusion value writes (SetInput/SetExpression) must not be wrapped in "
+    "comp.Lock()/Unlock(): the value reads back correctly but is ignored at "
+    "render (Studio 19.1.3.7, PSNR inf vs baseline). Structural edits "
+    "(AddTool/ConnectInput) are unaffected and keep their lock."
+)
+
+
 def _fusion_group_settings_load(comp, p: Dict[str, Any]) -> Dict[str, Any]:
     group_name = p.get("group_name")
     if not group_name:
@@ -25946,16 +25975,13 @@ def _fusion_comp_bulk_set_expressions(p: Dict[str, Any]) -> Dict[str, Any]:
                 undo_started = True
             except Exception:
                 undo_started = False
-            comp.Lock()
-            try:
-                time = op.get("time", 0)
-                inp = tool[op["input_name"]]
-                if not inp:
-                    raise ValueError(f"Input {op['input_name']!r} not found on {op['tool_name']!r}")
-                inp.SetExpression(str(op["expression"]), time)
-                keep_undo = True
-            finally:
-                comp.Unlock()
+            # No comp.Lock() around a value write — see _FUSION_VALUE_WRITE_NOTE.
+            time = op.get("time", 0)
+            inp = tool[op["input_name"]]
+            if not inp:
+                raise ValueError(f"Input {op['input_name']!r} not found on {op['tool_name']!r}")
+            inp.SetExpression(str(op["expression"]), time)
+            keep_undo = True
         except Exception as exc:
             error_message = str(exc)
         finally:
@@ -26074,15 +26100,12 @@ def _fusion_comp_bulk_set_inputs(p: Dict[str, Any]) -> Dict[str, Any]:
                 undo_started = True
             except Exception:
                 undo_started = False
-            comp.Lock()
-            try:
-                if "time" in op:
-                    tool.SetInput(op["input_name"], op["value"], op["time"])
-                else:
-                    tool.SetInput(op["input_name"], op["value"])
-                keep_undo = True
-            finally:
-                comp.Unlock()
+            # No comp.Lock() around a value write — see _FUSION_VALUE_WRITE_NOTE.
+            if "time" in op:
+                tool.SetInput(op["input_name"], op["value"], op["time"])
+            else:
+                tool.SetInput(op["input_name"], op["value"])
+            keep_undo = True
         except Exception as exc:
             error_message = str(exc)
         finally:
@@ -26255,25 +26278,22 @@ def _safe_set_fusion_inputs(comp, p: Dict[str, Any]):
     if p.get("dry_run"):
         return _ok(tool_name=tool_name, inputs=inputs, would_set=True)
     results = {}
-    comp.Lock()
-    try:
-        for input_name, value in inputs.items():
-            try:
-                if "time" in p:
-                    tool.SetInput(input_name, value, p["time"])
-                else:
-                    tool.SetInput(input_name, value)
-                row = {"success": True}
-                if p.get("readback", True):
-                    try:
-                        row["value"] = _ser(tool.GetInput(input_name, p["time"])) if "time" in p else _ser(tool.GetInput(input_name))
-                    except Exception as exc:
-                        row["readback_error"] = str(exc)
-                results[input_name] = row
-            except Exception as exc:
-                results[input_name] = {"success": False, "error": str(exc)}
-    finally:
-        comp.Unlock()
+    # No comp.Lock() around value writes — see _FUSION_VALUE_WRITE_NOTE.
+    for input_name, value in inputs.items():
+        try:
+            if "time" in p:
+                tool.SetInput(input_name, value, p["time"])
+            else:
+                tool.SetInput(input_name, value)
+            row = {"success": True}
+            if p.get("readback", True):
+                try:
+                    row["value"] = _ser(tool.GetInput(input_name, p["time"])) if "time" in p else _ser(tool.GetInput(input_name))
+                except Exception as exc:
+                    row["readback_error"] = str(exc)
+            results[input_name] = row
+        except Exception as exc:
+            results[input_name] = {"success": False, "error": str(exc)}
     return {"success": all(row.get("success") for row in results.values()), "tool_name": tool_name, "results": results}
 
 
@@ -26438,6 +26458,11 @@ def _fusion_add_mask(comp, p: Dict[str, Any]) -> Dict[str, Any]:
     y = p.get("y", -1)
     readback = bool(p.get("readback", True))
 
+    # The lock covers only the STRUCTURAL half (AddTool + rename). The input
+    # writes below must run outside it — see _FUSION_VALUE_WRITE_NOTE: a value
+    # written under the lock reads back correctly and is ignored at render,
+    # which on a mask means the shape exists at default size and position and
+    # every parameter the caller passed silently does nothing.
     comp.Lock()
     try:
         tool = comp.AddTool(tool_type, x, y)
@@ -26449,83 +26474,84 @@ def _fusion_add_mask(comp, p: Dict[str, Any]) -> Dict[str, Any]:
         name = p.get("name")
         if name:
             tool.SetAttrs({"TOOLS_Name": str(name)})
-        attrs = tool.GetAttrs() or {}
-        tool_name = attrs.get("TOOLS_Name", "")
-
-        results: List[Dict[str, Any]] = []
-
-        # Center: accept center=[x,y]/{1:x,2:y}, or center_x / center_y.
-        center = p.get("center")
-        cx, cy = p.get("center_x"), p.get("center_y")
-        if center is None and (cx is not None or cy is not None):
-            center = [cx if cx is not None else 0.5, cy if cy is not None else 0.5]
-        if center is not None:
-            ok, err, applied = _fusion_set_point_input(tool, "Center", center)
-            rec = {"input": "Center", "value": center, "success": ok}
-            if not ok:
-                rec["error"] = err
-            elif readback:
-                try:
-                    rec["readback"] = _ser(tool.GetInput("Center"))
-                except Exception as exc:
-                    rec["readback_error"] = str(exc)
-            results.append(rec)
-
-        # Scalar inputs (friendly aliases) + any raw passthrough inputs.
-        to_set: List[tuple] = []
-        for friendly, fusion_id in _MASK_INPUT_ALIASES.items():
-            if friendly in p:
-                to_set.append((fusion_id, p[friendly]))
-        raw_inputs = p.get("inputs")
-        if isinstance(raw_inputs, dict):
-            for k, v in raw_inputs.items():
-                to_set.append((str(k), v))
-
-        for fusion_id, value in to_set:
-            rec = {"input": fusion_id, "value": value}
-            try:
-                tool.SetInput(fusion_id, value)
-                rec["success"] = True
-                if readback:
-                    try:
-                        rec["readback"] = _ser(tool.GetInput(fusion_id))
-                    except Exception as exc:
-                        rec["readback_error"] = str(exc)
-            except Exception as exc:
-                rec["success"] = False
-                rec["error"] = str(exc)
-            results.append(rec)
-
-        out: Dict[str, Any] = {
-            "success": True,
-            "tool_name": tool_name,
-            "tool_type": attrs.get("TOOLS_RegID", tool_type),
-            "inputs_set": results,
-        }
-
-        # Optional wiring: connect this mask into a tool's mask input.
-        connect_to = p.get("connect_to")
-        if connect_to:
-            input_name = p.get("connect_input", "EffectMask")
-            target = comp.FindTool(str(connect_to))
-            if not target:
-                out["connection"] = {
-                    "success": False,
-                    "error": f"connect_to tool '{connect_to}' not found",
-                }
-            else:
-                try:
-                    ok = bool(target.ConnectInput(input_name, tool))
-                    out["connection"] = {
-                        "success": ok,
-                        "target": str(connect_to),
-                        "input_name": input_name,
-                    }
-                except Exception as exc:
-                    out["connection"] = {"success": False, "error": str(exc)}
-        return out
     finally:
         comp.Unlock()
+
+    attrs = tool.GetAttrs() or {}
+    tool_name = attrs.get("TOOLS_Name", "")
+
+    results: List[Dict[str, Any]] = []
+
+    # Center: accept center=[x,y]/{1:x,2:y}, or center_x / center_y.
+    center = p.get("center")
+    cx, cy = p.get("center_x"), p.get("center_y")
+    if center is None and (cx is not None or cy is not None):
+        center = [cx if cx is not None else 0.5, cy if cy is not None else 0.5]
+    if center is not None:
+        ok, err, applied = _fusion_set_point_input(tool, "Center", center)
+        rec = {"input": "Center", "value": center, "success": ok}
+        if not ok:
+            rec["error"] = err
+        elif readback:
+            try:
+                rec["readback"] = _ser(tool.GetInput("Center"))
+            except Exception as exc:
+                rec["readback_error"] = str(exc)
+        results.append(rec)
+
+    # Scalar inputs (friendly aliases) + any raw passthrough inputs.
+    to_set: List[tuple] = []
+    for friendly, fusion_id in _MASK_INPUT_ALIASES.items():
+        if friendly in p:
+            to_set.append((fusion_id, p[friendly]))
+    raw_inputs = p.get("inputs")
+    if isinstance(raw_inputs, dict):
+        for k, v in raw_inputs.items():
+            to_set.append((str(k), v))
+
+    for fusion_id, value in to_set:
+        rec = {"input": fusion_id, "value": value}
+        try:
+            tool.SetInput(fusion_id, value)
+            rec["success"] = True
+            if readback:
+                try:
+                    rec["readback"] = _ser(tool.GetInput(fusion_id))
+                except Exception as exc:
+                    rec["readback_error"] = str(exc)
+        except Exception as exc:
+            rec["success"] = False
+            rec["error"] = str(exc)
+        results.append(rec)
+
+    out: Dict[str, Any] = {
+        "success": True,
+        "tool_name": tool_name,
+        "tool_type": attrs.get("TOOLS_RegID", tool_type),
+        "inputs_set": results,
+    }
+
+    # Optional wiring: connect this mask into a tool's mask input.
+    connect_to = p.get("connect_to")
+    if connect_to:
+        input_name = p.get("connect_input", "EffectMask")
+        target = comp.FindTool(str(connect_to))
+        if not target:
+            out["connection"] = {
+                "success": False,
+                "error": f"connect_to tool '{connect_to}' not found",
+            }
+        else:
+            try:
+                ok = bool(target.ConnectInput(input_name, tool))
+                out["connection"] = {
+                    "success": ok,
+                    "target": str(connect_to),
+                    "input_name": input_name,
+                }
+            except Exception as exc:
+                out["connection"] = {"success": False, "error": str(exc)}
+    return out
 
 
 def _fusion_find_text_tool(comp, p: Dict[str, Any]):
@@ -26561,25 +26587,22 @@ def _fusion_set_text_plus(comp, p: Dict[str, Any]) -> Dict[str, Any]:
         return err
     input_id = p.get("input_name", "StyledText")
     readback = bool(p.get("readback", True))
-    comp.Lock()
+    # No comp.Lock() around a value write — see _FUSION_VALUE_WRITE_NOTE.
     try:
+        tool.SetInput(input_id, text)
+    except Exception as exc:
+        return _err(f"SetInput({input_id!r}) failed: {exc}")
+    out = {
+        "success": True,
+        "tool_name": (tool.GetAttrs() or {}).get("TOOLS_Name", ""),
+        "input_name": input_id,
+    }
+    if readback:
         try:
-            tool.SetInput(input_id, text)
+            out["readback"] = _ser(tool.GetInput(input_id))
         except Exception as exc:
-            return _err(f"SetInput({input_id!r}) failed: {exc}")
-        out = {
-            "success": True,
-            "tool_name": (tool.GetAttrs() or {}).get("TOOLS_Name", ""),
-            "input_name": input_id,
-        }
-        if readback:
-            try:
-                out["readback"] = _ser(tool.GetInput(input_id))
-            except Exception as exc:
-                out["readback_error"] = str(exc)
-        return out
-    finally:
-        comp.Unlock()
+            out["readback_error"] = str(exc)
+    return out
 
 
 def _fusion_keyframe_frames(inp) -> List[float]:
@@ -26956,15 +26979,12 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         tool = comp.FindTool(p["tool_name"])
         if not tool:
             return _err(f"Tool '{p['tool_name']}' not found")
-        comp.Lock()
-        try:
-            if "time" in p:
-                tool.SetInput(p["input_name"], p["value"], p["time"])
-            else:
-                tool.SetInput(p["input_name"], p["value"])
-            return _ok()
-        finally:
-            comp.Unlock()
+        # No comp.Lock() around a value write — see _FUSION_VALUE_WRITE_NOTE.
+        if "time" in p:
+            tool.SetInput(p["input_name"], p["value"], p["time"])
+        else:
+            tool.SetInput(p["input_name"], p["value"])
+        return _ok()
 
     elif action == "get_input":
         tool = comp.FindTool(p["tool_name"])
