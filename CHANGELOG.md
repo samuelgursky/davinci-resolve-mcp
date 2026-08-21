@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## Unreleased
+
+### Fixed
+
+- **`timeline(action="bulk_set_item_properties")` could not set a clip colour on
+  its own.** The handler required `_merge_property_groups` to return a non-empty
+  dict, and `clip_color`/`enabled` are not `SetProperty` keys, so they never land
+  there. An op of the shape triage actually sends —
+  `{"timeline_item_id": id, "clip_color": "Apricot"}` — was rejected with
+  "op requires properties, transform, crop, composite, audio, or direct property
+  keys", which made the `clip_color` and `enabled` branches further down
+  unreachable on exactly the ops that needed them. An op is now accepted when it
+  carries `clip_color` and/or `enabled` alone, and `dry_run` reports
+  `would_set_clip_color` / `would_set_enabled`.
+
+- **A colour-only op would have reported success no matter what.** Per-op
+  `success` was `all(...)` over the property rows, and `all([])` is `True`, so an
+  op with no property rows passed unconditionally. Every branch that ran now
+  votes on the result.
+
+- **The bulk path trusted `SetClipColor`'s bare bool.** It now routes through the
+  same checked helper the single-item path uses, so a name outside the 16-name
+  Edit-page palette and the generator/title case that returns `True` and drops
+  the colour (issue #124) both fail the op. The failure detail appears as
+  `results[].clip_color_detail`; the success shape is still the plain bool.
+
 ## What's New in v2.98.3
 
 **`fusion_comp` could never delete a Fusion keyframe.** Reported in

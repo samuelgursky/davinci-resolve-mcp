@@ -5,7 +5,9 @@ TimelineItem and MediaPoolItem; the stubs here reproduce what was measured.
 """
 
 import unittest
+from unittest.mock import patch
 
+from src import server
 from src.server import _set_clip_color_checked
 from src.utils.clip_colors import (
     CLIP_COLORS,
@@ -106,6 +108,116 @@ class SetClipColorCheckedTest(unittest.TestCase):
             result = _set_clip_color_checked(item, name, kind="media pool item")
             self.assertTrue(result["success"], name)
             self.assertEqual(result["readback"], name)
+
+
+
+class _BulkItemStub(ClipColorItemStub):
+    """A timeline item that answers the four calls the bulk path makes."""
+
+    def __init__(self, item_id="1", name="clip", persists=True):
+        super().__init__(persists=persists)
+        self.item_id = item_id
+        self.name = name
+        self.enabled = True
+        self.properties = {}
+
+    def GetUniqueId(self):
+        return self.item_id
+
+    def GetName(self):
+        return self.name
+
+    def SetProperty(self, key, value):
+        self.properties[key] = value
+        return True
+
+    def GetProperty(self, key):
+        return self.properties.get(key)
+
+    def SetClipEnabled(self, value):
+        self.enabled = bool(value)
+        return True
+
+
+class BulkSetItemPropertiesClipColorTest(unittest.TestCase):
+    """clip_color must work as the ONLY key in an op.
+
+    Triage is the daily use of this tool — paint N clips Apricot/Purple/
+    Chocolate in one call — and those ops carry no transform, crop, composite or
+    audio payload. `_merge_property_groups` returned {} for them, the handler
+    bailed on "op requires properties, ...", and the clip_color branch further
+    down was unreachable on exactly the ops that need it.
+    """
+
+    def _run(self, ops, item=None, **extra):
+        item = item or _BulkItemStub()
+        params = {"ops": ops}
+        params.update(extra)
+        with patch.object(server, "_find_timeline_item_by_id", return_value=item):
+            return server._timeline_bulk_set_item_properties(object(), params), item
+
+    def test_clip_color_alone_is_applied(self):
+        out, item = self._run([{"timeline_item_id": "1", "clip_color": "Apricot"}])
+        self.assertTrue(out["success"], out)
+        row = out["results"][0]
+        self.assertTrue(row["success"], row)
+        self.assertIs(row["clip_color"], True)
+        self.assertEqual(item.GetClipColor(), "Apricot")
+
+    def test_enabled_alone_is_applied(self):
+        out, item = self._run([{"timeline_item_id": "1", "enabled": False}])
+        self.assertTrue(out["success"], out)
+        self.assertIs(out["results"][0]["enabled"], True)
+        self.assertFalse(item.enabled)
+
+    def test_a_triage_batch_of_colours_all_land(self):
+        """The real workflow: three clips, three colours, one call."""
+        for color in ("Apricot", "Purple", "Chocolate"):
+            with self.subTest(color=color):
+                out, item = self._run([{"timeline_item_id": "1", "clip_color": color}])
+                self.assertTrue(out["success"], out)
+                self.assertEqual(item.GetClipColor(), color)
+
+    def test_a_refused_colour_fails_the_op_instead_of_passing_empty(self):
+        """all([]) is True — a colour-only op must not inherit that."""
+        out, item = self._run([{"timeline_item_id": "1", "clip_color": "Rose"}])
+        self.assertFalse(out["success"], out)
+        row = out["results"][0]
+        self.assertFalse(row["success"], row)
+        self.assertIs(row["clip_color"], False)
+        self.assertIn("clip_color_detail", row)
+
+    def test_a_colour_that_does_not_persist_is_reported_as_failure(self):
+        """Generators and titles take the call, return True, drop the colour."""
+        out, _ = self._run(
+            [{"timeline_item_id": "1", "clip_color": "Apricot"}],
+            item=_BulkItemStub(persists=False),
+        )
+        self.assertFalse(out["success"], out)
+        self.assertIs(out["results"][0]["clip_color"], False)
+
+    def test_dry_run_reports_the_colour_it_would_set(self):
+        out, item = self._run(
+            [{"timeline_item_id": "1", "clip_color": "Apricot"}], dry_run=True
+        )
+        self.assertTrue(out["success"], out)
+        self.assertEqual(out["results"][0]["would_set_clip_color"], "Apricot")
+        self.assertEqual(item.GetClipColor(), "")
+
+    def test_properties_and_colour_together_still_work(self):
+        out, item = self._run([{
+            "timeline_item_id": "1",
+            "transform": {"ZoomX": 1.5},
+            "clip_color": "Purple",
+        }])
+        self.assertTrue(out["success"], out)
+        self.assertEqual(item.properties["ZoomX"], 1.5)
+        self.assertEqual(item.GetClipColor(), "Purple")
+
+    def test_a_genuinely_empty_op_is_still_rejected(self):
+        out, _ = self._run([{"timeline_item_id": "1"}])
+        self.assertFalse(out["success"], out)
+        self.assertIn("clip_color", out["results"][0]["error"])
 
 
 if __name__ == "__main__":

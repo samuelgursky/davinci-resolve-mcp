@@ -5599,8 +5599,15 @@ def _timeline_bulk_set_item_properties(tl, p: Dict[str, Any]) -> Dict[str, Any]:
             results.append({"index": index, "success": False, "error": f"timeline item not found: {item_id}"})
             continue
         properties = _merge_property_groups(op)
-        if not properties:
-            results.append({"index": index, "success": False, "error": "op requires properties, transform, crop, composite, audio, or direct property keys"})
+        # clip_color and enabled are not SetProperty keys, so they never reach
+        # `properties`. Requiring a non-empty `properties` made a colour-only op
+        # — the shape triage actually sends, `{"timeline_item_id": id,
+        # "clip_color": "Apricot"}` — bail here, which left the clip_color and
+        # enabled branches below unreachable on exactly the ops that need them.
+        wants_color = "clip_color" in op
+        wants_enabled = "enabled" in op
+        if not properties and not wants_color and not wants_enabled:
+            results.append({"index": index, "success": False, "error": "op requires properties, transform, crop, composite, audio, clip_color, enabled, or direct property keys"})
             continue
         item_result = {
             "index": index,
@@ -5610,6 +5617,10 @@ def _timeline_bulk_set_item_properties(tl, p: Dict[str, Any]) -> Dict[str, Any]:
         }
         if dry_run:
             item_result.update({"success": True, "would_set": properties})
+            if wants_color:
+                item_result["would_set_clip_color"] = op["clip_color"]
+            if wants_enabled:
+                item_result["would_set_enabled"] = bool(op["enabled"])
             results.append(item_result)
             continue
         for key, value in properties.items():
@@ -5625,17 +5636,33 @@ def _timeline_bulk_set_item_properties(tl, p: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception as exc:
                     row["readback_error"] = str(exc)
             item_result["properties"][key] = row
-        if "clip_color" in op:
+        outcomes = [bool(row.get("success")) for row in item_result["properties"].values()]
+        if wants_color:
+            # Routed through the checked helper rather than the bare bool: a name
+            # outside the 16-name Edit-page palette is refused with False and no
+            # reason, and a generator or title takes the call, returns True and
+            # drops the colour (issue #124). The detail only appears on failure,
+            # so the success shape stays the plain bool callers already read.
             try:
-                item_result["clip_color"] = bool(item.SetClipColor(op["clip_color"]))
+                outcome = _set_clip_color_checked(item, op["clip_color"], kind="timeline item")
             except Exception as exc:
-                item_result["clip_color"] = {"success": False, "error": str(exc)}
-        if "enabled" in op:
+                outcome = {"success": False, "error": str(exc)}
+            applied = bool(outcome.get("success"))
+            item_result["clip_color"] = applied
+            if not applied:
+                item_result["clip_color_detail"] = outcome
+            outcomes.append(applied)
+        if wants_enabled:
             try:
-                item_result["enabled"] = bool(item.SetClipEnabled(bool(op["enabled"])))
+                enabled_ok = bool(item.SetClipEnabled(bool(op["enabled"])))
+                item_result["enabled"] = enabled_ok
             except Exception as exc:
+                enabled_ok = False
                 item_result["enabled"] = {"success": False, "error": str(exc)}
-        item_result["success"] = all(row.get("success") for row in item_result["properties"].values())
+            outcomes.append(enabled_ok)
+        # all([]) is True, so a colour-only op used to be able to report success
+        # no matter what SetClipColor did. Every branch that ran now votes.
+        item_result["success"] = all(outcomes)
         results.append(item_result)
     return {"success": all(row.get("success") for row in results), "results": results, "op_count": len(ops)}
 
@@ -22382,6 +22409,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         track_type, default 1); missing tracks are added, so V2/V3 multicam angles survive.
         # example: action_help(name='<action_name>')
       bulk_set_item_properties(ops, dry_run?, readback?) -> {results, op_count}
+        an op may carry clip_color and/or enabled with no other payload -- that is
+        the triage shape (paint N clips in one call).
         # example: action_help(name='<action_name>')
       apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?) -> {success}
         # example: action_help(name='<action_name>')
@@ -24420,16 +24449,18 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
             ),
         },
         "bulk_set_item_properties": {
-            "summary": "Batch SetProperty/clip_color/enabled across many items.",
-            "params": "ops: [{timeline_item_id|clip_id, properties|transform|crop|composite|audio, clip_color?, enabled?}], dry_run?, readback?",
-            "returns": "{success, results, op_count}",
+            "summary": "Batch SetProperty/clip_color/enabled across many items. clip_color or enabled may be the only key in an op.",
+            "params": "ops: [{timeline_item_id|clip_id, properties?|transform?|crop?|composite?|audio?, clip_color?, enabled?}], dry_run?, readback?",
+            "returns": "{success, results, op_count}; a failed clip_color adds results[].clip_color_detail",
             "example": (
                 'timeline(action="bulk_set_item_properties", params={\n'
                 '  "ops": [\n'
-                '    {"timeline_item_id": "TimelineItem-abc",\n'
-                '     "properties": {"ClipColor": "Teal", "ZoomX": 1.05}},\n'
-                '    {"timeline_item_id": "TimelineItem-def",\n'
-                '     "properties": {"ClipColor": "Teal"}}\n'
+                '    # triage: colour only, no other payload needed\n'
+                '    {"timeline_item_id": "TimelineItem-abc", "clip_color": "Apricot"},\n'
+                '    {"timeline_item_id": "TimelineItem-def", "clip_color": "Chocolate"},\n'
+                '    # or colour plus a transform in the same op\n'
+                '    {"timeline_item_id": "TimelineItem-ghi",\n'
+                '     "clip_color": "Purple", "transform": {"ZoomX": 1.05}}\n'
                 '  ],\n'
                 '  "dry_run": True, "readback": True\n'
                 '})'
