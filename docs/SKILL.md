@@ -444,7 +444,11 @@ same timecodes, then restore the previous active version or node-enabled state
 after any temporary bypass capture. Treat untreated frames as diagnostic
 evidence, not as permission to discard an existing creative grade.
 
-Prefer `safe_set_cdl` for small reversible primary corrections. Use DRX/stills
+Prefer `safe_set_cdl` for small reversible primary corrections. `SetCDL`'s
+`NodeIndex` is 1-BASED (scripting README line 6) and there is no `GetCDL`
+readback — `safe_set_cdl` and `apply_look_to_items` now read the node graph's
+`GetNumNodes` first and return a structured reason/diagnosis on a false
+`SetCDL` instead of a bare boolean. Use DRX/stills
 or grade copy only when the user accepts whole-grade replacement/transfer
 semantics. Use DCTL/LUT authoring only for reusable mathematical transforms, not
 as a substitute for hand-built windows, qualifiers, or tracked secondaries. Do
@@ -1377,7 +1381,20 @@ Key actions:
   unsupported because Resolve's public scripting API does not expose transition
   cloning. `copy_keyframes=True` adds the `keyframes` group.
 - `copy_clips(...)` / `move_clips(...)` — same safe append path; `move_clips`
-  deletes successfully duplicated source items afterward
+  deletes only sources whose duplicate was VERIFIED live on the timeline
+  (AppendToTimeline can return null-id items — e.g. into an occupied span — and
+  unverified sources are kept with a warning; see api_truth
+  'AppendToTimeline null-id'). NEVER use `move_clips` to open a gap for an
+  insert; that is `ripple_insert`'s job.
+- `ripple_insert(clip_infos, record_frame|record_timecode, record_frame_mode?,
+  dry_run?, confirm_token?)` — insert media-pool source ranges at a record point
+  and shift ALL later video/audio items right. DRY-RUN by default (full plan
+  with straddler/blocker detection); executing is confirm-token gated and
+  archives the timeline first. Shifted items are re-created from pool media
+  with transform/crop/composite/retime re-applied; grades, keyframes,
+  transitions, and link state on shifted items are NOT preserved (the archive
+  keeps them). Refuses mid-item insert points, non-pool items in the tail
+  (titles/generators/Fusion comps), subtitle shifts, and locked tracks.
 - `copy_range` / `duplicate_range` — copy exact video/audio source segments
   from `start_frame`/`end_frame` or mark in/out to `record_frame`
 - `overwrite_range` — delete whole destination overlaps, then copy the exact
@@ -1403,7 +1420,11 @@ Key actions:
   page and only while it is frontmost; the tool switches page automatically and
   restores the previous one. Expect a page flash in the GUI,
   and note that landing on Color can kick off cache/render work for the current
-  clip — on a large timeline the switch is not free
+  clip — on a large timeline the switch is not free.
+  NOT WYSIWYG for Fusion: thumbnails do not reflect Fusion composition output
+  (a warp demo read as identical before/after from a contact sheet,
+  2026-08-19). Prove Fusion/grade claims with `gallery_stills grab_and_export`
+  or an extracted RENDERED frame, never a thumbnail
 - `edit_kernel_capabilities` — report supported, partially supported, and
   unsupported timeline edit kernel behavior
 - `probe_edit_kernel_item(clip_ids? selected? timeline_item?)` — read-only
@@ -1602,7 +1623,12 @@ Key actions:
   clip version
 - `stabilize`, `smart_reframe`
 - `create_magic_mask(mode)` — mode: `"F"` forward, `"B"` backward, `"BI"` bidirectional
-  (requires DaVinci Neural Engine and Color page)
+  (requires DaVinci Neural Engine and Color page). Magic Mask v2 isolates via
+  operator CLICKS on the subject (manual ch. 139; strokes are legacy v1) and
+  the API cannot place clicks — with none present this returns
+  `{needs_hitl: true, hitl: {steps...}}` instead of a bare false. Never call it
+  as if it isolates a subject unattended; prove any isolation with a rendered
+  frame (`gallery_stills grab_and_export`).
 
 Color / Grade kernel actions (v2.11.0+) add safer grade inspection and
 boundary helpers: `grade_capabilities`, `probe_grade_item`,
@@ -2117,6 +2143,18 @@ clip's comp, always pass `clip_id`, `timeline_item_id`, or `timeline_item`.
 The server provides several mechanisms to inspect a frame as Resolve has processed
 it, including color grading, effects, and compositing — not just the raw source
 file.
+
+WYSIWYG hierarchy (live-verified 2026-08-20): a `grab_and_export` gallery still
+faithfully reflects edit sizing (Inspector transforms) and grades; media-pool
+thumbnails and `thumbnail_contact_sheet` output do NOT reflect Fusion
+composition output. Also note that whether an API-created Fusion comp is
+honoured at render is Resolve-version-dependent: a wired comp rendered on
+Studio 19.1.3.7, but on Studio 21.0.4 the same Blur configuration and a
+Transform variant both rendered bit-identical to the no-comp baseline, and no
+API selects an item's active composition (api_truth
+'AddFusionComp'). The only acceptable proof of a Fusion or grade claim is a
+rendered frame: `grab_and_export`, an exported gallery still, or a frame
+extracted from a delivered render.
 
 **Start here: `timeline_frame(action="capture")`** — Returns the frame at the
 playhead (or at any `timecode`/`frame` you name) as MCP image content, so a

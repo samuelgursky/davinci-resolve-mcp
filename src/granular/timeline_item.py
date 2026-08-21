@@ -1926,17 +1926,34 @@ def ti_load_burn_in_preset(preset_name: str, item_index: int = 0, track_type: st
 
 
 @mcp.tool()
-def ti_create_magic_mask(mode: str = "Forward", item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
+def ti_create_magic_mask(mode: str = "F", item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Create a Magic Mask on a timeline item.
 
+    Magic Mask v2 needs operator CLICKS on the subject (Color page > Magic Mask
+    palette > click subject > Track Forward); the API cannot place them, so with
+    no clicks present Resolve returns False and no isolation exists.
+
     Args:
-        mode: 'Forward' or 'Backward'. Default: 'Forward'.
+        mode: 'F' (forward), 'B' (backward), or 'BI' (bidirection) per the
+            scripting README ('Forward'/'Backward' are accepted as aliases).
         item_index: 0-based item index. Default: 0.
     """
+    aliases = {"F": "F", "FORWARD": "F", "B": "B", "BACKWARD": "B",
+               "BI": "BI", "BIDIRECTION": "BI", "BIDIRECTIONAL": "BI"}
+    normalized = aliases.get(str(mode).strip().upper())
+    if not normalized:
+        return {"error": "mode must be 'F', 'B', or 'BI'"}
     item, err = _get_timeline_item(track_type, track_index, item_index)
     if err:
         return err
-    return {"success": bool(item.CreateMagicMask(mode))}
+    if bool(item.CreateMagicMask(normalized)):
+        return {"success": True, "mode": normalized}
+    return {
+        "success": False,
+        "needs_hitl": True,
+        "hitl": "No Magic Mask clicks on this item — a human must click the subject "
+                "on the Color page Magic Mask palette, then press Track Forward.",
+    }
 
 
 @mcp.tool()
