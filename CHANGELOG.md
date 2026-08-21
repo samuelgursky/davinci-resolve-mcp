@@ -67,6 +67,12 @@ one no readback can check.
 
 ## What's New in v2.98.5
 
+> **Scope corrected in v2.98.6.** Six sites had the lock removed, but only
+> `set_input` and `safe_set_inputs` were ever verified to suppress the render.
+> The other four were changed by inference, and mutation-checking each of them
+> afterwards showed the lock does not break them. No code changed back; only the
+> claim did. See the v2.98.6 entry above for the per-site measurement.
+
 **Every Fusion parameter this server wrote was ignored at render.** A value
 write (`SetInput` / `SetExpression`) wrapped in `Comp.Lock()`/`Unlock()` is
 stored in the graph and reads back correctly — `GetInput` returns it, and so
