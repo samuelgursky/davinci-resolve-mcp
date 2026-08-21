@@ -434,7 +434,25 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "either. Contrast InsertFusionTitleIntoTimeline, whose comp "
                    "DOES render — text set via SetInput('StyledText') appears in "
                    "the output — so this is specific to comps attached to "
-                   "media-backed clips, not to Fusion through the API generally.",
+                   "media-backed clips, not to Fusion through the API generally. "
+                   "CONFLICTING LATER MEASUREMENT (Studio 21.0.4, live-verified "
+                   "2026-08-20): a fresh comp wired MediaIn -> Transform "
+                   "(Size 0.45) -> MediaOut on a media-backed clip — a rooted "
+                   "graph by the 2026-08-02 rule — read back correctly but "
+                   "changed neither a Color-page gallery still nor a delivered "
+                   "render, and opening the Fusion page did not activate it; the "
+                   "same held for edits to both comps of a 2-comp item, and for "
+                   "LoadFusionCompByName returning a live comp object. The tool "
+                   "was then ELIMINATED as the variable (isolation run, "
+                   "2026-08-20, Studio 21.0.4.5, disposable project): a wired "
+                   "MediaIn -> Blur (XBlurSize 20) -> MediaOut comp — the exact "
+                   "configuration that rendered on 19.1.3.7 — delivered a "
+                   "render bit-identical to the no-comp baseline (ffmpeg PSNR "
+                   "inf), as did the Transform variant in the same comp. There "
+                   "is still no API to select an item's active composition. The "
+                   "conflict tracks the Resolve build (19.1.3.7 honoured the "
+                   "wired comp; 21.0.4.5 ignores it), not the tool; treat "
+                   "'a wired comp renders' as version-dependent.",
         "recommended": "Wire the graph so MediaOut descends from MediaIn — that "
                        "is the difference between a comp that renders and one "
                        "that is silently bypassed, and it is what made this look "
@@ -448,8 +466,16 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "chosen from the API (see the Track Selector entry), so "
                        "overlaying onto an existing clip's track is not currently "
                        "reachable end-to-end. Building the comp in the Fusion page "
-                       "UI works; only the API-created comp is ignored.",
-        "tags": ["fusion", "silent-failure", "render"],
+                       "UI works; only the API-created comp is ignored. "
+                       "Never claim a Fusion effect from comp readback alone — "
+                       "prove it with a rendered frame (gallery_stills "
+                       "grab_and_export before/after, or a delivered render). On "
+                       "setups where even the wired comp does not render (see the "
+                       "2026-08-20 measurement), treat per-item Fusion effects as "
+                       "HITL (a human builds or activates the comp in the UI) and "
+                       "bake stills motion with ffmpeg when unattended output is "
+                       "required.",
+        "tags": ["fusion", "silent-failure", "render", "readback", "hitl"],
         "submit": "bug",
     },
     {
@@ -2082,6 +2108,69 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "rather than trusting the return.",
         "tags": ["gallery", "stills", "headless", "unreliable-return"],
         "submit": "bug",
+    },
+    {
+        "symbol": "MediaPool.AppendToTimeline (null-id timeline items)",
+        "object": "MediaPool",
+        "signature": "([{clipInfo}, ...]) -> [TimelineItem]",
+        "reality": "The returned TimelineItem objects can have an unreadable/empty "
+                   "GetUniqueId, notably when the clipInfo recordFrame lands in a "
+                   "span still occupied by another item (any duplicate-then-delete "
+                   "'move' whose offset is smaller than the item duration hits "
+                   "this). The item may not actually exist on the timeline. A "
+                   "session that trusted the non-empty return and deleted the "
+                   "sources lost 26 clips (Portugal timeline, 2026-08-19).",
+        "recommended": "Never treat AppendToTimeline's return as proof of "
+                       "placement. Re-enumerate the track and match on record "
+                       "frame + duration before any dependent delete; never "
+                       "shift items by duplicate-then-delete into occupied "
+                       "spans — use timeline.ripple_insert, which rebuilds the "
+                       "tail into free space and verifies by readback.",
+        "tags": ["editorial", "silent-failure", "unreliable-return", "timeline"],
+        "submit": "bug",
+        "mitigation": ["_append_and_recover_timeline_item duplicate_verified gate",
+                       "_timeline_ripple_insert_impl"],
+    },
+    {
+        "symbol": "TimelineItem.CreateMagicMask (needs operator clicks)",
+        "object": "TimelineItem",
+        "signature": "(mode) -> bool",
+        "reality": "Returns False when the item carries no Magic Mask clicks. "
+                   "Magic Mask v2 is click-driven (manual ch. 139; strokes are "
+                   "the legacy v1 interface) and the scripting API has no way to "
+                   "place a click, so on a fresh item the call can never isolate "
+                   "anything — it only tracks a mask the operator already seeded. "
+                   "Mode strings are 'F', 'B', 'BI'; long spellings like "
+                   "'Forward' are rejected.",
+        "recommended": "Treat CreateMagicMask as track-only: have the operator "
+                       "click the subject (Color page > Magic Mask palette) and "
+                       "then call it, or surface the HITL steps instead of a "
+                       "bare False. Verify isolation with a rendered frame "
+                       "(gallery_stills grab_and_export), never a thumbnail.",
+        "tags": ["ai", "magic-mask", "hitl", "silent-failure"],
+        "submit": "missing",
+        "mitigation": ["_magic_mask_hitl_result"],
+    },
+    {
+        "symbol": "TimelineItem.SetCDL (write-only, no GetCDL)",
+        "object": "TimelineItem",
+        "signature": "({NodeIndex, Slope, Offset, Power, Saturation}) -> bool",
+        "reality": "There is no GetCDL, so applied CDL values cannot be read "
+                   "back; the bool is the only signal and it returns False "
+                   "with no reason (missing node, still/generator item, values "
+                   "silently rejected). NodeIndex is 1-based (README line 6) "
+                   "and must not exceed Graph.GetNumNodes() — note "
+                   "TimelineItem.GetNumNodes is deprecated; the count lives on "
+                   "item.GetNodeGraph().",
+        "recommended": "Read item.GetNodeGraph().GetNumNodes() before SetCDL "
+                       "and diagnose a False against the node count and clip "
+                       "type. Prove the applied look with a rendered frame "
+                       "(gallery_stills grab_and_export or "
+                       "Project.ExportCurrentFrameAsStill), not the return "
+                       "value.",
+        "tags": ["color", "cdl", "readback", "silent-failure"],
+        "submit": "missing",
+        "mitigation": ["_cdl_node_preflight", "_cdl_failure_diagnosis"],
     },
 ]
 

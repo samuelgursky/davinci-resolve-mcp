@@ -1188,6 +1188,7 @@ _destructive_hook.register_preference_provider(_destructive_preference_provider)
 _TOKEN_GATED_DESTRUCTIVE_ACTIONS = frozenset({
     ("timeline", "delete_track"),
     ("timeline", "apply_cuts"),
+    ("timeline", "ripple_insert"),
     # Catastrophic media-pool deletes (EX3): irreversibly destroy clips/folders/
     # timelines. Gated like delete_track; also archive-on-mutate via the registry.
     ("media_pool", "delete_clips"),
@@ -4483,10 +4484,20 @@ def _append_and_recover_timeline_item(
         else:
             copied_properties = _copy_duplicate_item_state(source_item, duplicate_item, copy_properties)
 
+    # AppendToTimeline can return items with unreadable ids (notably when the
+    # target span is occupied). A duplicate counts as verified only when a live
+    # item or a real id was recovered — delete_sources callers must never remove
+    # a source on the strength of a synthetic summary.
+    duplicate_verified = duplicate_item is not None or bool(ser.get("timeline_item_id"))
+    if not duplicate_verified:
+        warnings.append(
+            "duplicate could not be verified on the timeline (null-id item, recovery found no match)"
+        )
     result = {
         "clip_id": source_timeline_item_id,
         "source_clip_id": source_timeline_item_id,
         "success": True,
+        "duplicate_verified": duplicate_verified,
         **ser,
         "source": source_summary,
         "duplicate": duplicate_summary,
@@ -4685,7 +4696,19 @@ def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_source
                 primary_result.setdefault("warnings", []).append(f"SetClipsLinked failed: {exc}")
 
         if delete_sources:
-            source_delete_items.extend(original_link_items if include_types else [item])
+            # Only queue sources for deletion when every duplicate (primary and
+            # linked) was verified live on the timeline. Synthetic/null-id
+            # duplicates dropped 26 clips in the Portugal 2026-08-19 session.
+            linked_rows = primary_result.get("linked_results") or []
+            entry_verified = bool(primary_result.get("duplicate_verified")) and all(
+                row.get("success") and row.get("duplicate_verified") for row in linked_rows
+            )
+            if entry_verified:
+                source_delete_items.extend(original_link_items if include_types else [item])
+            else:
+                primary_result.setdefault("warnings", []).append(
+                    "source NOT deleted: duplicate(s) could not be verified on the timeline"
+                )
 
         results.append(primary_result)
 
@@ -4696,7 +4719,9 @@ def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_source
         successful_source_ids = {
             result.get("source_clip_id")
             for result in results
-            if result.get("success") and result.get("source_clip_id")
+            if result.get("success")
+            and result.get("duplicate_verified")
+            and result.get("source_clip_id")
         }
         delete_items = []
         seen_delete_ids = set()
@@ -4718,6 +4743,391 @@ def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_source
             out["deleted_sources"] = False
             out["delete_error"] = "No successfully duplicated source items to delete"
     return out
+
+
+# Timeline-item properties re-applied to shifted items after a ripple_insert
+# rebuild. Grades, keyframes, transitions, Fusion comps, and link state are NOT
+# in this list because the scripting API cannot read them off a live item in a
+# form that can be written back (the pre-mutation archive preserves them).
+_RIPPLE_RESTORE_PROPERTY_KEYS = (
+    "Pan", "Tilt", "ZoomX", "ZoomY", "ZoomGang", "RotationAngle",
+    "AnchorPointX", "AnchorPointY", "Pitch", "Yaw", "FlipX", "FlipY",
+    "CropLeft", "CropRight", "CropTop", "CropBottom", "CropSoftness", "CropRetain",
+    "CompositeMode", "Opacity", "Distortion", "Scaling", "ResizeFilter",
+    "RetimeProcess", "MotionEstimation",
+)
+
+
+def _ripple_item_row(item, track_type, track_index):
+    start = _frame_int(item.GetStart())
+    end = _frame_int(item.GetEnd())
+    duration = None
+    if _has_method(item, "GetDuration"):
+        try:
+            duration = _frame_int(item.GetDuration())
+        except Exception:
+            duration = None
+    if duration is None and start is not None and end is not None:
+        duration = end - start
+    try:
+        name = item.GetName()
+    except Exception:
+        name = None
+    return {
+        "item": item,
+        "clip_id": _safe_timeline_item_id(item),
+        "name": name,
+        "track_type": track_type,
+        "track_index": track_index,
+        "start": start,
+        "end": end,
+        "duration": duration,
+    }
+
+
+def _ripple_public_row(row):
+    return {k: row[k] for k in ("clip_id", "name", "track_type", "track_index", "start", "end", "duration")}
+
+
+def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -> Dict[str, Any]:
+    """Insert clip_infos at a record frame and shift all later items right.
+
+    There is no ripple-insert primitive in the scripting API, and shifting items
+    by duplicate-then-delete corrupts the timeline when the shift is smaller
+    than an item (AppendToTimeline into an occupied span returns null-id items;
+    the Portugal 2026-08-19 session lost 26 clips that way). This action instead
+    plans a rebuild: capture every later item's pool media + source trim, delete
+    the tail (verified, non-ripple), re-append it shifted, then place the
+    inserts into the opened gap. Tail is re-appended BEFORE the inserts so the
+    worst mid-failure state is the original content with a gap, never lost tail.
+    DRY-RUN by default; executing is confirm-token gated and the destructive
+    hook archives the timeline first.
+    """
+    clip_infos = p.get("clip_infos") or p.get("clipInfos")
+    if not isinstance(clip_infos, list) or not clip_infos:
+        return _err(
+            "ripple_insert requires clip_infos: non-empty list of "
+            "{clip_id|media_pool_item_id, start_frame, end_frame, track_index?, media_type?}",
+            code="INVALID_CLIP_INFOS",
+            category="invalid_input",
+            remediation="Pass the media-pool source ranges to insert; SOURCE frames, end-exclusive.",
+        )
+    mp = proj.GetMediaPool()
+    if not mp:
+        return _err("Failed to get MediaPool")
+    root = mp.GetRootFolder()
+    tl_start = _frame_int(tl.GetStartFrame()) or 0
+
+    # Insertion point: record_timecode (timeline TC, absolute) beats record_frame
+    # (relative to timeline start by default, like every other server wrapper).
+    record_timecode = p.get("record_timecode", p.get("recordTimecode"))
+    if record_timecode is not None:
+        insert_frame, err = _timeline_timecode_to_frame_id(tl, record_timecode)
+        if err:
+            return err
+    else:
+        rf_raw = p.get("record_frame", p.get("recordFrame"))
+        if rf_raw is None:
+            return _err(
+                "ripple_insert requires record_frame (int) or record_timecode ('HH:MM:SS:FF')",
+                code="MISSING_RECORD_POINT",
+                category="invalid_input",
+                remediation="Pass record_timecode from the viewer/playhead, or record_frame "
+                            "relative to timeline start (record_frame_mode='absolute' for raw frames).",
+            )
+        synthetic = {
+            "recordFrame": rf_raw,
+            "recordFrameMode": p.get("record_frame_mode", p.get("recordFrameMode", "relative")),
+        }
+        insert_frame, err = _normalize_record_frame(synthetic, 0, tl_start)
+        if err:
+            return err
+
+    # Build insert clipInfos back-to-back from the insert point (per-track cursors).
+    built_inserts = []
+    insert_summaries = []
+    cursor_by_track: Dict[Any, int] = {}
+    for idx, raw_ci in enumerate(clip_infos):
+        if not isinstance(raw_ci, dict):
+            return _err(f"clip_infos[{idx}] must be an object")
+        ci = dict(raw_ci)
+        ci.pop("record_frame", None)
+        ci.pop("recordFrame", None)
+        track_index = ci.get("trackIndex", ci.get("track_index", 1))
+        media_type = ci.get("mediaType", ci.get("media_type", 1))
+        ci["track_index"] = track_index
+        ci["media_type"] = media_type
+        key = (int(media_type), int(track_index))
+        record = cursor_by_track.get(key, insert_frame)
+        ci["record_frame"] = record
+        ci["record_frame_mode"] = "absolute"
+        info, ierr = _build_append_clip_info_dict(root, ci, idx, tl_start)
+        if ierr:
+            return ierr
+        duration = int(info["endFrame"]) - int(info["startFrame"])
+        if duration <= 0:
+            return _err(f"clip_infos[{idx}] has non-positive duration (end_frame is end-exclusive)")
+        cursor_by_track[key] = record + duration
+        built_inserts.append(info)
+        insert_summaries.append({
+            "clip_id": raw_ci.get("clip_id") or raw_ci.get("media_pool_item_id"),
+            "record_frame": record,
+            "duration": duration,
+            "track_index": int(track_index),
+            "media_type": int(media_type),
+        })
+    shift = max(cursor - insert_frame for cursor in cursor_by_track.values())
+
+    # Scan the timeline: head stays, tail shifts, anything else blocks the plan.
+    straddlers: List[Dict[str, Any]] = []
+    tail_rows: List[Dict[str, Any]] = []
+    blockers: List[Dict[str, Any]] = []
+    locked_tracks: List[str] = []
+    head_rows: List[Dict[str, Any]] = []
+    for track_type in ("video", "audio"):
+        for track_index in range(1, _timeline_track_count(tl, track_type) + 1):
+            track_rows = [
+                _ripple_item_row(item, track_type, track_index)
+                for item in (tl.GetItemListInTrack(track_type, track_index) or [])
+            ]
+            track_has_tail = False
+            for row in track_rows:
+                if row["start"] is None or row["end"] is None:
+                    blockers.append({**_ripple_public_row(row), "reason": "unreadable start/end"})
+                    continue
+                if row["end"] <= insert_frame:
+                    head_rows.append(row)
+                elif row["start"] < insert_frame:
+                    straddlers.append(_ripple_public_row(row))
+                else:
+                    tail_rows.append(row)
+                    track_has_tail = True
+            if track_has_tail:
+                try:
+                    if bool(tl.GetIsTrackLocked(track_type, track_index)):
+                        locked_tracks.append(f"{track_type}:{track_index}")
+                except Exception:
+                    pass
+    subtitle_blockers = 0
+    for track_index in range(1, _timeline_track_count(tl, "subtitle") + 1):
+        for item in (tl.GetItemListInTrack("subtitle", track_index) or []):
+            item_start = _frame_int(item.GetStart())
+            if item_start is not None and item_start >= insert_frame:
+                subtitle_blockers += 1
+
+    # Capture rebuild info + restorable properties for every tail item BEFORE
+    # anything mutates (the live item objects die at delete time).
+    tail_rows.sort(key=lambda r: (r["track_type"], r["track_index"], r["start"]))
+    linked_tail_ids: List[str] = []
+    for row in tail_rows:
+        media_type = _timeline_media_type(row["track_type"])
+        info, ierr = _append_clip_info_from_timeline_item(
+            row["item"],
+            row["track_index"],
+            record_frame=row["start"] + shift,
+            media_type=media_type,
+        )
+        if ierr:
+            blockers.append({**_ripple_public_row(row), "reason": ierr.get("error", str(ierr))})
+            continue
+        row["info"] = info
+        try:
+            full_props = row["item"].GetProperty() or {}
+        except Exception:
+            full_props = {}
+        row["props"] = {k: full_props[k] for k in _RIPPLE_RESTORE_PROPERTY_KEYS if k in full_props}
+        try:
+            if row["item"].GetLinkedItems():
+                linked_tail_ids.append(row["clip_id"])
+        except Exception:
+            pass
+
+    warnings = [
+        "shifted items are re-created from pool media: grades, keyframes, transitions, "
+        "Fusion comps, and link state on them are NOT preserved (the pre-mutation archive keeps them)",
+    ]
+    if linked_tail_ids:
+        warnings.append(f"{len(linked_tail_ids)} shifted item(s) had linked items; links will not survive the shift")
+    plan = {
+        "insert_frame_absolute": insert_frame,
+        "insert_frame_relative": insert_frame - tl_start,
+        "shift_frames": shift,
+        "inserts": insert_summaries,
+        "tail_item_count": len(tail_rows),
+        "head_item_count": len(head_rows),
+        "tail_items": [_ripple_public_row(row) for row in tail_rows],
+        "straddlers": straddlers,
+        "blockers": blockers,
+        "subtitle_items_after_insert_point": subtitle_blockers,
+        "locked_tracks_with_tail": locked_tracks,
+        "warnings": warnings,
+    }
+    feasible = not (straddlers or blockers or subtitle_blockers or locked_tracks)
+    if not feasible:
+        reasons = []
+        if straddlers:
+            reasons.append(f"insert point cuts through {len(straddlers)} item(s) — choose an item boundary")
+        if blockers:
+            reasons.append(f"{len(blockers)} later item(s) cannot be rebuilt (no pool media: titles/generators/Fusion comps)")
+        if subtitle_blockers:
+            reasons.append(f"{subtitle_blockers} subtitle item(s) after the insert point cannot be shifted via the API")
+        if locked_tracks:
+            reasons.append(f"locked track(s) hold items that must shift: {', '.join(locked_tracks)}")
+        plan["infeasible_reasons"] = reasons
+    if bool(p.get("dry_run", True)):
+        return {"success": feasible, "dry_run": True, "plan": plan}
+    if not feasible:
+        return {
+            "success": False,
+            "dry_run": False,
+            "plan": plan,
+            "error": {
+                "code": "RIPPLE_PLAN_BLOCKED",
+                "category": "invalid_input",
+                "retryable": False,
+                "message": "; ".join(plan["infeasible_reasons"]),
+                "remediation": "Re-run with dry_run=true, resolve the listed blockers, then execute.",
+            },
+        }
+
+    if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+        return _issue_confirm_token(
+            action="timeline.ripple_insert",
+            params=p,
+            preview={
+                "operation": "timeline.ripple_insert",
+                "warning": "Deletes and re-appends every later item shifted right; grades/keyframes/"
+                           "transitions/links on shifted items are not preserved (archive keeps them).",
+                "insert_frame_absolute": insert_frame,
+                "shift_frames": shift,
+                "inserted_clips": len(built_inserts),
+                "tail_items_shifted": len(tail_rows),
+            },
+        )
+    blocked = _consume_confirm_token(action="timeline.ripple_insert", params=p)
+    if blocked:
+        return blocked
+
+    # Execute: delete tail -> re-append tail shifted -> place inserts into the gap.
+    # Hold the Edit page once for the whole rebuild: the delete's own guard
+    # nests harmlessly inside, and the appends/restores run without a page
+    # flip per call.
+    tail_items = [row["item"] for row in tail_rows]
+    with _edit_page_for_timeline_edits(resolve):
+        if tail_items and not _timeline_delete_clips_verified(tl, tail_items, False, resolve=resolve):
+            return _err(
+                "ripple_insert aborted before any change: tail items could not be removed "
+                "for re-placement (delete readback still finds them)",
+                code="RIPPLE_DELETE_FAILED",
+                category="resolve_api",
+                remediation="Check track locks and retry; the timeline is unchanged.",
+            )
+        failures: List[Dict[str, Any]] = []
+        for row in tail_rows:
+            try:
+                out_items = mp.AppendToTimeline([row["info"]])
+            except Exception as exc:
+                out_items = None
+                row["append_error"] = str(exc)
+            if not out_items:
+                failures.append({**_ripple_public_row(row),
+                                 "stage": "tail_reappend",
+                                 "expected_start": row["start"] + shift,
+                                 "error": row.get("append_error", "AppendToTimeline returned no item")})
+        for idx, info in enumerate(built_inserts):
+            try:
+                out_items = mp.AppendToTimeline([info])
+            except Exception as exc:
+                out_items = None
+                insert_summaries[idx]["append_error"] = str(exc)
+            if not out_items:
+                failures.append({**insert_summaries[idx], "stage": "insert"})
+
+        # Restore captured transform/crop/composite/retime properties on shifted items.
+        restored = 0
+        restore_failures = 0
+        by_track: Dict[Any, Dict[int, Any]] = {}
+        for track_type in ("video", "audio"):
+            for track_index in range(1, _timeline_track_count(tl, track_type) + 1):
+                slot = by_track.setdefault((track_type, track_index), {})
+                for item in (tl.GetItemListInTrack(track_type, track_index) or []):
+                    item_start = _frame_int(item.GetStart())
+                    if item_start is not None:
+                        slot[item_start] = item
+        for row in tail_rows:
+            if not row.get("props"):
+                continue
+            new_item = by_track.get((row["track_type"], row["track_index"]), {}).get(row["start"] + shift)
+            if new_item is None:
+                restore_failures += 1
+                continue
+            applied_any = False
+            for key, value in row["props"].items():
+                if value is None:
+                    continue
+                # Fresh appends carry default values for most keys — only write the
+                # ones that actually differ (some keys reject their own defaults).
+                try:
+                    if new_item.GetProperty(key) == value:
+                        continue
+                except Exception:
+                    pass
+                try:
+                    if new_item.SetProperty(key, value):
+                        applied_any = True
+                    else:
+                        restore_failures += 1
+                except Exception:
+                    restore_failures += 1
+            if applied_any:
+                restored += 1
+
+    # Full readback: every expected (start, duration) must exist on its track.
+    expected: Dict[Any, List[Dict[str, Any]]] = {}
+    for row in head_rows:
+        expected.setdefault((row["track_type"], row["track_index"]), []).append(
+            {"start": row["start"], "duration": row["duration"], "role": "head"})
+    for row in tail_rows:
+        expected.setdefault((row["track_type"], row["track_index"]), []).append(
+            {"start": row["start"] + shift, "duration": row["duration"], "role": "shifted"})
+    for summary in insert_summaries:
+        media_type = summary["media_type"]
+        track_type = "video" if media_type == 1 else "audio"
+        expected.setdefault((track_type, summary["track_index"]), []).append(
+            {"start": summary["record_frame"], "duration": summary["duration"], "role": "insert"})
+    missing: List[Dict[str, Any]] = []
+    after_counts: Dict[str, int] = {}
+    for (track_type, track_index), rows in expected.items():
+        live = {}
+        for item in (tl.GetItemListInTrack(track_type, track_index) or []):
+            row = _ripple_item_row(item, track_type, track_index)
+            live[row["start"]] = row["duration"]
+        after_counts[f"{track_type}:{track_index}"] = len(
+            tl.GetItemListInTrack(track_type, track_index) or [])
+        for exp in rows:
+            if live.get(exp["start"]) != exp["duration"]:
+                missing.append({"track": f"{track_type}:{track_index}", **exp,
+                                "found_duration": live.get(exp["start"])})
+    success = not failures and not missing
+    result = {
+        "success": success,
+        "dry_run": False,
+        "insert_frame_absolute": insert_frame,
+        "shift_frames": shift,
+        "inserted_clips": len(built_inserts),
+        "tail_items_shifted": len(tail_rows),
+        "properties_restored_items": restored,
+        "property_restore_failures": restore_failures,
+        "readback": {"after_counts": after_counts, "missing": missing},
+        "warnings": warnings,
+    }
+    if failures:
+        result["failures"] = failures
+        result["remediation"] = (
+            "Some items failed to re-append; the pre-mutation archive holds the full original "
+            "timeline — inspect timeline_versioning list_versions / rollback_to_version."
+        )
+    return result
 
 
 def _range_frames_from_params(tl, p: Dict[str, Any]):
@@ -5672,6 +6082,13 @@ def _timeline_apply_look_to_items(tl, p: Dict[str, Any]) -> Dict[str, Any]:
         out["success"] = not missing and not out.get("source_error")
         out["would_apply_cdl"] = cdl is not None
         out["would_copy_grade"] = source_item is not None
+        if cdl is not None:
+            node_index = out["cdl"]["validation"]["cdl"]["NodeIndex"]
+            out["node_preflight"] = [
+                {"timeline_item_id": _safe_timeline_item_id(item),
+                 **_cdl_node_preflight(item, node_index)[1]}
+                for item in targets
+            ]
         return out
     if missing or out.get("source_error"):
         out["success"] = False
@@ -5679,18 +6096,25 @@ def _timeline_apply_look_to_items(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     results = []
     if cdl is not None:
         normalized = out["cdl"]["normalized"]
+        node_index = out["cdl"]["validation"]["cdl"]["NodeIndex"]
         for item in targets:
+            row = {"timeline_item_id": _safe_timeline_item_id(item)}
+            # Read the node count before SetCDL (1-based NodeIndex, README line 6):
+            # a bare false on a missing node is undiagnosable after the fact.
+            node_ok, preflight = _cdl_node_preflight(item, node_index)
+            if not node_ok:
+                row.update({"set_cdl": False, "reason": preflight.get("reason"),
+                            "node_preflight": preflight})
+                results.append(row)
+                continue
             try:
-                results.append({
-                    "timeline_item_id": _safe_timeline_item_id(item),
-                    "set_cdl": bool(item.SetCDL(normalized)),
-                })
+                row["set_cdl"] = bool(item.SetCDL(normalized))
+                if not row["set_cdl"]:
+                    row["diagnosis"] = _cdl_failure_diagnosis(item, preflight)
             except Exception as exc:
-                results.append({
-                    "timeline_item_id": _safe_timeline_item_id(item),
-                    "set_cdl": False,
-                    "error": str(exc),
-                })
+                row["set_cdl"] = False
+                row["error"] = str(exc)
+            results.append(row)
     out["cdl_results"] = results
     if source_item is not None:
         try:
@@ -22285,7 +22709,7 @@ _TIMELINE_ACTIONS = [
     "add_track", "delete_track", "get_track_sub_type", "set_track_enable",
     "get_track_enabled", "set_track_lock", "get_track_locked", "get_track_name",
     "set_track_name", "get_items", "delete_clips", "set_clips_linked", "duplicate",
-    "duplicate_clips", "copy_clips", "move_clips", "copy_range", "duplicate_range",
+    "duplicate_clips", "copy_clips", "move_clips", "ripple_insert", "copy_range", "duplicate_range",
     "overwrite_range", "lift_range", "story_spine_report", "create_variant_from_ranges",
     "bulk_set_item_properties", "apply_look_to_items", "thumbnail_contact_sheet",
     "marker_thumbnail_review", "edit_kernel_capabilities", "probe_edit_kernel_item",
@@ -22368,7 +22792,24 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         include_linked=True duplicates linked audio and restores link state.
         # example: action_help(name='<action_name>')
       copy_clips(...) -> {results, count} — alias for duplicate_clips.
-      move_clips(...) -> {results, count, deleted_sources} — duplicate, then delete successfully duplicated sources.
+      move_clips(...) -> {results, count, deleted_sources} — duplicate, then delete VERIFIED duplicated sources.
+        Sources whose duplicate cannot be re-verified on the timeline are NOT deleted
+        (AppendToTimeline can return null-id items, e.g. into an occupied span).
+        NEVER use move_clips to open a gap for an insert — that is what ripple_insert is for.
+      ripple_insert(clip_infos, record_frame|record_timecode, record_frame_mode?, dry_run?, confirm_token?) -> {success, plan | readback}
+        Insert media-pool source ranges at a record point and shift ALL later video/audio
+        items right by the inserted duration. DRY-RUN by default (returns the full plan);
+        executing is DESTRUCTIVE — confirm-token gated, timeline version archived first.
+        clip_infos rows: {clip_id|media_pool_item_id, start_frame, end_frame (SOURCE,
+        end-exclusive), track_index?, media_type?} placed back-to-back at the insert point.
+        record_frame is relative to timeline start by default (record_frame_mode
+        absolute|auto accepted); record_timecode takes timeline 'HH:MM:SS:FF'. Refuses when
+        the insert point cuts through an item, when shifted items lack pool media
+        (titles/generators/Fusion comps), when subtitle items would need shifting, or when
+        a locked track holds tail items. Shifted items are re-created from pool media with
+        transform/crop/composite/retime re-applied; grades, keyframes, transitions, and
+        link state on shifted items are NOT preserved (the pre-mutation archive keeps them).
+        # example: action_help(name='<action_name>')
       copy_range/duplicate_range(start_frame, end_frame, record_frame, ...) -> {results, count}
       overwrite_range(start_frame, end_frame, record_frame, ...) -> {results, count}
       lift_range(start_frame, end_frame, allow_partial_item_delete?, ripple?) -> {success, deleted}
@@ -22387,6 +22828,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         # example: action_help(name='<action_name>')
       thumbnail_contact_sheet(frames?|max_samples?, analysis_root?) -> {path, samples}
         frames are relative to the timeline start (frame 0 = first frame), like marker frameIds.
+        NOT WYSIWYG: thumbnails are decoded from source media and exclude Fusion
+        composition output (grade reflection is unreliable). Never present a
+        contact sheet as proof of a Fusion/grade change — use gallery_stills
+        grab_and_export or an extracted RENDERED frame for that.
       marker_thumbnail_review(max_samples?, analysis_root?) -> {path, samples, review_guidance}
       edit_kernel_capabilities() -> {supported, partially_supported, unsupported}
       probe_edit_kernel_item(clip_ids? selected? timeline_item?) -> {items, count}
@@ -22700,6 +23145,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _timeline_duplicate_clips_impl(proj, tl, p)
     elif action == "move_clips":
         return _timeline_duplicate_clips_impl(proj, tl, p, delete_sources=True, resolve=get_resolve())
+    elif action == "ripple_insert":
+        return _timeline_ripple_insert_impl(proj, tl, p, resolve=get_resolve())
     elif action in {"copy_range", "duplicate_range"}:
         return _timeline_copy_range_impl(proj, tl, p)
     elif action == "overwrite_range":
@@ -24063,6 +24510,61 @@ def _probe_color_node_graph(proj, item, p: Dict[str, Any]):
     return snapshot
 
 
+def _cdl_node_preflight(item, node_index):
+    """Verify the SetCDL target node exists (NodeIndex is 1-based per the
+    scripting README) via the current Graph API — TimelineItem.GetNumNodes is
+    deprecated; the node count lives on item.GetNodeGraph()."""
+    info: Dict[str, Any] = {"node_index": node_index, "num_nodes": None, "graph_available": False}
+    try:
+        graph = item.GetNodeGraph()
+    except Exception as exc:
+        info["reason"] = f"GetNodeGraph failed: {exc}"
+        return False, info
+    if not graph:
+        info["reason"] = "item has no node graph"
+        return False, info
+    info["graph_available"] = True
+    try:
+        num_nodes = graph.GetNumNodes()
+    except Exception as exc:
+        info["reason"] = f"GetNumNodes failed: {exc}"
+        return False, info
+    info["num_nodes"] = num_nodes
+    if not isinstance(num_nodes, int) or num_nodes < 1:
+        info["reason"] = "node graph reports no nodes"
+        return False, info
+    if int(node_index) > num_nodes:
+        info["reason"] = f"NodeIndex {node_index} exceeds node count {num_nodes} (NodeIndex is 1-based)"
+        return False, info
+    return True, info
+
+
+def _cdl_failure_diagnosis(item, preflight):
+    """SetCDL returned False on a payload that validated and a node that exists —
+    report what is knowable instead of a bare false."""
+    clip_type = None
+    try:
+        mpi = item.GetMediaPoolItem()
+        if mpi:
+            clip_type = mpi.GetClipProperty("Type")
+    except Exception:
+        pass
+    diagnosis = {
+        "reason": "set_cdl_returned_false",
+        "node_preflight": preflight,
+        "clip_type": clip_type,
+        "remediation": (
+            "Resolve rejected the CDL despite a valid payload and an existing node. "
+            "Common causes: still-image or generator item, a locked/read-only grade "
+            "version, or the active color science ignoring CDL. Verify on the Color "
+            "page and prove any resulting grade with gallery_stills grab_and_export."
+        ),
+    }
+    if clip_type and "still" in str(clip_type).lower():
+        diagnosis["reason"] = "set_cdl_rejected_on_still_item"
+    return diagnosis
+
+
 def _safe_set_cdl(item, p: Dict[str, Any]):
     validation, err = _validate_cdl_payload(p.get("cdl"))
     if err:
@@ -24070,13 +24572,27 @@ def _safe_set_cdl(item, p: Dict[str, Any]):
     if not validation["valid"]:
         return {"success": False, "validation": validation}
     normalized = _normalize_cdl(validation["cdl"])
+    node_ok, preflight = _cdl_node_preflight(item, validation["cdl"]["NodeIndex"])
     if p.get("dry_run"):
-        return _ok(validation=validation, normalized=normalized)
-    return {
-        "success": bool(item.SetCDL(normalized)),
+        return _ok(validation=validation, normalized=normalized, node_preflight=preflight)
+    if not node_ok:
+        return {
+            "success": False,
+            "validation": validation,
+            "normalized": normalized,
+            "node_preflight": preflight,
+            "reason": preflight.get("reason"),
+        }
+    success = bool(item.SetCDL(normalized))
+    out = {
+        "success": success,
         "validation": validation,
         "normalized": normalized,
+        "node_preflight": preflight,
     }
+    if not success:
+        out["diagnosis"] = _cdl_failure_diagnosis(item, preflight)
+    return out
 
 
 def _timeline_items_for_grade_copy(tl, target_ids):
@@ -25017,6 +25533,48 @@ def _grade_evidence_base(proj, item, p: Dict[str, Any]) -> Dict[str, Any]:
         ],
     }
 
+# CreateMagicMask mode strings per the scripting README ("F", "B", "BI").
+# The granular server historically defaulted to "Forward", which Resolve
+# rejects — accept the long spellings as aliases and normalize.
+_MAGIC_MASK_MODES = {
+    "F": "F", "FORWARD": "F",
+    "B": "B", "BACKWARD": "B",
+    "BI": "BI", "BIDIRECTION": "BI", "BIDIRECTIONAL": "BI",
+}
+
+
+def _magic_mask_hitl_result(*, regenerate: bool = False) -> Dict[str, Any]:
+    """Magic Mask v2 isolates via operator CLICKS (manual ch. 139: strokes are
+    the legacy v1 interface). The scripting API can only trigger tracking; it
+    cannot place clicks, so with none present CreateMagicMask returns False.
+    Return the human step instead of a bare false."""
+    why = (
+        "RegenerateMagicMask returned False — there is no existing Magic Mask "
+        "click set on this item to regenerate."
+        if regenerate else
+        "CreateMagicMask returned False — the scripting API cannot place the "
+        "subject clicks Magic Mask v2 requires, so no isolation exists yet."
+    )
+    return {
+        "success": False,
+        "needs_hitl": True,
+        "hitl": {
+            "feature": "Magic Mask v2",
+            "page": "Color",
+            "why": why,
+            "steps": [
+                "Open the Color page and select this clip",
+                "Open the Magic Mask palette",
+                "Click the plus eyedropper on the subject in the Viewer "
+                "(shift to red minus clicks to remove areas)",
+                "Press Track Forward (clicks track together; tracked frames show blue)",
+            ],
+            "verify": "Prove the isolation with gallery_stills grab_and_export "
+                      "(rendered frame) — never a media-pool thumbnail",
+        },
+    }
+
+
 @mcp.tool()
 @_guard_missing_params
 @_destructive_op("timeline_item_color")
@@ -25035,7 +25593,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     grade_evidence_base -> {evidence_base: str, structured: {coverage, version_snapshot, node_graph, color_group, warnings}}
     bulk_match_to_hero  -> {hero, proposals: [{target_id, name, proposed_cdl|copy_source, warnings}], blocked: [...], confirm_token?}
     propose_grade       -> {accepted: bool, validation, plan_id?, preview_path?, error?}
-    safe_set_cdl        -> {success, validation, normalized}
+    safe_set_cdl        -> {success, validation, normalized, node_preflight, diagnosis?}
     safe_copy_grade     -> {success, targets, missing}
     safe_apply_drx      -> {success, path, source}  # first call may return confirm_token
     grade_capabilities  -> {item_methods, graph_sources, lut_export_types, guards}
@@ -25068,8 +25626,10 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       get_fusion_cache(...) -> {enabled}
 
     Guarded mutators (PREFERRED for grade work):
-      safe_set_cdl(cdl, dry_run?, ...) -> {success, validation, normalized}
+      safe_set_cdl(cdl, dry_run?, ...) -> {success, validation, normalized, node_preflight, diagnosis?}
         Validates input, supports dry_run, returns normalized CDL. Use this for primary corrections.
+        Reads the node graph's GetNumNodes before SetCDL (NodeIndex is 1-BASED); a false
+        SetCDL comes back with a structured diagnosis (missing node, still item, ...).
         # example: action_help(name='<action_name>')
       safe_copy_grade(target_ids, dry_run?, ...) -> {success, targets, missing}
         Copies grade to N items; dry_run reports targets without mutating.
@@ -25101,8 +25661,12 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       set_fusion_cache(enabled, ...) -> {success}
       stabilize(...) -> {success}
       smart_reframe(...) -> {success}
-      create_magic_mask(mode, ...) -> {success}  — mode: "F" forward, "B" backward, "BI" bidirectional
-      regenerate_magic_mask(...) -> {success}
+      create_magic_mask(mode, ...) -> {success | needs_hitl, hitl}  — mode: "F" forward, "B" backward, "BI" bidirectional
+        Magic Mask v2 needs operator CLICKS on the subject; the API cannot place them.
+        With no clicks present this returns needs_hitl=true plus the exact human steps
+        (Color page > Magic Mask palette > click subject > Track Forward). Do not treat
+        a create_magic_mask call as having isolated anything without a rendered-frame proof.
+      regenerate_magic_mask(...) -> {success | needs_hitl, hitl}
 
     Default: track_type="video", track_index=1, item_index=0
 
@@ -25213,9 +25777,21 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     elif action == "smart_reframe":
         return {"success": bool(item.SmartReframe())}
     elif action == "create_magic_mask":
-        return {"success": bool(item.CreateMagicMask(p.get("mode", "F")))}
+        mode = _MAGIC_MASK_MODES.get(str(p.get("mode", "F")).strip().upper())
+        if not mode:
+            return _err(
+                "mode must be 'F' (forward), 'B' (backward), or 'BI' (bidirection)",
+                code="INVALID_MAGIC_MASK_MODE",
+                category="invalid_input",
+                remediation="Pass one of the README mode strings: F, B, BI.",
+            )
+        if bool(item.CreateMagicMask(mode)):
+            return {"success": True, "mode": mode}
+        return _magic_mask_hitl_result()
     elif action == "regenerate_magic_mask":
-        return {"success": bool(item.RegenerateMagicMask())}
+        if bool(item.RegenerateMagicMask()):
+            return {"success": True}
+        return _magic_mask_hitl_result(regenerate=True)
     return _unknown(action, ["set_cdl","copy_grades","add_version","get_current_version","get_version_names","load_version","rename_version","delete_version","get_node_graph","get_color_group","assign_color_group","remove_from_color_group","export_lut","get_color_cache","set_color_cache","get_fusion_cache","set_fusion_cache","reset_all_node_colors","stabilize","smart_reframe","create_magic_mask","regenerate_magic_mask","action_help",*_COLOR_GRADE_KERNEL_ACTIONS])
 
 
@@ -25364,6 +25940,12 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     untouched, and folder_path itself is removed only if this call created it
     and left it empty. With cleanup false the files are moved up into
     folder_path without overwriting anything already there.
+
+    WYSIWYG PROOF RULE: grab_and_export (or an exported gallery still / extracted
+    RENDERED frame) is the ONLY acceptable visual evidence for a Fusion or grade
+    claim. Media-pool thumbnails and thumbnail contact sheets are decoded from
+    source media — they do NOT show Fusion composition output, so a before/after
+    built from thumbnails proves nothing.
     """
     p = _params(params)
     _, proj, err = _check()
@@ -26726,6 +27308,15 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       - Fusion page: omit timeline scope and this uses Fusion().GetCurrentComp().
 
     Use timeline_item_fusion to add/delete/import/export comps on items.
+
+    RENDER WARNING: whether a comp created via AddFusionComp / edited here is
+    honoured at render is Resolve-version-dependent — a wired
+    MediaIn->Blur->MediaOut comp rendered on Studio 19.1.3.7 (2026-08-02), but
+    on Studio 21.0.4 the same Blur configuration AND a Transform variant both
+    delivered renders bit-identical to the no-comp baseline (2026-08-20), and
+    no API selects an item's active composition (see resolve_control api_truth
+    query='AddFusionComp'). Prove any Fusion effect with gallery_stills
+    grab_and_export or a rendered frame, never with comp readback.
 
     Actions:
       add_tool(tool_type, x?, y?, name?) -> {tool_name, tool_type}

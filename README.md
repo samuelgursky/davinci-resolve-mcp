@@ -211,7 +211,7 @@ The open-source servers are complete and fully functional on their own.
 | App and project control | Launch/reconnect, page switching, project CRUD, project folders, databases, cloud project wrappers, settings, presets, archives |
 | Media pool and ingest | Safe import, image sequences, multicam prep timelines, bin organization, metadata normalization, metadata field inventory, marks, annotations, relink/proxy/full-resolution guards |
 | Media analysis | Source-safe file/clip/bin/project analysis, 2-pop/slate-clap sync-event detection, default Resolve metadata and Media Pool marker writeback, persisted analysis artifacts, existing-report reuse, host_chat_paths visual analysis (finalized per clip with `commit_vision`, works with any vision-capable MCP client) with opt-out, transcription with opt-out |
-| Timeline editing and conform | Track/item probing, title text key scans/writes, copy/move/duplicate helpers, range operations, gaps/overlaps, source ranges, checked interchange exports/imports |
+| Timeline editing and conform | Track/item probing, title text key scans/writes, copy/move/duplicate helpers, ripple insert, range operations, gaps/overlaps, source ranges, checked interchange exports/imports |
 | Review annotations | Timeline/item/clip markers, custom data, flags, clip color, copy/move/sync cleanup, review reports, marker thumbnail review |
 | Color and grading | Node graph probing, CDL validation, grade copy, DRX/LUT helpers, versions, Gallery stills, color groups |
 | Fusion | Timeline-item comps, safe tool creation, input writes, port inspection, validated connections, scoped bulk writes |

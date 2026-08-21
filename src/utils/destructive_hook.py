@@ -78,6 +78,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "move_clips",
         "duplicate_clips",
         "copy_clips",
+        "ripple_insert",
         "copy_range",
         "duplicate_range",
         "overwrite_range",
