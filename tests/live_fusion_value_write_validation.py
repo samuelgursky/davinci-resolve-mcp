@@ -17,10 +17,8 @@ The variable was isolated against the comp handle (AddFusionComp,
 GetFusionCompByIndex and GetFusionCompByName all render), the node name, and
 the write form. Only the lock around the write decided it.
 
-All six write paths the v2.98.5 fix touched are covered. Only two were proven
-with a render at the time; the rest were changed by inference from the same
-mechanism, and extending this harness is what showed that inference was too
-broad (see the second table).
+All six write paths the v2.98.5 fix touched are covered. Four of them are
+genuinely broken by the lock; two escape, and the reason is now known.
 
     set_input            Blur XBlurSize          scalar write
     safe_set_inputs      Blur XBlurSize          bulk scalar write
@@ -29,16 +27,17 @@ broad (see the second table).
     bulk_set_inputs      Blur XBlurSize          scalar write, undo-wrapped
     add_fusion_mask      RectangleMask W/H       scalar writes after AddTool
 
-WHICH OF THESE THE LOCK ACTUALLY BROKE (each mutation-checked on 19.1.3.7 by
-reintroducing the lock and re-rendering) - the suppression is NARROWER than
-"any value write":
+WHICH OF THESE THE LOCK ACTUALLY BREAKS (each mutation-checked on 19.1.3.7 by
+reintroducing the lock and re-rendering):
 
     set_input             lock -> PSNR inf    SUPPRESSED
     safe_set_inputs       lock -> PSNR inf    SUPPRESSED
-    bulk_set_inputs       lock -> unchanged   not affected
-    bulk_set_expressions  lock -> unchanged   not affected
-    add_fusion_mask       lock -> unchanged   not affected
-    set_text_plus         lock -> unchanged   not affected
+    set_text_plus         lock -> PSNR inf    SUPPRESSED
+    add_fusion_mask       lock -> PSNR inf    SUPPRESSED
+    bulk_set_inputs       lock -> unchanged   escapes
+    bulk_set_expressions  lock -> unchanged   escapes
+
+The two that escape are the two that wrap their write in StartUndo/EndUndo.
 
 MECHANISM, isolated 2026-08-22 with raw-API probes:
 
@@ -46,25 +45,33 @@ MECHANISM, isolated 2026-08-22 with raw-API probes:
                 lock-wrapped AddTool/ConnectInput. The identical locked write
                 against a graph wired by plain attribute assignment renders
                 normally - so "a lock around a value write" is necessary but not
-                sufficient; the comp must have been through prior lock cycles.
-                (This is why raw-API repro attempts kept coming back green.)
+                sufficient. (This is why raw-API repro attempts kept coming back
+                green.)
 
-  RESCUES       Comp.EndUndo() after the locked write, and any subsequent
-                UNLOCKED value write. Either one restores the render.
+  TRIGGER       The locked write is lost when it is the FIRST value write to the
+                comp since that build.
+
+  PRIMES IT     ANY unlocked value write anywhere in the comp clears the
+                condition permanently - even writing a DEFAULT value to an
+                unrelated tool. So does StartUndo/EndUndo around the write.
 
   DOES NOT      A structural ConnectInput inside the same lock, and a GetInput
-                readback after the Unlock. Both still render the stale frame.
+                readback after the Unlock.
 
-So bulk_set_inputs and bulk_set_expressions escape because they are wrapped in
-StartUndo/EndUndo. add_fusion_mask and set_text_plus escape for reasons NOT yet
-identified - the two obvious candidates (a structural call in the same lock, a
-readback) were tested and ruled out.
+*** WHY THIS MATTERS FOR WRITING CASES HERE ***
 
-The lock was removed from all six anyway: it buys nothing around a single write,
-and the two confirmed cases show what it costs when nothing else invalidates.
-The four non-discriminating cases are kept because they still prove the write
-reaches the render, which is the property that matters and the one no readback
-can check.
+Priming makes false negatives trivially easy, and it already caused one: the
+first versions of the set_text_plus and add_fusion_mask cases set up their graphs
+with plain SetInput calls (a text Size, a blur amount) before the call under
+test. Those setup writes primed the comp, both cases passed with the lock
+reintroduced, and v2.98.6 published the conclusion that those two code paths were
+unaffected. They are not - once the priming was removed both fail exactly like
+the others.
+
+So: a case in this file must perform NO value write of any kind before the call
+it is testing. Where a tool needs to be visible to measure at all, choose one
+that is visible at its defaults - that is why the mask case composites a
+Background rather than making a Blur visible by first writing XBlurSize.
 
 The Text+ case needs a ROOTED graph (MediaIn -> Merge -> MediaOut with the Text+
 in the foreground). A comp whose MediaOut is fed only by a Text+, with no path
@@ -308,11 +315,13 @@ def run(server, keep_open: bool) -> int:
 
         # --- Case 3: fusion_comp set_text_plus --------------------------
         # Rooted graph: MediaIn -> Merge.Background -> MediaOut, Text+ into
-        # Merge.Foreground. Baseline renders with EMPTY text, so it is the
-        # source frame; writing visible text must change it.
+        # Merge.Foreground. NOTHING is written to any input before the call
+        # under test - see the priming note in the header. The baseline renders
+        # with the Text+ at its defaults (empty StyledText), so it is the source
+        # frame, and the text is left at default Size for the same reason.
         item, mark_in, mark_out = fresh_item("set_text_plus")
         item_id = item.GetUniqueId()
-        comp = item.AddFusionComp()
+        item.AddFusionComp()
 
         def call3(action, params):
             payload = {"clip_id": item_id, "comp_index": 1}
@@ -330,14 +339,9 @@ def run(server, keep_open: bool) -> int:
                           "source_tool": "VWText"})
         call3("connect", {"target_tool": "MediaOut1", "input_name": "Input",
                           "source_tool": "VWMerge"})
-        # Setup writes go through the RAW API on purpose: the tool under test in
-        # this case is set_text_plus, and the baseline must be established by
-        # something already known to work.
-        text_tool = comp.FindTool("VWText")
-        text_tool.SetInput("StyledText", "")
-        text_tool.SetInput("Size", 0.35)
         base = _render(project, mark_in, mark_out, work_dir, "tp_base")
-        call3("set_text_plus", {"tool_name": "VWText", "text": "MMMMMMM\nMMMMMMM"})
+        call3("set_text_plus", {"tool_name": "VWText",
+                                "text": "\n".join(["MMMMMMMMMMMM"] * 6)})
         check("set_text_plus",
               _psnr(base, _render(project, mark_in, mark_out, work_dir, "tp_out")))
 
@@ -379,28 +383,49 @@ def run(server, keep_open: bool) -> int:
 
         # --- Case 6: fusion_comp add_fusion_mask ------------------------
         # add_fusion_mask writes its inputs right after AddTool, and until
-        # v2.98.5 one lock spanned both - so the mask was created at DEFAULT
-        # size and every parameter the caller passed did nothing.
+        # v2.98.5 one lock spanned both.
         #
-        # Baseline/after does not discriminate here: a default-sized mask still
-        # changes the render. So build the SAME graph twice, once with a default
+        # Baseline/after does not discriminate here - a default-sized mask still
+        # changes the render - so build the SAME graph twice, once with a default
         # mask and once with an explicitly tiny one, and require the two renders
-        # to differ. Under the bug both are default and the renders are equal.
-        def masked_blur_render(tag, mask_params):
+        # to differ. If the input writes are lost both are default and the two
+        # renders are identical.
+        #
+        # A Background over a Merge is used rather than a Blur because it is
+        # fully visible at its DEFAULTS: making a Blur visible would mean writing
+        # XBlurSize first, and that unlocked write would prime the comp and mask
+        # the very failure this case exists to catch.
+        def masked_bg_render(tag, mask_params):
             item, m_in, m_out = fresh_item(tag)
-            comp_local = item.AddFusionComp()
-            call_local = wire_blur(item, "VWBlur5")
-            comp_local.FindTool("VWBlur5").SetInput("XBlurSize", 20)
+            item.AddFusionComp()
+            iid = item.GetUniqueId()
+
+            def call6(action, params):
+                payload = {"clip_id": iid, "comp_index": 1}
+                payload.update(params)
+                out = server.fusion_comp(action, payload)
+                if isinstance(out, dict) and out.get("error"):
+                    raise AssertionError(f"fusion_comp.{action}: {out['error']}")
+                return out
+
+            call6("add_tool", {"tool_type": "Merge", "name": "VWM"})
+            call6("add_tool", {"tool_type": "Background", "name": "VWBG"})
+            call6("connect", {"target_tool": "VWM", "input_name": "Background",
+                              "source_tool": "MediaIn1"})
+            call6("connect", {"target_tool": "VWM", "input_name": "Foreground",
+                              "source_tool": "VWBG"})
+            call6("connect", {"target_tool": "MediaOut1", "input_name": "Input",
+                              "source_tool": "VWM"})
             params = {"mask_type": "Rectangle", "name": "VWMask",
-                      "connect_to": "VWBlur5", "connect_input": "EffectMask"}
+                      "connect_to": "VWBG", "connect_input": "EffectMask"}
             params.update(mask_params)
-            out = call_local("add_fusion_mask", params)
+            out = call6("add_fusion_mask", params)
             if not out.get("success"):
                 raise AssertionError(f"add_fusion_mask failed: {out}")
             return _render(project, m_in, m_out, work_dir, tag)
 
-        default_mask = masked_blur_render("mask_default", {})
-        sized_mask = masked_blur_render("mask_sized", {"width": 0.08, "height": 0.08})
+        default_mask = masked_bg_render("mask_default", {})
+        sized_mask = masked_bg_render("mask_sized", {"width": 0.08, "height": 0.08})
         check("add_fusion_mask", _psnr(default_mask, sized_mask))
 
         if failures:

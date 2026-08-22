@@ -16,13 +16,17 @@ The variable was isolated against the comp handle (AddFusionComp,
 GetFusionCompByIndex and GetFusionCompByName all render), the node name, and
 the write form. Only the lock around the write decides it.
 
-Scope, established later by mutation-checking every site (v2.98.6): this
-reproduces for `set_input` and `safe_set_inputs` — where the locked write is the
-only thing the call does — and NOT for `bulk_set_inputs`, `bulk_set_expressions`,
-`add_fusion_mask` or `set_text_plus`, each of which does something else in the
-same call that appears to invalidate the graph anyway. Since the rescuing
-mechanism is unidentified, this guard still refuses a lock around ANY value
-write rather than trying to encode which ones get away with it.
+Scope, settled in v2.98.8 by mutation-checking every site with a render: four of
+the six locked paths are genuinely broken — `set_input`, `safe_set_inputs`,
+`set_text_plus`, `add_fusion_mask`. The two that escape, `bulk_set_inputs` and
+`bulk_set_expressions`, do so because they wrap their write in
+`StartUndo`/`EndUndo`.
+
+An earlier reading (v2.98.6) had this the other way round, because the two
+test cases for `set_text_plus` and `add_fusion_mask` primed their comps with
+setup writes and could not fail. Any unlocked value write anywhere in a comp
+clears the condition, so this guard refuses a lock around ANY value write rather
+than encoding which call shapes happen to get away with it.
 
 This is a STATIC guard because the real proof needs a render: see
 `tests/live_fusion_value_write_validation.py`, which measures it end to end.

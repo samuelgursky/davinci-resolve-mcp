@@ -2,6 +2,59 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.98.8
+
+**The comp-lock mechanism, settled — and the v2.98.6 scope correction was itself
+wrong.** Chasing why `add_fusion_mask` and `set_text_plus` escaped the bug found
+that they don't. Their test cases were priming the comp and could not have
+failed.
+
+### The mechanism
+
+| | |
+| --- | --- |
+| **Precondition** | The comp's graph was built through lock-wrapped `AddTool`/`ConnectInput`. The same locked write against a graph wired by plain attribute assignment renders normally. |
+| **Trigger** | The locked write is the **first value write to that comp** since the build. |
+| **Primes it away** | **Any** unlocked value write anywhere in the comp — even writing a *default* value to an *unrelated* tool. Also `StartUndo`/`EndUndo` around the write. |
+| **Does not** | A structural `ConnectInput` inside the same lock; a `GetInput` readback after `Unlock`. |
+
+Priming is why every raw-API attempt to reproduce the bug kept coming back green,
+and why a control that was supposed to fail didn't.
+
+### The corrected scope
+
+| path | locked write |
+| --- | --- |
+| `set_input` | **suppressed** |
+| `safe_set_inputs` | **suppressed** |
+| `set_text_plus` | **suppressed** |
+| `add_fusion_mask` | **suppressed** |
+| `bulk_set_inputs` | escapes — wrapped in `StartUndo`/`EndUndo` |
+| `bulk_set_expressions` | escapes — wrapped in `StartUndo`/`EndUndo` |
+
+So **four of six** paths were genuinely broken, not two. v2.98.5's original
+"all six were the same bug" was closer to right than v2.98.6's correction of it;
+the two real escapes are explained by their undo wrapper.
+
+### Fixed in the tests
+
+`tests/live_fusion_value_write_validation.py` had two cases that could not fail.
+Both set up their graph with plain `SetInput` calls — a text `Size`, a blur
+amount — before the call under test, which primed the comp. Removing that:
+
+- the `set_text_plus` case now builds its rooted graph and writes **nothing**
+  before the call, leaving the Text+ at its default size;
+- the `add_fusion_mask` case composites a **Background** rather than making a
+  Blur visible, because a Background is visible at its defaults and needs no
+  setup write.
+
+Both now report `PSNR inf -> IGNORED at render` with the lock reintroduced, and
+13–17 dB APPLIED without it. The header carries a standing rule: a case in that
+file must perform no value write of any kind before the call it is testing.
+
+No production code changed. The v2.98.5 fix has been correct throughout; this is
+the third and final correction to the *description* of what it fixed.
+
 ## What's New in v2.98.7
 
 **Identifying the mechanism behind the Fusion comp-lock bug — and correcting the
@@ -60,6 +113,11 @@ it. What changed is the explanation, in `api_truth` and the harness docs.
   pass/fail test; it prints the five-case matrix above.
 
 ## What's New in v2.98.6
+
+> **Corrected in v2.98.8.** The table below says four of six paths escape the
+> bug. Two of those four — `set_text_plus` and `add_fusion_mask` — do not; their
+> test cases primed the comp with setup writes and could not fail. Only
+> `bulk_set_inputs` and `bulk_set_expressions` genuinely escape.
 
 **Correcting the scope of the v2.98.5 Fusion fix, and covering all six paths
 with a render.** v2.98.5 removed a `Comp.Lock()` from six Fusion value writes and
