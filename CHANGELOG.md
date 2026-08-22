@@ -58,6 +58,11 @@ render     -> PSNR 23.32 dB vs baseline — RENDERED
 
 ## What's New in v2.99.2
 
+> **Cause corrected in v2.99.3.** The "`fusion_comp add_tool` cannot run on the
+> free edition" note below has the wrong cause: `GetAttrs`/`SetAttrs` are present
+> on a Fusion tool and work when called — the bridge client reported them absent
+> because `dir()` on a Fusion Tool omits them. `add_tool` needed no change.
+
 **The Fusion comp-lock question is closed on Resolve 21.** The v2.98.5–v2.98.8
 work isolated the bug on Studio 19.1.3.7 only, and the open caveat was whether
 the "renders on 19.1.3.7, ignored on 21.0.4.5" split reported in
