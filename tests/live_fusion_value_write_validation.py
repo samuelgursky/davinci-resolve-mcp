@@ -40,13 +40,25 @@ reintroducing the lock and re-rendering) - the suppression is NARROWER than
     add_fusion_mask       lock -> unchanged   not affected
     set_text_plus         lock -> unchanged   not affected
 
-The two that broke are the two where the locked write is the ONLY thing the call
-does. The four that survived each have something else in the same call that
-appears to invalidate the graph anyway: bulk_set_inputs and bulk_set_expressions
-wrap the write in StartUndo/EndUndo, add_fusion_mask performs an AddTool in the
-same call, and set_text_plus writes a string to StyledText rather than a number.
-Which of those is the actual rescuing mechanism is NOT established here - only
-that the four do not reproduce.
+MECHANISM, isolated 2026-08-22 with raw-API probes:
+
+  PRECONDITION  The suppression only reproduces on a graph BUILT through
+                lock-wrapped AddTool/ConnectInput. The identical locked write
+                against a graph wired by plain attribute assignment renders
+                normally - so "a lock around a value write" is necessary but not
+                sufficient; the comp must have been through prior lock cycles.
+                (This is why raw-API repro attempts kept coming back green.)
+
+  RESCUES       Comp.EndUndo() after the locked write, and any subsequent
+                UNLOCKED value write. Either one restores the render.
+
+  DOES NOT      A structural ConnectInput inside the same lock, and a GetInput
+                readback after the Unlock. Both still render the stale frame.
+
+So bulk_set_inputs and bulk_set_expressions escape because they are wrapped in
+StartUndo/EndUndo. add_fusion_mask and set_text_plus escape for reasons NOT yet
+identified - the two obvious candidates (a structural call in the same lock, a
+readback) were tested and ruled out.
 
 The lock was removed from all six anyway: it buys nothing around a single write,
 and the two confirmed cases show what it costs when nothing else invalidates.

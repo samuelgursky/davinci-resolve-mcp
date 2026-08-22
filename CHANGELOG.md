@@ -2,6 +2,63 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.98.7
+
+**Identifying the mechanism behind the Fusion comp-lock bug — and correcting the
+root cause, again.** v2.98.6 recorded that four of the six locked call paths did
+not reproduce the bug and that the rescuing mechanism was unknown. Isolating it
+turned up something more important: the root cause stated in v2.98.5 and v2.98.6
+was incomplete.
+
+### The precondition nobody had noticed
+
+A lock around a value write is **necessary but not sufficient**. The suppression
+only reproduces on a comp whose graph was **built through lock-wrapped
+`AddTool`/`ConnectInput` calls**. The identical locked write against a graph
+wired by plain attribute assignment renders normally.
+
+That is why every raw-API attempt to reproduce the bug came back green — a
+control that was supposed to fail, didn't, which is what exposed the gap. Holding
+the write constant and varying only how the graph was built:
+
+| graph built via | value written via | render |
+| --- | --- | --- |
+| MCP `add_tool`/`connect` | MCP, locked | **suppressed** |
+| raw attribute assignment | MCP, locked | rendered |
+| MCP `add_tool`/`connect` | raw, locked | **suppressed** |
+| raw attribute assignment | raw, locked | rendered |
+
+### What rescues it
+
+Given that precondition, with the locked write in place:
+
+| after the locked write | render |
+| --- | --- |
+| nothing | **suppressed** |
+| a subsequent **unlocked** value write | rescued |
+| `StartUndo` / `EndUndo` around the write | rescued |
+| a structural `ConnectInput` inside the lock | **suppressed** |
+| a `GetInput` readback after `Unlock` | **suppressed** |
+
+So `bulk_set_inputs` and `bulk_set_expressions` escape the bug because both wrap
+their write in `StartUndo`/`EndUndo`. **That answers the open question from
+v2.98.6 for two of the four.** `add_fusion_mask` and `set_text_plus` still escape
+for reasons not identified — but the two obvious candidates, a structural call in
+the same lock and a readback, were tested and ruled out.
+
+### Nothing changed in the fix
+
+The v2.98.5 change stands and remains verified: removing the lock from the value
+write is what makes these paths render, and the live harness still fails without
+it. What changed is the explanation, in `api_truth` and the harness docs.
+
+### Added
+
+- `tests/live_fusion_lock_mechanism_probe.py` — the isolation experiment itself,
+  kept runnable rather than written up and thrown away, so the result can be
+  re-checked on another Resolve build instead of taken on trust. It is not a
+  pass/fail test; it prints the five-case matrix above.
+
 ## What's New in v2.98.6
 
 **Correcting the scope of the v2.98.5 Fusion fix, and covering all six paths
