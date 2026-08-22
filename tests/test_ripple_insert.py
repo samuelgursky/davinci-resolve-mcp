@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 import src.server as s
+import src.utils.destructive_hook as destructive_hook
 
 
 TL_START = 86400
@@ -333,6 +334,111 @@ class DuplicateVerifiedGateTest(unittest.TestCase):
         self.assertTrue(
             any("could not be verified" in w for w in result.get("warnings", []))
         )
+
+
+class PlanOnlyIsNotArchivedTest(unittest.TestCase):
+    """ripple_insert is the only destructive action that DEFAULTS to a plan-only
+    call, so without a dry-run filter every routine planning call archives a
+    timeline version. The F4 pending-confirm skip does not cover it: that path
+    short-circuits when the confirm-token preference is OFF."""
+
+    def test_a_dry_run_plan_is_not_treated_as_destructive(self):
+        p = {"dry_run": True, "clip_infos": [{"clip_id": "x"}], "record_frame": 48}
+        self.assertFalse(destructive_hook.is_destructive("timeline", "ripple_insert", p))
+
+    def test_no_params_defaults_to_plan_only(self):
+        self.assertFalse(destructive_hook.is_destructive("timeline", "ripple_insert", None))
+
+    def test_an_executing_call_is_still_destructive(self):
+        p = {"dry_run": False, "clip_infos": [{"clip_id": "x"}], "record_frame": 48}
+        self.assertTrue(destructive_hook.is_destructive("timeline", "ripple_insert", p))
+
+
+class GapReportingTest(unittest.TestCase):
+    """Every track shifts by the longest inserted run, so a track with a shorter
+    insert - or none - is left with a gap. The readback cannot see it: it only
+    checks the positions the action placed. Reporting success over a timeline
+    with black in it is the wrong answer, so the plan names the gaps."""
+
+    class _AVTimeline(TimelineStub):
+        def __init__(self, video, audio):
+            self.tracks = {("video", 1): list(video), ("audio", 1): list(audio)}
+            self.locked = False
+
+        def GetTrackCount(self, track_type):
+            return 1 if track_type in ("video", "audio") else 0
+
+    def _fixture(self):
+        source = MediaPoolItemStub("pool-src", "src.mov")
+        insert = MediaPoolItemStub("pool-ins", "insert.mov")
+        video = [ItemStub(f"v{i}", f"v{i}", TL_START + i * 48, 48, source) for i in range(2)]
+        audio = [ItemStub(f"a{i}", f"a{i}", TL_START + i * 48, 48, source) for i in range(2)]
+        tl = self._AVTimeline(video, audio)
+        mp = MediaPoolStub(FolderStub([source, insert]), tl)
+        return ProjectStub(mp), tl
+
+    def test_a_shorter_video_insert_reports_its_gap(self):
+        proj, tl = self._fixture()
+        params = {
+            "clip_infos": [
+                {"clip_id": "pool-ins", "start_frame": 0, "end_frame": 24,
+                 "track_index": 1, "media_type": 1},
+                {"clip_id": "pool-ins", "start_frame": 0, "end_frame": 48,
+                 "track_index": 1, "media_type": 2},
+            ],
+            "record_frame": 48,
+        }
+        plan = s._timeline_ripple_insert_impl(proj, tl, params)["plan"]
+        self.assertEqual(plan["shift_frames"], 48)
+        self.assertEqual(plan["gap_frames_by_track"], {"video:1": 24})
+        self.assertTrue(any("gap at the insert point" in w for w in plan["warnings"]))
+
+    def test_matched_insert_lengths_report_no_gap(self):
+        proj, tl = self._fixture()
+        params = {
+            "clip_infos": [
+                {"clip_id": "pool-ins", "start_frame": 0, "end_frame": 24,
+                 "track_index": 1, "media_type": 1},
+                {"clip_id": "pool-ins", "start_frame": 0, "end_frame": 24,
+                 "track_index": 1, "media_type": 2},
+            ],
+            "record_frame": 48,
+        }
+        plan = s._timeline_ripple_insert_impl(proj, tl, params)["plan"]
+        self.assertEqual(plan["gap_frames_by_track"], {})
+
+
+class SubtitleStraddlerTest(unittest.TestCase):
+    """Video and audio straddlers already refuse the plan. A subtitle that
+    straddles the insert point is the same problem - it stays put while the
+    picture under it moves right - and was passing the feasibility check."""
+
+    class _SubTimeline(TimelineStub):
+        def __init__(self, video, subs):
+            self.tracks = {("video", 1): list(video), ("subtitle", 1): list(subs)}
+            self.locked = False
+
+        def GetTrackCount(self, track_type):
+            return 1 if track_type in ("video", "subtitle") else 0
+
+    def _run(self, sub_start, sub_duration):
+        source = MediaPoolItemStub("pool-src", "src.mov")
+        insert = MediaPoolItemStub("pool-ins", "insert.mov")
+        video = [ItemStub(f"v{i}", f"v{i}", TL_START + i * 48, 48, source) for i in range(3)]
+        sub = ItemStub("sub1", "sub", sub_start, sub_duration, source)
+        tl = self._SubTimeline(video, [sub])
+        mp = MediaPoolStub(FolderStub([source, insert]), tl)
+        return s._timeline_ripple_insert_impl(ProjectStub(mp), tl, _insert_params())
+
+    def test_a_straddling_subtitle_blocks_the_plan(self):
+        out = self._run(TL_START + 30, 40)          # 86430..86470 across 86448
+        self.assertEqual(out["plan"]["subtitle_items_after_insert_point"], 1)
+        self.assertFalse(out["success"])
+
+    def test_a_subtitle_entirely_before_the_insert_point_does_not(self):
+        out = self._run(TL_START, 24)               # 86400..86424, well clear
+        self.assertEqual(out["plan"]["subtitle_items_after_insert_point"], 0)
+        self.assertTrue(out["success"])
 
 
 if __name__ == "__main__":

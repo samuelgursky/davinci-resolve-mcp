@@ -2,6 +2,83 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.99.0
+
+**`timeline.ripple_insert`, and a verified-delete gate on `move_clips`.**
+Contributed in [#156](https://github.com/samuelgursky/davinci-resolve-mcp/pull/156)
+by @handst97, driven by a real data-loss incident: a session used `move_clips`
+with a record offset smaller than the item duration to "open a gap",
+`AppendToTimeline` returned items whose ids could not be read, the code counted
+them as successful duplicates, and the delete phase removed 26 source clips.
+
+### Added
+
+- **`timeline.ripple_insert`** — insert media-pool source ranges at a record
+  point and shift all later video/audio items right. There is no ripple-insert
+  primitive in the scripting API, and duplicate-then-delete corrupts the timeline
+  when the shift is smaller than an item. This plans a rebuild instead: capture
+  every tail item's pool media and source trim, delete the tail (verified),
+  re-append it shifted, then place the inserts into the opened gap — **tail
+  first, so the worst mid-failure state is a gap, never lost content**. Dry-run
+  by default, with straddler / blocker / locked-track / subtitle detection;
+  executing is confirm-token gated and archives the timeline first. Shifted items
+  are re-created from pool media with transform/crop/composite/retime re-applied;
+  grades, keyframes, transitions and link state are NOT preserved (the archive
+  keeps them).
+
+### Fixed
+
+- **`move_clips` no longer deletes a source it could not verify.** Each duplicate
+  now carries `duplicate_verified` — a live item or a real id recovered from the
+  timeline — and sources are deleted only when every duplicate, primary and
+  linked, verified. Null-id appends keep the source with an explicit warning.
+- **`safe_set_cdl` / `apply_look_to_items` preflight the node.** `NodeIndex` is
+  1-based and there is no `GetCDL`, so a bare `False` was undiagnosable; the node
+  count is now read before `SetCDL` and a failure comes back with a structured
+  reason and a clip-type-aware diagnosis.
+- **Magic Mask reports the human step instead of a bare false.** Magic Mask v2
+  isolates via operator clicks and the API cannot place them, so `CreateMagicMask`
+  on a fresh item can only return `False`. It now returns `needs_hitl` with the
+  exact Color-page steps, and the mode aliases (`'Forward'` → `'F'`) are
+  normalized — the granular `ti_create_magic_mask` defaulted to a spelling
+  Resolve rejects.
+
+### Fixed in review
+
+Three defects found reviewing #156, each with a test that fails without the fix:
+
+- **A dry-run plan archived a timeline version.** `ripple_insert` is the only
+  destructive action whose *default* call mutates nothing, and the pending-confirm
+  skip only fires while the confirm-token preference is on — so with it off,
+  routine planning calls littered the version chain.
+- **Asymmetric per-track insert durations left an unreported gap.** Every track
+  shifts by the longest inserted run, so a shorter insert leaves a hole the
+  readback structurally cannot see — it only checks the positions it placed. The
+  plan and the result now carry `gap_frames_by_track` and a warning.
+- **Subtitle straddlers passed the feasibility check.** Video and audio
+  straddlers already refuse the plan; a subtitle across the insert point stayed
+  put while the picture under it moved.
+
+### Live validation
+
+Verified on Studio 19.1.3.7 via `tests/live_ripple_insert_validation.py`:
+dry-run plan exact (insert@86448, shift 24, tail 2, no straddlers), confirm-token
+round-trip, post-insert layout `[(86400,48),(86448,24),(86472,48),(86520,48)]`,
+`readback.missing=[]`, and ZoomX/Y=0.5 surviving the shift with
+`property_restore_failures=0`.
+
+### A note on the Fusion measurement in #156
+
+The PR proposed recording that whether an API-created Fusion comp renders is
+Resolve-version-dependent, from a 21.0.4 run where a wired comp delivered a render
+bit-identical to the baseline. That reading does not survive: those comps were
+built and set through this server, and the v2.98.5 comp-lock bug produced exactly
+that symptom on any build. Running the PR's own phase-2 harness unchanged against
+the fixed code now reports **RENDERED** (Blur 24.38 dB, Transform 7.95 dB) where
+it previously reported IGNORED. The `AddFusionComp` entry records the 21.0.4
+observation as independent evidence that the lock bug is not specific to
+19.1.3.7 — the one thing this machine cannot test.
+
 ## What's New in v2.98.8
 
 **The comp-lock mechanism, settled — and the v2.98.6 scope correction was itself

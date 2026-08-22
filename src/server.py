@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.98.8"
+VERSION = "2.99.0"
 
 import base64
 import os
@@ -4912,7 +4912,14 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
     for track_index in range(1, _timeline_track_count(tl, "subtitle") + 1):
         for item in (tl.GetItemListInTrack("subtitle", track_index) or []):
             item_start = _frame_int(item.GetStart())
+            item_end = _frame_int(item.GetEnd())
+            # A subtitle that STRADDLES the insert point is as much a blocker as
+            # one after it: video/audio straddlers already refuse the plan, and
+            # leaving a straddling subtitle in place silently desyncs it against
+            # the shifted picture.
             if item_start is not None and item_start >= insert_frame:
+                subtitle_blockers += 1
+            elif item_end is not None and item_end > insert_frame:
                 subtitle_blockers += 1
 
     # Capture rebuild info + restorable properties for every tail item BEFORE
@@ -4942,10 +4949,31 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         except Exception:
             pass
 
+    # Every track shifts by the SAME amount (the longest inserted run), so any
+    # track whose inserts are shorter than that — or which gets no insert at all
+    # — is left with a gap at the insert point. That is ordinary ripple-insert
+    # semantics, but it has to be reported: the readback below only checks the
+    # positions it placed, so it cannot see the hole, and an unqualified
+    # success over a timeline with black/silence in it is the wrong answer.
+    gap_by_track: Dict[str, int] = {}
+    for track_type in ("video", "audio"):
+        media_type = _timeline_media_type(track_type)
+        for track_index in range(1, _timeline_track_count(tl, track_type) + 1):
+            cursor = cursor_by_track.get((int(media_type), int(track_index)))
+            filled = (cursor - insert_frame) if cursor is not None else 0
+            if filled < shift:
+                gap_by_track[f"{track_type}:{track_index}"] = shift - filled
+
     warnings = [
         "shifted items are re-created from pool media: grades, keyframes, transitions, "
         "Fusion comps, and link state on them are NOT preserved (the pre-mutation archive keeps them)",
     ]
+    if gap_by_track:
+        warnings.append(
+            "every track shifts by the longest inserted run (%d frames); these tracks are "
+            "left with a gap at the insert point: %s"
+            % (shift, ", ".join(f"{track}={frames}f" for track, frames in sorted(gap_by_track.items())))
+        )
     if linked_tail_ids:
         warnings.append(f"{len(linked_tail_ids)} shifted item(s) had linked items; links will not survive the shift")
     plan = {
@@ -4960,6 +4988,7 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         "blockers": blockers,
         "subtitle_items_after_insert_point": subtitle_blockers,
         "locked_tracks_with_tail": locked_tracks,
+        "gap_frames_by_track": gap_by_track,
         "warnings": warnings,
     }
     feasible = not (straddlers or blockers or subtitle_blockers or locked_tracks)
@@ -5119,6 +5148,7 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         "properties_restored_items": restored,
         "property_restore_failures": restore_failures,
         "readback": {"after_counts": after_counts, "missing": missing},
+        "gap_frames_by_track": gap_by_track,
         "warnings": warnings,
     }
     if failures:

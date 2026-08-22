@@ -226,6 +226,31 @@ STRICT_DEFAULT_ACTIONS: frozenset = frozenset({
 })
 
 
+# ── Plan-only (dry-run) actions ─────────────────────────────────────────────
+#
+# Actions whose payload can declare the call non-mutating. `ripple_insert` is
+# the only destructive action that DEFAULTS to a plan-only call, so without
+# this every routine dry-run plan archives a timeline version — the same waste
+# the pending-confirm skip (F4) exists to prevent, except the pending-confirm
+# skip only fires while the confirm-token preference is ON. With it off, the
+# read-only path of the action littered the version chain.
+
+DRY_RUN_DEFAULT_TRUE_ACTIONS: frozenset = frozenset({
+    ("timeline", "ripple_insert"),
+})
+
+
+def _payload_is_plan_only(
+    tool_name: str, action: str, params: Optional[Dict[str, Any]],
+) -> bool:
+    """True iff this call only produces a plan and mutates nothing."""
+    if (tool_name, action) not in DRY_RUN_DEFAULT_TRUE_ACTIONS:
+        return False
+    if not isinstance(params, dict):
+        return True  # dry_run defaults to True for these actions
+    return bool(params.get("dry_run", params.get("dryRun", True)))
+
+
 def _payload_only_touches_no_archive_keys(
     tool_name: str, action: str, params: Optional[Dict[str, Any]],
 ) -> bool:
@@ -249,6 +274,8 @@ def is_destructive(tool_name: str, action: str, params: Optional[Dict[str, Any]]
     if action not in DESTRUCTIVE_ACTIONS_BY_TOOL.get(tool_name, frozenset()):
         return False
     if _payload_only_touches_no_archive_keys(tool_name, action, params):
+        return False
+    if _payload_is_plan_only(tool_name, action, params):
         return False
     return True
 
