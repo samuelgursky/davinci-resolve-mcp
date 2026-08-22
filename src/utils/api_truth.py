@@ -404,29 +404,34 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
-        "symbol": "Fusion tool GetAttrs / SetAttrs (unreachable over the in-app bridge)",
-        "object": "Fusion Tool (via the free-edition bridge)",
-        "signature": "GetAttrs() -> dict / SetAttrs(dict) -> None",
-        "reality": "The in-app bridge's transparent proxy exposes SetInput, "
-                   "GetInput, ConnectInput and FindMainInput on a Fusion tool, "
-                   "but NOT GetAttrs or SetAttrs - the client raises "
-                   "AttributeError('... has no attribute SetAttrs in this "
-                   "Resolve build'). Measured 2026-08-22 on free 21.0.3.7. "
-                   "Because fusion_comp's add_tool calls tool.GetAttrs() "
-                   "unconditionally to build its return value, and SetAttrs "
-                   "whenever a name is passed, `fusion_comp add_tool` cannot "
-                   "run at all on the free edition, which takes "
-                   "connect/set_input with it for any graph the caller wanted "
-                   "to build through the server. Comp-level calls "
-                   "(AddFusionComp, GetFusionCompByIndex, FindTool, AddTool) "
-                   "work, so the graph can still be wired with raw proxy calls.",
-        "recommended": "On the free edition, wire Fusion graphs with raw "
-                       "comp.AddTool/ConnectInput and use fusion_comp only for "
-                       "value writes. Making add_tool tolerate a missing "
-                       "GetAttrs (fall back to the requested tool_type and a "
-                       "FindTool-based name) would restore the action there.",
-        "tags": ["fusion", "bridge", "free-edition"],
+        "symbol": "Fusion object dir() omits real methods (GetAttrs / SetAttrs)",
+        "object": "Fusion Tool / Composition",
+        "signature": "dir(tool) -> incomplete list",
+        "reality": "`dir()` on a live Fusion Tool returns 38 names — with "
+                   "'Composition' listed TWICE — and omits GetAttrs and "
+                   "SetAttrs, which are documented Fusion Tool methods that "
+                   "work perfectly when called. Measured on free 21.0.3.7 over "
+                   "the in-app bridge: invoking GetAttrs directly returned "
+                   "{TOOLS_Name: 'Blur1', TOOLS_RegID: 'Blur'} and SetAttrs "
+                   "renamed the tool. This matters because Resolve fabricates a "
+                   "callable for ANY attribute name, so `dir()` is the only "
+                   "evidence of absence that exists — which makes an omitted "
+                   "name unrecoverable by probing. Any capability detection "
+                   "built on dir()/hasattr will therefore report a real Fusion "
+                   "method as missing. Resolve's own API objects do not have "
+                   "this problem: Timeline (60), TimelineItem (88) and "
+                   "Composition (92) all enumerate correctly.",
+        "recommended": "Do not treat dir()/hasattr as authoritative for Fusion "
+                       "Tool objects. Keep a curated set of documented Fusion "
+                       "methods that the enumeration omits, and identify a "
+                       "Fusion object positively (ConnectInput / FindMainInput "
+                       "/ GetControlPageNames on a Tool, AddTool / FindTool / "
+                       "GetToolList on a Composition) rather than relaxing the "
+                       "check globally, which would silently re-open capability "
+                       "detection on Resolve API objects.",
+        "tags": ["fusion", "introspection", "bridge", "free-edition"],
         "submit": "bug",
+        "mitigation": ["_FUSION_UNENUMERATED_METHODS", "_FUSION_OBJECT_MARKERS"],
     },
     {
         "symbol": "Composition.Lock (suppresses render invalidation for value writes)",

@@ -1935,6 +1935,57 @@ class AttributeReadingTests(unittest.TestCase):
                          "absent")
         self.assertIn("get_attribute", rbo.ResolveOperations.OPERATIONS)
 
+    def test_a_fusion_object_reaches_its_own_unenumerated_methods(self) -> None:
+        """Fusion under-reports itself, and unlike Resolve it cannot be probed.
+
+        `dir()` on a live Fusion Tool omits GetAttrs/SetAttrs — documented
+        methods that work perfectly when called (measured on free 21.0.3.7:
+        GetAttrs returned TOOLS_Name "Blur1"). Because Resolve fabricates a
+        callable for any name, dir() is the only evidence of absence there is,
+        so an omitted name can only be recovered by knowing about it.
+
+        The stub overrides __dir__ rather than just seeding the method cache:
+        the proxy re-fetches the list before declaring absence, so a stub whose
+        dir() still shows GetAttrs makes this test pass with the fix removed.
+
+        Without this, `fusion_comp add_tool` — which calls GetAttrs to build its
+        return value — died on the free edition and took every server-authored
+        Fusion graph with it.
+        """
+        class FusionToolLike:
+            """Callable GetAttrs, invisible to dir() — what Fusion actually does."""
+
+            def ConnectInput(self, *a): return True
+            def FindMainInput(self, *a): return None
+            def GetControlPageNames(self): return []
+            def SetInput(self, *a): return True
+            def GetAttrs(self): return {"TOOLS_Name": "Blur1", "TOOLS_RegID": "Blur"}
+
+            def __dir__(self):
+                return ["ConnectInput", "FindMainInput", "GetControlPageNames", "SetInput"]
+
+        tool, _ = self._serve(FusionToolLike())
+        self.assertNotIn("GetAttrs", tool._methods(refresh=True))
+        self.assertEqual(tool.GetAttrs(), {"TOOLS_Name": "Blur1", "TOOLS_RegID": "Blur"})
+
+    def test_resolve_objects_still_refuse_an_absent_method(self) -> None:
+        """The exception above must not become a hole in capability detection.
+
+        A Resolve API object has none of the Fusion markers, so GetAttrs stays
+        absent there — and an invented name stays absent on the Fusion object
+        too. This is what keeps `getattr(item, "CreateMagicMask", None)` honest.
+        """
+        resolve, _ = self._serve(self.RemoteLike())
+        self.assertFalse(hasattr(resolve, "GetAttrs"))
+
+        class FusionToolLike:
+            def ConnectInput(self, *a): return True
+            def GetAttrs(self): return {}
+            def __dir__(self): return ["ConnectInput"]
+
+        tool, _ = self._serve(FusionToolLike())
+        self.assertFalse(hasattr(tool, "Xyzzy_NotAFusionMethod"))
+
     def test_private_names_are_refused_here_too(self) -> None:
         from src.utils import resolve_bridge_ops as rbo
 

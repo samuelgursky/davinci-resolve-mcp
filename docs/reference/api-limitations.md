@@ -355,13 +355,13 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Author OTIO for Resolve by mirroring what Resolve itself exports, and give every event its media timecode origin. editorial.convert_to_interchange (target 'otio') does this and reports any event whose origin had to be assumed in `mediaOriginAssumed` — a non-empty list means the file will only import if that media really starts at 00:00:00:00. To debug a refusal, export any timeline with EXPORT_OTIO and diff your document against it; do NOT chase missing media or reach for sanitize_media, which cannot even parse a .otio (it is JSON, not XML).
 - **Tags:** timeline, import, interchange, otio, silent-failure, conform
 
-### Fusion tool GetAttrs / SetAttrs (unreachable over the in-app bridge)
+### Fusion object dir() omits real methods (GetAttrs / SetAttrs)
 
-- **Object:** `Fusion Tool (via the free-edition bridge)`
-- **Signature:** `GetAttrs() -> dict / SetAttrs(dict) -> None`
-- **Behavior:** The in-app bridge's transparent proxy exposes SetInput, GetInput, ConnectInput and FindMainInput on a Fusion tool, but NOT GetAttrs or SetAttrs - the client raises AttributeError('... has no attribute SetAttrs in this Resolve build'). Measured 2026-08-22 on free 21.0.3.7. Because fusion_comp's add_tool calls tool.GetAttrs() unconditionally to build its return value, and SetAttrs whenever a name is passed, `fusion_comp add_tool` cannot run at all on the free edition, which takes connect/set_input with it for any graph the caller wanted to build through the server. Comp-level calls (AddFusionComp, GetFusionCompByIndex, FindTool, AddTool) work, so the graph can still be wired with raw proxy calls.
-- **Workaround / current handling:** On the free edition, wire Fusion graphs with raw comp.AddTool/ConnectInput and use fusion_comp only for value writes. Making add_tool tolerate a missing GetAttrs (fall back to the requested tool_type and a FindTool-based name) would restore the action there.
-- **Tags:** fusion, bridge, free-edition
+- **Object:** `Fusion Tool / Composition`
+- **Signature:** `dir(tool) -> incomplete list`
+- **Behavior:** `dir()` on a live Fusion Tool returns 38 names — with 'Composition' listed TWICE — and omits GetAttrs and SetAttrs, which are documented Fusion Tool methods that work perfectly when called. Measured on free 21.0.3.7 over the in-app bridge: invoking GetAttrs directly returned {TOOLS_Name: 'Blur1', TOOLS_RegID: 'Blur'} and SetAttrs renamed the tool. This matters because Resolve fabricates a callable for ANY attribute name, so `dir()` is the only evidence of absence that exists — which makes an omitted name unrecoverable by probing. Any capability detection built on dir()/hasattr will therefore report a real Fusion method as missing. Resolve's own API objects do not have this problem: Timeline (60), TimelineItem (88) and Composition (92) all enumerate correctly.
+- **Workaround / current handling:** Do not treat dir()/hasattr as authoritative for Fusion Tool objects. Keep a curated set of documented Fusion methods that the enumeration omits, and identify a Fusion object positively (ConnectInput / FindMainInput / GetControlPageNames on a Tool, AddTool / FindTool / GetToolList on a Composition) rather than relaxing the check globally, which would silently re-open capability detection on Resolve API objects.
+- **Tags:** fusion, introspection, bridge, free-edition
 
 ### Composition.Lock (suppresses render invalidation for value writes)
 

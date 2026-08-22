@@ -198,6 +198,34 @@ def _decode_value(transport: BridgeTransport, value: Any) -> Any:
     return value
 
 
+# Fusion's own objects under-report themselves, and unlike Resolve's they cannot
+# be probed. `dir()` on a Fusion Tool lists 38 names — with "Composition"
+# appearing twice — and omits GetAttrs/SetAttrs, which are documented Fusion Tool
+# methods that work perfectly when called: measured on free 21.0.3.7 over this
+# bridge, GetAttrs returned {TOOLS_Name: "Blur1", TOOLS_RegID: "Blur"} and
+# SetAttrs renamed the tool. Resolve fabricates a callable for ANY name, so
+# `dir()` is the only evidence of absence that exists — which means a name it
+# omits cannot be recovered by probing, only by knowing.
+#
+# This is a curated exception, not a relaxation of the strict proxy. It applies
+# only to names that are documented Fusion methods, and only on an object whose
+# own method list identifies it as a Fusion object. Resolve API capability
+# detection — `getattr(item, "CreateMagicMask", None)` — answers exactly as
+# before, which is what the strict proxy exists to protect.
+#
+# Symptom when this is missing: `fusion_comp add_tool` calls tool.GetAttrs() to
+# build its return value, so the action died with "has no attribute 'GetAttrs'
+# in this Resolve build" and took every server-authored Fusion graph with it.
+_FUSION_UNENUMERATED_METHODS = frozenset({"GetAttrs", "SetAttrs"})
+
+#: Names that positively identify a Fusion Tool or Composition, as opposed to a
+#: Resolve API object. Drawn from what `dir()` DOES report on each.
+_FUSION_OBJECT_MARKERS = frozenset({
+    "ConnectInput", "FindMainInput", "GetControlPageNames",   # Tool
+    "AddTool", "FindTool", "GetToolList",                     # Composition
+})
+
+
 class _BoundMethod:
     """One callable method on a proxied object."""
 
@@ -309,6 +337,11 @@ class BridgeProxy:
                                                 {"target": self._handle, "name": name}) or {}
                 if probe.get("kind") == "value":
                     return _decode_value(self._transport, probe.get("value"))
+                if (name in _FUSION_UNENUMERATED_METHODS
+                        and self._methods() & _FUSION_OBJECT_MARKERS):
+                    # A Fusion object omitting one of its own documented
+                    # methods — see _FUSION_UNENUMERATED_METHODS.
+                    return _BoundMethod(self._transport, self._handle, name)
                 # Matches native semantics: hasattr() is False, getattr(..., None)
                 # is None, and a capability check refuses instead of guessing.
                 # A `callable` answer lands here too — Resolve fabricates one for

@@ -2,6 +2,60 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.99.3
+
+**Fusion authoring now works on the free edition.** v2.99.2 documented that
+`fusion_comp add_tool` could not run there, because the in-app bridge reported
+`GetAttrs`/`SetAttrs` as absent on a Fusion tool and `add_tool` calls `GetAttrs`
+to build its return value — which took every server-authored Fusion graph with
+it. Investigating the fallback found the premise was wrong: **those methods are
+present and work.** Invoked directly on free 21.0.3.7, `GetAttrs` returned
+`{TOOLS_Name: "Blur1", TOOLS_RegID: "Blur"}` and `SetAttrs` renamed the tool.
+
+The fault was our capability check.
+
+### The API truth underneath
+
+`dir()` on a live Fusion Tool returns 38 names — with `Composition` listed
+**twice** — and omits `GetAttrs`/`SetAttrs`. Resolve fabricates a callable for
+*any* attribute name, so `dir()` is the only evidence of absence that exists,
+which makes an omitted name unrecoverable by probing. The bridge's strict proxy
+took that omission as authoritative and answered "has no attribute 'GetAttrs' in
+this Resolve build" for a method that was right there.
+
+Resolve's own API objects enumerate correctly — Timeline 60, TimelineItem 88,
+Composition 92 — so this is specific to Fusion Tools.
+
+### Fixed
+
+- The bridge client now carries a **curated exception**: names that are
+  documented Fusion methods but absent from the enumeration resolve normally,
+  and only on an object whose own method list positively identifies it as a
+  Fusion object (`ConnectInput`/`FindMainInput`/`GetControlPageNames` on a Tool,
+  `AddTool`/`FindTool`/`GetToolList` on a Composition).
+
+  This is deliberately not a global relaxation. Dropping the scoping fails five
+  existing tests, including the ones that keep
+  `getattr(item, "CreateMagicMask", None)` honest — capability detection on
+  Resolve API objects answers exactly as before.
+
+- `fusion_comp add_tool` needed **no change**. The fallback proposed in v2.99.2
+  would have papered over a client bug while leaving every other unenumerated
+  Fusion method broken.
+
+### Live validation
+
+Free DaVinci Resolve 21.0.3.7, whole graph through the server including a custom
+tool name (which requires `SetAttrs`):
+
+```
+add_tool   -> {'tool_name': 'FreeBlur', 'tool_type': 'Blur'}
+connect    -> {'success': True}
+connect    -> {'success': True}
+set_input  -> {'success': True}
+render     -> PSNR 23.32 dB vs baseline — RENDERED
+```
+
 ## What's New in v2.99.2
 
 **The Fusion comp-lock question is closed on Resolve 21.** The v2.98.5–v2.98.8
