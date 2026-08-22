@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.99.2
+
+**The Fusion comp-lock question is closed on Resolve 21.** The v2.98.5–v2.98.8
+work isolated the bug on Studio 19.1.3.7 only, and the open caveat was whether
+the "renders on 19.1.3.7, ignored on 21.0.4.5" split reported in
+[#156](https://github.com/samuelgursky/davinci-resolve-mcp/pull/156) had a
+version component on top of it. It does not.
+
+Measured on **DaVinci Resolve 21.0.3.7**, driven through the in-app bridge: the
+same wired `MediaIn -> Blur(XBlurSize 20) -> MediaOut` comp, with the value
+written through the fixed `fusion_comp set_input`, **renders** — PSNR 24.38 dB
+against the no-comp baseline, file shrinking 2,017,973 → 727,261 bytes. That is
+the *same* PSNR figure measured on 19.1.3.7 from the same source and blur.
+
+So the split was the `Composition.Lock` bug on both sides, and "a wired comp
+renders" now holds across both Resolve generations tested. The `AddFusionComp`
+entry in `api_truth` records it.
+
+**Caveat, stated because it matters:** the 21 confirmation is a **free-edition
+21.0.3.7**, not the Studio 21.0.4.5 the original report used — no Studio 21 was
+available. The graph was also wired with raw proxy calls rather than
+`fusion_comp add_tool`, for the reason below; the value write, which is the step
+that carried the bug, did go through the real server path.
+
+### Documented
+
+- **`fusion_comp add_tool` cannot run on the free edition.** The in-app bridge's
+  proxy exposes `SetInput`/`GetInput`/`ConnectInput`/`FindMainInput` on a Fusion
+  tool but not `GetAttrs`/`SetAttrs`, and `add_tool` calls `GetAttrs()`
+  unconditionally to build its return value. Comp-level calls all work, so a
+  graph can still be wired with raw `comp.AddTool`/`ConnectInput` and driven
+  with `fusion_comp` for value writes. New `api_truth` entry; making `add_tool`
+  tolerate a missing `GetAttrs` would restore the action there.
+
 ## What's New in v2.99.1
 
 **`bulk_set_item_properties` could not set a clip colour on its own.** Reported

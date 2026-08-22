@@ -404,6 +404,31 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
+        "symbol": "Fusion tool GetAttrs / SetAttrs (unreachable over the in-app bridge)",
+        "object": "Fusion Tool (via the free-edition bridge)",
+        "signature": "GetAttrs() -> dict / SetAttrs(dict) -> None",
+        "reality": "The in-app bridge's transparent proxy exposes SetInput, "
+                   "GetInput, ConnectInput and FindMainInput on a Fusion tool, "
+                   "but NOT GetAttrs or SetAttrs - the client raises "
+                   "AttributeError('... has no attribute SetAttrs in this "
+                   "Resolve build'). Measured 2026-08-22 on free 21.0.3.7. "
+                   "Because fusion_comp's add_tool calls tool.GetAttrs() "
+                   "unconditionally to build its return value, and SetAttrs "
+                   "whenever a name is passed, `fusion_comp add_tool` cannot "
+                   "run at all on the free edition, which takes "
+                   "connect/set_input with it for any graph the caller wanted "
+                   "to build through the server. Comp-level calls "
+                   "(AddFusionComp, GetFusionCompByIndex, FindTool, AddTool) "
+                   "work, so the graph can still be wired with raw proxy calls.",
+        "recommended": "On the free edition, wire Fusion graphs with raw "
+                       "comp.AddTool/ConnectInput and use fusion_comp only for "
+                       "value writes. Making add_tool tolerate a missing "
+                       "GetAttrs (fall back to the requested tool_type and a "
+                       "FindTool-based name) would restore the action there.",
+        "tags": ["fusion", "bridge", "free-edition"],
+        "submit": "bug",
+    },
+    {
         "symbol": "Composition.Lock (suppresses render invalidation for value writes)",
         "object": "Composition (Fusion, via TimelineItem comps)",
         "signature": "Lock() / Unlock()",
@@ -506,8 +531,19 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "that the same defect reproduces on 21.0.4.5 — and since "
                    "the lock bug has only been isolated on 19.1.3.7, that "
                    "report is the only evidence it is not build-specific. "
-                   "Treat 'a wired comp renders' as established for 19.1.3.7 "
-                   "and unverified elsewhere.",
+                   "SETTLED 2026-08-22 on DaVinci Resolve 21.0.3.7 (free "
+                   "edition, driven through the in-app bridge): the same wired "
+                   "MediaIn -> Blur(XBlurSize 20) -> MediaOut comp, with the "
+                   "value written through this server's fixed set_input, "
+                   "RENDERS - PSNR 24.38 dB vs the no-comp baseline and the "
+                   "file shrinking 2,017,973 -> 727,261 bytes, the same figure "
+                   "measured on 19.1.3.7 from the same source. So the "
+                   "'renders on 19.1.3.7, ignored on 21' split was the "
+                   "Composition.Lock bug on both sides, not a version "
+                   "regression, and 'a wired comp renders' now holds across "
+                   "both Resolve generations tested. The 21 confirmation is a "
+                   "free-edition 21.0.3.7 rather than the Studio 21.0.4.5 the "
+                   "original report used; no Studio 21 was available to test.",
         "recommended": "Wire the graph so MediaOut descends from MediaIn — that "
                        "is the difference between a comp that renders and one "
                        "that is silently bypassed, and it is what made this look "
