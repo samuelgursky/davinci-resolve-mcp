@@ -1410,7 +1410,11 @@ Key actions:
   `track_index?` (default 1), so multicam angles can be rebuilt onto V2/V3
   rather than collapsing onto V1; missing tracks are added
 - `bulk_set_item_properties(ops, dry_run?, readback?)` — apply transforms,
-  crop/composite/audio/property groups to many timeline items in one call
+  crop/composite/audio/property groups to many timeline items in one call. An op
+  may carry `clip_color` and/or `enabled` with nothing else, which is the triage
+  shape: paint a whole selection in one round trip. A colour is verified by
+  readback, so a name outside the Edit-page palette and the generator/title case
+  that returns True and drops the colour both fail the op instead of passing
 - `apply_look_to_items(target_ids, cdl?|copy_from_item_id?, dry_run?)` — apply a
   normalized CDL and/or copy a source grade to multiple video items
 - `thumbnail_contact_sheet` / `marker_thumbnail_review` — sample Resolve

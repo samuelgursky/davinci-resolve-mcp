@@ -2,6 +2,46 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.99.1
+
+**`bulk_set_item_properties` could not set a clip colour on its own.** Reported
+and fixed in [#157](https://github.com/samuelgursky/davinci-resolve-mcp/pull/157)
+by @matoberuc-afk.
+
+The action documents `clip_color` and `enabled` as per-op keys and has code to
+apply both — but that code was unreachable for the op shape that needs it most.
+The payload is built by `_merge_property_groups`, which merges only
+`properties`/`transform`/`crop`/`composite`/`audio` and the duplicate-keyframe
+keys. `clip_color` and `enabled` are not `SetProperty` keys, so they never landed
+in that dict, and the `if not properties: continue` guard above returned early —
+leaving the `clip_color` branch twenty-five lines below dead on exactly the ops
+that carry no transform. Colour triage in one round trip is the main reason to
+call a *bulk* setter, and it was the one shape that could not work.
+
+### Fixed
+
+- **A colour-only or enabled-only op is now accepted** and applied.
+- **A colour-only op could not fail.** Per-op success was
+  `all(row.get("success") for row in ...properties.values())`, and `all([])` is
+  `True` — with no property rows the op passed regardless of what `SetClipColor`
+  returned. Every branch that runs now votes.
+- **The bulk path trusted the bare bool.** It called `item.SetClipColor` directly,
+  bypassing `_set_clip_color_checked` — the helper added for
+  [#124](https://github.com/samuelgursky/davinci-resolve-mcp/issues/124) that the
+  single-item path already used, because that bool lies twice: a name outside the
+  16-name Edit-page palette is refused with a bare `False`, and a generator or
+  title takes the call, returns `True`, and drops the colour. A failure now
+  carries `clip_color_detail`.
+- `dry_run` reports `would_set_clip_color` / `would_set_enabled`, and the
+  `action_help` example shows the triage shape instead of a `properties`
+  dict with a `ClipColor` key that was never a valid `SetProperty` target.
+
+### Live validation
+
+Studio 19.1.3.7: three colour-only ops in one call, live readback
+`['Apricot', 'Chocolate', 'Purple']` on the timeline items; a refused colour
+returns `success: false` instead of passing on the empty-list vote.
+
 ## What's New in v2.99.0
 
 **`timeline.ripple_insert`, and a verified-delete gate on `move_clips`.**
