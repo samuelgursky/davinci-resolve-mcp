@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.100.0"
+VERSION = "2.101.0"
 
 import base64
 import os
@@ -20076,6 +20076,58 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                     "metrics are undefined on them and will not be guessed at."
                 ),
             )
+    if action == "grade_loop":
+        # The retry ladder that consumes assess_grade's own verdict: apply the look,
+        # measure the real decoded frame, and on any flag retry with the look
+        # attenuated toward identity. Exhausting the ladder returns needs_human with
+        # the best attempt — never a quiet success at a strength that still bands.
+        from src.utils import grade_loop as _grade_loop_mod
+
+        source = str(p.get("source_path") or p.get("sourcePath") or "")
+        lut = str(p.get("lut_path") or p.get("lutPath") or "")
+        err, _clean = _validate_params(
+            {"source_path": source, "lut_path": lut},
+            {
+                "source_path": {"type": str, "required": True, "non_empty": True},
+                "lut_path": {"type": str, "required": True, "non_empty": True},
+            },
+        )
+        if err:
+            return _err(err)
+        kwargs = dict(
+            times=p.get("times"),
+            time_seconds=p.get("time_seconds", p.get("timeSeconds")),
+            strength=float(p.get("strength", 1.0) or 1.0),
+            max_tries=int(p.get("max_tries", p.get("maxTries", _grade_loop_mod.DEFAULT_MAX_TRIES))),
+            strength_floor=float(
+                p.get("strength_floor", p.get("strengthFloor", _grade_loop_mod.DEFAULT_STRENGTH_FLOOR))
+            ),
+            working_space=str(p.get("working_space") or p.get("workingSpace") or "rec709"),
+            cost_tier=str(p.get("cost_tier") or p.get("costTier") or _grade_loop_mod.DEFAULT_COST_TIER),
+        )
+        try:
+            # Dry run by default: the ladder can spend a dozen ffmpeg decodes per clip,
+            # and the plan names that budget before anyone commits to it.
+            if p.get("dry_run", True):
+                return _ok(**_grade_loop_mod.plan(source, lut, **kwargs))
+            return _ok(**_grade_loop_mod.run(
+                source, lut,
+                output_dir=(p.get("output_dir") or p.get("outputDir")) or None,
+                **kwargs,
+            ))
+        except (_grade_loop_mod.GradeLoopError, _grade_loop_mod.cube_lut.CubeLutError) as exc:
+            return _err(str(exc), code="GRADE_LOOP_REFUSED", category="invalid_input",
+                        remediation=(
+                            "Supply an existing source_path and a 3D .cube lut_path, plus "
+                            "times=[seconds,...] to sample. A grade clean on one frame is "
+                            "not a grade that passed."
+                        ))
+        except _grade_loop_mod.image_qc.ImageQcError as exc:
+            return _err(str(exc), code="IMAGE_QC_REFUSED", category="invalid_input")
+    if action == "grade_loop_capabilities":
+        from src.utils import grade_loop as _grade_loop_mod
+
+        return _ok(**_grade_loop_mod.capabilities())
     if action == "image_qc_capabilities":
         from src.utils import image_qc as _image_qc_mod
 
@@ -21028,6 +21080,8 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "capabilities",
         "recheck_capabilities",
         "assess_grade",
+        "grade_loop",
+        "grade_loop_capabilities",
         "image_qc_capabilities",
         "install_guidance",
         "resolve_output_root",

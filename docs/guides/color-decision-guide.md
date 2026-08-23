@@ -211,6 +211,36 @@ If untreated/current/after comparison is not available through the API in the
 moment, say which part is unavailable and whether the user wants a blind/global
 pass. Do not imply that a grade was reviewed if no rendered frames were checked.
 
+## Rejecting Your Own Grade
+
+Looking at frames tells you whether a grade reads right. It does not reliably tell you
+whether it *damaged* the picture — banding in a sky, highlight levels collapsing, shadow
+grain amplified into visible noise. Those are measurable, and measuring them is cheaper
+and steadier than eyeballing a compressed preview.
+
+`media_analysis assess_grade` measures one graded frame against its source and returns
+flags with remedies. `media_analysis grade_loop` closes the loop: it applies a look LUT,
+measures the real decoded result, and on any flag retries with the same look attenuated
+toward identity (strength × 0.8 per rung, floored at 0.5, three tries by default). The
+first strength that clears every sampled frame wins.
+
+Three properties matter more than the convenience:
+
+- **A flagged result is never reported acceptable.** When the ladder is exhausted the
+  answer is `needs_human`, carrying the best attempt and what it still fails on. There
+  is no strength at which the loop shrugs and ships.
+- **Every sampled frame must pass.** Pass several timestamps — a grade that is clean on
+  the frame you happened to check and bands two hundred frames later has not passed
+  anything. The report names the frame that failed.
+- **It does not touch the project.** The loop returns an apply manifest and stops.
+  Applying a grade is still a deliberate, version-protected step, and a result carrying
+  unresolved flags should reach a human before it reaches a timeline.
+
+Reach for it when applying an unfamiliar look LUT to unfamiliar footage, which is
+exactly where "it looked fine on the first shot" goes wrong. The flags are advisory
+thresholds, not standards — the raw measurements come back too, so a colorist can
+disagree with the flag rather than only with the verdict.
+
 ## Safe Color Workflow
 
 Before changing color:

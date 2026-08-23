@@ -2,6 +2,67 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.101.0
+
+**A grade can now reject itself.** `assess_grade` has measured grade damage since
+v2.68.0 — banding in a sky, highlight levels collapsing, shadow grain amplified into
+noise — and every flag it raises carries a remedy. Nothing consumed that report. The
+measurement existed; the loop did not, so the remedy "reduce the strength" was advice an
+agent had no way to act on.
+
+### Added
+
+- **`media_analysis grade_loop`** — the retry ladder. Applies a look LUT, measures the
+  real decoded frame, and on any flag retries with the same look attenuated toward
+  identity (strength x 0.8 per rung, floored at 0.5, three tries by default). The first
+  strength that clears every sampled frame wins.
+  - **A flagged result is never reported acceptable.** An exhausted ladder returns
+    `needs_human` with the best attempt and its remaining flags — never a quiet success
+    at a strength that still bands.
+  - **Every sampled frame must pass.** `times=[...]` samples several timestamps and the
+    report names the one that failed; a grade clean on the frame you happened to check
+    is not a grade that passed.
+  - **The best attempt is the gentlest.** When nothing converges, attempts rank by flag
+    count with ties broken by the smallest colour shift — equal damage means taking the
+    one a human has less to undo.
+  - **It does not touch the project.** The result is an apply manifest with
+    `safe_to_apply`, and a flagged result carries the reason it is blocked.
+  - `dry_run` defaults to true and reports the ffmpeg decode budget before anyone
+    commits to it. `cost_tier` defaults to `numeric`, because escalating every rung to
+    vision would spend host turns on attempts that exist to be rejected.
+- **`media_analysis grade_loop_capabilities`** — dependency state, ladder constants, and
+  an explicit statement of which modes exist.
+- **`src/utils/cube_lut.py`** — read, write, and attenuate 3D `.cube` LUTs. Attenuation
+  is a blend toward identity, the same operation a LUT mix control performs. Exact at
+  both endpoints: strength 1.0 returns the table unchanged and 0.0 returns true
+  identity. 1D LUTs are refused by name, and attenuation on a non-unit
+  `DOMAIN_MIN`/`DOMAIN_MAX` is refused because identity is only identity on 0..1.
+
+### Not built, and said so
+
+The in-loop **live** mode — apply in Resolve, render a frame, assess, repeat — is not
+implemented. It needs a single-frame render per rung, and shipping it unvalidated would
+put a "verified live" claim behind something no runnable command has produced.
+`grade_loop_capabilities()` says this in the response rather than only in the docs. The
+offline LUT ladder is complete and validated.
+
+### Documentation
+
+- `docs/guides/color-decision-guide.md` — a new "Rejecting Your Own Grade" section on
+  when measurement beats eyeballing a compressed preview.
+- `docs/kernels/color-grade-kernel.md` — the numeric grade-QC actions and their
+  display-referred-only contract.
+
+### Validation
+
+- Offline suite: 2889 passed, 1 skipped, 711 subtests, 0 failures.
+- End-to-end through real ffmpeg on generated media: a look that converges only after
+  backing off, and one that never converges and says so.
+- Two deliberate mutations — `acceptable` hard-coded true, and a rung passing on its
+  first clean frame — were each caught by the new tests.
+- No Resolve behavior changed; live test not required. A test asserts no Resolve
+  connection is attempted.
+
 ## What's New in v2.100.0
 
 **The craft guidance is now readable by any MCP client.** This repository carries a

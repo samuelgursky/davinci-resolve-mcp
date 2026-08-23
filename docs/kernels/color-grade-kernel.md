@@ -67,6 +67,28 @@ All actions are exposed through `timeline_item_color`.
   and delete worked.
 - Gallery capability and album list/create calls worked.
 
+## Numeric grade QC (`media_analysis`)
+
+Not part of the live kernel — no Resolve connection is involved — but it belongs to the
+same decision. Both actions measure a decoded frame of the real result, never a
+simulated transform, because LUT interpolation and encode rounding are where banding is
+actually introduced.
+
+- `assess_grade(source_path, time_seconds, graded_path|lut_path, working_space)` —
+  flags (`flat`, `washed_out`, `milky`, `noisy`, `clipped`, `posterized`, `banding`),
+  each with a remedy, plus the raw tonal/noise/damage measurements.
+- `grade_loop(source_path, lut_path, times[], strength?, max_tries?, strength_floor?,
+  dry_run?)` — the retry ladder over `assess_grade`. Attenuates the look toward identity
+  until every sampled frame clears, or returns `needs_human` with the best attempt.
+  `dry_run` defaults to **true** and reports the ffmpeg decode budget first.
+- `grade_loop_capabilities()` — dependency state, ladder constants, and which modes
+  exist. The in-loop **live** mode (apply in Resolve, render, assess) is **not built**;
+  the loop returns an apply manifest instead of driving the project.
+
+Both are display-referred only. Log and scene-referred encodings run through the same
+arithmetic happily and produce meaningless numbers, so `working_space` must be declared
+and non-display-referred values are refused rather than guessed at.
+
 ## Boundaries
 
 - Node graph internals are intentionally limited by Resolve's public API. The
