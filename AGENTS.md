@@ -66,6 +66,10 @@ semantics.
 - Public overview, current stats, and docs map: `README.md`
 - Historical release notes: `CHANGELOG.md`
 - AI assistant operating reference: `docs/SKILL.md`
+- Craft guidance for non-Claude-Code clients: the `knowledge` tool serves
+  `.claude/skills/`, `docs/guides/`, and `docs/kernels/` as resolved prose over
+  MCP. When you add a skill, guide, or kernel it is indexed automatically — a
+  drift guard fails the suite if anything in those directories is unreachable
 - Release checklist and validation rules: `docs/process/release-process.md`
 - Kernel workflow support maps: `docs/kernels/`
 - API coverage and live-test status: `docs/reference/api-coverage.md`

@@ -179,7 +179,7 @@ def test_utils_syntax():
 
 def test_compound_tool_count():
     # 35 = 33 baseline + edit_engine (Phase E) + timeline_frame (#146).
-    assert _count_mcp_tools(PROJECT_ROOT / "src" / "server.py") == 35
+    assert _count_mcp_tools(PROJECT_ROOT / "src" / "server.py") == 36
 
 
 def test_prompt_registrations():

@@ -23,6 +23,7 @@ SERVER = pathlib.Path(__file__).resolve().parent.parent / "src" / "server.py"
 # canonical name only.
 ALIASES = {
     "setup": {"capabilities", "options", "get", "status", "set", "configure", "clear", "reset"},
+    "knowledge": {"schema"},
 }
 
 

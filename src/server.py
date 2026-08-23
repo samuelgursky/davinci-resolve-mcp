@@ -2,7 +2,7 @@
 """
 DaVinci Resolve MCP Server (Compound Tools)
 
-35 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
+36 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
 plus Fusion Fuse, DCTL, and Resolve-page Script authoring tools.
 Each tool groups related operations via an 'action' parameter.
 
@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.99.3"
+VERSION = "2.100.0"
 
 import base64
 import os
@@ -317,7 +317,7 @@ def davinci_resolve_workflow() -> str:
     return """Use this DaVinci Resolve MCP server as a guarded post-production control surface.
 
 Core pattern:
-- Prefer the 35 compound tools and their action names over raw scripting.
+- Prefer the 36 compound tools and their action names over raw scripting.
 - Start by probing state: resolve_control.get_version/get_page, project_manager.get_current, timeline.get_current, and media_pool.probe_media_pool.
 - Before mutating timelines, media pools, render settings, grades, projects, databases, or extensions, prefer the matching probe, capabilities, boundary_report, safe_*, or dry_run action when one exists.
 - Preserve source media integrity. Never transcode, proxy, rewrite, move, rename, or create derivatives of source media unless the user explicitly asks. Analysis output belongs in sidecars or analysis directories.
@@ -14730,6 +14730,17 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     if action in {"schema", "capabilities", "options"}:
         return {
             "actions": ["schema", "get_defaults", "set_defaults", "clear_defaults"],
+            # Agents commonly call this first. The craft guidance is worth nothing if
+            # nobody knows it is there, so the orientation call names it.
+            "craft_guidance": {
+                "tool": "knowledge",
+                "start_with": "knowledge(action='topics')",
+                "when": (
+                    "Before a creative or destructive operation — cutting, grading, "
+                    "conforming, tightening, delivering. The tools execute; this is "
+                    "where the reasoning and the measured numbers live."
+                ),
+            },
             "defaults": {
                 "media_analysis.timed_markers_default": {
                     "description": "Default answer for writing source-time analysis notes as Media Pool clip markers.",
@@ -29472,6 +29483,83 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TOOL: knowledge
+#
+# The craft guidance in this repository — how to tighten a take without cutting
+# the breath out of it, what to look at before applying a grade, which API calls
+# silently lie — has always been readable only by an agent with this checkout on
+# disk. Over MCP there is no checkout, so a client on any other host operated the
+# tools without ever seeing the reasoning that makes the operation correct.
+#
+# This serves that corpus as content: the index, one resolved topic, or a search.
+# No Resolve connection is involved at any point.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_KNOWLEDGE_ACTIONS = ["topics", "get", "search", "capabilities"]
+
+
+@mcp.tool()
+@_guard_missing_params
+def knowledge(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Editorial, colour, audio, and workflow guidance — readable without this checkout.
+
+    Read a topic BEFORE a creative or destructive operation, not after. The guidance
+    carries measured numbers and known traps; operating the tools without it is how a
+    technically-correct call produces an editorially wrong result.
+
+    Actions:
+      topics(category?) -> {topics}  — the index: id, summary, size, sections, related.
+        Categories: workflow (task playbooks), guide, kernel (per-surface tool maps),
+        reference (exhaustive ledgers), repo (contributing to this project).
+      get(topic, section?, inline?) -> {content}  — resolved prose. Accepts natural
+        aliases ("tighten", "dead air", "grading"). `section` returns one heading's
+        subtree; `inline=false` skips the referenced documents.
+      search(query, limit?) -> {hits}  — ranked topics with excerpts.
+      capabilities() -> {topic_count, categories, corpus}
+
+    No Resolve connection required.
+    """
+    p = _params(params)
+    from src.utils import knowledge as _knowledge_mod
+
+    try:
+        if action == "topics":
+            category = p.get("category")
+            listing = _knowledge_mod.topics(category=str(category) if category else None)
+            return _ok(topics=listing, count=len(listing),
+                       categories=list(_knowledge_mod.CATEGORIES))
+        if action == "get":
+            err, _clean = _validate_params(p, {
+                "topic": {"type": str, "required": True, "non_empty": True},
+            })
+            if err:
+                return _err(err)
+            section = p.get("section")
+            return _ok(**_knowledge_mod.get(
+                str(p["topic"]),
+                section=str(section) if section else None,
+                inline=bool(p.get("inline", True)),
+            ))
+        if action == "search":
+            err, _clean = _validate_params(p, {
+                "query": {"type": str, "required": True, "non_empty": True},
+            })
+            if err:
+                return _err(err)
+            hits = _knowledge_mod.search(str(p["query"]), limit=int(p.get("limit", 5)))
+            return _ok(hits=hits, count=len(hits))
+        if action in {"capabilities", "schema"}:
+            return _ok(**_knowledge_mod.capabilities(), actions=_KNOWLEDGE_ACTIONS)
+    except _knowledge_mod.KnowledgeError as exc:
+        # The message already names the real topics or sections, so an agent that
+        # guessed wrong can correct itself without a second round-trip.
+        return _err(str(exc), code="UNKNOWN_TOPIC", category="invalid_params",
+                    retryable=False)
+
+    return _unknown(action, _KNOWLEDGE_ACTIONS)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MCP Resources — agentic-flow improvement E1
 #
 # Resources are read-only state surfaces that hosts can pull WITHOUT consuming
@@ -29512,6 +29600,32 @@ def _resource_mcp_version() -> Dict[str, Any]:
     return {
         "version": VERSION,
         "channel": get_update_channel(),
+    }
+
+
+@mcp.resource("knowledge://topics")
+@_safe_resource
+def _resource_knowledge_topics() -> Dict[str, Any]:
+    """The knowledge index — id, summary, category, size. Pure read of bundled docs.
+
+    A host that consumes resources learns what guidance exists without spending a turn
+    on it, which is the difference between the `knowledge` tool being available and it
+    being used.
+    """
+    from src.utils import knowledge as _knowledge_mod
+
+    return {
+        "topics": [
+            {
+                "topic": item["topic"],
+                "title": item["title"],
+                "category": item["category"],
+                "summary": item["summary"],
+                "length_lines": item["resolved_length_lines"],
+            }
+            for item in _knowledge_mod.topics()
+        ],
+        "fetch_with": "knowledge(action='get', params={'topic': '<id>'})",
     }
 
 
@@ -29734,5 +29848,5 @@ if __name__ == "__main__":
         logger.error(f"Unknown --transport {transport!r}; use stdio|sse|streamable-http")
         sys.exit(2)
 
-    logger.info("Starting DaVinci Resolve MCP Server (35 compound tools)")
+    logger.info("Starting DaVinci Resolve MCP Server (36 compound tools)")
     run_fastmcp_stdio(mcp)

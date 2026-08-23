@@ -2,6 +2,67 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.100.0
+
+**The craft guidance is now readable by any MCP client.** This repository carries a
+real body of editorial, colour, and audio guidance — how to tighten a take without
+cutting the breath out of it, what frames to look at before applying a grade, which
+API calls silently lie. It lived in `.claude/skills/`, `docs/guides/`, and
+`docs/kernels/`, and it was reachable only by an agent with this checkout on disk.
+
+Over MCP there is no checkout. A skill that says "open
+`docs/guides/color-decision-guide.md`" is a dead end on Codex, Cursor, or a bare SDK
+loop: the pointer resolves to nothing, and the agent operates the tools without ever
+seeing the reasoning that makes the operation correct.
+
+### Added
+
+- **`knowledge` tool** (36th compound tool) — the corpus served as prose, with no
+  Resolve connection involved:
+  - `topics(category?)` — the index: id, summary, size, sections, related topics.
+    35 topics across `workflow`, `guide`, `kernel`, `reference`, and `repo`.
+  - `get(topic, section?, inline?)` — resolved prose. Natural aliases (`"tighten"`,
+    `"dead air"`, `"grading"`) resolve to real topics, and referenced guides and
+    kernels arrive **inlined**, so what comes back is the manual rather than a path
+    to it. `section` returns one heading's subtree.
+  - `search(query, limit?)` — ranked topics with excerpts.
+  - `capabilities()` — topic counts by category and the corpus directories.
+- **`knowledge://topics` MCP resource** — the same index, so hosts that consume
+  resources can see what guidance exists without spending a turn on it.
+- `setup(action="schema")` now names the guidance, because an agent's orientation
+  call is where it will actually be noticed.
+
+### Design notes
+
+- **Inlining stops at one level.** Following references transitively would turn a
+  150-line answer into the whole `docs/` tree.
+- **Oversized references are summarised, not truncated.** Over the inline budget an
+  agent gets the title, summary, section list, and the topic id to fetch — a
+  truncated prefix is the first N lines, which is rarely the part that answers the
+  question.
+- **`reference` topics are terminal.** The 2250-line operating reference and the
+  generated API ledgers cross-link each other freely; inlining from them doubles a
+  document that was already complete.
+- **An unknown section is an error that lists the real ones**, never a quiet return
+  of the whole document.
+- **Search matches whole words.** Substring counting ranked `resolve-audio` top for
+  "dead air", because "air" is inside "F-air-light". Body hits are also normalised by
+  document length, so the longest document cannot win on mass alone.
+
+### Guarded against drift
+
+A test asserts every skill, guide, and kernel in the corpus reaches the index, and
+that every alias points at a topic that exists. Knowledge added to this repository
+later cannot go silently unserved — the failure mode a hand-kept list has every time.
+
+### Validation
+
+- Offline suite: 2849 passed, 1 skipped, 711 subtests, 0 failures.
+- Three deliberate mutations (substring search, inlining disabled, unknown section
+  returning the whole document) were each caught by the new tests.
+- No Resolve behavior changed; live test not required. A test asserts the tool never
+  reaches for a Resolve connection.
+
 ## What's New in v2.99.3
 
 **Fusion authoring now works on the free edition.** v2.99.2 documented that

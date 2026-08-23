@@ -162,7 +162,7 @@ before mutating Resolve state.
 
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
-| Compound (default) | `src/server.py` | 35 tools | Most workflows — keeps context lean |
+| Compound (default) | `src/server.py` | 36 tools | Most workflows — keeps context lean |
 | Granular (full) | `src/server.py --full` | 353 tools | Power users needing one tool per API method |
 
 This skill document covers the **compound server** (the default). Each compound
@@ -493,6 +493,32 @@ you are on the correct page first.
 ---
 
 ## Tool Map
+
+### Craft Guidance
+
+**`knowledge`** — The editorial, colour, audio, and workflow guidance bundled with
+this server, served as prose. No Resolve connection required.
+
+Read a topic **before** a creative or destructive operation, not after. The tools will
+happily execute an editorially wrong decision; this is where the reasoning lives —
+measured numbers, known traps, and what each move costs to undo.
+
+Key actions:
+- `topics(category?)` — the index: topic id, one-line summary, size, sections, and
+  related topics. Categories: `workflow` (task playbooks: tighten a recording, build a
+  rough cut, match a grade), `guide`, `kernel` (per-surface tool maps), `reference`
+  (exhaustive ledgers including this document), `repo` (contributing here)
+- `get(topic, section?, inline?)` — the resolved prose. Natural aliases work
+  (`"tighten"`, `"dead air"`, `"grading"`, `"conform"`). Referenced guides and kernels
+  arrive inlined, so a client with no checkout of this repository still gets the
+  manual, not a path to it. `section` returns one heading's subtree
+- `search(query, limit?)` — ranked topics with excerpts
+- `capabilities()` — topic count by category, and the corpus directories
+
+The same index is published as the `knowledge://topics` MCP resource, so hosts that
+consume resources can see what guidance exists without spending a turn.
+
+---
 
 ### App Control
 
