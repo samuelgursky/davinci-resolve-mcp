@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.101.0"
+VERSION = "2.102.0"
 
 import base64
 import os
@@ -20128,6 +20128,52 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         from src.utils import grade_loop as _grade_loop_mod
 
         return _ok(**_grade_loop_mod.capabilities())
+    if action in {"mix_plan", "measure_loudness", "mix_plan_capabilities"}:
+        # Gain staging between measuring loudness and grading it: dialogue-norm gain,
+        # a bed level relative to it, and ducking windows the dialogue itself implies.
+        # The render is measured afterwards, so what comes back is the loudness
+        # achieved rather than the arithmetic meant to produce it.
+        from src.utils import mix_plan as _mix_plan_mod
+
+        if action == "mix_plan_capabilities":
+            return _ok(**_mix_plan_mod.capabilities())
+        try:
+            if action == "measure_loudness":
+                paths = p.get("paths") or ([p["path"]] if p.get("path") else [])
+                if not paths:
+                    return _err("measure_loudness requires path or paths")
+                return _ok(measurements=[_mix_plan_mod.measure(str(item)) for item in paths])
+
+            dialogue = p.get("dialogue") or ([p["path"]] if p.get("path") else [])
+            if isinstance(dialogue, str):
+                dialogue = [dialogue]
+            kwargs = dict(
+                music=p.get("music") or [],
+                sfx=p.get("sfx") or [],
+                standard=str(p.get("standard") or _mix_plan_mod.DEFAULT_STANDARD),
+                target_lufs=(
+                    float(p["target_lufs"]) if p.get("target_lufs") is not None else None
+                ),
+                bed_offset_lu=float(p.get("bed_offset_lu", _mix_plan_mod.DEFAULT_BED_OFFSET_LU)),
+                duck_db=float(p.get("duck_db", _mix_plan_mod.DEFAULT_DUCK_DB)),
+                attack_s=float(p.get("attack_s", _mix_plan_mod.DEFAULT_ATTACK_S)),
+                release_s=float(p.get("release_s", _mix_plan_mod.DEFAULT_RELEASE_S)),
+                hold_s=float(p.get("hold_s", _mix_plan_mod.DEFAULT_HOLD_S)),
+            )
+            if p.get("dry_run", True):
+                return _ok(**_mix_plan_mod.plan(dialogue, **kwargs))
+            return _ok(**_mix_plan_mod.render(
+                dialogue,
+                output_path=(p.get("output_path") or p.get("outputPath")) or None,
+                program_normalize=p.get("program_normalize"),
+                **kwargs,
+            ))
+        except _mix_plan_mod.MixPlanError as exc:
+            return _err(str(exc), code="MIX_PLAN_REFUSED", category="invalid_input",
+                        remediation=(
+                            "Supply dialogue=[...] stems that carry audio. The mix is "
+                            "anchored to dialogue, so it cannot be planned without one."
+                        ))
     if action == "image_qc_capabilities":
         from src.utils import image_qc as _image_qc_mod
 
@@ -21082,6 +21128,9 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         "assess_grade",
         "grade_loop",
         "grade_loop_capabilities",
+        "mix_plan",
+        "mix_plan_capabilities",
+        "measure_loudness",
         "image_qc_capabilities",
         "install_guidance",
         "resolve_output_root",

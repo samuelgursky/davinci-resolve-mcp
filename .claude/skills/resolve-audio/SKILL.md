@@ -12,6 +12,20 @@ Thin router; depth stays in the kernel.
 - **Offline planning + bus routing** — `resolve-advanced/README.md` →
   `audio_plan`, `fairlight`, `audio`.
 
+## Rough mix before anything else
+
+If the ask is "make this sound balanced" rather than "route these buses", start with
+`media_analysis mix_plan` (Python server, no Resolve needed). Give it the dialogue stems
+and it derives the dialogue-normalisation gain, the music-bed level under it, and ducking
+windows from the dialogue's own silence — then renders a premix and **measures it**, so
+what you report is the loudness achieved rather than the gain arithmetic.
+
+`dry_run` defaults to true: show the gains and the window count first. On a
+full-programme standard (`ebu_r128`, `web`) a measured programme trim lands the whole mix
+on target; on `ott_dialogue_gated` it deliberately does not trim, because dialogue is the
+figure being graded. Flags (`loudness_off_target`, `true_peak_over`, `clipped`) come back
+with remedies and are never auto-corrected — report them, do not paper over them.
+
 ## Two servers — plan/measure offline, apply live
 
 | Job | Server | Tools |

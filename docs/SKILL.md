@@ -552,6 +552,13 @@ Key actions:
   `load_user_preferences_preset`
 - `quit` — terminates Resolve (destructive; confirm with user first)
 
+**Offline audio and image QC on `media_analysis`** — no Resolve connection required:
+`measure_loudness`, `mix_plan` / `mix_plan_capabilities` (dialogue-anchored rough mix
+with dialogue-following ducking, rendered and re-measured), and `assess_grade` /
+`grade_loop` / `grade_loop_capabilities` (numeric grade-damage QC and the retry ladder
+that backs a look off until it stops damaging the picture). See
+`docs/kernels/audio-fairlight-kernel.md` and `docs/kernels/color-grade-kernel.md`.
+
 **`layout_presets`** — Save, load, export, import, delete UI layout presets.
 `list` (Resolve 21.0.4+) enumerates the saved preset names the other actions
 take.

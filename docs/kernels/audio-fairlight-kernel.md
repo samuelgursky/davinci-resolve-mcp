@@ -53,6 +53,39 @@ All kernel actions are exposed through `timeline`.
 - Subtitle generation from the generated timeline returned true.
 - Fairlight preset listing and the full boundary report worked.
 
+## Rough mix (`media_analysis`)
+
+Offline and file-based — no Resolve connection — sitting between measuring loudness and
+grading it against a spec. The step nothing else covered was deciding the gains.
+
+- `measure_loudness(path|paths)` — integrated LUFS, loudness range, and true peak per
+  file via ffmpeg `ebur128`.
+- `mix_plan(dialogue[], music?, sfx?, standard?, target_lufs?, bed_offset_lu?, duck_db?,
+  attack_s?, release_s?, hold_s?, dry_run?, output_path?, program_normalize?)` —
+  dialogue-normalisation gain, a bed level relative to it, and ducking windows derived
+  from silence detection **on the dialogue stem**, so the bed follows the words rather
+  than a hand-placed envelope. `dry_run` defaults to true and renders nothing.
+- `mix_plan_capabilities()` — dependency state, the standards it knows, and the defaults.
+
+Three things worth knowing before using it:
+
+- **The achieved loudness is measured, not derived.** The premix is rendered, then
+  re-measured, and `achieved` carries what came back. A plan that hits its target on
+  paper and clips on true peak is a failed plan; only the measurement distinguishes them.
+- **Dialogue-anchored, then programme-trimmed.** Anchoring dialogue at target is right
+  for a dialogue-gated standard and wrong for a full-programme one the moment a bed is
+  added. For non-dialogue-gated standards a single measured trim is applied to everything
+  equally — preserving the dialogue-to-bed relationship — and reported as
+  `program_normalize.trim_db`. It never runs on a dialogue-gated standard.
+- **Nothing else is corrected.** Over true peak or clipped comes back as a flag with a
+  remedy, never as a quietly normalised file. Pulling the mix down to fix a peak would
+  move the loudness off the target it just hit.
+
+Standards come from `src/utils/delivery_targets.py` (`web`, `podcast`, `ebu_r128`,
+`atsc_a85`, `ott_dialogue_gated`) — the same table the delivery tools grade against, not
+a second copy. It is a rough mix: gain staging, a bed, and ducking. No EQ, compression,
+de-essing, or limiting.
+
 ## Boundaries
 
 - Timeline item audio properties may be readable as `None` and can reject writes

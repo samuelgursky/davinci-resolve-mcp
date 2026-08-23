@@ -2,6 +2,65 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.102.0
+
+**A rough mix that reports what it achieved, not what it intended.** The pieces were
+already here — `media_analysis` measures EBU R128 loudness and detects silence,
+`delivery_targets` holds the standards, `loudness_qc` grades a finished file. What was
+missing is the step between measuring and grading: deciding the gains.
+
+### Added
+
+- **`media_analysis mix_plan`** — dialogue-normalisation gain, a music-bed level relative
+  to it, and ducking windows derived from silence detection **on the dialogue stem**, so
+  the bed follows the words rather than a hand-placed envelope. `dry_run` defaults to
+  true and renders nothing.
+  - **The achieved loudness is measured, not derived.** The premix is rendered, then
+    re-measured; `achieved` carries integrated LUFS, true peak, loudness range, and the
+    delta from target. A plan that hits its target on paper and clips on true peak is a
+    failed plan, and only the measurement tells you which one you have.
+  - **Dialogue-anchored, then programme-trimmed.** Anchoring dialogue at target is right
+    for a dialogue-gated standard and wrong for a full-programme one the moment a bed is
+    added. For non-dialogue-gated standards one measured trim is applied to everything
+    equally — preserving the dialogue-to-bed relationship — and reported as
+    `program_normalize.trim_db`. It never runs on a dialogue-gated standard, where
+    dialogue is the figure being graded.
+  - **Nothing else is corrected.** `loudness_off_target`, `true_peak_over`, and `clipped`
+    come back as flags with remedies, never as a quietly normalised file.
+  - Standards come from `delivery_targets` (`web`, `podcast`, `ebu_r128`, `atsc_a85`,
+    `ott_dialogue_gated`) — the table the delivery tools already grade against, not a
+    second copy.
+- **`media_analysis measure_loudness`** — integrated LUFS, loudness range, and true peak
+  per file.
+- **`media_analysis mix_plan_capabilities`** — dependency state, known standards, and the
+  defaults, including the music-bed offset, which is the number most likely to be argued
+  with and so is named rather than buried.
+
+### Fixed while building it
+
+The new loudness parser reads the `Summary:` block **and** drops ebur128's per-frame
+progress lines, which carry their own `I:` and `LRA:` fields. A plain last-match-wins
+parse is correct only because ffmpeg happens to print the summary last, and scoping to
+the summary alone still swallows a progress line printed after it. Both steps are needed;
+a test with a trailing progress line pins it.
+
+### Scope
+
+A rough mix: gain staging, a bed, and ducking. No EQ, compression, de-essing, or
+limiting, and the module says so in its capabilities rather than leaving it implied.
+
+### Validation
+
+- Offline suite: 2924 passed, 1 skipped, 711 subtests, 0 failures.
+- End-to-end through real ffmpeg on generated tones: target hit from measurement, the
+  programme trim landing a hot bed on R128, a dialogue-gated standard refusing the trim,
+  and clipping reported rather than normalised away.
+- Three deliberate mutations (silent peak normalisation, trimming a dialogue-gated
+  standard, and dropping the parser scoping) were each caught. The parser mutation was
+  caught only after the test was strengthened — the first version of it passed against
+  both the fix and its absence.
+- No Resolve behavior changed; live test not required.
+
 ## What's New in v2.101.0
 
 **A grade can now reject itself.** `assess_grade` has measured grade damage since
