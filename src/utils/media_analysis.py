@@ -2659,17 +2659,17 @@ def _ffmpeg_stderr_filter(path: str, video_filter: Optional[str] = None, audio_f
 
 
 def _parse_loudness(stderr: str) -> Dict[str, Any]:
-    def latest(pattern: str) -> Optional[float]:
-        matches = re.findall(pattern, stderr)
-        if not matches:
-            return None
-        return _parse_float(matches[-1])
+    """EBU R128 figures from ffmpeg's `ebur128` output.
 
-    return {
-        "integrated_lufs": latest(r"I:\s*(-?\d+(?:\.\d+)?)\s*LUFS"),
-        "loudness_range_lu": latest(r"LRA:\s*(-?\d+(?:\.\d+)?)\s*LU"),
-        "true_peak_dbtp": latest(r"Peak:\s*(-?\d+(?:\.\d+)?)\s*dBFS"),
-    }
+    Delegates to `loudness_parse`, which bounds the summary block rather than taking the
+    last match in the stream. `ebur128`'s per-frame progress lines carry their own `I:`,
+    `LRA:` and peak fields, so a last-match read is right only while the summary happens
+    to print last — and when it is not, the numbers still parse and a single frame is
+    reported as a programme measurement, with nothing to notice.
+    """
+    from src.utils import loudness_parse
+
+    return dict(loudness_parse.parse_loudness(stderr, to_float=_parse_float))
 
 
 def _parse_scene_changes(stderr: str) -> List[Dict[str, Any]]:

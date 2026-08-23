@@ -56,7 +56,7 @@ import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import delivery_targets
+from . import delivery_targets, loudness_parse
 
 try:
     import numpy as _np
@@ -107,39 +107,11 @@ def _require() -> None:
 
 # ── measurement ──────────────────────────────────────────────────────────────
 
-# These patterns mirror `media_analysis._parse_loudness`. The duplication is deliberate
-# — this module stays importable without pulling in the analysis engine — and a test
-# asserts both parsers agree on the same ffmpeg output, so the copy cannot drift.
-_INTEGRATED_RE = r"I:\s*(-?\d+(?:\.\d+)?)\s*LUFS"
-_LRA_RE = r"LRA:\s*(-?\d+(?:\.\d+)?)\s*LU"
-_PEAK_RE = r"Peak:\s*(-?\d+(?:\.\d+)?)\s*dBFS"
-
-
-def parse_loudness(stderr: str) -> Dict[str, Optional[float]]:
-    """Pull the ebur128 summary out of ffmpeg's stderr.
-
-    Scoped to the text after `Summary:`, with ebur128's per-frame progress lines removed.
-    Both steps are needed and neither is enough alone: the progress line carries its own
-    `I:` and `LRA:`, so a plain last-match-wins parse is right only because the summary
-    happens to print last, and scoping to the summary still swallows any progress line
-    that prints after it. Progress lines are identified by the `TARGET:` field, which
-    appears on every one of them and on nothing in the summary block.
-    """
-    marker = stderr.rfind("Summary:")
-    scope = "\n".join(
-        line for line in (stderr[marker:] if marker >= 0 else stderr).splitlines()
-        if "TARGET:" not in line
-    )
-
-    def latest(pattern: str) -> Optional[float]:
-        matches = re.findall(pattern, scope)
-        return float(matches[-1]) if matches else None
-
-    return {
-        "integrated_lufs": latest(_INTEGRATED_RE),
-        "loudness_range_lu": latest(_LRA_RE),
-        "true_peak_dbtp": latest(_PEAK_RE),
-    }
+# Parsing lives in `loudness_parse`, imported by both this module and the analysis
+# engine. Two copies of the same three regexes were carried here so this module stayed
+# importable without the engine; that argument covers the ENGINE, not the parsing rule,
+# and a rule that has to be right in two places is one that eventually is not.
+parse_loudness = loudness_parse.parse_loudness
 
 
 def _run(args: Sequence[str], *, stdin_bytes: Optional[bytes] = None) -> Tuple[int, bytes, str]:

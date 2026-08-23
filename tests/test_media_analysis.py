@@ -13,6 +13,7 @@ import unittest.mock
 from typing import Any, Dict, Optional
 
 from src import server as _server_module
+from src.utils import media_analysis as _media_analysis_module
 from src.server import (
     _apply_media_analysis_clip_markers,
     _apply_sync_event_markers,
@@ -5016,6 +5017,95 @@ class MediaAnalysisAsyncModeTests(unittest.TestCase):
             _media_analysis_async_mode({"prefer_handle": True, "dry_run": True}, dry_run_explicit=False),
             "queued",
         )
+
+
+class LoudnessParsingTests(unittest.TestCase):
+    """`_parse_loudness` must read the summary block, not whatever printed last.
+
+    `ebur128` emits a progress line per frame carrying its own `I:`, `LRA:` and peak
+    fields. A last-match-wins read over the whole stream is right only because the
+    summary happens to print last, and a measurement that is correct because of output
+    ordering is one ffmpeg change away from being quietly wrong — the numbers still
+    parse, they are just of a single frame instead of the programme.
+    """
+
+    SUMMARY = """
+[Parsed_ebur128_0 @ 0x1] t: 11.9  TARGET:-23 LUFS  M: -27.8 S: -27.8  I: -27.8 LUFS  LRA: 0.0 LU  TPK: -27.1 -27.1 dBFS
+[Parsed_ebur128_0 @ 0x1] Summary:
+
+  Integrated loudness:
+    I:         -19.4 LUFS
+    Threshold: -29.4 LUFS
+
+  Loudness range:
+    LRA:         3.7 LU
+
+  True peak:
+    Peak:      -2.5 dBFS
+"""
+
+    # The ordering change the scoping defends against: a progress line printed AFTER the
+    # summary. Scoping to the last `Summary:` alone does not exclude it, which is why the
+    # progress lines are also dropped by their `TARGET:` field.
+    TRAILING_PROGRESS = SUMMARY + (
+        "[Parsed_ebur128_0 @ 0x1] t: 12.0  TARGET:-23 LUFS  M: -40.0 S: -40.0  "
+        "I: -40.0 LUFS  LRA: 9.9 LU  TPK: -40.0 -40.0 dBFS\n"
+    )
+
+    def test_reads_the_summary_not_the_progress_lines(self):
+        parsed = _media_analysis_module._parse_loudness(self.SUMMARY)
+        self.assertEqual(parsed["integrated_lufs"], -19.4)
+        self.assertEqual(parsed["loudness_range_lu"], 3.7)
+        self.assertEqual(parsed["true_peak_dbtp"], -2.5)
+
+    def test_a_progress_line_after_the_summary_does_not_win(self):
+        parsed = _media_analysis_module._parse_loudness(self.TRAILING_PROGRESS)
+        self.assertEqual(parsed["integrated_lufs"], -19.4)
+        self.assertEqual(parsed["loudness_range_lu"], 3.7)
+        self.assertEqual(parsed["true_peak_dbtp"], -2.5)
+
+    def test_only_the_summary_block_is_read(self):
+        """The second half of the fix, pinned separately.
+
+        Dropping `TARGET:` lines removes the progress lines ffmpeg emits *today*. The
+        scoping enforces the broader invariant — nothing outside the summary block is a
+        measurement — which also covers an `I: ... LUFS` reaching stderr from anywhere
+        else. No current ffmpeg build produces the line below, so this is synthetic on
+        purpose: it tests the contract, not an observed format. Without the scoping it
+        reads -50.0 and reports a number that was never a programme measurement.
+        """
+        noise = self.SUMMARY + (
+            "[some_other_filter @ 0x3] I: -50.0 LUFS  LRA: 22.0 LU\n"
+        )
+        parsed = _media_analysis_module._parse_loudness(noise)
+        self.assertEqual(parsed["integrated_lufs"], -19.4)
+
+    def test_output_with_no_summary_yields_none_rather_than_a_frame_reading(self):
+        """No summary means no measurement. A progress line is not a fallback for one."""
+        progress_only = (
+            "[Parsed_ebur128_0 @ 0x1] t: 1.0  TARGET:-23 LUFS  M: -30.0 S: -30.0  "
+            "I: -30.0 LUFS  LRA: 1.0 LU  TPK: -30.0 -30.0 dBFS\n"
+        )
+        parsed = _media_analysis_module._parse_loudness(progress_only)
+        self.assertIsNone(parsed["integrated_lufs"])
+        self.assertIsNone(parsed["loudness_range_lu"])
+
+    def test_no_ebur128_output_at_all(self):
+        parsed = _media_analysis_module._parse_loudness("ffmpeg: no audio streams\n")
+        self.assertIsNone(parsed["integrated_lufs"])
+        self.assertIsNone(parsed["true_peak_dbtp"])
+
+    def test_matches_the_mix_plan_parser(self):
+        """Two parsers of one format; the duplication is only safe while they agree."""
+        from src.utils import mix_plan
+
+        for name, sample in (("summary", self.SUMMARY),
+                             ("trailing", self.TRAILING_PROGRESS)):
+            with self.subTest(sample=name):
+                theirs = mix_plan.parse_loudness(sample)
+                mine = _media_analysis_module._parse_loudness(sample)
+                for key in ("integrated_lufs", "loudness_range_lu", "true_peak_dbtp"):
+                    self.assertEqual(mine[key], theirs[key], f"{name}/{key}")
 
 
 if __name__ == "__main__":

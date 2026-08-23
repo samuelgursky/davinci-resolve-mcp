@@ -2,6 +2,50 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.103.1
+
+**A loudness measurement could silently become a single frame's reading.**
+`media_analysis`'s EBU R128 parser took the last match for `I:`, `LRA:` and `Peak:`
+across the whole of ffmpeg's stderr. `ebur128` prints a progress line per frame carrying
+those same fields, so that read was correct only because the `Summary:` block happens to
+print last. Nothing enforces that ordering, and when it does not hold the numbers still
+parse — a delivery-grade figure is quietly replaced by one frame's, with no error to
+notice.
+
+### Fixed
+
+- `media_analysis._parse_loudness` now reads the summary block and nothing else.
+- Both callers share one parser, `src/utils/loudness_parse.py`. The regexes were
+  duplicated so `mix_plan` stayed importable without the analysis engine; that argument
+  covers the engine, not the parsing rule, and a rule that has to be right in two places
+  is one that eventually is not.
+- Absent a summary the result is `None`, not a best guess. "No measurement" and
+  "one frame's measurement" are different answers, and only one is safe to deliver on.
+
+### How the block is bounded
+
+Two independent guards, because each rests on a different assumption about ffmpeg's
+output and either can outlive the other:
+
+1. **Block bounding** — seek the last `Summary:`, then take lines until the next ffmpeg
+   log line. The summary body is indented plain text while every log line carries a
+   `[component @ address]` prefix, so the block ends at `[out#0/null …]`, at a trailing
+   progress line, and at anything else appended after it.
+2. **`TARGET:` filtering** — the field on every progress line and on nothing in the
+   summary. This is what still holds if a progress line ever arrives without the
+   bracketed prefix, and it is what makes the no-summary path return `None`.
+
+### Validation
+
+- Offline suite: 2980 passed, 1 skipped, 725 subtests, 0 failures (was 2959/719).
+- Verified against real ffmpeg output, not only fixtures: a live `ebur128` run is parsed
+  and the block asserted to end before ffmpeg's own trailer.
+- Four deliberate mutations — no scoping, locating the summary without bounding the
+  block, bounding it without the `TARGET:` filter, and falling back to the raw stream
+  when no summary printed — were each caught. The third initially survived, and the test
+  isolating that guard was added until it failed.
+- No Resolve behavior changed; live test not required.
+
 ## What's New in v2.103.0
 
 **An unreachable Resolve no longer ends the work.** The interchange authoring that can
