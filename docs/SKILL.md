@@ -552,6 +552,13 @@ Key actions:
   `load_user_preferences_preset`
 - `quit` — terminates Resolve (destructive; confirm with user first)
 
+**Offline timeline authoring on `timeline`** — served above the connection check:
+`author_offline` writes an importable `.drt` / `.otio` / `.edl` from a clip plan when
+Resolve is unreachable, and `offline_fallback_capabilities` reports whether it can. Every
+not-connected error carries an `offline_alternative` block naming it. Authoring a file
+does not complete a failed live operation — the timeline is not in a project until it is
+imported. See `docs/kernels/timeline-conform-interchange-kernel.md`.
+
 **Offline audio and image QC on `media_analysis`** — no Resolve connection required:
 `measure_loudness`, `mix_plan` / `mix_plan_capabilities` (dialogue-anchored rough mix
 with dialogue-following ducking, rendered and re-measured), and `assess_grade` /

@@ -15,6 +15,21 @@ Bridges online-editing / finishing *craft* to this repo's *tools*.
 - **Offline conform engine** — `resolve-advanced/README.md` → `conform`,
   `color_trace`, `offline_ref`, `editorial`, `drt`, `project_db`.
 
+## No Resolve? The work does not have to stop
+
+`timeline author_offline` writes an importable timeline (`drt` / `otio` / `edl`) from a
+file-path clip plan without any connection, and every not-connected error now carries an
+`offline_alternative` block pointing at it.
+
+Say plainly what happened: the live operation failed and a file was written — the
+timeline is not in a project until someone imports it. Read the warnings back too.
+`media_tc_origin_assumed` is the one that matters: OTIO source frames are
+timecode-absolute, and an event without `media_start_tc_frame` imports as an *empty*
+timeline with no error at all.
+
+Default to `drt` (Resolve-native, project version 17 / Resolve 21.0 — older builds need
+`drt downgrade`). Pick `otio` when the plan carries retimes; a `.drt` flattens them.
+
 ## Two servers
 
 | Job | Server | Tools |

@@ -120,7 +120,15 @@ class ErrorEnvelopeContractTest(unittest.TestCase):
         self.assertNotIn("state", _err("x", state={})["error"])
 
     def test_check_emits_structured_not_connected_when_resolve_absent(self):
-        """Integration smoke: _check returns a NOT_CONNECTED error when Resolve is unreachable."""
+        """Integration smoke: `_check` returns a not-connected error when Resolve is unreachable.
+
+        The CODE is situation-derived, not fixed. `_check` used to emit a flat
+        `NOT_CONNECTED` asserting Resolve might not be running and pointing every reader
+        at a Studio-only preference; it now delegates to `_not_connected_error`, which
+        distinguishes "not running" from "running but refusing scripting" from "the
+        bridge is enabled and silent". The contract this pins is the category and the
+        envelope, because that is what callers route on.
+        """
         import src.server as compound
 
         original = compound.get_resolve
@@ -132,11 +140,31 @@ class ErrorEnvelopeContractTest(unittest.TestCase):
 
         self.assertIsNotNone(err)
         body = err["error"]
-        self.assertEqual(body["code"], "NOT_CONNECTED")
+        self.assertIn(
+            body["code"],
+            {"NOT_CONNECTED", "RESOLVE_NOT_RUNNING", "SCRIPTING_UNAVAILABLE", "BRIDGE_UNAVAILABLE"},
+        )
         self.assertEqual(body["category"], "not_connected")
-        self.assertTrue(body["retryable"])
         self.assertIn("Resolve", body["message"])
         self.assertIn("remediation", body)
+
+    def test_not_connected_carries_the_offline_authoring_offer(self):
+        """An unreachable Resolve should not end the work — but the offer is not a success."""
+        import src.server as compound
+
+        original = compound.get_resolve
+        compound.get_resolve = lambda: None
+        try:
+            _, _, err = compound._check()
+        finally:
+            compound.get_resolve = original
+
+        offer = err["error"].get("offline_alternative")
+        if offer is None:  # node or the authoring module absent in this environment
+            self.skipTest("offline interchange authoring unavailable here")
+        self.assertTrue(offer["available"])
+        self.assertIn("does not complete the operation", offer["does_not"])
+        self.assertNotIn("success", err)
 
     def test_validate_cdl_payload_returns_invalid_input(self):
         """F1 — caller-side input validation on safe_set_cdl uses invalid_input,

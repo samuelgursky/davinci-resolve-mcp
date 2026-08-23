@@ -2,6 +2,71 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.103.0
+
+**An unreachable Resolve no longer ends the work.** The interchange authoring that can
+write an importable timeline has been in this repository the whole time, one process
+away, while a connection failure stopped everything. This routes to it.
+
+### Added
+
+- **`timeline author_offline`** — write an importable timeline from a file-path clip plan
+  with no Resolve connection. Served **above** the connection check, because it exists
+  for the case where there is none. Targets in preference order:
+  - **`drt`** (default) — Resolve-native, carries track structure. Stamped at project
+    version 17 (Resolve 21.0); older builds need the advanced server's
+    `drt(action='downgrade')`. Verified map: 18.0.4 -> 11, 19.1.x -> 14, 21.0 -> 17.
+  - **`otio`** — round-trips through this repo's own parser and carries gaps, per-clip
+    speed, and transitions. The target to pick when the plan has retimes.
+  - **`edl`** — CMX3600: video cuts and M2 speed, nothing else.
+- **`timeline offline_fallback_capabilities`** — whether authoring is available here, and
+  why not if it is not.
+- **`offline_alternative` on every not-connected error** — naming what could be produced.
+
+### It is an offer, never a substitute
+
+A caller who asked to build a timeline *in Resolve* has not succeeded because a file was
+written somewhere. The connection error stays an error, the block says outright that
+authoring does not complete what failed, and nothing is authored unless it is asked for.
+A test asserts both halves, because an offer that reads as success is worse than no offer.
+
+### Two silent failures, now named
+
+- `media_tc_origin_assumed` — OTIO source frames are **timecode-absolute**. An event with
+  no media timecode origin imports as an *empty* timeline: the file opens, nothing
+  appears, and no error is raised. Every event that had to assume an origin is named,
+  with the fix (`media_start_tc_frame` per clip).
+- `retimes_flattened` — a `.drt` carries no per-clip speed field, so retimes flatten to
+  100% forward. Every event that lost one is named, with OTIO as the target that keeps it.
+
+### Fixed
+
+`_check()` emitted its own flat `NOT_CONNECTED` error asserting Resolve might not be
+running and pointing every reader at a Studio-only preference — the same three wrong
+claims `_not_connected_error` was written to stop making in v2.63, still being made here
+because two producers of one error had drifted apart. It now delegates, so the message
+distinguishes "not running" from "running but refusing scripting" from "the bridge is
+enabled and silent", and free-edition users stop being sent to check a Studio install.
+
+### Design notes
+
+- **Frame numbers are at the timeline rate and `end_frame` is EXCLUSIVE**, matching
+  `AppendToTimeline`'s half-open range. The two shapes disagreeing would be a one-frame
+  error on every clip — exactly the kind that survives review.
+- **Authoring runs in Node** against `resolve-advanced/server/author-interchange.mjs`
+  rather than a second Python writer. Two writers to keep in agreement means the one that
+  drifts is always the copy nobody runs. Without Node it refuses and says why.
+
+### Validation
+
+- Offline suite: 2959 passed, 1 skipped, 719 subtests, 0 failures.
+- All three targets authored and read back: OTIO parsed as a Timeline document with
+  timecode-absolute source ranges, DRT and EDL written and inspected.
+- Three deliberate mutations (swallowing the media-origin warning, treating `end_frame`
+  as inclusive, and marking the connection error as a success) were each caught.
+- No Resolve behavior changed by the authoring path itself; live import validation of an
+  authored file is **not** included in this release.
+
 ## What's New in v2.102.0
 
 **A rough mix that reports what it achieved, not what it intended.** The pieces were

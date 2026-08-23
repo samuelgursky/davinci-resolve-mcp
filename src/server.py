@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.102.0"
+VERSION = "2.103.0"
 
 import base64
 import os
@@ -970,7 +970,7 @@ def _not_connected_error():
     running = resolve_is_running()
     bridge_on = _bridge_requested()
     if bridge_on:
-        return _err(
+        return _with_offline_alternative(_err(
             "The in-app bridge is enabled but not answering.",
             code="BRIDGE_UNAVAILABLE", category="not_connected",
             # `not_connected` defaults to retryable because auto-launch may
@@ -986,9 +986,9 @@ def _not_connected_error():
                         "run `launchctl setenv PYTHON3HOME \"$(python3 -c 'import sys; "
                         "print(sys.prefix)')\"` (launchctl, not export) and restart Resolve.",
             state={"resolve_running": running, "bridge_enabled": True},
-        )
+        ))
     if running:
-        return _err(
+        return _with_offline_alternative(_err(
             "DaVinci Resolve is running but is not answering the scripting API.",
             code="SCRIPTING_UNAVAILABLE", category="not_connected",
             # Not retryable: a preference has to change, or the bridge has to be
@@ -1006,13 +1006,33 @@ def _not_connected_error():
             # responses, and the in-app bridge is not an option for the former.
             state={"resolve_running": True, "bridge_enabled": False,
                    "headless": _resolve_runtime.is_headless()},
-        )
-    return _err(
+        ))
+    return _with_offline_alternative(_err(
         "DaVinci Resolve is not running and could not be started.",
         code="RESOLVE_NOT_RUNNING", category="not_connected",
         remediation="Start DaVinci Resolve and open a project, then retry.",
         state={"resolve_running": bool(running), "bridge_enabled": False},
-    )
+    ))
+
+
+def _with_offline_alternative(error: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach the offline-authoring offer to a not-connected error.
+
+    An offer, not a substitute: the error stays an error, and the block says outright
+    that authoring a file does not complete the operation that just failed. Rerouting
+    silently would turn "your project now has this timeline" into a claim that is false
+    in the only sense that matters.
+    """
+    try:
+        from src.utils import offline_fallback as _offline_mod
+
+        alternative = _offline_mod.offline_alternative()
+        if alternative.get("available"):
+            error.setdefault("error", {})["offline_alternative"] = alternative
+    except Exception:
+        # A connection error must survive anything wrong with the fallback path.
+        pass
+    return error
 
 
 def _destructive_versioning_provider() -> Optional[Tuple[Any, Any, str, Optional[str]]]:
@@ -2489,11 +2509,12 @@ def _check():
         )
     resolve = get_resolve()
     if resolve is None:
-        return None, None, _err(
-            "Not connected to DaVinci Resolve. Is Resolve running?",
-            code="NOT_CONNECTED", category="not_connected", retryable=True,
-            remediation="Open DaVinci Resolve Studio and set Preferences > General > 'External scripting using' to Local.",
-        )
+        # Delegate rather than assert. This branch used to claim Resolve might not be
+        # running and point every reader at a Studio-only preference — the same three
+        # wrong claims `_not_connected_error` was written to stop making, still being
+        # made here because two producers of the same error drifted apart. It also
+        # carries the offline-authoring offer, which this branch never had.
+        return None, None, _not_connected_error()
     pm = resolve.GetProjectManager()
     if pm is None:
         return None, None, _err(
@@ -22875,6 +22896,8 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 
 
 _TIMELINE_ACTIONS = [
+    # Offline authoring — served without a Resolve connection, above the _check() gate.
+    "author_offline", "offline_fallback_capabilities",
     "list", "get_current", "set_current", "get_name", "set_name", "get_start_frame",
     "get_end_frame", "get_start_timecode", "set_start_timecode", "get_track_count",
     "add_track", "delete_track", "get_track_sub_type", "set_track_enable",
@@ -23131,6 +23154,38 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     # action_help is pull-on-demand metadata; no Resolve connection needed.
     if action == "action_help":
         return _action_help("timeline", p)
+    if action in {"author_offline", "offline_fallback_capabilities"}:
+        # Deliberately above the connection check: these exist FOR the case where there
+        # is no connection. Authoring writes a file the user imports; it does not make
+        # a failed live operation succeed, and the response says so.
+        from src.utils import offline_fallback as _offline_mod
+
+        if action == "offline_fallback_capabilities":
+            return _ok(**_offline_mod.capabilities())
+        err, _clean = _validate_params(p, {
+            "output_path": {"type": str, "required": True, "non_empty": True},
+        })
+        if err:
+            return _err(err)
+        try:
+            return _ok(**_offline_mod.author(
+                p.get("clips") or [],
+                str(p["output_path"]),
+                target=str(p.get("target") or _offline_mod.DEFAULT_TARGET),
+                name=str(p.get("name") or "Offline Conform"),
+                fps=float(p.get("fps") or _offline_mod.DEFAULT_FPS),
+                start_timecode=str(p.get("start_timecode") or "01:00:00:00"),
+                resolution=str(p.get("resolution") or "1920x1080"),
+            ))
+        except _offline_mod.OfflineFallbackError as exc:
+            return _err(str(exc), code="OFFLINE_AUTHORING_REFUSED",
+                        category="invalid_input", retryable=False,
+                        remediation=(
+                            "Supply clips=[{path, start_frame, end_frame}] with frame "
+                            "numbers at the timeline rate; end_frame is EXCLUSIVE. Add "
+                            "media_start_tc_frame per clip so source frames are "
+                            "timecode-absolute, or the import can produce an empty timeline."
+                        ))
     pm, proj, err = _check()
     if err:
         return err

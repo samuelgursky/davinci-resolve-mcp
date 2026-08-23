@@ -67,6 +67,45 @@ Supported aliases include `aaf`, `drt`, `edl`, `edl_cdl`, `edl_sdl`,
 - Synthetic-only unlink, missing-media detection, relink candidate planning,
   and safe relink all worked through generated media.
 
+## When Resolve is unreachable
+
+An unreachable Resolve used to end the work. It no longer has to: `timeline` serves two
+actions **above** the connection check, and every not-connected error carries an
+`offline_alternative` block naming them.
+
+- `author_offline(clips[], output_path, target?, name?, fps?, start_timecode?,
+  resolution?)` — write an importable timeline from a file-path clip plan.
+  Targets, in preference order:
+  - **`drt`** (default) — Resolve-native, carries track structure. Stamped at project
+    version 17 (Resolve 21.0); older builds need the advanced server's
+    `drt(action='downgrade')`. Verified map: 18.0.4 → 11, 19.1.x → 14, 21.0 → 17.
+  - **`otio`** — round-trips through this repo's own parser and carries gaps, per-clip
+    speed, and transitions. The target to pick when the plan has retimes.
+  - **`edl`** — CMX3600: video cuts and M2 speed, nothing else.
+- `offline_fallback_capabilities()` — whether authoring is available here, and why not
+  if it is not.
+
+Frame numbers are at the timeline rate and `end_frame` is **EXCLUSIVE**, matching
+`AppendToTimeline`'s half-open range.
+
+**It is an offer, not a substitute.** A caller who asked to build a timeline *in Resolve*
+has not succeeded because a file was written. The connection error stays an error, the
+block says outright that authoring does not complete what failed, and nothing is authored
+unless someone asks for it.
+
+Two warnings the result can carry, both for failures that are otherwise silent:
+
+- `media_tc_origin_assumed` — OTIO source frames are **timecode-absolute**. An event with
+  no media timecode origin imports as an *empty* timeline: the file opens, nothing
+  appears, no error is raised. Pass `media_start_tc_frame` (or an absolute
+  `src_tc_frame`) per clip. Every event that had to assume is named.
+- `retimes_flattened` — a `.drt` has no per-clip speed field, so retimes flatten to 100%
+  forward. Every event that lost one is named; author OTIO to keep them.
+
+Authoring runs in Node against `resolve-advanced/server/author-interchange.mjs` rather
+than a second Python writer — two writers to keep in agreement means the one that drifts
+is always the copy nobody runs. Without Node it refuses and says so.
+
 ## Boundaries
 
 - Interchange formats are not semantically equivalent. DRT is the strongest
