@@ -95,13 +95,64 @@ def _platform_key(platform: str | None = None) -> str:
     return "linux"
 
 
+def _discovered_default(kind: str) -> str | None:
+    """Ask the runtime helpers where Resolve actually is.
+
+    The candidate table above is a table of *conventional* locations. Resolve is
+    routinely installed somewhere else — a second drive is the common case,
+    because the application and its caches are large (issue #158 reported
+    `D:\\Programs\\DaVinci Resolve`). install.py already looks past the table
+    via these helpers; doctor did not, so it reported FAIL on installs the
+    installer had just configured correctly. That disagreement between two tools
+    describing one machine is the same failure shape as issue #106.
+
+    Only consulted when no candidate exists, and only for the two kinds the
+    helpers can answer. `api` has no discovery helper, so a non-default install
+    can still miss there — worth knowing when reading a report.
+    """
+    if str(REPO) not in sys.path:
+        # doctor is run standalone (`python scripts/doctor.py`) as often as it is
+        # run through the launcher, and only the latter puts the repo on the path.
+        sys.path.insert(0, str(REPO))
+
+    if kind == "lib":
+        try:
+            from src.utils.platform import discover_scripting_lib
+        except Exception:
+            return None
+        try:
+            discovered = discover_scripting_lib()
+        except Exception:
+            return None
+        return str(discovered) if discovered and Path(discovered).exists() else None
+
+    if kind == "app":
+        try:
+            from src.utils.resolve_runtime import _executable_from_line, resolve_processes
+        except Exception:
+            return None
+        try:
+            processes = resolve_processes() or []
+        except Exception:
+            return None
+        for line in processes:
+            executable = _executable_from_line(line)
+            if executable and Path(executable).exists():
+                return str(executable)
+    return None
+
+
 def _resolve_default(kind: str, platform: str | None = None) -> str:
-    """First candidate of `kind` that exists, else the first (so the FAIL line
-    names the canonical location rather than an arbitrary miss)."""
+    """First candidate of `kind` that exists, then discovery, else the first
+    candidate (so the FAIL line names the canonical location rather than an
+    arbitrary miss)."""
     candidates = _RESOLVE_PATH_CANDIDATES[_platform_key(platform)][kind]
     for candidate in candidates:
         if Path(candidate).exists():
             return candidate
+    discovered = _discovered_default(kind)
+    if discovered:
+        return discovered
     return candidates[0]
 
 
@@ -170,11 +221,27 @@ def check(results: list[dict[str, str]], status: str, name: str, detail: str) ->
     results.append({"status": status, "name": name, "detail": detail})
 
 
+def _normalize_separators(text: str) -> str:
+    r"""Collapse every run of backslashes to a single forward slash.
+
+    A Windows path does not survive a literal substring test against the file it
+    was written into: JSON escapes `C:\Users\x` as `C:\\Users\\x`, and TOML
+    may keep it single-escaped or write a literal string. doctor compared the
+    unescaped path against the raw file text and so reported the entry missing
+    on configs it had itself just written (issue #158).
+
+    Collapsing runs — rather than only the doubled form — is what makes both
+    spellings compare equal, and normalizing the needle the same way keeps the
+    comparison symmetric.
+    """
+    return re.sub(r"\\+", "/", text)
+
+
 def file_contains(path: Path, needles: list[str]) -> tuple[bool, str]:
     if not path.exists():
         return False, "missing"
-    text = path.read_text(errors="replace")
-    missing = [needle for needle in needles if needle not in text]
+    text = _normalize_separators(path.read_text(errors="replace"))
+    missing = [needle for needle in needles if _normalize_separators(needle) not in text]
     if missing:
         return False, "missing: " + ", ".join(missing)
     return True, "contains davinci-resolve MCP entry"

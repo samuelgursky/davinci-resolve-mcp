@@ -2,6 +2,63 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.103.2
+
+**A Windows setup that failed with nothing to read.** Reported in issue #158 by
+@KMiNT21 on a machine carrying both Python 3.12 and 3.13: `npx davinci-resolve-mcp`
+exited without a traceback, a log line, or an error. Three defects compounded.
+
+The first is the one that mattered. The npm launcher tested for the Windows `py`
+launcher with `py --version`, and that result gated the entire `py -3.12 / -3.11 /
+-3.10` candidate list. `py` does not accept `--version` on every build — it exits
+101 on the ones it does not — so on those machines the probe reported no launcher,
+every version-pinned candidate was discarded, and selection fell through to bare
+`python`: the 3.13 that the candidate ordering exists specifically to avoid. The
+3.13 protections added in v2.26.1 were not wrong; they were being skipped past.
+
+The fix removes the probe rather than correcting its flag. `checkPython()` already
+validates each candidate by running it, so a machine without `py` costs one failed
+spawn. A probe that can produce a false negative earns its place only if something
+downstream cannot do without it, and nothing here needed it.
+
+### Fixed
+
+- `bin/davinci-resolve-mcp.mjs` no longer gates the `py -3.x` candidates behind a
+  `py --version` probe.
+- An access-violation exit is now explained instead of propagated bare. Windows
+  reports `STATUS_ACCESS_VIOLATION` as an exit code (`3221225477`, or `-1073741819`
+  read signed), not as a signal — the interpreter dies inside the native library
+  with no chance to print. Both the launcher and `install.py`'s connection probe now
+  name the code, say why there is no traceback, and give the remedy. Previously the
+  probe could only report `Process exited with code 3221225477`.
+- `scripts/doctor.py` consults the runtime discovery helpers when every candidate
+  path misses, so Resolve installed off the conventional root (the reporter had it
+  on `D:`) is found rather than reported as four FAILs on a machine `install.py` had
+  just configured correctly. Same shape as issue #106.
+- `scripts/doctor.py` no longer reports a client config as `missing` because of path
+  escaping. A Windows path written into JSON comes back with doubled separators, and
+  the literal substring test could never match it — a false negative in the tool
+  whose job is to say whether setup worked.
+
+### Not changed
+
+Python 3.13 is still permitted. The policy set in v2.26.1 is a 3.10 floor with no
+cap — warn, do not block — and issue #158 proposed enforcing 3.10-3.12 on Windows.
+The candidate ordering already prefers the lower-risk interpreters; the bug was that
+ordering being bypassed, which is now fixed.
+
+### Coverage and its limits
+
+`tests/test_windows_python_crash.py` pins the launcher's candidate shape and the
+crash-code translation; `tests/test_doctor_paths.py` gains the discovery and
+path-escaping cases. All were confirmed to fail against the unfixed code.
+
+What is **not** covered, and is not coverable from macOS: whether `py --version`
+actually fails on any given Windows build. That claim comes from the reporter. The
+fix does not rest on it — it removes the probe rather than correcting it, so the
+code no longer has an opinion either way. The access-violation paths are likewise
+tested by injecting the exit code, not by producing a real crash.
+
 ## What's New in v2.103.1
 
 **A loudness measurement could silently become a single frame's reading.**

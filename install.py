@@ -37,7 +37,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.103.1"
+VERSION = "2.103.2"
 # Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
 # Resolve's scripting bridge loads into newer interpreters on recent builds
 # (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
@@ -1253,6 +1253,54 @@ def install_dependencies(venv_path, project_dir):
 
 # ─── Connection Verification ─────────────────────────────────────────────────
 
+#: Windows surfaces a hard access violation (STATUS_ACCESS_VIOLATION) as a
+#: process exit code. Both spellings appear in the wild: the unsigned value and
+#: the signed reading of the same 32 bits. The interpreter dies inside the
+#: native library, so there is no traceback and no stderr to report — without
+#: this translation the probe can only say "exited with code 3221225477",
+#: which is the shape issue #158 was reported as.
+WINDOWS_ACCESS_VIOLATION_CODES = (3221225477, -1073741819)
+
+
+def _version_parts(version):
+    """A `(major, minor, ...)` int tuple, or None if it cannot be read.
+
+    `is_abi_risk_python_version` unpacks `version[:2]`, so handing it the string
+    "3.13.3" yields `("3", ".")` and a quiet False — the interpreter most likely
+    to have caused the crash would be reported as not at risk. Normalizing here
+    means a caller cannot make that mistake by passing the obvious thing.
+    """
+    if version is None:
+        return None
+    if isinstance(version, str):
+        try:
+            return tuple(int(part) for part in version.split(".")[:3])
+        except ValueError:
+            return None
+    try:
+        return tuple(int(part) for part in tuple(version)[:3])
+    except (TypeError, ValueError):
+        return None
+
+
+def access_violation_message(returncode, version=None):
+    """Explain an access-violation exit, naming the ABI theory when it fits."""
+    text = (
+        "Python crashed with an access violation (0xC0000005) while loading "
+        "Resolve's scripting library — no traceback is possible, the process "
+        "was terminated by the OS."
+    )
+    parts = _version_parts(version)
+    if parts is None or is_abi_risk_python_version(parts):
+        text += (
+            " This is the signature of a C ABI mismatch: recreate the venv on "
+            "Python 3.10-3.12 (e.g. DAVINCI_RESOLVE_MCP_PYTHON=...\\python3.12.exe)."
+        )
+    else:
+        text += " Check that RESOLVE_SCRIPT_LIB names the library from your Resolve install."
+    return text
+
+
 def verify_resolve_connection(python_path, api_path, lib_path):
     """Try to import DaVinciResolveScript and connect."""
     if not api_path:
@@ -1311,6 +1359,12 @@ def verify_resolve_connection(python_path, api_path, lib_path):
         elif output.startswith("IMPORTED_OK:"):
             return True, "API module loaded (Resolve not running)"
         else:
+            if result.returncode in WINDOWS_ACCESS_VIOLATION_CODES:
+                try:
+                    version = _version_for_python(python_path)
+                except Exception:
+                    version = None
+                return False, access_violation_message(result.returncode, version)
             if output:
                 return False, output
             return False, f"Process exited with code {result.returncode}"
@@ -2219,7 +2273,10 @@ def main():
                     "             Point RESOLVE_SCRIPT_LIB at the fusionscript library inside your "
                     "Resolve install, or start Resolve and re-run setup."
                 )
-            if py_abi_risk:
+            if py_abi_risk and "0xC0000005" not in message:
+                # The access-violation message already carries this remedy, and
+                # states it as a diagnosis rather than a maybe. Do not follow it
+                # with a weaker restatement of itself.
                 print(
                     f"             On Python 3.13+ this may be an ABI mismatch with Resolve's "
                     f"scripting library — try Python 3.10-3.12 if it persists."

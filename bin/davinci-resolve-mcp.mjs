@@ -179,14 +179,6 @@ function syncManagedInstall(root) {
   return root;
 }
 
-function commandExists(command, args = []) {
-  const result = spawnSync(command, [...args, "--version"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  return result.status === 0;
-}
-
 function parseExecutable(value) {
   if (!value) {
     return null;
@@ -207,7 +199,14 @@ function pythonCandidates() {
   // Prefer the lowest-ABI-risk interpreters first, then newer ones, then the
   // generic launchers. All 3.10+ are accepted; ordering just picks the safest
   // when several are installed.
-  if (process.platform === "win32" && commandExists("py")) {
+  // No existence probe in front of these. `py --version` is not a reliable
+  // one — the Windows launcher does not accept it on every build, and it
+  // exits 101 on the ones it does not (issue #158). A probe that gets that
+  // wrong discards every version-pinned candidate below and falls through to
+  // bare `python`, which is exactly the 3.13 the ordering exists to avoid.
+  // checkPython() runs each candidate anyway, so a missing `py` costs one
+  // failed spawn and is skipped.
+  if (process.platform === "win32") {
     candidates.push(
       { command: "py", args: ["-3.12"] },
       { command: "py", args: ["-3.11"] },
@@ -317,6 +316,24 @@ function venvPython(root) {
   return info;
 }
 
+// Windows reports a hard access violation as the process exit code, not as a
+// signal and not as a traceback: the interpreter is gone before it can say
+// anything. Loading Resolve's fusionscript under a Python its C ABI does not
+// match is one way to get there, so name that possibility rather than letting
+// the run end in a bare unexplained code (issue #158).
+const WINDOWS_ACCESS_VIOLATION = [3221225477, -1073741819];
+
+function accessViolationNote(code) {
+  return [
+    `The Python process was terminated by an access violation (0x${(code >>> 0).toString(16).toUpperCase()}).`,
+    "It crashed inside a native library before it could report anything, so there is no traceback above.",
+    "The usual cause is Resolve's scripting library being loaded by a Python whose C ABI it was not built",
+    "against. If you are on Python 3.13+, install Python 3.10-3.12 and pin it:",
+    "  DAVINCI_RESOLVE_MCP_PYTHON=C:\\Path\\To\\python3.12.exe",
+    "then re-run setup so the managed venv is rebuilt on that interpreter.",
+  ].join("\n");
+}
+
 function run(command, args, options = {}) {
   const child = spawn(command, args, {
     cwd: options.cwd,
@@ -328,6 +345,9 @@ function run(command, args, options = {}) {
     if (signal) {
       process.kill(process.pid, signal);
       return;
+    }
+    if (WINDOWS_ACCESS_VIOLATION.includes(code)) {
+      console.error(accessViolationNote(code));
     }
     process.exit(code ?? 1);
   });
