@@ -4072,6 +4072,74 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertEqual(index["counts"]["clips"], 2)
             self.assertGreaterEqual(search["result_count"], 1)
 
+    def test_batch_job_slice_reports_whisper_timeout_as_failed_clip(self):
+        """A wall-clock transcription timeout must not count as a succeeded clip."""
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        timeout_payload = {
+            "success": False,
+            "status": "wall_clock_timeout",
+            "backend": "whisper_cli",
+            "reason": "wall-clock timeout after 90s",
+            "elapsed_ms": 90000,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "source")
+            analysis_dir = os.path.join(tmp, "analysis")
+            os.makedirs(source_dir)
+            source = os.path.join(source_dir, "job_timeout.mp4")
+            self._write_synthetic_media(source)
+            records = [{
+                "clip_id": "clip-timeout",
+                "clip_name": "job_timeout.mp4",
+                "file_path": source,
+                "media_id": "media-timeout",
+            }]
+            params = {
+                "analysis_root": analysis_dir,
+                "depth": "quick",
+                "transcription": {"enabled": True, "backend": "mock"},
+                "vision": {"enabled": False},
+            }
+            created = create_batch_job(
+                project_name="Example Project",
+                project_id="project-job-timeout",
+                records=records,
+                target={"type": "file_list"},
+                params=params,
+                name="Timeout batch",
+            )
+            self.assertTrue(created["success"])
+            job = created["job"]
+            captured = {}
+            real_execute_plan = execute_plan
+
+            def _capture_execute_plan(*args, **kwargs):
+                manifest = real_execute_plan(*args, **kwargs)
+                captured["manifest"] = manifest
+                return manifest
+
+            with unittest.mock.patch.object(
+                _media_analysis_module, "_transcribe", return_value=timeout_payload
+            ), unittest.mock.patch(
+                "src.utils.media_analysis_jobs.execute_plan",
+                side_effect=_capture_execute_plan,
+            ):
+                slice_result = run_batch_job_slice(job["project_root"], job["job_id"], max_clips=1)
+
+            self.assertIn("manifest", captured)
+            clip_result = (captured["manifest"].get("clips") or [{}])[0]
+            self.assertFalse(
+                clip_result.get("success"),
+                "transcription timeout must not mark clip_result.success True",
+            )
+            self.assertEqual((slice_result.get("processed") or [{}])[0].get("status"), "failed")
+            final = batch_job_status(job["project_root"], job["job_id"])
+            self.assertEqual(final["failed_clips"], 1)
+            self.assertEqual(final["succeeded_clips"], 0)
+            self.assertTrue(final.get("last_error"), "job last_error must be set on transcription timeout")
+            self.assertNotEqual(final["status"], "completed")
+
     def test_batch_job_cancel_and_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             source_dir = os.path.join(tmp, "source")
