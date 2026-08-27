@@ -73,7 +73,27 @@ thrown away:
 
 <!-- Aspect ratios, timeline naming, versioning, where renders go. -->
 
-_Not yet captured._
+### Word-by-word subtitles: split the existing cards, do not re-transcribe
+
+When word-for-word captions are asked for and a subtitle track already exists,
+split those cards into one word each. Do not run `CreateSubtitlesFromAudio`
+again to get word-level timing.
+
+**Why:** the existing track is the transcript that has already been read and
+lived with. Re-transcribing throws that away and returns a different wording,
+including different mistakes, for no gain the editor asked for.
+
+**The trap:** Resolve's API cannot write subtitle items — `CreateSubtitlesFromAudio`
+is the only path that creates them, and it always transcribes. So splitting has
+to leave the tool: build an SRT and let the editor import it (File > Import >
+Subtitle). Offering "regenerate with chars-per-line = 1" as the convenient route
+is offering to discard the transcript.
+
+**Timing:** divide each card's own span between its words by character length,
+so the speech timing the card already carries is never stretched or shifted.
+Hold each word at least 3 frames (120 ms) or it cannot be read; take the extra
+frames from the longest words in the same gapless run, so the run's start and
+end stay put.
 
 ---
 
