@@ -134,6 +134,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str]) -> int:
+    if argv is None:
+        raise TypeError("argv must not be None")
     args = _parse_args(argv)
     content = render()
     if args.check:

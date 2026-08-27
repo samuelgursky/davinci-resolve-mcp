@@ -10,6 +10,7 @@ import importlib.util
 import contextlib
 import io
 import pathlib
+import sys
 import tempfile
 import unittest
 
@@ -65,6 +66,44 @@ class ApiLimitationsDocTest(unittest.TestCase):
             self.assertEqual(raised.exception.code, 0)
             self.assertIn("usage:", stdout.getvalue().lower())
             self.assertIn("--check", stdout.getvalue())
+            self.assertFalse(gen.DOC_PATH.exists())
+
+    def test_unknown_option_exits_without_writing_report(self):
+        gen = _load_generator()
+        with tempfile.TemporaryDirectory() as tmp:
+            gen.DOC_PATH = pathlib.Path(tmp) / "api-limitations.md"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as raised:
+                    gen.main(["--unknown-option"])
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn("usage:", stderr.getvalue().lower())
+            self.assertIn("unrecognized arguments", stderr.getvalue())
+            self.assertFalse(gen.DOC_PATH.exists())
+
+    def test_tuple_argv_is_accepted_without_writing_report(self):
+        gen = _load_generator()
+        with tempfile.TemporaryDirectory() as tmp:
+            gen.DOC_PATH = pathlib.Path(tmp) / "api-limitations.md"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                with self.assertRaises(SystemExit) as raised:
+                    gen.main(("--help",))
+            self.assertEqual(raised.exception.code, 0)
+            self.assertIn("usage:", stdout.getvalue().lower())
+            self.assertFalse(gen.DOC_PATH.exists())
+
+    def test_none_argv_fails_before_writing_report(self):
+        gen = _load_generator()
+        original_argv = sys.argv
+        with tempfile.TemporaryDirectory() as tmp:
+            gen.DOC_PATH = pathlib.Path(tmp) / "api-limitations.md"
+            sys.argv = ["gen_api_limitations.py"]
+            try:
+                with self.assertRaises(TypeError):
+                    gen.main(None)
+            finally:
+                sys.argv = original_argv
             self.assertFalse(gen.DOC_PATH.exists())
 
 
