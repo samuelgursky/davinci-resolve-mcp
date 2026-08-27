@@ -2,9 +2,9 @@
 
 # Read/Write Symmetry Audit
 
-- write-style actions scanned: **116**
-- with a matching read: **67**
-- high-signal `set_` actions without a direct/known readback: **8**
+- write-style action occurrences scanned: **116**
+- write-style action occurrences with a matching read: **67**
+- distinct high-signal `set_` actions without a direct/known readback: **8**
 
 ## High-signal gaps — `set_` with no direct/known readback
 
@@ -17,6 +17,6 @@
 - `set_node_enabled`
 - `set_title_text`
 
-## Low-signal (create/add/insert/import — usually expected): 40
+## Low-signal (create/add/insert/apply/import — usually expected): 40 distinct names
 
 `add_clip_mattes`, `add_comp`, `add_fusion_mask`, `add_subfolder`, `add_sync_event_markers`, `add_timeline_mattes`, `add_track`, `add_version`, `apply_arri_cdl_lut`, `apply_cuts`, `apply_fairlight_preset`, `apply_grade_from_drx`, `apply_look_to_items`, `apply_spec`, `create_compound_clip`, `create_fusion_clip`, `create_magic_mask`, `create_stereo_clip`, `create_subtitles`, `create_timeline`, `create_timeline_from_clips`, `create_variant_from_ranges`, `import_comp`, `import_folder`, `import_from_drp`, `import_into_timeline`, `import_media`, `import_preset`, `import_project`, `import_render`, `import_timeline`, `import_timeline_checked`, `import_to_pool`, `insert_audio`, `insert_fusion_composition`, `insert_fusion_generator`, `insert_fusion_title`, `insert_generator`, `insert_ofx_generator`, `insert_title`

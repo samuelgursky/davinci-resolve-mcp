@@ -57,13 +57,13 @@ def _module_constants(tree: ast.Module):
 
 
 def _resolve_actions(expr, constants, seen=None):
-    """Resolve supported action-list expressions to string values."""
+    """Resolve supported action-list expressions or return None."""
     seen = set() if seen is None else seen
     if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
         return [expr.value]
     if isinstance(expr, ast.Name):
         if expr.id in seen or expr.id not in constants:
-            return []
+            return None
         return _resolve_actions(expr=constants[expr.id], constants=constants,
                                  seen=seen | {expr.id})
     if isinstance(expr, (ast.List, ast.Tuple)):
@@ -71,12 +71,18 @@ def _resolve_actions(expr, constants, seen=None):
         for element in expr.elts:
             if isinstance(element, ast.Starred):
                 element = element.value
-            actions.extend(_resolve_actions(element, constants, seen))
+            resolved = _resolve_actions(element, constants, seen)
+            if resolved is None:
+                return None
+            actions.extend(resolved)
         return actions
     if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
-        return (_resolve_actions(expr.left, constants, seen)
-                + _resolve_actions(expr.right, constants, seen))
-    return []
+        left = _resolve_actions(expr.left, constants, seen)
+        right = _resolve_actions(expr.right, constants, seen)
+        if left is None or right is None:
+            return None
+        return left + right
+    return None
 
 
 def _action_lists(src: str):
@@ -93,7 +99,7 @@ def _action_lists(src: str):
                 and node.args[0].id == "action"):
             continue
         actions = _resolve_actions(node.args[1], constants)
-        if actions:
+        if actions is not None:
             yield actions
 
 
@@ -134,9 +140,9 @@ def render_report(src: str) -> str:
         "",
         "# Read/Write Symmetry Audit",
         "",
-        f"- write-style actions scanned: **{total}**",
-        f"- with a matching read: **{covered}**",
-        f"- high-signal `set_` actions without a direct/known readback: **{len(high)}**",
+        f"- write-style action occurrences scanned: **{total}**",
+        f"- write-style action occurrences with a matching read: **{covered}**",
+        f"- distinct high-signal `set_` actions without a direct/known readback: **{len(high)}**",
         "",
     ]
     if high:
@@ -148,7 +154,8 @@ def render_report(src: str) -> str:
             lines.append(f"- `{a}`")
     lines += [
         "",
-        f"## Low-signal (create/add/insert/import — usually expected): {len(low)}",
+        f"## Low-signal (create/add/insert/apply/import — usually expected): "
+        f"{len(low)} distinct names",
         "",
         ", ".join(f"`{a}`" for a in low),
     ]

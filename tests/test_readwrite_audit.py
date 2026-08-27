@@ -87,6 +87,88 @@ def tool(action):
         total, covered, high, low = audit_rw.audit(src)
         self.assertEqual((total, covered, high, low), (1, 1, [], []))
 
+    def test_annotated_action_list_is_scanned(self):
+        src = '''
+_ACTIONS: tuple[str, ...] = ("get_name", "set_name")
+def tool(action):
+    return _unknown(action, _ACTIONS)
+'''
+        total, covered, high, low = audit_rw.audit(src)
+        self.assertEqual((total, covered, high, low), (1, 1, [], []))
+
+    def test_string_list_and_tuple_constants_are_scanned(self):
+        src = '''
+_STRING_ACTIONS = "set_string"
+_LIST_ACTIONS = ["set_list"]
+_TUPLE_ACTIONS = ("set_tuple",)
+def string_tool(action):
+    return _unknown(action, _STRING_ACTIONS)
+def list_tool(action):
+    return _unknown(action, _LIST_ACTIONS)
+def tuple_tool(action):
+    return _unknown(action, _TUPLE_ACTIONS)
+'''
+        total, covered, high, low = audit_rw.audit(src)
+        self.assertEqual(
+            (total, covered, high, low),
+            (3, 0, ["set_list", "set_string", "set_tuple"], []),
+        )
+
+    def test_concatenated_action_constants_are_scanned(self):
+        src = '''
+_READ_ACTIONS = ["get_name"]
+_WRITE_ACTIONS = ("set_name",)
+_ACTIONS = _READ_ACTIONS + _WRITE_ACTIONS
+def tool(action):
+    return _unknown(action, _ACTIONS)
+'''
+        total, covered, high, low = audit_rw.audit(src)
+        self.assertEqual((total, covered, high, low), (1, 1, [], []))
+
+    def test_recursive_action_constants_are_skipped(self):
+        src = '''
+_FIRST = _SECOND
+_SECOND = _FIRST
+def tool(action):
+    return _unknown(action, _FIRST)
+'''
+        total, covered, high, low = audit_rw.audit(src)
+        self.assertEqual((total, covered, high, low), (0, 0, [], []))
+
+    def test_partially_dynamic_action_group_is_skipped(self):
+        src = '''
+def dynamic_actions():
+    return ["get_orphan"]
+def tool(action):
+    return _unknown(action, ["set_orphan", *dynamic_actions()])
+'''
+        total, covered, high, low = audit_rw.audit(src)
+        self.assertEqual((total, covered, high, low), (0, 0, [], []))
+
+    def test_report_labels_occurrences_and_distinct_gap_names(self):
+        src = '''
+def first_tool(action):
+    return _unknown(action, ["set_orphan"])
+def second_tool(action):
+    return _unknown(action, ["set_orphan"])
+'''
+        report = audit_rw.render_report(src)
+        self.assertIn("- write-style action occurrences scanned: **2**", report)
+        self.assertIn(
+            "- write-style action occurrences with a matching read: **0**",
+            report,
+        )
+        self.assertIn(
+            "- distinct high-signal `set_` actions without a direct/known readback: "
+            "**1**",
+            report,
+        )
+        self.assertIn(
+            "## Low-signal (create/add/insert/apply/import — usually expected): "
+            "0 distinct names",
+            report,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
