@@ -2,6 +2,58 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.0
+
+The read/write symmetry audit's worklist, worked. PR #162's AST rewrite left
+eight `set_` actions with no readback; live probing on Studio 19.1.3.7 sorted
+them into four the API supports and four it simply cannot — and turned up a
+render-pipeline failure mode along the way.
+
+### Added
+
+- `media_pool.get_clip_marks` — read mark in/out for a set of media-pool clips,
+  the read twin of `set_clip_marks` (live-verified round trip: set 12/60, read
+  12/60).
+- `timeline.get_clips_linked` — per-item link readback via
+  `TimelineItem.GetLinkedItems` (live-verified: a video item returns its audio
+  twin).
+- `timeline.get_title_text` — the read twin of `set_title_text`. Resolves the
+  same heuristic title-property keys as the setter, and falls back to reading
+  `StyledText` off the TextPlus tool in the item's Fusion comp — on Studio
+  19.1.3 the property route exposes no title keys at all (the setter fails
+  there too), while the comp route reads and writes fine.
+- `media_pool_item_markers.get_name` — the markers group carried `set_name`
+  with no read twin.
+- `render.verify_output(job_id)` — checks the actual output file against the
+  job's own mark range: existence, size, ffprobe duration, and a
+  duration-ratio warning when a Complete job produced a near-empty stub (the
+  issue #164 signature: content the render engine never visited). Verify
+  before deleting the job — deleted jobs carry no TargetDir to check.
+
+### Documented (api_truth, Blackmagic-facing report regenerated)
+
+Four readbacks the API cannot express, each now a submit-tagged entry:
+`SetCDL` (no GetCDL anywhere — read grades via DRX decode instead),
+`SetNodeEnabled` (no GetNodeEnabled), `SetKeyframeInterpolation` (nothing
+returns interpolation; the whole keyframe family is absent on 19.1.3), and
+`SetHighPriority` (no getter, irreversible per session). The symmetry report's
+high-signal gap list is now exactly these four.
+
+And one render-pipeline bug found the hard way: **deleting or closing a
+project while its render job is running wedges Resolve** — the orphaned
+render's `IsRenderingInProgress` sticks True on every subsequent project,
+`StopRendering` does not clear it, new render jobs sit at 0% forever, then
+`StartRendering` starts returning False and `Resolve.Quit()` is refused
+behind a quit-confirm dialog. Reproduced live on Studio 19.1.3.7. Poll
+`GetRenderJobStatus` for completion, never `IsRenderingInProgress`, and never
+close a project mid-render.
+
+### Version ledger
+
+`MediaPoolItem.GetMarkInOut` and `TimelineItem.GetLinkedItems` enter the
+evidence gates as measured-present on 19.1.3.7 (introduction versions
+unbisected; the floors err toward refusing on older builds).
+
 ## What's New in v2.103.5
 
 Two fixes that fell out of auditing the code around this week's releases — the

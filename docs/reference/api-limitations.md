@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 29 missing capabilities, 38 bugs / unreliable behaviors.
+**Totals:** 33 missing capabilities, 39 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -238,6 +238,38 @@ equivalent, blocking full automation.
 - **Behavior:** Some render formats expose NO codecs at all, and the call then rejects every codec value — the empty string, the format id itself, and any plausible name ('Linear PCM'). Which formats are affected varies by build: 'wav' and 'gif' on Studio 19.1.3.7; 'braw', 'mts' and 'wav' on 21.0.4.5 (gif gained codecs, BRAW and MTS lost them). 'wav' is affected on both, so there is no documented way to select it through this API and an audio-only WAV deliverable is not expressible in scripting.
 - **Workaround / current handling:** Check GetRenderCodecs(format) first; when it is empty, treat the format as unreachable through this API rather than guessing a codec value. Render audio-only via ExportVideo=False on a format that does expose codecs, or drive it from a saved render preset.
 - **Tags:** render, deliver, audio, unsupported
+
+### TimelineItem.SetCDL (write-only — no GetCDL anywhere)
+
+- **Object:** `TimelineItem`
+- **Signature:** `({NodeIndex, Slope, Offset, Power, Saturation}) -> Bool`
+- **Behavior:** SetCDL writes a node's CDL but no object exposes a read: no GetCDL on TimelineItem or Graph in the API reference, and dir() on a live Graph confirms (Studio 19.1.3.7). A grade applied via SetCDL cannot be read back, diffed, or verified through the API.
+- **Workaround / current handling:** Track intended CDL values in the caller, or read the actual grade by exporting a DRX still and decoding it (this repo's drx tool decodes 100% of DRX params — slope/offset/power/sat included).
+- **Tags:** color, missing-method, readback
+
+### Graph.SetNodeEnabled (write-only — no GetNodeEnabled)
+
+- **Object:** `Graph`
+- **Signature:** `(nodeIndex, bool) -> Bool`
+- **Behavior:** A node's bypass state can be set but never read: no GetNodeEnabled in the API reference, and dir() on a live Graph confirms (Studio 19.1.3.7). After a SetNodeEnabled the caller cannot verify it took, and the pre-existing state of a node someone toggled in the UI is unknowable.
+- **Workaround / current handling:** Treat node-enable state as write-only: record what you set, and verify visually (rendered-frame compare) when the state matters.
+- **Tags:** color, missing-method, readback
+
+### TimelineItem.SetKeyframeInterpolation (write-only)
+
+- **Object:** `TimelineItem`
+- **Signature:** `(property, frame, type) -> Bool`
+- **Behavior:** Interpolation can be written per keyframe but nothing returns it: GetKeyframeAtIndex/GetPropertyAtKeyframeIndex expose frame and value only (API reference). On Studio 19.1.3.7 the whole keyframe method family is absent from dir() — these methods are 20.x+.
+- **Workaround / current handling:** Record interpolation choices in the caller; readback is not available at any version.
+- **Tags:** timeline, missing-method, readback, keyframes
+
+### Resolve.SetHighPriority (write-only, irreversible per session)
+
+- **Object:** `Resolve`
+- **Signature:** `() -> Bool`
+- **Behavior:** Raises the Resolve process priority; there is no getter and no way to lower it again through the API (confirmed absent from dir() on Studio 19.1.3.7).
+- **Workaround / current handling:** Call it only when the user asked for a long render on a dedicated machine; state cannot be read back or undone without restarting Resolve.
+- **Tags:** app-control, missing-method, readback
 
 ### TimelineItem.CreateMagicMask (needs operator clicks)
 
@@ -564,3 +596,11 @@ values, or automation-hostile modal prompts.
 - **Behavior:** The returned TimelineItem objects can have an unreadable/empty GetUniqueId, notably when the clipInfo recordFrame lands in a span still occupied by another item (any duplicate-then-delete 'move' whose offset is smaller than the item duration hits this). The item may not actually exist on the timeline. A session that trusted the non-empty return and deleted the sources lost 26 clips (Portugal timeline, 2026-08-19).
 - **Workaround / current handling:** Never treat AppendToTimeline's return as proof of placement. Re-enumerate the track and match on record frame + duration before any dependent delete; never shift items by duplicate-then-delete into occupied spans — use timeline.ripple_insert, which rebuilds the tail into free space and verifies by readback.
 - **Tags:** editorial, silent-failure, unreliable-return, timeline
+
+### Project.IsRenderingInProgress (stuck True after deleting the rendering project)
+
+- **Object:** `Project`
+- **Signature:** `() -> Bool`
+- **Behavior:** Deleting or closing a project while its render job is still running orphans the render and wedges the whole render pipeline: the output file stops growing and Resolve idles at 0% CPU, IsRenderingInProgress on the NEXT current project reports True indefinitely, StopRendering does not clear it, NEW render jobs sit at 0% forever (then StartRendering starts returning False), and Resolve.Quit() is refused because the app believes a render is running — even project creation can start returning None behind the quit-confirm dialog (reproduced live on Studio 19.1.3.7, 2026-08-29).
+- **Workaround / current handling:** Never close or delete a project while IsRenderingInProgress is True — StopRendering first, wait for False, then close. Once wedged, only a manual quit (confirming the dialog) or force-quit clears it; treat a True that persists at 0% CPU with a static output file as stuck rather than rendering. Poll GetRenderJobStatus for completion instead of IsRenderingInProgress, which this failure poisons.
+- **Tags:** render, silent-failure, unreliable-return

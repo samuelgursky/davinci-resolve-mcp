@@ -119,6 +119,23 @@ _EVIDENCE_GATES: List[Dict[str, Any]] = [
         "issue": 128,
     },
     {
+        "symbol": "MediaPoolItem.GetMarkInOut",
+        "introduced_in": "19.1",
+        "source": "measured",
+        "note": "Present on Studio 19.1.3.7 (confirmed live 2026-08-29, "
+                "set/get round trip). Introduction version not bisected — "
+                "19.1 is the highest floor this repo can attest, so older "
+                "builds may have it too and the gate errs toward refusing.",
+    },
+    {
+        "symbol": "TimelineItem.GetLinkedItems",
+        "introduced_in": "19.1",
+        "source": "measured",
+        "note": "Present on Studio 19.1.3.7 (confirmed live 2026-08-29, "
+                "returned the audio twin of a video item). Introduction "
+                "version not bisected — same caveat as GetMarkInOut.",
+    },
+    {
         # Named on Project, not Timeline: the shipped README lists it in the
         # Project section and src/server.py calls it on the project handle. The
         # method's name says "CurrentTimeline", which is what made the earlier

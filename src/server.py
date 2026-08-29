@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.103.5"
+VERSION = "2.104.0"
 
 import base64
 import os
@@ -5612,6 +5612,76 @@ def _timeline_title_property_scan(tl, p: Dict[str, Any]):
     }
 
 
+def _timeline_get_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Read a title item's text back — the read twin of set_title_text.
+
+    Same key resolution as the setter: an explicit property_key wins, otherwise
+    the heuristic title-key candidates from the item's property map. Returns the
+    first key that holds a non-empty string, plus every candidate's value so a
+    caller can see which key actually carries the text on this generator.
+    """
+    item, err = _timeline_resolve_item_optional(tl, p)
+    if err:
+        return err
+    property_key = p.get("property_key") or p.get("key")
+    keys: List[str] = []
+    if property_key:
+        keys.append(str(property_key))
+    else:
+        flat, exc_text = _timeline_item_get_property_map(item, _ser)
+        if exc_text and not flat:
+            return _err(f"GetProperty failed: {exc_text}")
+        for row in _candidate_title_property_keys(flat):
+            if row["key"] not in keys:
+                keys.append(row["key"])
+        if not keys:
+            keys = ["Styled Text", "StyledText", "Text", "Rich Text"]
+    values: List[Dict[str, Any]] = []
+    text = None
+    text_key = None
+    for key in keys:
+        rec: Dict[str, Any] = {"property_key": key}
+        try:
+            value = item.GetProperty(key)
+        except Exception as exc:
+            rec["error"] = str(exc)
+            values.append(rec)
+            continue
+        rec["value"] = _ser(value)
+        values.append(rec)
+        if text is None and isinstance(value, str) and value.strip():
+            text = value
+            text_key = key
+    source = "property" if text is not None else None
+    if text is None:
+        # SetProperty/GetProperty title keys are not exposed on every build
+        # (absent for Text+ on Studio 19.1.3, where set_title_text also
+        # fails). The Fusion comp carries the same text as the TextPlus
+        # tool's StyledText input, which reads back fine there — so fall
+        # through to the comp when the property route finds nothing.
+        try:
+            if int(item.GetFusionCompCount() or 0) > 0:
+                comp = item.GetFusionCompByIndex(1)
+                tools = comp.GetToolList(False, "TextPlus") if comp else None
+                for key in (tools or {}):
+                    value = tools[key].GetInput("StyledText")
+                    if isinstance(value, str) and value.strip():
+                        text = value
+                        text_key = "StyledText"
+                        source = "fusion_comp"
+                        break
+        except Exception as exc:
+            values.append({"fusion_comp_error": str(exc)})
+    return {
+        "success": text is not None,
+        "timeline_item_id": _safe_timeline_item_id(item),
+        "text": text,
+        "property_key": text_key,
+        "source": source,
+        "values": values,
+    }
+
+
 def _timeline_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     item, err = _timeline_resolve_item_optional(tl, p)
     if err:
@@ -8634,6 +8704,7 @@ _MEDIA_POOL_KERNEL_ACTIONS = [
     "link_proxy_checked",
     "link_full_resolution_checked",
     "set_clip_marks",
+    "get_clip_marks",
     "clear_clip_marks",
     "copy_clip_annotations",
     "media_pool_boundary_report",
@@ -12843,6 +12914,41 @@ def _clip_media_signature(clip):
     return signature
 
 
+def _ffprobe_media_summary(path: str) -> Optional[Dict[str, Any]]:
+    """Small duration/stream summary of a rendered file; None when ffprobe is unusable."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        proc = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries",
+             "format=duration,size:stream=codec_type,codec_name",
+             "-of", "json", path],
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=20, stdin=subprocess.DEVNULL,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return {"error": (proc.stderr or "ffprobe failed").strip()[:300]}
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except ValueError:
+        return None
+    fmt = payload.get("format") or {}
+    summary: Dict[str, Any] = {
+        "streams": [
+            {"codec_type": st.get("codec_type"), "codec_name": st.get("codec_name")}
+            for st in payload.get("streams") or []
+        ],
+    }
+    try:
+        summary["duration_seconds"] = float(fmt.get("duration"))
+    except (TypeError, ValueError):
+        summary["duration_seconds"] = None
+    return summary
+
+
 def _probe_media_file(path: str):
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
@@ -13369,6 +13475,23 @@ def _set_clip_marks(root, mp, p: Dict[str, Any]):
             continue
         results.append({"clip_id": clip_id, "success": bool(clip.SetMarkInOut(mark_in, mark_out, p.get("type", "all")))})
     return {"success": all(row.get("success") for row in results), "count": len(results), "missing": missing, "results": results}
+
+
+def _get_clip_marks(root, mp, p: Dict[str, Any]):
+    """Read mark in/out for a set of media-pool clips — the read twin of set_clip_marks."""
+    resolved, err = _clips_from_params(root, mp, p)
+    if err:
+        return err
+    clips, missing = resolved
+    results = []
+    for clip in clips:
+        clip_id = _safe_media_pool_item_id(clip)
+        gate = _requires_method(clip, "GetMarkInOut", "19.1")
+        if gate:
+            return gate
+        marks = clip.GetMarkInOut() or {}
+        results.append({"clip_id": clip_id, "name": clip.GetName(), "marks": _ser(marks)})
+    return {"success": True, "count": len(results), "missing": missing, "results": results}
 
 
 def _clear_clip_marks(root, mp, p: Dict[str, Any]):
@@ -18457,6 +18580,11 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       delete_all_jobs() -> {success}
       list_jobs() -> {jobs}
       get_job_status(job_id) -> {status}
+      verify_output(job_id) -> {status, output_path, output_exists, output_size_bytes, output_probe, expected_duration_seconds, duration_ratio, warnings, verified}
+        JobStatus reports Complete even when the render produced a near-empty
+        stub (content before the timeline start, issue #164) — this checks the
+        actual output file against the job's mark range. Verify BEFORE deleting
+        the job; deleted jobs carry no TargetDir to check.
       start(job_ids?, interactive?) -> {success}
       stop() -> {success}
       is_rendering() -> {rendering}
@@ -18521,6 +18649,70 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return {"jobs": _ser(proj.GetRenderJobList())}
     elif action == "get_job_status":
         return _ser(proj.GetRenderJobStatus(p["job_id"]))
+    elif action == "verify_output":
+        # JobStatus lies by omission: a job whose content renders as nothing
+        # (e.g. clips placed before the timeline start, issue #164) still
+        # reports Complete at 100% with a stub output file. Verify the file.
+        job_id = p.get("job_id")
+        if not job_id:
+            return _err("verify_output requires job_id")
+        status = _ser(proj.GetRenderJobStatus(job_id)) or {}
+        jobs = _ser(proj.GetRenderJobList()) or []
+        job = next((j for j in jobs if j.get("JobId") == job_id), None)
+        if job is None:
+            return _err(
+                f"Render job {job_id!r} is not in the render queue "
+                "(deleted jobs cannot be verified — verify before deleting)",
+                code="JOB_NOT_FOUND", category="invalid_input",
+            )
+        result: Dict[str, Any] = {"job_id": job_id, "status": status}
+        target_dir = job.get("TargetDir")
+        filename = job.get("OutputFilename")
+        warnings: List[str] = []
+        output_path = None
+        if target_dir and filename:
+            output_path = os.path.join(target_dir, filename)
+        else:
+            warnings.append("Job carries no TargetDir/OutputFilename to verify against.")
+        result["output_path"] = output_path
+        if output_path:
+            exists = os.path.exists(output_path)
+            result["output_exists"] = exists
+            if exists:
+                result["output_size_bytes"] = os.path.getsize(output_path)
+                probe = _ffprobe_media_summary(output_path)
+                if probe:
+                    result["output_probe"] = probe
+                    duration = probe.get("duration_seconds")
+                    # Expected duration from the job's own mark range and rate.
+                    try:
+                        frames = int(job.get("MarkOut")) - int(job.get("MarkIn")) + 1
+                        fps = float(str(job.get("FrameRate")))
+                        expected = frames / fps if fps > 0 else None
+                    except (TypeError, ValueError):
+                        expected = None
+                    result["expected_duration_seconds"] = expected
+                    if duration is not None and expected and expected > 0:
+                        result["duration_ratio"] = round(duration / expected, 4)
+                        if duration < expected * 0.5:
+                            warnings.append(
+                                f"Output duration {duration:.2f}s is under half the job's "
+                                f"mark range ({expected:.2f}s). A Complete status with a "
+                                "near-empty file is the signature of content the render "
+                                "engine never visited — e.g. clips placed before the "
+                                "timeline start (recordFrame counted from absolute zero, "
+                                "issue #164)."
+                            )
+            else:
+                if status.get("JobStatus") == "Complete":
+                    warnings.append(
+                        "JobStatus is Complete but the output file does not exist."
+                    )
+        result["warnings"] = warnings
+        result["verified"] = bool(
+            output_path and result.get("output_exists") and not warnings
+        )
+        return result
     elif action == "start":
         job_ids = p.get("job_ids")
         interactive = p.get("interactive", False)
@@ -18645,7 +18837,7 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return _safe_quick_export(proj, p)
     elif action == "export_render_boundary_report":
         return _export_render_boundary_report(proj, p)
-    return _unknown(action, ["add_job","delete_job","delete_all_jobs","list_jobs","get_job_status","start","stop","is_rendering","get_formats","get_codecs","get_format_and_codec","set_format_and_codec","get_mode","set_mode","get_resolutions","get_settings","set_settings","list_presets","load_preset","save_preset","delete_preset","quick_export_presets","quick_export",*_RENDER_KERNEL_ACTIONS])
+    return _unknown(action, ["add_job","delete_job","delete_all_jobs","list_jobs","get_job_status","verify_output","start","stop","is_rendering","get_formats","get_codecs","get_format_and_codec","set_format_and_codec","get_mode","set_mode","get_resolutions","get_settings","set_settings","list_presets","load_preset","save_preset","delete_preset","quick_export_presets","quick_export",*_RENDER_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -19185,6 +19377,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         return _link_full_resolution_checked(root, p)
     elif action == "set_clip_marks":
         return _set_clip_marks(root, mp, p)
+    elif action == "get_clip_marks":
+        return _get_clip_marks(root, mp, p)
     elif action == "clear_clip_marks":
         return _clear_clip_marks(root, mp, p)
     elif action == "copy_clip_annotations":
@@ -19854,6 +20048,8 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
         return {"flags": clip.GetFlagList()}
     elif action == "clear_flags":
         return {"success": bool(clip.ClearFlags(p["color"]))}
+    elif action == "get_name":
+        return {"name": clip.GetName()}
     elif action == "set_name":
         missing = _requires_method(clip, "SetName", "20.2")
         if missing:
@@ -19880,7 +20076,7 @@ def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None
         if not replacement_path:
             return _err("Provide path or file_path")
         return {"success": bool(clip.ReplaceClipPreserveSubClip(replacement_path))}
-    return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","add_flag","get_flags","clear_flags","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip"])
+    return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","add_flag","get_flags","clear_flags","get_name","set_name","link_full_resolution_media","monitor_growing_file","replace_clip_preserve_sub_clip"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -22924,7 +23120,8 @@ _TIMELINE_ACTIONS = [
     "overwrite_range", "lift_range", "story_spine_report", "create_variant_from_ranges",
     "bulk_set_item_properties", "apply_look_to_items", "thumbnail_contact_sheet",
     "marker_thumbnail_review", "edit_kernel_capabilities", "probe_edit_kernel_item",
-    "title_property_scan", "set_title_text", "bulk_set_title_text", "create_compound_clip",
+    "title_property_scan", "set_title_text", "get_title_text", "get_clips_linked",
+    "bulk_set_title_text", "create_compound_clip",
     "create_fusion_clip", "import_into_timeline", "export", "get_setting", "set_setting",
     "insert_generator", "insert_fusion_generator", "insert_fusion_composition",
     "insert_ofx_generator", "insert_title", "insert_fusion_title", "get_unique_id",
@@ -23418,6 +23615,29 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _timeline_title_property_scan(tl, p)
     elif action == "set_title_text":
         return _timeline_set_title_text(tl, p)
+    elif action == "get_title_text":
+        return _timeline_get_title_text(tl, p)
+    elif action == "get_clips_linked":
+        ids = p.get("clip_ids") or ([p["clip_id"]] if p.get("clip_id") else None)
+        if not ids:
+            return _err("get_clips_linked requires clip_id or clip_ids")
+        groups = []
+        for cid in ids:
+            it = _find_timeline_item_by_id(tl, cid)
+            if not it:
+                groups.append({"clip_id": cid, "error": "not found"})
+                continue
+            missing = _requires_method(it, "GetLinkedItems", "19.1")
+            if missing:
+                return missing
+            linked = it.GetLinkedItems() or []
+            groups.append({
+                "clip_id": cid,
+                "name": it.GetName(),
+                "linked": bool(linked),
+                "linked_items": [{"name": li.GetName(), "id": li.GetUniqueId()} for li in linked],
+            })
+        return {"groups": groups, "count": len(groups)}
     elif action == "bulk_set_title_text":
         return _timeline_bulk_set_title_text(tl, p)
     elif action == "create_compound_clip":

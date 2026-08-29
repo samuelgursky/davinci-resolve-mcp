@@ -3,19 +3,15 @@
 # Read/Write Symmetry Audit
 
 - write-style action occurrences scanned: **116**
-- write-style action occurrences with a matching read: **67**
-- distinct high-signal `set_` actions without a direct/known readback: **8**
+- write-style action occurrences with a matching read: **71**
+- distinct high-signal `set_` actions without a direct/known readback: **4**
 
 ## High-signal gaps — `set_` with no direct/known readback
 
 - `set_cdl`
-- `set_clip_marks`
-- `set_clips_linked`
 - `set_high_priority`
 - `set_keyframe_interpolation`
-- `set_name`
 - `set_node_enabled`
-- `set_title_text`
 
 ## Low-signal (create/add/insert/apply/import — usually expected): 40 distinct names
 

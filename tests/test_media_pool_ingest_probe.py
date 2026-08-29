@@ -19,6 +19,7 @@ from src.server import (
     _normalize_metadata,
     _probe_clip_properties,
     _safe_import_sequence,
+    _get_clip_marks,
     _set_clip_marks,
 )
 from src.utils.readback import reset_verification_stats, verification_stats
@@ -351,6 +352,13 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["results"][0]["mark_in"], 2)
         self.assertEqual(result["results"][0]["mark_out"], 8)
+
+    def test_get_clip_marks_reads_back(self):
+        mp = MediaPoolStub()
+        result = _get_clip_marks(mp.root, mp, {"selected": True})
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["results"][0]["marks"], {"video": {"in": 10, "out": 40}})
 
     def test_copy_clip_annotations_dry_run(self):
         mp = MediaPoolStub()

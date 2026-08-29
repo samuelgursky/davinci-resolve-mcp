@@ -62,3 +62,61 @@ class TimelineTitleTextUtilsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GetTitleTextServerHelperTest(unittest.TestCase):
+    """Offline coverage of server._timeline_get_title_text — the read twin of set_title_text."""
+
+    class _Item:
+        def __init__(self, props):
+            self._props = props
+
+        def GetProperty(self, key=None):
+            if key is None:
+                return dict(self._props)
+            return self._props.get(key)
+
+        def GetUniqueId(self):
+            return "item-1"
+
+        def GetName(self):
+            return "Title 1"
+
+    class _Timeline:
+        def __init__(self, item):
+            self._item = item
+
+        def GetTrackCount(self, track_type):
+            return 1 if track_type == "video" else 0
+
+        def GetItemListInTrack(self, track_type, index):
+            return [self._item] if track_type == "video" else []
+
+    def _get(self, props, params=None):
+        from src.server import _timeline_get_title_text
+
+        item = self._Item(props)
+        tl = self._Timeline(item)
+        p = {"clip_id": "item-1"}
+        p.update(params or {})
+        return _timeline_get_title_text(tl, p)
+
+    def test_reads_styled_text_via_heuristic_keys(self):
+        result = self._get({"Styled Text": "LOWER THIRD", "ZoomX": 1.0})
+        self.assertTrue(result["success"])
+        self.assertEqual(result["text"], "LOWER THIRD")
+        self.assertEqual(result["property_key"], "Styled Text")
+
+    def test_explicit_property_key_wins(self):
+        result = self._get(
+            {"Styled Text": "WRONG", "Custom": "RIGHT"},
+            {"property_key": "Custom"},
+        )
+        self.assertTrue(result["success"])
+        self.assertEqual(result["text"], "RIGHT")
+        self.assertEqual(result["property_key"], "Custom")
+
+    def test_no_text_keys_reports_not_found(self):
+        result = self._get({"ZoomX": 1.0, "Opacity": 100.0})
+        self.assertFalse(result["success"])
+        self.assertIsNone(result["text"])

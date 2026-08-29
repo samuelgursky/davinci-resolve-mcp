@@ -2268,6 +2268,90 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "_timeline_ripple_insert_impl"],
     },
     {
+        "symbol": "TimelineItem.SetCDL (write-only — no GetCDL anywhere)",
+        "object": "TimelineItem",
+        "signature": "({NodeIndex, Slope, Offset, Power, Saturation}) -> Bool",
+        "reality": "SetCDL writes a node's CDL but no object exposes a read: "
+                   "no GetCDL on TimelineItem or Graph in the API reference, "
+                   "and dir() on a live Graph confirms (Studio 19.1.3.7). A "
+                   "grade applied via SetCDL cannot be read back, diffed, or "
+                   "verified through the API.",
+        "recommended": "Track intended CDL values in the caller, or read the "
+                       "actual grade by exporting a DRX still and decoding it "
+                       "(this repo's drx tool decodes 100% of DRX params — "
+                       "slope/offset/power/sat included).",
+        "tags": ["color", "missing-method", "readback"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Graph.SetNodeEnabled (write-only — no GetNodeEnabled)",
+        "object": "Graph",
+        "signature": "(nodeIndex, bool) -> Bool",
+        "reality": "A node's bypass state can be set but never read: no "
+                   "GetNodeEnabled in the API reference, and dir() on a live "
+                   "Graph confirms (Studio 19.1.3.7). After a SetNodeEnabled "
+                   "the caller cannot verify it took, and the pre-existing "
+                   "state of a node someone toggled in the UI is unknowable.",
+        "recommended": "Treat node-enable state as write-only: record what "
+                       "you set, and verify visually (rendered-frame compare) "
+                       "when the state matters.",
+        "tags": ["color", "missing-method", "readback"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "TimelineItem.SetKeyframeInterpolation (write-only)",
+        "object": "TimelineItem",
+        "signature": "(property, frame, type) -> Bool",
+        "reality": "Interpolation can be written per keyframe but nothing "
+                   "returns it: GetKeyframeAtIndex/GetPropertyAtKeyframeIndex "
+                   "expose frame and value only (API reference). On Studio "
+                   "19.1.3.7 the whole keyframe method family is absent from "
+                   "dir() — these methods are 20.x+.",
+        "recommended": "Record interpolation choices in the caller; readback "
+                       "is not available at any version.",
+        "tags": ["timeline", "missing-method", "readback", "keyframes"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Resolve.SetHighPriority (write-only, irreversible per session)",
+        "object": "Resolve",
+        "signature": "() -> Bool",
+        "reality": "Raises the Resolve process priority; there is no getter "
+                   "and no way to lower it again through the API (confirmed "
+                   "absent from dir() on Studio 19.1.3.7).",
+        "recommended": "Call it only when the user asked for a long render on "
+                       "a dedicated machine; state cannot be read back or "
+                       "undone without restarting Resolve.",
+        "tags": ["app-control", "missing-method", "readback"],
+        "submit": "missing",
+    },
+    {
+        "symbol": "Project.IsRenderingInProgress (stuck True after deleting the rendering project)",
+        "object": "Project",
+        "signature": "() -> Bool",
+        "reality": "Deleting or closing a project while its render job is "
+                   "still running orphans the render and wedges the whole "
+                   "render pipeline: the output file stops growing and "
+                   "Resolve idles at 0% CPU, IsRenderingInProgress on the "
+                   "NEXT current project reports True indefinitely, "
+                   "StopRendering does not clear it, NEW render jobs sit at "
+                   "0% forever (then StartRendering starts returning False), "
+                   "and Resolve.Quit() is refused because the app believes a "
+                   "render is running — even project creation can start "
+                   "returning None behind the quit-confirm dialog "
+                   "(reproduced live on Studio 19.1.3.7, 2026-08-29).",
+        "recommended": "Never close or delete a project while "
+                       "IsRenderingInProgress is True — StopRendering first, "
+                       "wait for False, then close. Once wedged, only a "
+                       "manual quit (confirming the dialog) or force-quit "
+                       "clears it; treat a True that persists at 0% CPU with "
+                       "a static output file as stuck rather than rendering. "
+                       "Poll GetRenderJobStatus for completion instead of "
+                       "IsRenderingInProgress, which this failure poisons.",
+        "tags": ["render", "silent-failure", "unreliable-return"],
+        "submit": "bug",
+    },
+    {
         "symbol": "TimelineItem.CreateMagicMask (needs operator clicks)",
         "object": "TimelineItem",
         "signature": "(mode) -> bool",
