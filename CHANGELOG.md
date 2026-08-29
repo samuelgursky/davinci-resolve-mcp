@@ -2,6 +2,68 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.103.3
+
+**A batch transcription fix that would have failed every clip.** Issue #160 by
+@techsolvehq-source was real and precisely reported: a Whisper transcription that
+hit the 90s wall-clock cap already returned `success: False`, but
+`execute_plan_async` then hard-set `clip_result["success"] = True`, so the batch
+job counted the clip as succeeded, closed as `completed`, and left `last_error`
+unset. PR #161 by @Steve0x2a fixed that by giving transcription the failure
+annotation vision already had.
+
+The gate it landed with keyed on `success` alone, and that is where it went wrong.
+Transcription is enabled by default, and `allow_model_download` is off by default,
+so `_transcribe` returns `success: False, status: "skipped"` on a stock install —
+no Whisper backend, or one the user has not opted into model downloads for. Every
+clip of every batch would have been marked failed and no batch job could have
+reached `completed`. Vision can treat every non-success as a failure because
+vision defaults to *disabled*; transcription cannot.
+
+So the failure class is now drawn by status rather than by `success`: skipped,
+disabled, and not_implemented mean the backend never ran, while timeouts, caps
+refusals, and backend errors are real failures. The original timeout bug stays
+fixed.
+
+**Antigravity's config path, settled without picking a winner.** Issue #159 by
+@KMiNT21 reports `~/.gemini/config/mcp_config.json`; commit 85afe82 wrote
+`~/.gemini/antigravity/mcp_config.json`. Neither is verifiable from macOS, and
+swapping one unverifiable path for another is a coin flip that breaks it for
+whichever contributor was right — this repo has already been bitten by a
+documented-but-decoy config path (Claude Desktop MSIX, issue #93). The installer
+now probes: `~/.gemini/config/` first, because the installer has never written
+there, so that file existing is evidence something else created it. It looks for
+the file rather than the directory, since `~/.gemini/antigravity/` holds runtime
+state on every install.
+
+### Fixed
+
+- A transcription backend that is unavailable, disabled, or not implemented no
+  longer marks a batch clip failed. `transcription_attempt_failed` in
+  `src/utils/media_analysis.py` screens the "never ran" statuses out of the
+  failure class; timeouts, caps refusals, and backend errors stay in it.
+- Whisper wall-clock timeouts are reported as failed batch clips instead of
+  silently succeeding (#160, PR #161 by @Steve0x2a).
+- `install.py` resolves Antigravity's MCP config path from what is on disk
+  instead of a hard-coded guess (#159).
+- `scripts/gen_api_limitations.py --help` prints usage instead of silently
+  overwriting the generated report (PR #163 by @diesdaas).
+
+### Changed
+
+- The read/write symmetry audit resolves `_unknown(action, ...)` groups through
+  the AST rather than a regex, so action lists expressed as named, starred,
+  annotated, or concatenated module constants are now scanned. This surfaced a
+  genuine readback gap (`set_clip_marks`) the regex was missing, and known
+  readback aliases such as `get_cache_enabled` and `mcp_update_status` no longer
+  register as false gaps (PR #162 by @diesdaas).
+- `scripts/audit_readwrite_symmetry.py` writes `docs/reference/readwrite-symmetry.md`
+  by default and gains `--check` and `--stdout`, matching the
+  `gen_api_limitations.py` convention. The report is pinned to `src/server.py` by
+  a drift guard, so it needed a regeneration path: the check now runs in the
+  release checklist, and both the script and the failing test name the command
+  that clears it.
+
 ## What's New in v2.103.2
 
 **A Windows setup that failed with nothing to read.** Reported in issue #158 by
