@@ -86,7 +86,7 @@ The installer can automatically configure any of these clients:
 
 | Client | Config Written To |
 |--------|-------------------|
-| Antigravity (Google) | `~/.gemini/antigravity/mcp_config.json` (all platforms) |
+| Antigravity (Google) | `~/.gemini/config/mcp_config.json`, or `~/.gemini/antigravity/mcp_config.json` if that file already exists (all platforms) |
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS); `%APPDATA%\Claude\claude_desktop_config.json` (Windows, see MSIX note below) |
 | Claude Code | `.mcp.json` (project root) |
 | Cursor | `~/.cursor/mcp.json` |

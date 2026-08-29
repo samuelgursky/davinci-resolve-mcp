@@ -393,6 +393,33 @@ def vscode_global_storage():
         return xdg_config() / "Code" / "User" / "globalStorage"
 
 
+def antigravity_config():
+    """Antigravity's MCP config path, resolved by what is on disk (issue #159).
+
+    Two contributors report two different locations and neither is verifiable
+    from here: 85afe82 added ~/.gemini/antigravity/mcp_config.json, and #159
+    reports ~/.gemini/config/mcp_config.json, with ~/.gemini/antigravity/ being
+    runtime state (logs, crash reports, brain state). Swapping one unverifiable
+    path for the other is a coin flip that breaks it for whoever was right, and
+    this repo has already been bitten by a documented-but-decoy config path
+    (Claude Desktop MSIX, issue #93).
+
+    So probe instead of choosing. ~/.gemini/config/ is checked first because
+    the installer has never written there — if that file exists, something else
+    created it, which is real evidence. ~/.gemini/antigravity/mcp_config.json
+    may exist merely because an earlier run of this installer put it there.
+    With neither present, fall back to ~/.gemini/config/ as #159 documents.
+    """
+    candidates = (
+        home() / ".gemini" / "config" / "mcp_config.json",
+        home() / ".gemini" / "antigravity" / "mcp_config.json",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 # Each client entry:
 #   id, name, config_path_fn, config_key, merge_strategy, notes
 # config_path_fn returns the path; config_key is the JSON key wrapping the server entry
@@ -402,7 +429,7 @@ MCP_CLIENTS = [
     {
         "id": "antigravity",
         "name": "Antigravity",
-        "get_path": lambda: home() / ".gemini" / "antigravity" / "mcp_config.json",
+        "get_path": antigravity_config,
         "config_key": "mcpServers",
         "notes": "Google's agentic AI coding assistant (VS Code fork)",
     },
