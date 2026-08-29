@@ -200,13 +200,41 @@ def _annotate_clip_vision_failure(clip_result: Dict[str, Any], vision: Any) -> N
         })
 
 
+# Transcription statuses that mean "never attempted", as opposed to "attempted
+# and did not produce a transcript". Transcription is on by default
+# (DEFAULT_TRANSCRIPTION_ENABLED) and allow_model_download is off by default, so
+# a machine with no Whisper backend — or one that has simply not opted into model
+# downloads — reports "skipped" on every clip. Those are configuration states,
+# not clip failures, and counting them as failures fails every clip of every
+# batch on a default install.
+TRANSCRIPTION_UNATTEMPTED_STATUSES = frozenset({"skipped", "disabled", "not_implemented"})
+
+
+def transcription_attempt_failed(transcript: Any, *, enabled: bool) -> bool:
+    """True when requested transcription ran and still produced no transcript.
+
+    The vision counterpart is visual_analysis_completed, but vision defaults to
+    disabled, so it can treat every non-success as a failure. Transcription
+    defaults to enabled, so it has to separate "the backend refused to start" —
+    which is the normal state of an install without Whisper — from a real
+    failure such as a wall-clock timeout, a caps refusal, or a backend error.
+    """
+    if not enabled or not isinstance(transcript, dict):
+        return False
+    if transcript.get("success"):
+        return False
+    status = str(transcript.get("status") or "").strip().lower()
+    return status not in TRANSCRIPTION_UNATTEMPTED_STATUSES
+
+
 def _annotate_clip_transcript_failure(clip_result: Dict[str, Any], transcript: Any) -> None:
     """Mark a clip failed when requested transcription did not complete.
 
     execute_plan_async writes the analysis JSON and then hard-sets success True.
     Vision already overwrites that via _annotate_clip_vision_failure; a
-    transcription timeout (or any other transcript.success False) had no
-    equivalent, so batch jobs counted an empty transcript as succeeded.
+    transcription timeout had no equivalent, so batch jobs counted an empty
+    transcript as succeeded. Callers gate on transcription_attempt_failed, which
+    keeps the "backend never ran" statuses out of the failure class.
     """
     status = ""
     reason = ""
@@ -5725,10 +5753,12 @@ async def execute_plan_async(
             and not vision_pending
             and not visual_analysis_completed(vision)
         )
-        transcript_failed = (
-            _coerce_bool((options.get("transcription") or {}).get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED)
-            and isinstance(transcript, dict)
-            and not transcript.get("success")
+        transcript_failed = transcription_attempt_failed(
+            transcript,
+            enabled=_coerce_bool(
+                (options.get("transcription") or {}).get("enabled"),
+                default=DEFAULT_TRANSCRIPTION_ENABLED,
+            ),
         )
         frame_count = int(clip_plan.get("analysis_keyframe_budget") or 0)
         marker_plan = _build_clip_marker_plan(

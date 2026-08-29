@@ -4140,6 +4140,103 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertTrue(final.get("last_error"), "job last_error must be set on transcription timeout")
             self.assertNotEqual(final["status"], "completed")
 
+    def _run_single_clip_batch_with_transcript(self, tmp, payload):
+        """Run a one-clip batch whose _transcribe returns `payload`."""
+        source_dir = os.path.join(tmp, "source")
+        os.makedirs(source_dir)
+        source = os.path.join(source_dir, "job_transcript.mp4")
+        self._write_synthetic_media(source)
+        created = create_batch_job(
+            project_name="Example Project",
+            project_id="project-job-transcript",
+            records=[{
+                "clip_id": "clip-transcript",
+                "clip_name": "job_transcript.mp4",
+                "file_path": source,
+                "media_id": "media-transcript",
+            }],
+            target={"type": "file_list"},
+            params={
+                "analysis_root": os.path.join(tmp, "analysis"),
+                "depth": "quick",
+                "transcription": {"enabled": True},
+                "vision": {"enabled": False},
+            },
+            name="Transcript batch",
+        )
+        self.assertTrue(created["success"])
+        job = created["job"]
+        with unittest.mock.patch.object(
+            _media_analysis_module, "_transcribe", return_value=payload
+        ):
+            run_batch_job_slice(job["project_root"], job["job_id"], max_clips=1)
+        return batch_job_status(job["project_root"], job["job_id"])
+
+    def test_unavailable_transcription_backend_does_not_fail_the_clip(self):
+        """An install with no Whisper backend must not fail every batch clip.
+
+        Transcription is enabled by default and allow_model_download is off by
+        default, so _transcribe returns success False / status "skipped" on a
+        stock install. Counting that as a clip failure would fail every clip of
+        every batch for most users.
+        """
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        for reason, payload in (
+            ("no backend available", {
+                "success": False,
+                "status": "skipped",
+                "reason": "No local transcription backend available",
+            }),
+            ("model download not opted into", {
+                "success": False,
+                "status": "skipped",
+                "backend": "whisper_cli",
+                "reason": "Local transcription may download model files; set allow_model_download=true explicitly to run it.",
+            }),
+            ("backend not implemented", {
+                "success": False,
+                "status": "not_implemented",
+                "backend": "whisper_cpp",
+                "reason": "whisper_cpp execution needs per-install CLI validation before enabling.",
+            }),
+        ):
+            with self.subTest(reason=reason):
+                with tempfile.TemporaryDirectory() as tmp:
+                    final = self._run_single_clip_batch_with_transcript(tmp, payload)
+                self.assertEqual(final["succeeded_clips"], 1)
+                self.assertEqual(final["failed_clips"], 0)
+                self.assertEqual(final["status"], "completed")
+                self.assertFalse(final.get("last_error"))
+
+    def test_transcription_backend_error_still_fails_the_clip(self):
+        """A backend that ran and broke is a real failure, status or not."""
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            final = self._run_single_clip_batch_with_transcript(tmp, {
+                "success": False,
+                "backend": "whisper_cli",
+                "error": "whisper exited 1",
+            })
+        self.assertEqual(final["failed_clips"], 1)
+        self.assertEqual(final["succeeded_clips"], 0)
+        self.assertTrue(final.get("last_error"))
+
+    def test_caps_refusal_still_fails_the_clip(self):
+        """A caps refusal is a deliberate stop the caller has to be told about."""
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            final = self._run_single_clip_batch_with_transcript(tmp, {
+                "success": False,
+                "status": "caps_exhausted",
+                "reason": "daily vision-token cap reached",
+            })
+        self.assertEqual(final["failed_clips"], 1)
+        self.assertEqual(final["succeeded_clips"], 0)
+        self.assertTrue(final.get("last_error"))
+
     def test_batch_job_cancel_and_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             source_dir = os.path.join(tmp, "source")
