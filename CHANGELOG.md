@@ -2,6 +2,41 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.103.4
+
+**A frame-numbering trap, documented where agents will look it up.** Issue #164
+by @jonathandahl-cmyk arrived as a detailed report that `AppendToTimeline`'s
+`trackIndex`/`recordFrame` corrupt a timeline — every readback correct, render
+produces a ~6KB stub. Their own same-day correction found the real cause, and it
+is simpler and nastier: **`recordFrame` is timeline-absolute.** It counts from
+Resolve's global frame zero, so `recordFrame=0` on a default `01:00:00:00`
+timeline places the clip at frame 0 — an hour before the timeline's own start at
+86400. The items genuinely exist and are internally consistent, so
+`AppendToTimeline` returns them, every `Get*` reads back the expected values,
+and the render engine — which only walks the timeline's own start→end range —
+reports `JobStatus: Complete` at 100% while writing a near-empty stub.
+
+The assumption was easy to make because Resolve uses both conventions side by
+side: marker `frameId`s *are* timeline-relative (frame 0 == first frame), while
+`recordFrame` and `TimelineItem.GetStart()`/`GetEnd()` are absolute.
+
+This server's own callers were never exposed: `media_pool.append_to_timeline`
+has defaulted to `record_frame_mode="relative"` — adding `GetStartFrame()` for
+you — since v2.17.1, which live-validated the exact arithmetic (relative 12 →
+86412; absolute preserved 86484). What was missing was the catalog entry: the
+API-truth table had five `AppendToTimeline` entries (the half-open `endFrame`
+bound, occupied-span null-ids, mixed-fps duration floors…) but never the
+absolute origin, which fails more silently than any of them. It now records the
+convention, the render-lies-too behavior, why the wrapper default exists, and
+that `JobStatus: Complete` is not proof a render produced frames.
+
+### Changed
+
+- `src/utils/api_truth.py` gains
+  `MediaPool.AppendToTimeline clipInfo recordFrame (timeline-absolute origin)`
+  (#164). Internal entry — an undocumented convention, not a Resolve defect —
+  so the Blackmagic-facing limitations report is unchanged.
+
 ## What's New in v2.103.3
 
 **A batch transcription fix that would have failed every clip.** Issue #160 by
