@@ -200,6 +200,34 @@ def _annotate_clip_vision_failure(clip_result: Dict[str, Any], vision: Any) -> N
         })
 
 
+def _annotate_clip_transcript_failure(clip_result: Dict[str, Any], transcript: Any) -> None:
+    """Mark a clip failed when requested transcription did not complete.
+
+    execute_plan_async writes the analysis JSON and then hard-sets success True.
+    Vision already overwrites that via _annotate_clip_vision_failure; a
+    transcription timeout (or any other transcript.success False) had no
+    equivalent, so batch jobs counted an empty transcript as succeeded.
+    """
+    status = ""
+    reason = ""
+    if isinstance(transcript, dict):
+        status = str(transcript.get("status") or "").strip()
+        reason = str(transcript.get("reason") or transcript.get("error") or "").strip()
+    if status == "wall_clock_timeout":
+        message = "Transcription timed out before a transcript was produced."
+        if reason:
+            message = f"{message} {reason}"
+    elif reason:
+        message = f"Transcription was requested but did not complete: {reason}"
+    else:
+        message = "Transcription was requested but did not complete."
+    clip_result.update({
+        "success": False,
+        "error": message,
+        "transcription": transcript,
+    })
+
+
 def _annotate_partial_success(manifest: Dict[str, Any]) -> None:
     """D3 — Mark batch manifests with explicit completed/failed clip-id lists.
 
@@ -5697,6 +5725,11 @@ async def execute_plan_async(
             and not vision_pending
             and not visual_analysis_completed(vision)
         )
+        transcript_failed = (
+            _coerce_bool((options.get("transcription") or {}).get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED)
+            and isinstance(transcript, dict)
+            and not transcript.get("success")
+        )
         frame_count = int(clip_plan.get("analysis_keyframe_budget") or 0)
         marker_plan = _build_clip_marker_plan(
             record,
@@ -5757,6 +5790,8 @@ async def execute_plan_async(
             manifest["vision_pending"] = True
         elif vision_failed:
             _annotate_clip_vision_failure(clip_result, vision)
+        if transcript_failed:
+            _annotate_clip_transcript_failure(clip_result, transcript)
         manifest["clips"].append(clip_result)
 
     manifest["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

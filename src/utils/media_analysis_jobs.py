@@ -745,6 +745,8 @@ def run_batch_job_slice(
                     _event(conn, job_id, "info", f"Clip {row['position'] + 1} {status}", {"clip": clip_result.get("record")})
                 else:
                     error = clip_result.get("error") or manifest.get("error") or "Clip analysis failed"
+                    if not isinstance(error, str):
+                        error = str(error)
                     conn.execute(
                         """
                         UPDATE job_clips
@@ -752,6 +754,10 @@ def run_batch_job_slice(
                         WHERE id = ?
                         """,
                         (error, completed_at, completed_at, row["id"]),
+                    )
+                    conn.execute(
+                        "UPDATE jobs SET last_error = ?, updated_at = ? WHERE job_id = ?",
+                        (error, completed_at, job_id),
                     )
                     processed.append({"position": row["position"], "status": "failed", "error": error})
                     _event(conn, job_id, "error", f"Clip {row['position'] + 1} failed", {"error": error})
@@ -766,6 +772,10 @@ def run_batch_job_slice(
                     (str(exc), completed_at, completed_at, row["id"]),
                 )
                 processed.append({"position": row["position"], "status": "failed", "error": str(exc)})
+                conn.execute(
+                    "UPDATE jobs SET last_error = ?, updated_at = ? WHERE job_id = ?",
+                    (str(exc), completed_at, job_id),
+                )
                 _event(conn, job_id, "error", f"Clip {row['position'] + 1} raised an exception", {"error": str(exc)})
             _sync_job_counts(conn, job_id)
             conn.commit()
