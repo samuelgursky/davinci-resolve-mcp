@@ -227,6 +227,30 @@ def transcription_attempt_failed(transcript: Any, *, enabled: bool) -> bool:
     return status not in TRANSCRIPTION_UNATTEMPTED_STATUSES
 
 
+def transcription_options_would_attempt(transcription: Dict[str, Any]) -> bool:
+    """True when these options would actually run a transcription backend.
+
+    Mirrors _transcribe's early-outs. The local backends (whisper_cli,
+    mlx_whisper — also what a backend of None resolves to) refuse to run
+    without allow_model_download=true, whisper_cpp is not_implemented, and
+    the resolve backend is refused by design; mock and HTTP-provider
+    backends always attempt. Used by _report_missing_layers to decide
+    whether re-running an analysis could produce a transcript a cached
+    report lacks — if it could not, the cached report is as complete as a
+    fresh run would be. Known blind spot: backend None on a machine whose
+    only configured backend is an HTTP provider reports False here; name
+    the http_* backend explicitly to get cache invalidation.
+    """
+    backend = transcription.get("backend")
+    if backend in {"mock", "local_mock"}:
+        return True
+    if isinstance(backend, str) and backend.startswith(HTTP_TRANSCRIPTION_BACKEND_PREFIX):
+        return True
+    if backend in {"whisper_cpp", "resolve"}:
+        return False
+    return _coerce_bool(transcription.get("allow_model_download"), default=False)
+
+
 def _annotate_clip_transcript_failure(clip_result: Dict[str, Any], transcript: Any) -> None:
     """Mark a clip failed when requested transcription did not complete.
 
@@ -3665,7 +3689,19 @@ def _report_missing_layers(report: Dict[str, Any], depth: str, options: Dict[str
     if _coerce_bool(transcription.get("enabled"), default=DEFAULT_TRANSCRIPTION_ENABLED):
         transcript = report.get("transcription") or {}
         if not transcript.get("success") or transcript.get("status") == "skipped":
-            missing.append("transcription")
+            # A transcript-less report is a missing layer only when a re-run
+            # could supply the transcript: either the cached payload shows a
+            # real attempt that failed (a retry may fix a timeout), or the
+            # current options would now actually run a backend. Transcription
+            # is enabled by default while allow_model_download is not, so on a
+            # stock install every report carries a declined "skipped" payload —
+            # counting that as missing made every cached report reusable=False
+            # forever, silently defeating cache reuse with full re-analysis
+            # that could never produce the transcript either.
+            if transcription_attempt_failed(
+                transcript, enabled=True
+            ) or transcription_options_would_attempt(transcription):
+                missing.append("transcription")
     vision = options.get("vision") or {}
     if _coerce_bool(vision.get("enabled"), default=False):
         visual = report.get("visual") or {}

@@ -87,7 +87,7 @@ if not logging.getLogger().handlers:
         handlers=[logging.StreamHandler()],
     )
 
-VERSION = "2.103.4"
+VERSION = "2.103.5"
 logger = logging.getLogger("davinci-resolve-mcp")
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")
@@ -572,7 +572,22 @@ def _normalize_record_frame(ci, index, timeline_start_frame=None):
         }
 
     start = _frame_int(timeline_start_frame)
-    if start in (None, 0) or mode == "absolute":
+    if mode == "absolute":
+        # recordFrame counts from Resolve's global frame zero; a value below
+        # the timeline start renders as ~0 frames while every readback agrees
+        # (issue #164). No legitimate placement exists there — refuse.
+        if start not in (None, 0) and rf < start:
+            return None, {
+                "error": (
+                    f"clip_infos[{index}] recordFrame {rf} is before the timeline "
+                    f"start frame {start}. recordFrame is timeline-absolute, so "
+                    "content placed there reads back correctly but renders as ~0 "
+                    "frames. Use record_frame_mode='relative' (default) or pass an "
+                    f"absolute frame >= {start}."
+                )
+            }
+        return rf, None
+    if start in (None, 0):
         return rf, None
     if mode == "auto":
         return (start + rf) if rf < start else rf, None

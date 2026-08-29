@@ -124,6 +124,44 @@ class GranularCreateClipInfoBuilderTest(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(out["recordFrame"], 108000)
 
+    def test_record_frame_absolute_below_timeline_start_is_refused(self):
+        """Issue #164: absolute recordFrame before the timeline start renders
+        as ~0 frames while every readback agrees. Refuse instead of placing."""
+        _, err = _build_create_clip_info_dict(
+            self.root,
+            {
+                "media_pool_item_id": "abc",
+                "start_frame": 0,
+                "end_frame": 24,
+                "record_frame": 0,
+                "record_frame_mode": "absolute",
+            },
+            1,
+            timeline_start_frame=108000,
+        )
+        self.assertIsNotNone(err)
+        message = err["error"]
+        self.assertIn("before the timeline start", message)
+        self.assertIn("108000", message)
+        self.assertIn("record_frame_mode='relative'", message)
+
+    def test_record_frame_absolute_with_unknown_start_is_passed_through(self):
+        """With no timeline start to judge against, absolute values pass —
+        this is the validation pre-pass case where no timeline exists yet."""
+        out, err = _build_create_clip_info_dict(
+            self.root,
+            {
+                "media_pool_item_id": "abc",
+                "start_frame": 0,
+                "end_frame": 24,
+                "record_frame": 12,
+                "record_frame_mode": "absolute",
+            },
+            1,
+        )
+        self.assertIsNone(err)
+        self.assertEqual(out["recordFrame"], 12)
+
     def test_does_not_pass_track_index_or_media_type(self):
         out, err = _build_create_clip_info_dict(
             self.root,
@@ -186,6 +224,42 @@ class CompoundCreateClipInfoBuilderTest(unittest.TestCase):
         )
         self.assertIsNone(err)
         self.assertEqual(out["recordFrame"], 108000)
+
+    def test_record_frame_absolute_below_timeline_start_is_refused(self):
+        """Compound copy of the issue #164 guard."""
+        from tests._error_envelope_helpers import err_message
+
+        _, err = compound_build_create_clip_info_dict(
+            self.root,
+            {
+                "clip_id": "abc",
+                "start_frame": 0,
+                "end_frame": 24,
+                "record_frame": 86399,
+                "record_frame_mode": "absolute",
+            },
+            0,
+            timeline_start_frame=86400,
+        )
+        self.assertIsNotNone(err)
+        self.assertIn("before the timeline start", err_message(err))
+        self.assertIn("86400", err_message(err))
+
+    def test_record_frame_absolute_at_timeline_start_is_accepted(self):
+        out, err = compound_build_create_clip_info_dict(
+            self.root,
+            {
+                "clip_id": "abc",
+                "start_frame": 0,
+                "end_frame": 24,
+                "record_frame": 86400,
+                "record_frame_mode": "absolute",
+            },
+            0,
+            timeline_start_frame=86400,
+        )
+        self.assertIsNone(err)
+        self.assertEqual(out["recordFrame"], 86400)
 
     def test_missing_record_frame_uses_err_helper(self):
         from tests._error_envelope_helpers import err_message

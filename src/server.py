@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.103.4"
+VERSION = "2.103.5"
 
 import base64
 import os
@@ -2894,7 +2894,24 @@ def _normalize_record_frame(
         )
 
     start = _frame_int(timeline_start_frame)
-    if start in (None, 0) or mode == "absolute":
+    if mode == "absolute":
+        # recordFrame counts from Resolve's global frame zero. An absolute
+        # value below the timeline's own start frame places content the render
+        # engine never visits: every readback agrees, the render reports
+        # Complete, and the output is a near-empty stub (issue #164; see the
+        # api_truth recordFrame timeline-absolute origin entry). The Resolve UI
+        # cannot place content there, so there is no legitimate case — refuse.
+        if start not in (None, 0) and rf < start:
+            return None, _err(
+                f"clip_infos[{index}] recordFrame {rf} is before the timeline start "
+                f"frame {start}. recordFrame is timeline-absolute (counted from frame "
+                "zero, not from the timeline's start), so content placed there reads "
+                "back correctly but renders as ~0 frames. Use the default "
+                "record_frame_mode='relative' with an offset from the timeline start, "
+                f"or pass an absolute frame >= {start}."
+            )
+        return rf, None
+    if start in (None, 0):
         return rf, None
     if mode == "auto":
         return (start + rf) if rf < start else rf, None

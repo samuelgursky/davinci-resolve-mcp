@@ -4140,6 +4140,63 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertTrue(final.get("last_error"), "job last_error must be set on transcription timeout")
             self.assertNotEqual(final["status"], "completed")
 
+    def test_declined_transcription_does_not_poison_cache_reuse(self):
+        """A skipped transcript is a missing layer only if a re-run could fix it.
+
+        Transcription is enabled by default and allow_model_download is not, so
+        a stock install writes a declined "skipped" transcript into every
+        report. Counting that as a missing layer made every cached report
+        reusable=False forever — full re-analysis on every call that could
+        never produce the transcript either.
+        """
+        from src.utils.media_analysis import _report_missing_layers
+
+        base_report = {"technical": {"ok": True}, "clip_analysis_markers": [{"m": 1}]}
+        declined = {
+            "success": False, "status": "skipped", "backend": "whisper_cli",
+            "reason": "Local transcription may download model files; set allow_model_download=true explicitly to run it.",
+        }
+        cases = [
+            # (name, cached transcript, transcription options, expect_missing)
+            ("declined skip, no opt-in: report is as complete as a re-run",
+             declined, {"enabled": True, "backend": "whisper_cli"}, False),
+            ("declined skip, opted in now: re-run would transcribe",
+             declined, {"enabled": True, "backend": "whisper_cli", "allow_model_download": True}, True),
+            ("declined skip, mock backend always attempts",
+             declined, {"enabled": True, "backend": "mock"}, True),
+            ("wall-clock timeout is a real attempt; retry may fix it",
+             {"success": False, "status": "wall_clock_timeout", "reason": "90s"},
+             {"enabled": True, "backend": "whisper_cli"}, True),
+            ("caps refusal is a real attempt",
+             {"success": False, "status": "caps_exhausted", "reason": "cap"},
+             {"enabled": True, "backend": "whisper_cli"}, True),
+            ("no transcript key at all (old report)",
+             None, {"enabled": True, "backend": "whisper_cli"}, True),
+            ("real transcript satisfies the layer",
+             {"success": True, "backend": "whisper_cli", "segments": [{"text": "hi"}]},
+             {"enabled": True, "backend": "whisper_cli", "allow_model_download": True}, False),
+            ("disabled-run cache, request still not opting in",
+             {"success": True, "status": "skipped", "reason": "transcription disabled"},
+             {"enabled": True, "backend": "whisper_cli"}, False),
+            ("disabled-run cache, request now opting in",
+             {"success": True, "status": "skipped", "reason": "transcription disabled"},
+             {"enabled": True, "backend": "whisper_cli", "allow_model_download": True}, True),
+            ("whisper_cpp never attempts (not_implemented), even opted in",
+             declined, {"enabled": True, "backend": "whisper_cpp", "allow_model_download": True}, False),
+            ("transcription disabled: never missing",
+             declined, {"enabled": False}, False),
+        ]
+        for name, transcript, transcription, expect_missing in cases:
+            with self.subTest(case=name):
+                report = dict(base_report)
+                if transcript is not None:
+                    report["transcription"] = transcript
+                missing = _report_missing_layers(report, "quick", {"transcription": transcription})
+                if expect_missing:
+                    self.assertIn("transcription", missing)
+                else:
+                    self.assertNotIn("transcription", missing)
+
     def _run_single_clip_batch_with_transcript(self, tmp, payload):
         """Run a one-clip batch whose _transcribe returns `payload`."""
         source_dir = os.path.join(tmp, "source")
@@ -4409,7 +4466,11 @@ class MediaAnalysisCoverageTests(unittest.TestCase):
                 with_transcription=False,
             )
 
-            # Request requires transcription — report is incomplete
+            # Request requires transcription AND could produce it (model
+            # download opted in) — the transcript-less report is incomplete.
+            # An enabled request that could NOT run a backend would treat the
+            # report as complete instead; see
+            # test_declined_transcription_does_not_poison_cache_reuse.
             coverage = build_coverage_report(
                 project_name="Missing Layer Project",
                 project_id="v1",
@@ -4418,7 +4479,7 @@ class MediaAnalysisCoverageTests(unittest.TestCase):
                 params={
                     "analysis_root": analysis_root,
                     "depth": "standard",
-                    "transcription": {"enabled": True},
+                    "transcription": {"enabled": True, "allow_model_download": True},
                 },
                 capabilities=self._base_capabilities(),
             )

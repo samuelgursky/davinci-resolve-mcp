@@ -1884,7 +1884,9 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "media_pool.append_to_timeline defaults to "
                        "record_frame_mode='relative' and adds the start frame, "
                        "so pass record_frame_mode='absolute' only for raw "
-                       "Resolve frame numbers. When driving the API directly, "
+                       "Resolve frame numbers — and since v2.103.5 an absolute "
+                       "value below the timeline start is refused outright. "
+                       "When driving the API directly, "
                        "never treat JobStatus Complete as proof a render "
                        "worked — check the output file's duration, not just "
                        "that the job finished.",

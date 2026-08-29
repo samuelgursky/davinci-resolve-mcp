@@ -2,6 +2,54 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.103.5
+
+Two fixes that fell out of auditing the code around this week's releases — the
+same failure classes as #161 and #164, found one tier up from where each was
+originally fixed.
+
+**Cache reuse was permanently poisoned on most real installs.** The v2.103.3
+transcription fix taught batch jobs that a declined transcription is not a clip
+failure — but the cache layer had the same default-ON blindness.
+`_report_missing_layers` counted any non-success transcript as a missing layer,
+and the capability gate only screens for a missing backend, not for the stock
+configuration: Whisper installed, `allow_model_download` unset. On such a
+machine every analysis writes a declined "skipped" transcript, every cached
+report carries `missing_layers: ['transcription']`, and `find_reusable_report`
+returns `reusable: False` — forever. Every analyze call silently re-ran full
+analysis (frame extraction included) and produced the same skipped transcript
+again. An unfixable loop, reproduced end-to-end before the fix and green after.
+
+A transcript-less report is now a missing layer only when a re-run could supply
+the transcript: the cached payload shows a real attempt that failed (a timeout
+retry may succeed), or the current options would now actually run a backend
+(mock or HTTP backends, or `allow_model_download=true`). Because the check is
+recomputed per request, flipping `allow_model_download` on later correctly
+refuses reuse and finally produces the transcript.
+
+**Absolute recordFrames below the timeline start are now refused.** Issue #164
+documented that `recordFrame` counts from Resolve's global frame zero and that
+content placed before the timeline start reads back correctly while rendering
+as ~0 frames. The wrapper's `record_frame_mode='relative'` default shields
+callers — but `record_frame_mode='absolute'` passed any value straight through,
+so an absolute-mode caller with relative-style values reproduced the silent
+stub through this server's own tools. `_normalize_record_frame` (both the
+compound and granular copies) now rejects an absolute value below the
+timeline's start frame with an error naming the convention; internal
+absolute-mode flows (`ripple_insert` cursors) derive their frames from
+timeline reads and cannot trip it. The Resolve UI cannot place content there,
+so no legitimate call is lost.
+
+### Fixed
+
+- A declined transcription (no `allow_model_download` opt-in, unavailable or
+  not-implemented backend) no longer marks cached analysis reports
+  incomplete, so report reuse works on default installs again. Opting into
+  model downloads later invalidates reuse and produces the transcript.
+- `record_frame_mode='absolute'` values below the timeline start frame are
+  refused with a remediation instead of silently placing content the render
+  engine never visits (#164).
+
 ## What's New in v2.103.4
 
 **A frame-numbering trap, documented where agents will look it up.** Issue #164
