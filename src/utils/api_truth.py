@@ -1854,6 +1854,44 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["timeline", "edit", "off-by-one", "readback"],
     },
     {
+        "symbol": "MediaPool.AppendToTimeline clipInfo recordFrame (timeline-absolute origin)",
+        "object": "MediaPool",
+        "signature": "([{mediaPoolItem, startFrame, endFrame, recordFrame, "
+                     "trackIndex, mediaType}]) -> [TimelineItem]",
+        "reality": "clipInfo recordFrame is TIMELINE-ABSOLUTE: it counts from "
+                   "Resolve's global frame zero, not from the timeline's own "
+                   "GetStartFrame(). A timeline with the default 01:00:00:00 "
+                   "start begins at frame 86400, so recordFrame=0 places the "
+                   "item about an hour BEFORE the timeline starts. Nothing "
+                   "reports the mistake, because the items are real and "
+                   "self-consistent: AppendToTimeline returns them, "
+                   "GetName/GetSourceStartFrame/GetSourceEndFrame all read back "
+                   "the expected values, and the bin count is right. Only a "
+                   "render exposes it — the engine walks the timeline's own "
+                   "start->end range, so the job reports JobStatus Complete at "
+                   "100% in under 2s and writes a ~6KB stub for a 405s "
+                   "timeline. The trap is that the two frame conventions sit "
+                   "side by side: marker frameIds ARE timeline-relative "
+                   "(frame 0 == first frame), while recordFrame and "
+                   "TimelineItem.GetStart/GetEnd are absolute. Distinct from "
+                   "the null-id entry below, which is a recordFrame landing in "
+                   "an OCCUPIED span rather than before the start. Verified on "
+                   "Studio 20.3.2.9 (v2.17.1 probe: relative record_frame 12 "
+                   "landed at 86400 + 12 = 86412, absolute preserved 86484) and "
+                   "independently on Studio 21.0.4.5 (issue #164).",
+        "recommended": "Offset every recordFrame by timeline.GetStartFrame(). "
+                       "This server already does it: "
+                       "media_pool.append_to_timeline defaults to "
+                       "record_frame_mode='relative' and adds the start frame, "
+                       "so pass record_frame_mode='absolute' only for raw "
+                       "Resolve frame numbers. When driving the API directly, "
+                       "never treat JobStatus Complete as proof a render "
+                       "worked — check the output file's duration, not just "
+                       "that the job finished.",
+        "tags": ["timeline", "edit", "render", "silent-failure", "media-pool"],
+        "issue": 164,
+    },
+    {
         "symbol": "Timeline.DeleteClips (requires the Edit page; flaky first attempt)",
         "object": "Timeline",
         "signature": "([TimelineItem], ripple) -> bool",
