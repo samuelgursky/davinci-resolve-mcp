@@ -1,7 +1,10 @@
 """Tests for the read/write symmetry audit logic."""
+import contextlib
 import importlib.util
+import io
 import os
 import pathlib
+import tempfile
 import unittest
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -65,9 +68,38 @@ class AuditTest(unittest.TestCase):
         self.assertEqual(covered, 1)
 
     def test_reference_doc_matches_current_audit(self):
+        """The committed report must match the current server action surface.
+
+        This fires whenever an action is added to src/server.py, which is the
+        point of it — but a bare assertEqual on two large documents says
+        nothing about how to clear it, so name the regeneration command.
+        """
         src = (ROOT / "src" / "server.py").read_text()
         doc = ROOT / "docs" / "reference" / "readwrite-symmetry.md"
-        self.assertEqual(doc.read_text(), audit_rw.render_report(src))
+        self.assertEqual(
+            doc.read_text(),
+            audit_rw.render_report(src),
+            f"docs/reference/readwrite-symmetry.md is stale. "
+            f"Regenerate it with: {audit_rw.REGEN_COMMAND}",
+        )
+
+    def test_check_mode_passes_against_the_committed_report(self):
+        self.assertEqual(audit_rw.main(["--check"]), 0)
+
+    def test_stdout_mode_does_not_write_the_report(self):
+        doc = ROOT / "docs" / "reference" / "readwrite-symmetry.md"
+        before = doc.read_text()
+        original = audit_rw.DOC_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_rw.DOC_PATH = os.path.join(tmp, "readwrite-symmetry.md")
+            try:
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(audit_rw.main(["--stdout"]), 0)
+            finally:
+                audit_rw.DOC_PATH = original
+            self.assertFalse(os.path.exists(os.path.join(tmp, "readwrite-symmetry.md")))
+        self.assertIn("# Read/Write Symmetry Audit", out.getvalue())
+        self.assertEqual(doc.read_text(), before)
 
     def test_named_action_list_is_scanned(self):
         src = '''

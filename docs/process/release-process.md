@@ -73,6 +73,7 @@ venv/bin/python tests/test_import.py
 npm install --package-lock-only --no-audit --no-fund   # re-stage package-lock.json if it moved
 venv/bin/python scripts/audit_api_parity.py
 venv/bin/python scripts/gen_api_limitations.py --check
+venv/bin/python scripts/audit_readwrite_symmetry.py --check
 node scripts/agent-rules/generate.mjs --check
 venv/bin/python -m unittest tests.test_static_undefined_names tests.test_duplicate_definitions tests.test_action_list_drift tests.test_panel_docs_drift tests.test_doc_tool_counts tests.test_agent_rules_drift
 node bin/davinci-resolve-mcp.mjs --help

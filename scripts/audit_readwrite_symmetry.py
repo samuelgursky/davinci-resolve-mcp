@@ -7,14 +7,22 @@ asymmetries. The goal is to find write-without-read gaps before users have to â€
 the repeatable feature-discovery method behind R5.
 
 Reads the `_unknown(action, [...])` lists in src/server.py, which enumerate every
-action a tool accepts. Prints a markdown report.
+action a tool accepts. Writes docs/reference/readwrite-symmetry.md.
+
+`--check` verifies the committed report matches the current server surface; it is
+what tests/test_readwrite_audit.py and the release checklist gate on. `--stdout`
+prints the report instead of writing it.
 """
+import argparse
 import ast
 import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER = os.path.join(ROOT, "src", "server.py")
+DOC_PATH = os.path.join(ROOT, "docs", "reference", "readwrite-symmetry.md")
+DOC_REL = os.path.relpath(DOC_PATH, ROOT)
+REGEN_COMMAND = "venv/bin/python scripts/audit_readwrite_symmetry.py"
 
 READ_PREFIXES = ("get_", "list_", "probe_", "is_", "has_", "find_")
 # `set_` is the high-signal class: a set with no get is a genuine readback gap.
@@ -162,10 +170,47 @@ def render_report(src: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def main():
+def _parse_args(argv):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if the committed report is out of date",
+    )
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="print the report instead of writing it",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    args = _parse_args(argv)
     with open(SERVER, encoding="utf-8") as fh:
         src = fh.read()
-    print(render_report(src), end="")
+    content = render_report(src)
+    if args.stdout:
+        print(content, end="")
+        return 0
+    if args.check:
+        current = ""
+        if os.path.exists(DOC_PATH):
+            with open(DOC_PATH, encoding="utf-8") as fh:
+                current = fh.read()
+        if current != content:
+            print(
+                f"STALE: {DOC_REL} is out of date.\nRun: {REGEN_COMMAND}",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"OK: {DOC_REL} is up to date.")
+        return 0
+    with open(DOC_PATH, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    print(f"Wrote {DOC_REL}")
     return 0
 
 
