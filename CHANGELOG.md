@@ -2,6 +2,36 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.1
+
+**The job metadata lies too — verify_output now cross-checks the timeline.**
+Finishing v2.104.0's pending live validation exposed a hole in the new
+`render.verify_output`: in the issue #164 case (content before the timeline
+start) Resolve rewrites the render job's own MarkIn/MarkOut down to the
+collapsed extent. Measured live on Studio 19.1.3.7: 96 frames of content
+placed before the start turned an explicit 96-frame mark range into a 1-frame
+job — Complete at 100%, a 1-frame black stub, and a clean duration ratio,
+because the expected duration was computed from the job's own lying range.
+
+The only truthful readback in that state is the timeline items themselves,
+which report their real positions. `verify_output` now finds the job's
+timeline and cross-checks it: video items starting before the timeline's
+start frame warn (the #164 signature by direct evidence), and a mark range
+under half the items' extent warns (the collapse signature). Callers can also
+pass `expected_frames` or `expected_duration_seconds` outright. Live-verified
+both ways on 19.1.3.7: the healthy render verifies clean, the stub now fails
+with both warnings.
+
+### Fixed
+
+- `render.verify_output` no longer trusts the job's MarkIn/MarkOut as the
+  expected duration — the #164 stub previously verified clean at ratio 1.0.
+
+### Changed
+
+- The api_truth recordFrame entry now documents the mark-range rewrite and
+  the item-readback discriminator; the Blackmagic-facing report regenerated.
+
 ## What's New in v2.104.0
 
 The read/write symmetry audit's worklist, worked. PR #162's AST rewrite left

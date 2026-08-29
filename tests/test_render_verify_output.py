@@ -15,16 +15,38 @@ from unittest import mock
 from src import server
 
 
-def _proj(jobs, status):
+def _timeline(name="T", start=86400, items=()):
+    """items: (start, end) tuples on video track 1."""
+    tl = mock.Mock()
+    tl.GetName.return_value = name
+    tl.GetStartFrame.return_value = start
+    tl.GetTrackCount.side_effect = lambda t: 1 if t == "video" else 0
+    built = []
+    for it_start, it_end in items:
+        it = mock.Mock()
+        it.GetStart.return_value = it_start
+        it.GetEnd.return_value = it_end
+        built.append(it)
+    tl.GetItemListInTrack.side_effect = lambda t, i: built if t == "video" else []
+    return tl
+
+
+def _proj(jobs, status, timeline=None):
     proj = mock.Mock()
     proj.GetRenderJobStatus.return_value = status
     proj.GetRenderJobList.return_value = jobs
+    if timeline is None:
+        # A timeline whose items match the default job's 96-frame mark range.
+        timeline = _timeline(items=[(86400, 86496)])
+    proj.GetTimelineCount.return_value = 1
+    proj.GetTimelineByIndex.side_effect = lambda i: timeline if i == 1 else None
     return proj
 
 
 def _job(job_id="job-1", target_dir=None, filename="out.mov", **extra):
     payload = {"JobId": job_id, "TargetDir": target_dir, "OutputFilename": filename,
-               "MarkIn": 86400, "MarkOut": 86495, "FrameRate": "24"}
+               "MarkIn": 86400, "MarkOut": 86495, "FrameRate": "24",
+               "TimelineName": "T"}
     payload.update(extra)
     return payload
 
@@ -91,6 +113,60 @@ class VerifyOutputTest(unittest.TestCase):
         self.assertFalse(result["verified"])
         self.assertIsNone(result["output_path"])
         self.assertTrue(any("TargetDir" in w for w in result["warnings"]))
+
+
+class VerifyOutputStubDetectionTest(unittest.TestCase):
+    """The issue #164 case where the job metadata lies along with JobStatus:
+    Resolve rewrites the job's mark range down to the collapsed extent, so the
+    only truthful readback is the timeline items themselves."""
+
+    def _call(self, proj, params):
+        with mock.patch.object(server, "_check", return_value=(mock.Mock(), proj, None)):
+            return server.render("verify_output", params)
+
+    def test_items_before_timeline_start_warn(self):
+        tl = _timeline(start=86400, items=[(0, 96)])
+        proj = _proj([_job(MarkIn=86400, MarkOut=86400)],
+                     {"JobStatus": "Complete", "CompletionPercentage": 100},
+                     timeline=tl)
+        result = self._call(proj, {"job_id": "job-1"})
+        self.assertFalse(result["verified"])
+        self.assertTrue(any("before the timeline's" in w and "start frame" in w
+                            for w in result["warnings"]), result["warnings"])
+
+    def test_collapsed_mark_range_vs_item_extent_warns(self):
+        tl = _timeline(start=86400, items=[(0, 96)])
+        proj = _proj([_job(MarkIn=86400, MarkOut=86400)],
+                     {"JobStatus": "Complete"}, timeline=tl)
+        result = self._call(proj, {"job_id": "job-1"})
+        self.assertEqual(result["mark_range_frames"], 1)
+        self.assertEqual(result["timeline_item_extent_frames"], 96)
+        self.assertTrue(any("rewrote the range" in w for w in result["warnings"]),
+                        result["warnings"])
+
+    def test_missing_timeline_warns_instead_of_passing(self):
+        proj = _proj([_job(TimelineName="RENAMED")], {"JobStatus": "Complete"})
+        result = self._call(proj, {"job_id": "job-1"})
+        self.assertFalse(result["verified"])
+        self.assertTrue(any("was not found" in w for w in result["warnings"]))
+
+    def test_caller_expected_frames_overrides_job_mark_range(self):
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "out.mov")
+            subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi",
+                            "-i", "testsrc=duration=0.1:size=128x72:rate=24",
+                            "-y", out], check=True)
+            # Collapsed 1-frame job range would make the stub look clean;
+            # the caller states the render should hold 96 frames.
+            tl = _timeline(start=86400, items=[(0, 96)])
+            proj = _proj([_job(target_dir=tmp, MarkIn=86400, MarkOut=86400)],
+                         {"JobStatus": "Complete"}, timeline=tl)
+            result = self._call(proj, {"job_id": "job-1", "expected_frames": 96})
+        self.assertFalse(result["verified"])
+        self.assertLess(result["duration_ratio"], 0.5)
+        self.assertTrue(any("never visited" in w for w in result["warnings"]))
 
 
 class GetTitleTextFusionFallbackTest(unittest.TestCase):

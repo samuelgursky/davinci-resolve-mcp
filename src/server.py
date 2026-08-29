@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.104.0"
+VERSION = "2.104.1"
 
 import base64
 import os
@@ -18580,11 +18580,16 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
       delete_all_jobs() -> {success}
       list_jobs() -> {jobs}
       get_job_status(job_id) -> {status}
-      verify_output(job_id) -> {status, output_path, output_exists, output_size_bytes, output_probe, expected_duration_seconds, duration_ratio, warnings, verified}
+      verify_output(job_id, expected_frames?, expected_duration_seconds?) -> {status, output_path, output_exists, output_size_bytes, output_probe, mark_range_frames, timeline_item_extent_frames, expected_duration_seconds, duration_ratio, warnings, verified}
         JobStatus reports Complete even when the render produced a near-empty
-        stub (content before the timeline start, issue #164) — this checks the
-        actual output file against the job's mark range. Verify BEFORE deleting
-        the job; deleted jobs carry no TargetDir to check.
+        stub (content before the timeline start, issue #164), and Resolve
+        rewrites the job's own MarkIn/MarkOut down to the collapsed extent, so
+        the job metadata lies too. This checks the actual output file, and
+        cross-checks the job's timeline items (which read back their real
+        positions): items before the timeline start and a mark range far
+        smaller than the item extent both warn. Pass expected_frames or
+        expected_duration_seconds when you know what the render should hold.
+        Verify BEFORE deleting the job; deleted jobs carry no TargetDir.
       start(job_ids?, interactive?) -> {success}
       stop() -> {success}
       is_rendering() -> {rendering}
@@ -18675,6 +18680,71 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         else:
             warnings.append("Job carries no TargetDir/OutputFilename to verify against.")
         result["output_path"] = output_path
+        # The job's own MarkIn/MarkOut cannot be the only truth source: when
+        # timeline content sits before the timeline's start frame (issue #164)
+        # Resolve rewrites the job's mark range down to the collapsed extent,
+        # so the job metadata lies right along with JobStatus (measured live on
+        # Studio 19.1.3.7: 96 frames of content before start -> job range of 1
+        # frame, Complete at 100%, a 1-frame black stub). Cross-check the
+        # job's timeline items, which DO read back their real positions, and
+        # let the caller override expected duration outright.
+        try:
+            fps = float(str(job.get("FrameRate")))
+        except (TypeError, ValueError):
+            fps = None
+        try:
+            mark_frames = int(job.get("MarkOut")) - int(job.get("MarkIn")) + 1
+        except (TypeError, ValueError):
+            mark_frames = None
+        result["mark_range_frames"] = mark_frames
+        tl_for_job = None
+        try:
+            for i in range(1, int(proj.GetTimelineCount() or 0) + 1):
+                cand = proj.GetTimelineByIndex(i)
+                if cand and cand.GetName() == job.get("TimelineName"):
+                    tl_for_job = cand
+                    break
+        except Exception:
+            tl_for_job = None
+        if tl_for_job is not None:
+            try:
+                tl_start = int(tl_for_job.GetStartFrame())
+                extent_lo, extent_hi, before_start = None, None, 0
+                for ti in range(1, int(tl_for_job.GetTrackCount("video") or 0) + 1):
+                    for it in tl_for_job.GetItemListInTrack("video", ti) or []:
+                        it_start, it_end = int(it.GetStart()), int(it.GetEnd())
+                        extent_lo = it_start if extent_lo is None else min(extent_lo, it_start)
+                        extent_hi = it_end if extent_hi is None else max(extent_hi, it_end)
+                        if it_start < tl_start:
+                            before_start += 1
+                if before_start:
+                    warnings.append(
+                        f"{before_start} video item(s) on timeline "
+                        f"{job.get('TimelineName')!r} start before the timeline's "
+                        f"start frame {tl_start} — the render engine never visits "
+                        "that content (recordFrame counts from absolute frame "
+                        "zero, issue #164). The items read back as placed; the "
+                        "render is a stub."
+                    )
+                if (extent_lo is not None and mark_frames is not None
+                        and mark_frames < (extent_hi - extent_lo) * 0.5):
+                    warnings.append(
+                        f"The job's mark range ({mark_frames} frame(s)) is under "
+                        f"half the timeline's item extent "
+                        f"({extent_hi - extent_lo} frames) — Resolve rewrote the "
+                        "range down to a collapsed extent, which is how a stub "
+                        "render reports a clean duration ratio."
+                    )
+                result["timeline_item_extent_frames"] = (
+                    None if extent_lo is None else extent_hi - extent_lo
+                )
+            except Exception:
+                pass
+        else:
+            warnings.append(
+                f"Timeline {job.get('TimelineName')!r} was not found in the "
+                "project, so item-extent cross-checks were skipped."
+            )
         if output_path:
             exists = os.path.exists(output_path)
             result["output_exists"] = exists
@@ -18684,13 +18754,21 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
                 if probe:
                     result["output_probe"] = probe
                     duration = probe.get("duration_seconds")
-                    # Expected duration from the job's own mark range and rate.
-                    try:
-                        frames = int(job.get("MarkOut")) - int(job.get("MarkIn")) + 1
-                        fps = float(str(job.get("FrameRate")))
-                        expected = frames / fps if fps > 0 else None
-                    except (TypeError, ValueError):
-                        expected = None
+                    # Expected duration: caller-supplied truth wins; the job's
+                    # mark range is the fallback (see collapse caveat above).
+                    expected = None
+                    if p.get("expected_duration_seconds") is not None:
+                        try:
+                            expected = float(p["expected_duration_seconds"])
+                        except (TypeError, ValueError):
+                            expected = None
+                    elif p.get("expected_frames") is not None and fps:
+                        try:
+                            expected = int(p["expected_frames"]) / fps
+                        except (TypeError, ValueError):
+                            expected = None
+                    elif mark_frames is not None and fps:
+                        expected = mark_frames / fps
                     result["expected_duration_seconds"] = expected
                     if duration is not None and expected and expected > 0:
                         result["duration_ratio"] = round(duration / expected, 4)

@@ -1875,10 +1875,20 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "(frame 0 == first frame), while recordFrame and "
                    "TimelineItem.GetStart/GetEnd are absolute. Distinct from "
                    "the null-id entry below, which is a recordFrame landing in "
-                   "an OCCUPIED span rather than before the start. Verified on "
+                   "an OCCUPIED span rather than before the start. Worse, the "
+                   "render JOB's own metadata lies too: Resolve rewrites the "
+                   "job's MarkIn/MarkOut down to the collapsed extent (measured "
+                   "live on 19.1.3.7: 96 frames of content before start -> an "
+                   "explicit 96-frame mark range became a 1-frame job, Complete "
+                   "at 100%, a 1-frame black stub), so output-duration vs "
+                   "job-mark-range checks read clean. The only truthful "
+                   "readback is the timeline items themselves, which report "
+                   "their real GetStart/GetEnd — before the start frame. "
+                   "Verified on "
                    "Studio 20.3.2.9 (v2.17.1 probe: relative record_frame 12 "
-                   "landed at 86400 + 12 = 86412, absolute preserved 86484) and "
-                   "independently on Studio 21.0.4.5 (issue #164).",
+                   "landed at 86400 + 12 = 86412, absolute preserved 86484), "
+                   "independently on Studio 21.0.4.5 (issue #164), and the "
+                   "mark-range rewrite on Studio 19.1.3.7 (2026-08-29).",
         "recommended": "Offset every recordFrame by timeline.GetStartFrame(). "
                        "This server already does it: "
                        "media_pool.append_to_timeline defaults to "
@@ -1888,8 +1898,10 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "value below the timeline start is refused outright. "
                        "When driving the API directly, "
                        "never treat JobStatus Complete as proof a render "
-                       "worked — check the output file's duration, not just "
-                       "that the job finished.",
+                       "worked — and do not trust the job's MarkIn/MarkOut as "
+                       "the expected duration either. render.verify_output "
+                       "(v2.104.1) cross-checks the job against its timeline's "
+                       "item extents and flags items before the start frame.",
         "tags": ["timeline", "edit", "render", "silent-failure", "media-pool"],
         "issue": 164,
     },
