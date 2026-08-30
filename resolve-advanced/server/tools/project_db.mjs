@@ -259,7 +259,7 @@ export const projectDbTool = {
         return {
           tracks,
           note: tracks.some((t) => t.styled === false)
-            ? 'Tracks with styled:false carry no style blob (Resolve writes a NumLayers-only stub until the track is styled once in the UI); set_subtitle_style cannot patch those.'
+            ? 'Tracks with styled:false carry no style blob (Resolve writes a NumLayers-only stub until the track is styled once in the UI); set_subtitle_style cannot patch those. This covers scripted routes too: a track built by MediaPool.ImportMedia(srt) + AppendToTimeline([srtClip]) reports styled:false (confirmed on Studio 21.0.4.5, issue #169), so style once in the UI regardless of how the track was created.'
             : undefined,
         };
       } finally {

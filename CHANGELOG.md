@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.3
+
+Documentation follow-through on the v2.104.2 batch.
+
+- The FCP7 internal-sequence-name-overrides-timelineName behavior (#171) is now
+  a submit-tagged api_truth entry, so it feeds the Blackmagic-facing
+  limitations report alongside the fix that works around it.
+- `project_db.list_subtitle_styles`'s styled:false note now states that the
+  "must be styled once in the UI" precondition covers the scripted
+  `ImportMedia(srt)` + `AppendToTimeline` route too (confirmed by the #169
+  reporter on Studio 21.0.4.5), not only tracks added empty in the UI.
+
 ## What's New in v2.104.2
 
 A contributor batch: two merged PRs, one PR converted into its fix, and four

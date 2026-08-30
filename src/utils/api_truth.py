@@ -1854,6 +1854,32 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["timeline", "edit", "off-by-one", "readback"],
     },
     {
+        "symbol": "MediaPool.ImportTimelineFromFile (internal sequence name overrides timelineName)",
+        "object": "MediaPool",
+        "signature": "(filePath, {timelineName, importSourceClips, ...}) -> Timeline",
+        "reality": "For FCP7 XML, the sequence name INSIDE the file wins over "
+                   "the timelineName import option. When the internal name "
+                   "matches an existing timeline, the call returns that "
+                   "EXISTING timeline — no error, no new timeline — so an "
+                   "export→edit→re-import loop keying uniqueness on the option "
+                   "'succeeds' while operating on one timeline forever "
+                   "(issue #171, Studio 21.0.4.5; wrapper behavior verified on "
+                   "19.1.3.7). Distinct from the documented repeated-"
+                   "timelineName None return: here the option is fresh and the "
+                   "file's name is stale.",
+        "recommended": "Rewrite the <sequence><name> inside the file to the "
+                       "intended name before importing — "
+                       "timeline.import_timeline_checked does this "
+                       "automatically for FCP7 XML and errors when a "
+                       "non-rewritable format still returns an existing "
+                       "timeline. Never treat a truthy return as proof of "
+                       "creation; check the returned timeline's id against "
+                       "the pre-import set.",
+        "tags": ["timeline", "import", "silent-failure", "unreliable-return"],
+        "submit": "bug",
+        "issue": 171,
+    },
+    {
         "symbol": "MediaPool.AppendToTimeline clipInfo recordFrame (timeline-absolute origin)",
         "object": "MediaPool",
         "signature": "([{mediaPoolItem, startFrame, endFrame, recordFrame, "

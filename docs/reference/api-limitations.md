@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 33 missing capabilities, 39 bugs / unreliable behaviors.
+**Totals:** 33 missing capabilities, 40 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -516,6 +516,15 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** After writing 'Reel Name', read it back with GetClipProperty('Reel Name') and refuse to report success on mismatch; surface the project-setting gate to the caller (server._verify_clip_property_writeback).
 - **Reference:** [issue #77](https://github.com/samuelgursky/davinci-resolve-mcp/issues/77)
 - **Tags:** unreliable-return, silent-failure, metadata, reel-name
+
+### MediaPool.ImportTimelineFromFile (internal sequence name overrides timelineName)
+
+- **Object:** `MediaPool`
+- **Signature:** `(filePath, {timelineName, importSourceClips, ...}) -> Timeline`
+- **Behavior:** For FCP7 XML, the sequence name INSIDE the file wins over the timelineName import option. When the internal name matches an existing timeline, the call returns that EXISTING timeline — no error, no new timeline — so an export→edit→re-import loop keying uniqueness on the option 'succeeds' while operating on one timeline forever (issue #171, Studio 21.0.4.5; wrapper behavior verified on 19.1.3.7). Distinct from the documented repeated-timelineName None return: here the option is fresh and the file's name is stale.
+- **Workaround / current handling:** Rewrite the <sequence><name> inside the file to the intended name before importing — timeline.import_timeline_checked does this automatically for FCP7 XML and errors when a non-rewritable format still returns an existing timeline. Never treat a truthy return as proof of creation; check the returned timeline's id against the pre-import set.
+- **Reference:** [issue #171](https://github.com/samuelgursky/davinci-resolve-mcp/issues/171)
+- **Tags:** timeline, import, silent-failure, unreliable-return
 
 ### Timeline.DeleteClips (requires the Edit page; flaky first attempt)
 
