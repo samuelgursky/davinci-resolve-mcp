@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.6
+
+**A correction to the v2.104.2 StartFrame fix — measured against Resolve
+itself.** SMPTE non-drop timecode counts NOMINAL frames: the fields multiply
+by the integer base (30 for 29.97, 24 for 23.976), not the exact rate.
+Measured live on Studio 19.1.3.7: a 29.97 timeline at 01:00:00:00 reads
+GetStartFrame 108000 = 3600 x 30, and a 23.976 one reads 86400 = 3600 x 24.
+Issue #168's reporter expected round(3600 x 30000/1001) = 107892 — they said
+plainly they had patched defensively without verifying Resolve — and the
+v2.104.2 fix shipped that expectation. Both the original fractional product
+and the rounded 107892 were wrong; the Python converters (which always used
+nominal) and the Node converters now agree.
+
+Three Node converters move to nominal-base counting, with drop-frame
+handling (semicolon timecodes) matching the Python formula:
+
+- `drt.author`'s SeqContainer StartFrame (01:00:00:00 at 29.97 now writes
+  108000; at 23.976, 86400)
+- `editorial.tcToFrames` — the exact-rate product undercounted NTSC
+  timecode by 0.1% (108 frames per hour), which touched every EDL/AAF
+  source/record conversion at 29.97
+- `media-inventory.tcToFrames` — whose own framesToTc was already nominal,
+  so the tc->frames->tc round trip was asymmetric at NTSC rates until now
+
+The conform fixtures are integer-rate, which is how the exact-rate
+convention survived: nothing in the suite exercised an NTSC timecode
+conversion end to end. Regression tests now pin the measured nominal values
+and a drop-frame case.
+
 ## What's New in v2.104.5
 
 The recent bug classes, generalized into guards — and the sweeps found the

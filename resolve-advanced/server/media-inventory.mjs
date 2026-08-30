@@ -17,10 +17,21 @@ import { probeMedia } from './ffprobe-media.mjs';
 /** "HH:MM:SS:FF" (or ';' DF) → integer frames at fps. Returns null if unparseable. */
 export function tcToFrames(tc, fps) {
   if (typeof tc !== 'string' || !fps) return null;
-  const m = /^(\d{1,2}):(\d{2}):(\d{2})[:;](\d{2,3})$/.exec(tc.trim());
+  const raw = tc.trim();
+  const m = /^(\d{1,2}):(\d{2}):(\d{2})[:;](\d{2,3})$/.exec(raw);
   if (!m) return null;
   const [, h, mm, s, f] = m.map(Number);
-  return Math.round((h * 3600 + mm * 60 + s) * fps) + f;
+  // Nominal-base counting, matching framesToTc below and Resolve's own
+  // GetStartFrame (measured, Studio 19.1.3.7) — the exact-rate product made
+  // the tc->frames->tc round trip asymmetric at NTSC rates.
+  const nominal = Math.round(fps);
+  let frames = (h * 3600 + mm * 60 + s) * nominal + f;
+  if (raw.includes(';')) {
+    const dropped = Math.round(nominal * 0.0666666667);
+    const totalMinutes = h * 60 + mm;
+    frames -= dropped * (totalMinutes - Math.floor(totalMinutes / 10));
+  }
+  return frames;
 }
 
 export function framesToTc(frames, fps) {

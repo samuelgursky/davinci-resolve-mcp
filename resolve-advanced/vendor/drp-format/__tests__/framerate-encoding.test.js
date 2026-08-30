@@ -34,14 +34,31 @@ test('the three formerly-wrong table rates never reappear', () => {
   assert.notStrictEqual(encodeFrameRate(59.94), '286b55e253f9ed3f');
 });
 
-test('StartFrame is an integer at fractional rates and startFrame wins', async () => {
+test('StartFrame counts NOMINAL frames and startFrame wins', async () => {
+  // Measured against Resolve itself (Studio 19.1.3.7): 01:00:00:00 at 29.97
+  // reads GetStartFrame 108000 = 3600 x 30, and 23.976 reads 86400 = 3600 x
+  // 24 — SMPTE NDF counts by the integer base, not the exact rate. Both the
+  // pre-#168 fractional product and its first rounded fix (107892) were wrong.
   const tl = { name: 'T', videoTracks: [], audioTracks: [] };
-  const fromTc = await buildSeqContainerFile(tl, {
+  const ntsc30 = await buildSeqContainerFile(tl, {
     frameRate: 30000 / 1001, startTimecode: '01:00:00:00',
   });
-  assert.match(fromTc, /<StartFrame>107892<\/StartFrame>/);
+  assert.match(ntsc30, /<StartFrame>108000<\/StartFrame>/);
+  const ntsc24 = await buildSeqContainerFile(tl, {
+    frameRate: 24000 / 1001, startTimecode: '01:00:00:00',
+  });
+  assert.match(ntsc24, /<StartFrame>86400<\/StartFrame>/);
   const explicit = await buildSeqContainerFile(tl, {
     frameRate: 30000 / 1001, startTimecode: '01:00:00:00', startFrame: 99999,
   });
   assert.match(explicit, /<StartFrame>99999<\/StartFrame>/);
+});
+
+test('drop-frame start timecode subtracts the dropped numbers', async () => {
+  // 00:01:00;02 DF at 29.97: minute 1 drops 2 numbers -> 1800 + 2 - 2 = 1800.
+  const tl = { name: 'T', videoTracks: [], audioTracks: [] };
+  const df = await buildSeqContainerFile(tl, {
+    frameRate: 30000 / 1001, startTimecode: '00:01:00;02',
+  });
+  assert.match(df, /<StartFrame>1800<\/StartFrame>/);
 });

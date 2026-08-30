@@ -23,10 +23,21 @@ const require = createRequire(import.meta.url);
 // ── timecode ───────────────────────────────────────────────────────────
 const TC_RE = /^(\d{2}):(\d{2}):(\d{2})[:;](\d{2,3})$/;
 export function tcToFrames(tc, fps) {
-  const m = TC_RE.exec(String(tc).trim());
+  const raw = String(tc).trim();
+  const m = TC_RE.exec(raw);
   if (!m || !fps) return null;
   const [, h, mm, s, f] = m.map(Number);
-  return Math.round((h * 3600 + mm * 60 + s) * fps) + f;
+  // SMPTE timecode counts NOMINAL frames (base 30 for 29.97, 24 for 23.976) —
+  // measured against Resolve's own GetStartFrame (Studio 19.1.3.7). The
+  // previous exact-rate product undercounted NTSC by 0.1% (108 frames/hour).
+  const nominal = Math.round(fps);
+  let frames = (h * 3600 + mm * 60 + s) * nominal + f;
+  if (raw.includes(';')) {
+    const dropped = Math.round(nominal * 0.0666666667);
+    const totalMinutes = h * 60 + mm;
+    frames -= dropped * (totalMinutes - Math.floor(totalMinutes / 10));
+  }
+  return frames;
 }
 const isTc = (t) => TC_RE.test(t);
 

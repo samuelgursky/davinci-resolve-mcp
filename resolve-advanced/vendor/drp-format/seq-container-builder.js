@@ -363,15 +363,27 @@ function buildMarkersFieldsBlob(markers, frameRate) {
 function timecodeToFrames(timecode, fps = 24) {
   if (!timecode || typeof timecode !== 'string') return 0;
 
-  const parts = timecode.split(':').map(Number);
-  if (parts.length !== 4) return 0;
+  const dropFrame = timecode.includes(';');
+  const parts = timecode.replace(/;/g, ':').split(':').map(Number);
+  if (parts.length !== 4 || parts.some(Number.isNaN)) return 0;
 
   const [hh, mm, ss, ff] = parts;
-  // A frame index is an integer. At fractional rates the seconds product is
-  // fractional (3600 x 30000/1001 = 107892.107...), and writing it raw put a
-  // fractional <StartFrame> in the XML (issue #168). Non-drop convention:
-  // round the seconds part, then add the frame component.
-  return Math.round(hh * 3600 * fps + mm * 60 * fps + ss * fps) + ff;
+  // SMPTE timecode counts NOMINAL frames: the fields multiply by the integer
+  // base (30 for 29.97, 24 for 23.976), not the exact rate. Measured against
+  // Resolve itself (Studio 19.1.3.7): a 29.97 timeline at 01:00:00:00 reads
+  // GetStartFrame 108000 = 3600 x 30, and a 23.976 one reads 86400 = 3600 x
+  // 24. Both the pre-#168 exact-rate product (107892.107...) and its rounded
+  // fix (107892) were wrong; nominal is what Resolve stores.
+  const nominal = Math.round(fps);
+  let frames = (hh * 3600 + mm * 60 + ss) * nominal + ff;
+  if (dropFrame) {
+    // Drop-frame skips 2 (or 4 at 59.94) TC numbers per minute except every
+    // tenth minute — same formula as the Python _timecode_to_frame_id.
+    const dropped = Math.round(nominal * 0.0666666667);
+    const totalMinutes = hh * 60 + mm;
+    frames -= dropped * (totalMinutes - Math.floor(totalMinutes / 10));
+  }
+  return frames;
 }
 
 // =============================================================================
