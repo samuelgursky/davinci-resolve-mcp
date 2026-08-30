@@ -19,7 +19,7 @@
 import fs from 'node:fs/promises';
 import { z } from 'zod';
 import JSZip from 'jszip';
-import { drt } from '../libs.mjs';
+import { drt, drp } from '../libs.mjs';
 import { summarizeDrtTimelines } from '../sequences.mjs';
 
 const parseSchema = z.object({ drtPath: z.string().describe('Absolute path to a .drt (or .drp) file') });
@@ -29,6 +29,48 @@ const authorSchema = z.object({
   outputPath: z.string().describe('Absolute path where the .drt will be written'),
 });
 const validateSchema = z.object({ drtPath: z.string().describe('Absolute path to a .drt file') });
+const assembleSchema = z.object({
+  spec: z
+    .object({})
+    .passthrough()
+    .describe("assembleTimeline spec: { timelineName?, elements: [{type:'title'|'generator', track, startFrame, durationFrames?, text?, ...}], transitions? }. startFrame is timeline-absolute (origin 86400)."),
+  outputPath: z.string().describe('Absolute path where the importable .drt will be written'),
+  targetAppVersion: z
+    .union([z.string(), z.number()])
+    .optional()
+    .describe("Resolve version that must import it, e.g. '19.1' — stamps ProjectVersion down from the template's Resolve-21 capture. Omit for 21+ hosts."),
+});
+
+/** Rewrite version stamps across every XML entry of a JSZip; returns patch counts. */
+async function applyVersionStamps(zip, targetPV, appVer) {
+  const out = new JSZip();
+  let elementPatches = 0;
+  let stampPatches = 0;
+  const jobs = [];
+  zip.forEach((path, e) => {
+    if (e.dir) return;
+    jobs.push(
+      (async () => {
+        if (!path.endsWith('.xml')) {
+          out.file(path, await e.async('nodebuffer'));
+          return;
+        }
+        let xml = await e.async('string');
+        xml = xml.replace(/<ProjectVersion>\d+<\/ProjectVersion>/g, () => {
+          elementPatches += 1;
+          return `<ProjectVersion>${targetPV}</ProjectVersion>`;
+        });
+        xml = xml.replace(/DbAppVer="[^"]*" DbPrjVer="[^"]*"/g, () => {
+          stampPatches += 1;
+          return `DbAppVer="${appVer}" DbPrjVer="${targetPV}"`;
+        });
+        out.file(path, xml);
+      })(),
+    );
+  });
+  await Promise.all(jobs);
+  return { out, elementPatches, stampPatches };
+}
 const injectIntoDrpSchema = z.object({
   drtPath: z.string().describe('Source .drt'),
   drpPath: z.string().describe('Target.drp to inject into'),
@@ -93,7 +135,7 @@ function requirePathArg(args, key, action) {
 export const drtTool = {
   name: 'drt',
   description:
-    'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: parse, list_sequences (enumerate the timelines inside a .drp/.drt → [{id,name,eventCount,index}] to drive a "which sequence?" picker), author, validate, inject_into_drp, extract_from_drp (pull one SeqContainer out as a .drt — feed the .drt to the Python davinci-resolve MCP timeline.import_timeline_checked, or use timeline.import_from_drp to do both), downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
+    'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: assemble (spec → IMPORTABLE native-schema .drt via template-spliced real structures; pass targetAppVersion e.g. \'19.1\' for pre-21 hosts), parse, list_sequences (enumerate the timelines inside a .drp/.drt → [{id,name,eventCount,index}] to drive a "which sequence?" picker), author, validate, inject_into_drp, extract_from_drp (pull one SeqContainer out as a .drt — feed the .drt to the Python davinci-resolve MCP timeline.import_timeline_checked, or use timeline.import_from_drp to do both), downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
   async handler({ action, args }) {
     if (action === 'parse') {
       const p = parseSchema.parse(requirePathArg(args, 'drtPath', 'parse'));
@@ -148,6 +190,37 @@ export const drtTool = {
       await fs.writeFile(p.outputPath, outBuf);
       return { outputPath: p.outputPath, bytes: outBuf.length, seqContainersInjected: injected, projectFolder };
     }
+    if (action === 'assemble') {
+      const p = assembleSchema.parse(args);
+      // Native-schema authoring: template-spliced real Resolve structures
+      // (drp-format assembleTimeline), which ImportTimelineFromFile accepts —
+      // unlike drt.author's flat template. Measured live on Studio 19.1.3.7:
+      // assembled + stamped to the host's ProjectVersion imports with every
+      // element intact.
+      const { assembleTimeline } = drp();
+      const { buffer, timelineName, startFrame } = await assembleTimeline(p.spec);
+      let outBuf = buffer;
+      let stamped = null;
+      if (p.targetAppVersion !== undefined) {
+        const targetPV = resolveTargetProjectVersion({ targetAppVersion: p.targetAppVersion });
+        const appVer = `${p.targetAppVersion}${'.0'.repeat(Math.max(0, 4 - String(p.targetAppVersion).split('.').length))}`;
+        const zip = await JSZip.loadAsync(buffer);
+        const { out, elementPatches, stampPatches } = await applyVersionStamps(zip, targetPV, appVer);
+        outBuf = await out.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+        stamped = { targetProjectVersion: targetPV, elementPatches, stampPatches };
+      }
+      await fs.writeFile(p.outputPath, outBuf);
+      return {
+        outputPath: p.outputPath,
+        bytes: outBuf.length,
+        timelineName,
+        startFrame,
+        stamped,
+        note:
+          'Import with timeline.import_timeline_checked — the imported timeline is named after the FILE. ' +
+          'On a host older than Resolve 21, pass targetAppVersion or the version gate refuses the archive.',
+      };
+    }
     if (action === 'extract_from_drp') {
       const p = extractFromDrpSchema.parse(args);
       const drpZip = await JSZip.loadAsync(await fs.readFile(p.drpPath));
@@ -156,16 +229,37 @@ export const drtTool = {
       if (idx >= seqEntries.length) {
         return { error: `timelineIndex ${idx} out of range (${seqEntries.length} SeqContainers)` };
       }
-      const xml = await drpZip.file(seqEntries[idx]).async('string');
+      // The importable-.drt recipe, measured by bisection on Studio 19.1.3.7:
+      // a .drt IS a .drp that ImportTimelineFromFile accepts. project.xml and
+      // MediaPool/ are REQUIRED (the Sm2Sequence/Sm2Timeline objects live in
+      // MpFolder.xml); the SeqContainer must keep its ORIGINAL uuid path —
+      // renaming it imports an EMPTY timeline with no error; Gallery.xml is
+      // droppable. Other timelines' MpFolder blocks must go too, or each
+      // arrives as a ghost empty timeline (matched via the container tracks'
+      // <Sequence> DbId, which appears inside exactly one Sm2MpTimelineClip).
+      const keepEntry = seqEntries[idx];
+      const keepXml = await drpZip.file(keepEntry).async('string');
+      const keepSeqIds = [...keepXml.matchAll(/<Sequence>([0-9a-f-]{36})<\/Sequence>/g)].map((m) => m[1]);
       const out = new JSZip();
-      out.file('Primary1/SeqContainer1.xml', xml);
-      // ImportTimelineFromFile refuses a .drt without project.xml (measured
-      // by bisection on Studio 19.1.3.7), so carry the source's over.
-      const projectEntry = Object.keys(drpZip.files).find(
-        (n) => n === 'project.xml' || n.endsWith('/project.xml'),
-      );
-      if (projectEntry) {
-        out.file('project.xml', await drpZip.file(projectEntry).async('string'));
+      let droppedTimelines = 0;
+      for (const name of Object.keys(drpZip.files)) {
+        const entry = drpZip.files[name];
+        if (entry.dir) continue;
+        if (name === 'Gallery.xml') continue;
+        const isSeq = seqEntries.includes(name);
+        if (isSeq && name !== keepEntry) continue;
+        let content = await entry.async(name.endsWith('.xml') ? 'string' : 'nodebuffer');
+        if (name.endsWith('MpFolder.xml') && seqEntries.length > 1) {
+          content = content.replace(
+            /<Element>\s*<Sm2MpTimelineClip DbId="[^"]+">(?:(?!<\/Sm2MpTimelineClip>)[\s\S])*?<\/Sm2MpTimelineClip>\s*<\/Element>/g,
+            (block) => {
+              if (keepSeqIds.some((id) => block.includes(id))) return block;
+              droppedTimelines += 1;
+              return '';
+            },
+          );
+        }
+        out.file(name, content);
       }
       out.file(
         'metadata.json',
@@ -173,7 +267,8 @@ export const drtTool = {
           {
             source: 'extract_from_drp',
             sourceDrp: p.drpPath,
-            sourceSeqContainer: seqEntries[idx],
+            sourceSeqContainer: keepEntry,
+            droppedTimelines,
             exportedFrom: 'davinci-resolve-advanced-mcp drt.extract_from_drp',
           },
           null,
@@ -182,7 +277,13 @@ export const drtTool = {
       );
       const outBuf = await out.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
       await fs.writeFile(p.outputPath, outBuf);
-      return { outputPath: p.outputPath, bytes: outBuf.length, sourceSeqContainer: seqEntries[idx] };
+      return {
+        outputPath: p.outputPath,
+        bytes: outBuf.length,
+        sourceSeqContainer: keepEntry,
+        droppedTimelines,
+        note: 'The imported timeline is named after the FILE. Source must be a SAVED project export — ExportProject snapshots the saved DB state, so unsaved edits are absent.',
+      };
     }
     if (action === 'downgrade') {
       const p = downgradeSchema.parse(args);

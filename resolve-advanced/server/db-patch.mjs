@@ -52,6 +52,44 @@ export const LITE_DB_ROOT = path.join(
 /** Every root searched when resolving a project by name, Studio first. */
 export const DB_ROOTS = [DISK_DB_ROOT, PROJECT_LIBRARY_ROOT, LITE_DB_ROOT];
 
+/**
+ * Filter roots to the ones that answer a readdir within `deadlineMs`.
+ *
+ * macOS can render a path UNRESPONSIVE at the filesystem level — measured
+ * live 2026-08-30: `ls` on the Lite sandbox container hung indefinitely
+ * (File-Provider/container materialization), which made every projectName
+ * lookup and the test suite hang with it. A hung readdir cannot be
+ * cancelled; the race abandons it (one leaked threadpool op) and reports the
+ * root as skipped so the caller can say WHERE it could not look.
+ * Returns { roots, skipped: [{root, reason}] }.
+ */
+export async function responsiveRoots(roots = DB_ROOTS, deadlineMs = 3000) {
+  const fsp = require('node:fs/promises');
+  const results = await Promise.all(
+    roots.map(async (root) => {
+      try {
+        const answer = fsp
+          .readdir(root)
+          .then(() => 'ok', (err) => (err && err.code === 'ENOENT' ? 'absent' : 'error'));
+        const timer = new Promise((resolve) => {
+          const t = setTimeout(() => resolve('timeout'), deadlineMs);
+          if (t.unref) t.unref();
+        });
+        const outcome = await Promise.race([answer, timer]);
+        return { root, outcome };
+      } catch {
+        return { root, outcome: 'error' };
+      }
+    }),
+  );
+  return {
+    roots: results.filter((r) => r.outcome === 'ok' || r.outcome === 'absent').map((r) => r.root),
+    skipped: results
+      .filter((r) => r.outcome === 'timeout')
+      .map((r) => ({ root: r.root, reason: `unresponsive after ${deadlineMs}ms (hung filesystem path — skipped)` })),
+  };
+}
+
 export function loadSqlite() {
   try {
     return require('better-sqlite3');
@@ -85,17 +123,22 @@ export function findProjectDb(projectName, root = DISK_DB_ROOT) {
   return hits;
 }
 
-export function resolveDbPath({ projectDb, projectName }) {
+export function resolveDbPath({ projectDb, projectName, roots, skippedRoots = [] }) {
   if (projectDb) return projectDb;
   if (!projectName) throw new Error('provide projectDb (path) or projectName');
+  const searchRoots = roots || DB_ROOTS;
   // Deduplicate: a project present under both roots must not read as ambiguous
   // just because the same file was found twice.
-  const hits = [...new Set(DB_ROOTS.flatMap((root) => findProjectDb(projectName, root)))];
+  const hits = [...new Set(searchRoots.flatMap((root) => findProjectDb(projectName, root)))];
   if (!hits.length) {
     throw new Error(
-      `no Project.db found for project "${projectName}". Searched the Studio libraries ` +
-      `(${DISK_DB_ROOT} and ${PROJECT_LIBRARY_ROOT}) and the sandboxed free-edition ` +
-      `library (${LITE_DB_ROOT}). ` +
+      `no Project.db found for project "${projectName}". Searched: ` +
+      `${searchRoots.join(', ')}. ` +
+      (skippedRoots.length
+        ? `SKIPPED unresponsive root(s): ${skippedRoots.map((r) => r.root).join(', ')} — ` +
+          'a hung filesystem path (File Provider / sandbox container); its projects ' +
+          'are invisible until macOS unwedges it. '
+        : '') +
       'If Resolve keeps its projects elsewhere — a relocated library, a network/Postgres ' +
       'database, or the free edition on Windows/Linux — pass projectDb with the full path.',
     );

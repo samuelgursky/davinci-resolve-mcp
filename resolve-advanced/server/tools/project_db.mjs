@@ -19,7 +19,17 @@
 
 import { z } from 'zod';
 import { createRequire } from 'node:module';
-import { resolveDbPath, openGuarded, backup, requireClosed } from '../db-patch.mjs';
+import { resolveDbPath as _resolveDbPathRaw, responsiveRoots, openGuarded, backup, requireClosed } from '../db-patch.mjs';
+
+// projectName discovery walks library roots that macOS can render UNRESPONSIVE
+// (measured: a hung Lite sandbox container froze every lookup). Probe the
+// roots with a deadline first and search only the ones that answer; the
+// not-found error then names any skipped root.
+async function resolveDbPath(p) {
+  if (p.projectDb || !p.projectName) return _resolveDbPathRaw(p);
+  const { roots, skipped } = await responsiveRoots();
+  return _resolveDbPathRaw({ ...p, roots, skippedRoots: skipped });
+}
 
 const require = createRequire(import.meta.url);
 
@@ -96,7 +106,7 @@ export const projectDbTool = {
   async handler({ action, args }) {
     if (action === 'list_folders') {
       const p = listFoldersSchema.parse(args);
-      const db = openGuarded(resolveDbPath(p), { table: 'Sm2MpFolder', column: 'Name' });
+      const db = openGuarded(await resolveDbPath(p), { table: 'Sm2MpFolder', column: 'Name' });
       try {
         return { folders: db.prepare('SELECT Name, ColorTag FROM Sm2MpFolder ORDER BY Name').all() };
       } finally {
@@ -106,7 +116,7 @@ export const projectDbTool = {
     if (action === 'rename_folder') {
       const p = renameFolderSchema.parse(args);
       requireClosed(p);
-      const dbPath = resolveDbPath(p);
+      const dbPath = await resolveDbPath(p);
       const bak = backup(dbPath);
       const db = openGuarded(dbPath, { writable: true, table: 'Sm2MpFolder', column: 'Name' });
       try {
@@ -121,7 +131,7 @@ export const projectDbTool = {
     if (action === 'set_folder_color') {
       const p = folderColorSchema.parse(args);
       requireClosed(p);
-      const dbPath = resolveDbPath(p);
+      const dbPath = await resolveDbPath(p);
       const bak = backup(dbPath);
       const db = openGuarded(dbPath, { writable: true, table: 'Sm2MpFolder', column: 'ColorTag' });
       try {
@@ -135,7 +145,7 @@ export const projectDbTool = {
     }
     if (action === 'list_clips') {
       const p = listClipsSchema.parse(args);
-      const db = openGuarded(resolveDbPath(p), { table: 'Sm2MpMedia', column: 'MarkIn' });
+      const db = openGuarded(await resolveDbPath(p), { table: 'Sm2MpMedia', column: 'MarkIn' });
       try {
         return { clips: db.prepare('SELECT Name, MarkIn, MarkOut FROM Sm2MpMedia ORDER BY Name LIMIT 500').all() };
       } finally {
@@ -146,7 +156,7 @@ export const projectDbTool = {
       const p = clipMarksSchema.parse(args);
       requireClosed(p);
       if (p.markIn == null && p.markOut == null) throw new Error('provide markIn and/or markOut');
-      const dbPath = resolveDbPath(p);
+      const dbPath = await resolveDbPath(p);
       const bak = backup(dbPath);
       const db = openGuarded(dbPath, { writable: true, table: 'Sm2MpMedia', column: 'MarkIn' });
       try {
@@ -163,7 +173,7 @@ export const projectDbTool = {
       const p = relayoutSchema.parse(args);
       const layout = require('../../vendor/drx-codec/node-layout.js');
       const layoutOpts = { originX: p.originX, originY: p.originY, spacingX: p.spacingX };
-      const dbPath = resolveDbPath(p);
+      const dbPath = await resolveDbPath(p);
       const write = !p.dryRun;
       if (write) requireClosed(p);
       const bak = write ? backup(dbPath) : null;
@@ -228,7 +238,7 @@ export const projectDbTool = {
     if (action === 'list_subtitle_styles') {
       const p = listSubtitleStylesSchema.parse(args);
       const style = require('../../vendor/drp-format/subtitle-style.js');
-      const db = openGuarded(resolveDbPath(p), { table: 'Sm2TiTrack', column: 'FieldsBlob' });
+      const db = openGuarded(await resolveDbPath(p), { table: 'Sm2TiTrack', column: 'FieldsBlob' });
       try {
         const counts = new Map();
         const tracks = [];
@@ -281,7 +291,7 @@ export const projectDbTool = {
 
       const write = !p.dryRun;
       if (write) requireClosed(p);
-      const dbPath = resolveDbPath(p);
+      const dbPath = await resolveDbPath(p);
       const bak = write ? backup(dbPath) : null;
       const db = openGuarded(dbPath, { writable: write, table: 'Sm2TiTrack', column: 'FieldsBlob' });
       try {

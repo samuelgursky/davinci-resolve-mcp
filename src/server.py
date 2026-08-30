@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.104.10"
+VERSION = "2.105.0"
 
 import base64
 import os
@@ -7158,12 +7158,12 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
                 "dismisses it, so this import is not attempted at all.",
                 category="invalid_input",
                 remediation=(
-                    "Authored DRTs serve offline/DB workflows, not live import. "
-                    "For a live import, author OTIO instead "
-                    "(editorial.convert_to_interchange target 'otio' imports "
-                    "cleanly), or import a REAL Resolve .drt — one Resolve "
-                    "exported, or one pulled from a .drp with "
-                    "drt.extract_from_drp."
+                    "Flat-authored DRTs serve offline/DB workflows, not live "
+                    "import. For an importable .drt, use drt.assemble "
+                    "(native-schema authoring from a spec; pass "
+                    "targetAppVersion e.g. '19.1' on pre-21 hosts), "
+                    "drt.extract_from_drp on a SAVED .drp export, or author "
+                    "OTIO (editorial.convert_to_interchange target 'otio')."
                 ),
             )
     # ImportTimelineFromFile silently no-ops on the never-saved default project: it returns
@@ -7465,38 +7465,62 @@ def _drp_seq_containers(zf) -> List[Dict[str, Any]]:
 
 
 def _extract_seqcontainer_from_drp(drp_path: str, seq_entry: str, out_path: str) -> None:
-    """Write a .drt (zip) holding one SeqContainer plus the source's project.xml.
+    """Write an IMPORTABLE .drt holding one timeline from a .drp/.drt archive.
 
-    ImportTimelineFromFile refuses a .drt without project.xml (measured by
-    bisection on Studio 19.1.3.7: a real export minus only project.xml is
-    refused; project.xml + container with no MpFolder imports). The source
-    .drp/.drt carries one — copy it, or the extract cannot import.
+    The recipe, measured by bisection on Studio 19.1.3.7: a .drt IS a .drp
+    that ImportTimelineFromFile accepts. project.xml and MediaPool/ are
+    REQUIRED (the Sm2Sequence/Sm2Timeline objects live in MpFolder.xml); the
+    SeqContainer must keep its ORIGINAL uuid path — renaming it imports an
+    EMPTY timeline with no error; Gallery.xml is droppable; and other
+    timelines' Sm2MpTimelineClip blocks must be removed from MpFolder.xml or
+    each arrives as a ghost empty timeline (matched via the kept container's
+    track <Sequence> DbIds, which appear inside exactly one block). Source
+    must be a SAVED export — ExportProject snapshots the saved DB state.
     """
     import zipfile
 
     with zipfile.ZipFile(drp_path, "r") as zf:
-        xml = zf.read(seq_entry)
-        project_xml = None
-        for candidate in zf.namelist():
-            if candidate == "project.xml" or candidate.endswith("/project.xml"):
-                project_xml = zf.read(candidate)
-                break
-    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as out:
-        out.writestr("Primary1/SeqContainer1.xml", xml)
-        if project_xml is not None:
-            out.writestr("project.xml", project_xml)
-        out.writestr(
-            "metadata.json",
-            json.dumps(
-                {
-                    "source": "import_from_drp",
-                    "sourceDrp": drp_path,
-                    "sourceSeqContainer": seq_entry,
-                    "exportedFrom": "davinci-resolve-mcp timeline.import_from_drp",
-                },
-                indent=2,
-            ),
-        )
+        names = [n for n in zf.namelist() if not n.endswith("/")]
+        seq_entries = [n for n in names if _SEQ_CONTAINER_RE.search(n)]
+        keep_xml = zf.read(seq_entry).decode("utf-8", "replace")
+        keep_seq_ids = re.findall(r"<Sequence>([0-9a-f-]{36})</Sequence>", keep_xml)
+        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as out:
+            for name in names:
+                if name == "Gallery.xml":
+                    continue
+                if name in seq_entries and name != seq_entry:
+                    continue
+                data = zf.read(name)
+                if name.endswith("MpFolder.xml") and len(seq_entries) > 1:
+                    text = data.decode("utf-8", "replace")
+
+                    def _keep_block(match):
+                        block = match.group(0)
+                        if any(sid in block for sid in keep_seq_ids):
+                            return block
+                        return ""
+
+                    text = re.sub(
+                        r"<Element>\s*<Sm2MpTimelineClip DbId=\"[^\"]+\">"
+                        r"(?:(?!</Sm2MpTimelineClip>)[\s\S])*?"
+                        r"</Sm2MpTimelineClip>\s*</Element>",
+                        _keep_block,
+                        text,
+                    )
+                    data = text.encode("utf-8")
+                out.writestr(name, data)
+            out.writestr(
+                "metadata.json",
+                json.dumps(
+                    {
+                        "source": "import_from_drp",
+                        "sourceDrp": drp_path,
+                        "sourceSeqContainer": seq_entry,
+                        "exportedFrom": "davinci-resolve-mcp timeline.import_from_drp",
+                    },
+                    indent=2,
+                ),
+            )
 
 
 def _import_from_drp(proj, mp, p: Dict[str, Any]):

@@ -2,6 +2,56 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.105.0
+
+**Native-schema DRT authoring — the parked "project, not a lap" — shipped.**
+Tool-authored .drt files that Resolve's ImportTimelineFromFile actually
+accepts, live-verified end to end on Studio 19.1.3.7.
+
+The door was already half-open: the repo's template-splice engine
+(assembleTimeline + the real Resolve-21 empty-project capture) authors
+native-schema .drp archives, and the final bisection showed a .drt IS a .drp
+that ImportTimelineFromFile accepts. What stood between them was the version
+gate (the template stamps DbPrjVer 17; a 19.1.3 host wants 14) and a set of
+extraction traps nobody had mapped.
+
+### Added
+
+- **`drt.assemble`** — spec → importable native-schema .drt (titles,
+  generators, transitions), with `targetAppVersion` stamping for pre-21
+  hosts. Live-verified: assembled archives import with every element intact.
+- **`drt.extract_from_drp` rebuilt on the measured recipe**: keep
+  project.xml + MediaPool + the SeqContainer at its ORIGINAL uuid path, drop
+  Gallery, and remove other timelines' Sm2MpTimelineClip blocks (matched via
+  the kept container's track Sequence DbIds) so they don't arrive as ghost
+  empty timelines. The Python extractor behind `timeline.import_from_drp`
+  implements the same recipe. Live-verified: single-timeline extracts from a
+  two-timeline project import cleanly, one timeline, clips intact.
+
+### The .drt import contract, fully mapped (api_truth rewritten)
+
+A whole saved-project export renamed .drt imports, clips intact.
+Requirements: project.xml; MpFolder.xml (it holds the Sm2Sequence/Sm2Timeline
+objects); the SeqContainer's ORIGINAL uuid path — renaming it "succeeds"
+with an EMPTY timeline, no error, the nastiest variant; version stamps at or
+below the host; native blob schema; and a SAVED source project —
+ExportProject snapshots the saved DB state, so an unsaved timeline exports
+empty tracks (the trap that produced v2.104.7's "necessary but not
+sufficient" verdict, now corrected). Every Sm2MpTimelineClip block imports
+as a timeline; extras arrive as ghosts unless removed.
+
+### Fixed in passing
+
+- **project_db lookups can no longer hang on an unresponsive library root.**
+  Mid-session, macOS rendered the Lite sandbox container path unresponsive at
+  the filesystem level (`ls` itself hung) — which froze the Node test suite
+  and would have frozen every projectName lookup. Roots are now probed with a
+  deadline (`responsiveRoots`); unresponsive ones are skipped and NAMED in
+  the not-found error. The root-walking tests are hermetic now — suites must
+  not depend on machine paths that an OS can wedge.
+- The flat-authored-shape refusal in import_timeline_checked now points at
+  `drt.assemble` as the importable authoring route.
+
 ## What's New in v2.104.10
 
 Stones turned on the live-validation backlog, on Studio 19.1.3.7.
