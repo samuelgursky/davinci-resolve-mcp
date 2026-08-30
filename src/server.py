@@ -6426,10 +6426,24 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
     if switch_err:
         return switch_err
     if p.get("start_timecode"):
+        # A refused start timecode leaves the variant at the default hour while
+        # every record frame below was computed against the requested one, so
+        # the whole build lands at the wrong absolute time.
         try:
-            new_tl.SetStartTimecode(p["start_timecode"])
-        except Exception:
-            pass
+            start_tc_set = bool(new_tl.SetStartTimecode(p["start_timecode"]))
+            start_tc_error = None
+        except Exception as exc:
+            start_tc_set, start_tc_error = False, str(exc)
+        if not start_tc_set:
+            return _err(
+                f"SetStartTimecode({p['start_timecode']!r}) was refused on '{name}'",
+                code="START_TIMECODE_REFUSED", category="api_error", retryable=False,
+                reason=(start_tc_error or
+                        "Resolve returned False. The variant would sit at the default "
+                        "start timecode while its record frames assume the requested one."),
+                remediation="Check the timecode is valid for the timeline's frame rate, "
+                            "or omit start_timecode to build at the default start.",
+            )
     for track_type, needed in max_tracks.items():
         while int(new_tl.GetTrackCount(track_type) or 0) < needed:
             if not new_tl.AddTrack(track_type):
@@ -6676,7 +6690,16 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
                     sampled.append(sample)
                     continue
                 try:
-                    tl.SetCurrentTimecode(timecode)
+                    # A refused playhead move means the thumbnail below is the
+                    # frame the playhead was ALREADY on -- a sheet of the wrong
+                    # frames, labelled with the frames that were asked for.
+                    if not tl.SetCurrentTimecode(timecode):
+                        sample["error"] = (
+                            f"Playhead would not move to {timecode}; no thumbnail was "
+                            "sampled here rather than sampling the wrong frame"
+                        )
+                        sampled.append(sample)
+                        continue
                     thumbnail = tl.GetCurrentClipThumbnailImage()
                     if not thumbnail:
                         sample["error"] = (
@@ -6693,11 +6716,7 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
                     sample["error"] = str(exc)
                 sampled.append(sample)
         finally:
-            if original_timecode:
-                try:
-                    tl.SetCurrentTimecode(original_timecode)
-                except Exception:
-                    pass
+            _restore_playhead(tl, original_timecode, what="the contact sheet")
     sheet_samples = [sample for sample in sampled if sample.get("thumbnail_rgb")]
     if not sheet_samples:
         return {"success": False, "samples": sampled, "error": "No thumbnails could be sampled"}
@@ -8788,10 +8807,24 @@ def _setup_multicam_timeline(proj, mp, p: Dict[str, Any]):
     if switch_err:
         return switch_err
     if plan.get("start_timecode"):
+        # Same as the variant builder: the angle stack's record frames assume
+        # this start, so a refusal puts every angle at the wrong absolute time.
         try:
-            new_tl.SetStartTimecode(plan["start_timecode"])
-        except Exception:
-            pass
+            start_tc_set = bool(new_tl.SetStartTimecode(plan["start_timecode"]))
+            start_tc_error = None
+        except Exception as exc:
+            start_tc_set, start_tc_error = False, str(exc)
+        if not start_tc_set:
+            return _err(
+                f"SetStartTimecode({plan['start_timecode']!r}) was refused on "
+                f"'{plan['name']}'",
+                code="START_TIMECODE_REFUSED", category="api_error", retryable=False,
+                reason=(start_tc_error or
+                        "Resolve returned False. The angle stack would land at the "
+                        "wrong absolute time."),
+                remediation="Check the timecode is valid for the timeline's frame rate, "
+                            "or omit start_timecode.",
+            )
 
     audio_type = str(p.get("audio_type", p.get("audioType", "stereo")) or "stereo")
     video_tracks = _ensure_timeline_tracks(new_tl, "video", plan.get("max_video_track", 0))
@@ -10504,7 +10537,18 @@ def _apply_sync_event_markers(proj, detection: Dict[str, Any], p: Dict[str, Any]
                 skipped.append({"clip_id": clip_id, "frame": marker["frame"], "reason": "Marker already exists", "custom_data": custom_data})
                 continue
             if existing and replace_existing and _has_method(clip, "DeleteMarkerByCustomData"):
-                clip.DeleteMarkerByCustomData(custom_data)
+                # A discarded False leaves the old marker in place, and AddMarker
+                # then refuses the occupied frame -- reported as "add failed"
+                # when the real failure was the delete.
+                if not clip.DeleteMarkerByCustomData(custom_data):
+                    failed.append({
+                        "clip_id": clip_id, "frame": marker["frame"],
+                        "custom_data": custom_data,
+                        "reason": "replace_existing was requested but "
+                                  "DeleteMarkerByCustomData refused; the existing "
+                                  "marker is still there and nothing was replaced",
+                    })
+                    continue
         result = _add_marker(clip, marker)
         if result.get("success"):
             added.append({
@@ -10901,7 +10945,20 @@ def _apply_media_analysis_clip_markers(clip, markers: List[Dict[str, Any]], p: D
                 skipped.append({"frame": marker.get("frame"), "name": marker.get("name"), "reason": "Marker already exists", "custom_data": custom_data})
                 continue
             if existing and replace_existing and _has_method(clip, "DeleteMarkerByCustomData"):
-                clip.DeleteMarkerByCustomData(custom_data)
+                # A discarded False leaves the old marker in place, and AddMarker
+                # then refuses the occupied frame -- reported as "add failed"
+                # when the real failure was the delete.
+                if not clip.DeleteMarkerByCustomData(custom_data):
+                    failed.append({
+                        "marker": marker,
+                        "result": {
+                            "success": False,
+                            "reason": "replace_existing was requested but "
+                                      "DeleteMarkerByCustomData refused; the existing "
+                                      "marker is still there and nothing was replaced",
+                        },
+                    })
+                    continue
         result = _add_marker(clip, marker)
         if result.get("success"):
             added.append({"frame": result.get("frame"), "name": marker.get("name"), "custom_data": custom_data})
@@ -12508,11 +12565,24 @@ def _set_current_folder_temporarily(mp, target_path: Optional[str]):
 
 
 def _restore_current_folder(mp, previous):
-    if previous:
-        try:
-            mp.SetCurrentFolder(previous)
-        except Exception:
-            pass
+    """Put the Media Pool's current folder back. Logged, never raised.
+
+    Fire-and-forget by design: this runs after the real work, the current
+    folder is UI state that nothing downstream reads, and turning a failed
+    teardown into a failed operation would report a successful import as a
+    failure. Logged rather than swallowed, because a bin left open somewhere
+    unexpected is otherwise unexplained.
+    """
+    if not previous:
+        return
+    try:
+        restored = mp.SetCurrentFolder(previous)
+    except Exception as exc:
+        logger.debug("could not restore the current Media Pool folder: %s", exc)
+        return
+    if not restored:
+        logger.debug("could not restore the current Media Pool folder: "
+                     "SetCurrentFolder returned %r", restored)
 
 
 def _ensure_folder_path(mp, path: str):
@@ -13814,11 +13884,7 @@ def _playhead_frame_preview(tl, p: Dict[str, Any]):
                 width, height, raw = _box_downscale_rgb(width, height, raw, int(max_width))
             return Image(data=_rgb_to_png_bytes(width, height, raw), format="png")
         finally:
-            if original_tc:
-                try:
-                    tl.SetCurrentTimecode(original_tc)
-                except Exception:
-                    pass
+            _restore_playhead(tl, original_tc, what="the thumbnail capture")
 
 
 def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
@@ -13969,11 +14035,22 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
             except Exception:
                 pass
         if original_fc:
+            # A failed restore leaves the Deliver page on the capture's format
+            # and codec, which the user's next render would silently inherit.
+            # This runs in a teardown path, so it is logged rather than raised.
             try:
-                proj.SetCurrentRenderFormatAndCodec(
+                restored_fc = proj.SetCurrentRenderFormatAndCodec(
                     original_fc.get("format"), original_fc.get("codec"))
-            except Exception:
-                pass
+            except Exception as exc:
+                restored_fc, restore_exc = False, exc
+            else:
+                restore_exc = None
+            if not restored_fc:
+                logger.warning(
+                    "frame capture could not restore the render format/codec to %s/%s: %s",
+                    original_fc.get("format"), original_fc.get("codec"),
+                    restore_exc or "SetCurrentRenderFormatAndCodec returned False",
+                )
         # Best-effort, not a restore: without GetRenderSettings there is nothing
         # to restore FROM, so put the mark range back to the whole timeline
         # rather than leaving it pinned to the captured frame.
@@ -13997,11 +14074,7 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
                 os.rmdir(folder)
         except OSError:
             pass
-        if original_tc:
-            try:
-                tl.SetCurrentTimecode(original_tc)
-            except Exception:
-                pass
+        _restore_playhead(tl, original_tc, what="the render capture")
         if original_page and original_page != "deliver":
             try:
                 _open_page_serialized(resolve, original_page)
@@ -14112,11 +14185,7 @@ def _playhead_frame_full(proj, tl, p: Dict[str, Any]):
                     album.DeleteStills([still])
                 except Exception:
                     pass
-            if original_tc:
-                try:
-                    tl.SetCurrentTimecode(original_tc)
-                except Exception:
-                    pass
+            _restore_playhead(tl, original_tc, what="the still capture")
             try:
                 for name in os.listdir(folder):
                     if name.startswith(prefix):
@@ -14202,6 +14271,29 @@ def _playhead_frame_capture(p: Dict[str, Any]):
                     "frame capture could not restore the current timeline: %s",
                     restore_err["error"]["message"],
                 )
+
+
+def _restore_playhead(tl, timecode, *, what: str) -> None:
+    """Put the playhead back after a capture. Logged, never raised.
+
+    Deliberately fire-and-forget on the CALLER's behalf: every use of this runs
+    in a `finally`, so raising or returning an error would replace the caller's
+    real result -- or its real exception -- with a teardown failure. What it is
+    not is silent. A refused restore leaves the editor's playhead somewhere
+    else, and a support log that says so is the difference between a two-minute
+    diagnosis and an afternoon.
+    """
+    if not timecode:
+        return
+    try:
+        moved = tl.SetCurrentTimecode(timecode)
+    except Exception as exc:
+        logger.warning("could not restore the playhead to %s after %s: %s",
+                       timecode, what, exc)
+        return
+    if not moved:
+        logger.warning("could not restore the playhead to %s after %s: "
+                       "SetCurrentTimecode returned %r", timecode, what, moved)
 
 
 def _set_current_timeline_checked(proj, tl, *, what: str):
@@ -16321,11 +16413,21 @@ def _resolve_restore_state(p: Dict[str, Any]) -> Dict[str, Any]:
                         break
                     restored["current_timeline_id"] = state["current_timeline_id"]
                     if state.get("current_timecode"):
+                        # restored[] is a claim about what was put back. Writing
+                        # it before checking made restore_state report a playhead
+                        # position it had not reached.
                         try:
-                            tl.SetCurrentTimecode(state["current_timecode"])
+                            moved = bool(tl.SetCurrentTimecode(state["current_timecode"]))
+                        except Exception as exc:
+                            moved, restored["current_timecode_error"] = False, str(exc)
+                        if moved:
                             restored["current_timecode"] = state["current_timecode"]
-                        except Exception:
-                            pass
+                        else:
+                            restored.setdefault(
+                                "current_timecode_error",
+                                f"SetCurrentTimecode({state['current_timecode']!r}) "
+                                "returned False; the playhead is elsewhere",
+                            )
                     break
         except Exception as exc:
             restored["timeline_error"] = str(exc)
@@ -16339,9 +16441,20 @@ def _resolve_restore_state(p: Dict[str, Any]) -> Dict[str, Any]:
                 for cid in state["selected_clip_ids"]:
                     found, parent = _find_clip_with_parent(root, cid)
                     if found and parent is not None:
-                        mp.SetCurrentFolder(parent)
-                        mp.SetSelectedClip(found)
-                        restored["selected_clip_id"] = cid
+                        # Both report with a bare bool. Claiming the selection
+                        # was restored when SetSelectedClip refused is the same
+                        # lie as the timeline and timecode above.
+                        folder_ok = bool(mp.SetCurrentFolder(parent))
+                        selected_ok = bool(mp.SetSelectedClip(found))
+                        if selected_ok:
+                            restored["selected_clip_id"] = cid
+                        else:
+                            restored["selection_error"] = (
+                                f"SetSelectedClip({cid!r}) returned False"
+                                + ("" if folder_ok else
+                                   " (SetCurrentFolder also refused, so the bin was "
+                                   "never opened)")
+                            )
                         break  # SetSelectedClip is singular; pick the first
         except Exception as exc:
             restored["selection_error"] = str(exc)
@@ -17202,10 +17315,16 @@ class _SpecLiveExecutor:
             if tl is None:
                 return False
         if fps is not None:
+            # A refused rate is the silent wrong-fps timeline: everything built
+            # on it is laid at a rate nobody asked for and the durations read
+            # back wrong. Resolve only accepts this on an EMPTY project, so the
+            # refusal is common and must not be reported as success.
             try:
-                tl.SetSetting("timelineFrameRate", str(fps))
+                rate_set = bool(tl.SetSetting("timelineFrameRate", str(fps)))
             except Exception:
-                pass
+                rate_set = False
+            if not rate_set:
+                return False
         return True
 
     def set_timeline_setting(self, tl_name: str, key: str, value: Any) -> bool:
@@ -19828,11 +19947,19 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
                     mark_set = {"applied": False, "error": str(exc)}
 
         # Navigate the bin to the clip's folder so the clip is visible to select.
+        # Not fatal on its own (SetSelectedClip may still work), but a discarded
+        # False meant the caller could not tell "the bin did not move" from
+        # "the bin moved and the clip is right there", which is the whole point
+        # of the action.
+        folder_ok: Optional[bool] = None
+        folder_error: Optional[str] = None
         if parent is not None:
             try:
-                mp.SetCurrentFolder(parent)
-            except Exception:
-                pass  # not fatal; SetSelectedClip below may still work
+                folder_ok = bool(mp.SetCurrentFolder(parent))
+            except Exception as exc:
+                folder_ok, folder_error = False, str(exc)
+            if not folder_ok:
+                folder_error = folder_error or "SetCurrentFolder returned False"
         select_ok = bool(mp.SetSelectedClip(clip))
 
         # Bring Resolve to the foreground so the editor doesn't have to
@@ -19857,6 +19984,8 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             "clip_id": clip.GetUniqueId(),
             "clip_name": clip.GetName(),
             "folder_name": parent.GetName() if parent else None,
+            "bin_opened": folder_ok,
+            "bin_error": folder_error,
             "page": page,
             "mark_set": mark_set,
             "focus": focus_result,
@@ -26642,9 +26771,17 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
                 used_format = try_fmt
                 break
             time.sleep(0.3)
-        # Clean up still from gallery
+        # Clean up still from gallery. Cleanup, not the operation: the export
+        # above is what the caller asked for and it has already been verified by
+        # the file listing below. A leftover still is visible in the Gallery
+        # rather than silent, so this is logged, not raised.
         if delete_after:
-            album.DeleteStills([still])
+            try:
+                if not album.DeleteStills([still]):
+                    logger.warning("DeleteStills returned False; a still is left in "
+                                   "the Gallery album after the export")
+            except Exception as exc:
+                logger.warning("DeleteStills raised after the export: %s", exc)
         if not export_ok:
             _discard_still_staging(staging)
             return _err("ExportStills failed — ensure the Gallery panel is open on the Color page (Workspace > Gallery)")
@@ -26797,12 +26934,20 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
             # not the per-user dir that dctl install writes to. Relocate and retry.
             relocated = _ensure_lut_in_master(lut_path)
             if relocated:
+                # The retry below only works if Resolve re-scanned the master
+                # LUT dir. A discarded False here turns the retry into a second
+                # identical failure with no explanation.
+                refreshed = None
                 try:
                     _, proj, _lut_err = _check()
                     if proj:
-                        proj.RefreshLUTList()
-                except Exception:
-                    pass
+                        refreshed = bool(proj.RefreshLUTList())
+                except Exception as exc:
+                    logger.warning("RefreshLUTList raised before the SetLUT retry: %s", exc)
+                if refreshed is False:
+                    logger.warning(
+                        "RefreshLUTList returned False; the relocated LUT may not be "
+                        "visible to SetLUT yet")
                 ok = bool(g.SetLUT(node_index, relocated))
                 if ok:
                     return {"success": True, "resolved_lut": relocated,
@@ -27070,6 +27215,19 @@ def _fusion_group_settings_load(comp, p: Dict[str, Any]) -> Dict[str, Any]:
         group.SaveSettings(backup_path)
     except Exception as exc:
         return _err(f"backup SaveSettings failed: {exc}")
+    # SaveSettings reports through the Lua bridge and its return is not
+    # reliable, but the file it was asked to write is. This backup is the only
+    # way back from the LoadSettings below, so loading without it would be an
+    # irreversible replacement of the group's graph presented as a reversible one.
+    if not os.path.isfile(backup_path):
+        return _err(
+            f"backup SaveSettings did not create a file at {backup_path!r}",
+            code="FUSION_BACKUP_NOT_WRITTEN", category="api_error", retryable=False,
+            reason="LoadSettings replaces the group's graph. Without the backup on "
+                   "disk there is no way back, so nothing was loaded.",
+            remediation="Check the backup_path directory is writable, or pass an "
+                        "explicit backup_path somewhere that is.",
+        )
 
     undo_name = p.get("undo_name", f"MCP group_settings_load {group_name}")
     undo_started = False
@@ -28215,7 +28373,31 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             except Exception:
                 _already_animated = False
             if not _already_animated:
+                # AddModifier reports through the Lua bridge, which resolves an
+                # unknown attribute to None rather than raising, so the return is
+                # not reliable evidence on its own. The readback below is: if the
+                # input still has no connected output, the assignment on the next
+                # line would set a STATIC value and _ok() would report a keyframe
+                # that does not exist.
                 tool.AddModifier(p["input_name"], p.get("modifier", "BezierSpline"))
+                try:
+                    attached = tool[p["input_name"]].GetConnectedOutput() is not None
+                except Exception:
+                    attached = False
+                if not attached:
+                    return _err(
+                        f"Could not animate '{p['input_name']}' on "
+                        f"'{p['tool_name']}': no spline modifier attached.",
+                        code="FUSION_ADD_MODIFIER_FAILED", category="api_error",
+                        retryable=False,
+                        reason="Without a spline, assigning at a time sets a STATIC "
+                               "value (last write wins) and creates no keyframe. "
+                               "Reporting success here would claim a keyframe that "
+                               "does not exist.",
+                        remediation="Check the input accepts the modifier type "
+                                    f"({p.get('modifier', 'BezierSpline')!r}); Point "
+                                    "inputs take 'Path'.",
+                    )
             tool[p["input_name"]][p["time"]] = p["value"]
             return _ok()
         finally:
@@ -29189,10 +29371,24 @@ def _run_inline_lua(source: str) -> Dict[str, Any]:
     )
 
     # Clear prior slots so we can detect if RunScript silently did nothing.
-    fusion.SetData("__mcp_done__", "")
-    fusion.SetData("__mcp_stdout__", "")
-    fusion.SetData("__mcp_result__", "")
-    fusion.SetData("__mcp_error__", "")
+    # SetData goes through the Lua bridge and returns nil whether or not it
+    # took, so the return is not evidence -- but GetData is. The __mcp_done__
+    # slot is the one that matters: a stale "1" left by the previous run makes
+    # the poll below exit immediately and return the PREVIOUS run's stdout,
+    # result and error as this run's.
+    for slot in ("__mcp_done__", "__mcp_stdout__", "__mcp_result__", "__mcp_error__"):
+        fusion.SetData(slot, "")
+    stale = fusion.GetData("__mcp_done__")
+    if stale not in ("", None):
+        return _err(
+            "Could not clear the Fusion completion sentinel before running.",
+            code="FUSION_SENTINEL_NOT_CLEARED", category="api_error", retryable=True,
+            reason=f"__mcp_done__ still reads {stale!r} after SetData. The poll would "
+                   "exit immediately and hand back the previous run's output as this "
+                   "run's.",
+            remediation="Retry; if it persists, restart Resolve to clear the Fusion "
+                        "app's data slots.",
+        )
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.lua',
                                       prefix='mcp-lua-inline-',

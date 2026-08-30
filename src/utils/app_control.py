@@ -78,13 +78,23 @@ def quit_resolve_app(resolve_obj, force: bool = False, save_project: bool = True
             if project and save_project:
                 logger.info("Saving project before quitting")
                 # Try to save the project
+                # Only the exception was handled. SaveProject also reports a
+                # refusal with a bare False -- which is what a project attached
+                # to no database returns -- and quitting on that throws the
+                # session away silently.
                 try:
-                    project.SaveProject()
+                    saved = project.SaveProject()
                 except Exception as e:
                     logger.error(f"Failed to save project: {str(e)}")
                     if not force:
                         logger.error("Aborting quit due to save failure")
                         return False
+                else:
+                    if saved is False:
+                        logger.error("SaveProject returned False; the project was NOT saved")
+                        if not force:
+                            logger.error("Aborting quit due to save failure")
+                            return False
         
         # Attempt to quit using the API
         if hasattr(resolve_obj, 'Quit') and callable(getattr(resolve_obj, 'Quit')):
