@@ -30,19 +30,28 @@ const DEFAULT_PROJECT_SETTINGS = {
 };
 
 /**
- * Frame rate encoding lookup table
- * Maps common frame rates to their hex-encoded double representation
+ * Snap rounded NTSC decimals to their exact rationals.
+ *
+ * A caller writing 23.976 / 29.97 / 59.94 means 24000/1001, 30000/1001,
+ * 60000/1001 — the value Resolve itself stores. Integer rates are left
+ * untouched (24 × 1.001 = 24.024 sits outside the window), and an exact
+ * rational snaps to itself. This replaces a hand-typed hex lookup table whose
+ * 23.976 entry actually held 30000/1001, whose 29.97 entry held 29.9739, and
+ * whose 59.94 entry held 0.9367 (issue #167) — magic constants nobody could
+ * read were wrong for years while every exact input bypassed them.
  */
-const FRAME_RATE_ENCODINGS = {
-  23.976: '286b55e253f83d40',
-  24.0: '0000000000003840',
-  25.0: '0000000000003940',
-  29.97: '286b55e253f93d40',
-  30.0: '0000000000003e40',
-  50.0: '0000000000004940',
-  59.94: '286b55e253f9ed3f',
-  60.0: '0000000000004e40'
-};
+function snapFrameRate(fps) {
+  const scaled = (fps * 1001) / 1000;
+  const nearest = Math.round(scaled);
+  if (
+    nearest > 0 &&
+    Math.abs(scaled - nearest) < 0.02 &&
+    Math.abs(fps - nearest) > 1e-9
+  ) {
+    return (nearest * 1000) / 1001;
+  }
+  return fps;
+}
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -73,14 +82,9 @@ function generateUUID() {
  * // Returns: "0000000000003840"
  */
 function encodeFrameRate(fps) {
-  // Check if we have a pre-encoded value
-  if (FRAME_RATE_ENCODINGS[fps]) {
-    return FRAME_RATE_ENCODINGS[fps];
-  }
-
   // Encode as IEEE 754 double precision (8 bytes, little-endian)
   const buffer = Buffer.allocUnsafe(8);
-  buffer.writeDoubleLE(fps, 0);
+  buffer.writeDoubleLE(snapFrameRate(fps), 0);
   return buffer.toString('hex');
 }
 
@@ -755,5 +759,5 @@ module.exports = {
 
   // Constants
   DEFAULT_PROJECT_SETTINGS,
-  FRAME_RATE_ENCODINGS
+  snapFrameRate
 };

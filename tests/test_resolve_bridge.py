@@ -2567,3 +2567,26 @@ class BridgePortConflictTests(unittest.TestCase):
         self.assertIn("still running from an earlier Resolve session", message)
         self.assertIn("shutdown", message)
         self.assertIn(str(port), message)
+
+
+class BoundMethodKeywordTests(unittest.TestCase):
+    """Bridge method proxies are positional-only; a kwarg must fail with
+    guidance, not the bare "unexpected keyword argument" that shipped a
+    black-box error to a PR #165 reporter."""
+
+    def test_keyword_argument_raises_with_remediation(self):
+        from src.utils.resolve_bridge_client import _BoundMethod
+
+        method = _BoundMethod(transport=None, handle="h1", name="StartRendering")
+        with self.assertRaises(TypeError) as raised:
+            method([1], isInteractiveMode=False)
+        message = str(raised.exception)
+        self.assertIn("StartRendering", message)
+        self.assertIn("isInteractiveMode", message)
+        self.assertIn("positionally", message)
+
+    def test_no_kwarg_call_site_remains_in_the_compound_server(self):
+        """The one call site PR #165 hit is fixed; keep new ones out."""
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "server.py").read_text()
+        self.assertNotIn("isInteractiveMode=", src)

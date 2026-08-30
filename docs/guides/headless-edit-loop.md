@@ -61,6 +61,21 @@ name is taken. An iterative loop that reuses one name works exactly once and
 then quietly does nothing, which is the worst possible failure for an automated
 edit cycle. Make the name unique per iteration.
 
+### A unique `timelineName` is still not enough — the file's internal name wins
+
+Resolve honours the sequence name **inside** the interchange file over the
+`timelineName` option (issue #171, measured on Studio 21.0.4.5). Export → edit
+→ re-import with `timelineName: CUT_v002` while the XML still says `CUT_v001`
+and Resolve hands back the **existing** `CUT_v001` timeline: the raw API
+reports the old timeline as if it were the import, and the loop operates on one
+timeline forever. When driving the raw API, bump the `<sequence><name>` inside
+the XML each iteration.
+
+`timeline.import_timeline_checked` handles both halves for you: it rewrites the
+FCP7 XML's internal sequence name to the requested `timelineName` before
+importing, and if a format it cannot rewrite still returns an existing timeline
+it errors instead of reporting success.
+
 ### DRT ignores `timelineName` and re-imports the media
 
 DRT is the native format and the obvious first choice, but it behaves

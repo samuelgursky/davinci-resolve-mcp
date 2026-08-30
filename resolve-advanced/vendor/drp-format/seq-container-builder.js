@@ -60,8 +60,11 @@ async function buildSeqContainerFile(timeline, options = {}) {
   // Build lockable blob with markers
   const lockableBlob = buildLockableBlobElement(markers, lockableBlobId, frameRate);
 
-  // Calculate start frame from timecode
-  const startFrame = timecodeToFrames(startTimecode, frameRate);
+  // An explicit startFrame wins; otherwise derive it from the timecode
+  // (issue #168 — the spec field used to be ignored entirely).
+  const startFrame = Number.isFinite(options.startFrame)
+    ? Math.round(options.startFrame)
+    : timecodeToFrames(startTimecode, frameRate);
 
   // Combine video tracks: standard video tracks first, then Rich title tracks
   const allVideoTrackElements = [...videoTrackElements, ...richTitleTrackElements];
@@ -364,7 +367,11 @@ function timecodeToFrames(timecode, fps = 24) {
   if (parts.length !== 4) return 0;
 
   const [hh, mm, ss, ff] = parts;
-  return hh * 3600 * fps + mm * 60 * fps + ss * fps + ff;
+  // A frame index is an integer. At fractional rates the seconds product is
+  // fractional (3600 x 30000/1001 = 107892.107...), and writing it raw put a
+  // fractional <StartFrame> in the XML (issue #168). Non-drop convention:
+  // round the seconds part, then add the frame component.
+  return Math.round(hh * 3600 * fps + mm * 60 * fps + ss * fps) + ff;
 }
 
 // =============================================================================
@@ -549,6 +556,7 @@ async function buildSeqContainerFiles(timelines, options = {}) {
       ...options,
       frameRate: timeline.frameRate || options.frameRate || 24,
       startTimecode: timeline.startTimecode || options.startTimecode || '01:00:00:00',
+      startFrame: timeline.startFrame ?? options.startFrame,
       markers: timeline.markers || options.markers || [],
     });
     results.push({ filename: `SeqContainer${idx + 1}.xml`, content });

@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.104.1"
+VERSION = "2.104.2"
 
 import base64
 import os
@@ -7004,6 +7004,41 @@ _BINARY_INTERCHANGE_EXTS = {".aaf"}
 _JSON_INTERCHANGE_EXTS = {".otio"}
 
 
+_FCP7_SEQUENCE_NAME_RE = re.compile(
+    r"(<sequence\b[^>]*>(?:(?!<name>|</sequence>)[\s\S])*?<name>)([\s\S]*?)(</name>)"
+)
+
+
+def _rewrite_fcp7_sequence_name(xml_path: str, new_name: str):
+    """Copy an FCP7 XML with its first <sequence><name> replaced; (path, changed, error).
+
+    Resolve honours the sequence name INSIDE the file, not the timelineName
+    import option: when the internal name matches an existing timeline, the
+    import silently hands back that existing timeline (issue #171). Rewriting
+    the internal name is the only way to make the option mean what it says.
+    Surgical text replacement on a temp copy — the original is never touched,
+    and everything but the one name survives byte-for-byte (an XML re-serialize
+    would drop the xmeml DOCTYPE).
+    """
+    try:
+        with open(xml_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError as exc:
+        return None, False, f"could not read {xml_path}: {exc}"
+    escaped = (
+        new_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+    text, count = _FCP7_SEQUENCE_NAME_RE.subn(
+        lambda m: m.group(1) + escaped + m.group(3), text, count=1
+    )
+    if not count:
+        return None, False, None
+    fd, out_path = tempfile.mkstemp(prefix="timeline_name_", suffix=".xml")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return out_path, True, None
+
+
 def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     path = p.get("path")
     if not path:
@@ -7134,6 +7169,22 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
             ) if k in sres
         }
 
+    # Resolve honours the interchange file's internal sequence name over the
+    # timelineName option (issue #171): with a stale internal name that matches
+    # an existing timeline, the import "succeeds" by returning the existing
+    # timeline. For FCP7 XML the name is rewritable in place; for formats we
+    # cannot rewrite, the created_new gate below turns the case into an error.
+    requested_name = options.get("timelineName")
+    sequence_name_rewritten = False
+    if requested_name and not is_binary and not is_json:
+        rewritten_path, sequence_name_rewritten, rewrite_err = _rewrite_fcp7_sequence_name(
+            import_path, str(requested_name)
+        )
+        if rewrite_err:
+            return _err(f"Could not rewrite the sequence name: {rewrite_err}")
+        if sequence_name_rewritten:
+            import_path = rewritten_path
+
     if p.get("dry_run"):
         out = _ok(path=path, import_path=import_path, options=options, would_import=True)
         if sanitize_report is not None:
@@ -7220,14 +7271,38 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
             relink_result = _binary_post_import_relink(imported, mp, search_roots)
             if relink_result.get("after"):
                 media = relink_result["after"]
+        created_new = imported_id not in before_ids
+        if requested_name and not created_new:
+            # The caller asked for a NEW timeline by name and got an existing
+            # one back — the interchange file's internal sequence name matched
+            # it and Resolve ignored the option (issue #171). success:true with
+            # created_new:false read as an import; an iterating loop would
+            # operate on the same timeline forever.
+            return _err(
+                f"Import returned the EXISTING timeline {imported.GetName()!r} "
+                f"({imported_id}) instead of creating {requested_name!r}. Resolve "
+                "honours the sequence name inside the file over the timelineName "
+                "option, and this file's internal name matched an existing "
+                "timeline.",
+                category="api_error",
+                remediation=(
+                    "Rewrite the sequence name inside the interchange file to the "
+                    "new name before importing (for FCP7 XML this wrapper does it "
+                    f"automatically; it could not for this file{' — the <sequence><name> pattern was not found' if not sequence_name_rewritten else ''}), "
+                    "or delete/rename the existing timeline first."
+                ),
+                state={"existing_name": imported.GetName(), "existing_id": imported_id},
+            )
         out = _ok(
             name=imported.GetName(),
             id=imported_id,
-            created_new=imported_id not in before_ids,
+            created_new=created_new,
             timeline_count=proj.GetTimelineCount(),
             api_returned_object=api_returned_object,
             media=media,
         )
+        if sequence_name_rewritten:
+            out["sequence_name_rewritten"] = True
         if sanitize_report is not None:
             out["sanitize"] = sanitize_report
         if relink_result is not None:
@@ -13997,7 +14072,11 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
         if not job:
             return _err("AddRenderJob returned nothing", code="RENDER_JOB_FAILED", category="api_error")
         before = set(os.listdir(folder))
-        if not proj.StartRendering([job], isInteractiveMode=False):
+        # Positional on purpose: the free-edition bridge proxies method calls
+        # positionally, and a keyword argument dies inside _BoundMethod with
+        # "unexpected keyword argument 'isInteractiveMode'" before reaching
+        # Resolve (reported on 21.0.4.5 free/Windows, PR #165).
+        if not proj.StartRendering([job], False):
             return _err("StartRendering refused the job", code="RENDER_START_FAILED", category="api_error")
         waited = 0.0
         while proj.IsRenderingInProgress() and waited < 120:

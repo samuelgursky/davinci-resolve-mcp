@@ -2,6 +2,53 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.2
+
+A contributor batch: two merged PRs, one PR converted into its fix, and four
+sharp issues from @andytsai821201-spec — all live- or repro-verified.
+
+**Merged.** PR #166 by @matoberuc-afk routes SetCurrentTimeline and 28 other
+discarded Resolve mutator returns through a checked helper — a refused
+timeline switch now errors instead of silently sending the next edit to
+whatever timeline was current. PR #170 by @FerroQuant makes the doctor and
+installer probes bridge-first and hard-exits probe children after native
+Fusion imports, extending PR #108's fusionscript-teardown rule to the
+remaining short-lived probes.
+
+**Fixed (from PR #165 by @Douglas4000).** `timeline_frame capture` died on the
+free-edition bridge with "unexpected keyword argument 'isInteractiveMode'":
+the bridge proxies Resolve calls positionally, and the single-frame render
+used a keyword. The call is positional now, and the bridge proxy raises a
+TypeError that names the rule instead of the bare stack trace.
+
+**Fixed (#167).** `drt.author`'s hand-typed frame-rate hex table was wrong in
+three of eight entries: 23.976 stored 30000/1001 (a different, plausible
+rate), 29.97 stored 29.9739, and 59.94 stored 0.9367 — while validate stayed
+green. The table is gone; rounded NTSC decimals snap to their exact rationals
+and everything encodes through writeDoubleLE.
+
+**Fixed (#168).** `drt.author` wrote fractional `<StartFrame>` values at
+fractional rates (01:00:00:00 at 30000/1001 → 107892.107…) and ignored the
+spec's `startFrame` field entirely. Frame indexes now round, and an explicit
+startFrame wins over the timecode.
+
+**Fixed (#169).** `project_db` by projectName never searched
+`Resolve Project Library/Resolve Projects` — the root a stock modern Studio
+install actually uses (this repo's own 19.1.3 machine uses the old
+`Resolve Disk Database` name, so both are real). Both Studio roots and the
+sandboxed free-edition root are searched and deduped.
+
+**Fixed (#171).** Resolve honours the sequence name INSIDE an FCP7 XML over
+the `timelineName` import option, so an iterating export→edit→import loop
+with a stale internal name "succeeded" while returning the same existing
+timeline forever. `import_timeline_checked` now rewrites the XML's internal
+sequence name to the requested timelineName before importing (surgical text
+replacement on a temp copy — DOCTYPE and clip names survive byte-for-byte),
+and a format it cannot rewrite that still returns an existing timeline errors
+instead of reporting success. Live-verified on Studio 19.1.3.7 with the
+reporter's exact step sequence. The headless-edit-loop guide documents the
+internal-name rule for raw-API callers.
+
 ## What's New in v2.104.1
 
 **The job metadata lies too — verify_output now cross-checks the timeline.**

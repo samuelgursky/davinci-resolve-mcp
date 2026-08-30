@@ -236,7 +236,16 @@ class _BoundMethod:
         self._handle = handle
         self._name = name
 
-    def __call__(self, *args: Any) -> Any:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if kwargs:
+            raise TypeError(
+                f"{self._name}() was called with keyword argument(s) "
+                f"{sorted(kwargs)} through the in-app bridge, which proxies "
+                "Resolve calls positionally. Pass every argument positionally "
+                "(Resolve's own signatures accept it) — e.g. "
+                "StartRendering([job_ids], False) instead of "
+                "StartRendering([job_ids], isInteractiveMode=False)."
+            )
         result = self._transport.request(
             "call",
             {"target": self._handle, "method": self._name,

@@ -93,6 +93,7 @@ async function packageFullDRP(options) {
     const seqContainerXml = await buildSeqContainerFile(timeline, {
       frameRate: timeline.frameRate || 24,
       startTimecode: timeline.startTimecode || '01:00:00:00',
+      startFrame: timeline.startFrame,
       markers: timeline.markers || [],
       resolution: timeline.resolution || '1920x1080',
     });

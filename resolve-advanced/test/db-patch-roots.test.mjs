@@ -16,14 +16,18 @@ import path from 'node:path';
 
 import {
   DISK_DB_ROOT,
+  PROJECT_LIBRARY_ROOT,
   LITE_DB_ROOT,
   DB_ROOTS,
   findProjectDb,
   resolveDbPath,
 } from '../server/db-patch.mjs';
 
-test('both edition roots are searched, Studio first', () => {
-  assert.deepEqual(DB_ROOTS, [DISK_DB_ROOT, LITE_DB_ROOT]);
+test('every library root is searched, Studio layouts first', () => {
+  // Both Studio layouts are real: older installs use "Resolve Disk Database",
+  // stock modern installs use "Resolve Project Library" (issue #169).
+  assert.deepEqual(DB_ROOTS, [DISK_DB_ROOT, PROJECT_LIBRARY_ROOT, LITE_DB_ROOT]);
+  assert.match(PROJECT_LIBRARY_ROOT, /Application Support\/Blackmagic Design\/DaVinci Resolve\/Resolve Project Library\/Resolve Projects$/);
 });
 
 test('the free-edition root points inside the App Store sandbox container', () => {

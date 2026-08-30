@@ -265,7 +265,7 @@ class CaptureRenderTest(unittest.TestCase):
                 target["name"] = payload["CustomName"]
             return True
 
-        def _start(jobs, **kwargs):
+        def _start(jobs, interactive=False, **kwargs):
             # Resolve writes the file during the render, and appends the frame
             # number to CustomName.
             if write and target:
