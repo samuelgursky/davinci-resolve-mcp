@@ -287,9 +287,12 @@ export const drtTool = {
         ...((spec.elements || []).length && (spec.templateVersion ?? 21) < 21
           ? {
               elementsWarning:
-                'title/generator elements on a pre-21 host are NOT render-verified: the harvested ' +
-                'snippets are Resolve-21 structures, which import and read back correctly but render ' +
-                'black on 19.1.3 (measured). Media cuts render; verify element output before delivery.',
+                'On a pre-21 host, imported Fusion elements render only via the machine\'s Fusion ' +
+                'disk cache, keyed to the EXACT comp bytes (measured: an identity recompression ' +
+                'rendered black) — so offline-authored titles/generators may render black, and ' +
+                'offline TEXT patching cannot work there. The working pre-21 flow: assemble media ' +
+                'offline, then set title text post-import with timeline.set_title_text (its ' +
+                'Fusion-comp path is live-verified on 19.1.3). Media cuts render everywhere.',
             }
           : {}),
         ...(mediaDescriptor === 'repoint-fallback'

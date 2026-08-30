@@ -118,3 +118,16 @@ test('per-cut mediaRef rewires the clone', async () => {
     assert.notEqual(refs[1], ref, 'second cut keeps donor ref');
   }
 });
+
+test('harvested r19 snippets are Element-wrapped (unwrapped clips break the track vec)', () => {
+  // An unwrapped clip inserted into Items made AddRenderJob-era renders fail
+  // outright with no status (measured); the wrapper is load-bearing.
+  const fs3 = require('node:fs');
+  const path3 = require('node:path');
+  for (const f of ['fusion-title-r19.xml', 'generator-solid-color-r19.xml', 'fusion-title.xml', 'generator-solid-color.xml']) {
+    const s = fs3.readFileSync(
+      path3.join(process.cwd(), 'vendor', 'drp-format', 'templates', f), 'utf8').trim();
+    assert.ok(s.startsWith('<Element>'), `${f} must start with <Element>`);
+    assert.ok(s.endsWith('</Element>'), `${f} must end with </Element>`);
+  }
+});

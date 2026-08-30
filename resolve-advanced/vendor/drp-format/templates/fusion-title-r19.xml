@@ -1,3 +1,4 @@
+<Element>
 <Sm2TiVideoClip DbId="8c729549-aded-4c80-b143-c1fce23c5712">
        <FieldsBlob>0000000200000027800a120a0e2205546578742b4a05546578742b200112100000000000000005ffffffffffffffff</FieldsBlob>
        <PrettyType>Fusion Title</PrettyType>
@@ -52,3 +53,4 @@
        </Thumbnail>
        <ThumbnailDirtyFlag>true</ThumbnailDirtyFlag>
       </Sm2TiVideoClip>
+</Element>

@@ -82,6 +82,15 @@ function rewriteInner(hex, transform) {
   const b = Buffer.from(hex, 'hex');
   const outer = zlib.inflateSync(b.subarray(4));
 
+  // NOTE (measured 2026-08-30, Studio 19.1.3.7): the mechanics below are
+  // generation-agnostic and byte-correct — a patched blob re-inflates with
+  // StyledText updated and consistent framing. But on 19, IMPORTED comps
+  // render only via the machine's Fusion disk cache, keyed to the EXACT
+  // compressed bytes: even an identity reframe (same Lua, different
+  // compression) rendered black, while the untouched harvest rendered its
+  // cached frames. Offline text patching therefore works on 21-generation
+  // hosts (live Fusion render) and CANNOT work on 19 imports — set text
+  // post-import with timeline.set_title_text instead.
   const marker = outer.lastIndexOf(COMPRESSED_MARKER);
   if (marker < 0) throw new Error('composition-text: composition marker not found (unexpected framing)');
   const zNull = outer.indexOf(0x00, marker);

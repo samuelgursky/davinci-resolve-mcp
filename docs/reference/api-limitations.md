@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 33 missing capabilities, 41 bugs / unreliable behaviors.
+**Totals:** 33 missing capabilities, 42 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -525,6 +525,13 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Rewrite the <sequence><name> inside the file to the intended name before importing — timeline.import_timeline_checked does this automatically for FCP7 XML and errors when a non-rewritable format still returns an existing timeline. Never treat a truthy return as proof of creation; check the returned timeline's id against the pre-import set.
 - **Reference:** [issue #171](https://github.com/samuelgursky/davinci-resolve-mcp/issues/171)
 - **Tags:** timeline, import, silent-failure, unreliable-return
+
+### Imported Fusion comps render via byte-keyed disk cache on 19.x (offline comp edits render black)
+
+- **Object:** `Fusion / render engine`
+- **Behavior:** On Studio 19.1.3.7, a Fusion composition arriving via timeline import renders only when the machine's Fusion disk cache (CacheClip/) holds frames keyed to the comp blob's EXACT bytes. Measured by discrimination: the untouched harvested title rendered its text; the same blob after an IDENTITY recompression — byte-identical Lua, different zlib bytes, verified consistent framing — imported, read back perfectly, and rendered black; a text-patched blob (also byte-verified) rendered black the same way. The live-render fallback for imported comps does not produce frames on 19; 21-generation hosts render imported comps live (the template-splice title/generator primitives were proven there).
+- **Workaround / current handling:** Never edit an imported comp's bytes offline for a 19.x host — no valid re-encoding can hit the cache. Author media offline (renders everywhere via the native-descriptor transplant) and set title text POST-IMPORT with timeline.set_title_text, whose Fusion-comp write path is live-verified on 19.1.3. Render-verify any imported Fusion element before delivery; structural readback cannot see this.
+- **Tags:** fusion, render, import, silent-failure
 
 ### MediaPool.ImportTimelineFromFile (.drt requirements and filename naming)
 

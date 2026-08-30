@@ -1915,6 +1915,33 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["media-pool", "import", "render", "silent-failure", "readback"],
     },
     {
+        "symbol": "Imported Fusion comps render via byte-keyed disk cache on 19.x (offline comp edits render black)",
+        "object": "Fusion / render engine",
+        "reality": "On Studio 19.1.3.7, a Fusion composition arriving via "
+                   "timeline import renders only when the machine's Fusion "
+                   "disk cache (CacheClip/) holds frames keyed to the comp "
+                   "blob's EXACT bytes. Measured by discrimination: the "
+                   "untouched harvested title rendered its text; the same "
+                   "blob after an IDENTITY recompression — byte-identical "
+                   "Lua, different zlib bytes, verified consistent framing — "
+                   "imported, read back perfectly, and rendered black; a "
+                   "text-patched blob (also byte-verified) rendered black "
+                   "the same way. The live-render fallback for imported "
+                   "comps does not produce frames on 19; 21-generation "
+                   "hosts render imported comps live (the template-splice "
+                   "title/generator primitives were proven there).",
+        "recommended": "Never edit an imported comp's bytes offline for a "
+                       "19.x host — no valid re-encoding can hit the cache. "
+                       "Author media offline (renders everywhere via the "
+                       "native-descriptor transplant) and set title text "
+                       "POST-IMPORT with timeline.set_title_text, whose "
+                       "Fusion-comp write path is live-verified on 19.1.3. "
+                       "Render-verify any imported Fusion element before "
+                       "delivery; structural readback cannot see this.",
+        "tags": ["fusion", "render", "import", "silent-failure"],
+        "submit": "bug",
+    },
+    {
         "symbol": "MediaPool.ImportTimelineFromFile (.drt requirements and filename naming)",
         "object": "MediaPool",
         "signature": "(drtPath, {importSourceClips, ...}) -> Timeline",

@@ -32,16 +32,7 @@ const TEMPLATE_PATH_R19 = path.join(__dirname, 'templates', 'generator-solid-col
 // Generation-bound like every other harvested structure (R21 snippet renders
 // black on 19 — measured); r19 variant harvested live from 19.1.3.7.
 function snippetPathFor(templateVersion) {
-  // The r19 snippets are harvested but NOT yet render-viable: the generator's
-  // separate Sm2TiCompositionTable dependency is not carried, and the title's
-  // comp-blob patching assumes the R21 layout — with them, render jobs FAIL
-  // outright (measured), which is worse than the R21 snippet's silent black.
-  // Selection stays on the R21 snippet for every generation until the element
-  // transplant (comp table + per-generation blob patch) lands; drt.assemble
-  // warns when elements target a pre-21 host.
-  void templateVersion;
-  void TEMPLATE_PATH_R19;
-  return TEMPLATE_PATH;
+  return (Number(templateVersion) || 21) >= 21 ? TEMPLATE_PATH : TEMPLATE_PATH_R19;
 }
 
 /**
