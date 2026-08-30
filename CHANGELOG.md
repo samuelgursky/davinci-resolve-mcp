@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.4
+
+Hardening pass over the classes the v2.104.2 batch exposed, live-verified on
+Studio 19.1.3.7.
+
+**set_title_text works on builds where SetProperty cannot.** On Studio 19.1.3
+a Text+ item rejects every title property key, so set_title_text failed while
+the item's Fusion comp accepted the same text all along. The setter now falls
+back to writing StyledText on the TextPlus tool — deliberately UNLOCKED, per
+the comp-lock render bug — and reports success only after reading the input
+back. Live-verified end to end: set via fallback, read via get_title_text,
+and a rendered frame confirms the text reaches the output (mean luma above
+black). bulk_set_title_text inherits the fallback. PR #166's discarded-return
+guard caught the fallback's bare SetInput during development — the allowlist
+entry records that the write is verified by readback, which is stronger than
+the bool Fusion doesn't return.
+
+**verify_output no longer flags deliberate short renders.** A single-frame
+capture tripped the mark-range-collapse warning, because the checker cannot
+distinguish a caller-chosen short range from a Resolve-rewritten one. Passing
+expected_frames / expected_duration_seconds matching the mark range now
+suppresses the collapse warning; an unstated short range still warns.
+
+**#171's scope measured: the internal-name override is FCP7-specific.** An
+OTIO export re-imported under a new timelineName creates a new timeline
+(measured 19.1.3.7), so the api_truth entry now says the override is an FCP7
+XML behavior, not a general import rule.
+
+**One more #167-class constant found and removed.** effect-encoder's exported
+"common double values" hex table — consumed by nothing — carried a '0.9'
+entry that decoded to 0.8. Deleted; the sweep found the remaining converters
+(editorial, media-inventory, the Python timecode helpers) already round
+correctly.
+
 ## What's New in v2.104.3
 
 Documentation follow-through on the v2.104.2 batch.

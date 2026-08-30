@@ -144,6 +144,30 @@ class VerifyOutputStubDetectionTest(unittest.TestCase):
         self.assertTrue(any("rewrote the range" in w for w in result["warnings"]),
                         result["warnings"])
 
+    def test_deliberate_single_frame_render_is_not_a_collapse(self):
+        """A caller who states expected_frames=1 chose the short range — the
+        collapse warning is for ranges Resolve rewrote, not ranges asked for."""
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg/ffprobe not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "out.mov")
+            subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi",
+                            "-i", "testsrc=duration=0.042:size=128x72:rate=24",
+                            "-y", out], check=True)
+            tl = _timeline(start=86400, items=[(86400, 86520)])
+            proj = _proj([_job(target_dir=tmp, MarkIn=86400, MarkOut=86400)],
+                         {"JobStatus": "Complete"}, timeline=tl)
+            result = self._call(proj, {"job_id": "job-1", "expected_frames": 1})
+        self.assertTrue(result["verified"], result)
+        self.assertEqual(result["warnings"], [])
+
+    def test_unstated_short_range_still_warns(self):
+        tl = _timeline(start=86400, items=[(86400, 86520)])
+        proj = _proj([_job(MarkIn=86400, MarkOut=86400)],
+                     {"JobStatus": "Complete"}, timeline=tl)
+        result = self._call(proj, {"job_id": "job-1"})
+        self.assertTrue(any("rewrote the range" in w for w in result["warnings"]))
+
     def test_missing_timeline_warns_instead_of_passing(self):
         proj = _proj([_job(TimelineName="RENAMED")], {"JobStatus": "Complete"})
         result = self._call(proj, {"job_id": "job-1"})
@@ -167,6 +191,47 @@ class VerifyOutputStubDetectionTest(unittest.TestCase):
         self.assertFalse(result["verified"])
         self.assertLess(result["duration_ratio"], 0.5)
         self.assertTrue(any("never visited" in w for w in result["warnings"]))
+
+
+class SetTitleTextFusionFallbackTest(unittest.TestCase):
+    """When SetProperty rejects every title key (Text+ on Studio 19.1.3), the
+    setter writes StyledText on the TextPlus tool — unlocked, per the
+    comp-lock render bug — and confirms by reading the input back."""
+
+    def test_falls_back_to_fusion_comp_write(self):
+        store = {}
+        tool = mock.Mock()
+        tool.SetInput.side_effect = lambda k, v: store.__setitem__(k, v)
+        tool.GetInput.side_effect = lambda k: store.get(k)
+        comp = mock.Mock()
+        comp.GetToolList.return_value = {1: tool}
+        item = mock.Mock()
+        item.GetProperty.return_value = {"ZoomX": 1.0}
+        item.SetProperty.return_value = False
+        item.GetFusionCompCount.return_value = 1
+        item.GetFusionCompByIndex.return_value = comp
+        item.GetUniqueId.return_value = "item-1"
+        tl = mock.Mock()
+        tl.GetTrackCount.side_effect = lambda t: 1 if t == "video" else 0
+        tl.GetItemListInTrack.side_effect = lambda t, i: [item] if t == "video" else []
+        result = server._timeline_set_title_text(tl, {"clip_id": "item-1", "text": "VIA COMP"})
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["mode"], "fusion_comp")
+        self.assertEqual(store["StyledText"], "VIA COMP")
+        comp.Lock.assert_not_called()
+
+    def test_no_textplus_tool_still_fails_with_guidance(self):
+        item = mock.Mock()
+        item.GetProperty.return_value = {"ZoomX": 1.0}
+        item.SetProperty.return_value = False
+        item.GetFusionCompCount.return_value = 0
+        item.GetUniqueId.return_value = "item-1"
+        tl = mock.Mock()
+        tl.GetTrackCount.side_effect = lambda t: 1 if t == "video" else 0
+        tl.GetItemListInTrack.side_effect = lambda t, i: [item] if t == "video" else []
+        result = server._timeline_set_title_text(tl, {"clip_id": "item-1", "text": "X"})
+        self.assertFalse(result["success"])
+        self.assertIn("title_property_scan", result["error"])
 
 
 class GetTitleTextFusionFallbackTest(unittest.TestCase):

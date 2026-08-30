@@ -49,6 +49,11 @@ PROBE = "probe harness: the return is the measurement and is captured separately
 # (module path relative to src/, enclosing function, method) -> reason.
 ALLOWED: dict[tuple[str, str, str], str] = {
     # --- Fusion, via the Lua bridge (returns nil) ---------------------------
+    ("server.py", "_timeline_set_title_text", "SetInput"): (
+        "Fusion SetInput returns nothing meaningful; the fallback verifies the "
+        "write harder than any bool — it reads StyledText back and compares "
+        "before reporting success (comp-lock render bug rules the pattern)."
+    ),
     ("server.py", "fusion_comp", "SetInput"): NIL,
     ("server.py", "fusion_comp", "SetAttrs"): NIL,
     ("server.py", "fusion_comp", "SetPos"): NIL,

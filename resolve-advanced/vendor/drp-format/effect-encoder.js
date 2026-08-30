@@ -180,16 +180,10 @@ function encodeFloat(value) {
   return buffer.toString('hex');
 }
 
-/**
- * Common double values in hex for quick reference
- */
-const DOUBLE_VALUES = {
-  '1.0': '000000000000f03f',
-  '1.1': '9a9999999999f13f',
-  '0.9': '9a9999999999e93f',
-  '2.0': '0000000000000040',
-  '0.5': '000000000000e03f',
-};
+// A "common double values in hex" reference table used to sit here. It was
+// consumed by nothing, and its '0.9' entry actually decoded to 0.8 — the same
+// hand-typed-hex rot that put 30000/1001 in drt.author's 23.976 slot
+// (issue #167). Encode with encodeDouble()/writeDoubleLE; never copy hex.
 
 /**
  * Build a protobuf field with double value
@@ -636,5 +630,4 @@ module.exports = {
   // Constants
   EFFECT_PARAMS,
   WIRE_TYPES,
-  DOUBLE_VALUES,
 };

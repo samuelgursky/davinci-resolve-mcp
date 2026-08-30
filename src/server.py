@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.104.3"
+VERSION = "2.104.4"
 
 import base64
 import os
@@ -5745,9 +5745,41 @@ def _timeline_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
                     "attempts": attempts,
                 }
 
+    # SetProperty exposes no title keys on every build (Text+ on Studio 19.1.3
+    # rejects all of them), while the item's Fusion comp carries the same text
+    # as the TextPlus tool's StyledText input and accepts writes there — the
+    # route get_title_text already reads. Deliberately a bare, UNLOCKED
+    # SetInput: the comp-lock render bug (api_truth / v2.98.5) eats writes
+    # wrapped in Comp.Lock(), and unlocked writes are the safe ones.
+    if not bool(p.get("as_styled_xml", p.get("styled", False))):
+        try:
+            if int(item.GetFusionCompCount() or 0) > 0:
+                comp = item.GetFusionCompByIndex(1)
+                tools = comp.GetToolList(False, "TextPlus") if comp else None
+                for tool_key in (tools or {}):
+                    tool = tools[tool_key]
+                    tool.SetInput("StyledText", text)
+                    confirmed = tool.GetInput("StyledText")
+                    rec = {"mode": "fusion_comp", "property_key": "StyledText",
+                           "success": confirmed == text}
+                    if confirmed != text:
+                        rec["readback"] = _ser(confirmed)
+                    attempts.append(rec)
+                    if confirmed == text:
+                        return {
+                            "success": True,
+                            "timeline_item_id": _safe_timeline_item_id(item),
+                            "property_key": "StyledText",
+                            "mode": "fusion_comp",
+                            "attempts": attempts,
+                        }
+        except Exception as exc:
+            attempts.append({"mode": "fusion_comp", "success": False, "error": str(exc)})
+
     return {
         "success": False,
-        "error": "SetProperty did not succeed; run title_property_scan, copy a real key from `properties`, "
+        "error": "SetProperty did not succeed and the Fusion-comp StyledText fallback found no "
+        "TextPlus tool to write; run title_property_scan, copy a real key from `properties`, "
         "and pass `property_key` (see `attempts` for diagnostics).",
         "attempts": attempts,
     }
@@ -18833,7 +18865,9 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         cross-checks the job's timeline items (which read back their real
         positions): items before the timeline start and a mark range far
         smaller than the item extent both warn. Pass expected_frames or
-        expected_duration_seconds when you know what the render should hold.
+        expected_duration_seconds when you know what the render should hold —
+        a DELIBERATE short render (single-frame capture, excerpt) reads as a
+        collapse warning unless the stated expectation matches the mark range.
         Verify BEFORE deleting the job; deleted jobs carry no TargetDir.
       start(job_ids?, interactive?) -> {success}
       stop() -> {success}
@@ -18971,7 +19005,28 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
                         "zero, issue #164). The items read back as placed; the "
                         "render is a stub."
                     )
+                caller_expected_frames = None
+                if p.get("expected_frames") is not None:
+                    try:
+                        caller_expected_frames = int(p["expected_frames"])
+                    except (TypeError, ValueError):
+                        caller_expected_frames = None
+                elif p.get("expected_duration_seconds") is not None and fps:
+                    try:
+                        caller_expected_frames = int(round(float(p["expected_duration_seconds"]) * fps))
+                    except (TypeError, ValueError):
+                        caller_expected_frames = None
+                # A caller who states the render SHOULD be this short (a
+                # deliberate single-frame or excerpt render) is not a collapse
+                # victim — the warning is for ranges Resolve rewrote, which the
+                # caller by definition did not expect.
+                intentional_short_range = (
+                    caller_expected_frames is not None
+                    and mark_frames is not None
+                    and abs(caller_expected_frames - mark_frames) <= 1
+                )
                 if (extent_lo is not None and mark_frames is not None
+                        and not intentional_short_range
                         and mark_frames < (extent_hi - extent_lo) * 0.5):
                     warnings.append(
                         f"The job's mark range ({mark_frames} frame(s)) is under "
