@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.104.7"
+VERSION = "2.104.8"
 
 import base64
 import os
@@ -5787,6 +5787,35 @@ def _timeline_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _summarize_bulk_results(results: List[Dict[str, Any]], op_count: int) -> Dict[str, Any]:
+    """Envelope for per-op result lists whose top level must reflect the rows.
+
+    A bare {results, op_count} envelope made all-failed and all-succeeded
+    calls indistinguishable to a caller reading only the top level (the same
+    aggregation class as import_from_drp reporting success over failed rows).
+    """
+    succeeded = sum(1 for row in results if row.get("success"))
+    failed = op_count - succeeded
+    out: Dict[str, Any] = {
+        "results": results,
+        "op_count": op_count,
+        "succeeded": succeeded,
+        "failed": failed,
+        "success": failed == 0,
+    }
+    if failed and succeeded:
+        out["partial"] = True
+        out["warning"] = (
+            f"{succeeded} of {op_count} ops succeeded; see results[].error "
+            "for the failures."
+        )
+    elif failed:
+        out["error"] = (
+            f"All {op_count} op(s) failed — see results[].error for each cause."
+        )
+    return out
+
+
 def _timeline_bulk_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     ops = p.get("ops")
     if not isinstance(ops, list) or not ops:
@@ -5801,7 +5830,7 @@ def _timeline_bulk_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
         out = _timeline_set_title_text(tl, merged)
         out["index"] = index
         results.append(out)
-    return {"results": results, "op_count": len(ops)}
+    return _summarize_bulk_results(results, len(ops))
 
 
 _TIMELINE_CONFORM_KERNEL_ACTIONS = [
@@ -27585,7 +27614,7 @@ def _fusion_comp_bulk_set_expressions(p: Dict[str, Any]) -> Dict[str, Any]:
             results.append({"index": index, "error": error_message})
         elif keep_undo:
             results.append({"index": index, "success": True, "expression": op["expression"]})
-    return {"results": results, "op_count": len(ops)}
+    return _summarize_bulk_results(results, len(ops))
 
 
 def _fusion_probe_group_published_inputs(comp, p: Dict[str, Any]) -> Dict[str, Any]:
@@ -27710,7 +27739,7 @@ def _fusion_comp_bulk_set_inputs(p: Dict[str, Any]) -> Dict[str, Any]:
         elif keep_undo:
             results.append({"index": index, "success": True})
 
-    return {"results": results, "op_count": len(ops)}
+    return _summarize_bulk_results(results, len(ops))
 
 
 _FUSION_KERNEL_ACTIONS = [
@@ -28115,12 +28144,28 @@ def _fusion_add_mask(comp, p: Dict[str, Any]) -> Dict[str, Any]:
             rec["error"] = str(exc)
         results.append(rec)
 
+    failed_inputs = [row for row in results if not row.get("success")]
     out: Dict[str, Any] = {
-        "success": True,
+        # The tool was added either way, but success must mean "the mask that
+        # was asked for": an unconditional True over failed input rows left a
+        # default-shaped mask reading as configured.
+        "success": not failed_inputs or len(failed_inputs) < len(results),
         "tool_name": tool_name,
         "tool_type": attrs.get("TOOLS_RegID", tool_type),
         "inputs_set": results,
     }
+    if failed_inputs and len(failed_inputs) == len(results):
+        out["success"] = False
+        out["error"] = (
+            f"The {tool_name} tool was added but all {len(results)} input "
+            "write(s) failed — the mask is default-shaped; see inputs_set[].error."
+        )
+    elif failed_inputs:
+        out["partial"] = True
+        out["warning"] = (
+            f"{len(failed_inputs)} of {len(results)} mask input(s) failed to "
+            "apply; see inputs_set[].error."
+        )
 
     # Optional wiring: connect this mask into a tool's mask input.
     connect_to = p.get("connect_to")
@@ -28142,6 +28187,12 @@ def _fusion_add_mask(comp, p: Dict[str, Any]) -> Dict[str, Any]:
                 }
             except Exception as exc:
                 out["connection"] = {"success": False, "error": str(exc)}
+        if isinstance(out.get("connection"), dict) and not out["connection"].get("success"):
+            out["success"] = False
+            out.setdefault(
+                "error",
+                "The mask was added but could not be connected — see `connection`.",
+            )
     return out
 
 

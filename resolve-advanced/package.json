@@ -3,9 +3,9 @@
   "version": "0.0.0-dev",
   "private": true,
   "license": "MIT",
-  "description": "Beyond-the-API DaVinci Resolve MCP — offline .drp/.drt/.drx authoring/editing. Sibling Node server to the Python davinci-resolve-mcp. Dev-local package.json; deps promote to the repo root at packaging.",
-  "comment_commonjs": "Intentionally NO \"type\": \"module\" — the vendored libs are CommonJS (require()). The repo root is type:module, so this nested manifest scopes resolve-advanced/**/*.js back to CommonJS.",
-  "comment_exports": "Public library surface so a downstream consumer can import the codec/grading/pipeline API, not just spawn the MCP bin. `.` = the lib barrel; `./mcp` = the stdio server entry. Still private:true — publish name/registry + un-privating are a parked decision.",
+  "description": "Beyond-the-API DaVinci Resolve MCP \u2014 offline .drp/.drt/.drx authoring/editing. Sibling Node server to the Python davinci-resolve-mcp. Dev-local package.json; deps promote to the repo root at packaging.",
+  "comment_commonjs": "Intentionally NO \"type\": \"module\" \u2014 the vendored libs are CommonJS (require()). The repo root is type:module, so this nested manifest scopes resolve-advanced/**/*.js back to CommonJS.",
+  "comment_exports": "Public library surface so a downstream consumer can import the codec/grading/pipeline API, not just spawn the MCP bin. `.` = the lib barrel; `./mcp` = the stdio server entry. Still private:true \u2014 publish name/registry + un-privating are a parked decision.",
   "main": "./server/lib.mjs",
   "exports": {
     ".": "./server/lib.mjs",
@@ -20,11 +20,10 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "adm-zip": "^0.5.16",
+    "adm-zip": "^0.6.0",
     "fast-xml-parser": "^5.7.3",
     "fzstd": "^0.1.1",
     "jszip": "^3.10.1",
-    "uuid": "^9.0.0",
     "zod": "^3.25.76",
     "zstd-codec": "^0.1.5"
   },
@@ -32,10 +31,10 @@
     "better-sqlite3": "^11.10.0",
     "js-yaml": "^4.3.0",
     "pg": "^8.22.0",
-    "sharp": "^0.33.0"
+    "sharp": "^0.35.4"
   },
   "peerDependenciesMeta": {
-    "_comment": "audio (split/trim/convert) + conform frame ops need system ffmpeg/ffprobe on PATH (NOT bundled — FFmpeg binaries are GPL; this package stays MIT). Install ffmpeg yourself: brew install ffmpeg."
+    "_comment": "audio (split/trim/convert) + conform frame ops need system ffmpeg/ffprobe on PATH (NOT bundled \u2014 FFmpeg binaries are GPL; this package stays MIT). Install ffmpeg yourself: brew install ffmpeg."
   },
   "scripts": {
     "test": "node --test vendor/drp-format/__tests__/*.test.js vendor/drt-format/__tests__/*.test.js vendor/drx-codec/__tests__/*.test.js test/*.test.mjs",
@@ -43,7 +42,7 @@
     "test:server": "node --test test/*.test.mjs"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.9"
   },
   "devDependencies": {
     "prettier": "^3.9.4"

@@ -34,7 +34,7 @@ try {
 } catch {
   ZstdCodec = null;
 }
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID: uuidv4 } = require('node:crypto');
 
 // Import shared DRX parameter library
 const drxParams = require('../drx-parameters');
@@ -1859,7 +1859,7 @@ async function generateMultiNodeDRX(nodes, connections, metadata = {}) {
   const bodyHex = body.toString('hex');
 
   // Generate UUIDs
-  const { v4: uuidv4 } = require('uuid');
+  const { randomUUID: uuidv4 } = require('node:crypto');
   const stillId = uuidv4();
   const clipVersionId = uuidv4();
 
@@ -1873,7 +1873,7 @@ async function generateMultiNodeDRX(nodes, connections, metadata = {}) {
  ${pTrackVerXml}`;
   } else {
     // Generate default pTrackVer body
-    const trackVersionId = require('uuid').v4();
+    const trackVersionId = require('node:crypto').randomUUID();
     const trackBodyHex = await generatePTrackVerBody(width, height);
     pTrackVerSection = `
  <pTrackVer>

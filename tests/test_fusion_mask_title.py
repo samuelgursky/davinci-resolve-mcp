@@ -150,9 +150,14 @@ class AddFusionMaskTest(unittest.TestCase):
     def test_connect_to_missing_target_reports_error(self):
         comp = FakeComp()
         out = _dispatch(comp, "add_fusion_mask", {"connect_to": "nope"})
-        # The mask is still created; only the wiring fails.
-        self.assertTrue(out["success"])
+        # The mask is still created, but the caller asked for a CONNECTED mask
+        # and did not get one — an unconnected mask affects nothing while a
+        # top-level success:true reads as configured (the partial-envelope
+        # class, v2.104.8). The failure now surfaces at the top level; the
+        # error text and `connection` say the mask itself exists.
+        self.assertFalse(out["success"])
         self.assertFalse(out["connection"]["success"])
+        self.assertIn("could not be connected", out["error"])
 
 
 class TextPlusTest(unittest.TestCase):

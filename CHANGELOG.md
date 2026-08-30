@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.8
+
+More laps: the aggregation class swept to completion, and the dependency
+stack brought to zero known vulnerabilities.
+
+**Four more envelope lies fixed.** An AST sweep for per-op result lists under
+success-shaped envelopes (the class import_from_drp exposed) found four bulk
+tools whose top level ignored their rows: `bulk_set_title_text`,
+`fusion_comp.bulk_set_expressions`, and `bulk_set_inputs` returned bare
+{results, op_count} — all-failed and all-succeeded calls indistinguishable
+without reading every row — and `fusion_comp.add_mask` hard-coded
+success:true over failable input writes, so a mask whose every parameter
+failed to apply read as configured while sitting default-shaped on the clip.
+All four now report success/succeeded/failed with partial warnings, through
+one shared summarizer. Also swept and clean: flow-prescribing remediation
+texts (every named action exists), absolute-belief comments in tests and
+source, and the Python tree for further aggregation suspects (the remaining
+hits are read-only listers).
+
+**Dependency stack: 15 advisories to zero.** `npm audit fix` cleared the
+non-breaking set (hono, fast-xml-parser, fast-uri, ip-address, js-yaml and
+friends); adm-zip moved to 0.6.0; the `uuid` dependency is GONE (three call
+sites now use Node's built-in crypto.randomUUID); and sharp moved to 0.35.4,
+which clears four libvips CVEs in the image-decode paths that media QC feeds
+untrusted files into.
+
+**Node floor: >=20.9 (warn-don't-block).** sharp 0.35 requires Node 20.9+,
+and Node 18 has been end-of-life since April 2025 — on an 18.20 interpreter
+npm silently produced a BROKEN install (engines-skipped platform binding,
+"up to date", no sharp module, 57 tests gone from the count). Both
+package.json engines now say >=20.9, which warns older interpreters without
+blocking, matching the Python floor policy. CI publishes on Node 24; the
+full Node suite runs green on 20.19 (823 tests, sharp included).
+
 ## What's New in v2.104.7
 
 The DRT import thread, chased to ground by live bisection on Studio 19.1.3.7
