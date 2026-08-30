@@ -320,5 +320,73 @@ class ClaudeDesktopConfigTests(unittest.TestCase):
         )
 
 
+class ResolveProbeLifecycleTests(unittest.TestCase):
+    def _layout(self, root: Path, helper: str, dvr: str) -> tuple[Path, Path]:
+        repo = root / "repo"
+        utils = repo / "src" / "utils"
+        modules = root / "modules"
+        utils.mkdir(parents=True)
+        modules.mkdir()
+        (repo / "src" / "__init__.py").write_text("")
+        (utils / "__init__.py").write_text("")
+        (utils / "resolve_connection.py").write_text(helper)
+        (modules / "DaVinciResolveScript.py").write_text(dvr)
+        return repo, modules
+
+    def test_bridge_first_skips_native_fusion_import(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo, modules = self._layout(
+                root,
+                "class Proxy:\n"
+                " def GetProductName(self): return 'Bridge Resolve'\n"
+                " def GetVersionString(self): return '1.0'\n"
+                "def connect_resolve(dvr):\n"
+                " assert dvr is None\n"
+                " return Proxy()\n",
+                "raise RuntimeError('native Fusion import must not happen')\n",
+            )
+            with mock.patch.object(doctor, "REPO", repo), mock.patch.object(
+                doctor, "RESOLVE_MODULES", modules
+            ), mock.patch.object(doctor, "PYTHON", Path(sys.executable)):
+                probe = doctor.resolve_probe()
+
+        self.assertTrue(probe["resolve_connected"])
+        self.assertTrue(probe["import_skipped"])
+        self.assertEqual(probe["transport"], "bridge")
+        self.assertEqual(probe["returncode"], 0)
+
+    def test_native_fallback_hard_exits_without_running_atexit(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            finalized = root / "finalized.txt"
+            repo, modules = self._layout(
+                root,
+                "def connect_resolve(dvr):\n"
+                " return None if dvr is None else dvr.scriptapp('Resolve')\n",
+                "import atexit\nfrom pathlib import Path\n"
+                f"atexit.register(lambda: Path({str(finalized)!r}).write_text('ran'))\n"
+                "class Proxy:\n"
+                " def GetProductName(self): return 'Direct Resolve'\n"
+                " def GetVersionString(self): return '1.0'\n"
+                "def scriptapp(name): return Proxy()\n",
+            )
+            with mock.patch.object(doctor, "REPO", repo), mock.patch.object(
+                doctor, "RESOLVE_MODULES", modules
+            ), mock.patch.object(doctor, "PYTHON", Path(sys.executable)):
+                probe = doctor.resolve_probe()
+
+            self.assertTrue(probe["import_ok"])
+            self.assertTrue(probe["resolve_connected"])
+            self.assertEqual(probe["returncode"], 0)
+            self.assertFalse(finalized.exists(), "native probe ran Python finalizers")
+
+
 if __name__ == "__main__":
     unittest.main()

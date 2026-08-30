@@ -146,6 +146,13 @@ class InstallConfigTests(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertIn("connect_resolve", captured["script"])
+        self.assertIn("connect_resolve(None)", captured["script"])
+        self.assertLess(
+            captured["script"].index("connect_resolve(None)"),
+            captured["script"].index("import DaVinciResolveScript"),
+        )
+        self.assertIn("native_import_attempted = True", captured["script"])
+        self.assertIn("os._exit(0)", captured["script"])
         self.assertIn(repo_root, captured["script"])
         # RESOLVE_SCRIPT_HOST propagated into the probe env by build_server_env.
         self.assertEqual(captured["env"].get("RESOLVE_SCRIPT_HOST"), "127.0.0.1")

@@ -275,35 +275,71 @@ def resolve_probe(
     if not PYTHON.exists():
         return {"import_ok": False, "error": f"{PYTHON} is missing"}
 
+    # Disposable probe: ask the persistent bridge before importing Blackmagic's
+    # native Fusion module. fusionscript can leave a RemoteApp thread alive and
+    # crash CPython during interpreter finalization. If native import is needed,
+    # flush the result and hard-exit so those unsafe finalizers never run.
     code = f"""
 import json
+import os
 import sys
 sys.path.insert(0, {str(REPO)!r})
 sys.path.insert(0, {str(RESOLVE_MODULES)!r})
+native_import_attempted = False
 try:
-    import DaVinciResolveScript as dvr
     from src.utils.resolve_connection import connect_resolve
 except Exception as exc:
     payload = {{"import_ok": False, "error": repr(exc)}}
 else:
     try:
-        resolve = connect_resolve(dvr)
+        resolve = connect_resolve(None)
     except Exception as exc:
         payload = {{
-            "import_ok": True,
-            "module": getattr(dvr, "__file__", None),
+            "import_ok": None,
+            "import_skipped": True,
             "resolve_connected": False,
             "connection_error": repr(exc),
         }}
     else:
-        payload = {{
-            "import_ok": True,
-            "module": getattr(dvr, "__file__", None),
-            "resolve_connected": bool(resolve),
-            "product": resolve.GetProductName() if resolve else None,
-            "version": resolve.GetVersionString() if resolve else None,
-        }}
-print(json.dumps(payload))
+        if resolve is not None:
+            payload = {{
+                "import_ok": None,
+                "import_skipped": True,
+                "module": None,
+                "resolve_connected": True,
+                "transport": "bridge",
+                "product": resolve.GetProductName(),
+                "version": resolve.GetVersionString(),
+            }}
+        else:
+            native_import_attempted = True
+            try:
+                import DaVinciResolveScript as dvr
+            except Exception as exc:
+                payload = {{"import_ok": False, "error": repr(exc)}}
+            else:
+                try:
+                    resolve = connect_resolve(dvr)
+                except Exception as exc:
+                    payload = {{
+                        "import_ok": True,
+                        "module": getattr(dvr, "__file__", None),
+                        "resolve_connected": False,
+                        "connection_error": repr(exc),
+                    }}
+                else:
+                    payload = {{
+                        "import_ok": True,
+                        "module": getattr(dvr, "__file__", None),
+                        "resolve_connected": bool(resolve),
+                        "product": resolve.GetProductName() if resolve else None,
+                        "version": resolve.GetVersionString() if resolve else None,
+                    }}
+print(json.dumps(payload), flush=True)
+if native_import_attempted:
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 """
     env = {
         **os.environ,
@@ -481,36 +517,46 @@ def collect(
     check(results, "OK" if pyver["ok"] else "FAIL", "Python version", pyver["stdout"] or pyver["stderr"])
 
     probe = resolve_probe(resolve_host, resolve_timeout)
-    if probe.get("import_ok"):
+    if probe.get("import_skipped"):
+        check(
+            results,
+            "OK" if probe.get("resolve_connected") else "INFO",
+            "DaVinciResolveScript import",
+            "skipped — persistent bridge answered; native Fusion module not loaded"
+            if probe.get("resolve_connected")
+            else "skipped — bridge mode failed before native Fusion import",
+        )
+    elif probe.get("import_ok"):
         check(results, "OK", "DaVinciResolveScript import", str(probe.get("module")))
-        if probe.get("resolve_connected"):
-            detail = f"{probe.get('product')} {probe.get('version')}"
-            check(results, "OK", "Resolve scripting connection", detail)
-        elif probe.get("connection_error"):
-            check(
-                results,
-                "FAIL",
-                "Resolve scripting connection",
-                str(probe["connection_error"]),
-            )
-        else:
-            # This is also exactly what the free edition looks like: the module
-            # imports fine and scriptapp refuses, because Blackmagic gates
-            # *external* scripting to Studio. Sending someone to toggle a
-            # preference that cannot help them is a dead end, so name the bridge
-            # here too.
-            check(
-                results,
-                "WARN",
-                "Resolve scripting connection",
-                "Module import worked, but scriptapp returned no object. On Studio: "
-                "External scripting = Local, or Network with --resolve-host set to "
-                "the Resolve host IP, then restart Resolve. On the FREE edition "
-                "external scripting is gated off entirely — use the in-app bridge "
-                "(see 'Free-edition bridge' below).",
-            )
     else:
         check(results, "FAIL", "DaVinciResolveScript import", str(probe.get("error")))
+
+    if probe.get("resolve_connected"):
+        detail = f"{probe.get('product')} {probe.get('version')}"
+        check(results, "OK", "Resolve scripting connection", detail)
+    elif probe.get("connection_error"):
+        check(
+            results,
+            "FAIL",
+            "Resolve scripting connection",
+            str(probe["connection_error"]),
+        )
+    elif probe.get("import_ok"):
+        # This is also exactly what the free edition looks like: the module
+        # imports fine and scriptapp refuses, because Blackmagic gates
+        # *external* scripting to Studio. Sending someone to toggle a
+        # preference that cannot help them is a dead end, so name the bridge
+        # here too.
+        check(
+            results,
+            "WARN",
+            "Resolve scripting connection",
+            "Module import worked, but scriptapp returned no object. On Studio: "
+            "External scripting = Local, or Network with --resolve-host set to "
+            "the Resolve host IP, then restart Resolve. On the FREE edition "
+            "external scripting is gated off entirely — use the in-app bridge "
+            "(see 'Free-edition bridge' below).",
+        )
 
     results.extend(bridge_checks(probe))
 
