@@ -191,6 +191,114 @@ function patchSpecBlobs(mpXml, toName, fromSpec, toSpec) {
  * @param {string} [opts.from] @param {string} [opts.to] @param {object} [opts.fromSpec] @param {object} [opts.toSpec]
  * @returns {Promise<{buffer:Buffer, relinked:Array, specPatched:Array<{to:string,patched:boolean}>}>}
  */
+let _fzstd = null;
+try { _fzstd = require('fzstd'); } catch (e) { /* optional; zstd Clip blobs need it */ }
+const _zlib = require('node:zlib');
+const _crypto = require('node:crypto');
+const _fs = require('node:fs');
+
+/**
+ * Rewrite the media-identity <Clip> blobs in MpFolder.xml for a repoint.
+ *
+ * The blob is [u32BE version][u32BE len][0x81][compressed protobuf] where the
+ * protobuf is FLAT: f1 dir, f2/f6 filename, f3 mtime string, f7 uuid,
+ * f13 file size bytes, f14 media frame count. Resolve links media by THIS
+ * identity in preference to the plain-text MediaFilePath — measured live
+ * 2026-08-30: a template whose Clip blob still named its capture source made
+ * ImportTimelineFromFile link that ORIGINAL file (a real client asset) while
+ * every visible field said the new path, and the relinked render came out
+ * black. relinkMedia's raw-bytes blob pass cannot see through the
+ * compression, so this decompresses (zstd via optional fzstd, zlib, or raw
+ * deflate), patches the fields, and re-emits as zlib — the decoder framing
+ * accepts either codec.
+ */
+function repointClipBlobsInXml(xml, { toDir, toName, toSpec }) {
+  let patched = 0;
+  const out = xml.replace(/<Clip>([0-9a-f]{40,})<\/Clip>/g, (whole, hex) => {
+    try {
+      const raw = Buffer.from(hex, 'hex');
+      if (raw.length < 10 || raw[8] !== 0x81) return whole;
+      const payload = raw.subarray(9);
+      let plain;
+      if (payload[0] === 0x28 && payload[1] === 0xb5 && payload[2] === 0x2f && payload[3] === 0xfd) {
+        if (!_fzstd) return whole;
+        plain = Buffer.from(_fzstd.decompress(new Uint8Array(payload)));
+      } else if (payload[0] === 0x78) {
+        plain = _zlib.inflateSync(payload);
+      } else {
+        plain = _zlib.inflateRawSync(payload);
+      }
+      // Parse flat top-level protobuf fields.
+      const fields = [];
+      let o = 0;
+      while (o < plain.length) {
+        const start = o;
+        let shift = 0; let tag = 0;
+        for (;;) { const b = plain[o++]; tag |= (b & 0x7f) << shift; if (!(b & 0x80)) break; shift += 7; }
+        const field = tag >>> 3; const wire = tag & 7;
+        if (wire === 0) { for (;;) { const b = plain[o++]; if (!(b & 0x80)) break; } }
+        else if (wire === 1) o += 8;
+        else if (wire === 5) o += 4;
+        else if (wire === 2) {
+          let len = 0; shift = 0;
+          for (;;) { const b = plain[o++]; len |= (b & 0x7f) << shift; if (!(b & 0x80)) break; shift += 7; }
+          o += len;
+        } else return whole; // unknown wire type: leave the blob alone
+        fields.push({ field, wire, bytes: plain.subarray(start, o) });
+      }
+      const varint = (v) => {
+        const bs = [];
+        let r = v;
+        while (r > 0x7f) { bs.push((r & 0x7f) | 0x80); r = Math.floor(r / 128); }
+        bs.push(r & 0x7f);
+        return Buffer.from(bs);
+      };
+      const strField = (field, str) => {
+        const body = Buffer.from(str, 'utf8');
+        return Buffer.concat([varint((field << 3) | 2), varint(body.length), body]);
+      };
+      const intField = (field, v) => Buffer.concat([varint(field << 3), varint(v)]);
+      let stat = null;
+      try { stat = _fs.statSync(`${toDir}/${toName}`); } catch (e) { /* offline authoring: file may not exist yet */ }
+      const rebuilt = fields.map((f) => {
+        if (f.field === 1) return strField(1, toDir);
+        if (f.field === 2) return strField(2, toName);
+        if (f.field === 6) return strField(6, toName);
+        if (f.field === 7) return strField(7, _crypto.randomUUID());
+        // f13 is the file's MTIME IN MICROSECONDS — verified by capturing the
+        // same file natively (Resolve wrote 1788121973071908 for an
+        // Aug-30-2026 mtime). Writing anything else here makes the render
+        // engine refuse with "Full resolution media not found" while every
+        // structural readback stays green. f14 is absent from native captures
+        // of plain mp4 media; a stale template value is dropped.
+        if (f.field === 13 && stat) return intField(13, Math.floor(stat.mtimeMs * 1000));
+        if (f.field === 14) return Buffer.alloc(0);
+        if (f.field === 3 && stat) {
+          // ctime() layout, matching Resolve's own stamps: 'Sun Aug 17 15:01:38 2025'
+          const d = stat.mtime;
+          const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+          const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+          const pad = (n) => String(n).padStart(2, '0');
+          const ctime = `${days[d.getDay()]} ${months[d.getMonth()]} ${String(d.getDate()).padStart(2, ' ')} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${d.getFullYear()}`;
+          return strField(3, ctime);
+        }
+        return f.bytes;
+      });
+      const fresh = Buffer.concat(rebuilt);
+      const compressed = _zlib.deflateSync(fresh);
+      const head = Buffer.alloc(9);
+      head.writeUInt32BE(raw.readUInt32BE(0), 0);
+      head.writeUInt32BE(1 + compressed.length, 4);
+      head[8] = 0x81;
+      patched += 1;
+      return `<Clip>${Buffer.concat([head, compressed]).toString('hex')}</Clip>`;
+    } catch (e) {
+      return whole; // never corrupt a blob we cannot fully parse
+    }
+  });
+  return { xml: out, patched };
+}
+
 async function repointMedia(drpInput, opts = {}) {
   const mappings = opts.mappings
     || (opts.from && opts.to ? [{ from: opts.from, to: opts.to, fromSpec: opts.fromSpec, toSpec: opts.toSpec }] : []);
@@ -210,9 +318,21 @@ async function repointMedia(drpInput, opts = {}) {
     mp = res.xml;
     specPatched.push({ to: m.to, patched: res.patched });
   }
+  // 3) rewrite the compressed media-identity Clip blobs — the field Resolve
+  // actually links by (see repointClipBlobsInXml).
+  let clipBlobsPatched = 0;
+  for (const m of mappings) {
+    const res = repointClipBlobsInXml(mp, {
+      toDir: nodePath.dirname(m.to),
+      toName: nodePath.basename(m.to),
+      toSpec: m.toSpec,
+    });
+    mp = res.xml;
+    clipBlobsPatched += res.patched;
+  }
   zip.file(mpPath, mp);
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-  return { buffer, relinked: relinked.relinked, specPatched };
+  return { buffer, relinked: relinked.relinked, specPatched, clipBlobsPatched };
 }
 
 module.exports = { relinkMedia, repointMedia };

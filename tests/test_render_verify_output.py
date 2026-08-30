@@ -293,3 +293,20 @@ class SafeQuickExportOutputCheckTest(unittest.TestCase):
         self.assertTrue(result["success"], result)
         self.assertEqual(len(result["outputs"]), 1)
         self.assertEqual(result["outputs"][0]["size_bytes"], 2048)
+
+
+class VerifyOutputJobStatusTest(unittest.TestCase):
+    """A Failed job must never verify, whatever the file looks like —
+    spotted live when a stub from a Failed render passed the ratio check."""
+
+    def test_failed_job_is_not_verified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "out.mov"), "wb") as fh:
+                fh.write(b"x" * 1024)
+            proj = _proj([_job(target_dir=tmp, MarkIn=86400, MarkOut=86400)],
+                         {"JobStatus": "Failed", "Error": "Full resolution media not found"})
+            with mock.patch.object(server, "_check", return_value=(mock.Mock(), proj, None)):
+                result = server.render("verify_output", {"job_id": "job-1", "expected_frames": 1})
+        self.assertFalse(result["verified"], result)
+        self.assertTrue(any("Failed" in w for w in result["warnings"]))
+        self.assertTrue(any("Full resolution media" in w for w in result["warnings"]))

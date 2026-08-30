@@ -2,6 +2,62 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.106.0
+
+**Media clips in native DRT authoring — cut real footage into an importable,
+RENDERING timeline.** The deepest silent-failure class this repo has hit, run
+to ground and shipped, live-verified at every step on Studio 19.1.3.7.
+
+### The discovery chain
+
+Adding media cuts to drt.assemble surfaced three buried traps in sequence.
+First: repointing the bundled media template at a new file left the pool
+entry's compressed identity blobs describing the ORIGINAL capture source —
+and when that file still exists on the machine, Resolve silently links IT
+(observed: authored timelines linked a client clip while every visible field
+said the right path). Second: after teaching the Clip identity blobs the new
+path (their layout: dir, filename, ctime-format mtime string, codec tag,
+uuid, mtime-in-MICROSECONDS — a field first misread as file size), imports
+read back perfectly and still failed to render: "Full resolution media not
+found". Third: the render engine validates the pool entry's DEEP descriptors
+(Radiometry, keyed-dict FieldsBlobs, stream data) that offline code cannot
+synthesize. Structural readback cannot see any of this — only rendering can.
+
+### The architecture that works
+
+- **`media_pool.capture_media_template(media_path)`** (live, once per file):
+  builds a disposable project around the file, lets Resolve describe it
+  natively, caches the pool media element + MediaRef id under
+  ~/.config/davinci-resolve-mcp/media-templates/, and switches your project
+  back.
+- **`drt.assemble` grows media support**: `media: {mediaFilePath, spec,
+  cuts: [{startFrame, durationFrames, srcIn}]}` cuts ONE source into N
+  placements (new cut-media vendor primitive: donor clip cloned with fresh
+  DbIds and per-cut geometry on video + audio tracks; placement guards refuse
+  cuts before the timeline origin and reads past the media's end). At build
+  time the cached native element is TRANSPLANTED and MediaRefs rewired —
+  rendered output then matches a natively built timeline exactly (YAVG
+  125.6/123.2 across cuts vs 123.2 native control). Without a cache the
+  result carries mediaDescriptor: 'repoint-fallback' and a warning naming
+  the capture action.
+- **Version-matched templates**: a Resolve-21 template stamped down to 19
+  imports and reads back perfectly — and renders BLACK (the stamp clears the
+  gate, not the blob semantics). Both template generations now ship ('21'
+  original, '19' captured from 19.1.3.7); drt.assemble picks by
+  targetAppVersion.
+
+### Fixed
+
+- `render.verify_output` never verifies a job whose JobStatus is not
+  Complete (a Failed job's stub passed the duration-ratio check during this
+  hunt).
+- The repoint fallback's Clip identity blobs are now written with the
+  measured field semantics (mtime-µs, ctime string, dropped stale fields).
+
+All of it is an api_truth entry: imported media renders only with NATIVE
+pool descriptors; render-verify authored timelines, because structural
+readback cannot see this class.
+
 ## What's New in v2.105.0
 
 **Native-schema DRT authoring — the parked "project, not a lap" — shipped.**

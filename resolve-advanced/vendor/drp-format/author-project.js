@@ -28,6 +28,36 @@ const DEFAULT_TIMELINE_NAME = 'Timeline 1';
 const MEDIA_TEMPLATE_DRP = path.join(__dirname, 'templates', 'media-clip-h264.drp');
 const MEDIA_TEMPLATE_SPEC = { width: 352, height: 262, frameCount: 4576, fps: 30000 / 1001 };
 const MEDIA_TEMPLATE_TL_NAME = 'MediaTemplate';
+
+// Version-matched template registry. Measured live on Studio 19.1.3.7: an
+// archive built from the Resolve-21 capture and version-STAMPED down imports
+// with every clip reading back correctly — and renders BLACK. The stamp
+// clears the import gate; the R21 blob semantics do not fully parse on 19,
+// so the render tree is empty while the structural readback is perfect (the
+// read-back-fine/render-dead class again). The only working fix is a
+// template captured from the target generation, so both generations ship:
+// '21' (original capture) and '19' (captured from Studio 19.1.3.7,
+// 2026-08-30, identical timeline geometry: start 86400, media clip
+// Start 86400 / Duration 3664 for the same 352x262 4576-frame 29.97 spec).
+const TEMPLATES = {
+  21: {
+    empty: TEMPLATE_DRP,
+    media: MEDIA_TEMPLATE_DRP,
+    mediaSpec: MEDIA_TEMPLATE_SPEC,
+  },
+  19: {
+    empty: path.join(__dirname, 'templates', 'empty-project-r19.drp'),
+    media: path.join(__dirname, 'templates', 'media-clip-r19.drp'),
+    mediaSpec: MEDIA_TEMPLATE_SPEC,
+  },
+};
+
+function templateFor(templateVersion) {
+  const key = Number(templateVersion) || 21;
+  const entry = TEMPLATES[key >= 21 ? 21 : 19];
+  if (!entry) throw new Error(`no template generation for version ${templateVersion}`);
+  return entry;
+}
 // The template timeline begins at 01:00:00:00 (24fps) — clips placed BEFORE this frame are
 // dropped by Resolve on import. Callers should place at >= startFrame.
 const DEFAULT_START_FRAME = 86400;
@@ -41,8 +71,8 @@ const DEFAULT_START_FRAME = 86400;
  *   startFrame is the timeline origin (86400 = 01:00:00:00 @ 24fps); place clips at >= this.
  */
 async function createEmptyProject(opts = {}) {
-  const { timelineName } = opts;
-  const tmpl = await fs.promises.readFile(TEMPLATE_DRP);
+  const { timelineName, templateVersion } = opts;
+  const tmpl = await fs.promises.readFile(templateFor(templateVersion).empty);
 
   if (!timelineName || timelineName === DEFAULT_TIMELINE_NAME) {
     return { buffer: tmpl, timelineName: DEFAULT_TIMELINE_NAME, startFrame: DEFAULT_START_FRAME };
@@ -74,13 +104,13 @@ async function createEmptyProject(opts = {}) {
  * @returns {Promise<{buffer:Buffer, timelineName:string, mediaFile:string}>}
  */
 async function addMediaClip(opts = {}) {
-  const { mediaFile, spec, timelineName, durationFrames } = opts;
+  const { mediaFile, spec, timelineName, durationFrames, templateVersion } = opts;
   if (!mediaFile || !path.isAbsolute(mediaFile)) throw new Error('addMediaClip: mediaFile must be an absolute path');
   if (!spec || ['width', 'height', 'frameCount', 'fps'].some((k) => typeof spec[k] !== 'number')) {
     throw new Error('addMediaClip: spec must be { width, height, frameCount, fps } (numbers)');
   }
 
-  const tmpl = await fs.promises.readFile(MEDIA_TEMPLATE_DRP);
+  const tmpl = await fs.promises.readFile(templateFor(templateVersion).media);
   // Discover the template's current media path (the "from" for repoint).
   const zip0 = await JSZip.loadAsync(tmpl);
   let fromPath = null;
@@ -92,7 +122,7 @@ async function addMediaClip(opts = {}) {
   if (!fromPath) throw new Error('addMediaClip: could not read template media path');
 
   let { buffer } = await repointMedia(tmpl, {
-    from: fromPath, to: mediaFile, fromSpec: MEDIA_TEMPLATE_SPEC, toSpec: spec,
+    from: fromPath, to: mediaFile, fromSpec: templateFor(templateVersion).mediaSpec, toSpec: spec,
   });
 
   // Rename the timeline (lives in the Media Pool).

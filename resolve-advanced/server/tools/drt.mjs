@@ -198,7 +198,14 @@ export const drtTool = {
       // assembled + stamped to the host's ProjectVersion imports with every
       // element intact.
       const { assembleTimeline } = drp();
-      const { buffer, timelineName, startFrame } = await assembleTimeline(p.spec);
+      // The template GENERATION must match the target host: a Resolve-21
+      // template stamped down imports on 19 but renders BLACK (measured) —
+      // the stamp clears the gate, not the blob semantics.
+      const spec = { ...p.spec };
+      if (spec.templateVersion === undefined && p.targetAppVersion !== undefined) {
+        spec.templateVersion = parseFloat(p.targetAppVersion) >= 21 ? 21 : 19;
+      }
+      const { buffer, timelineName, startFrame, mediaDescriptor } = await assembleTimeline(spec);
       let outBuf = buffer;
       let stamped = null;
       if (p.targetAppVersion !== undefined) {
@@ -216,6 +223,17 @@ export const drtTool = {
         timelineName,
         startFrame,
         stamped,
+        templateVersion: spec.templateVersion ?? 21,
+        mediaDescriptor: mediaDescriptor ?? 'none',
+        ...(mediaDescriptor === 'repoint-fallback'
+          ? {
+              warning:
+                'No native media template cached for this file — the archive imports and reads back ' +
+                'correctly but its media may not RENDER (black frames / "Full resolution media not ' +
+                'found"). Run media_pool.capture_media_template(media_path) once with Resolve open, ' +
+                'then re-assemble for a render-verified transplant.',
+            }
+          : {}),
         note:
           'Import with timeline.import_timeline_checked — the imported timeline is named after the FILE. ' +
           'On a host older than Resolve 21, pass targetAppVersion or the version gate refuses the archive.',

@@ -156,6 +156,7 @@ module.exports = {
 
   // Build a full importable timeline from a declarative spec (titles/generators/transitions).
   assembleTimeline: require('./assemble-timeline').assembleTimeline,
+  cutSourceIntoClips: require('./cut-media').cutSourceIntoClips,
 
   // Author a project with one media clip referencing an arbitrary h264 file, from scratch [P8].
   addMediaClip: require('./author-project').addMediaClip,

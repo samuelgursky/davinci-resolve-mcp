@@ -1886,6 +1886,35 @@ API_TRUTH: List[Dict[str, Any]] = [
         "issue": 171,
     },
     {
+        "symbol": "Imported media renders only with NATIVE pool descriptors (repointed entries read back fine, render never)",
+        "object": "MediaPool / render engine",
+        "reality": "An imported archive's media links by the pool entry's DEEP "
+                   "descriptors (compressed Clip identity blobs, Radiometry, "
+                   "keyed-dict FieldsBlobs, stream data), not by the visible "
+                   "MediaFilePath. A pool entry whose visible fields all name "
+                   "the right file but whose deep blobs describe another "
+                   "imports cleanly, reads back perfectly (items, names, "
+                   "source frames, linked counts), and then either renders "
+                   "BLACK or fails with 'Full resolution media not found' — "
+                   "and worse, when the stale identity matches a file that "
+                   "exists on the machine, Resolve links THAT file (observed: "
+                   "a template captured from a client clip silently linked "
+                   "the client clip). Measured by bisection on Studio "
+                   "19.1.3.7: pristine native archives render (YAVG 123), "
+                   "every synthesized/repointed variant read back identically "
+                   "and did not.",
+        "recommended": "Never synthesize pool media descriptors. Capture them "
+                       "natively once per file with "
+                       "media_pool.capture_media_template (builds a scratch "
+                       "project around the file, caches the native element), "
+                       "and author with drt.assemble, which transplants the "
+                       "cached element and rewires MediaRefs — rendered "
+                       "output then matches a natively built timeline "
+                       "exactly. Always render-verify authored timelines; "
+                       "structural readback cannot see this class.",
+        "tags": ["media-pool", "import", "render", "silent-failure", "readback"],
+    },
+    {
         "symbol": "MediaPool.ImportTimelineFromFile (.drt requirements and filename naming)",
         "object": "MediaPool",
         "signature": "(drtPath, {importSourceClips, ...}) -> Timeline",

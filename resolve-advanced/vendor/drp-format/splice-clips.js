@@ -442,4 +442,8 @@ async function rippleTimeline(drpInput, opts = {}) {
   return { buffer, entry, timelineUuid: seqId, at, delta, shifted };
 }
 
-module.exports = { moveClip, deleteClip, trimClip, trimClipHead, splitClip, rippleTimeline };
+module.exports = {
+  moveClip, deleteClip, trimClip, trimClipHead, splitClip, rippleTimeline,
+  // low-level clip-XML helpers, reused by cut-media.js
+  clipDbId, clipStart, clipDuration, clipIn, setClipStart, setClipDuration, setClipIn,
+};

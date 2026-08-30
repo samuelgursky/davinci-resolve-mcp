@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.105.0"
+VERSION = "2.106.0"
 
 import base64
 import os
@@ -8973,6 +8973,7 @@ _MEDIA_POOL_KERNEL_ACTIONS = [
     "link_full_resolution_checked",
     "set_clip_marks",
     "get_clip_marks",
+    "capture_media_template",
     "clear_clip_marks",
     "copy_clip_annotations",
     "media_pool_boundary_report",
@@ -13793,6 +13794,126 @@ def _set_clip_marks(root, mp, p: Dict[str, Any]):
             continue
         results.append({"clip_id": clip_id, "success": bool(clip.SetMarkInOut(mark_in, mark_out, p.get("type", "all")))})
     return {"success": all(row.get("success") for row in results), "count": len(results), "missing": missing, "results": results}
+
+
+def _capture_media_template(r, pm, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Capture a media file's NATIVE Resolve descriptors for offline authoring.
+
+    Offline authoring cannot synthesize the media-identity blobs Resolve's
+    render engine validates (Radiometry, keyed-dict FieldsBlobs, stream
+    descriptors): a repointed pool entry imports and reads back perfectly but
+    renders black or fails with "Full resolution media not found" (measured
+    2026-08-30, Studio 19.1.3.7). This builds a disposable project around the
+    file, lets Resolve describe it natively, and caches the pool media
+    <Element> + the timeline clips' <MediaRef> id. drt.assemble then
+    TRANSPLANTS the cached element, which renders identically to native.
+
+    Switches the current project to a scratch project during capture and
+    switches back; requires the media file to exist locally.
+    """
+    import hashlib
+    import zipfile as _zipfile
+
+    media_path = p.get("media_path") or p.get("path")
+    if not media_path or not os.path.isabs(str(media_path)):
+        return _err("capture_media_template requires media_path (absolute)")
+    media_path = os.path.abspath(str(media_path))
+    if not os.path.exists(media_path):
+        return _err(f"media file does not exist: {media_path}")
+
+    cache_dir = os.environ.get("DRP_MEDIA_TEMPLATE_DIR") or os.path.join(
+        os.path.expanduser("~"), ".config", "davinci-resolve-mcp", "media-templates"
+    )
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(
+        cache_dir, hashlib.sha1(media_path.encode("utf-8")).hexdigest() + ".json"
+    )
+
+    previous = None
+    try:
+        cur = pm.GetCurrentProject()
+        previous = cur.GetName() if cur else None
+    except Exception:
+        previous = None
+
+    scratch = f"_mcp_media_tpl_{int(time.time())}"
+    proj = pm.CreateProject(scratch)
+    if not proj:
+        return _err(f"Could not create scratch project {scratch!r}")
+    drp_tmp = os.path.join(tempfile.gettempdir(), f"{scratch}.drp")
+    try:
+        mp_obj = proj.GetMediaPool()
+        clips = mp_obj.ImportMedia([media_path])
+        if not clips:
+            return _err(f"Resolve could not import {media_path}")
+        tl = mp_obj.CreateEmptyTimeline("MediaTemplate")
+        from src.utils.resolve_writes import set_current_timeline, describe_switch_failure
+        switched, detail = set_current_timeline(proj, tl)
+        if not switched:
+            return _err(describe_switch_failure(detail, "the media-template capture"))
+        if not mp_obj.AppendToTimeline([clips[0]]):
+            return _err("AppendToTimeline failed during capture")
+        if not pm.SaveProject():
+            return _err("SaveProject failed — ExportProject would snapshot an empty timeline")
+        if not pm.ExportProject(scratch, drp_tmp):
+            return _err("ExportProject failed during capture")
+
+        with _zipfile.ZipFile(drp_tmp) as zf:
+            mp_xml = zf.read("MediaPool/Master/MpFolder.xml").decode("utf-8", "replace")
+            seq_xml = ""
+            for n in zf.namelist():
+                if re.search(r"SeqContainer/.+\.xml$", n):
+                    seq_xml = zf.read(n).decode("utf-8", "replace")
+                    break
+        marker = os.path.basename(media_path)
+        idx = mp_xml.find(marker)
+        if idx < 0:
+            return _err("captured MpFolder does not name the media — capture aborted")
+        start = mp_xml.rfind("<Element>", 0, idx)
+        depth, end = 0, -1
+        for m in re.finditer(r"</?Element>", mp_xml[start:]):
+            depth += 1 if m.group(0) == "<Element>" else -1
+            if depth == 0:
+                end = start + m.end()
+                break
+        media_ref_m = re.search(r"<MediaRef>([0-9a-f-]{36})</MediaRef>", seq_xml)
+        if end < 0 or not media_ref_m:
+            return _err("could not isolate the media element / MediaRef from the capture")
+        pool_element = mp_xml[start:end]
+        media_ref = media_ref_m.group(1)
+        if media_ref not in pool_element:
+            return _err("MediaRef is not inside the captured element — schema drift; capture aborted")
+
+        stat = os.stat(media_path)
+        payload = {
+            "mediaFilePath": media_path,
+            "capturedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "resolveVersion": r.GetVersionString(),
+            "mtimeMs": stat.st_mtime * 1000.0,
+            "sizeBytes": stat.st_size,
+            "mediaRef": media_ref,
+            "poolElement": pool_element,
+        }
+        with open(cache_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        return _ok(
+            cache_path=cache_path,
+            media_ref=media_ref,
+            pool_element_bytes=len(pool_element),
+            resolve_version=payload["resolveVersion"],
+            note=(
+                "drt.assemble now transplants this native descriptor for this "
+                "media file; re-capture if the file is rewritten (mtime/size "
+                "recorded for staleness checks)."
+            ),
+        )
+    finally:
+        try:
+            os.unlink(drp_tmp)
+        except OSError:
+            pass
+        from src.utils.project_cleanup import delete_project_safely
+        delete_project_safely(pm, scratch, switch_to=previous)
 
 
 def _get_clip_marks(root, mp, p: Dict[str, Any]):
@@ -19154,6 +19275,7 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
                 code="JOB_NOT_FOUND", category="invalid_input",
             )
         result: Dict[str, Any] = {"job_id": job_id, "status": status}
+        job_status = str(status.get("JobStatus") or "")
         target_dir = job.get("TargetDir")
         filename = job.get("OutputFilename")
         warnings: List[str] = []
@@ -19290,6 +19412,14 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
                     warnings.append(
                         "JobStatus is Complete but the output file does not exist."
                     )
+        if job_status and job_status != "Complete":
+            # Spotted live: a Failed job that wrote a stub file otherwise
+            # produced verified:true — a duration ratio means nothing when
+            # Resolve itself says the job did not complete.
+            warnings.append(
+                f"JobStatus is {job_status!r}, not Complete"
+                + (f": {status.get('Error')}" if status.get("Error") else "")
+            )
         result["warnings"] = warnings
         result["verified"] = bool(
             output_path and result.get("output_exists") and not warnings
@@ -19580,6 +19710,13 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       check_proxy_media_compatibility(clip_id, proxy_path|path, expected_codec?, expected_profile?) -> {compatible, mismatches}
       link_proxy_checked(clip_id, proxy_path|path, dry_run?, check_compatibility?, require_compatible?, expected_codec?, expected_profile?) -> {success}
       link_full_resolution_checked(clip_id, path|full_res_media_path, dry_run?) -> {success}
+      capture_media_template(media_path) -> {cache_path, media_ref}
+        Captures the file's NATIVE Resolve media descriptors into
+        ~/.config/davinci-resolve-mcp/media-templates/ via a disposable
+        project (switches projects during capture and switches back).
+        Offline drt.assemble then transplants them — the only measured way
+        authored media actually RENDERS; synthesized descriptors import and
+        read back fine but render black or 'Full resolution media not found'.
       set_clip_marks(clip_ids|selected, mark_in, mark_out, type?, dry_run?) -> {success, results}
       clear_clip_marks(clip_ids|selected, type?, dry_run?) -> {success, results}
       copy_clip_annotations(source_clip_id, target_clip_ids, include_markers?, include_flags?, include_clip_color?, dry_run?) -> {success, results}
@@ -19961,6 +20098,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         return _set_clip_marks(root, mp, p)
     elif action == "get_clip_marks":
         return _get_clip_marks(root, mp, p)
+    elif action == "capture_media_template":
+        return _capture_media_template(get_resolve(), get_resolve().GetProjectManager(), p)
     elif action == "clear_clip_marks":
         return _clear_clip_marks(root, mp, p)
     elif action == "copy_clip_annotations":
