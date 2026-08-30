@@ -192,6 +192,103 @@ export function eventsToOTIO(events, opts = {}) {
 }
 
 /** Build a CMX3600 EDL string (cuts + M2 speed). Video events only, per EDL convention. */
+/**
+ * eventsToAssembleSpec — normalized interchange events → drt.assemble media spec.
+ *
+ * The coast-to-coast bridge: parseInterchange's events (EDL/AAF/OTIO/XML)
+ * become an importable, RENDERING native .drt via assembleTimeline's
+ * transplant path. Frame math: event frames are NOMINAL-base at the event's
+ * fps (v2.104.6 convention, measured against Resolve); the assemble template
+ * timeline runs 24fps with origin 86400, so rec/src frames convert as
+ * round(frames × 24 / nominalFps). Placement anchors the EARLIEST video
+ * event at the origin. Honesty ledger in the returned report: flattened
+ * retimes (the template clip schema has no per-clip speed), dropped
+ * transitions (treated as cuts at their boundary), and skipped audio events
+ * (cuts carry linked A1 audio from their own source already).
+ *
+ * @param {Array} events - normalized events (parseInterchange shape)
+ * @param {object} opts
+ * @param {Object<string,{mediaFilePath:string, spec:object}>} opts.sourceMap -
+ *   event.source (reel) → media file + spec. Every VIDEO event's source must
+ *   be mapped; unmapped reels refuse with the reel names listed.
+ * @param {string} [opts.timelineName]
+ * @returns {{spec: object, report: object}}
+ */
+export function eventsToAssembleSpec(events, opts = {}) {
+  const { sourceMap, timelineName } = opts;
+  if (!Array.isArray(events) || !events.length) {
+    throw new TypeError('eventsToAssembleSpec: events must be a non-empty array');
+  }
+  if (!sourceMap || typeof sourceMap !== 'object') {
+    throw new TypeError('eventsToAssembleSpec: sourceMap {reel: {mediaFilePath, spec}} is required');
+  }
+  const ORIGIN = 86400;
+  const vids = events.filter((e) => e.track !== 'A' && e.recIn != null && e.recOut != null);
+  const audioSkipped = events.length - vids.length;
+  if (!vids.length) throw new Error('eventsToAssembleSpec: no video events with record ranges');
+
+  const unmapped = [...new Set(vids.map((e) => e.source).filter((srcName) => !sourceMap[srcName]))];
+  if (unmapped.length) {
+    throw new Error(
+      `eventsToAssembleSpec: unmapped source reel(s): ${unmapped.join(', ')} — ` +
+      'every video event needs a sourceMap entry {mediaFilePath, spec}',
+    );
+  }
+
+  const toTl = (frames, fps) => Math.round((frames * 24) / Math.round(fps || 24));
+  const flattenedRetimes = [];
+  const droppedTransitions = [];
+  const perSource = new Map();
+  const placements = [];
+
+  const minRec = Math.min(...vids.map((e) => toTl(e.recIn, e.fps)));
+  for (const e of vids) {
+    const recIn = ORIGIN + (toTl(e.recIn, e.fps) - minRec);
+    const recOut = ORIGIN + (toTl(e.recOut, e.fps) - minRec);
+    const durationFrames = recOut - recIn;
+    if (durationFrames <= 0) continue;
+    if ((e.speed ?? 100) !== 100 || e.reverse) {
+      flattenedRetimes.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse });
+    }
+    if (e.transition) {
+      droppedTransitions.push({ index: e.index, type: e.transition.type, duration: e.transition.duration });
+    }
+    const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps) };
+    placements.push({ start: recIn, end: recOut, index: e.index });
+    if (!perSource.has(e.source)) perSource.set(e.source, []);
+    perSource.get(e.source).push(cut);
+  }
+
+  placements.sort((a, b) => a.start - b.start);
+  for (let i = 1; i < placements.length; i += 1) {
+    if (placements[i].start < placements[i - 1].end) {
+      throw new Error(
+        `eventsToAssembleSpec: events ${placements[i - 1].index} and ${placements[i].index} ` +
+        'overlap on the record track after frame conversion — a single V1 cannot hold both. ' +
+        'Resolve the overlap upstream (transitions count as cuts at their boundary here).',
+      );
+    }
+  }
+
+  const media = [...perSource.entries()].map(([reel, cuts]) => ({
+    mediaFilePath: sourceMap[reel].mediaFilePath,
+    spec: sourceMap[reel].spec,
+    cuts,
+  }));
+
+  return {
+    spec: { timelineName, media },
+    report: {
+      videoEvents: vids.length,
+      sources: media.length,
+      audioEventsSkipped: audioSkipped,
+      flattenedRetimes,
+      droppedTransitions,
+      origin: ORIGIN,
+    },
+  };
+}
+
 export function eventsToEDL(events, opts = {}) {
   const fps = opts.fps || events.find((e) => e.fps)?.fps || 24;
   const vids = events.filter((e) => e.track !== 'A').sort((a, b) => (a.recIn ?? 0) - (b.recIn ?? 0));

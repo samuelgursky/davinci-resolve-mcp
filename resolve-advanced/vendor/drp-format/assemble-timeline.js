@@ -131,12 +131,12 @@ async function assembleTimeline(spec = {}) {
       ({ buffer } = await placeFusionTitle(buffer, {
         trackIndex: el.track, startFrame: el.startFrame, durationFrames: el.durationFrames,
         text: el.text, font: el.font, style: el.style, size: el.size, color: el.color,
-        vJustify: el.vJustify, hJustify: el.hJustify, name: el.name,
+        vJustify: el.vJustify, hJustify: el.hJustify, name: el.name, templateVersion,
       }));
     } else if (el.type === 'generator') {
       ({ buffer } = await placeGenerator(buffer, {
         generatorName: el.generatorName, trackIndex: el.track,
-        startFrame: el.startFrame, durationFrames: el.durationFrames,
+        startFrame: el.startFrame, durationFrames: el.durationFrames, templateVersion,
       }));
     } else {
       throw new Error(`assembleTimeline: elements[${i}] unknown type "${el.type}" (title|generator)`);

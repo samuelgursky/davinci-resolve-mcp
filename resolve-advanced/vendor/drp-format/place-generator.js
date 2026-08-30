@@ -28,6 +28,21 @@ const {
 } = require('./seq-surgery');
 
 const TEMPLATE_PATH = path.join(__dirname, 'templates', 'generator-solid-color.xml');
+const TEMPLATE_PATH_R19 = path.join(__dirname, 'templates', 'generator-solid-color-r19.xml');
+// Generation-bound like every other harvested structure (R21 snippet renders
+// black on 19 — measured); r19 variant harvested live from 19.1.3.7.
+function snippetPathFor(templateVersion) {
+  // The r19 snippets are harvested but NOT yet render-viable: the generator's
+  // separate Sm2TiCompositionTable dependency is not carried, and the title's
+  // comp-blob patching assumes the R21 layout — with them, render jobs FAIL
+  // outright (measured), which is worse than the R21 snippet's silent black.
+  // Selection stays on the R21 snippet for every generation until the element
+  // transplant (comp table + per-generation blob patch) lands; drt.assemble
+  // warns when elements target a pre-21 host.
+  void templateVersion;
+  void TEMPLATE_PATH_R19;
+  return TEMPLATE_PATH;
+}
 
 /**
  * Place a built-in generator on a chosen video track.
@@ -43,7 +58,7 @@ const TEMPLATE_PATH = path.join(__dirname, 'templates', 'generator-solid-color.x
  *   generatorName:string, videoTrackCount:number, createdTracks:number}>}
  */
 async function placeGenerator(drpInput, opts = {}) {
-  const { generatorName = 'Solid Color', trackIndex = 2, startFrame, durationFrames = 120, timelineUuid } = opts;
+  const { generatorName = 'Solid Color', trackIndex = 2, startFrame, durationFrames = 120, timelineUuid, templateVersion } = opts;
   if (!Number.isInteger(startFrame)) throw new TypeError('placeGenerator: startFrame (int) is required');
   if (!Number.isInteger(trackIndex) || trackIndex < 1) throw new TypeError('placeGenerator: trackIndex must be a positive integer');
   if (/[<>]/.test(generatorName)) throw new Error('placeGenerator: generatorName must not contain < or >');
@@ -51,7 +66,7 @@ async function placeGenerator(drpInput, opts = {}) {
   const zip = await loadDrpZip(drpInput);
   const { entry, xml: seqXml, seqId } = await selectTargetSeq(zip, timelineUuid);
 
-  let gen = fs.readFileSync(TEMPLATE_PATH, 'utf8').trim();
+  let gen = fs.readFileSync(snippetPathFor(templateVersion), 'utf8').trim();
   gen = freshDbIds(gen);
   gen = gen.replace(/<PrettyType>[\s\S]*?<\/PrettyType>/, `<PrettyType>${escapeXml(generatorName)}</PrettyType>`);
   gen = gen.replace(/<Name>[\s\S]*?<\/Name>/, `<Name>${escapeXml(generatorName)}</Name>`);

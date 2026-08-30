@@ -2,6 +2,44 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.108.0
+
+**The conform emulator, coast to coast.** An interchange file goes in; an
+importable, RENDERING native .drt comes out — one call.
+
+### Added
+
+- **`drt.assemble_from_interchange`**: EDL/OTIO/XML/AAF + a sourceMap
+  (reel → {mediaFilePath, spec}) → parse → frame-convert → multi-source
+  assemble with native-descriptor transplant → stamped .drt. The
+  events→spec bridge (`eventsToAssembleSpec`) anchors the earliest video
+  event at the timeline origin, converts nominal-base event frames to the
+  24fps template timeline (round(frames × 24 / nominalFps) — butt cuts stay
+  gapless through the conversion, verified at 29.97), groups cuts per
+  source, refuses overlapping record ranges and unmapped reels loudly, and
+  returns an honesty ledger: flattened retimes (the clip schema has no
+  per-clip speed), transitions treated as cuts, audio events skipped (cuts
+  carry their own linked A1).
+
+Live-proofed on Studio 19.1.3.7 with the full route: a three-event EDL
+cutting between two sources (with an M2 retime line) assembled, imported
+6/6 linked with exact source in-points, and rendered each event's OWN
+pixels — YAVG 125.6 / 234 / 125.5 — with a full-range render verifying at
+duration ratio 1.0 and the retime present in the ledger.
+
+### Scoped honestly
+
+Title/generator elements on a pre-21 host are NOT render-verified: the
+harvested snippets are Resolve-21 structures that import and read back
+correctly but render black on 19.1.3 (measured), and the r19 snippet
+harvest is incomplete (the generator's Sm2TiCompositionTable dependency,
+the title's per-generation comp-blob layout) — with the partial harvest,
+render jobs fail outright, which is worse. Snippet selection stays on the
+R21 structures, `drt.assemble` warns when elements target a pre-21 host,
+and the harvested r19 snippets ship in the templates directory for the
+element-transplant expedition. Media cuts render everywhere the transplant
+path covers.
+
 ## What's New in v2.107.0
 
 **Multi-source media authoring.** `drt.assemble`'s media support grows from

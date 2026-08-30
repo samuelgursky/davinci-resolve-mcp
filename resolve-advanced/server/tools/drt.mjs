@@ -29,6 +29,19 @@ const authorSchema = z.object({
   outputPath: z.string().describe('Absolute path where the .drt will be written'),
 });
 const validateSchema = z.object({ drtPath: z.string().describe('Absolute path to a .drt file') });
+const assembleFromInterchangeSchema = z.object({
+  format: z.enum(['edl', 'otio', 'xml', 'aaf']).describe('Interchange format of the input'),
+  path: z.string().optional().describe('Path to the interchange file (aaf REQUIRES a path)'),
+  content: z.string().optional().describe('Inline interchange text (edl/otio/xml)'),
+  fps: z.number().optional().describe('Event frame rate for parsing (default 24; use e.g. 29.97 for NTSC EDLs)'),
+  sourceMap: z
+    .record(z.object({ mediaFilePath: z.string(), spec: z.object({}).passthrough() }))
+    .describe('reel/source name → {mediaFilePath, spec:{width,height,frameCount,fps}}; every video event must map'),
+  timelineName: z.string().optional(),
+  outputPath: z.string().describe('Where the importable .drt is written'),
+  targetAppVersion: z.union([z.string(), z.number()]).optional()
+    .describe("Host Resolve version, e.g. '19.1' for pre-21"),
+});
 const assembleSchema = z.object({
   spec: z
     .object({})
@@ -135,7 +148,7 @@ function requirePathArg(args, key, action) {
 export const drtTool = {
   name: 'drt',
   description:
-    'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: assemble (spec → IMPORTABLE native-schema .drt via template-spliced real structures; pass targetAppVersion e.g. \'19.1\' for pre-21 hosts), parse, list_sequences (enumerate the timelines inside a .drp/.drt → [{id,name,eventCount,index}] to drive a "which sequence?" picker), author, validate, inject_into_drp, extract_from_drp (pull one SeqContainer out as a .drt — feed the .drt to the Python davinci-resolve MCP timeline.import_timeline_checked, or use timeline.import_from_drp to do both), downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
+    'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: assemble_from_interchange (EDL/OTIO/XML/AAF + sourceMap → IMPORTABLE RENDERING native .drt in one call; retimes flatten, transitions become cuts, ledger in `conform`), assemble (spec → IMPORTABLE native-schema .drt via template-spliced real structures; pass targetAppVersion e.g. \'19.1\' for pre-21 hosts), parse, list_sequences (enumerate the timelines inside a .drp/.drt → [{id,name,eventCount,index}] to drive a "which sequence?" picker), author, validate, inject_into_drp, extract_from_drp (pull one SeqContainer out as a .drt — feed the .drt to the Python davinci-resolve MCP timeline.import_timeline_checked, or use timeline.import_from_drp to do both), downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
   async handler({ action, args }) {
     if (action === 'parse') {
       const p = parseSchema.parse(requirePathArg(args, 'drtPath', 'parse'));
@@ -190,6 +203,52 @@ export const drtTool = {
       await fs.writeFile(p.outputPath, outBuf);
       return { outputPath: p.outputPath, bytes: outBuf.length, seqContainersInjected: injected, projectFolder };
     }
+    if (action === 'assemble_from_interchange') {
+      // Coast-to-coast conform: interchange in, importable RENDERING .drt out.
+      const p = assembleFromInterchangeSchema.parse(args);
+      const { parseInterchange } = await import('../editorial.mjs');
+      const { eventsToAssembleSpec } = await import('../author-interchange.mjs');
+      let content = p.content;
+      if (p.format === 'aaf') {
+        if (!p.path) return { error: 'aaf input requires path' };
+        content = p.path;
+      } else if (!content) {
+        if (!p.path) return { error: 'provide content or path' };
+        content = await fs.readFile(p.path, 'utf8');
+      }
+      const events = parseInterchange(p.format, content, { fps: p.fps ?? 24 });
+      if (!events || !events.length) return { error: 'no events parsed from the interchange input' };
+      const { spec, report } = eventsToAssembleSpec(events, {
+        sourceMap: p.sourceMap, timelineName: p.timelineName,
+      });
+      if (p.targetAppVersion !== undefined) {
+        spec.templateVersion = parseFloat(p.targetAppVersion) >= 21 ? 21 : 19;
+      }
+      const { assembleTimeline } = drp();
+      const { buffer, timelineName, mediaDescriptor } = await assembleTimeline(spec);
+      let outBuf = buffer;
+      let stamped = null;
+      if (p.targetAppVersion !== undefined) {
+        const targetPV = resolveTargetProjectVersion({ targetAppVersion: p.targetAppVersion });
+        const appVer = `${p.targetAppVersion}${'.0'.repeat(Math.max(0, 4 - String(p.targetAppVersion).split('.').length))}`;
+        const zip = await JSZip.loadAsync(buffer);
+        const { out } = await applyVersionStamps(zip, targetPV, appVer);
+        outBuf = await out.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+        stamped = { targetProjectVersion: targetPV };
+      }
+      await fs.writeFile(p.outputPath, outBuf);
+      return {
+        outputPath: p.outputPath,
+        bytes: outBuf.length,
+        timelineName,
+        mediaDescriptor,
+        stamped,
+        conform: report,
+        note:
+          'Import with timeline.import_timeline_checked (timeline is named after the FILE). ' +
+          'Retimes are flattened and transitions become cuts — see `conform` for the ledger.',
+      };
+    }
     if (action === 'assemble') {
       const p = assembleSchema.parse(args);
       // Native-schema authoring: template-spliced real Resolve structures
@@ -225,6 +284,14 @@ export const drtTool = {
         stamped,
         templateVersion: spec.templateVersion ?? 21,
         mediaDescriptor: mediaDescriptor ?? 'none',
+        ...((spec.elements || []).length && (spec.templateVersion ?? 21) < 21
+          ? {
+              elementsWarning:
+                'title/generator elements on a pre-21 host are NOT render-verified: the harvested ' +
+                'snippets are Resolve-21 structures, which import and read back correctly but render ' +
+                'black on 19.1.3 (measured). Media cuts render; verify element output before delivery.',
+            }
+          : {}),
         ...(mediaDescriptor === 'repoint-fallback'
           ? {
               warning:

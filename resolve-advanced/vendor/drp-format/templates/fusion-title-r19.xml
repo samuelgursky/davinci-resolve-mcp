@@ -1,0 +1,54 @@
+<Sm2TiVideoClip DbId="8c729549-aded-4c80-b143-c1fce23c5712">
+       <FieldsBlob>0000000200000027800a120a0e2205546578742b4a05546578742b200112100000000000000005ffffffffffffffff</FieldsBlob>
+       <PrettyType>Fusion Title</PrettyType>
+       <Name>Fusion Title</Name>
+       <Start>86400</Start>
+       <Duration>120</Duration>
+       <LinkedItemSync/>
+       <WasDisbanded>false</WasDisbanded>
+       <MarkersBA/>
+       <UiMemento>0</UiMemento>
+       <Flags>0</Flags>
+       <PriorityIndex>0</PriorityIndex>
+       <EffectFiltersBA/>
+       <ImportExportMetadataBA/>
+       <RenderTextEnabled>true</RenderTextEnabled>
+       <RenderTextGanged>true</RenderTextGanged>
+       <RenderTextPrefixed>true</RenderTextPrefixed>
+       <CompositionTable>
+        <Sm2TiCompositionTable DbId="fda722ba-c81f-4fa2-ae79-9f33b26a6bb1">
+         <FieldsBlob>000000010000000100000016004c006100730074004d006f006400540069006d0065000000040000000000002254b6</FieldsBlob>
+         <DbSavedTime>2309245</DbSavedTime>
+         <CompositionBA>000006b1789c75547f6c1445145e31d4585142a28d4222eb69c51ff763f7eedabb2bb4a6f67ab686daa3bd1e840acddcec6cbbedeece6677b677a536863420d5c81f448931261543c4a0a04453153585a860b531284ab46862556c4a358809218d4a9cd9dd6b8fa89bdbcbbc37efbd79effbbe598ee3aee138ee5afa967390c39ccde91ca1d612fa3a5bcb3881eba24ec0691c72c2e8b3926ba0b11a67d07f8b53688642573ac773e2428a4453087d99cd7165a906ac19d8528882757e906fb04d13e924a36888afe5053fdf867409996d40ef668e41e612c5043fe4e71f52710ea8ffb5e315694e527fc4cf37291be8829836f2f369150ce400eceb302440500b96bc63da093211f66c19a8168dcd22d3625dd5f2be24c82a3a5468371656fb110db72505f36222280623414110623e5a03f423a9d526864d2cb76a1352a50cc6aa6726150be45454ea5a8f61df558e7a56b855962d448a0058b6c6d21666708f685015c372067726b608d6928000c793696c49afafcf34763910f832a840eef7b1b8940934b490953691ec1a8c0467d1ac532000244abf0b6adac4850167d50e81d383e867a9f4975550decd662bb15834896460ab647127927496ad06a3d875b7f7e07c4736c3a8d3491641824dab883babc11ab64d944406e96103283a893bfdbb34b935b06dc2227b033af4e07194612b92376591b02276ed3a304a4f6aa12a3015a0b24691f9af46ffb711863956b1e9b5629224b22095aaa2772f0a88f9db8166a8c85a74a66c55a5c043c5d396d78a57340d488f7b740b7019e9f479333400d883ac1adf16d648a8c3a2ea0c5940b391da6d9b56df40a805f72bc80a39714c1d211416a02c08301046220c44e3914820511dad0e88f1980c130921918b89a1585c4e54e5c46820160d4b816804c881845c950b54272242541644291783a1388c851355d14400488806c1b810a0299100146588c211581513c3a194cd462ac2e3482d854d0d1097098a345d84a31e3fd4561893623056fac4998228da0c26f7fa3a26458c0e972ff15cadd4887366876e51c891e41ce87e1f1a7566791f86948af359b7cca04304bb78cd94350888c3e5822e525877db6ed470afe2593e57830652d5861e04fbdc00ddb9d30b0a6beed6b1893662537ac4d672c82ca17e71ab9e560086554abf2b29cd30916595941be20ed06f6e61eae93dc77b3f1496edbc7ccfdd336d5f0687cfbd719aef2ceb2c9f3dfae6d9570e1d3b327ce7e9c3fb2ed47dbcf5dea5abcbeb3e19affb76bc7279ee7aedc05ddb0bd3bf37dd706e9bb8ab2dbf7bdb99b28b2f4f6e3ef8e98a0bef4f4e3d7c5f2c3b29cf275f58f3e375aba64efe31bfeed2b1b53fe8ab6bef18bae9a3fcf21dcf066e3e31b6a7977ff0833978cbedafcf6eac8fd4ece6275e9d9b782b37b29fbff81820cfbc5673eaa5bd475b0f9f3cf1cecacd8faefafa2f587872c36cf4c6bf376daffcaee9d2f13ae3b315fbbee832767db56ee7955b9f5a3356c88f8c2f9d4e9f3f04464641e56d736f0f6f7a4e786ffe9b2bfed1ba1d4bb68e9e7af167f079fcf1113cb3e57cd9ee2315fba77fab1fffa5efa75fcb0eeac9e0e8c804ff67c5da5cf8ddb364eff7cf57cc3cf1003f76e6f23fb8ff3f78</CompositionBA>
+         <ActiveCompositionIdx>0</ActiveCompositionIdx>
+        </Sm2TiCompositionTable>
+       </CompositionTable>
+       <In/>
+       <MixedFrameRateAlignment>0</MixedFrameRateAlignment>
+       <MediaStartTime>0</MediaStartTime>
+       <MediaFilePath/>
+       <MediaReelNumber/>
+       <MediaFrameRate>00000000000038400000000000000000</MediaFrameRate>
+       <MediaTimemapBA>024013d55555555555</MediaTimemapBA>
+       <LastChangedTime>0</LastChangedTime>
+       <LastRenderedTime>0</LastRenderedTime>
+       <IsMarkedForCaching>false</IsMarkedForCaching>
+       <IsForceConformed>true</IsForceConformed>
+       <MatchConflictState>0</MatchConflictState>
+       <UseOppositeSrcForLeftEye>false</UseOppositeSrcForLeftEye>
+       <UseOppositeSrcForRightEye>false</UseOppositeSrcForRightEye>
+       <RenderCacheBA/>
+       <CurrentSelectorIdx>962869300</CurrentSelectorIdx>
+       <IsPreConformed>false</IsPreConformed>
+       <PreConformMediaExtents>00000100000030c20000010000003042</PreConformMediaExtents>
+       <MediaMetadata/>
+       <Thumbnail>
+        <BtThumnail DbId="ac0024f2-2407-47f8-9789-eafdbd585ae2">
+         <FieldsBlob/>
+         <ImgWidth>-1</ImgWidth>
+         <ImgHeight>-1</ImgHeight>
+         <Buffer/>
+        </BtThumnail>
+       </Thumbnail>
+       <ThumbnailDirtyFlag>true</ThumbnailDirtyFlag>
+      </Sm2TiVideoClip>
