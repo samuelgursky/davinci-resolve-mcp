@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.104.6"
+VERSION = "2.104.7"
 
 import base64
 import os
@@ -624,8 +624,10 @@ reverse-subclip repair, lineage, and grade tracing with no Resolve open.
 
 - Live: timeline probe_timeline_structure / detect_gaps_overlaps /
   source_range_report / conform_boundary_report; export_timeline_checked /
-  import_timeline_checked (drt is the only lossless project-native round-trip;
-  EDL/FCPXML drop relationships); detect_missing_media -> build_relink_plan
+  import_timeline_checked (a REAL-Resolve .drt — exported by Resolve or pulled
+  out with drt.extract_from_drp — is the only lossless project-native
+  round-trip; tool-AUTHORED .drt files use a template schema Resolve's import
+  refuses; EDL/FCPXML drop relationships); detect_missing_media -> build_relink_plan
   (read-only, bounded) -> media_pool.safe_relink with approved paths only.
 - XML import via the scripting API goes OFFLINE (missing-media/generators abort);
   use import_timeline_checked with media sanitize (FCP7/FCPXML), then exact-path
@@ -7016,11 +7018,14 @@ _PRPROJ_REFUSAL = (
     "XML, not an interchange). Two offline routes, no Premiere needed: (1) read it with the "
     "advanced MCP — editorial.list_sequences / editorial.parse_interchange (format 'prproj'); "
     "(2) convert it to an importable interchange — editorial.convert_to_interchange "
-    "(target 'otio'|'edl'|'drt') — then import that here with import_timeline_checked. "
+    "(target 'otio'|'edl') — then import that here with import_timeline_checked. "
     "Editorial timing/cuts/transitions carry over; per-clip effects/Lumetri color do not. "
-    "Speed/reverse carry on 'otio' and 'edl' ONLY — the DRT clip schema has no per-clip "
-    "speed field, so 'drt' flattens every retime to 100% forward and reports them in "
-    "`flattened`. Prefer 'otio' or 'edl' for a cut that carries retimes. "
+    "Speed/reverse carry on 'otio' and 'edl' ONLY. Do NOT pick target 'drt' for a live "
+    "import: tool-AUTHORED .drt files use a template schema that "
+    "ImportTimelineFromFile refuses (measured on 19.1.3.7 — Resolve's native "
+    "container format is blob-based and includes a project.xml the authored "
+    "shape lacks); authored DRTs are for offline/DB workflows, and 'drt' also "
+    "flattens every retime to 100% forward (reported in `flattened`). "
     "Alternatively export FCP7 XML / AAF / FCPXML from Premiere and conform that."
 )
 
@@ -7071,6 +7076,33 @@ def _rewrite_fcp7_sequence_name(xml_path: str, new_name: str):
     return out_path, True, None
 
 
+def _drt_looks_tool_authored(path: str) -> Optional[str]:
+    """Name the tell when a .drt/.drp is the authored TEMPLATE shape, else None.
+
+    Real Resolve archives carry a project.xml and blob-based SeqContainers
+    (Sm2TiTrack/FieldsBlob children, clip <Start> elements). The tool-authored
+    template instead writes flat container-level <StartFrame>/<StartTC>
+    elements and omits project.xml — and ImportTimelineFromFile refuses both
+    of those (measured: a real export re-imports; the same archive minus
+    project.xml, or with an authored container, does not).
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+            has_project_xml = any(n == "project.xml" or n.endswith("/project.xml") for n in names)
+            for n in names:
+                if _SEQ_CONTAINER_RE.search(n or "") and n.endswith(".xml"):
+                    head = zf.read(n)[:4096].decode("utf-8", "replace")
+                    if "<StartFrame>" in head or "<StartTC>" in head:
+                        return "flat container-level <StartFrame>/<StartTC> elements"
+            if not has_project_xml:
+                return "no project.xml in the archive"
+    except Exception:
+        return None
+    return None
+
+
 def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     path = p.get("path")
     if not path:
@@ -7080,6 +7112,31 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     ext = os.path.splitext(path)[1].lower()
     if ext == ".prproj":
         return _err(_PRPROJ_REFUSAL, category="invalid_input")
+    if ext in {".drt", ".drp"}:
+        # Refuse BEFORE calling Resolve: a refused .drt import can raise a
+        # modal error dialog that blocks the scripting call indefinitely
+        # (measured live — the call neither returns nor times out until a
+        # human dismisses the dialog), so a post-failure diagnosis may never
+        # run. The authored template shape is detectable from the zip alone.
+        authored_shape = _drt_looks_tool_authored(path)
+        if authored_shape:
+            return _err(
+                f"This {ext} carries the tool-AUTHORED template schema "
+                f"({authored_shape}), which Resolve's ImportTimelineFromFile "
+                "refuses — the native format is blob-based and includes a "
+                "project.xml (measured on Studio 19.1.3.7). Worse, the refusal "
+                "raises a modal dialog that blocks all scripting until a human "
+                "dismisses it, so this import is not attempted at all.",
+                category="invalid_input",
+                remediation=(
+                    "Authored DRTs serve offline/DB workflows, not live import. "
+                    "For a live import, author OTIO instead "
+                    "(editorial.convert_to_interchange target 'otio' imports "
+                    "cleanly), or import a REAL Resolve .drt — one Resolve "
+                    "exported, or one pulled from a .drp with "
+                    "drt.extract_from_drp."
+                ),
+            )
     # ImportTimelineFromFile silently no-ops on the never-saved default project: it returns
     # nothing, creates no timeline, and reports no cause. The generic "Resolve created no
     # timeline" error that came back instead sent people to source-clip resolution and
@@ -7379,13 +7436,26 @@ def _drp_seq_containers(zf) -> List[Dict[str, Any]]:
 
 
 def _extract_seqcontainer_from_drp(drp_path: str, seq_entry: str, out_path: str) -> None:
-    """Write a minimal .drt (zip) holding one SeqContainer as Primary1/SeqContainer1.xml."""
+    """Write a .drt (zip) holding one SeqContainer plus the source's project.xml.
+
+    ImportTimelineFromFile refuses a .drt without project.xml (measured by
+    bisection on Studio 19.1.3.7: a real export minus only project.xml is
+    refused; project.xml + container with no MpFolder imports). The source
+    .drp/.drt carries one — copy it, or the extract cannot import.
+    """
     import zipfile
 
     with zipfile.ZipFile(drp_path, "r") as zf:
         xml = zf.read(seq_entry)
+        project_xml = None
+        for candidate in zf.namelist():
+            if candidate == "project.xml" or candidate.endswith("/project.xml"):
+                project_xml = zf.read(candidate)
+                break
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as out:
         out.writestr("Primary1/SeqContainer1.xml", xml)
+        if project_xml is not None:
+            out.writestr("project.xml", project_xml)
         out.writestr(
             "metadata.json",
             json.dumps(
@@ -7494,7 +7564,10 @@ def _import_from_drp(proj, mp, p: Dict[str, Any]):
             imported_count += 1
         results.append(entry)
 
-    return _ok(
+    # Top-level success must reflect the rows: _ok() over a result list whose
+    # every import failed read as a successful call (the #161 aggregation
+    # class — the wrapper reported what it meant to do, not what happened).
+    out = _ok(
         drpPath=drp_path,
         selected=len(selected),
         imported=imported_count,
@@ -7502,6 +7575,19 @@ def _import_from_drp(proj, mp, p: Dict[str, Any]):
         results=results,
         dry_run=bool(p.get("dry_run")),
     )
+    if not p.get("dry_run") and selected and imported_count == 0:
+        out["success"] = False
+        out["error"] = (
+            f"None of the {len(selected)} selected timeline(s) imported — "
+            "see results[].error for each cause."
+        )
+    elif not p.get("dry_run") and imported_count < len(selected):
+        out["partial"] = True
+        out["warning"] = (
+            f"{imported_count} of {len(selected)} selected timeline(s) "
+            "imported; see results[].error for the failures."
+        )
+    return out
 
 
 def _timeline_by_selector(proj, p: Dict[str, Any], *, prefix: str):
@@ -23761,7 +23847,12 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         metric; a conflicting relink is VETOED — reverted and reported under
         `sanitize.flagged` for human review, never silently applied. verify_threshold
         (default 0.90) sets the structural-match bar.
-      import_from_drp(drpPath, timelineNames?|timelineIndexes?, import_source_clips?, dry_run?) -> {success, selected, imported, available, results}
+      import_from_drp(drpPath, timelineNames?|timelineIndexes?, import_source_clips?, dry_run?) -> {success, selected, imported, available, results, partial?}
+        CAVEAT (measured 19.1.3.7): Resolve refuses extracted containers even
+        repacked with the source's project.xml — the sufficient import set
+        beyond Resolve's own .drt exports is unmapped, so expect failures on
+        this build and read results[].error; success reflects the rows. For a
+        reliable programmatic import use OTIO or FCP7 XML.
         Extract chosen timelines from a .drp (offline zip surgery → temp .drt each) and
         import each into the running Resolve. Omit the selector to import ALL. Enumerate
         first with the advanced MCP drt.list_sequences / editorial.list_sequences to get

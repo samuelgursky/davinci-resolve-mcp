@@ -2,7 +2,12 @@
  * drt tool — DaVinci Resolve Timeline (.drt) format. All actions local/offline.
  *
  * parse — .drt/.drp path → { timelines, metadata, seqContainers }
- * author — spec → .drt bytes written to outputPath
+ * author — spec → .drt bytes written to outputPath. TEMPLATE SCHEMA: the
+ *   output serves offline/DB workflows (inject_into_drp, parsing, diffing);
+ *   Resolve's ImportTimelineFromFile REFUSES it (measured 19.1.3.7 — the
+ *   native format is blob-based with a project.xml this shape lacks). For a
+ *   file Resolve imports, author OTIO, or extract a REAL container with
+ *   extract_from_drp.
  * validate — .drt path → { valid, errors }
  * inject_into_drp — graft a .drt's SeqContainers into an existing .drp
  * extract_from_drp — pull a SeqContainer out of a .drp as a .drt
@@ -154,6 +159,14 @@ export const drtTool = {
       const xml = await drpZip.file(seqEntries[idx]).async('string');
       const out = new JSZip();
       out.file('Primary1/SeqContainer1.xml', xml);
+      // ImportTimelineFromFile refuses a .drt without project.xml (measured
+      // by bisection on Studio 19.1.3.7), so carry the source's over.
+      const projectEntry = Object.keys(drpZip.files).find(
+        (n) => n === 'project.xml' || n.endsWith('/project.xml'),
+      );
+      if (projectEntry) {
+        out.file('project.xml', await drpZip.file(projectEntry).async('string'));
+      }
       out.file(
         'metadata.json',
         JSON.stringify(

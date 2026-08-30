@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 33 missing capabilities, 40 bugs / unreliable behaviors.
+**Totals:** 33 missing capabilities, 41 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -525,6 +525,14 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Rewrite the <sequence><name> inside the file to the intended name before importing — timeline.import_timeline_checked does this automatically for FCP7 XML and errors when a non-rewritable format still returns an existing timeline. Never treat a truthy return as proof of creation; check the returned timeline's id against the pre-import set.
 - **Reference:** [issue #171](https://github.com/samuelgursky/davinci-resolve-mcp/issues/171)
 - **Tags:** timeline, import, silent-failure, unreliable-return
+
+### MediaPool.ImportTimelineFromFile (.drt requirements and filename naming)
+
+- **Object:** `MediaPool`
+- **Signature:** `(drtPath, {importSourceClips, ...}) -> Timeline`
+- **Behavior:** Measured by bisection on Studio 19.1.3.7 against a real .drt export: (1) the archive MUST contain project.xml — the same archive minus only that entry is refused, while removing MediaPool/MpFolder.xml or renaming the SeqContainer path changes nothing; (2) the container XML must be Resolve's native blob-based schema — a syntactic SeqContainer with flat template elements is refused even beside a genuine project.xml; (3) the imported timeline is named after the FILE (real_2997.drt -> 'real_2997'), not the container's internal name — a third naming authority beside FCP7 (internal name wins) and OTIO (timelineName option wins); and (4) a refused import can raise a modal error dialog that BLOCKS the scripting call until a human dismisses it — the call neither returns nor times out.
+- **Workaround / current handling:** Import only .drt files Resolve itself exported — the sufficient set is unmapped beyond that: even a .drp-sourced native container repacked WITH its project.xml was refused (measured 19.1.3.7), so extraction-based .drt import cannot be relied on either. Name the timeline by naming the FILE. Never batch speculative .drt imports unattended — one refusal can hold the whole session hostage behind its dialog. timeline.import_timeline_checked detects the authored template shape up front and refuses with this diagnosis instead of importing; for a reliable programmatic import use OTIO or FCP7 XML.
+- **Tags:** timeline, import, silent-failure, headless
 
 ### Timeline.DeleteClips (requires the Edit page; flaky first attempt)
 

@@ -1,9 +1,14 @@
 /**
  * DRT builder — package a timeline-only Resolve archive.
  *
- * DRT and DRP share the SeqContainer/MpFolder schema; the only on-disk
- * difference is that DRT has no project.xml. This module reuses
- * drp-format's packageFullDRP with includeProjectXml: false.
+ * DRT and DRP share the SeqContainer/MpFolder schema. NOTE (measured on
+ * Studio 19.1.3.7): real Resolve .drt exports DO include a project.xml, and
+ * ImportTimelineFromFile refuses archives without one — and refuses this
+ * module's template-schema containers regardless (Resolve's native container
+ * is blob-based Sm2TiTrack/Sm2TiVideoClip, not the flat elements written
+ * here). buildDRT output therefore serves offline/DB workflows (injection,
+ * parsing, diffing), not direct live import. This module reuses drp-format's
+ * packageFullDRP with includeProjectXml: false.
  *
  * Spec shape — same as buildDRP minus the project shell:
  *   {

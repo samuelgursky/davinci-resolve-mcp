@@ -196,7 +196,11 @@ class DrpSeqContainerTests(unittest.TestCase):
                 names = z.namelist()
             self.assertIn("Primary1/SeqContainer1.xml", names)
             self.assertIn("metadata.json", names)
-            self.assertNotIn("project.xml", names)  # a .drt has no project shell
+            # Measured (Studio 19.1.3.7): ImportTimelineFromFile refuses a .drt
+            # without project.xml — real Resolve exports carry one, so the
+            # extract carries the source's over when present. (Carrying it is
+            # necessary, not yet proven sufficient for .drp-sourced containers.)
+            self.assertIn("project.xml", names)
         finally:
             if os.path.exists(out):
                 os.unlink(out)

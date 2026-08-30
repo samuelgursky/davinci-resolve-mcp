@@ -2,6 +2,48 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.7
+
+The DRT import thread, chased to ground by live bisection on Studio 19.1.3.7
+— and the tool had been giving instructions that could not work.
+
+**What a .drt import actually requires, measured.** A real Resolve export
+re-imports; the same archive minus ONLY project.xml is refused; removing
+MpFolder.xml or renaming the SeqContainer path changes nothing. Tool-authored
+DRTs fail on two counts: they omit project.xml AND use a flat template
+container schema (<StartFrame>/<StartTC> elements) that Resolve never wrote —
+its native containers are blob-based Sm2TiTrack/Sm2TiVideoClip structures.
+Worse: a refused .drt import can raise a modal error dialog that BLOCKS the
+scripting call indefinitely (observed live — the call neither returns nor
+times out until a human dismisses the dialog), and .drt import names the
+timeline after the FILE, not the container's internal name — a third naming
+authority beside FCP7 (internal name) and OTIO (timelineName option). All of
+it is now a submit-tagged api_truth entry.
+
+### Fixed
+
+- `import_timeline_checked` refuses tool-authored .drt/.drp BEFORE calling
+  Resolve — the shape is detectable from the zip alone, and refusing early is
+  what prevents the scripting-blocking dialog. The error names the actual
+  cause and points at routes that work (OTIO authoring; Resolve's own .drt
+  exports) instead of the old media/sanitize misdiagnosis.
+- `import_from_drp` no longer reports success:true when every selected
+  timeline failed to import (the discarded-outcome aggregation class); a
+  partial import is labeled partial with a warning.
+- Both extractors (`import_from_drp`'s and `drt.extract_from_drp`) now carry
+  the source archive's project.xml into the extracted .drt — measured as
+  necessary. NOT yet sufficient: a .drp-sourced native container repacked
+  with its project.xml was still refused on 19.1.3.7, so extraction-based
+  import remains unreliable on this build and is documented as such.
+
+### Documented
+
+- The .prproj refusal and offline-authoring guidance no longer tell users to
+  author a 'drt' and import it — that instruction could never work; they
+  point at 'otio'/'edl'. The drt tool and drt-builder docstrings state the
+  authored template's actual role (offline/DB workflows, injection, parsing)
+  and that real-Resolve exports are the only known-importable .drt files.
+
 ## What's New in v2.104.6
 
 **A correction to the v2.104.2 StartFrame fix — measured against Resolve
