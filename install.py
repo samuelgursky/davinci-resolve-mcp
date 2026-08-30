@@ -1329,37 +1329,57 @@ def access_violation_message(returncode, version=None):
 
 
 def verify_resolve_connection(python_path, api_path, lib_path):
-    """Try to import DaVinciResolveScript and connect."""
+    """Probe Resolve without exposing short-lived children to Fusion teardown.
+
+    The persistent bridge is tried before Blackmagic's native scripting module.
+    If direct scripting is genuinely required, the disposable child flushes its
+    result and hard-exits after any native import attempt so fusionscript's
+    background RemoteApp thread cannot race CPython finalization.
+    """
     if not api_path:
         return False, "Resolve API path not found"
 
     env = {**os.environ, **build_server_env(python_path, api_path, lib_path)}
     modules_path = env["PYTHONPATH"]
     repo_root = str(Path(__file__).resolve().parent)
-    # Route through connect_resolve so Network mode (RESOLVE_SCRIPT_HOST, propagated
-    # into env by build_server_env) uses the explicit IP-targeted overload. Fall
-    # back to Local-mode discovery if the helper cannot be imported.
     test_script = textwrap.dedent(f"""\
+        import os
         import sys
         sys.path.insert(0, {modules_path!r})
         sys.path.insert(0, {repo_root!r})
+        native_import_attempted = False
         try:
-            import DaVinciResolveScript as dvr
             try:
                 from src.utils.resolve_connection import connect_resolve
             except Exception:
-                connect_resolve = lambda mod: mod.scriptapp('Resolve')
-            resolve = connect_resolve(dvr)
+                connect_resolve = None
+
+            resolve = None
+            if connect_resolve is not None:
+                resolve = connect_resolve(None)
+
+            if resolve is None:
+                native_import_attempted = True
+                import DaVinciResolveScript as dvr
+                if connect_resolve is not None:
+                    resolve = connect_resolve(dvr)
+                else:
+                    resolve = dvr.scriptapp('Resolve')
+
             if resolve:
                 name = resolve.GetProductName()
                 ver = resolve.GetVersionString()
-                print(f"CONNECTED: {{name}} {{ver}}")
+                print(f"CONNECTED: {{name}} {{ver}}", flush=True)
             else:
-                print("IMPORTED_OK: Module loads but Resolve not running or not responding")
+                print("IMPORTED_OK: Module loads but Resolve not running or not responding", flush=True)
         except ImportError as e:
-            print(f"IMPORT_ERROR: {{e}}")
+            print(f"IMPORT_ERROR: {{e}}", flush=True)
         except Exception as e:
-            print(f"ERROR: {{e}}")
+            print(f"ERROR: {{e}}", flush=True)
+        if native_import_attempted:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
     """)
 
     process_timeout = 10.0
@@ -1399,6 +1419,7 @@ def verify_resolve_connection(python_path, api_path, lib_path):
         return False, "Connection timed out"
     except Exception as e:
         return False, str(e)
+
 
 # ─── Interactive UI ───────────────────────────────────────────────────────────
 
