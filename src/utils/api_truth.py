@@ -1866,7 +1866,13 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "(issue #171, Studio 21.0.4.5; wrapper behavior verified on "
                    "19.1.3.7). Distinct from the documented repeated-"
                    "timelineName None return: here the option is fresh and the "
-                   "file's name is stale.",
+                   "file's name is stale. THE NAMING AUTHORITY DIFFERS PER "
+                   "FORMAT (all measured on 19.1.3.7): FCP7 XML ignores "
+                   "timelineName entirely (internal <name> wins); AAF honours "
+                   "timelineName when given and falls back to its internal "
+                   "name; OTIO honours timelineName; and .drt names the "
+                   "timeline after the FILE (see the .drt entry below). Only "
+                   "FCP7 exhibits the returned-existing trap.",
         "recommended": "Rewrite the <sequence><name> inside the file to the "
                        "intended name before importing — "
                        "timeline.import_timeline_checked does this "

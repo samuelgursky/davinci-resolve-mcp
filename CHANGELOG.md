@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.10
+
+Stones turned on the live-validation backlog, on Studio 19.1.3.7.
+
+**AAF live import, validated at last** (marked "NOT live-validated" since
+2026-07-06): an EXPORT_AAF/EXPORT_AAF_NEW round trip imports cleanly with
+importSourceClips=false, lands fully offline (the documented turnover shape),
+and preserves the start timecode. The naming matrix across import formats is
+now complete and in api_truth — FCP7 XML ignores timelineName (internal name
+wins, the #171 trap); AAF honours timelineName when given, else its internal
+name; OTIO honours timelineName; .drt names the timeline after the file. Only
+FCP7 exhibits the returned-existing trap. The AAF post-import relink leg was
+exercised too: under importSourceClips=false it correctly reports "no Media
+Pool Items to relink" — the API relinks pool items, and none exist on that
+path — so its precondition is now stated instead of assumed.
+
+**safe_quick_export verifies its output.** RenderWithQuickExport's status
+dict was the last render surface trusted without a file check: a success
+status that wrote nothing read as an export. The files that actually landed
+in TargetDir are now listed with size and ffprobe duration, and a success
+status with no new file flips to an error.
+
+**Housekeeping:** the delete-locked scratch project from the v2.104.7 session
+is gone — the pre-restart DeleteProject had returned False while actually
+succeeding, the documented DeleteProject lie caught in the wild. A clean
+Resolve quit/relaunch verified the wedge entry's other half: Quit() works
+when no orphaned render holds the pipeline.
+
 ## What's New in v2.104.9
 
 **The NTSC coverage gap, closed.** The conform fixtures were integer-rate

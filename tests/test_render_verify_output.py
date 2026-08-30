@@ -260,3 +260,36 @@ class GetTitleTextFusionFallbackTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SafeQuickExportOutputCheckTest(unittest.TestCase):
+    """RenderWithQuickExport's status dict is not trusted alone: a successful
+    export must have produced a file in TargetDir."""
+
+    def _run(self, tmp, status, write_file):
+        proj = mock.Mock()
+
+        def _render(preset, params):
+            if write_file:
+                with open(os.path.join(tmp, "out.mp4"), "wb") as fh:
+                    fh.write(b"x" * 2048)
+            return status
+
+        proj.RenderWithQuickExport.side_effect = _render
+        return server._safe_quick_export(proj, {
+            "preset": "H.264 Master", "target_dir": tmp,
+            "allow_render": True, "require_temp_target": False,
+        })
+
+    def test_success_with_no_file_is_flipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(tmp, {"JobStatus": "Complete"}, write_file=False)
+        self.assertFalse(result["success"], result)
+        self.assertIn("wrote no file", result["error"])
+
+    def test_success_with_file_lists_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run(tmp, {"JobStatus": "Complete"}, write_file=True)
+        self.assertTrue(result["success"], result)
+        self.assertEqual(len(result["outputs"]), 1)
+        self.assertEqual(result["outputs"][0]["size_bytes"], 2048)

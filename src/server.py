@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.104.9"
+VERSION = "2.104.10"
 
 import base64
 import os
@@ -18975,8 +18975,40 @@ def _safe_quick_export(proj, p: Dict[str, Any]):
         return {"success": False, "validation": validation}
     if p.get("dry_run") or not p.get("allow_render", False):
         return _ok(would_render=False, preset=preset, params=params, validation=validation)
+    before = set()
+    if target_dir and os.path.isdir(target_dir):
+        before = set(os.listdir(target_dir))
     status = _ser(proj.RenderWithQuickExport(preset, params))
-    return {"success": not (isinstance(status, dict) and status.get("error")), "status": status, "params": params}
+    out: Dict[str, Any] = {
+        "success": not (isinstance(status, dict) and status.get("error")),
+        "status": status,
+        "params": params,
+    }
+    # RenderWithQuickExport's status dict is trusted nowhere else in this
+    # repo's render surface anymore (issue #164 taught that lesson) — check
+    # what actually landed on disk. Best-effort: TargetDir is known, so a
+    # successful export must have produced at least one new file there.
+    if out["success"] and target_dir and os.path.isdir(target_dir):
+        new_files = sorted(set(os.listdir(target_dir)) - before)
+        outputs = []
+        for name in new_files:
+            path = os.path.join(target_dir, name)
+            if not os.path.isfile(path):
+                continue
+            rec: Dict[str, Any] = {"path": path, "size_bytes": os.path.getsize(path)}
+            probe = _ffprobe_media_summary(path)
+            if probe:
+                rec["duration_seconds"] = probe.get("duration_seconds")
+            outputs.append(rec)
+        out["outputs"] = outputs
+        if not outputs:
+            out["success"] = False
+            out["error"] = (
+                "RenderWithQuickExport reported success but wrote no file to "
+                f"{target_dir} — treat the status dict as unreliable and check "
+                "the Deliver page's render queue."
+            )
+    return out
 
 
 def _export_render_boundary_report(proj, p: Dict[str, Any]):
@@ -19049,7 +19081,10 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         way to read back — see the SetRenderSettings api_truth entry.
       render_job_lifecycle_probe(target_dir, settings?, format?, codec?, custom_name?) -> {success, job_id, status_before_delete}
       quick_export_capabilities() -> {presets, safe_params, guards}
-      safe_quick_export(preset, target_dir?|params?, custom_name?, dry_run?, allow_render?) -> {success, status}
+      safe_quick_export(preset, target_dir?|params?, custom_name?, dry_run?, allow_render?) -> {success, status, outputs}
+        After a live export, the files that actually landed in TargetDir are
+        listed with size and ffprobe duration; a success status that wrote no
+        file flips success to false (the issue #164 trust lesson).
       export_render_boundary_report(include_matrix?, max_pairs?, include_quick_export?) -> {capabilities, settings, matrix?}
       list_delivery_targets(tier?, check_availability?) -> {targets, tiers, schema_version}
       resolve_delivery_target(target, overrides?) -> {format_id, codec_id, settings, qc_spec}
