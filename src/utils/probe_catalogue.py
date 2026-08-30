@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Any, List
 
 from src.utils.mode_matrix import Probe
+from .resolve_writes import set_current_timeline, describe_switch_failure
 
 CATALOGUE: List[Probe] = []
 
@@ -731,11 +732,22 @@ def _probe_editorial_nested(ctx):
               if (c.GetClipProperty("Type") or "") == "Timeline"]
     if not nested:
         return None
-    ctx.project.SetCurrentTimeline(outer)
+    # AppendToTimeline writes to the CURRENT timeline, so a discarded False
+    # here would nest the clip into ctx.timeline and then count PROBE_OUTER's
+    # empty track -- a measurement of the wrong timeline, reported as this one's.
+    switched, detail = set_current_timeline(ctx.project, outer)
+    if not switched:
+        return describe_switch_failure(detail, "nesting the probe timeline")
     appended = pool.AppendToTimeline([{"mediaPoolItem": nested[0]}])
     count = len(outer.GetItemListInTrack("video", 1) or [])
-    ctx.project.SetCurrentTimeline(ctx.timeline)
-    return f"{bool(appended)}/{count}"
+    restored, restore_detail = set_current_timeline(ctx.project, ctx.timeline)
+    result = f"{bool(appended)}/{count}"
+    if not restored:
+        # The measurement stands; the teardown did not. Say so in the result
+        # rather than leaving the next probe on PROBE_OUTER without warning.
+        result += " (probe timeline left current: " + \
+            describe_switch_failure(restore_detail, "restoring the probe timeline") + ")"
+    return result
 
 
 @probe("editorial.set_clips_linked", "editorial", timeout=90, needs=("timeline",),

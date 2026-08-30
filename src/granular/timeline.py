@@ -3,6 +3,7 @@
 from src.granular.common import *  # noqa: F401,F403
 
 from src.utils.page_lock import color_page_for_thumbnails
+from src.utils.resolve_writes import set_current_timeline, describe_switch_failure
 
 resolve = ResolveProxy()
 
@@ -1038,11 +1039,15 @@ def create_timeline_from_clips(
         tl = mp.CreateEmptyTimeline(name)
         if not tl:
             return {"success": False, "error": "Failed to create timeline"}
-        try:
-            if project:
-                project.SetCurrentTimeline(tl)
-        except Exception:
-            logger.debug("Could not set newly created timeline current", exc_info=True)
+        if project:
+            # The appends below go to the CURRENT timeline, so this is a
+            # precondition for the whole build, not a convenience.
+            switched, switch_detail = set_current_timeline(project, tl)
+            if not switched:
+                return {"success": False,
+                        "error": describe_switch_failure(switch_detail,
+                                                         "appending the clip_infos"),
+                        "switch": switch_detail}
         timeline_start = _timeline_start_frame(tl)
         built = []
         for i, ci in enumerate(clip_infos):

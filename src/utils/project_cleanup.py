@@ -13,8 +13,11 @@ disposable-project flow gets it for free:
    instead of silently leaking.
 """
 
+import logging
 import time
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger("davinci-resolve-mcp.project_cleanup")
 
 
 #: The name Resolve gives the project it opens when it has nothing else to open.
@@ -103,10 +106,21 @@ def delete_project_safely(
             # cannot be saved, so the next close or switch raises a modal no
             # script can dismiss. That is a wedged application, not a tidy-up.
             if switch_to and switch_to != name:
+                # A discarded False leaves the session on the unsaveable
+                # "Untitled Project" this comment exists to avoid, and the next
+                # close or switch raises a modal no script can dismiss. Logged
+                # loudly: the caller is mid-delete and cannot be aborted here,
+                # but a silent wedge is what made this hard to diagnose.
                 try:
-                    pm.LoadProject(switch_to)
-                except Exception:
-                    pass
+                    if not pm.LoadProject(switch_to):
+                        logger.error(
+                            "LoadProject(%r) returned False after closing %r; the "
+                            "session is left on an unsaveable Untitled Project and "
+                            "the next close will raise a modal", switch_to, name,
+                        )
+                except Exception as exc:
+                    logger.error("LoadProject(%r) raised after closing %r: %s",
+                                 switch_to, name, exc)
 
         last_error = None
         for attempt in range(1 + max(0, int(retries))):

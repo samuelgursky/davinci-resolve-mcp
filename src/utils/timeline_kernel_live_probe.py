@@ -947,7 +947,13 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
         audio_item = server._find_timeline_item_by_id(timeline, audio_id)
         if not audio_item:
             raise AssertionError(f"Could not recover audio item: {audio_id}")
-        timeline.SetClipsLinked([source_item, audio_item], True)
+        # Everything the probe measures below assumes the pair is linked. A
+        # discarded False would measure UNLINKED behaviour and record it as
+        # linked behaviour.
+        if not timeline.SetClipsLinked([source_item, audio_item], True):
+            raise AssertionError(
+                "SetClipsLinked refused the source/audio pair; every linked-item "
+                "measurement below would be a reading of unlinked items")
 
         source_duration = _frame_int(source_item.GetDuration())
         metadata["source"] = {

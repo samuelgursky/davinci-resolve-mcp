@@ -111,12 +111,20 @@ class MediaPoolStub:
 
 
 class ProjectStub:
-    def __init__(self):
+    def __init__(self, switch_succeeds=True):
         self.current_timeline = None
+        self.switch_succeeds = switch_succeeds
 
     def SetCurrentTimeline(self, timeline):
+        # Resolve reports the switch with a bare bool and does not move the
+        # current timeline when it fails, which is what the False case models.
+        if not self.switch_succeeds:
+            return False
         self.current_timeline = timeline
         return True
+
+    def GetCurrentTimeline(self):
+        return self.current_timeline
 
 
 class MulticamSetupTests(unittest.TestCase):

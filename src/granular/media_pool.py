@@ -2,6 +2,7 @@
 
 from src.granular.common import *  # noqa: F401,F403
 from src.utils.multicam import build_multicam_setup_plan
+from src.utils.resolve_writes import set_current_timeline, describe_switch_failure
 
 resolve = ResolveProxy()
 
@@ -272,15 +273,22 @@ def setup_multicam_timeline(
     timeline = mp.CreateEmptyTimeline(plan["name"])
     if not timeline:
         return {"error": f"Failed to create multicam setup timeline: {plan['name']}"}
-    try:
-        project.SetCurrentTimeline(timeline)
-    except Exception:
-        pass
+    switched, switch_detail = set_current_timeline(project, timeline)
+    if not switched:
+        return {"error": describe_switch_failure(switch_detail, "stacking the angles"),
+                "switch": switch_detail}
+    start_timecode_set = None
     if plan.get("start_timecode"):
+        # A refused start timecode leaves the timeline at 01:00:00:00 while every
+        # recordFrame below was computed against the requested one, so the whole
+        # stack lands at the wrong absolute time. Reported, not swallowed.
         try:
-            timeline.SetStartTimecode(plan["start_timecode"])
-        except Exception:
-            pass
+            start_timecode_set = bool(timeline.SetStartTimecode(plan["start_timecode"]))
+        except Exception as exc:
+            return {"error": f"SetStartTimecode('{plan['start_timecode']}') raised: {exc}"}
+        if not start_timecode_set:
+            return {"error": f"SetStartTimecode('{plan['start_timecode']}') was refused; "
+                             f"the angle stack would land at the wrong absolute time"}
 
     video_tracks = _ensure_timeline_tracks_for_multicam(timeline, "video", plan.get("max_video_track", 0))
     if not video_tracks.get("success"):
