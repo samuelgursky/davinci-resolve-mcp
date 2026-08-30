@@ -2,6 +2,7 @@
 
 from src.granular.common import *  # noqa: F401,F403
 from src.utils.multicam import build_multicam_setup_plan
+from src.utils.resolve_writes import set_current_timeline, describe_switch_failure
 
 resolve = ResolveProxy()
 
@@ -272,10 +273,10 @@ def setup_multicam_timeline(
     timeline = mp.CreateEmptyTimeline(plan["name"])
     if not timeline:
         return {"error": f"Failed to create multicam setup timeline: {plan['name']}"}
-    try:
-        project.SetCurrentTimeline(timeline)
-    except Exception:
-        pass
+    switched, switch_detail = set_current_timeline(project, timeline)
+    if not switched:
+        return {"error": describe_switch_failure(switch_detail, "stacking the angles"),
+                "switch": switch_detail}
     if plan.get("start_timecode"):
         try:
             timeline.SetStartTimecode(plan["start_timecode"])

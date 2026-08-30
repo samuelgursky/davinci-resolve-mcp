@@ -44,6 +44,7 @@ for p in [current_dir, project_dir]:
 
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
+from src.utils import resolve_writes as _resolve_writes
 from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
 from src.utils import clip_colors as _clip_colors
@@ -6421,7 +6422,9 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
     new_tl = mp.CreateEmptyTimeline(name)
     if not new_tl:
         return _err(f"Failed to create timeline: {name}")
-    proj.SetCurrentTimeline(new_tl)
+    switch_err = _set_current_timeline_checked(proj, new_tl, what="building the variant")
+    if switch_err:
+        return switch_err
     if p.get("start_timecode"):
         try:
             new_tl.SetStartTimecode(p["start_timecode"])
@@ -8781,10 +8784,9 @@ def _setup_multicam_timeline(proj, mp, p: Dict[str, Any]):
     new_tl = mp.CreateEmptyTimeline(plan["name"])
     if not new_tl:
         return _err(f"Failed to create multicam setup timeline: {plan['name']}")
-    try:
-        proj.SetCurrentTimeline(new_tl)
-    except Exception:
-        pass
+    switch_err = _set_current_timeline_checked(proj, new_tl, what="stacking the angles")
+    if switch_err:
+        return switch_err
     if plan.get("start_timecode"):
         try:
             new_tl.SetStartTimecode(plan["start_timecode"])
@@ -14188,10 +14190,48 @@ def _playhead_frame_capture(p: Dict[str, Any]):
         return _playhead_frame_render(proj, tl, p)
     finally:
         if original_tl is not None:
-            try:
-                proj.SetCurrentTimeline(original_tl)
-            except Exception:
-                pass
+            # Best-effort by necessity: this runs in a finally, so raising or
+            # returning here would replace the caller's real result (or its real
+            # exception) with a restore failure. It is still not silent -- a
+            # failed restore leaves the editor on a different timeline, which is
+            # visible immediately, and it is logged.
+            restore_err = _set_current_timeline_checked(
+                proj, original_tl, what="restoring the timeline after the capture")
+            if restore_err:
+                logger.warning(
+                    "frame capture could not restore the current timeline: %s",
+                    restore_err["error"]["message"],
+                )
+
+
+def _set_current_timeline_checked(proj, tl, *, what: str):
+    """Switch the project's current timeline and PROVE it switched.
+
+    Returns None on success, or an error envelope naming what did not happen.
+
+    This is not UI polish. `AppendToTimeline`, `GetCurrentTimeline` and every
+    other "current timeline" call writes to whatever the PROJECT believes is
+    current, not to the handle in scope. A discarded False here sends the
+    assembly to the timeline the editor was looking at while the tool reports
+    the new timeline's name and id, which is the worst possible shape of
+    failure: the work happened, on the wrong timeline, under a success.
+
+    The bare bool is not trusted on its own. A Resolve attached to no database
+    answers version queries normally while every project mutation returns False
+    or None, and a True that did not take has been observed there, so the
+    switch is confirmed by reading the current timeline back.
+    """
+    ok, detail = _resolve_writes.set_current_timeline(proj, tl)
+    if ok:
+        return None
+    return _err(
+        _resolve_writes.describe_switch_failure(detail, what),
+        code="TIMELINE_SWITCH_FAILED", category="api_error", retryable=False,
+        reason="A discarded False here writes the work to the wrong timeline.",
+        remediation="Quit and restart Resolve if it came up with no database attached "
+                    "(resolve_control runtime_mode reports that), then retry.",
+        state=detail,
+    )
 
 
 def _unknown(action, valid):
@@ -16271,7 +16311,14 @@ def _resolve_restore_state(p: Dict[str, Any]) -> Dict[str, Any]:
             for i in range(1, count + 1):
                 tl = proj.GetTimelineByIndex(i)
                 if tl and tl.GetUniqueId() == state["current_timeline_id"]:
-                    proj.SetCurrentTimeline(tl)
+                    # The one function whose whole job is putting things back
+                    # must not claim it did. restored[] is written only on a
+                    # verified switch; a failure is reported, not swallowed.
+                    switch_err = _set_current_timeline_checked(
+                        proj, tl, what="restoring the saved state")
+                    if switch_err:
+                        restored["current_timeline_error"] = switch_err["error"]["message"]
+                        break
                     restored["current_timeline_id"] = state["current_timeline_id"]
                     if state.get("current_timecode"):
                         try:
@@ -19165,10 +19212,10 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             tl = mp.CreateEmptyTimeline(create_name)
             if not tl:
                 return _err("Failed to create timeline from clip_infos")
-            try:
-                proj.SetCurrentTimeline(tl)
-            except Exception:
-                pass
+            switch_err = _set_current_timeline_checked(
+                proj, tl, what="appending the clip_infos")
+            if switch_err:
+                return switch_err
             timeline_start = _timeline_start_frame(tl)
             built = []
             for i, ci in enumerate(raw):
@@ -22651,10 +22698,10 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         tl = mp.CreateEmptyTimeline(name)
         if not tl:
             return _err("Failed to create selects timeline")
-        try:
-            proj.SetCurrentTimeline(tl)
-        except Exception:
-            pass
+        switch_err = _set_current_timeline_checked(
+            proj, tl, what="assembling the selects")
+        if switch_err:
+            return switch_err
         timeline_start = _timeline_start_frame(tl)
         built = []
         build_errors = []
@@ -23038,10 +23085,14 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         tl, _tl_index = _find_timeline_by_name(proj, plan.get("timeline_name"))
         if not tl:
             return _err(f"Timeline '{plan.get('timeline_name')}' not found")
-        try:
-            proj.SetCurrentTimeline(tl)
-        except Exception:
-            pass
+        # The lift is handle-based and hits the right timeline; the append that
+        # puts the replacement back is current-timeline-based. A failed switch
+        # here punches a hole in the target and drops the alternate on whatever
+        # the editor had open, under a reported success.
+        switch_err = _set_current_timeline_checked(
+            proj, tl, what="swapping the item")
+        if switch_err:
+            return switch_err
         before = _edit_engine_capture(tl)
         before["track_counts"] = _edit_engine_track_counts(tl)
         slot_start = int(item_block.get("timeline_start_frame"))

@@ -35,6 +35,7 @@ from src.utils.resolve_probe import has_method
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.utils import actor_identity, timeline_brain_db
+from .resolve_writes import set_current_timeline, describe_switch_failure
 
 logger = logging.getLogger("resolve-mcp.timeline-versioning")
 
@@ -166,7 +167,16 @@ def archive_current_timeline(
     # DuplicateTimeline drops the duplicate in the *current* folder (Archive),
     # but it also switches Resolve's current timeline to the duplicate. Restore
     # the working timeline as the active one so downstream mutation hits it.
-    project.SetCurrentTimeline(tl)
+    # A discarded False here sends every subsequent mutation into the ARCHIVE
+    # copy while the caller believes it is editing the working timeline, so the
+    # archive fails loudly instead.
+    switched, switch_detail = set_current_timeline(project, tl)
+    if not switched:
+        return {"success": False,
+                "error": describe_switch_failure(
+                    switch_detail, "returning to the working timeline after archiving"),
+                "archived_timeline_name": archived_name,
+                "switch": switch_detail}
 
     # Timebase snapshot — timeline_clip_usage stores ABSOLUTE record frames
     # (GetStart() includes the start-timecode offset), so readers need the
@@ -612,10 +622,13 @@ def rollback_to_version(
     if restored is None:
         return {"success": False, "error": f"DuplicateTimeline('{restored_name}') failed"}
 
-    project.SetCurrentTimeline(restored)
+    switched, switch_detail = set_current_timeline(project, restored)
 
     return {
         "success": True,
+        "current_timeline_switched": switched,
+        "switch_error": (None if switched else describe_switch_failure(
+            switch_detail, "opening the restored timeline")),
         "rolled_back_from_version": version,
         "restored_timeline_name": restored_name,
         "archive_of_previous": archive_result,

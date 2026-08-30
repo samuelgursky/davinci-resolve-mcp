@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from src.utils.timeline_kernel_probe import ProbeRecorder, render_markdown_report, utc_timestamp
+from .resolve_writes import set_current_timeline, describe_switch_failure
 
 
 def _require_success(label: str, result: Dict[str, Any]) -> Dict[str, Any]:
@@ -183,7 +184,13 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
         timeline = media_pool.CreateTimelineFromClips(timeline_name, [clip])
         if not timeline:
             raise AssertionError("Failed to create synthetic render timeline")
-        project.SetCurrentTimeline(timeline)
+        # A discarded False here would run the whole probe against whatever
+        # timeline was already current, and every measurement below would be a
+        # reading of the wrong thing reported as a reading of this one.
+        switched, switch_detail = set_current_timeline(project, timeline)
+        if not switched:
+            raise AssertionError(
+                describe_switch_failure(switch_detail, "probing the synthetic render timeline"))
         print(f"Created timeline: {timeline_name}")
 
         chosen = _choose_render_format_codec(server)
