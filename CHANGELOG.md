@@ -2,6 +2,31 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.9
+
+**The NTSC coverage gap, closed.** The conform fixtures were integer-rate
+only — which is how parseEDL ran exact-rate timecode math against a
+nominal-rate writer for years (fixed in v2.104.6, convention measured against
+Resolve's own GetStartFrame). New fixtures now exercise the pipeline at
+29.97: a broadcast-start EDL parses to nominal frames (an NDF minute is 1800
+frames, butt cuts stay gapless), the EDL write→parse round trip is
+frame-identical, media-inventory's tc↔frames round trip is the identity at
+all three NTSC rates, and drop-frame pins to the canonical values
+(01:00:00;00 → 107892 — the number that haunted the #168 saga, now living
+where it belongs). Cross-language pin tests assert the Python converters
+(_timecode_to_frame_id, multicam) and the Node converters agree on the same
+canonical values, so a change that moves one side fails the other side's
+suite.
+
+**Python dependency stack: audited to zero.** pip-audit over the dev venv
+found and cleared advisories in urllib3, requests, python-multipart,
+setuptools, starlette (0.52 → 1.6 — the MCP SDK tolerated the major, full
+suite green), pyjwt, pydantic-settings, pygments, pillow, idna, msgpack,
+cryptography, pip itself, and torch 2.13 (with the matching torchvision).
+Also found: the venv's mcp SDK was at 1.27.0, BELOW the repo's own >=1.29
+floor, and carrying a CVE — now 1.29.1. Both stacks (npm and pip) report
+zero known vulnerabilities, with clean resolver constraints.
+
 ## What's New in v2.104.8
 
 More laps: the aggregation class swept to completion, and the dependency
