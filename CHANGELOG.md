@@ -2,6 +2,24 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.107.0
+
+**Multi-source media authoring.** `drt.assemble`'s media support grows from
+one source to many: `media` accepts an array of `{mediaFilePath, spec, cuts}`
+sources, each cut landing on the shared V1/A1 with its own source's
+transplanted native descriptors. New plumbing: `insertMediaElement` appends
+additional native pool elements into MpFolder's MediaVec (folder-parent id
+adopted), and `cutSourceIntoClips` accepts a per-cut `mediaRef` so each clone
+points at ITS source. Multi-source strictly requires a captured native
+template for every source (the render-verified transplant path); the refusal
+names `media_pool.capture_media_template` per missing file — a repoint
+fallback that renders black across N sources would be a trap, not a feature.
+
+Live-verified end to end on Studio 19.1.3.7 with luma fingerprints: a
+timeline interleaving cuts from two sources (testsrc + solid white) imported
+6/6 linked and rendered each cut's OWN pixels — YAVG 125.6 / 234 / 125.5
+across the three cuts, matching each source's signature exactly.
+
 ## What's New in v2.106.0
 
 **Media clips in native DRT authoring — cut real footage into an importable,

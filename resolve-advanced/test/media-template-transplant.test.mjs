@@ -68,3 +68,53 @@ test('cutSourceIntoClips clones the donor with per-cut geometry', async () => {
     assert.deepEqual(starts, ['86400', '86410']);
   }
 });
+
+test('multi-source: missing caches refuse with the capture action named', async () => {
+  const { assembleTimeline } = require('../vendor/drp-format/index.js');
+  await assert.rejects(
+    assembleTimeline({
+      media: [
+        { mediaFilePath: '/no/cache/a.mp4', spec: { width: 64, height: 36, frameCount: 48, fps: 24 },
+          cuts: [{ startFrame: 86400, durationFrames: 10 }] },
+        { mediaFilePath: '/no/cache/b.mp4', spec: { width: 64, height: 36, frameCount: 48, fps: 24 },
+          cuts: [{ startFrame: 86410, durationFrames: 10 }] },
+      ],
+    }),
+    /capture_media_template/,
+  );
+});
+
+test('insertMediaElement appends a sibling into MediaVec with the folder id fixed', () => {
+  const { insertMediaElement } = require('../vendor/drp-format/media-template-cache.js');
+  const mp = '<Sm2MpFolder><MediaVec><Element><Sm2MpVideoClip DbId="one">' +
+    '<MpFolder>11111111-1111-1111-1111-111111111111</MpFolder></Sm2MpVideoClip></Element>' +
+    '</MediaVec></Sm2MpFolder>';
+  const el = '<Element><Sm2MpVideoClip DbId="two">' +
+    '<MpFolder>99999999-9999-9999-9999-999999999999</MpFolder></Sm2MpVideoClip></Element>';
+  const out = insertMediaElement(mp, el);
+  assert.ok(out.includes('DbId="one"') && out.includes('DbId="two"'));
+  assert.equal((out.match(/<MpFolder>11111111-1111-1111-1111-111111111111<\/MpFolder>/g) || []).length, 2,
+    'inserted element adopts the target folder id');
+  assert.ok(out.indexOf('DbId="two"') < out.indexOf('</MediaVec>'));
+});
+
+test('per-cut mediaRef rewires the clone', async () => {
+  const fs2 = require('node:fs');
+  const path2 = require('node:path');
+  const tpl = fs2.readFileSync(
+    path2.join(process.cwd(), 'vendor', 'drp-format', 'templates', 'media-clip-r19.drp'));
+  const ref = 'abcdefab-1234-5678-9abc-def012345678';
+  const res = await cutSourceIntoClips(tpl, { cuts: [
+    { startFrame: 86400, durationFrames: 10, mediaRef: ref },
+    { startFrame: 86410, durationFrames: 10 },
+  ]});
+  const JSZip2 = require('jszip');
+  const zip = await JSZip2.loadAsync(res.buffer);
+  for (const n of Object.keys(zip.files)) {
+    if (!/SeqContainer\/.+\.xml$/.test(n)) continue;
+    const xml = await zip.file(n).async('string');
+    const refs = [...xml.matchAll(/<Sm2TiVideoClip[^>]*>[\s\S]*?<MediaRef>([0-9a-f-]{36})<\/MediaRef>/g)].map((m) => m[1]);
+    assert.equal(refs[0], ref, 'first cut rewired');
+    assert.notEqual(refs[1], ref, 'second cut keeps donor ref');
+  }
+});

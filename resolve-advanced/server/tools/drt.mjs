@@ -33,7 +33,7 @@ const assembleSchema = z.object({
   spec: z
     .object({})
     .passthrough()
-    .describe("assembleTimeline spec: { timelineName?, elements: [{type:'title'|'generator', track, startFrame, durationFrames?, text?, ...}], transitions? }. startFrame is timeline-absolute (origin 86400)."),
+    .describe("assembleTimeline spec: { timelineName?, media?: {mediaFilePath, spec:{width,height,frameCount,fps}, cuts:[{startFrame,durationFrames,srcIn?}]} | [same, ...] (multi-source needs media_pool.capture_media_template run once per file), elements?: [{type:'title'|'generator', track, startFrame, durationFrames?, text?, ...}], transitions? }. startFrame is timeline-absolute (origin 86400)."),
   outputPath: z.string().describe('Absolute path where the importable .drt will be written'),
   targetAppVersion: z
     .union([z.string(), z.number()])

@@ -49,6 +49,9 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     if (cut.srcIn !== undefined && (!Number.isInteger(cut.srcIn) || cut.srcIn < 0)) {
       throw new TypeError(`cutSourceIntoClips: cuts[${i}].srcIn must be a non-negative integer`);
     }
+    if (cut.mediaRef !== undefined && !/^[0-9a-f-]{36}$/.test(cut.mediaRef)) {
+      throw new TypeError(`cutSourceIntoClips: cuts[${i}].mediaRef must be a uuid`);
+    }
   });
 
   const zip = await loadDrpZip(drpInput);
@@ -68,6 +71,11 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
       c = setClipStart(c, cut.startFrame);
       c = setClipDuration(c, cut.durationFrames);
       c = setClipIn(c, cut.srcIn ?? 0);
+      if (cut.mediaRef) {
+        // Multi-source: point this cut at ITS source's transplanted pool
+        // element instead of the donor's.
+        c = c.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/, `<MediaRef>${cut.mediaRef}</MediaRef>`);
+      }
       return c;
     });
     if (trackType === 'video') {

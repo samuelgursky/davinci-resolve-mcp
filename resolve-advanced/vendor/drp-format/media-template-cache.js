@@ -68,4 +68,16 @@ function transplantMediaElement(mpXml, seqXmls, { poolElement, mediaRef }) {
   return { mpXml: outMp, seqXmls: outSeqs };
 }
 
-module.exports = { CACHE_DIR, cachePathFor, loadMediaTemplate, transplantMediaElement };
+/** Insert an ADDITIONAL native media <Element> into MpFolder's MediaVec. */
+function insertMediaElement(mpXml, poolElement) {
+  const close = mpXml.indexOf('</MediaVec>');
+  if (close < 0) throw new Error('insertMediaElement: no MediaVec in MpFolder');
+  const folderId = (mpXml.match(/<Sm2MpVideoClip[^>]*>[\s\S]*?<MpFolder>([0-9a-f-]{36})<\/MpFolder>/) || [])[1];
+  let element = poolElement;
+  if (folderId) {
+    element = element.replace(/<MpFolder>[0-9a-f-]{36}<\/MpFolder>/, `<MpFolder>${folderId}</MpFolder>`);
+  }
+  return mpXml.slice(0, close) + element + mpXml.slice(close);
+}
+
+module.exports = { CACHE_DIR, cachePathFor, loadMediaTemplate, transplantMediaElement, insertMediaElement };
