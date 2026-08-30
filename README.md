@@ -52,6 +52,11 @@ python scripts/install_resolve_bridge.py
 # restart Resolve, open a project, then: Workspace > Scripts > resolve_bridge
 ```
 
+The installer and MCP client use `~/.config/davinci-resolve-mcp/bridge.json`
+by default. To keep the authenticated bridge config elsewhere, set
+`DAVINCI_RESOLVE_BRIDGE_CONFIG` while running the installer and in the MCP
+client environment; both sides will use that path.
+
 Once that listener is running it is used **automatically** whenever external
 scripting is unavailable — no environment variable required. Setting
 `DAVINCI_RESOLVE_BRIDGE=1` *forces* the bridge instead: it becomes the only
