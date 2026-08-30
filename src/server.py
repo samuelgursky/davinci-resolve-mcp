@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.104.4"
+VERSION = "2.104.5"
 
 import base64
 import os
@@ -17630,7 +17630,11 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       create(name, media_location_path?) -> {success, name}
       load(name) -> {success}
       save() -> {success}
-      close() -> {success}
+      close(stop_render?) -> {success}
+        Refuses while a render is in progress — closing mid-render orphans the
+        render and wedges Resolve's pipeline until restart (stuck
+        IsRenderingInProgress, 0% jobs, refused Quit). stop_render=true stops
+        the render, waits for the flag to clear, then closes.
       delete(name) -> {success}
       import_project(path, name?) -> {success}
       export_project(name, path, with_stills_and_luts?) -> {success}
@@ -17734,7 +17738,33 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return {"success": bool(pm.SaveProject())}
     elif action == "close":
         proj = pm.GetCurrentProject()
-        return {"success": bool(pm.CloseProject(proj))} if proj else _err("No project open")
+        if not proj:
+            return _err("No project open")
+        # Closing mid-render orphans the render and wedges Resolve's pipeline
+        # (api_truth IsRenderingInProgress entry, measured live). Refuse by
+        # default; stop_render=true stops the render and waits before closing.
+        try:
+            rendering = bool(proj.IsRenderingInProgress())
+        except Exception:
+            rendering = False
+        if rendering:
+            if not p.get("stop_render"):
+                return _err(
+                    "A render is in progress on this project. Closing now would "
+                    "orphan the render and wedge Resolve's render pipeline — the "
+                    "stuck IsRenderingInProgress flag blocks every later render "
+                    "and refuses Quit until Resolve is restarted.",
+                    category="invalid_input",
+                    remediation=(
+                        "Wait for the render (poll render.get_job_status), or pass "
+                        "stop_render=true to stop it and close once the flag clears."
+                    ),
+                )
+            from src.utils.project_cleanup import stop_render_before_close
+            render_state = stop_render_before_close(proj)
+            if not render_state.get("safe"):
+                return _err(render_state["detail"], category="api_error")
+        return {"success": bool(pm.CloseProject(proj))}
     elif action == "delete":
         if not p.get("name"):
             return _err("delete requires name")

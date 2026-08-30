@@ -504,7 +504,9 @@ def _probe_render_to_disk(ctx):
     job = ctx.project.AddRenderJob()
     if not job:
         return False
-    ctx.project.StartRendering(job, isInteractiveMode=False)
+    # Positional: the free-edition bridge proxies Resolve calls positionally,
+    # and a keyword argument dies inside _BoundMethod (PR #165's bug class).
+    ctx.project.StartRendering(job, False)
     deadline = _t.monotonic() + 420
     while ctx.project.IsRenderingInProgress() and _t.monotonic() < deadline:
         _t.sleep(1)

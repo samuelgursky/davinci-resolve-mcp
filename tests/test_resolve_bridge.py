@@ -2585,8 +2585,40 @@ class BoundMethodKeywordTests(unittest.TestCase):
         self.assertIn("isInteractiveMode", message)
         self.assertIn("positionally", message)
 
-    def test_no_kwarg_call_site_remains_in_the_compound_server(self):
-        """The one call site PR #165 hit is fixed; keep new ones out."""
+    def test_no_resolve_api_call_uses_keyword_arguments(self):
+        """PR #165's bug class, guarded for ALL bridge-reachable code.
+
+        The bridge proxies Resolve calls positionally, so a keyword argument
+        on any Resolve API method works on Studio's native scripting and dies
+        on the free edition. The Resolve method-name set comes from the shipped
+        API reference, which is what separates StartRendering from Popen — a
+        PascalCase heuristic alone flags every stdlib constructor in the tree.
+        The first sweep found the bug a second time, in probe_catalogue.py.
+        """
+        import ast
         import pathlib
-        src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "server.py").read_text()
-        self.assertNotIn("isInteractiveMode=", src)
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        api_doc = (root / "docs" / "reference" / "resolve_scripting_api.txt").read_text()
+        api_methods = set(re.findall(r"^\s{2}([A-Z][A-Za-z0-9]+)\(", api_doc, re.M))
+        self.assertGreater(len(api_methods), 100, "API doc parse looks broken")
+
+        offenders = []
+        for path in sorted((root / "src").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                if node.func.attr in api_methods and node.keywords:
+                    kw = ", ".join(k.arg or "**" for k in node.keywords)
+                    offenders.append(
+                        f"{path.relative_to(root)}:{node.lineno} "
+                        f"{node.func.attr}({kw}=...)"
+                    )
+        self.assertEqual(
+            offenders, [],
+            "Resolve API calls must be positional — a keyword argument dies in "
+            "the free-edition bridge's _BoundMethod (PR #165). Rewrite these "
+            "positionally:\n  " + "\n  ".join(offenders),
+        )

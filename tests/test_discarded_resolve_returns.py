@@ -54,6 +54,11 @@ ALLOWED: dict[tuple[str, str, str], str] = {
         "write harder than any bool — it reads StyledText back and compares "
         "before reporting success (comp-lock render bug rules the pattern)."
     ),
+    ("project_cleanup.py", "stop_render_before_close", "StopRendering"): (
+        "StopRendering returns None in the API; the helper verifies the "
+        "outcome harder than a return could — it polls IsRenderingInProgress "
+        "until the flag clears and refuses the close when it will not."
+    ),
     ("server.py", "fusion_comp", "SetInput"): NIL,
     ("server.py", "fusion_comp", "SetAttrs"): NIL,
     ("server.py", "fusion_comp", "SetPos"): NIL,

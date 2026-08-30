@@ -2,6 +2,42 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.104.5
+
+The recent bug classes, generalized into guards — and the sweeps found the
+kwarg bug a second time.
+
+**PR #165's bug existed twice.** The positional-only bridge rule was guarded
+for src/server.py alone; sweeping ALL of src/ found
+`StartRendering(isInteractiveMode=...)` again in the render-deliver probe
+catalogue. Fixed, and the guard is rebuilt properly: it parses the Resolve
+method names out of the shipped API reference and flags keyword arguments on
+exactly those calls across the whole tree — which is what separates
+StartRendering from Popen without drowning in stdlib false positives.
+
+**Closing a project mid-render is now unreachable through this server.** The
+wedge documented in v2.104.0 (orphaned render, stuck IsRenderingInProgress,
+0% jobs, refused Quit) could still be triggered via project_manager.close or
+a disposable-project delete. `close` now refuses while a render is in
+progress — with the wedge named in the remediation — and accepts
+stop_render=true to stop, wait for the flag to clear, and close.
+delete_project_safely auto-stops first (deleting kills the render anyway;
+stopping is strictly better) and refuses when the flag will not clear, which
+is the already-wedged state where no delete ends well. Live-verified both
+paths on Studio 19.1.3.7: mid-render close refused, stop_render=true stopped
+and closed cleanly, no wedge.
+
+**Audits that came back clean, on the record:** the remaining default-ON
+analysis gates (marker plan is built unconditionally, vision is default-OFF
+behind a capability gate) cannot reproduce the cache-poisoning shape, and the
+Python tree carries no numeric-keyed hex tables of the kind that rotted in
+the Node encoders.
+
+PR #166's discarded-return guard fired on this release's own
+StopRendering call — third catch in three releases; the allowlist entry
+records that the helper verifies by polling the flag, stronger than the None
+the API returns.
+
 ## What's New in v2.104.4
 
 Hardening pass over the classes the v2.104.2 batch exposed, live-verified on

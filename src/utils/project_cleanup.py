@@ -64,6 +64,52 @@ def save_project_if_safe(pm: Any) -> Dict[str, Any]:
         return {"saved": False, "skipped": False, "project": name, "reason": repr(exc)}
 
 
+def stop_render_before_close(project: Any, *, wait_seconds: float = 8.0) -> Dict[str, Any]:
+    """Stop any in-progress render and wait for the flag to clear.
+
+    Closing or deleting a project while its render runs orphans the render and
+    wedges Resolve's whole pipeline: IsRenderingInProgress sticks True on every
+    subsequent project, new jobs sit at 0%, StartRendering starts returning
+    False, and Quit() is refused behind a modal (api_truth, measured live on
+    Studio 19.1.3.7). Returns {safe, was_rendering, waited_seconds, detail}.
+    A flag that stays True after StopRendering at idle is the stuck state —
+    only restarting Resolve clears it, so `safe` comes back False.
+    """
+    import time as _time
+
+    try:
+        rendering = bool(project.IsRenderingInProgress())
+    except Exception:
+        return {"safe": True, "was_rendering": False, "waited_seconds": 0.0,
+                "detail": "IsRenderingInProgress unavailable; proceeding"}
+    if not rendering:
+        return {"safe": True, "was_rendering": False, "waited_seconds": 0.0, "detail": ""}
+    try:
+        project.StopRendering()
+    except Exception:
+        pass
+    waited = 0.0
+    while waited < wait_seconds:
+        _time.sleep(0.5)
+        waited += 0.5
+        try:
+            if not project.IsRenderingInProgress():
+                return {"safe": True, "was_rendering": True,
+                        "waited_seconds": waited, "detail": "render stopped"}
+        except Exception:
+            break
+    return {
+        "safe": False, "was_rendering": True, "waited_seconds": waited,
+        "detail": (
+            "IsRenderingInProgress is still True after StopRendering and "
+            f"{waited:.0f}s — closing now would orphan the render and wedge "
+            "Resolve's render pipeline (stuck flag, 0% jobs, refused Quit). "
+            "If Resolve is idle at 0% CPU this is the already-stuck state and "
+            "only restarting Resolve clears it."
+        ),
+    }
+
+
 def delete_project_safely(
     pm: Any,
     name: str,
@@ -89,6 +135,20 @@ def delete_project_safely(
         except Exception:
             current = None
         if current == name:
+            # Deleting the current project kills its render anyway — stopping
+            # first is strictly better than orphaning it (the wedge documented
+            # in stop_render_before_close). Refuse only when the flag will not
+            # clear, which is the already-wedged state where the delete cannot
+            # end well either.
+            try:
+                project = pm.GetCurrentProject()
+            except Exception:
+                project = None
+            if project is not None:
+                render_state = stop_render_before_close(project)
+                if not render_state.get("safe"):
+                    return {"success": False, "attempts": 0, "leftover": name,
+                            "detail": render_state["detail"]}
             # CloseProject ALWAYS, and first. It is what releases the session's
             # lock on the project; switching away with LoadProject does not, and
             # DeleteProject then returns False permanently — retries never help.
