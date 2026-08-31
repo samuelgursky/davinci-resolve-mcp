@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 33 missing capabilities, 42 bugs / unreliable behaviors.
+**Totals:** 33 missing capabilities, 43 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -525,6 +525,13 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Rewrite the <sequence><name> inside the file to the intended name before importing — timeline.import_timeline_checked does this automatically for FCP7 XML and errors when a non-rewritable format still returns an existing timeline. Never treat a truthy return as proof of creation; check the returned timeline's id against the pre-import set.
 - **Reference:** [issue #171](https://github.com/samuelgursky/davinci-resolve-mcp/issues/171)
 - **Tags:** timeline, import, silent-failure, unreliable-return
+
+### MediaTimemapBA keyframes are generation-split; 19.x silently ignores the R21 protobuf form
+
+- **Object:** `Sm2TimeMap (per-clip retime blob)`
+- **Behavior:** Resolve 21 encodes a retimed clip's KeyframesBA as protobuf points; Resolve 19.1.3 encodes it as a keyed-dict of keyed-dict keyframes ({interp, YOut, YIn, Y, XOut, XIn, X}). On import, 19 SILENTLY IGNORES the protobuf form — the clip reads back and plays at 100% with no warning (measured: identical timelines, one per form; protobuf → source 0..96 over 96 frames, keyed → source 0..48 over 96 frames and a live 50% render). The map spans the WHOLE source stretched by 1/speed; the clip's <In>/<Duration> window into it in RECORD frames (srcIn converts by /speed).
+- **Workaround / current handling:** Author retimes for pre-21 hosts with the keyed form (drt.assemble cuts[].speed does this; encoder byte-exact against a live 19.1.3.7 harvest). Treat any cross-generation timemap as unverified until a readback shows the retimed source range.
+- **Tags:** retime, import, silent-failure, drt
 
 ### Imported Fusion comps render via byte-keyed disk cache on 19.x (offline comp edits render black)
 

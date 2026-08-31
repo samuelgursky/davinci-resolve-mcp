@@ -202,7 +202,9 @@ export function eventsToOTIO(events, opts = {}) {
  * timeline runs 24fps with origin 86400, so rec/src frames convert as
  * round(frames × 24 / nominalFps). Placement anchors the EARLIEST video
  * event at the origin. Honesty ledger in the returned report: flattened
- * retimes (the template clip schema has no per-clip speed), authored vs
+ * reverse retimes (forward constant speeds are AUTHORED as real Sm2TimeMaps
+ * — r19 keyed form, render/readback-verified; reverse flattens with the
+ * reason), authored vs
  * dropped transitions (cross-dissolves are AUTHORED when the predecessor
  * abuts the cut and both sides have handle media — render-verified on
  * 19.1.3.7; otherwise dropped with the reason, as a cut at the boundary),
@@ -241,6 +243,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
   // 'V'/'V1' → 1, 'V2' → 2, … (parsers number video tracks; EDL is single-V).
   const trackNum = (t) => { const m = /^V(\d+)?$/.exec(String(t || 'V')); return m ? (m[1] ? parseInt(m[1], 10) : 1) : 1; };
   const flattenedRetimes = [];
+  const authoredRetimes = [];
   const droppedTransitions = [];
   const transitionCandidates = [];
   const perSource = new Map();
@@ -252,11 +255,20 @@ export function eventsToAssembleSpec(events, opts = {}) {
     const recOut = ORIGIN + (toTl(e.recOut, e.fps) - minRec);
     const durationFrames = recOut - recIn;
     if (durationFrames <= 0) continue;
-    if ((e.speed ?? 100) !== 100 || e.reverse) {
-      flattenedRetimes.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse });
-    }
     const vTrack = trackNum(e.track);
     const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps), ...(vTrack > 1 ? { track: vTrack } : {}) };
+    if ((e.speed ?? 100) !== 100 || e.reverse) {
+      if (e.reverse || !(e.speed > 0)) {
+        // Reverse needs a descending timemap (not yet measured) — flatten, with the reason.
+        flattenedRetimes.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse, reason: 'reverse not supported — played forward at 100%' });
+      } else {
+        // Forward constant speed: authored as a real Sm2TimeMap on the cut
+        // (r19 keyed form; render/readback-verified on 19.1.3.7). Audio for
+        // retimed cuts is video-only downstream.
+        cut.speed = e.speed / 100;
+        authoredRetimes.push({ index: e.index, source: e.source, speed: e.speed });
+      }
+    }
     if (e.transition) {
       // A dissolve INTO this event, at its record-in boundary. Whether it can
       // be authored (abutting predecessor + handles both sides) is decided
@@ -338,6 +350,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
       audioEventsSkipped: audioSkipped,
       upperTrackCutsVideoOnly: placements.filter((pl) => pl.track > 1).length,
       flattenedRetimes,
+      authoredRetimes,
       authoredTransitions: transitions,
       droppedTransitions,
       origin: ORIGIN,

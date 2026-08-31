@@ -209,8 +209,55 @@ function buildConstantSpeedTimemap({ speed, sourceDurationSec, uniqueId, recordD
   });
 }
 
+/**
+ * r19-generation constant-speed Sm2TimeMap. Resolve 19.x encodes KeyframesBA
+ * as a keyed-dict of keyed-dict keyframes ({interp,YOut,YIn,Y,XOut,XIn,X}),
+ * NOT the R21 protobuf points — and 19 silently IGNORES the protobuf form on
+ * import (measured: item read back at 100%). Shape harvested from a live
+ * 19.1.3.7 XMEML retime and rebuilt byte-exact. The map spans the ENTIRE
+ * source stretched by 1/speed (the clip's Start/Duration/In window into it):
+ *   YMax = (sourceFrames-1)/fps          — full source extent, seconds
+ *   XMax = (sourceFrames/speed - 1)/fps  — full retimed extent, seconds
+ *   kf0 = (0,0); kf1 = (XMax, XMax*speed); linear (zero handles, interp 0)
+ *
+ * @param {object} p
+ * @param {number} p.speed        - source/record ratio (0.5 = 50%). Forward only.
+ * @param {number} p.sourceFrames - full source frame count at p.fps.
+ * @param {number} [p.fps=24]
+ * @param {string} p.uniqueId     - fresh uuid (bare, no braces).
+ * @returns {Buffer}
+ */
+function buildConstantSpeedTimemapKeyed({ speed, sourceFrames, fps = 24, uniqueId }) {
+  if (!(speed > 0)) throw new RangeError('buildConstantSpeedTimemapKeyed: speed must be > 0 (reverse not supported here)');
+  if (!Number.isInteger(sourceFrames) || sourceFrames < 1) throw new TypeError('buildConstantSpeedTimemapKeyed: sourceFrames must be a positive integer');
+  const YMax = (sourceFrames - 1) / fps;
+  const XMax = (sourceFrames / speed - 1) / fps;
+  const kf = (X, Y) => encodeKeyedDict({ hdr: 1, entries: [
+    { key: 'interp', type: 0x02, subType: 0, value: 0 },
+    { key: 'YOut', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'YIn', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'Y', type: T_DOUBLE, subType: 0, value: Y },
+    { key: 'XOut', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'XIn', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'X', type: T_DOUBLE, subType: 0, value: X },
+  ] }).toString('hex');
+  const keyframes = encodeKeyedDict({ hdr: 1, entries: [
+    { key: '1', type: T_BYTES, subType: 0, value: kf(XMax, XMax * speed) },
+    { key: '0', type: T_BYTES, subType: 0, value: kf(0, 0) },
+  ] }).toString('hex');
+  return encodeKeyedDict({ hdr: 1, entries: [
+    { key: 'YMax', type: T_DOUBLE, subType: 0, value: YMax },
+    { key: 'XMax', type: T_DOUBLE, subType: 0, value: XMax },
+    { key: 'UniqueId', type: T_STRING, subType: 0, value: uniqueId },
+    { key: 'LastValidYOffset', type: T_DOUBLE, subType: 0, value: YMax },
+    { key: 'KeyframesBA', type: T_BYTES, subType: 0, value: keyframes },
+    { key: 'DbType', type: T_STRING, subType: 0, value: 'Sm2TimeMap' },
+  ] });
+}
+
 module.exports = {
   decodeTimemap, encodeTimemap, encodeRetimedTimemap,
-  identityTimemap, buildConstantSpeedTimemap, buildTimemap, decodeProtobuf,
+  identityTimemap, buildConstantSpeedTimemap, buildConstantSpeedTimemapKeyed,
+  buildTimemap, decodeProtobuf,
   TYPE_LINEAR,
 };

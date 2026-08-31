@@ -1915,6 +1915,28 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["media-pool", "import", "render", "silent-failure", "readback"],
     },
     {
+        "symbol": "MediaTimemapBA keyframes are generation-split; 19.x silently ignores the R21 protobuf form",
+        "object": "Sm2TimeMap (per-clip retime blob)",
+        "reality": "Resolve 21 encodes a retimed clip's KeyframesBA as "
+                   "protobuf points; Resolve 19.1.3 encodes it as a "
+                   "keyed-dict of keyed-dict keyframes ({interp, YOut, YIn, "
+                   "Y, XOut, XIn, X}). On import, 19 SILENTLY IGNORES the "
+                   "protobuf form — the clip reads back and plays at 100% "
+                   "with no warning (measured: identical timelines, one per "
+                   "form; protobuf → source 0..96 over 96 frames, keyed → "
+                   "source 0..48 over 96 frames and a live 50% render). "
+                   "The map spans the WHOLE source stretched by 1/speed; "
+                   "the clip's <In>/<Duration> window into it in RECORD "
+                   "frames (srcIn converts by /speed).",
+        "recommended": "Author retimes for pre-21 hosts with the keyed "
+                       "form (drt.assemble cuts[].speed does this; encoder "
+                       "byte-exact against a live 19.1.3.7 harvest). Treat "
+                       "any cross-generation timemap as unverified until a "
+                       "readback shows the retimed source range.",
+        "tags": ["retime", "import", "silent-failure", "drt"],
+        "submit": "bug",
+    },
+    {
         "symbol": "Imported Fusion comps render via byte-keyed disk cache on 19.x (offline comp edits render black)",
         "object": "Fusion / render engine",
         "reality": "On Studio 19.1.3.7, a Fusion composition arriving via "

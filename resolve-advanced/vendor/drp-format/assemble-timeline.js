@@ -25,6 +25,8 @@ const { createEmptyProject, addMediaClip, DEFAULT_START_FRAME } = require('./aut
 const { loadMediaTemplate, transplantMediaElement, insertMediaElement } = require('./media-template-cache');
 const JSZip = require('jszip');
 const { cutSourceIntoClips } = require('./cut-media');
+const { buildConstantSpeedTimemapKeyed } = require('./media-timemap');
+const { randomUUID } = require('node:crypto');
 const { placeFusionTitle } = require('./place-fusion-title');
 const { placeGenerator } = require('./place-generator');
 const { placeTransition } = require('./place-transition');
@@ -111,7 +113,22 @@ async function assembleTimeline(spec = {}) {
     const allCuts = [];
     sources.forEach((src, i) => {
       (src.cuts || []).forEach((cut) => {
-        allCuts.push(mediaRefs[i] ? { ...cut, mediaRef: mediaRefs[i] } : { ...cut });
+        const out = mediaRefs[i] ? { ...cut, mediaRef: mediaRefs[i] } : { ...cut };
+        if (cut.speed !== undefined && cut.speed !== 1) {
+          // Constant-speed retime (forward only). The Sm2TimeMap spans the
+          // whole source stretched by 1/speed; the clip windows into it with
+          // RECORD-domain In/Duration (measured live on 19.1.3.7), so the
+          // source-domain srcIn converts by /speed here.
+          if (!(cut.speed > 0)) throw new RangeError('assembleTimeline: cut.speed must be > 0 (reverse not supported)');
+          const fps = Math.round(src.spec.fps || 24);
+          out.timemap = buildConstantSpeedTimemapKeyed({
+            speed: cut.speed, sourceFrames: src.spec.frameCount, fps,
+            uniqueId: randomUUID(),
+          }).toString('hex');
+          out.srcIn = Math.round((cut.srcIn ?? 0) / cut.speed);
+          delete out.speed;
+        }
+        allCuts.push(out);
       });
     });
     allCuts.sort((a, b) => a.startFrame - b.startFrame);

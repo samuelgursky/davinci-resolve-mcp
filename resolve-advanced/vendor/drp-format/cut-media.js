@@ -59,6 +59,9 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     if (cut.track !== undefined && (!Number.isInteger(cut.track) || cut.track < 1)) {
       throw new TypeError(`cutSourceIntoClips: cuts[${i}].track must be a positive integer`);
     }
+    if (cut.timemap !== undefined && !/^[0-9a-fA-F]+$/.test(cut.timemap)) {
+      throw new TypeError(`cutSourceIntoClips: cuts[${i}].timemap must be a hex MediaTimemapBA blob`);
+    }
   });
 
   const zip = await loadDrpZip(drpInput);
@@ -76,6 +79,12 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
       // element instead of the donor's.
       c = c.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/, `<MediaRef>${cut.mediaRef}</MediaRef>`);
     }
+    if (cut.timemap) {
+      // Constant-speed retime: swap the identity MediaTimemapBA for the
+      // caller-built Sm2TimeMap (r19 keyed form render/readback-verified;
+      // the clip's <In>/<Duration> are RECORD-domain, measured live).
+      c = c.replace(/<MediaTimemapBA>[0-9a-fA-F]*<\/MediaTimemapBA>/, `<MediaTimemapBA>${cut.timemap}</MediaTimemapBA>`);
+    }
     return c;
   };
 
@@ -87,8 +96,10 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     if (!clips.length) continue; // audio-less media: nothing to cut on A1
     const donor = clips[0];
     if (trackType === 'audio') {
-      // A1 mirrors track-1 video cuts only; higher video tracks stay video-only.
-      const a1 = cuts.filter((cut) => (cut.track ?? 1) === 1).map((cut) => cloneCut(donor, cut));
+      // A1 mirrors track-1 video cuts only; higher video tracks stay video-only,
+      // and so do RETIMED cuts (the audio clone would need its own timemap and
+      // pitch handling — video-only is stated, not silent).
+      const a1 = cuts.filter((cut) => (cut.track ?? 1) === 1 && !cut.timemap).map((cut) => cloneCut(donor, cut));
       tracks[0] = setItemsInner(tracks[0], a1.join(''));
       xml = replaceTrackVec(xml, trackType, match, tracks);
       continue;

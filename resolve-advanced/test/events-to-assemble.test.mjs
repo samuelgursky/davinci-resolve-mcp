@@ -53,11 +53,16 @@ test('NTSC 29.97 events convert nominal→24 and stay gapless at the joins', () 
   assert.equal(all[1].durationFrames, 720);
 });
 
-test('retimes flatten into the ledger; overlaps refuse; unmapped reels refuse', () => {
+test('forward retimes author, reverse flattens; overlaps refuse; unmapped reels refuse', () => {
   const base = { track: 'V', srcIn: 0, srcOut: 48, fps: 24 };
   const retimed = [{ ...base, index: 1, source: 'TAPE1', recIn: 0, recOut: 48, speed: 50 }];
   const r1 = eventsToAssembleSpec(retimed, { sourceMap: MAP });
-  assert.equal(r1.report.flattenedRetimes.length, 1);
+  assert.equal(r1.report.flattenedRetimes.length, 0);
+  assert.deepEqual(r1.report.authoredRetimes, [{ index: 1, source: 'TAPE1', speed: 50 }]);
+  assert.equal(r1.spec.media[0].cuts[0].speed, 0.5);
+  const reversed = [{ ...base, index: 1, source: 'TAPE1', recIn: 0, recOut: 48, speed: 100, reverse: true }];
+  const r2 = eventsToAssembleSpec(reversed, { sourceMap: MAP });
+  assert.equal(r2.report.flattenedRetimes.length, 1);
   const overlapping = [
     { ...base, index: 1, source: 'TAPE1', recIn: 0, recOut: 48 },
     { ...base, index: 2, source: 'TAPE2', recIn: 24, recOut: 72 },
@@ -184,4 +189,45 @@ test('overlap on the SAME video track still refuses, naming the track', () => {
   const events = parseOTIO(otio, { fps: 24 });
   const bad = events.concat([{ ...events[0], index: 99, recIn: 24, recOut: 72 }]);
   assert.throws(() => eventsToAssembleSpec(bad, { sourceMap: MAP }), /overlap on video track 1/);
+});
+
+// Constant-speed retime authoring: r19 keyed Sm2TimeMap (Resolve 19 silently
+// IGNORES the R21 protobuf keyframe form on import — measured; the keyed form
+// read back source 0..48 over 96 record frames and rendered live).
+import { createRequire } from 'node:module';
+const requireCjs = createRequire(import.meta.url);
+const { buildConstantSpeedTimemapKeyed } = requireCjs('../vendor/drp-format/media-timemap.js');
+import fs from 'node:fs';
+
+test('the r19 keyed timemap encoder is byte-exact against the live harvest', () => {
+  // Fixture: MediaTimemapBA of a 50% clip authored BY RESOLVE 19.1.3.7 itself
+  // (XMEML retime import → SaveProject → ExportProject → harvest).
+  const harvest = fs.readFileSync(new URL('./fixtures-r19-timemap-50pct.hex', import.meta.url), 'utf8').trim();
+  const mine = buildConstantSpeedTimemapKeyed({
+    speed: 0.5, sourceFrames: 192, fps: 24,
+    uniqueId: 'b025dc86-ac50-4796-a222-4c8e62679164',
+  });
+  assert.equal(mine.toString('hex'), harvest);
+});
+
+test('OTIO LinearTimeWarp authors cut.speed; reverse flattens with the reason', () => {
+  const rtv = (value) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate: 24 });
+  const otio = { OTIO_SCHEMA: 'Timeline.1', tracks: { children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [
+      { OTIO_SCHEMA: 'Clip.1', name: 'TAPE1',
+        source_range: { start_time: rtv(96), duration: rtv(48) },
+        media_reference: { name: 'TAPE1' },
+        effects: [{ OTIO_SCHEMA: 'LinearTimeWarp.1', time_scalar: 0.5 }] },
+      { OTIO_SCHEMA: 'Clip.1', name: 'TAPE2',
+        source_range: { start_time: rtv(120), duration: rtv(24) },
+        media_reference: { name: 'TAPE2' },
+        effects: [{ OTIO_SCHEMA: 'LinearTimeWarp.1', time_scalar: -1 }] },
+    ] },
+  ] } };
+  const { spec, report } = eventsToAssembleSpec(parseOTIO(otio, { fps: 24 }), { sourceMap: MAP });
+  const t1 = spec.media.find((m) => m.mediaFilePath === '/m/a.mp4');
+  assert.deepEqual(t1.cuts, [{ startFrame: 86400, durationFrames: 48, srcIn: 96, speed: 0.5 }]);
+  assert.deepEqual(report.authoredRetimes, [{ index: 1, source: 'TAPE1', speed: 50 }]);
+  assert.equal(report.flattenedRetimes.length, 1);
+  assert.match(report.flattenedRetimes[0].reason, /reverse not supported/);
 });
