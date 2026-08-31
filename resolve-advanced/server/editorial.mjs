@@ -141,6 +141,16 @@ export function parseOTIO(otio, opts = {}) {
     // First track of each kind keeps the bare letter (compat); higher tracks
     // are numbered ('V2', 'A2', …).
     const kind = isAudio ? (aNum === 1 ? 'A' : `A${aNum}`) : (vNum === 1 ? 'V' : `V${vNum}`);
+    // Track-level markers: marked_range is already in track (record) time.
+    for (const mk of track.markers || []) {
+      const mrStart = (mk.marked_range && mk.marked_range.start_time && mk.marked_range.start_time.value) || 0;
+      const mrRate = (mk.marked_range && mk.marked_range.start_time && mk.marked_range.start_time.rate) || opts.fps || 24;
+      events.push(evt({
+        index: idx++, track: 'MARKER', source: '',
+        recIn: mrStart, recOut: null,
+        name: mk.name || undefined, color: mk.color || undefined, fps: mrRate,
+      }));
+    }
     let rec = 0;
     for (const child of track.children || []) {
       const schema = child.OTIO_SCHEMA || '';
@@ -429,5 +439,20 @@ export function markerRoundtrip(markers, opts = {}) {
     throw new Error(`marker_roundtrip: ${markers.length} in, ${decoded.length} out — round-trip dropped markers`);
   const provenanceOk = decoded.every((m) => typeof m.provenance === 'string' && m.provenance.length);
   if (markers.length && !provenanceOk) throw new Error('marker_roundtrip: a marker lost its provenance tag');
-  return { count: decoded.length, markers: decoded, provenanceOk, roundTrip: 'ok' };
+  // Binary round-trip through the REAL Sm2SequenceLockableBlob codec
+  // (byte-exact vs a live export): provenance rides in customData, so an
+  // authored .drt carries it. Colors outside the measured 16 refuse there —
+  // markerRoundtrip normalizes to 'Blue' above, so this cannot throw for
+  // valid input; if it ever does, that IS the failed round-trip.
+  let blobRoundTrip = 'skipped (no markers)';
+  if (normalized.length) {
+    const { encodeTimelineMarkersBlob, decodeTimelineMarkersBlob } = require('../vendor/drp-format/timeline-markers-blob.js');
+    const back = decodeTimelineMarkersBlob(encodeTimelineMarkersBlob(normalized.map((m) => ({
+      frame: m.frame, color: m.color, name: m.name, note: m.note, customData: m.provenance,
+    }))));
+    if (back.length !== normalized.length) throw new Error(`marker_roundtrip: blob codec ${normalized.length} in, ${back.length} out`);
+    if (!back.every((m) => m.customData && m.customData.length)) throw new Error('marker_roundtrip: provenance lost in the blob codec');
+    blobRoundTrip = 'ok';
+  }
+  return { count: decoded.length, markers: decoded, provenanceOk, roundTrip: 'ok', blobRoundTrip };
 }

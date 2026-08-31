@@ -416,3 +416,19 @@ test('identical audio channel legs merge instead of overlapping', () => {
   const cuts = spec.media[0].cuts.filter((c) => c.audioOnly);
   assert.equal(cuts.length, 1);
 });
+
+test('OTIO track-level markers land at record positions', () => {
+  const rtt = (value) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate: 24 });
+  const otio = { OTIO_SCHEMA: 'Timeline.1', tracks: { children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video',
+      markers: [{ OTIO_SCHEMA: 'Marker.2', name: 'reel start', color: 'CYAN',
+        marked_range: { start_time: rtt(12), duration: rtt(1) } }],
+      children: [
+        { OTIO_SCHEMA: 'Clip.1', name: 'TAPE1',
+          source_range: { start_time: rtt(0), duration: rtt(48) },
+          media_reference: { name: 'TAPE1' } },
+      ] },
+  ] } };
+  const { spec } = eventsToAssembleSpec(parseOTIO(otio, { fps: 24 }), { sourceMap: MAP });
+  assert.deepEqual(spec.markers, [{ frame: 86412, color: 'Cyan', name: 'reel start' }]);
+});

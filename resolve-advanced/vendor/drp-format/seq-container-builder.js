@@ -338,9 +338,15 @@ function buildLockableBlobElement(markers, blobId, frameRate) {
     ]);
   }
 
-  // Build marker protobuf (simplified - actual markers would need full encoding)
-  // For now, return minimal structure that DaVinci can parse
-  const fieldsBlobHex = buildMarkersFieldsBlob(markers, frameRate);
+  // Real Sm2SequenceLockableBlob encoding (byte-exact vs a live 19.1.3.7
+  // export; see timeline-markers-blob.js) — replaces the old simplified
+  // marker-encoder blob, whose bytes never matched a real export.
+  const { encodeTimelineMarkersBlob } = require('./timeline-markers-blob');
+  const fieldsBlobHex = encodeTimelineMarkersBlob(markers.map((m) => ({
+    frame: Number(m.frame) || 0,
+    color: m.color, name: m.name, note: m.note ?? m.description,
+    duration: m.duration, customData: m.customData,
+  }))).toString('hex');
 
   return buildXmlElement('Sm2SequenceLockableBlob', { DbId: blobId }, [
     buildXmlElement('FieldsBlob', {}, fieldsBlobHex),
