@@ -181,6 +181,7 @@ async function assembleTimeline(spec = {}) {
     if (!tr || typeof tr !== 'object') throw new TypeError(`assembleTimeline: transitions[${i}] must be an object`);
     ({ buffer } = await placeTransition(buffer, {
       track: tr.track, atFrame: tr.atFrame, durationFrames: tr.durationFrames,
+      trackType: tr.trackType || 'video',
     }));
   }
 

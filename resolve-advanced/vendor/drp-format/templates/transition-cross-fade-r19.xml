@@ -1,0 +1,22 @@
+<Element>
+<Sm2TiTransition DbId="43e55250-3117-4f6e-abf0-ce028e94bf71">
+       <FieldsBlob>000000020000001b8012180000002c789c636660640001e62b75aa0c04000033c3017f</FieldsBlob>
+       <PrettyType>Final Cut Pro 7</PrettyType>
+       <Name/>
+       <Start>36</Start>
+       <Duration>24</Duration>
+       <LinkedItemSync/>
+       <WasDisbanded>false</WasDisbanded>
+       <MarkersBA/>
+       <UiMemento>0</UiMemento>
+       <Flags>0</Flags>
+       <PriorityIndex>0</PriorityIndex>
+       <EffectFiltersBA>00000002000001418128b52ffd60ea02b50900d24e3631608bda00016b1886611886618aaa90c45a8b2c4bb74e225968cc77bbadcdb43f34bdb7510008cd286032991041dcafba3a6db563c78e1f207ad278bd56901d3be66054645e53f64ec70e0cfdd6395ec67bbd5ad6a24a3d7f9d724c23acdc237c3969bcd14eafb71f24ba8e1ffab3d3eb4423ac3212140da3e3030d6c4098b087fe98b5b46efaa5cf4b7da7f3948a06887acc1863ab5b85577fe4cb10e35c6c4c1b8b08035e8d6996843765b48b674648a9f9ac295016da65d268eb7bb08f0c615802d148a3258514040c7448221f13001601828924325a012300e9f0abc6e90af86f499c4a043085b2b044a134bcb479940460f4f9df4213e27805a1a8862fe8bcb86058bb0b23aeab01486d4073cdcda64fc1d02980a688b20aada10ad6ead65663955acbce363a856d7330570bd2da6206</EffectFiltersBA>
+       <ImportExportMetadataBA/>
+       <RenderTextEnabled>true</RenderTextEnabled>
+       <RenderTextGanged>true</RenderTextGanged>
+       <RenderTextPrefixed>true</RenderTextPrefixed>
+       <AlignmentType>2</AlignmentType>
+       <Position>2</Position>
+      </Sm2TiTransition>
+</Element>

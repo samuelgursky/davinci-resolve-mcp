@@ -44,5 +44,7 @@ test('placeTransition errors when no abutting boundary at atFrame', async () => 
 test('placeTransition validates args', async () => {
   const buf = await synth2();
   await assert.rejects(() => placeTransition(buf, { track: 1, atFrame: 100, durationFrames: 1 }), /durationFrames/);
-  await assert.rejects(() => placeTransition(buf, { track: 1, atFrame: 100, trackType: 'audio' }), /only video/);
+  // trackType 'audio' is now supported (harvested cross-fade template,
+  // v2.116.0); an unknown trackType still refuses.
+  await assert.rejects(() => placeTransition(buf, { track: 1, atFrame: 100, trackType: 'subtitle' }), /video or audio/);
 });

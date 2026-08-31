@@ -299,6 +299,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
   const audioTrackNum = (t) => { const m = /^A(\d+)?$/.exec(String(t)); return m && m[1] ? parseInt(m[1], 10) : 1; };
   const audioPlacements = [];
   const audioRetimesSkipped = [];
+  const audioTransCandidates = [];
   for (const e of auds) {
     const recIn = ORIGIN + (toTl(e.recIn, e.fps) - minRec);
     const recOut = ORIGIN + (toTl(e.recOut, e.fps) - minRec);
@@ -309,7 +310,16 @@ export function eventsToAssembleSpec(events, opts = {}) {
     }
     const track = audioTrackNum(e.track);
     const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps), audioOnly: true, track };
-    audioPlacements.push({ start: recIn, end: recOut, index: e.index, track });
+    if (e.transition) {
+      let d = Math.max(2, toTl(e.transition.duration || 0, e.fps) || 2);
+      d += d % 2;
+      audioTransCandidates.push({
+        atFrame: recIn, durationFrames: d, track,
+        index: e.index, type: e.transition.type, rawDuration: e.transition.duration,
+        source: e.source, srcIn: cut.srcIn,
+      });
+    }
+    audioPlacements.push({ start: recIn, end: recOut, index: e.index, track, source: e.source, srcIn: cut.srcIn, durationFrames });
     if (!perSource.has(e.source)) perSource.set(e.source, []);
     perSource.get(e.source).push(cut);
   }
@@ -383,6 +393,29 @@ export function eventsToAssembleSpec(events, opts = {}) {
       continue;
     }
     transitions.push({ track: c.track, atFrame: c.atFrame, durationFrames: c.durationFrames });
+  }
+  // Audio cross-fades, same geometry rules (render-verified on 19.1.3.7 via
+  // the harvested cross-fade template: the highpass RMS ramps, not steps).
+  for (const c of audioTransCandidates) {
+    const prev = audioPlacements.find((pl) => pl.track === c.track && pl.end === c.atFrame);
+    if (!prev) {
+      droppedTransitions.push({ index: c.index, type: c.type, duration: c.rawDuration, trackType: 'audio', reason: 'no abutting predecessor at the cut' });
+      continue;
+    }
+    const half = c.durationFrames / 2;
+    const bHandle = c.srcIn >= half;
+    const aSpec = sourceMap[prev.source] && sourceMap[prev.source].spec;
+    const aFrames = aSpec && Number(aSpec.frameCount);
+    const aHandle = Number.isFinite(aFrames) ? prev.srcIn + prev.durationFrames + half <= aFrames : false;
+    if (!bHandle || !aHandle) {
+      droppedTransitions.push({
+        index: c.index, type: c.type, duration: c.rawDuration, trackType: 'audio',
+        reason: `insufficient handles for a centered ${c.durationFrames}f cross-fade` +
+          `${bHandle ? '' : ' (incoming srcIn < half)'}${aHandle ? '' : ' (outgoing tail media < half)'}`,
+      });
+      continue;
+    }
+    transitions.push({ track: c.track, atFrame: c.atFrame, durationFrames: c.durationFrames, trackType: 'audio' });
   }
 
   return {

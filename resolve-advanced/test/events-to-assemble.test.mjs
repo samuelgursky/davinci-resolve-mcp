@@ -308,3 +308,36 @@ test('audio cuts beyond the template ceiling refuse at assemble time', async () 
     /audio track 9 exceeds the template's 8 audio tracks/,
   );
 });
+
+// Audio cross-fades: same geometry rules as video dissolves; the harvested
+// cross-fade template renders a RAMP through the junction (verified on
+// 19.1.3.7 against a Resolve-authored control: -27.6 → -25.6 → -23.0 → -21.9
+// highpass-RMS, identical shape).
+test('an EDL audio dissolve with handles authors an audio cross-fade', () => {
+  const edl = [
+    'TITLE: AX',
+    'FCM: NON-DROP FRAME',
+    '001  TAPE1 A     C        00:00:01:00 00:00:03:00 01:00:00:00 01:00:02:00',
+    '002  TAPE2 A     D    024 00:00:01:00 00:00:03:00 01:00:02:00 01:00:04:00',
+    '003  TAPE1 V     C        00:00:01:00 00:00:05:00 01:00:00:00 01:00:04:00',
+    '',
+  ].join('\n');
+  const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
+  assert.deepEqual(report.authoredTransitions, [{ track: 1, atFrame: 86448, durationFrames: 24, trackType: 'audio' }]);
+  assert.equal(report.droppedTransitions.length, 0);
+  assert.deepEqual(spec.transitions, report.authoredTransitions);
+});
+
+test('an audio dissolve without an abutting predecessor drops with trackType audio', () => {
+  const edl = [
+    'TITLE: AX',
+    'FCM: NON-DROP FRAME',
+    '001  TAPE1 V     C        00:00:01:00 00:00:05:00 01:00:00:00 01:00:04:00',
+    '002  TAPE2 A     D    024 00:00:01:00 00:00:03:00 01:00:02:00 01:00:04:00',
+    '',
+  ].join('\n');
+  const { report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
+  assert.equal(report.droppedTransitions.length, 1);
+  assert.equal(report.droppedTransitions[0].trackType, 'audio');
+  assert.match(report.droppedTransitions[0].reason, /no abutting predecessor/);
+});

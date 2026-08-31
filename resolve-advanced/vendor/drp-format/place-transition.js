@@ -33,6 +33,11 @@ function splitItems(itemsInner) {
 }
 
 const TEMPLATE_PATH = path.join(__dirname, 'templates', 'transition-cross-dissolve.xml');
+// Audio cross-fade, harvested from a live 19.1.3.7 XMEML import of an FCP7
+// KGAudioTransCrossFade (render-verified: the highpass RMS ramps through the
+// junction instead of stepping). PrettyType reads "Final Cut Pro 7" — that is
+// what Resolve itself stores for it, and it renders.
+const AUDIO_TEMPLATE_PATH = path.join(__dirname, 'templates', 'transition-cross-fade-r19.xml');
 
 const clipStart = (c) => { const m = c.match(/<Start>(\d+)<\/Start>/); return m ? parseInt(m[1], 10) : null; };
 const clipDuration = (c) => { const m = c.match(/<Duration>(\d+)<\/Duration>/); return m ? parseInt(m[1], 10) : null; };
@@ -45,7 +50,7 @@ const clipDuration = (c) => { const m = c.match(/<Duration>(\d+)<\/Duration>/); 
  * @param {number} opts.track             - 1-based video track.
  * @param {number} opts.atFrame           - the cut frame (where one clip ends and the next begins).
  * @param {number} [opts.durationFrames=24] - transition length (even number recommended; centered).
- * @param {'video'} [opts.trackType='video'] - audio cross-fade uses a different template (not bundled).
+ * @param {'video'|'audio'} [opts.trackType='video'] - 'audio' places the harvested cross-fade (render-verified on 19.1.3).
  * @param {string} [opts.timelineUuid]
  * @returns {Promise<{buffer:Buffer, entry:string, timelineUuid:string, track:number,
  *   atFrame:number, start:number, durationFrames:number, transitionDbId:string|null}>}
@@ -55,7 +60,7 @@ async function placeTransition(drpInput, opts = {}) {
   if (!Number.isInteger(track) || track < 1) throw new TypeError('placeTransition: track must be a positive integer');
   if (!Number.isInteger(atFrame)) throw new TypeError('placeTransition: atFrame must be an integer');
   if (!Number.isInteger(durationFrames) || durationFrames < 2) throw new TypeError('placeTransition: durationFrames must be an integer >= 2');
-  if (trackType !== 'video') throw new Error('placeTransition: only video cross-dissolve is supported (no bundled audio template)');
+  if (trackType !== 'video' && trackType !== 'audio') throw new Error('placeTransition: trackType must be video or audio');
 
   const zip = await loadDrpZip(drpInput);
   const { entry, xml: seqXml, seqId } = await selectTargetSeq(zip, timelineUuid);
@@ -71,7 +76,7 @@ async function placeTransition(drpInput, opts = {}) {
   }
   if (leftIdx < 0) throw new Error(`placeTransition: no abutting clip boundary at frame ${atFrame} on track ${track}`);
 
-  let trans = fs.readFileSync(TEMPLATE_PATH, 'utf8').trim();
+  let trans = fs.readFileSync(trackType === 'audio' ? AUDIO_TEMPLATE_PATH : TEMPLATE_PATH, 'utf8').trim();
   trans = freshDbIds(trans);
   const start = atFrame - Math.floor(durationFrames / 2); // centered (AlignmentType 2)
   trans = trans.replace(/<Start>\d+<\/Start>/, `<Start>${start}</Start>`);
