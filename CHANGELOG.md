@@ -2,6 +2,493 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.136.1 — the changelog catches up
+
+### Fixed
+
+- **README badges and this changelog had silently frozen at v2.108.0** while
+  28 releases shipped with notes only on GitHub Releases. All entries
+  v2.109.0-v2.136.0 are now ported here verbatim, both README badges (and the
+  zh-CN correspondence line) track the released version again, and a new
+  drift guard (`tests/test_release_surface_drift.py`) fails the suite if any
+  of these surfaces lag a version bump — the release-process mandate is now
+  enforceable instead of aspirational.
+- **Windows `UnicodeDecodeError` in tests/scripts** — adapted from
+  [PR #174](https://github.com/samuelgursky/davinci-resolve-mcp/pull/174) by
+  @Chosen-3: 151 `open()`/`read_text()`/`write_text()` call sites across 47
+  files gained `encoding="utf-8"` (locale-encoding fallback crashes on
+  cp1252 the moment a read target holds non-ASCII bytes; binary-mode and
+  `PIL.Image.open` sites correctly exempt). A companion AST guard
+  (`tests/test_utf8_encoding_discipline.py`) keeps new unencoded text-mode
+  calls out of `tests/` and `scripts/` — its first catch was this repo's own
+  day-old sync script.
+
+## What's New in v2.136.0 — portable agent assets
+
+Adapted from [PR #173](https://github.com/samuelgursky/davinci-resolve-mcp/pull/173) by @jin386 — the portable `.agents/` layout lands, with the review findings folded in rather than waiting on a revision round.
+
+### What's new
+
+- **`.agents/` is the host-neutral canonical layer**: `.agents/skills` (the skill corpus, now what the `knowledge` MCP tool serves and what Codex reads directly), `.agents/roles` (reviewer bodies), `.agents/hooks` (canonical guard logic with a shared `hook_runtime`).
+- **Codex support as contributed**: `.codex/hooks.json` wiring, hook shims, and native agent TOMLs, plus the cross-host portability test suite.
+- **Claude Code loses nothing**: `.claude/skills` adapters are content-complete, byte-identical copies — never pointer stubs — so the rich "Apply when…" trigger descriptions, named craft-skill references, and `user-invocable` flags survive verbatim (Claude routes on the frontmatter at selection time). `.claude/agents` keep their frontmatter, including the deliberate `model: opus` pins. `CLAUDE.md` stays intentionally short.
+- **Safety kept narrow**: `source_media_guard`'s scratch-exemption prefixes remain `claude-`/`codex-` only — the proposed `agent-` prefix would have exempted any real `agent-*` directory from the source-media deny.
+- **Drift cannot land**: `scripts/agent-rules/sync_portable_assets.py` (+`--check`) restores the invariant from either edit point, and `tests/test_portable_asset_parity.py` fails the suite on divergence, missing adapters (the "new skill silently never loads" failure mode), lost frontmatter pins, or widened scratch prefixes.
+
+Suites: Node 853, Python 3123 + 845 subtests (portability + parity families added).
+
+## What's New in v2.135.0 — audio.trim never trimmed
+
+The E59 protocol-layer sweep — the v2.133.0 smoke-test harness pointed at the *other* 16 advanced tools — found one real silent lie and confirmed the rest of the surface healthy.
+
+### Fixed
+
+**`audio.trim` never trimmed.** Two stacked failures, both invisible to success-shaped output: the non-strict schema silently stripped mistyped window keys (so `{start, duration}` copied the whole file and reported success), and the tool's own advertised `durationFrames` was never in the vendored module's vocabulary (`{startTime, endTime, duration}` in seconds) — even a correct call returned the full file as a "trim". Schemas across the audio tool are now `.strict()` (unknown keys refuse; extra ffmpeg knobs belong in `opts`), `durationFrames` is required (a windowless trim is a no-op copy wearing a trim's name — use `convert`), and a new optional `fps` (default 24) converts it to seconds. Live-verified through the MCP layer: `durationFrames: 24` → exactly 1.000 s of output.
+
+### Swept clean
+
+All 18 dispatchers refuse unknown actions with structured errors; offline happy paths verified for drp, drx, fusion, audio_plan, pipeline, editorial, conform, media, deliverable, and capabilities.
+
+Suites: Node 853, Python 3111 + 799 subtests.
+
+## What's New in v2.134.1 — the nesting envelope extends
+
+A follow-up measurement to v2.134.0: depth-3 nesting also renders (E58 — a compound inside a compound inside a compound, triple-nested white measured at 234 through the full spec → import → render route on 19.1.3.7). The SequenceSetup fix generalizes; nesting depth is no longer the boundary. Tool doc, guide, and code comments updated from "deeper unverified" to the measured envelope. Suites: Node 852, Python 3111+799.
+
+## What's New in v2.134.0 — freeze frames and nested compounds
+
+Two measured boundaries — both previously closed as "not authorable" — reopened with new harvest angles and closed for real, each render-proven on Studio 19.1.3.7.
+
+### Freeze frames: authored offline (`cuts[].freeze`)
+
+The old finding said no harvest path existed. One did: Resolve's EDL importer honors `M2 <reel> 000.0` motion memos, giving the first real frozen clip whose bytes could be read (E55: reads back source N..N **and** renders frozen — freezedetect-proven, the direction the earlier synthetic always failed in). The real `Sm2TimeMap` is flat in **seconds**, not frames: `YMin = YMax = Y = frozenFrame/fps`, `XMax = 60000` (a sentinel domain), and the clip's `<In>` stays empty. `buildFreezeTimemapKeyed` reproduces the harvest byte-exactly; `cuts[].freeze: true` (or `speed: 0`) authors it, and `assemble_from_interchange` now **authors** zero-speed events (EDL M2 freezes, zero-speed warps) instead of flattening them with a reason. Proof: an offline-authored freeze at a *different* source frame holds luma 125.09 for exactly 2.000 s, then the following cut resumes motion.
+
+### Nested compounds: depth-2 black solved (`compounds[].compounds`)
+
+`Timeline.CreateCompoundClip` works on 19.1.3, so a real doubly nested compound was made live and its archive diffed against the synthetic one that rendered black. Exactly one delta mattered: a Resolve-made compound's embedded pool `Sm2Sequence` FieldsBlob carries a **`SequenceSetup`** key (a 347-byte constant project-format blob) the donor template lacked. With it added, doubly nested synthetic content renders — bisect confirmed `SequenceSetup` alone flips it (E56), and the full tool-layer route proves it end to end (E57: white 234 through two nesting levels with flanking cuts intact). `spec.compounds` now nests recursively; depth-2 playback is render-verified, deeper composes structurally but is unverified.
+
+### Verification
+
+- Node (vendor + server): 852 passed (5 new tests incl. a byte-exact freeze-harvest fixture and a SequenceSetup template guard)
+- Python: 3111 passed + 799 subtests
+- Live: E55 harvests, E56 freeze + depth-2 bisect renders, E57 nested-spec render — all measured by frame luma / freezedetect
+
+## What's New in v2.133.0 — the tool layer meets its own surface
+
+The first end-to-end pass of the entire v2.106–v2.132 native-DRT authoring surface **through the MCP protocol layer** (every earlier proof drove the modules directly). A kitchen-sink spec — media cuts, cross-dissolve, 0.5x retime, V2 stacking, explicit audio placement, a compound clip, markers, and SRT subtitles in ONE assemble — was authored offline, imported, read back, and render-verified on Studio 19.1.3.7 (frame luma 122.9 / 181.6 mid-dissolve / 234 / 125.8 retime / 125.5 compound-inner; tone at the mono-strip -24.1 dB, then silence). The smoke test caught three real defects; all are fixed and regression-tested.
+
+### Fixed
+
+- **Subtitles (and marker ownership) vanished when compounds were in the spec.** Both placement steps ran after compound insertion but still targeted the first name-sorted `SeqContainer` — and a compound's inner container matches that pattern. Measured live: the imported timeline had no subtitle track; the cues sat inside the compound. The parent container id is now pinned once, before any compound exists, and threaded through subtitle placement and the marker blob's owner.
+- **`editorial.verify_roundtrip` could not close an EDL loop.** The zero-duration outgoing dissolve leg was paired as a real event (count mismatch), and EDL reel names (`CUTSRC`) had no way to match the re-export's file basenames (`cut_src`). Zero-length events are dropped, and a new `sourceMap` parameter — the same map that drove the assemble — derives the reel→basename aliases. EDL → assemble → import → OTIO-export → verify now passes with fitted per-source offsets.
+- **`assemble_from_interchange` result note contradicted itself**, appending the stale pre-v2.111 "transitions become cuts" text after the authored-ledger sentence.
+- **Headless recovery (#172):** a `-nogui` boot that never becomes scriptable still holds the one-per-machine singleton, wedging the GUI too. `resolve_headless.py start` now kills the instance it spawned when its readiness check fails; `stop --force` escalates TERM→KILL for an unanswering instance (unclean — expect project locks and a slow next boot); the headless-edit-loop guide names the precondition and a 30-second preflight.
+
+### Verification
+
+- Python: 3111 passed + 799 subtests (6 new recovery-path tests)
+- Node (vendor + server): 847 passed (2 new regression tests)
+- Live: kitchen-sink render probe + EDL round-trip pass on 19.1.3.7
+
+## What's New in v2.132.1 — the nesting boundary
+
+Knowledge release. **Depth-2 compound nesting renders black**: a compound placed inside another compound's inner container composes structurally — imports fully linked, reads back — but the doubly nested content renders black (the readback-blind class again). Depth-1, multiple parallel compounds per archive, remains the render-verified envelope; the tool doc now states the boundary.
+
+Also corrected during cleanup: the crash-window "phantom projects" never existed — a project created moments before a Resolve crash dies with the instance (no DB row, no folder), and `DeleteProject` returning `False` afterwards means *nothing to delete*. Lesson recorded: re-list after a crash before diagnosing project state.
+
+Suites: Node 845 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.132.0 — multiple compounds compose
+
+### The one-per-archive restriction falls
+
+Three separate dangling references each hard-crash Resolve's importer — mapped one crash at a time, then confirmed with an all-encodings reference sweep:
+
+1. the pool element's `<MpFolder>` (v2.131)
+2. the embedded sequence blob's keyed **`SeqRef`** — it names the inner *container's* uuid, patched through the keyed-dict codec
+3. the embedded sequence's **`<Parent>`** — pointing back at the compound's own pool id
+
+With all three rewired, every cluster identity freshens safely and **multiple compounds compose in one archive**. Also fixed en route: container listing is name-sorted, so an inner container could alphabetically precede the parent and swallow the next compound's item — the parent is now pinned explicitly.
+
+**Render proof:** parent cut 124.5 → CMP_A's inner white 234 → CMP_B's inner cut 125.3 — two offline-authored nested timelines playing back to back on 19.1.3.
+
+Suites: Node 845 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.131.0 — compound clips authored offline
+
+### Nested timelines, fully offline
+
+`drt.assemble` gains `spec.compounds`: author a compound clip — a nested timeline with its own inner edit — entirely offline, and it **renders** after import.
+
+**Render proof (fresh project, 19.1.3):** parent cut (124.5) → the compound's inner cut at source offset 96 (125.3) → the compound's inner white (234). An offline-authored nested edit, playing.
+
+**Two crash laws paid for the summit** (Resolve died twice mapping them):
+- The compound cluster's identities ride **verbatim** — the embedded `Sm2Sequence` FieldsBlob encodes them, and freshening the XML ids around the unchanged blob crashes the importer outright. Hence: one compound per archive for now.
+- A dangling `<MpFolder>` reference in the pool element also crashes the importer — it's rewired to the target pool's folder.
+
+Inner content uses the ordinary cuts machinery on the inner container (origin frame 0), cloning the sources' captured native clips — `cut-media` now supports donor-less tracks when every cut carries one.
+
+Suites: Node 845 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.130.0 — compound clips survive extraction
+
+### The hollow-compound bug
+
+A compound clip in a `.drp` is a pool `Sm2MpCompoundClip` embedding a full `Sm2Sequence` — whose actual tracks live in their **own SeqContainer**. The extraction recipe kept only the target timeline's container, so any timeline containing a compound extracted into a `.drt` whose compound imported, read back… and was **hollow**.
+
+`extract_from_drp` now walks the kept container's `MediaRef`s → compound pool elements → embedded sequence ids → keeps the inner containers too, recursively (compounds nest).
+
+**Live proof:** the fixed extraction imports 3/3 linked with the compound intact, and the archive **renders the compound's inner content** (cut 125.3 → white 234, audio −21.1 dB) — compound clips fully survive the `.drt` route on 19.1.3.
+
+Also banked: the full `.drp` anatomy of compounds (embedded sequence identity, Fairlight blob, the hidden `000_Archive` pool location, the generic item blob) — the map for offline compound *authoring* later.
+
+Suites: Node 844 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.129.0 — sidecar SRT in the conform route
+
+Turnover packages usually ship a sidecar `.srt` next to the edit. `assemble_from_interchange` now takes `subtitlesSrtPath` and authors the cues onto the subtitle track in the same call — EDL/OTIO/AAF/XML/prproj in, picture + audio + subtitles out.
+
+Suites: Node 843 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.128.0 — subtitles authored; track matrix complete
+
+### The last track type falls
+
+Subtitles turn out to be the **simplest item in the whole schema**: a plain `Sm2TiGenerator` with `PrettyType Subtitle` and the cue text in `<Name>` — no blobs at all, on a Type-2 track. No Fusion comp means the byte-keyed cache law doesn't apply, and the payload is API-visible after import.
+
+`drt.assemble` gains `spec.subtitles` (frame-addressed cues) and `spec.subtitlesSrt` (**raw SRT in, cues out** — composes with `spec.startFrame`). Overlapping cues refuse; the track vec is synthesized from the harvested shape.
+
+**Live proof:** SRT cues plus a spec-level cue import and read back at exact frames with their text. One measured caveat, documented: Resolve reads angle-bracket runs in cue text as SRT formatting markup and strips unknown tags from display (standard subtitle semantics — the authored XML carries them escaped and intact).
+
+With this, the native authoring matrix covers **every track type**: video (cuts, stacking, dissolves, retimes), audio (placements, crossfades), and subtitles — plus markers, start TC, generators, and five interchange formats in.
+
+Suites: Node 842 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.127.1 — audio ignores timemaps (measured)
+
+Knowledge release closing the audio-retime question: a 50% keyed `Sm2TimeMap` on an imported **audio** clip *reads back* retimed (source 0..48 over 96 record frames) but **renders at 100%** — pitch and spectrum identical to the 1× reference. The audio engine ignores clip timemaps entirely while readback honors them: the readback/render divergence class, audio edition. Audio retimes remain honestly skipped, with the ledger reason now carrying the measurement.
+
+Suites: Node 841 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.127.0 — sequence picker and reel aliasing
+
+Two conform-ergonomics upgrades surfaced by real turnover shapes:
+
+- **Multi-sequence containers**: `assemble_from_interchange` gains `sequenceName` / `sequenceIndex` for AAF and `.prproj`. When exactly one sequence carries events it auto-picks; when several do, it refuses and lists them (`index:name`) instead of flattening into an overlap refusal.
+- **Reel aliasing**: sources now group **by file**, not by reel — multiple reels mapped to one `mediaFilePath` (Avid mob vs tape names, re-linked dailies) merge into a single source with combined cuts, instead of demanding a captured template per reel name.
+
+Suites: Node 841 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.126.0 — AAF route fixed at the tool layer; harness parity
+
+### The last gap in the AAF story
+
+Two closures:
+
+**A since-birth bug, fixed.** `assemble_from_interchange` with `format: 'aaf'` fell through to the sync parser — which throws for AAF — so the tool-layer AAF route had *never* worked (every earlier proof called the parser library directly). The handler now awaits the async `parseAAF`, and `aaf.mjs` falls back to the repo venv's Python (where `pyaaf2` lives), so the route works with zero environment setup. A stubbed regression test pins it.
+
+**Harness parity.** The shipped `capture_media_template` ran live for both fixture sources — capturing `mediaStartTime` 3600 and the native clip elements through the real code path — and the tool-handler route produced renders **identical** to the hand-verified E36 run (126.376 / 95.965 / 95.964 / 126.373, audio −21.08 dB). Nothing hand-rolled remains in the chain.
+
+Suites: Node 840 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.125.0 — the round-trip QC loop closes
+
+### Prove the conform, don't trust it
+
+New `editorial.verify_roundtrip`: parse the original turnover, parse Resolve's own re-export of the timeline you authored from it, and get a verdict — normalized for the three conventions that otherwise drown the diff in noise:
+
+- track labels (`V` ≡ `V1`)
+- source naming (AAF mob name vs file basename, extension-stripped)
+- source frames (Resolve's OTIO export is **timecode-absolute** — a constant per-source offset is fitted, reported, and enforced)
+
+**Live proof:** rich AAF → `assemble_from_interchange` → import → Resolve's own OTIO export → `pass: true`, 4 pairs, `srcOffsets` = 86400 for both sources — exactly their 01:00:00:00 TC bases. The record geometry survives the entire loop to the frame.
+
+Real drift still trips it: a 5-frame source slip or a 2-frame record slip returns `pass: false` with the mismatch kind and location.
+
+Suites: Node 839 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.124.0 — the Premiere leg; five formats proven
+
+### .prproj in, frames out — no Premiere required
+
+`assemble_from_interchange` gains `format: 'prproj'`: the Premiere project is read **offline** (gunzip + object-graph walk), converted through the same authoring bridge, and lands as a linked, rendering `.drt`.
+
+**Live proof through the actual tool handler:** a schema-faithful synthetic `.prproj` (two sources on V1 + an audio event) → `.drt` → import (3/3 linked, fresh project) → render: 122.99 / 234, audio −21.1 dB.
+
+That makes **all five interchange formats route-proven end-to-end**: EDL, OTIO, AAF, FCP7 XML, and `.prproj` — parse → assemble → import → measured frames and RMS.
+
+Also: the result note that still claimed "retimes are flattened and transitions become cuts" (stale since v2.111/v2.113) now states the authored-ledger truth.
+
+Suites: Node 837 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.123.0 — four formats proven; cross-link guard
+
+### Route coverage complete
+
+**All four interchange formats — EDL, OTIO, AAF, and FCP7 XML — are now route-proven end-to-end**: parse → `assemble_from_interchange` → `.drt` → import → measured frames and RMS. The XMEML leg (E37): two sources cut on V1 (122.99 / 234) with an explicit A1 audio event continuing at −21.1 dB under the second cut.
+
+**And the guard the merge law demands:** `import_timeline_checked` now cross-checks `.drt`/`.drp` imports — the archive's `<MediaFilePath>` set vs the files the imported items *actually* link to. A missing expected file returns `cross_link_warning` with the full `{expected, actual, missing}` comparison. This catches the coarse-identity cross-link that `linked == total` is provably blind to (the wrongly-linked items read back fully linked, wrong clip name and all).
+
+Suites: Node 836 pass / 0 fail; Python 3105 passed + 799 subtests.
+
+## What's New in v2.122.0 — the AAF route, coast to coast
+
+### AAF in, frames out
+
+The full route is proven: a rich Resolve-exported AAF → `assemble_from_interchange` → `.drt` → import → render, **every window frame-accurate** (Studio 19.1.3.7, headless):
+
+| Window | Expected | Measured |
+|---|---|---|
+| V1 rt_source_1 | ~126 | 126.4 |
+| V2 rt_source_2 stacked over V1 | ~96 | **95.97** |
+| V1's rt_source_2 cut | ~96 | **95.96** |
+| V1 rt_source_1 tail | ~126 | 126.4 |
+| Audio (both source windows) | tone | −21 dB |
+
+Channel-leg merge, V2 stacking, and TC-bearing sources (embedded 01:00:00:00 via `MediaStartTime`) verified in one render. The v2.120 native-donor clone path is now **render-verified**.
+
+**New law (`api_truth`):** `ImportTimelineFromFile` merges pool media by a *coarse* identity across imports — two different files (different names and sizes, mtimes 1 s apart) carried identity blobs byte-identical except uuids, and in a non-empty project the second file's clips silently played the first file's picture. Fresh projects materialize both correctly; verify per-item paths (or render probes) after importing into non-empty projects.
+
+Also recorded: the modal-wedge failure mode and its recovery (force-kill + headless relaunch; headless is *not* modal-immune — a would-be dialog hangs the call; a hard-wedged render has no API exit).
+
+Suites: Node 836 pass / 0 fail; Python 3101 passed + 799 subtests.
+
+## What's New in v2.121.0 — one marker codec everywhere
+
+Offline consolidation release (live validation is paused on a stuck Resolve dialog — see v2.120.0). All marker paths now share the single measured codec:
+
+- `seq-container-builder` encodes lockable-blob markers with `timeline-markers-blob` (byte-exact vs a live Resolve export) instead of the deprecated simplified encoder
+- `editorial.marker_roundtrip` adds a **binary** round-trip through the real codec, with provenance riding in `customData` — the result gains `blobRoundTrip`
+- `parseOTIO` picks up **track-level** markers (record-time `marked_range`) alongside clip-level ones
+
+Suites: Node 836 pass / 0 fail; Python 3101 passed + 799 subtests.
+
+## What's New in v2.120.0 — AAF channel-leg merge; native-donor path staged
+
+### The AAF leg, part one
+
+Driving a real Resolve-exported AAF through `assemble_from_interchange` surfaced two truths and staged one architecture change:
+
+- **AAF duplicates audio per channel.** Every A-track event in a rich Resolve 19 export arrives twice (one per channel leg). The bridge now merges identical legs instead of refusing them as a same-track overlap (`report.audioChannelLegsMerged`, tested); skipped-audio accounting corrected.
+- **Embedded source timecode matters.** A `.mov` with embedded 01:00:00:00 fails the render with *"Full resolution media not found at 01:00:00:00"* — the native clip stores `<MediaStartTime>` in seconds where the template donor has 0. `capture_media_template` now harvests `mediaStartTime` plus the source's native timeline-clip elements.
+- **Native-donor clone path (staged, live-unverified).** `cut-media` can clone the source's own captured clip (per track type, wrapper kept). Only caches carrying the new fields reach it — every existing capture keeps the proven donor path. Live verification is pending: a stuck Resolve modal (import-failure dialog) wedged the session mid-expedition — after it, even previously-proven files refused to import, so every later measurement was of the wedge, not the code. The resume plan is recorded.
+
+Suites: Node 835 pass / 0 fail; Python 3101 passed + 799 subtests.
+
+## What's New in v2.119.0 — turnover markers ride the conform
+
+### Locators survive the trip
+
+Editorial marks up a cut; the conform should keep those marks. Now it does: **EDL `* LOC:` locators** (the Avid convention) and **OTIO `Marker` objects** parse into the normalized event stream and come out the other end as real timeline markers in the assembled `.drt` — names, colors, exact frames.
+
+**Full-route proof:** an EDL with two `LOC` lines imports as a timeline whose markers read back at exactly frames 24 and 60 with their names and mapped colors (Red / Green) through the marker API.
+
+### Changes
+- `parseEDL`: `* LOC:` lines → `track: 'MARKER'` pseudo-events (never miscounted as skipped audio)
+- `parseOTIO`: clip markers → record-position MARKER events
+- `eventsToAssembleSpec`: authors `spec.markers`; interchange colors map onto the measured 16-color Resolve palette (MAGENTA→Fuchsia, ORANGE→Sand, WHITE→Cream, BLACK→Cocoa; unknown→Blue); `report.authoredMarkers`
+- 2 new bridge tests
+
+Suites after last edit: Node 834 pass / 0 fail; Python 3101 passed + 799 subtests.
+
+## What's New in v2.118.0 — timeline markers authored offline
+
+### Markers ride the .drt now
+
+`drt.assemble` gains `spec.markers` — timeline markers with all 16 colors, names, notes, durations, and `customData`, authored fully offline and verified by API readback after import.
+
+**The decode:** markers live in `project.xml` as a `Sm2SequenceLockableBlob` (owner = the timeline's `Sm2Sequence` DbId) wrapping a zstd-framed protobuf. Resolve itself emits **raw-block zstd** for small payloads and accepts it on import — so the codec needs no zstd library. The new `timeline-markers-blob.js` encoder is **byte-exact** against Resolve 19.1.3.7's own export (fixture checked in).
+
+**The correction:** the legacy `marker-encoder.js` color map was wrong (Yellow is 16, not 8; Purple is 128, not 131072) and its output never matched a real export — now deprecated with a pointer. The full 16-color bit map was harvested live, one marker per color.
+
+**Proof:** offline-authored markers (Red with note + duration 12; Mint with `customData`) read back perfectly through the marker API after import.
+
+Suites after last edit: Node 832 pass / 0 fail; Python 3101 passed + 799 subtests.
+
+## What's New in v2.117.0 — start-timecode fidelity
+
+### The conform emulator keeps the real start TC
+
+AAF/EDL turnovers rarely start at 01:00:00:00 — and until now the assembled timeline silently did. `assemble_from_interchange` gains `preserveStartTimecode: true`: the timeline starts at the turnover's **real first record frame** (the long-standing AAF rule "build at THAT start" — now automated).
+
+**The discovery:** a timeline's start timecode lives in exactly one non-cosmetic place in a `.drp`/`.drt` — the pool `Sm2MpTimelineClip`'s `MediaExtents` blob, 16 bytes of LE doubles `[startSeconds, durationSeconds]`. Patch it offline, keep clips at absolute frames ≥ the new origin, and the import lands at the new start TC and renders.
+
+**Proof:** offline patch to 02:00:00:00 → readback `02:00:00:00`, live frame; full route: a 00:59:52:00 EDL → timeline at 00:59:52:00 (86208–86304) with both sources rendering correctly.
+
+### Changes
+- `drt.assemble`: `spec.startFrame` (frames @24; before-origin cuts still refuse, against the new origin)
+- `assemble_from_interchange`: `preserveStartTimecode`
+- `api_truth` MediaExtents entry; 2 new tests
+
+Suites after last edit: Node 830 pass / 0 fail; Python 3101 passed + 799 subtests.
+
+## What's New in v2.116.2 — flat-target wording routed to assemble
+
+Doc-clarity release from a post-release drift review (which found everything else clean — generated files, tool counts, api-limitations, version stamps). `convert_to_interchange`'s flat DRT target still flattens retimes by design, but the claim "the DRT clip schema has no per-clip speed field" read misleadingly now that `drt.assemble` authors retimes via `Sm2TimeMap` (v2.113+). The tool description and `resolve-advanced/README.md` now name the flat target explicitly and route to `drt.assemble_from_interchange` for authored retimes, dissolves, multi-track video, and audio.
+
+Suites: Node 828 pass / 0 fail; Python 3101 passed + 799 subtests.
+
+## What's New in v2.116.1 — the flat-timemap divergence
+
+Knowledge release. Freeze-frame probe: a **flat** keyed `Sm2TimeMap` (both keyframes at the same source Y) is the one timemap shape where readback and render *disagree in the trusting direction* — the imported item reads back frozen (source 96..96) but **renders moving** (48/48 unique frames). Freezes therefore stay in `flattenedRetimes` with the reason rather than being authored as flat maps. Recorded in `api_truth` (the readback-blind class now has a member that lies in both directions).
+
+Suites: Node 828 pass / 0 fail; Python 3101 passed + 799 subtests.
+
+## What's New in v2.116.0 — audio cross-fades authored
+
+### The conform emulator learns audio cross-fades
+
+An audio dissolve in interchange now becomes a **real, rendering cross-fade** in the assembled `.drt`.
+
+**The harvest:** Resolve has no API for transitions, so we let it author one — an FCP7 `KGAudioTransCrossFade` imported via XMEML lands as an audio `Sm2TiTransition` (PrettyType "Final Cut Pro 7", which is what Resolve itself stores — and renders). That element is now a bundled template.
+
+**Render proof:** the offline-authored crossfade's highpass-RMS **ramps** through the junction (−27.6 → −25.6 → −23.0 → −21.9 dB), identical in shape to a Resolve-authored control; a butt cut steps.
+
+### Changes
+- `placeTransition` `trackType: 'audio'`; `drt.assemble` `transitions[].trackType`
+- `eventsToAssembleSpec`: audio dissolves authored under the same abut/handle geometry; drops carry `trackType: 'audio'` and the reason
+- XMEML gotcha recorded: an `<audio><channelcount>` block inside a *file definition* aborts the whole import silently
+- 2 new bridge tests; template wrapper guard extended
+
+Suites after last edit: Node 828 pass / 0 fail; Python 3101 passed + 799 subtests.
+
+## What's New in v2.115.1 — native DRT authoring guide
+
+Documentation release: [docs/guides/native-drt-authoring.md](https://github.com/samuelgursky/davinci-resolve-mcp/blob/main/docs/guides/native-drt-authoring.md) consolidates the offline-authoring subsystem (v2.105–v2.115) — every capability with its spec surface, the four measured laws (Fusion comp byte-keyed cache, Fairlight strip, Sm2TimeMap generation split, timeline origin), the readback-is-blind verification doctrine, and a delivery checklist. AGENTS.md links it from the Conform/Interchange workflow row; per-IDE agent rules regenerated.
+
+Suites: Node 826 pass / 0 fail; Python 3101 passed + 799 subtests.
+
+## What's New in v2.115.0 — audio authored: the Fairlight strip law
+
+### The conform emulator learns audio
+
+A-track events in interchange now come out the other end as **real, playing audio clips** — the last big honesty-ledger item (`audioEventsSkipped`) falls.
+
+**The law (measured by elimination):** audio tracks cannot be grown offline. The per-timeline Fairlight model (`FLStudioModelBA`, inside the media pool's `Sm2Sequence.FieldsBlob`) holds one mixer strip per audio track — a cloned track imports fine, reads back fine, and renders **silent**. We made the clip byte-identical to a live-authored one, the track byte-identical (`SubType` is the channel-format code — 1=mono — not an ordinal), shared the pool entry with a playing A1 clip: still silent. Only a template *captured* with the tracks plays. Audio aliveness is readback-blind — verify by rendered RMS.
+
+**The fix is the capture-once pattern again:** the r19 media template was re-captured live with **8 mono audio tracks** (valid strips ride along). `audioOnly` cuts land on A1–A8 and render at native level; placements beyond the ceiling refuse with instructions.
+
+**Full-route proof:** OTIO with V + two audio tracks → `.drt` → import → render: A1 tone −21.09 dB, A2 tone −24.08 dB (exactly the native control), video alive throughout.
+
+### Changes
+- `drt.assemble`: `cuts[].audioOnly` + `track` (1–8); explicit audio suppresses the A1 convenience mirror; audio clones carry their own source identity (donor-identity clones were part of the silence)
+- `eventsToAssembleSpec`: A-track events authored with per-track overlap checks; audio retimes skipped with reason; OTIO/EDL audio tracks numbered (`A`, `A2`, …)
+- `api_truth`: Fairlight-strip entry (silent-failure class); 3 new tests
+
+Suites after last edit: Node 826 pass / 0 fail; Python 3101 passed + 796 subtests.
+
+## What's New in v2.114.0 — reverse retimes authored
+
+### The last flattened retime falls
+
+Reversed clips in interchange (OTIO negative `time_scalar`, XMEML/EDL reverse) are now **authored** into the assembled .drt — `flattenedRetimes` only holds zero-speed freezes.
+
+**The shape:** reverse is the same r19 keyed `Sm2TimeMap` with the Y endpoints swapped — kf0=(0, YMax), kf1=(XMax, 0), a descending line. The encoder is **byte-exact** against Resolve 19.1.3.7's own −100% retime export.
+
+**The In rule (measured):** for a reversed clip, `<In>` measures from the source **end**: `(sourceFrames − srcIn − dur×speed)/speed`. Offline proof: a reversed srcIn-24 dur-48 cut reads back source 71→23 — exactly the prediction — and renders 48 live frames.
+
+### Changes
+- `drt.assemble`: `cuts[].reverse` (composable with `cuts[].speed`)
+- `eventsToAssembleSpec`: reverse authored; ledger reasons updated
+- `api_truth` timemap entry extended with the reverse shape + In-from-end rule
+
+Suites after last edit: Node 823 pass / 0 fail; Python 3101 passed + 796 subtests.
+
+## What's New in v2.113.0 — retimes authored: the r19 Sm2TimeMap
+
+### The conform emulator learns speed
+
+A 50% `LinearTimeWarp` in OTIO now comes out the other end as a **real retime** in the imported timeline — not a flattened 100% clip.
+
+**The discovery:** `Sm2TimeMap` keyframes are generation-split. Resolve 21 stores protobuf points; Resolve 19 stores a keyed-dict of keyed-dict keyframes — and **19 silently ignores the protobuf form on import** (the clip reads back at 100%, no warning). The new `buildConstantSpeedTimemapKeyed` encoder emits the r19 form and is **byte-exact** against a timemap authored by Resolve 19.1.3.7 itself.
+
+**Full-route proof:** OTIO `time_scalar: 0.5` → `assemble_from_interchange` → import → the item reads source 96..120 over 48 record frames (50% at source offset 96, the exact interchange intent) and renders live.
+
+### Semantics measured
+- The timemap spans the **whole source** stretched by 1/speed; the clip's `<In>`/`<Duration>` window into it in **record-domain** frames (`srcIn` converts by `/speed`)
+- Retimed cuts are video-only on A1 (audio would need its own timemap + pitch handling — stated in the ledger, not silent)
+- Reverse still flattens, with the reason; `report.authoredRetimes` joins the ledger
+
+### Changes
+- `drt.assemble`: `cuts[].speed` (forward constant, e.g. 0.5)
+- `eventsToAssembleSpec`: forward speeds authored, reverse flattened with reason
+- `api_truth`: generation-split entry (silent-failure class); harvest fixture + byte-exactness unit test
+
+Suites after last edit: Node 822 pass / 0 fail; Python 3101 passed + 796 subtests.
+
+## What's New in v2.112.0 — multi-track video authoring
+
+### The conform emulator goes multi-track
+
+Two-video-track interchange (OTIO/XMEML) now assembles into a .drt with real V2+ stacking — and it renders.
+
+**Render proof (Studio 19.1.3.7):** two-track OTIO → `assemble_from_interchange` → import (3/3 linked) → render: V1 testsrc at 122.8/125.5 with the V2 white insert covering the middle at exactly **234**.
+
+### Changes
+- `cutSourceIntoClips`: cuts gain `track` (1-based); missing video tracks grown as empty clones; track>1 cuts are **video-only** (their audio would overlap A1 — stated, not silent)
+- OTIO/XMEML parsers number video tracks `V, V2, V3, …`; EDL stays single-V
+- `eventsToAssembleSpec`: overlap judged **per video track** (V2 over V1 is legitimate geometry); dissolves match predecessors on their own track; ledger gains `upperTrackCutsVideoOnly`
+- 2 new Node tests: V2 cut mapping, per-track overlap refusal naming the track
+
+Suites after last edit: Node 820 pass / 0 fail; Python 3101 passed + 796 subtests.
+
+## What's New in v2.111.0 — dissolves authored coast-to-coast
+
+### The conform emulator learns dissolves
+
+An EDL `D`-event now comes out the other end as a **real, rendering Cross Dissolve** — not a cut.
+
+**Render proof (Studio 19.1.3.7):** an offline-authored `Sm2TiTransition` over transplanted cross-source media blends exactly through the cut — outgoing testsrc 123.9 → 130.8 → **181.6 at mid-dissolve** (predicted (124+234)/2 = 179) → 223.2 → incoming white 234. Transitions carry no Fusion comp, so the byte-keyed comp-cache law (v2.109.0/v2.110.0) does not apply: the harvested transition renders live on 19.
+
+### Changes
+- `eventsToAssembleSpec` **authors** a cross-dissolve when the predecessor ends exactly at the cut and both sides have handle media for the centered span; every non-authorable dissolve stays in `droppedTransitions` **with the reason** (no abutting predecessor / insufficient handles, side named). The report gains `authoredTransitions`.
+- Full route re-proven live: EDL `D 024` → `drt.assemble_from_interchange` → `.drt` → `timeline.import_timeline_checked` → render → 181.6 mid-blend.
+- `drt` tool doc updated: transitions no longer "become cuts".
+- 4 new Node tests cover the authored / no-incoming-handle / no-outgoing-tail / record-gap branches.
+
+Suites after last edit: Node 818 pass / 0 fail; Python 3101 passed + 796 subtests.
+
+## What's New in v2.110.0 — offline generators render on 19; cache law scoped to titles
+
+### Element expedition, part two — generators are exempt
+
+v2.109.0 mapped the law: imported Fusion comps on Resolve 19.x render only via the machine's byte-keyed Fusion disk cache. This release proves the carve-out: **built-in generators are plain `Sm2TiGenerator` clips with no Fusion comp, and they render live from a fully offline-authored .drt** — measured on Studio 19.1.3.7 over transplanted white media (YAVG 234):
+
+| Element | YAVG | Verdict |
+|---|---|---|
+| Solid Color on V2 | 16.0 | alive — covers the white |
+| half-coverage control | 16 / 234 in one render | discrimination clean |
+| `PrettyType` → SMPTE Color Bar | 104.9 | bars render |
+| `PrettyType` → Grey Scale | 125.1 | ramp renders |
+
+So offline element authoring on pre-21 is real for generators (slates, leaders, bars, solids) — only Fusion **titles** remain cache-bound, with the live `timeline.set_title_text` post-import flow as the working alternative.
+
+### Changes
+- `drt.assemble`: `elementsWarning` now fires **only for title elements** on pre-21 targets and documents verified generator kinds; spec doc lists `generatorName` options
+- `api_truth`: generator exemption added to the byte-keyed cache-law entry; `api-limitations.md` regenerated
+- **Version stamps unified**: v2.109.0's bump missed `install.py` and `src/granular/common.py` — the CI smoke test correctly **blocked** that npm publish (2.109.0 never reached npm). All four stamps now move together, enforced by `test_npm_package_metadata`
+- New Node test: generator kind selection lands in the sequence XML; warning gate is title-only
+
+Suites after last edit: Node 814 pass / 0 fail; Python 3101 passed + 796 subtests.
+
+## What's New in v2.109.0 — element render law: byte-keyed Fusion cache on 19.x
+
+### Element transplant expedition — verdict
+
+**The law (measured on Studio 19.1.3.7):** a Fusion comp arriving via timeline import renders on Resolve 19.x **only** when the machine's Fusion disk cache holds frames keyed to the comp blob's *exact compressed bytes*. An identity recompression — byte-identical Lua, different zlib bytes, framing verified consistent — imported and read back perfectly but rendered black, while the untouched harvest rendered its cached frames. The live-render fallback for imported comps produces no frames on 19; Resolve 21-generation hosts render imported comps live (where the title/generator primitives were originally proven).
+
+**Consequence:** offline text patching of Fusion comps for a 19.x host is impossible *by design* — no valid re-encoding can hit the byte-keyed cache.
+
+**The working pre-21 flow:** `drt.assemble` media offline (native-descriptor transplant renders everywhere), then set title text **post-import** with `timeline.set_title_text` (its Fusion-comp write path is live-verified on 19.1.3).
+
+### Changes
+- `composition-text`: wrong plaintext dual-mode branch reverted (both generations share identical nested framing); law documented at `rewriteInner`
+- r19 title/generator snippets `<Element>`-wrapped (raw clips concatenated into Items made render jobs fail with no status); guard test added
+- `snippetPathFor(templateVersion)` selects r19 snippets for pre-21 targets; `drt.assemble` `elementsWarning` now states the law and the working flow
+- `api_truth`: new entry *Imported Fusion comps render via byte-keyed disk cache on 19.x*; `api-limitations.md` regenerated
+
+Suites: Node 813 pass / 0 fail; Python 3101 passed + 796 subtests.
+
 ## What's New in v2.108.0
 
 **The conform emulator, coast to coast.** An interchange file goes in; an
