@@ -229,9 +229,11 @@ export function eventsToAssembleSpec(events, opts = {}) {
   }
   const DEFAULT_ORIGIN = 86400;
   const isAudio = (t) => /^A\d*$/.test(String(t || ''));
-  const vids = events.filter((e) => !isAudio(e.track) && e.recIn != null && e.recOut != null);
+  const isMarker = (t) => t === 'MARKER';
+  const vids = events.filter((e) => !isAudio(e.track) && !isMarker(e.track) && e.recIn != null && e.recOut != null);
   const auds = events.filter((e) => isAudio(e.track) && e.recIn != null && e.recOut != null);
-  const audioSkipped = events.length - vids.length - auds.length;
+  const markerEvents = events.filter((e) => isMarker(e.track) && e.recIn != null);
+  const audioSkipped = events.length - vids.length - auds.length - markerEvents.length;
   if (!vids.length) throw new Error('eventsToAssembleSpec: no video events with record ranges');
 
   const unmapped = [...new Set([...vids, ...auds].map((e) => e.source).filter((srcName) => !sourceMap[srcName]))];
@@ -426,12 +428,31 @@ export function eventsToAssembleSpec(events, opts = {}) {
     transitions.push({ track: c.track, atFrame: c.atFrame, durationFrames: c.durationFrames, trackType: 'audio' });
   }
 
+  // Turnover markers (EDL * LOC: locators, OTIO Marker objects) → authored
+  // timeline markers. Interchange colors map to the measured Resolve names;
+  // unknown colors fall back to Blue. Frames are timeline-absolute like cuts.
+  const COLOR_MAP = {
+    blue: 'Blue', cyan: 'Cyan', green: 'Green', yellow: 'Yellow', red: 'Red',
+    pink: 'Pink', purple: 'Purple', magenta: 'Fuchsia', fuchsia: 'Fuchsia',
+    rose: 'Rose', lavender: 'Lavender', sky: 'Sky', mint: 'Mint',
+    lemon: 'Lemon', sand: 'Sand', cocoa: 'Cocoa', cream: 'Cream',
+    orange: 'Sand', white: 'Cream', black: 'Cocoa',
+  };
+  const markers = markerEvents
+    .map((e) => ({
+      frame: ORIGIN + (toTl(e.recIn, e.fps) - minRec),
+      color: COLOR_MAP[String(e.color || '').toLowerCase()] || 'Blue',
+      ...(e.name ? { name: e.name } : {}),
+    }))
+    .filter((m) => m.frame >= (preserveStartTimecode ? startFrame : DEFAULT_ORIGIN));
+
   return {
-    spec: { timelineName, media, ...(preserveStartTimecode ? { startFrame } : {}), ...(transitions.length ? { transitions } : {}) },
+    spec: { timelineName, media, ...(preserveStartTimecode ? { startFrame } : {}), ...(markers.length ? { markers } : {}), ...(transitions.length ? { transitions } : {}) },
     report: {
       videoEvents: vids.length,
       sources: media.length,
       audioEventsSkipped: audioSkipped,
+      authoredMarkers: markers.length,
       authoredAudioEvents: audioPlacements.length,
       audioRetimesSkipped,
       upperTrackCutsVideoOnly: placements.filter((pl) => pl.track > 1).length,

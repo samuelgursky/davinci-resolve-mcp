@@ -49,6 +49,8 @@ function evt(o) {
   return {
     index: o.index ?? null,
     track: o.track || 'V',
+    ...(o.name !== undefined ? { name: o.name } : {}),
+    ...(o.color !== undefined ? { color: o.color } : {}),
     source: o.source || 'UNKNOWN',
     srcIn: o.srcIn ?? null,
     srcOut: o.srcOut ?? null,
@@ -81,6 +83,19 @@ export function parseEDL(text, opts = {}) {
         target.speed = +Math.abs(pendingSpeed.speedPct).toFixed(2);
         target.reverse = pendingSpeed.reverse;
       }
+      continue;
+    }
+    // Avid-style locators: `* LOC: 01:00:01:12 BLUE marker text` — a marker
+    // at an absolute record timecode. Emitted as track 'MARKER' pseudo-events
+    // (recIn only) so the assemble bridge can author them; consumers that
+    // filter video/audio by track shape ignore them.
+    const loc = /^\*\s*LOC:\s*(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+(\S+)\s*(.*)$/i.exec(line);
+    if (loc) {
+      events.push(evt({
+        index: events.length + 1, track: 'MARKER', source: '',
+        recIn: tcToFrames(loc[1], fps), recOut: null,
+        name: loc[3].trim() || undefined, color: loc[2], fps,
+      }));
       continue;
     }
     const tokens = line.split(/\s+/);
@@ -147,6 +162,14 @@ export function parseOTIO(otio, opts = {}) {
           }
         }
         const src = (child.media_reference && (child.media_reference.target_url || child.media_reference.name)) || child.name || 'UNKNOWN';
+        for (const mk of child.markers || []) {
+          const mrStart = (mk.marked_range && mk.marked_range.start_time && mk.marked_range.start_time.value) || 0;
+          events.push(evt({
+            index: idx++, track: 'MARKER', source: '',
+            recIn: rec + (mrStart - startVal), recOut: null,
+            name: mk.name || undefined, color: mk.color || undefined, fps: rate,
+          }));
+        }
         events.push(
           evt({
             index: idx++,

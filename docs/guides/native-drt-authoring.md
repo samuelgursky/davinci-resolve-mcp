@@ -49,6 +49,7 @@ window. `render.verify_output` covers the container-level checks.
 | Built-in generators | `elements: [{type:'generator', generatorName}]` | v2.110 |
 | Custom start timecode | `spec.startFrame` / `preserveStartTimecode` | v2.117 |
 | Timeline markers | `spec.markers` (16 colors, notes, durations, customData) | v2.118 |
+| Turnover markers | EDL `* LOC:` locators + OTIO markers → authored | v2.119 |
 | Fusion titles | `elements: [{type:'title', text}]` — **21-gen hosts only** | v2.108 |
 
 `assemble_from_interchange` drives the same engine from an EDL / OTIO /

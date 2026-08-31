@@ -364,3 +364,40 @@ test('preserveStartTimecode keeps absolute record positions and sets spec.startF
   assert.equal(anchored.report.origin, 86400);
   assert.equal(anchored.spec.media.find((m) => m.mediaFilePath === '/m/a.mp4').cuts[0].startFrame, 86400);
 });
+
+// Turnover markers: EDL * LOC: locators and OTIO Marker objects become
+// authored timeline markers (blob codec byte-exact vs a live export;
+// imported markers read back perfectly through the marker API).
+test('EDL LOC locators author markers with mapped colors', () => {
+  const edl = [
+    'TITLE: LOCS',
+    'FCM: NON-DROP FRAME',
+    '001  TAPE1 V     C        00:00:01:00 00:00:03:00 01:00:00:00 01:00:02:00',
+    '* LOC: 01:00:01:00 RED  fix flash frame',
+    '* LOC: 01:00:00:12 MAGENTA vfx due',
+    '',
+  ].join('\n');
+  const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
+  assert.equal(report.authoredMarkers, 2);
+  assert.deepEqual(spec.markers, [
+    { frame: 86424, color: 'Red', name: 'fix flash frame' },
+    { frame: 86412, color: 'Fuchsia', name: 'vfx due' },
+  ]);
+  assert.equal(report.audioEventsSkipped, 0, 'locators are not miscounted as skipped audio');
+});
+
+test('OTIO clip markers land at their record position', () => {
+  const rtm = (value) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate: 24 });
+  const otio = { OTIO_SCHEMA: 'Timeline.1', tracks: { children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [
+      { OTIO_SCHEMA: 'Clip.1', name: 'TAPE1',
+        source_range: { start_time: rtm(24), duration: rtm(48) },
+        media_reference: { name: 'TAPE1' },
+        markers: [{ OTIO_SCHEMA: 'Marker.2', name: 'beat', color: 'GREEN',
+          marked_range: { start_time: rtm(36), duration: rtm(1) } }] },
+    ] },
+  ] } };
+  const { spec } = eventsToAssembleSpec(parseOTIO(otio, { fps: 24 }), { sourceMap: MAP });
+  // clip srcIn 24 at record 0; marker at source 36 → record 12 → frame 86412
+  assert.deepEqual(spec.markers, [{ frame: 86412, color: 'Green', name: 'beat' }]);
+});
