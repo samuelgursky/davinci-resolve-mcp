@@ -45,6 +45,7 @@ window. `render.verify_output` covers the container-level checks.
 | Audio cross-fades | `transitions[].trackType: 'audio'` | v2.116 |
 | Constant retimes, forward | `cuts[].speed` (e.g. `0.5`) | v2.113 |
 | Constant retimes, reverse | `cuts[].reverse` | v2.114 |
+| Freeze frames | `cuts[].freeze` (holds source frame `srcIn`) | v2.134 |
 | Audio placements, A1–A8 | `cuts[].audioOnly + track` | v2.115 |
 | Built-in generators | `elements: [{type:'generator', generatorName}]` | v2.110 |
 | Custom start timecode | `spec.startFrame` / `preserveStartTimecode` | v2.117 |
@@ -54,6 +55,7 @@ window. `render.verify_output` covers the container-level checks.
 | Subtitles | `spec.subtitles` / `spec.subtitlesSrt` (raw SRT) | v2.128 |
 | Compound clips | survive `extract_from_drp` → `.drt` (inner containers kept, recursive) | v2.130 |
 | Compound authoring | `spec.compounds` (multiple compose; nested edits render) | v2.131–2.132 |
+| Nested compounds | `compounds[].compounds` (depth-2 playback render-verified) | v2.134 |
 | Fusion titles | `elements: [{type:'title', text}]` — **21-gen hosts only** | v2.108 |
 
 `assemble_from_interchange` drives the same engine from an EDL / OTIO /
@@ -92,6 +94,15 @@ Resolve's own output. The map spans the whole source stretched by 1/speed;
 the clip's `<In>`/`<Duration>` window into it in record-domain frames.
 Reverse is the same map with the Y endpoints swapped, and `In` then measures
 from the source end.
+
+**Freezes are a third shape, not a flat retime.** A flat line in the retime's
+frame domain reads back frozen but *renders moving* — the one divergence that
+runs in the "working" direction. The real freeze (harvested from a live EDL
+`M2 000.0` import, render-proven frozen by freezedetect) is a flat line in
+**seconds**: `YMin = YMax = Y = frozen position` (source frame / fps),
+`XMax = 60000` (a fixed sentinel, not the clip length), and the clip's `<In>`
+left **empty**. `cuts[].freeze: true` authors exactly that; EDL `M2 000.0`
+and zero-speed warps route to it through `assemble_from_interchange`.
 
 **Timeline origin.** Template timelines start at frame 86400
 (01:00:00:00 @ 24fps). Clips placed before the origin are silently dropped

@@ -25,7 +25,7 @@ const { createEmptyProject, addMediaClip, DEFAULT_START_FRAME } = require('./aut
 const { loadMediaTemplate, transplantMediaElement, insertMediaElement } = require('./media-template-cache');
 const JSZip = require('jszip');
 const { cutSourceIntoClips } = require('./cut-media');
-const { buildConstantSpeedTimemapKeyed } = require('./media-timemap');
+const { buildConstantSpeedTimemapKeyed, buildFreezeTimemapKeyed } = require('./media-timemap');
 const { encodeTimelineMarkersBlob } = require('./timeline-markers-blob');
 const { placeSubtitles, parseSrt } = require('./place-subtitles');
 const { placeCompound } = require('./place-compound');
@@ -137,7 +137,21 @@ async function assembleTimeline(spec = {}) {
         // captured before clip elements were harvested.
         if (caches[i] && caches[i].videoClipElement) out.donorClipVideo = caches[i].videoClipElement;
         if (caches[i] && caches[i].audioClipElement) out.donorClipAudio = caches[i].audioClipElement;
-        if (cut.reverse || (cut.speed !== undefined && cut.speed !== 1)) {
+        if (cut.freeze || cut.speed === 0) {
+          // FREEZE frame (r19 keyed map harvested from a live EDL M2 000.0
+          // import, E55; render-proven frozen). Holds source frame srcIn for
+          // the whole cut. The frozen clip's <In> stays EMPTY; the position
+          // rides in the map (seconds domain, XMax 60000 sentinel).
+          if (cut.reverse) throw new RangeError('assembleTimeline: cut.freeze cannot combine with reverse');
+          const fpsF = Math.round(src.spec.fps || 24);
+          out.timemap = buildFreezeTimemapKeyed({
+            freezeFrame: cut.srcIn ?? 0, sourceFrames: src.spec.frameCount, fps: fpsF,
+            uniqueId: randomUUID(),
+          }).toString('hex');
+          out.emptyIn = true;
+          delete out.freeze;
+          delete out.speed;
+        } else if (cut.reverse || (cut.speed !== undefined && cut.speed !== 1)) {
           // Constant-speed retime (forward only). The Sm2TimeMap spans the
           // whole source stretched by 1/speed; the clip windows into it with
           // RECORD-domain In/Duration (measured live on 19.1.3.7), so the
@@ -219,40 +233,44 @@ async function assembleTimeline(spec = {}) {
     // Pool elements for compound-only sources (files not in spec.media).
     const specFiles = new Set((Array.isArray(media) ? media : media ? [media] : []).map((src) => src.mediaFilePath));
     const insertedExtra = new Set();
-    for (const comp of spec.compounds) {
-      for (const cut of comp.cuts || []) {
-        const fp = cut.mediaFilePath;
-        if (!fp || specFiles.has(fp) || insertedExtra.has(fp)) continue;
-        const cache = loadMediaTemplate(fp);
-        if (!cache) continue; // the per-cut refusal below names it properly
-        const zipC = await JSZip.loadAsync(buffer);
-        const mpP = 'MediaPool/Master/MpFolder.xml';
-        zipC.file(mpP, insertMediaElement(await zipC.file(mpP).async('string'), cache.poolElement));
-        buffer = await zipC.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-        insertedExtra.add(fp);
-      }
+    const walkCompoundCuts = (comps) => (comps || []).flatMap((c) => [...(c.cuts || []), ...walkCompoundCuts(c.compounds)]);
+    for (const cut of walkCompoundCuts(spec.compounds)) {
+      const fp = cut.mediaFilePath;
+      if (!fp || specFiles.has(fp) || insertedExtra.has(fp)) continue;
+      const cache = loadMediaTemplate(fp);
+      if (!cache) continue; // the per-cut refusal below names it properly
+      const zipC = await JSZip.loadAsync(buffer);
+      const mpP = 'MediaPool/Master/MpFolder.xml';
+      zipC.file(mpP, insertMediaElement(await zipC.file(mpP).async('string'), cache.poolElement));
+      buffer = await zipC.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+      insertedExtra.add(fp);
     }
-    for (const [ci, comp] of spec.compounds.entries()) {
-      if (!comp || typeof comp !== 'object') throw new TypeError(`assembleTimeline: compounds[${ci}] must be an object`);
+    // Recursive: compounds nest (comp.compounds, frames inner-relative like
+    // cuts). Depth-2 playback is RENDER-VERIFIED on 19.1.3.7 (E56, white 234
+    // through two levels) — the historical depth-2 black was one missing key,
+    // SequenceSetup, in the donor template's embedded-sequence blob. Depths
+    // beyond 2 compose structurally but are not render-verified.
+    const placeTree = async (comp, parentUuid, label) => {
+      if (!comp || typeof comp !== 'object') throw new TypeError(`assembleTimeline: ${label} must be an object`);
       const res = await placeCompound(buffer, {
-        name: comp.name || `Compound ${ci + 1}`,
+        name: comp.name,
         startFrame: comp.startFrame,
         durationFrames: comp.durationFrames,
         track: comp.track,
-        timelineUuid: parentContainerId,
+        timelineUuid: parentUuid,
       });
       buffer = res.buffer;
       const innerCuts = (comp.cuts || []).map((cut, i) => {
-        if (!cut.mediaFilePath) throw new TypeError(`assembleTimeline: compounds[${ci}].cuts[${i}].mediaFilePath is required`);
+        if (!cut.mediaFilePath) throw new TypeError(`assembleTimeline: ${label}.cuts[${i}].mediaFilePath is required`);
         if (!Number.isInteger(cut.startFrame) || cut.startFrame < 0 || (cut.startFrame + (cut.durationFrames || 0)) > comp.durationFrames) {
-          throw new RangeError(`assembleTimeline: compounds[${ci}].cuts[${i}] must sit inside [0, ${comp.durationFrames}) — inner frames are 0-based`);
+          throw new RangeError(`assembleTimeline: ${label}.cuts[${i}] must sit inside [0, ${comp.durationFrames}) — inner frames are 0-based`);
         }
         const cache = loadMediaTemplate(cut.mediaFilePath);
         if (!cache) {
-          throw new Error(`assembleTimeline: compounds[${ci}].cuts[${i}] — no captured native media template for ${cut.mediaFilePath}. Run media_pool.capture_media_template(path) with Resolve open.`);
+          throw new Error(`assembleTimeline: ${label}.cuts[${i}] — no captured native media template for ${cut.mediaFilePath}. Run media_pool.capture_media_template(path) with Resolve open.`);
         }
         if (!cache.videoClipElement) {
-          throw new Error(`assembleTimeline: compounds[${ci}].cuts[${i}] — the media template for ${cut.mediaFilePath} predates native clip capture. Re-run media_pool.capture_media_template(path) with Resolve open.`);
+          throw new Error(`assembleTimeline: ${label}.cuts[${i}] — the media template for ${cut.mediaFilePath} predates native clip capture. Re-run media_pool.capture_media_template(path) with Resolve open.`);
         }
         const out = { ...cut, mediaRef: cache.mediaRef };
         delete out.mediaFilePath;
@@ -267,6 +285,19 @@ async function assembleTimeline(spec = {}) {
         const cutRes = await cutSourceIntoClips(buffer, { cuts: innerCuts, timelineUuid: res.innerContainerId });
         buffer = cutRes.buffer;
       }
+      for (const [cj, child] of (comp.compounds || []).entries()) {
+        if (child && typeof child === 'object' && !Number.isInteger(child.startFrame)) {
+          throw new TypeError(`assembleTimeline: ${label}.compounds[${cj}].startFrame must be an integer (INNER frames, 0-based)`);
+        }
+        await placeTree({ name: child.name || `Compound ${cj + 1}`, ...child }, res.innerContainerId, `${label}.compounds[${cj}]`);
+      }
+    };
+    for (const [ci, comp] of spec.compounds.entries()) {
+      await placeTree(
+        { ...(comp && typeof comp === 'object' ? comp : {}), name: (comp && comp.name) || `Compound ${ci + 1}` },
+        parentContainerId,
+        `compounds[${ci}]`,
+      );
     }
   }
 

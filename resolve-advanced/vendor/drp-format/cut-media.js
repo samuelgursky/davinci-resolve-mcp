@@ -26,7 +26,7 @@ const {
   replaceTrackVec,
   emptyTrackClone,
 } = require('./seq-surgery');
-const { clipDbId, setClipStart, setClipDuration, setClipIn } = require('./splice-clips');
+const { clipDbId, setClipStart, setClipDuration, setClipIn, setClipInEmpty } = require('./splice-clips');
 
 /**
  * @param {Buffer|string} drpInput
@@ -90,7 +90,9 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     let c = freshDbIds(native ? native.trim() : donor);
     c = setClipStart(c, cut.startFrame);
     c = setClipDuration(c, cut.durationFrames);
-    c = setClipIn(c, cut.srcIn ?? 0);
+    // A frozen clip's <In> is EMPTY (measured E55 harvest); the frozen
+    // position rides in the timemap, and a windowed In breaks the render.
+    c = cut.emptyIn ? setClipInEmpty(c) : setClipIn(c, cut.srcIn ?? 0);
     if (cut.mediaRef) {
       // Multi-source: point this cut at ITS source's transplanted pool
       // element instead of the donor's.

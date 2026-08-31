@@ -259,9 +259,55 @@ function buildConstantSpeedTimemapKeyed({ speed, sourceFrames, fps = 24, uniqueI
   ] });
 }
 
+/**
+ * FREEZE frame map — r19 keyed form, harvested from a live 19.1.3.7 EDL
+ * `M2 <reel> 000.0` import (E55, 2026-08-31; render-proven frozen by
+ * freezedetect). A real freeze is NOT the flat frame-domain line the earlier
+ * synthetic attempt used (that one reads back frozen but RENDERS moving —
+ * the readback-blind divergence measured in E41-era work). The engine's
+ * shape is a flat line in SECONDS with two extra conventions:
+ *
+ *   YMin = YMax = Y(kf0) = Y(kf1) = frozen source position in SECONDS
+ *   XMax = 60000 (a fixed sentinel domain, not the clip length)
+ *   LastValidYOffset = (sourceFrames-1)/fps  (whole-source extent, as always)
+ *
+ * The clip's <In> is EMPTY on a frozen item (record windowing does not
+ * apply to a constant map). Byte-exact vs the harvest for equal inputs.
+ */
+function buildFreezeTimemapKeyed({ freezeFrame, sourceFrames, fps = 24, uniqueId }) {
+  if (!Number.isInteger(freezeFrame) || freezeFrame < 0) throw new TypeError('buildFreezeTimemapKeyed: freezeFrame must be a non-negative integer (source frame to hold)');
+  if (!Number.isInteger(sourceFrames) || sourceFrames < 1) throw new TypeError('buildFreezeTimemapKeyed: sourceFrames must be a positive integer');
+  if (freezeFrame >= sourceFrames) throw new RangeError(`buildFreezeTimemapKeyed: freezeFrame ${freezeFrame} outside source (${sourceFrames} frames)`);
+  const freezeSec = freezeFrame / fps;
+  const XMAX_SENTINEL = 60000;
+  const kf = (X, Y) => encodeKeyedDict({ hdr: 1, entries: [
+    { key: 'interp', type: 0x02, subType: 0, value: 0 },
+    { key: 'YOut', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'YIn', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'Y', type: T_DOUBLE, subType: 0, value: Y },
+    { key: 'XOut', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'XIn', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'X', type: T_DOUBLE, subType: 0, value: X },
+  ] }).toString('hex');
+  const keyframes = encodeKeyedDict({ hdr: 1, entries: [
+    { key: '1', type: T_BYTES, subType: 0, value: kf(XMAX_SENTINEL, freezeSec) },
+    { key: '0', type: T_BYTES, subType: 0, value: kf(0, freezeSec) },
+  ] }).toString('hex');
+  return encodeKeyedDict({ hdr: 1, entries: [
+    { key: 'YMin', type: T_DOUBLE, subType: 0, value: freezeSec },
+    { key: 'YMax', type: T_DOUBLE, subType: 0, value: freezeSec },
+    { key: 'XMax', type: T_DOUBLE, subType: 0, value: XMAX_SENTINEL },
+    { key: 'UniqueId', type: T_STRING, subType: 0, value: uniqueId },
+    { key: 'LastValidYOffset', type: T_DOUBLE, subType: 0, value: (sourceFrames - 1) / fps },
+    { key: 'KeyframesBA', type: T_BYTES, subType: 0, value: keyframes },
+    { key: 'DbType', type: T_STRING, subType: 0, value: 'Sm2TimeMap' },
+  ] });
+}
+
 module.exports = {
   decodeTimemap, encodeTimemap, encodeRetimedTimemap,
   identityTimemap, buildConstantSpeedTimemap, buildConstantSpeedTimemapKeyed,
+  buildFreezeTimemapKeyed,
   buildTimemap, decodeProtobuf,
   TYPE_LINEAR,
 };

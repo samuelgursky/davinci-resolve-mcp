@@ -570,3 +570,57 @@ test('verifyRoundtrip drops zero-duration dissolve legs and maps reels via alias
   assert.equal(bare.pass, false);
   assert.equal(bare.mismatches[0].kind, 'source');
 });
+
+// FREEZE frames (E55/E56, 2026-08-31): the real freeze map — harvested from a
+// live 19.1.3.7 EDL `M2 000.0` import and render-proven frozen by
+// freezedetect — is a flat line in SECONDS (YMin=YMax=Y=frozen position,
+// XMax=60000 sentinel), NOT the frame-domain flat line the earlier synthetic
+// used (that one reads back frozen but RENDERS moving). Offline authoring of
+// this shape was render-proven frozen at a different source frame (96).
+const { buildFreezeTimemapKeyed } = requireCjs('../vendor/drp-format/media-timemap.js');
+
+test('buildFreezeTimemapKeyed is byte-exact vs the live freeze harvest', () => {
+  const harvest = fs.readFileSync(new URL('./fixtures-r19-freeze-timemap.hex', import.meta.url), 'utf8').trim().toLowerCase();
+  const mine = buildFreezeTimemapKeyed({
+    freezeFrame: 24, sourceFrames: 192, fps: 24,
+    uniqueId: 'a953300c-1100-4a80-adb5-e0747bba751f',
+  }).toString('hex').toLowerCase();
+  assert.equal(mine, harvest);
+});
+
+test('zero-speed events author freezes instead of flattening', () => {
+  const base = { track: 'V', srcIn: 96, srcOut: 144, fps: 24 };
+  const frozen = [{ ...base, index: 1, source: 'TAPE1', recIn: 0, recOut: 48, speed: 0 }];
+  const r = eventsToAssembleSpec(frozen, { sourceMap: MAP });
+  assert.equal(r.report.flattenedRetimes.length, 0);
+  assert.deepEqual(r.report.authoredRetimes, [{ index: 1, source: 'TAPE1', speed: 0, freeze: true }]);
+  assert.equal(r.spec.media[0].cuts[0].freeze, true);
+  assert.equal(r.spec.media[0].cuts[0].srcIn, 96);
+});
+
+test('assemble authors a freeze cut: freeze map present, <In/> EMPTY', async () => {
+  const { drtTool } = await import('../server/lib.mjs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const JSZip = (await import('jszip')).default;
+  const out = path.join(os.tmpdir(), `frz-${Math.random().toString(36).slice(2)}.drt`);
+  await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    spec: { timelineName: 'FRZ', media: {
+      mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 },
+      cuts: [{ startFrame: 86400, durationFrames: 48, srcIn: 96, freeze: true }],
+    } },
+  }});
+  const zip = await JSZip.loadAsync(fs.readFileSync(out));
+  const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+  const seq = await zip.file(seqName).async('string');
+  const clip = seq.match(/<Element>\s*<Sm2TiVideoClip[\s\S]*?<\/Sm2TiVideoClip>\s*<\/Element>/)[0];
+  assert.match(clip, /<In\/>/, 'frozen clip keeps an EMPTY <In/>');
+  const tm = clip.match(/<MediaTimemapBA>([0-9a-fA-F]+)<\/MediaTimemapBA>/)[1];
+  const expected = buildFreezeTimemapKeyed({ freezeFrame: 96, sourceFrames: 192, fps: 24, uniqueId: '00000000-0000-0000-0000-000000000000' }).toString('hex');
+  // uniqueId differs per assembly — compare everything around the uuid field
+  assert.equal(tm.length, expected.length);
+  assert.equal(tm.slice(0, 100), expected.slice(0, 100), 'header (YMin/YMax/XMax) matches');
+  assert.equal(tm.slice(-700), expected.slice(-700), 'keyframes/DbType match');
+  fs.unlinkSync(out);
+});

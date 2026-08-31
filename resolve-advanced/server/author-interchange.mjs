@@ -201,9 +201,10 @@ export function eventsToOTIO(events, opts = {}) {
  * fps (v2.104.6 convention, measured against Resolve); the assemble template
  * timeline runs 24fps with origin 86400, so rec/src frames convert as
  * round(frames × 24 / nominalFps). Placement anchors the EARLIEST video
- * event at the origin. Honesty ledger in the returned report: flattened
- * zero-speed freezes (constant retimes — forward AND reverse — are AUTHORED
- * as real Sm2TimeMaps, r19 keyed form, readback/render-verified), authored vs
+ * event at the origin. Honesty ledger in the returned report: authored
+ * retimes (constant speed forward AND reverse, and zero-speed FREEZES — all
+ * AUTHORED as real Sm2TimeMaps, r19 keyed form, readback/render-verified;
+ * freezes render-proven frozen via freezedetect, E55/E56), authored vs
  * dropped transitions (cross-dissolves are AUTHORED when the predecessor
  * abuts the cut and both sides have handle media — render-verified on
  * 19.1.3.7; otherwise dropped with the reason, as a cut at the boundary),
@@ -286,7 +287,11 @@ export function eventsToAssembleSpec(events, opts = {}) {
     if ((e.speed ?? 100) !== 100 || e.reverse) {
       const spd = Math.abs(e.speed ?? 100);
       if (!(spd > 0)) {
-        flattenedRetimes.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse, reason: 'zero speed (freeze) not supported — played forward at 100%' });
+        // FREEZE (EDL M2 000.0 / zero-speed OTIO warp): authored as the real
+        // freeze Sm2TimeMap harvested live in E55 — holds srcIn for the
+        // whole cut (render-proven frozen via freezedetect on 19.1.3.7).
+        cut.freeze = true;
+        authoredRetimes.push({ index: e.index, source: e.source, speed: 0, freeze: true });
       } else {
         // Constant speed, forward or reverse: authored as a real Sm2TimeMap
         // on the cut (r19 keyed form; readback/render-verified on 19.1.3.7 —
