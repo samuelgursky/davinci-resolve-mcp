@@ -2,6 +2,44 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.137.0 — the sweep reaches the database tier
+
+### Fixed
+
+- **Fairlight DB row selection** (adapted the v2.133 container-pin lesson to
+  the vendor layer): `readFromDatabase` took the FIRST `Sm2Sequence` row — in
+  any project holding a compound clip that can be a compound's embedded
+  sequence with no `FLStudioModelBA`, so bus reads failed while the model sat
+  in the next row (measured live). Worse, `applyTemplate` wrote its new blob
+  into EVERY blob-bearing sequence row, clobbering compound `SeqRef` links
+  project-wide. Reads now pick the model-bearing row; writes scope to exactly
+  that `Sm2Sequence_id` and refuse ambiguous multi-timeline projects without
+  an explicit target. `read_buses_from_db` also stops dumping the ~430KB
+  decompressed model into the tool response.
+- **`provenance.cdl_diff` silently identity-defaulted array-shaped CDLs**:
+  `[r,g,b]` slope/offset/power (the common interchange form) read as unity
+  through the `{r,g,b}` accessor, so two different grades diffed as
+  saturation-only (measured). Both shapes are accepted now; unrecognizable
+  shapes refuse loudly.
+- **Node-floor enforcement**: the advanced server refuses to start below
+  Node 20.9 with the exact fix named (measured live: a client config's node
+  resolved to an nvm v18, where pure-JS tools limp and better-sqlite3 dies
+  with a cryptic ABI mismatch). `install.py` now writes an absolute,
+  version-checked node path into client configs, and the better-sqlite3
+  loader distinguishes "not installed" from "built for a different Node".
+- **Windows UTF-8, rounds two and three** — adapted from
+  [PR #175](https://github.com/samuelgursky/davinci-resolve-mcp/pull/175) and
+  [PR #176](https://github.com/samuelgursky/davinci-resolve-mcp/pull/176) by
+  @Chosen-3: the six unencoded call sites in `src/` (brain-edits registry,
+  page lock) and `install.py`'s client-config `read_json`/`write_json`. The
+  UTF-8 discipline guard now covers `src/` and `install.py` too.
+
+### Verified through the MCP tool layer (E60)
+
+`project_read` (introspect/report/audit/timeline_clips), `offline_ref.list_in_project`,
+`color_trace.plan` (6/6 exact-name matches), and both fairlight bus readers,
+all against a live scratch project database.
+
 ## What's New in v2.136.1 — the changelog catches up
 
 ### Fixed
