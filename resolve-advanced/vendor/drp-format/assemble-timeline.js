@@ -28,6 +28,7 @@ const { cutSourceIntoClips } = require('./cut-media');
 const { buildConstantSpeedTimemapKeyed } = require('./media-timemap');
 const { encodeTimelineMarkersBlob } = require('./timeline-markers-blob');
 const { placeSubtitles, parseSrt } = require('./place-subtitles');
+const { placeCompound } = require('./place-compound');
 const { randomUUID } = require('node:crypto');
 const { placeFusionTitle } = require('./place-fusion-title');
 const { placeGenerator } = require('./place-generator');
@@ -197,6 +198,64 @@ async function assembleTimeline(spec = {}) {
       track: tr.track, atFrame: tr.atFrame, durationFrames: tr.durationFrames,
       trackType: tr.trackType || 'video',
     }));
+  }
+
+  // Compound clips: an empty nested timeline is spliced in from the
+  // harvested donor shape, then its content is placed with the ORDINARY cuts
+  // machinery targeting the inner container (inner origin is FRAME 0).
+  // Inner cuts must reference files with captured native templates.
+  if (Array.isArray(spec.compounds) && spec.compounds.length) {
+    // Pool elements for compound-only sources (files not in spec.media).
+    const specFiles = new Set((Array.isArray(media) ? media : media ? [media] : []).map((src) => src.mediaFilePath));
+    const insertedExtra = new Set();
+    for (const comp of spec.compounds) {
+      for (const cut of comp.cuts || []) {
+        const fp = cut.mediaFilePath;
+        if (!fp || specFiles.has(fp) || insertedExtra.has(fp)) continue;
+        const cache = loadMediaTemplate(fp);
+        if (!cache) continue; // the per-cut refusal below names it properly
+        const zipC = await JSZip.loadAsync(buffer);
+        const mpP = 'MediaPool/Master/MpFolder.xml';
+        zipC.file(mpP, insertMediaElement(await zipC.file(mpP).async('string'), cache.poolElement));
+        buffer = await zipC.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+        insertedExtra.add(fp);
+      }
+    }
+    for (const [ci, comp] of spec.compounds.entries()) {
+      if (!comp || typeof comp !== 'object') throw new TypeError(`assembleTimeline: compounds[${ci}] must be an object`);
+      const res = await placeCompound(buffer, {
+        name: comp.name || `Compound ${ci + 1}`,
+        startFrame: comp.startFrame,
+        durationFrames: comp.durationFrames,
+        track: comp.track,
+      });
+      buffer = res.buffer;
+      const innerCuts = (comp.cuts || []).map((cut, i) => {
+        if (!cut.mediaFilePath) throw new TypeError(`assembleTimeline: compounds[${ci}].cuts[${i}].mediaFilePath is required`);
+        if (!Number.isInteger(cut.startFrame) || cut.startFrame < 0 || (cut.startFrame + (cut.durationFrames || 0)) > comp.durationFrames) {
+          throw new RangeError(`assembleTimeline: compounds[${ci}].cuts[${i}] must sit inside [0, ${comp.durationFrames}) — inner frames are 0-based`);
+        }
+        const cache = loadMediaTemplate(cut.mediaFilePath);
+        if (!cache) {
+          throw new Error(`assembleTimeline: compounds[${ci}].cuts[${i}] — no captured native media template for ${cut.mediaFilePath}. Run media_pool.capture_media_template(path) with Resolve open.`);
+        }
+        if (!cache.videoClipElement) {
+          throw new Error(`assembleTimeline: compounds[${ci}].cuts[${i}] — the media template for ${cut.mediaFilePath} predates native clip capture. Re-run media_pool.capture_media_template(path) with Resolve open.`);
+        }
+        const out = { ...cut, mediaRef: cache.mediaRef };
+        delete out.mediaFilePath;
+        if (cache.mediaStartTime) out.mediaStartTime = cache.mediaStartTime;
+        out.donorClipVideo = cache.videoClipElement;
+        if (cache.audioClipElement) out.donorClipAudio = cache.audioClipElement;
+        return out;
+      });
+      if (innerCuts.length) {
+        // The inner container has no donor items — clones come from the
+        // captured native clip elements, so the template donor is unused.
+        const cutRes = await cutSourceIntoClips(buffer, { cuts: innerCuts, timelineUuid: res.innerContainerId });
+        buffer = cutRes.buffer;
+      }
+    }
   }
 
   // Subtitles: plain Sm2TiGenerator items (text in <Name>, no blobs — the

@@ -124,7 +124,7 @@ test('harvested r19 snippets are Element-wrapped (unwrapped clips break the trac
   // outright with no status (measured); the wrapper is load-bearing.
   const fs3 = require('node:fs');
   const path3 = require('node:path');
-  for (const f of ['fusion-title-r19.xml', 'generator-solid-color-r19.xml', 'fusion-title.xml', 'generator-solid-color.xml', 'transition-cross-fade-r19.xml']) {
+  for (const f of ['fusion-title-r19.xml', 'generator-solid-color-r19.xml', 'fusion-title.xml', 'generator-solid-color.xml', 'transition-cross-fade-r19.xml', 'compound-item-r19.xml']) {
     const s = fs3.readFileSync(
       path3.join(process.cwd(), 'vendor', 'drp-format', 'templates', f), 'utf8').trim();
     assert.ok(s.startsWith('<Element>'), `${f} must start with <Element>`);

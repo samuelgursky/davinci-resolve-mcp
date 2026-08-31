@@ -53,6 +53,7 @@ window. `render.verify_output` covers the container-level checks.
 | TC-bearing sources (AAF route) | native clip capture (`MediaStartTime`), channel-leg merge | v2.120–2.122 |
 | Subtitles | `spec.subtitles` / `spec.subtitlesSrt` (raw SRT) | v2.128 |
 | Compound clips | survive `extract_from_drp` → `.drt` (inner containers kept, recursive) | v2.130 |
+| Compound authoring | `spec.compounds` (one per archive; nested edit renders) | v2.131 |
 | Fusion titles | `elements: [{type:'title', text}]` — **21-gen hosts only** | v2.108 |
 
 `assemble_from_interchange` drives the same engine from an EDL / OTIO /

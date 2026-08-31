@@ -251,3 +251,29 @@ test('extract keeps a compound clip\'s inner container, recursively', async () =
   assert.equal(res.droppedTimelines, 1);
   await fs.unlink(src); await fs.unlink(out);
 });
+
+test('placeCompound splices the donor cluster verbatim and refuses a second', async () => {
+  // Freshening the ids around the embedded Sm2Sequence FieldsBlob CRASHED
+  // Resolve on import (twice, measured E47) — the cluster rides VERBATIM,
+  // and the folder ref is rewired to the target pool (a dangling folder ref
+  // also crashed the importer). Render-proven: nested playback on 19.1.3.7.
+  const requireC3 = createRequire(import.meta.url);
+  const { placeCompound } = requireC3('../vendor/drp-format/place-compound.js');
+  const { addMediaClip } = requireC3('../vendor/drp-format/author-project.js');
+  const base = await addMediaClip({
+    mediaFile: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 }, templateVersion: 19,
+  });
+  const res = await placeCompound(base.buffer, { name: 'CMP', startFrame: 86400, durationFrames: 96 });
+  const zip = await JSZip.loadAsync(res.buffer);
+  const inner = await zip.file(`SeqContainer/${res.innerContainerId}.xml`).async('string');
+  assert.match(inner, /<Items\/>/);
+  const mp = await zip.file('MediaPool/Master/MpFolder.xml').async('string');
+  const folderId = mp.match(/<Sm2MpFolder DbId="([^"]+)"/)[1];
+  const cmp = mp.match(/<Sm2MpCompoundClip[\s\S]*?<\/Sm2MpCompoundClip>/)[0];
+  assert.ok(cmp.includes(`<MpFolder>${folderId}</MpFolder>`), 'folder ref rewired to target pool');
+  assert.ok(cmp.includes('<Name>CMP</Name>'));
+  const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n) && !n.includes(res.innerContainerId));
+  const parent = await zip.file(seqName).async('string');
+  assert.ok(parent.includes(`<MediaRef>${res.compoundId}</MediaRef>`), 'parent item references the compound');
+  await assert.rejects(placeCompound(res.buffer, { name: 'CMP2', startFrame: 86500, durationFrames: 24 }), /one compound per archive/);
+});

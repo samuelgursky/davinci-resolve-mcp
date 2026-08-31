@@ -139,8 +139,18 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     if (!tracks.length) continue;
     const items = getItemsInner(tracks[0]);
     const clips = splitClipElements(items);
-    if (!clips.length) continue; // audio-less media: nothing to cut on A1
-    const donor = clips[0];
+    // No donor items is fine when every cut carries its own captured native
+    // clip (compound inner containers start EMPTY by design); the template
+    // donor is only required for cuts without one.
+    const donor = clips[0] || null;
+    if (!donor) {
+      const donorless = cuts.filter((cut) => !(trackType === 'audio' ? cut.donorClipAudio : cut.donorClipVideo));
+      if (trackType === 'audio' && !cuts.some((cut) => cut.audioOnly)) continue; // no donor, no explicit audio: nothing to mirror
+      if (donorless.length) {
+        if (trackType === 'audio') continue; // audio-less media: nothing to cut on A1
+        throw new Error('cutSourceIntoClips: the target timeline has no donor clip and some cuts carry no captured native clip element — re-capture the media template');
+      }
+    }
     if (trackType === 'audio') {
       const audioCuts = cuts.filter((cut) => cut.audioOnly);
       if (audioCuts.length) {
