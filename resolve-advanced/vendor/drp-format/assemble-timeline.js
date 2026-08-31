@@ -27,6 +27,7 @@ const JSZip = require('jszip');
 const { cutSourceIntoClips } = require('./cut-media');
 const { buildConstantSpeedTimemapKeyed } = require('./media-timemap');
 const { encodeTimelineMarkersBlob } = require('./timeline-markers-blob');
+const { placeSubtitles, parseSrt } = require('./place-subtitles');
 const { randomUUID } = require('node:crypto');
 const { placeFusionTitle } = require('./place-fusion-title');
 const { placeGenerator } = require('./place-generator');
@@ -196,6 +197,23 @@ async function assembleTimeline(spec = {}) {
       track: tr.track, atFrame: tr.atFrame, durationFrames: tr.durationFrames,
       trackType: tr.trackType || 'video',
     }));
+  }
+
+  // Subtitles: plain Sm2TiGenerator items (text in <Name>, no blobs — the
+  // cache law does not apply; the payload is API-visible after import).
+  // spec.subtitles frames are timeline-ABSOLUTE; spec.subtitlesSrt is raw SRT
+  // text whose cues anchor at the origin.
+  let subtitles = Array.isArray(spec.subtitles) ? [...spec.subtitles] : [];
+  if (typeof spec.subtitlesSrt === 'string' && spec.subtitlesSrt.length) {
+    subtitles.push(...parseSrt(spec.subtitlesSrt, 24).map((c) => ({ ...c, startFrame: c.startFrame + originFrame })));
+  }
+  if (subtitles.length) {
+    for (const sub of subtitles) {
+      if (!Number.isInteger(sub.startFrame) || sub.startFrame < originFrame) {
+        throw new RangeError(`assembleTimeline: subtitle at frame ${sub.startFrame} is before the timeline origin ${originFrame}`);
+      }
+    }
+    ({ buffer } = await placeSubtitles(buffer, { subtitles }));
   }
 
   if (Array.isArray(spec.markers) && spec.markers.length) {

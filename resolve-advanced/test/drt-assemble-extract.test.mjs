@@ -175,3 +175,41 @@ test('spec.markers encode byte-exact and attach to the sequence owner', async ()
 });
 
 test('createRequire import for marker tests', () => { assert.ok(createRequire); });
+
+test('subtitles author as plain Subtitle generators on a Type-2 track', async () => {
+  // Harvested shape (19.1.3.7): Sm2TiGenerator, PrettyType Subtitle, TEXT in
+  // <Name>, zero blobs — readback-verified live (3 cues at exact frames).
+  const requireC2 = createRequire(import.meta.url);
+  const { parseSrt } = requireC2('../vendor/drp-format/place-subtitles.js');
+  const cues = parseSrt('1\n00:00:01,000 --> 00:00:02,500\nHello\n\n2\n00:00:03,000 --> 00:00:04,000\nWorld\n', 24);
+  assert.deepEqual(cues, [
+    { startFrame: 24, durationFrames: 36, text: 'Hello' },
+    { startFrame: 72, durationFrames: 24, text: 'World' },
+  ]);
+  const out = tmp('.drt');
+  const res = await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    spec: { timelineName: 'SUBS', media: {
+      mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+      cuts: [{ startFrame: 86400, durationFrames: 96 }],
+    }, subtitlesSrt: '1\n00:00:01,000 --> 00:00:02,500\nA & B <i>styled</i>\n' },
+  }});
+  assert.ok(!res.error, res.error);
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+  const seq = await zip.file(seqName).async('string');
+  const vec = seq.match(/<SubtitleTrackVec>([\s\S]*?)<\/SubtitleTrackVec>/)[1];
+  assert.match(vec, /<Type>2<\/Type>/);
+  assert.match(vec, /<PrettyType>Subtitle<\/PrettyType>/);
+  assert.match(vec, /<Name>A &amp; B &lt;i&gt;styled&lt;\/i&gt;<\/Name>/, 'text escaped in XML');
+  assert.match(vec, /<Start>86424<\/Start>/);
+  await fs.unlink(out);
+  // overlapping cues refuse
+  await assert.rejects(drtTool.handler({ action: 'assemble', args: {
+    outputPath: tmp('.drt'),
+    spec: { subtitles: [
+      { startFrame: 86400, durationFrames: 48, text: 'a' },
+      { startFrame: 86424, durationFrames: 24, text: 'b' },
+    ], media: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 }, cuts: [{ startFrame: 86400, durationFrames: 96 }] } },
+  }}), /overlap — one subtitle track/);
+});
