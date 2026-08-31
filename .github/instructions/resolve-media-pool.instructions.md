@@ -11,4 +11,4 @@ Two servers — compute offline, apply live:
 - Offline (.drp/.drt/.drx + DB, no Resolve, `davinci-resolve-advanced`): media (ingest_verify, media_inventory, sync, relink_manifest, rename_plan, reel_normalize, turnover_package, project_hygiene)
 - Key rule: Verify + inventory the card offline before importing, then import/organize live. media needs ffmpeg+ffprobe. Never rename/derive camera originals (rename_plan refuses them). For footage-content analysis use media-analysis; for deliverable-side media QC use delivery.
 
-Depth: docs/kernels/media-pool-ingest-kernel.md + docs/guides/multicam-setup-guide.md. On-demand in any MCP client: the `/media_pool_workflow` slash prompt. Claude Code skill: `resolve-media-pool`. Never modify/transcode/derive source media (AGENTS.md).
+Depth: docs/kernels/media-pool-ingest-kernel.md + docs/guides/multicam-setup-guide.md. On-demand in any MCP client: the `/media_pool_workflow` slash prompt. Portable skill: `resolve-media-pool` in `.agents/skills/`. Never modify/transcode/derive source media (AGENTS.md).

@@ -1,0 +1,58 @@
+{
+  "description": "Source-safety and focused validation hooks for DaVinci Resolve MCP development.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__davinci-resolve__(timeline_item_color|color_group)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/frame_verification_guard.py\"",
+            "timeout": 15,
+            "statusMessage": "Checking frame evidence"
+          }
+        ]
+      },
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/source_media_guard.py\"",
+            "timeout": 15,
+            "statusMessage": "Protecting source media"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(mcp__davinci-resolve__(media_analysis|gallery|gallery_stills|timeline_item_color)|view_image|Read|Bash)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/frame_verification_guard.py\"",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "^(apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_rules_drift_check.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking generated rules"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/run_matching_test.py\"",
+            "timeout": 90,
+            "statusMessage": "Running matching tests"
+          }
+        ]
+      }
+    ]
+  }
+}

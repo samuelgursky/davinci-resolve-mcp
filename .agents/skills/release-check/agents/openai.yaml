@@ -1,0 +1,6 @@
+interface:
+  display_name: "Release Check"
+  short_description: "Validate and ship a Resolve MCP release"
+  default_prompt: "Use $release-check to prepare and validate a DaVinci Resolve MCP release."
+policy:
+  allow_implicit_invocation: false

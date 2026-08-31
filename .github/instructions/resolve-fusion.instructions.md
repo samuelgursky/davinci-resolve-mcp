@@ -11,4 +11,4 @@ Two servers — compute offline, apply live:
 - Offline (.drp/.drt/.drx + DB, no Resolve, `davinci-resolve-advanced`): fusion (generate, generate_from_template, list_templates, to_api_calls)
 - Key rule: Author/verify the .comp offline, then apply live (to_api_calls maps onto safe_add_tool -> safe_set_inputs -> safe_connect_tools). Probe first — tool availability and input readability vary by build; bulk mutation needs timeline scope.
 
-Depth: docs/kernels/fusion-composition-kernel.md. On-demand in any MCP client: the `/fusion_workflow` slash prompt. Claude Code skill: `resolve-fusion`. Never modify/transcode/derive source media (AGENTS.md).
+Depth: docs/kernels/fusion-composition-kernel.md. On-demand in any MCP client: the `/fusion_workflow` slash prompt. Portable skill: `resolve-fusion` in `.agents/skills/`. Never modify/transcode/derive source media (AGENTS.md).

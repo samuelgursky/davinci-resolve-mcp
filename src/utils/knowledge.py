@@ -2,7 +2,7 @@
 
 This repository carries a real body of craft guidance: how to tighten a recording
 without cutting the breath out of it, what to look at before applying a grade, which
-Resolve API calls silently lie. It lives in two places — `.claude/skills/*/SKILL.md`
+Resolve API calls silently lie. It lives in two places — `.agents/skills/*/SKILL.md`
 and `docs/guides` + `docs/kernels` — and until now both were reachable only by an
 agent that could open files in this checkout.
 
@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
+SKILLS_DIR = REPO_ROOT / ".agents" / "skills"
 GUIDES_DIR = REPO_ROOT / "docs" / "guides"
 KERNELS_DIR = REPO_ROOT / "docs" / "kernels"
 
@@ -217,22 +217,8 @@ def _first_paragraph(body: str) -> str:
 def _title_of(body: str, fallback: str) -> str:
     for line in body.splitlines():
         if line.startswith("# "):
-            # `# Resolve Tighten Recording — Claude Code Skill` is scaffolding for one
-            # client. The subject is everything before the dash.
-            title = line[2:].strip()
-            return re.sub(r"\s*[—-]\s*Claude Code Skill\s*$", "", title).strip()
+            return line[2:].strip()
     return fallback
-
-
-def _strip_client_scaffolding(body: str) -> str:
-    """Drop the one H1 that names a specific client. Prose is left alone."""
-    return re.sub(
-        r"^#\s+(.*?)\s*[—-]\s*Claude Code Skill\s*$",
-        lambda m: f"# {m.group(1)}",
-        body,
-        count=1,
-        flags=re.M,
-    )
 
 
 _DOC_REF_RE = re.compile(r"`(docs/[^`\s]+\.md)`|\]\((docs/[^)\s]+\.md)\)")
@@ -275,7 +261,7 @@ def _build_index() -> Dict[str, Dict[str, Any]]:
                 "summary": fields.get("description", "") or _first_paragraph(body),
                 "category": "repo" if topic in _REPO_SKILLS else "workflow",
                 "path": str(skill_md.relative_to(REPO_ROOT)),
-                "body": _strip_client_scaffolding(body).strip(),
+                "body": body.strip(),
             }
 
     for category, directory in (("guide", GUIDES_DIR), ("kernel", KERNELS_DIR)):

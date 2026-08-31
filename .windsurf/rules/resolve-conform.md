@@ -7,4 +7,4 @@ Two servers — compute offline, apply live:
 - Offline (.drp/.drt/.drx + DB, no Resolve, `davinci-resolve-advanced`): conform (frame-oracle QC, reverse-subclip repair, lineage, per-cut frame QC), color_trace, offline_ref, editorial, drt, project_db
 - Key rule: drt is the only lossless project-native round-trip. XML import via the scripting API goes offline — use import_timeline_checked with media sanitize, then exact-path relink. project_db patches need the project CLOSED + iConfirmProjectClosed + a full quit/relaunch. Relink plans are read-only until executed.
 
-Depth: docs/kernels/timeline-conform-interchange-kernel.md. On-demand in any MCP client: the `/conform_workflow` slash prompt. Claude Code skill: `resolve-conform`. Never modify/transcode/derive source media (AGENTS.md).
+Depth: docs/kernels/timeline-conform-interchange-kernel.md. On-demand in any MCP client: the `/conform_workflow` slash prompt. Portable skill: `resolve-conform` in `.agents/skills/`. Never modify/transcode/derive source media (AGENTS.md).

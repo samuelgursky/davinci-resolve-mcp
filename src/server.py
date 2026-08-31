@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.135.0"
+VERSION = "2.136.0"
 
 import base64
 import os
@@ -545,8 +545,8 @@ def prep_color_handoff(output_dir: str = "") -> str:
 # ─── Per-domain workflow routers ───────────────────────────────────────────────
 # Cross-platform depth: these surface as slash commands in EVERY MCP client
 # (Codex, Cursor, Copilot, Continue, Claude Desktop, …), so per-domain routing is
-# not limited to Claude Code's .claude/skills/. They mirror the repo skills of the
-# same name; keep them in sync with docs/kernels/*.
+# not limited to one client's adapters. They mirror the canonical `.agents/skills/`
+# skills of the same name; keep them in sync with docs/kernels/*.
 
 
 @mcp.prompt(

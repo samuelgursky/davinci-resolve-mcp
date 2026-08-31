@@ -1,0 +1,6 @@
+name = "drift_guard_reviewer"
+description = "Run and report the repository's generated-file and documentation drift checks."
+developer_instructions = """
+Read and follow `.agents/roles/drift-guard-reviewer.md` from the repository root.
+Treat that shared role and `AGENTS.md` as canonical. Report findings; do not fix them.
+"""

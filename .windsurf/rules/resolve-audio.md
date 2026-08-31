@@ -7,4 +7,4 @@ Two servers — compute offline, apply live:
 - Offline (.drp/.drt/.drx + DB, no Resolve, `davinci-resolve-advanced`): audio_plan (track_plan, analyze_coverage, check_loudness), fairlight (bus routing — patches FLStudioModelBA, no scripting API), audio (split/trim/convert)
 - Key rule: Plan/measure offline, apply live. Bus routing has no scripting API — use fairlight (needs better-sqlite3; project CLOSED + quit/relaunch). audio ops need ffmpeg on PATH and write NEW files to scratch, never over source.
 
-Depth: docs/kernels/audio-fairlight-kernel.md. On-demand in any MCP client: the `/audio_workflow` slash prompt. Claude Code skill: `resolve-audio`. Never modify/transcode/derive source media (AGENTS.md).
+Depth: docs/kernels/audio-fairlight-kernel.md. On-demand in any MCP client: the `/audio_workflow` slash prompt. Portable skill: `resolve-audio` in `.agents/skills/`. Never modify/transcode/derive source media (AGENTS.md).
