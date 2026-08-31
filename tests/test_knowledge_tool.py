@@ -126,7 +126,7 @@ class TestResolution(unittest.TestCase):
         self.assertIn("summarised here rather than inlined", resolved)
         self.assertIn('get(topic="mcp-operating-reference")', resolved)
 
-    def test_client_scaffolding_is_stripped_from_the_title(self):
+    def test_canonical_titles_are_client_neutral(self):
         for record in knowledge.index().values():
             with self.subTest(topic=record["topic"]):
                 self.assertNotIn("Claude Code Skill", record["title"])

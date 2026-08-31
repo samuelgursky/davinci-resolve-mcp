@@ -54,7 +54,7 @@ REPO = Path(__file__).resolve().parents[1]
 #: Directories to scan. `local/` is gitignored and deliberately excluded — that
 #: is where the attributions are supposed to live.
 SCAN_DIRS = ("src", "tests", "scripts")
-SCAN_DOCS = ("docs", ".claude")
+SCAN_DOCS = ("docs", ".agents", ".claude", ".codex")
 
 #: A fake surname, present only so the self-tests below can demonstrate a real
 #: detection without reintroducing a genuine name into this file.

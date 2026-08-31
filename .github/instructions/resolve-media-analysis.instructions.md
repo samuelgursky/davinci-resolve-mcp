@@ -11,4 +11,4 @@ Two servers — compute offline, apply live:
 - Offline (.drp/.drt/.drx + DB, no Resolve, `davinci-resolve-advanced`): media (ingest_verify, media_inventory, sync) on the advanced server
 - Key rule: Source media is READ-ONLY — never modify/transcode/convert/derive. Do not silently downgrade: keep visuals, transcription, persistence, metadata + Media Pool marker writeback on unless the user opts out. Finish each clip with commit_vision or it stays pending (a failure mode).
 
-Depth: docs/kernels/README.md + docs/guides/media-analysis-guide.md. On-demand in any MCP client: the `/analyze_media` slash prompt. Claude Code skill: `resolve-media-analysis`. Never modify/transcode/derive source media (AGENTS.md).
+Depth: docs/kernels/README.md + docs/guides/media-analysis-guide.md. On-demand in any MCP client: the `/analyze_media` slash prompt. Portable skill: `resolve-media-analysis` in `.agents/skills/`. Never modify/transcode/derive source media (AGENTS.md).

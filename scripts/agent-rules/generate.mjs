@@ -119,7 +119,7 @@ function domainBody(d) {
     `- Offline (.drp/.drt/.drx + DB, no Resolve, \`davinci-resolve-advanced\`): ${d.offline}`,
     `- Key rule: ${d.rule}`,
     ``,
-    `Depth: ${depth}. On-demand in any MCP client: the \`/${d.prompt}\` slash prompt. Claude Code skill: \`${d.skill}\`. Never modify/transcode/derive source media (AGENTS.md).`,
+    `Depth: ${depth}. On-demand in any MCP client: the \`/${d.prompt}\` slash prompt. Portable skill: \`${d.skill}\` in \`.agents/skills/\`. Never modify/transcode/derive source media (AGENTS.md).`,
   ].join('\n');
 }
 
@@ -167,8 +167,9 @@ const agentsBlock = [
   `Per-domain routers pair the live tools with their offline (advanced-server)`,
   `counterparts. Every domain is available on demand in ANY MCP client as a slash`,
   `prompt (\`/color_grade_workflow\`, \`/timeline_edit_workflow\`, \`/conform_workflow\`,`,
-  `\`/delivery_workflow\`, \`/analyze_media\`) and, in Claude Code, as a \`.claude/skills/\``,
-  `skill. Full per-action depth lives in \`docs/kernels/\`.`,
+  `\`/delivery_workflow\`, \`/analyze_media\`) and as canonical skills in`,
+  `\`.agents/skills/\` (with thin client adapters where needed). Full per-action depth`,
+  `lives in \`docs/kernels/\`.`,
   ``,
   ...DOMAINS.map((d) => {
     const depth = d.guide ? `${d.kernel} + ${d.guide}` : d.kernel;

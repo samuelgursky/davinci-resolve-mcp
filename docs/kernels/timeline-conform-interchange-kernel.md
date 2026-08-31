@@ -160,7 +160,7 @@ Gotchas the live path shares:
 - **Deps.** `better-sqlite3` gates lineage/reverse/DB; `sharp`/ffmpeg gate frame
   compare — call the advanced `capabilities` tool.
 
-See the `resolve-conform` skill (`.claude/skills/resolve-conform/SKILL.md`) for the
+See the `resolve-conform` skill (`.agents/skills/resolve-conform/SKILL.md`) for the
 craft ↔ live ↔ offline routing.
 
 ## Live Probe

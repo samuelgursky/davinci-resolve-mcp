@@ -41,57 +41,60 @@ ignored scratch folders such as `docs/_scratch/`.
 - [Project Lifecycle](kernels/project-lifecycle-kernel.md)
 - [Extension Authoring](kernels/extension-authoring-kernel.md)
 
-## Claude Code Skills
+## Portable Agent Skills
 
-Per-domain skills in `.claude/skills/` route craft ↔ live tools ↔ offline
-advanced tools automatically when an agent works in that domain. They are thin
-bridges — the authoritative depth stays in the kernels and guides above.
+Per-domain skills in `.agents/skills/` route craft ↔ live tools ↔ offline
+advanced tools automatically when an agent works in that domain. This is the
+canonical, client-neutral source. Codex discovers it directly; Claude Code uses
+thin `.claude/skills/` adapters that point back to it. Author substantive changes
+only in `.agents/skills/` so the clients cannot drift.
 
-- `resolve-mcp` (`.claude/skills/resolve-mcp/SKILL.md`) — orientation/index: the map to the domain skills below (self-trigger; not an auto-loader)
-- `resolve-color` (`.claude/skills/resolve-color/SKILL.md`) — grading, looks, shot match, LUT/CDL/DRX
-- `resolve-edit` (`.claude/skills/resolve-edit/SKILL.md`) — cutting, ranges, variants, changelist
-- `resolve-conform` (`.claude/skills/resolve-conform/SKILL.md`) — conform, relink, finishing QC, grade tracing
-- `resolve-delivery` (`.claude/skills/resolve-delivery/SKILL.md`) — render, deliverable QC, media/provenance
-- `resolve-fusion` (`.claude/skills/resolve-fusion/SKILL.md`) — Fusion comps (titles, motion graphics, VFX)
-- `resolve-audio` (`.claude/skills/resolve-audio/SKILL.md`) — audio/Fairlight tracks, buses, loudness, sync
-- `resolve-media-pool` (`.claude/skills/resolve-media-pool/SKILL.md`) — media pool ingest, organize, multicam
-- `resolve-media-analysis` (`.claude/skills/resolve-media-analysis/SKILL.md`) — source-safe media intelligence
+- `resolve-mcp` — orientation/index: the map to the domain skills below (self-trigger; not an auto-loader)
+- `resolve-color` — grading, looks, shot match, LUT/CDL/DRX
+- `resolve-edit` — cutting, ranges, variants, changelist
+- `resolve-conform` — conform, relink, finishing QC, grade tracing
+- `resolve-delivery` — render, deliverable QC, media/provenance
+- `resolve-fusion` — Fusion comps (titles, motion graphics, VFX)
+- `resolve-audio` — audio/Fairlight tracks, buses, loudness, sync
+- `resolve-media-pool` — media pool ingest, organize, multicam
+- `resolve-media-analysis` — source-safe media intelligence
 
-Each skill is a directory containing `SKILL.md`. Claude Code does not discover
-loose `.md` files in `.claude/skills/`; a skill placed at the top level of that
-directory silently never loads.
+Each canonical skill is a directory containing `SKILL.md`. The Claude adapter
+uses the same directory shape because Claude Code does not discover loose files.
 
 Two end-to-end assembly recipes sit alongside the domain skills. Where a domain
 skill routes, these two walk a whole job:
 
-- `resolve-rough-cut` (`.claude/skills/resolve-rough-cut/SKILL.md`) — **additive**:
+- `resolve-rough-cut` — **additive**:
   select shots from a folder of many clips into an assembled timeline.
-- `resolve-tighten-recording` (`.claude/skills/resolve-tighten-recording/SKILL.md`)
+- `resolve-tighten-recording`
   — **subtractive**: remove dead air from one long single-take recording.
 
 Three more sit outside the domain routing:
 
-- `house-style` (`.claude/skills/house-style/SKILL.md`) — accumulated editorial
-  corrections, so the same note is not given twice. Claude-only; append to it
+- `house-style` — accumulated editorial
+  corrections, so the same note is not given twice. Append to it
   when an editorial decision is corrected.
-- `resolve-session` (`.claude/skills/resolve-session/SKILL.md`) — `/resolve-session`
+- `resolve-session` — `/resolve-session`
   connects, confirms edition and bridge, and reports project/timeline/pool state.
-- `release-check` (`.claude/skills/release-check/SKILL.md`) — `/release-check`
+- `release-check` — `/release-check`
   walks a version bump using [docs/process/release-process.md](process/release-process.md)
   as the sole source; the skill wraps that doc, it does not duplicate it.
 
 The offline half of every one is the advanced server; see
 [Advanced Server](../resolve-advanced/README.md).
 
-## Claude Code Hooks and Subagents
+## Portable Hooks and Reviewers
 
-Four hooks live in `.claude/hooks/` — two `PreToolUse` guards enforcing rules
-`AGENTS.md` states in prose, and two `PostToolUse` checks that surface
-engineering drift right after the edit that caused it instead of at the next
-test run. All four ship as scripts but are **not** wired up by default — the
-repository does not enable hooks on your behalf. Opt in by adding the block
-below to your own `.claude/settings.local.json` (gitignored, so it stays
-yours):
+Four canonical hooks live in `.agents/hooks/` — two `PreToolUse` guards
+enforcing rules `AGENTS.md` states in prose, and two `PostToolUse` checks that
+surface engineering drift immediately after the edit that caused it. Thin
+wrappers in `.claude/hooks/` and `.codex/hooks/` translate only the host
+protocol; policy stays in the canonical scripts.
+
+Codex wiring is committed in `.codex/hooks.json`. Because project hooks execute
+commands, review and trust that file through Codex's `/hooks` UI. Claude Code
+users opt in by adding this block to `.claude/settings.local.json`:
 
 ```json
 {
@@ -139,18 +142,18 @@ yours):
 }
 ```
 
-Hooks are read at session start, so restart Claude Code after adding them. The
-four are:
+Hooks are read at session start, so restart the client after enabling them. The
+four canonical policies are:
 
-- `.claude/hooks/frame_verification_guard.py` — denies grade-applying actions on
+- `.agents/hooks/frame_verification_guard.py` — denies grade-applying actions on
   `timeline_item_color` until the session has actually looked at a
   Resolve-rendered frame, and asks before whole-grade artifacts
   (`safe_copy_grade`, `bulk_match_to_hero`) overwrite hand-work. `dry_run`
   passes through untouched.
-- `.claude/hooks/source_media_guard.py` — denies shell commands that write,
+- `.agents/hooks/source_media_guard.py` — denies shell commands that write,
   move, or delete source media outside a scratch root. Reads (`ffprobe`, and
   `ffmpeg` writing into scratch) pass.
-- `.claude/hooks/agent_rules_drift_check.py` — after an edit to anything
+- `.agents/hooks/agent_rules_drift_check.py` — after an edit to anything
   `generate.mjs` reads (`docs/SKILL.md`, `docs/kernels/README.md`,
   `resolve-advanced/README.md`, and `generate.mjs` itself, which carries the
   DOMAINS manifest inline) or to `AGENTS.md`, which it writes, runs
@@ -160,7 +163,7 @@ four are:
   blocks. Skips quietly if `node` isn't on `PATH`. **If `generate.mjs` grows a
   new input, add it to `SOURCE_PATHS` in the hook** — an unwatched input is a
   silent hook on exactly the edit it exists to catch.
-- `.claude/hooks/run_matching_test.py` — after an edit to `src/<module>.py`,
+- `.agents/hooks/run_matching_test.py` — after an edit to `src/<module>.py`,
   runs the matching `tests/test_<module>.py` if one exists, using the project
   venv (`venv/bin/python`) so `pytest` is actually importable. Informational
   only; skips quietly if there's no matching test file or no working `pytest`.
@@ -169,8 +172,13 @@ four are:
   for `src/server.py` or `src/granular/common.py`. Silence means "no matching
   test file", not "this edit is fine".
 
-Three review subagents in `.claude/agents/` run in their own context so bulky
-output (frame images, full test transcripts) stays out of the main session:
+Codex does not currently support an interactive `ask` result from `PreToolUse`.
+For the two whole-grade actions, its adapter adds a warning while the MCP
+server's confirmation-token gate remains authoritative. Hard denials, including
+missing frame evidence and source-media writes, block in both clients.
+
+Three canonical reviewer roles live in `.agents/roles/`, with native Codex
+definitions under `.codex/agents/` and Claude adapters under `.claude/agents/`:
 
 - `cut-reviewer` — screens an assembled timeline from its frames and reports on
   pacing, shot order, continuity, and coverage gaps.

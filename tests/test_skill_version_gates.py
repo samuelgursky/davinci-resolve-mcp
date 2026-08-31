@@ -20,7 +20,7 @@ from pathlib import Path
 
 from src.utils.resolve_versions import VERSION_GATES
 
-SKILLS = Path(__file__).resolve().parent.parent / ".claude" / "skills"
+SKILLS = Path(__file__).resolve().parent.parent / ".agents" / "skills"
 
 #: Domain skills that offer at least one version-gated live surface. Skills with
 #: no gated surface at all (resolve-fusion, house-style) are deliberately absent:

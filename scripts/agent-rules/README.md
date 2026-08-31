@@ -24,7 +24,8 @@ cannot drift.
    | Platform | File(s) | Trigger | Source |
    |---|---|---|---|
    | Codex / OpenCode / Zed / others | `AGENTS.md` (`## Domain Routing` block) | always-on | generated block |
-   | Claude Code | `.claude/skills/<name>/SKILL.md` | semantic (description) | hand-authored (rich) |
+   | Codex and compatible agents | `.agents/skills/<name>/SKILL.md` | semantic (description) | hand-authored canonical skill |
+   | Claude Code | `.claude/skills/<name>/SKILL.md` | semantic (description) | thin adapter to canonical skill |
    | Cursor | `.cursor/rules/*.mdc` | `alwaysApply` repo rule + per-domain `description` (agent-requested) | generated |
    | VS Code / Copilot | `.github/copilot-instructions.md` + `.github/instructions/*.instructions.md` | always-on + `applyTo` | generated |
    | Windsurf | `.windsurf/rules/*.md` + `.windsurfrules` | rules dir + legacy flat | generated |
@@ -33,8 +34,9 @@ cannot drift.
    | Continue | `.continue/rules/resolve-mcp.md` | always-on | generated |
    | Claude Desktop | — (chat client, no repo rules) | — | MCP prompts only |
 
-   `.claude/skills/*` stays hand-authored (Claude's rich semantic skills). Each
-   one is a **directory** holding a `SKILL.md` named for its frontmatter `name`;
+   `.agents/skills/*` stays hand-authored as the canonical rich skill source.
+   `.claude/skills/*` contains only compatibility adapters. Each skill is a
+   **directory** holding a `SKILL.md` named for its frontmatter `name`;
    a loose `.md` at the top level of `.claude/skills/` is never discovered and
    fails silently. Every
    other file is generated. `AGENTS.md` remains the universal backstop for any
@@ -65,7 +67,7 @@ node scripts/agent-rules/generate.mjs --check   # exit 1 if anything is stale (C
 
 - **New domain:** add an entry to `DOMAINS` in `generate.mjs`, add a matching
   `@mcp.prompt` in `src/server.py`, and (optionally) a rich
-  `.claude/skills/<name>/SKILL.md`. Regenerate.
+  `.agents/skills/<name>/SKILL.md` and add/update its client adapter. Regenerate.
 - **New platform:** add an `emit(...)` for its convention in `generate.mjs`,
   reusing `domainBody(d)` / `repoHygiene`. Regenerate. Do not hand-edit generated
   files — the drift guard will fail.

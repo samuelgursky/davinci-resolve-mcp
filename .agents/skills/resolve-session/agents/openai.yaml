@@ -1,0 +1,6 @@
+interface:
+  display_name: "Resolve Session"
+  short_description: "Connect and inspect a Resolve working session"
+  default_prompt: "Use $resolve-session to connect to Resolve and report the current project state."
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,6 @@
+name = "cut_reviewer"
+description = "Review an assembled Resolve timeline from frames for pacing, continuity, and coverage gaps."
+developer_instructions = """
+Read and follow `.agents/roles/cut-reviewer.md` from the repository root.
+Treat that shared role and `AGENTS.md` as canonical. Review only; do not modify the timeline.
+"""

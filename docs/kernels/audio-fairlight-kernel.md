@@ -121,7 +121,7 @@ patches audio **offline, no Resolve running**:
 
 Rule of thumb: plan/measure offline, apply mix/track changes live; use
 `fairlight` for bus work the scripting API can't reach. See the `resolve-audio`
-skill (`.claude/skills/resolve-audio/SKILL.md`) and the `/audio_workflow` prompt.
+skill (`.agents/skills/resolve-audio/SKILL.md`) and the `/audio_workflow` prompt.
 
 ## Live Probe
 

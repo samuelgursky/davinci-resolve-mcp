@@ -156,7 +156,7 @@ Cross-server rules an agent must know:
 - **Deps.** The grading catalog needs `sharp`; call the advanced `capabilities`
   tool for live status and install hints.
 
-See the `resolve-color` skill (`.claude/skills/resolve-color/SKILL.md`) for the
+See the `resolve-color` skill (`.agents/skills/resolve-color/SKILL.md`) for the
 craft ↔ live ↔ offline routing and the frame-first rule.
 
 ## Live Probe

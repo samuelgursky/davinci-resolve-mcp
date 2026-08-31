@@ -545,7 +545,7 @@ def prep_color_handoff(output_dir: str = "") -> str:
 # ─── Per-domain workflow routers ───────────────────────────────────────────────
 # Cross-platform depth: these surface as slash commands in EVERY MCP client
 # (Codex, Cursor, Copilot, Continue, Claude Desktop, …), so per-domain routing is
-# not limited to Claude Code's .claude/skills/. They mirror the repo skills of the
+# not limited to one client's adapters. They mirror the canonical `.agents/skills/`
 # same name; keep them in sync with docs/kernels/*.
 
 

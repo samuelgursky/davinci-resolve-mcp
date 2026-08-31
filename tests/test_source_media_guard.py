@@ -1,6 +1,6 @@
 """The Bash guard, exercised by running it — not by reading it.
 
-`.claude/hooks/source_media_guard.py` is the tripwire between an agent's shell
+`.agents/hooks/source_media_guard.py` is the canonical tripwire between an agent's shell
 access and the one rule AGENTS.md opens with: source media is never modified.
 It had no tests, and both holes closed in #152 were found by executing payloads
 against it. So these run the hook as the harness runs it — a PreToolUse JSON
