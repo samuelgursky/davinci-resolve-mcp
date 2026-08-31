@@ -202,9 +202,11 @@ export function eventsToOTIO(events, opts = {}) {
  * timeline runs 24fps with origin 86400, so rec/src frames convert as
  * round(frames × 24 / nominalFps). Placement anchors the EARLIEST video
  * event at the origin. Honesty ledger in the returned report: flattened
- * retimes (the template clip schema has no per-clip speed), dropped
- * transitions (treated as cuts at their boundary), and skipped audio events
- * (cuts carry linked A1 audio from their own source already).
+ * retimes (the template clip schema has no per-clip speed), authored vs
+ * dropped transitions (cross-dissolves are AUTHORED when the predecessor
+ * abuts the cut and both sides have handle media — render-verified on
+ * 19.1.3.7; otherwise dropped with the reason, as a cut at the boundary),
+ * and skipped audio events (cuts carry linked A1 audio already).
  *
  * @param {Array} events - normalized events (parseInterchange shape)
  * @param {object} opts
@@ -238,6 +240,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
   const toTl = (frames, fps) => Math.round((frames * 24) / Math.round(fps || 24));
   const flattenedRetimes = [];
   const droppedTransitions = [];
+  const transitionCandidates = [];
   const perSource = new Map();
   const placements = [];
 
@@ -250,11 +253,20 @@ export function eventsToAssembleSpec(events, opts = {}) {
     if ((e.speed ?? 100) !== 100 || e.reverse) {
       flattenedRetimes.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse });
     }
-    if (e.transition) {
-      droppedTransitions.push({ index: e.index, type: e.transition.type, duration: e.transition.duration });
-    }
     const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps) };
-    placements.push({ start: recIn, end: recOut, index: e.index });
+    if (e.transition) {
+      // A dissolve INTO this event, at its record-in boundary. Whether it can
+      // be authored (abutting predecessor + handles both sides) is decided
+      // after all placements are known.
+      let d = Math.max(2, toTl(e.transition.duration || 0, e.fps) || 2);
+      d += d % 2; // placeTransition centers on the cut; keep it even
+      transitionCandidates.push({
+        atFrame: recIn, durationFrames: d,
+        index: e.index, type: e.transition.type, rawDuration: e.transition.duration,
+        source: e.source, srcIn: cut.srcIn,
+      });
+    }
+    placements.push({ start: recIn, end: recOut, index: e.index, source: e.source, srcIn: cut.srcIn, durationFrames });
     if (!perSource.has(e.source)) perSource.set(e.source, []);
     perSource.get(e.source).push(cut);
   }
@@ -276,13 +288,44 @@ export function eventsToAssembleSpec(events, opts = {}) {
     cuts,
   }));
 
+  // Author cross-dissolves where the geometry allows it (render-verified on
+  // 19.1.3.7: an offline Sm2TiTransition over transplanted cross-source media
+  // blends 124→181.6→234 at the cut — transitions carry no Fusion comp, so
+  // the byte-keyed comp-cache law does not apply). A candidate is authorable
+  // when a predecessor ends EXACTLY at its cut and both sides have handle
+  // media for the centered span; anything else stays in droppedTransitions
+  // with the reason.
+  const transitions = [];
+  for (const c of transitionCandidates) {
+    const prev = placements.find((pl) => pl.end === c.atFrame);
+    if (!prev) {
+      droppedTransitions.push({ index: c.index, type: c.type, duration: c.rawDuration, reason: 'no abutting predecessor at the cut' });
+      continue;
+    }
+    const half = c.durationFrames / 2;
+    const bHandle = c.srcIn >= half;
+    const aSpec = sourceMap[prev.source] && sourceMap[prev.source].spec;
+    const aFrames = aSpec && Number(aSpec.frameCount);
+    const aHandle = Number.isFinite(aFrames) ? prev.srcIn + prev.durationFrames + half <= aFrames : false;
+    if (!bHandle || !aHandle) {
+      droppedTransitions.push({
+        index: c.index, type: c.type, duration: c.rawDuration,
+        reason: `insufficient handles for a centered ${c.durationFrames}f dissolve` +
+          `${bHandle ? '' : ' (incoming srcIn < half)'}${aHandle ? '' : ' (outgoing tail media < half)'}`,
+      });
+      continue;
+    }
+    transitions.push({ track: 1, atFrame: c.atFrame, durationFrames: c.durationFrames });
+  }
+
   return {
-    spec: { timelineName, media },
+    spec: { timelineName, media, ...(transitions.length ? { transitions } : {}) },
     report: {
       videoEvents: vids.length,
       sources: media.length,
       audioEventsSkipped: audioSkipped,
       flattenedRetimes,
+      authoredTransitions: transitions,
       droppedTransitions,
       origin: ORIGIN,
     },

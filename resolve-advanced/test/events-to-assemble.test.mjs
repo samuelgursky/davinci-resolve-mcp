@@ -79,3 +79,63 @@ test('round trip: events → EDL → events → spec is stable', () => {
   assert.deepEqual(all.map((c) => [c.startFrame, c.durationFrames, c.srcIn]),
     [[86400, 48, 96], [86448, 24, 0]]);
 });
+
+// Cross-dissolve authoring (render-verified on 19.1.3.7: offline
+// Sm2TiTransition over transplanted media blends 124→181.6→234 at the cut).
+// Authored only when a predecessor abuts the cut AND both sides have handle
+// media for the centered span; otherwise dropped WITH the reason.
+test('an EDL dissolve with handles both sides is authored as a transition', () => {
+  const edl = [
+    'TITLE: DIS',
+    'FCM: NON-DROP FRAME',
+    '001  TAPE1 V     C        00:00:01:00 00:00:03:00 01:00:00:00 01:00:02:00',
+    '002  TAPE2 V     D    024 00:00:01:00 00:00:03:00 01:00:02:00 01:00:04:00',
+    '',
+  ].join('\n');
+  const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
+  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24 }]);
+  assert.deepEqual(report.authoredTransitions, spec.transitions);
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+test('a dissolve with no handle on the incoming side drops with the reason', () => {
+  const edl = [
+    'TITLE: DIS',
+    'FCM: NON-DROP FRAME',
+    '001  TAPE1 V     C        00:00:01:00 00:00:03:00 01:00:00:00 01:00:02:00',
+    '002  TAPE2 V     D    024 00:00:00:00 00:00:02:00 01:00:02:00 01:00:04:00',
+    '',
+  ].join('\n');
+  const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
+  assert.equal(spec.transitions, undefined);
+  assert.equal(report.authoredTransitions.length, 0);
+  assert.equal(report.droppedTransitions.length, 1);
+  assert.match(report.droppedTransitions[0].reason, /incoming srcIn < half/);
+});
+
+test('a dissolve whose outgoing tail runs off the media drops with the reason', () => {
+  const edl = [
+    'TITLE: DIS',
+    'FCM: NON-DROP FRAME',
+    // TAPE1 is 480 frames; this cut ends at source frame 480 — zero tail handle.
+    '001  TAPE1 V     C        00:00:18:00 00:00:20:00 01:00:00:00 01:00:02:00',
+    '002  TAPE2 V     D    024 00:00:01:00 00:00:03:00 01:00:02:00 01:00:04:00',
+    '',
+  ].join('\n');
+  const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
+  assert.equal(spec.transitions, undefined);
+  assert.match(report.droppedTransitions[0].reason, /outgoing tail media < half/);
+});
+
+test('a dissolve with a record gap before it drops as no-abutting-predecessor', () => {
+  const edl = [
+    'TITLE: DIS',
+    'FCM: NON-DROP FRAME',
+    '001  TAPE1 V     C        00:00:01:00 00:00:03:00 01:00:00:00 01:00:02:00',
+    '002  TAPE2 V     D    024 00:00:01:00 00:00:03:00 01:00:03:00 01:00:05:00',
+    '',
+  ].join('\n');
+  const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
+  assert.equal(spec.transitions, undefined);
+  assert.match(report.droppedTransitions[0].reason, /no abutting predecessor/);
+});
