@@ -327,3 +327,45 @@ test('subtitles and markers target the PINNED parent when compounds are present'
     await fs.unlink(out);
   }
 });
+
+test('compound donor template carries SequenceSetup (the depth-2 render key)', async () => {
+  // The historical depth-2-renders-black was ONE missing key: the embedded
+  // Sm2Sequence FieldsBlob of a REAL compound (fresh 19.1.3.7 CreateCompoundClip
+  // harvest, E55) carries a constant SequenceSetup blob (project format
+  // descriptor) the old donor template lacked. With it, doubly nested content
+  // renders (E56/E57: white 234 through two levels). Guard the template.
+  const requireC4 = createRequire(import.meta.url);
+  const { decodeKeyedDict } = requireC4('../vendor/drp-format/keyed-dict.js');
+  const t = await fs.readFile(new URL('../vendor/drp-format/templates/compound-pool-r19.xml', import.meta.url), 'utf8');
+  const fb = t.match(/<Sm2Sequence DbId="[^"]+">\s*<FieldsBlob>([0-9a-fA-F]+)/)[1];
+  const keys = decodeKeyedDict(Buffer.from(fb, 'hex')).entries.map((e) => e.key);
+  assert.ok(keys.includes('SequenceSetup'), `template blob keys: ${keys.join(',')}`);
+  assert.ok(keys.includes('SeqRef'));
+});
+
+test('compounds nest recursively through the spec', async () => {
+  const out = tmp('.drt');
+  await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    spec: {
+      timelineName: 'NEST',
+      media: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 }, cuts: [{ startFrame: 86400, durationFrames: 48 }] },
+      compounds: [{ name: 'OUT', startFrame: 86448, durationFrames: 48, cuts: [],
+        compounds: [{ name: 'INNER', startFrame: 0, durationFrames: 24, cuts: [] }] }],
+    },
+  }});
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const seqs = Object.keys(zip.files).filter((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+  assert.equal(seqs.length, 3, 'parent + OUT inner + INNER inner');
+  let outContainer = null;
+  for (const n of seqs) {
+    const xml = await zip.file(n).async('string');
+    if (/<Name>INNER<\/Name>/.test(xml)) outContainer = xml;
+  }
+  assert.ok(outContainer, 'the INNER compound item sits inside OUT\'s container');
+  assert.doesNotMatch(outContainer, /<Name>OUT<\/Name>/, 'OUT\'s own item is in the PARENT, not its inner container');
+  const mp = await zip.file('MediaPool/Master/MpFolder.xml').async('string');
+  const compounds = mp.match(/<Sm2MpCompoundClip DbId="[^"]+">[\s\S]*?<\/Sm2MpCompoundClip>/g) || [];
+  assert.equal(compounds.length, 2, 'both compounds pooled flat');
+  await fs.unlink(out);
+});
