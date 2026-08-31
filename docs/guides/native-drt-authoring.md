@@ -52,6 +52,7 @@ window. `render.verify_output` covers the container-level checks.
 | Turnover markers | EDL `* LOC:` locators + OTIO markers → authored | v2.119 |
 | TC-bearing sources (AAF route) | native clip capture (`MediaStartTime`), channel-leg merge | v2.120–2.122 |
 | Subtitles | `spec.subtitles` / `spec.subtitlesSrt` (raw SRT) | v2.128 |
+| Compound clips | survive `extract_from_drp` → `.drt` (inner containers kept, recursive) | v2.130 |
 | Fusion titles | `elements: [{type:'title', text}]` — **21-gen hosts only** | v2.108 |
 
 `assemble_from_interchange` drives the same engine from an EDL / OTIO /

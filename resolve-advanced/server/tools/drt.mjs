@@ -373,6 +373,45 @@ export const drtTool = {
       const keepEntry = seqEntries[idx];
       const keepXml = await drpZip.file(keepEntry).async('string');
       const keepSeqIds = [...keepXml.matchAll(/<Sequence>([0-9a-f-]{36})<\/Sequence>/g)].map((m) => m[1]);
+      // COMPOUND CLIPS: a compound is a pool Sm2MpCompoundClip with an
+      // EMBEDDED Sm2Sequence whose tracks live in their OWN SeqContainer —
+      // dropping that container ships a compound that imports and reads back
+      // but is hollow. Walk MediaRefs of the kept container(s) → compound
+      // pool elements → embedded sequence ids → keep those containers too,
+      // recursively (compounds nest). Live-proven: a .drt that keeps the
+      // inner container renders the compound's content (E45, 19.1.3.7).
+      const mpXmlByName = {};
+      for (const name of Object.keys(drpZip.files)) {
+        if (!drpZip.files[name].dir && name.endsWith('MpFolder.xml')) {
+          mpXmlByName[name] = await drpZip.file(name).async('string');
+        }
+      }
+      const seqXmlByEntry = { [keepEntry]: keepXml };
+      const keepContainers = new Set([keepEntry]);
+      const compoundIds = new Set();
+      const queue = [keepXml];
+      while (queue.length) {
+        const xml = queue.pop();
+        for (const m of xml.matchAll(/<MediaRef>([0-9a-f-]{36})<\/MediaRef>/g)) {
+          const ref = m[1];
+          if (compoundIds.has(ref)) continue;
+          for (const mpXml of Object.values(mpXmlByName)) {
+            const cm = mpXml.match(new RegExp(`<Sm2MpCompoundClip DbId="${ref}">[\\s\\S]*?</Sm2MpCompoundClip>`));
+            if (!cm) continue;
+            compoundIds.add(ref);
+            const innerSeq = (cm[0].match(/<Sm2Sequence DbId="([0-9a-f-]{36})">/) || [])[1];
+            if (!innerSeq) continue;
+            for (const entryName of seqEntries) {
+              if (keepContainers.has(entryName)) continue;
+              const sx = seqXmlByEntry[entryName] ?? (seqXmlByEntry[entryName] = await drpZip.file(entryName).async('string'));
+              if (sx.includes(`<Sequence>${innerSeq}</Sequence>`)) {
+                keepContainers.add(entryName);
+                queue.push(sx);
+              }
+            }
+          }
+        }
+      }
       const out = new JSZip();
       let droppedTimelines = 0;
       for (const name of Object.keys(drpZip.files)) {
@@ -380,7 +419,7 @@ export const drtTool = {
         if (entry.dir) continue;
         if (name === 'Gallery.xml') continue;
         const isSeq = seqEntries.includes(name);
-        if (isSeq && name !== keepEntry) continue;
+        if (isSeq && !keepContainers.has(name)) continue;
         let content = await entry.async(name.endsWith('.xml') ? 'string' : 'nodebuffer');
         if (name.endsWith('MpFolder.xml') && seqEntries.length > 1) {
           content = content.replace(

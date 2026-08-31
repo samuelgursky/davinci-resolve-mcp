@@ -213,3 +213,41 @@ test('subtitles author as plain Subtitle generators on a Type-2 track', async ()
     ], media: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 }, cuts: [{ startFrame: 86400, durationFrames: 96 }] } },
   }}), /overlap — one subtitle track/);
 });
+
+test('extract keeps a compound clip\'s inner container, recursively', async () => {
+  // A compound is a pool Sm2MpCompoundClip embedding an Sm2Sequence whose
+  // tracks live in their OWN SeqContainer — the old recipe dropped it and
+  // shipped a hollow compound (live-proven fix: E45/E46 render the inner
+  // content on 19.1.3.7).
+  const seqParent = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const seqInner = 'bbbbbbbb-0000-0000-0000-000000000002';
+  const seqOther = 'cccccccc-0000-0000-0000-000000000003';
+  const compoundId = 'dddddddd-0000-0000-0000-000000000004';
+  const cont = (seqId, extra = '') =>
+    `<?xml version="1.0"?><Sm2SequenceContainer DbId="c"><VideoTrackVec><Element>` +
+    `<Sm2TiTrack DbId="t"><Sequence>${seqId}</Sequence><Items>${extra}</Items></Sm2TiTrack></Element></VideoTrackVec></Sm2SequenceContainer>`;
+  const compoundItem = `<Element><Sm2TiVideoClip DbId="i"><Name>CMP</Name><MediaRef>${compoundId}</MediaRef></Sm2TiVideoClip></Element>`;
+  const mp =
+    '<Sm2MpFolder>' +
+    `<Element><Sm2MpTimelineClip DbId="a"><Name>PARENT</Name><Id>${seqParent}</Id></Sm2MpTimelineClip></Element>` +
+    `<Element><Sm2MpTimelineClip DbId="b"><Name>OTHER</Name><Id>${seqOther}</Id></Sm2MpTimelineClip></Element>` +
+    `<Element><Sm2MpCompoundClip DbId="${compoundId}"><Name>CMP</Name><Sequence><Sm2Sequence DbId="${seqInner}"><FieldsBlob/></Sm2Sequence></Sequence></Sm2MpCompoundClip></Element>` +
+    '</Sm2MpFolder>';
+  const zip = new JSZip();
+  zip.file('project.xml', '<SM_Project/>');
+  zip.file('MediaPool/Master/MpFolder.xml', mp);
+  zip.file('SeqContainer/aaaa.xml', cont(seqParent, compoundItem));
+  zip.file('SeqContainer/bbbb.xml', cont(seqInner));
+  zip.file('SeqContainer/cccc.xml', cont(seqOther));
+  const src = tmp('.drp');
+  await fs.writeFile(src, await zip.generateAsync({ type: 'nodebuffer' }));
+  const out = tmp('.drt');
+  const res = await drtTool.handler({ action: 'extract_from_drp', args: { drpPath: src, outputPath: out, timelineIndex: 0 } });
+  const outZip = await JSZip.loadAsync(await fs.readFile(out));
+  const names = Object.keys(outZip.files).filter((n) => !outZip.files[n].dir);
+  assert.ok(names.includes('SeqContainer/aaaa.xml'), 'parent kept');
+  assert.ok(names.includes('SeqContainer/bbbb.xml'), 'compound INNER container kept');
+  assert.ok(!names.includes('SeqContainer/cccc.xml'), 'unrelated timeline still dropped');
+  assert.equal(res.droppedTimelines, 1);
+  await fs.unlink(src); await fs.unlink(out);
+});
