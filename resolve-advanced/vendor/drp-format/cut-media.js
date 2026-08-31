@@ -24,16 +24,20 @@ const {
   freshDbIds,
   getTrackVec,
   replaceTrackVec,
+  emptyTrackClone,
 } = require('./seq-surgery');
 const { clipDbId, setClipStart, setClipDuration, setClipIn } = require('./splice-clips');
 
 /**
  * @param {Buffer|string} drpInput
  * @param {object} opts
- * @param {Array<{startFrame:number, durationFrames:number, srcIn?:number}>} opts.cuts
+ * @param {Array<{startFrame:number, durationFrames:number, srcIn?:number, track?:number}>} opts.cuts
  *   Timeline placements. startFrame is timeline-absolute (origin 86400 on the
  *   bundled templates — clips before the origin are dropped by Resolve on
  *   import, silently). srcIn is the source in-point in TIMELINE frames.
+ *   track is the 1-based VIDEO track (default 1); missing tracks are grown as
+ *   empty clones. Cuts on track > 1 are placed VIDEO-ONLY — their audio would
+ *   overlap the track-1 cuts' audio on A1 (the template has a single A1).
  * @param {string} [opts.timelineUuid]
  * @returns {Promise<{buffer: Buffer, cutCount: number, clipDbIds: string[]}>}
  */
@@ -52,12 +56,28 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     if (cut.mediaRef !== undefined && !/^[0-9a-f-]{36}$/.test(cut.mediaRef)) {
       throw new TypeError(`cutSourceIntoClips: cuts[${i}].mediaRef must be a uuid`);
     }
+    if (cut.track !== undefined && (!Number.isInteger(cut.track) || cut.track < 1)) {
+      throw new TypeError(`cutSourceIntoClips: cuts[${i}].track must be a positive integer`);
+    }
   });
 
   const zip = await loadDrpZip(drpInput);
   const { entry, xml: seqXml } = await selectTargetSeq(zip, timelineUuid);
   let xml = seqXml;
   const clipDbIds = [];
+
+  const cloneCut = (donor, cut) => {
+    let c = freshDbIds(donor);
+    c = setClipStart(c, cut.startFrame);
+    c = setClipDuration(c, cut.durationFrames);
+    c = setClipIn(c, cut.srcIn ?? 0);
+    if (cut.mediaRef) {
+      // Multi-source: point this cut at ITS source's transplanted pool
+      // element instead of the donor's.
+      c = c.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/, `<MediaRef>${cut.mediaRef}</MediaRef>`);
+    }
+    return c;
+  };
 
   for (const trackType of ['video', 'audio']) {
     const { match, tracks } = getTrackVec(xml, trackType);
@@ -66,22 +86,23 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     const clips = splitClipElements(items);
     if (!clips.length) continue; // audio-less media: nothing to cut on A1
     const donor = clips[0];
-    const clones = cuts.map((cut) => {
-      let c = freshDbIds(donor);
-      c = setClipStart(c, cut.startFrame);
-      c = setClipDuration(c, cut.durationFrames);
-      c = setClipIn(c, cut.srcIn ?? 0);
-      if (cut.mediaRef) {
-        // Multi-source: point this cut at ITS source's transplanted pool
-        // element instead of the donor's.
-        c = c.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/, `<MediaRef>${cut.mediaRef}</MediaRef>`);
-      }
-      return c;
-    });
-    if (trackType === 'video') {
-      for (const c of clones) clipDbIds.push(clipDbId(c));
+    if (trackType === 'audio') {
+      // A1 mirrors track-1 video cuts only; higher video tracks stay video-only.
+      const a1 = cuts.filter((cut) => (cut.track ?? 1) === 1).map((cut) => cloneCut(donor, cut));
+      tracks[0] = setItemsInner(tracks[0], a1.join(''));
+      xml = replaceTrackVec(xml, trackType, match, tracks);
+      continue;
     }
-    tracks[0] = setItemsInner(tracks[0], clones.join(''));
+    const maxTrack = Math.max(1, ...cuts.map((cut) => cut.track ?? 1));
+    const cloneSource = tracks[0];
+    while (tracks.length < maxTrack) tracks.push(emptyTrackClone(cloneSource));
+    for (let t = 1; t <= tracks.length; t += 1) {
+      const mine = cuts.filter((cut) => (cut.track ?? 1) === t);
+      if (t > 1 && !mine.length) continue; // grown-empty or untouched track keeps its items
+      const clones = mine.map((cut) => cloneCut(donor, cut));
+      for (const c of clones) clipDbIds.push(clipDbId(c));
+      tracks[t - 1] = setItemsInner(tracks[t - 1], clones.join(''));
+    }
     xml = replaceTrackVec(xml, trackType, match, tracks);
   }
 

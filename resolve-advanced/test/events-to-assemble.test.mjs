@@ -139,3 +139,49 @@ test('a dissolve with a record gap before it drops as no-abutting-predecessor', 
   assert.equal(spec.transitions, undefined);
   assert.match(report.droppedTransitions[0].reason, /no abutting predecessor/);
 });
+
+// Multi-track video: parsers number video tracks (V, V2, …), cuts carry the
+// track, overlap is judged PER TRACK (V2 stacking over V1 is legitimate).
+import { parseOTIO } from '../server/editorial.mjs';
+
+const rt = (value, rate = 24) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate });
+const clip = (name, srcIn, dur) => ({
+  OTIO_SCHEMA: 'Clip.1', name,
+  source_range: { OTIO_SCHEMA: 'TimeRange.1', start_time: rt(srcIn), duration: rt(dur) },
+  media_reference: { name },
+});
+const gap = (dur) => ({ OTIO_SCHEMA: 'Gap.1', source_range: { duration: rt(dur) } });
+const vtrack = (children) => ({ OTIO_SCHEMA: 'Track.1', kind: 'Video', children });
+
+test('two-video-track OTIO maps V2 cuts with track and passes per-track overlap', () => {
+  const otio = {
+    OTIO_SCHEMA: 'Timeline.1',
+    tracks: { children: [
+      vtrack([clip('TAPE1', 24, 96)]),
+      vtrack([gap(32), clip('TAPE2', 24, 32)]),
+    ] },
+  };
+  const events = parseOTIO(otio, { fps: 24 });
+  assert.deepEqual([...new Set(events.map((e) => e.track))].sort(), ['V', 'V2']);
+  const { spec, report } = eventsToAssembleSpec(events, { sourceMap: MAP });
+  const t1 = spec.media.find((m) => m.mediaFilePath === '/m/a.mp4');
+  const t2 = spec.media.find((m) => m.mediaFilePath === '/m/b.mp4');
+  assert.deepEqual(t1.cuts, [{ startFrame: 86400, durationFrames: 96, srcIn: 24 }]);
+  assert.deepEqual(t2.cuts, [{ startFrame: 86432, durationFrames: 32, srcIn: 24, track: 2 }]);
+  assert.equal(report.upperTrackCutsVideoOnly, 1);
+});
+
+test('overlap on the SAME video track still refuses, naming the track', () => {
+  const otio = {
+    OTIO_SCHEMA: 'Timeline.1',
+    tracks: { children: [
+      vtrack([clip('TAPE1', 0, 48)]),
+      vtrack([gap(24), clip('TAPE2', 0, 48), gap(1), clip('TAPE2', 100, 48)]),
+    ] },
+  };
+  // Force a same-track overlap: V2 children with overlapping record ranges can't
+  // come from sequential OTIO children, so collide V1 with itself via raw events.
+  const events = parseOTIO(otio, { fps: 24 });
+  const bad = events.concat([{ ...events[0], index: 99, recIn: 24, recOut: 72 }]);
+  assert.throws(() => eventsToAssembleSpec(bad, { sourceMap: MAP }), /overlap on video track 1/);
+});

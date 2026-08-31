@@ -116,8 +116,12 @@ export function parseOTIO(otio, opts = {}) {
   const tracks = (doc.tracks && doc.tracks.children) || [];
   const events = [];
   let idx = 1;
+  let vNum = 0;
   for (const track of tracks) {
-    const kind = track.kind === 'Audio' ? 'A' : 'V';
+    const isAudio = track.kind === 'Audio';
+    if (!isAudio) vNum += 1;
+    // First video track stays 'V' (compat); higher tracks are 'V2', 'V3', …
+    const kind = isAudio ? 'A' : (vNum === 1 ? 'V' : `V${vNum}`);
     let rec = 0;
     for (const child of track.children || []) {
       const schema = child.OTIO_SCHEMA || '';
@@ -199,7 +203,7 @@ export function parseXMEMLEvents(xml, opts = {}) {
   const media = seq && seq.media;
   if (media) {
     const vtracks = media.video && media.video.track ? (Array.isArray(media.video.track) ? media.video.track : [media.video.track]) : [];
-    for (const t of vtracks) if (t.clipitem) walk(t.clipitem, 'V');
+    vtracks.forEach((t, vi) => { if (t.clipitem) walk(t.clipitem, vi === 0 ? 'V' : `V${vi + 1}`); });
     const atracks = media.audio && media.audio.track ? (Array.isArray(media.audio.track) ? media.audio.track : [media.audio.track]) : [];
     for (const t of atracks) if (t.clipitem) walk(t.clipitem, 'A');
   }
@@ -320,7 +324,7 @@ export function timingGuards(oldEvents, newEvents) {
     const ne = matches[0];
     if (!ne) {
       // A dropped audio event where its video sibling survives → dropped J/L-cut audio.
-      if (oe.track === 'A' && newEvents.some((x) => x.track === 'V' && x.source === oe.source))
+      if (oe.track === 'A' && newEvents.some((x) => x.track !== 'A' && x.source === oe.source))
         flags.push({ kind: 'dropped_split_audio', source: oe.source, detail: 'audio event gone but video sibling present (J/L-cut lost)' });
       continue;
     }

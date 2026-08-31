@@ -238,6 +238,8 @@ export function eventsToAssembleSpec(events, opts = {}) {
   }
 
   const toTl = (frames, fps) => Math.round((frames * 24) / Math.round(fps || 24));
+  // 'V'/'V1' → 1, 'V2' → 2, … (parsers number video tracks; EDL is single-V).
+  const trackNum = (t) => { const m = /^V(\d+)?$/.exec(String(t || 'V')); return m ? (m[1] ? parseInt(m[1], 10) : 1) : 1; };
   const flattenedRetimes = [];
   const droppedTransitions = [];
   const transitionCandidates = [];
@@ -253,7 +255,8 @@ export function eventsToAssembleSpec(events, opts = {}) {
     if ((e.speed ?? 100) !== 100 || e.reverse) {
       flattenedRetimes.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse });
     }
-    const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps) };
+    const vTrack = trackNum(e.track);
+    const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps), ...(vTrack > 1 ? { track: vTrack } : {}) };
     if (e.transition) {
       // A dissolve INTO this event, at its record-in boundary. Whether it can
       // be authored (abutting predecessor + handles both sides) is decided
@@ -261,24 +264,33 @@ export function eventsToAssembleSpec(events, opts = {}) {
       let d = Math.max(2, toTl(e.transition.duration || 0, e.fps) || 2);
       d += d % 2; // placeTransition centers on the cut; keep it even
       transitionCandidates.push({
-        atFrame: recIn, durationFrames: d,
+        atFrame: recIn, durationFrames: d, track: vTrack,
         index: e.index, type: e.transition.type, rawDuration: e.transition.duration,
         source: e.source, srcIn: cut.srcIn,
       });
     }
-    placements.push({ start: recIn, end: recOut, index: e.index, source: e.source, srcIn: cut.srcIn, durationFrames });
+    placements.push({ start: recIn, end: recOut, index: e.index, source: e.source, srcIn: cut.srcIn, durationFrames, track: vTrack });
     if (!perSource.has(e.source)) perSource.set(e.source, []);
     perSource.get(e.source).push(cut);
   }
 
+  // Overlap is judged PER VIDEO TRACK — V2 stacking over V1 is legitimate
+  // conform geometry (render-verified: an upper-track clip covers the lower).
   placements.sort((a, b) => a.start - b.start);
-  for (let i = 1; i < placements.length; i += 1) {
-    if (placements[i].start < placements[i - 1].end) {
-      throw new Error(
-        `eventsToAssembleSpec: events ${placements[i - 1].index} and ${placements[i].index} ` +
-        'overlap on the record track after frame conversion — a single V1 cannot hold both. ' +
-        'Resolve the overlap upstream (transitions count as cuts at their boundary here).',
-      );
+  const byTrack = new Map();
+  for (const pl of placements) {
+    if (!byTrack.has(pl.track)) byTrack.set(pl.track, []);
+    byTrack.get(pl.track).push(pl);
+  }
+  for (const [trk, pls] of byTrack) {
+    for (let i = 1; i < pls.length; i += 1) {
+      if (pls[i].start < pls[i - 1].end) {
+        throw new Error(
+          `eventsToAssembleSpec: events ${pls[i - 1].index} and ${pls[i].index} ` +
+          `overlap on video track ${trk} after frame conversion — one track cannot hold both. ` +
+          'Resolve the overlap upstream (transitions count as cuts at their boundary here).',
+        );
+      }
     }
   }
 
@@ -297,7 +309,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
   // with the reason.
   const transitions = [];
   for (const c of transitionCandidates) {
-    const prev = placements.find((pl) => pl.end === c.atFrame);
+    const prev = placements.find((pl) => pl.track === c.track && pl.end === c.atFrame);
     if (!prev) {
       droppedTransitions.push({ index: c.index, type: c.type, duration: c.rawDuration, reason: 'no abutting predecessor at the cut' });
       continue;
@@ -315,7 +327,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
       });
       continue;
     }
-    transitions.push({ track: 1, atFrame: c.atFrame, durationFrames: c.durationFrames });
+    transitions.push({ track: c.track, atFrame: c.atFrame, durationFrames: c.durationFrames });
   }
 
   return {
@@ -324,6 +336,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
       videoEvents: vids.length,
       sources: media.length,
       audioEventsSkipped: audioSkipped,
+      upperTrackCutsVideoOnly: placements.filter((pl) => pl.track > 1).length,
       flattenedRetimes,
       authoredTransitions: transitions,
       droppedTransitions,
