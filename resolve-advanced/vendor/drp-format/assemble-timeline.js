@@ -200,6 +200,17 @@ async function assembleTimeline(spec = {}) {
     }));
   }
 
+  // Pin the PARENT container id BEFORE any compound inserts an inner
+  // container: entry listing is name-sorted, so an inner container can
+  // alphabetically precede the parent and every later "first container"
+  // lookup — the next compound's item, subtitles, markers — then targets
+  // the compound's INNER timeline instead (measured: CMP_B landed inside
+  // CMP_A; subtitles authored with a compound in the spec vanished into
+  // the inner container and the imported timeline had no subtitle track).
+  const zipPin = await JSZip.loadAsync(buffer);
+  const parentEntryPin = Object.keys(zipPin.files).find((n) => !zipPin.files[n].dir && /SeqContainer\/.+\.xml$/.test(n));
+  const parentContainerId = ((await zipPin.file(parentEntryPin).async('string')).match(/<Sm2SequenceContainer DbId="([^"]+)"/) || [])[1];
+
   // Compound clips: an empty nested timeline is spliced in from the
   // harvested donor shape, then its content is placed with the ORDINARY cuts
   // machinery targeting the inner container (inner origin is FRAME 0).
@@ -221,13 +232,6 @@ async function assembleTimeline(spec = {}) {
         insertedExtra.add(fp);
       }
     }
-    // Pin the PARENT container id BEFORE inserting inner containers: entry
-    // listing is name-sorted, so an inner container can alphabetically
-    // precede the parent and swallow the next compound's item (measured —
-    // CMP_B landed inside CMP_A's inner timeline).
-    const zip0 = await JSZip.loadAsync(buffer);
-    const parentEntry0 = Object.keys(zip0.files).find((n) => !zip0.files[n].dir && /SeqContainer\/.+\.xml$/.test(n));
-    const parentContainerId = ((await zip0.file(parentEntry0).async('string')).match(/<Sm2SequenceContainer DbId="([^"]+)"/) || [])[1];
     for (const [ci, comp] of spec.compounds.entries()) {
       if (!comp || typeof comp !== 'object') throw new TypeError(`assembleTimeline: compounds[${ci}] must be an object`);
       const res = await placeCompound(buffer, {
@@ -280,7 +284,7 @@ async function assembleTimeline(spec = {}) {
         throw new RangeError(`assembleTimeline: subtitle at frame ${sub.startFrame} is before the timeline origin ${originFrame}`);
       }
     }
-    ({ buffer } = await placeSubtitles(buffer, { subtitles }));
+    ({ buffer } = await placeSubtitles(buffer, { subtitles, timelineUuid: parentContainerId }));
   }
 
   if (Array.isArray(spec.markers) && spec.markers.length) {
@@ -289,9 +293,17 @@ async function assembleTimeline(spec = {}) {
     // <Sequence> references). Encoder byte-exact vs a live 19.1.3.7 export.
     // Marker frames here are TIMELINE-ABSOLUTE for consistency with cuts;
     // the blob stores them start-relative.
+    // Resolved against the PINNED parent container — a compound's inner
+    // container also matches the "any SeqContainer entry" pattern, and
+    // attaching the blob to the inner sequence hides every marker.
     const zipM = await JSZip.loadAsync(buffer);
-    const seqName = Object.keys(zipM.files).find((n) => !zipM.files[n].dir && /SeqContainer\/.+\.xml$/.test(n));
-    const seqXml2 = await zipM.file(seqName).async('string');
+    const seqNames = Object.keys(zipM.files).filter((n) => !zipM.files[n].dir && /SeqContainer\/.+\.xml$/.test(n));
+    let seqXml2 = null;
+    for (const n of seqNames) {
+      const xmlN = await zipM.file(n).async('string');
+      if (xmlN.includes(`<Sm2SequenceContainer DbId="${parentContainerId}"`)) { seqXml2 = xmlN; break; }
+    }
+    if (!seqXml2) throw new Error('assembleTimeline: pinned parent SeqContainer not found for markers');
     const seqIdM = (seqXml2.match(/<Sequence>([0-9a-f-]{36})<\/Sequence>/) || [])[1];
     if (!seqIdM) throw new Error('assembleTimeline: cannot find the Sm2Sequence id for markers');
     const rel = spec.markers.map((m) => {

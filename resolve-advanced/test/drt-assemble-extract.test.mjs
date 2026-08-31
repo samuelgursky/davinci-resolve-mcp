@@ -286,3 +286,44 @@ test('placeCompound rewires every cluster link — folder, SeqRef, Parent — an
   assert.ok(zip2.file(`SeqContainer/${res.innerContainerId}.xml`), 'first inner kept');
   assert.ok(zip2.file(`SeqContainer/${res2.innerContainerId}.xml`), 'second inner added');
 });
+
+test('subtitles and markers target the PINNED parent when compounds are present', async () => {
+  // A compound's inner container also matches "first SeqContainer with a
+  // VideoTrackVec", and entry listing is name-sorted by random uuid — so
+  // pre-pin, cues (and the markers' BlobOwner) could land inside the
+  // compound (measured live: the imported timeline had NO subtitle track).
+  // The sort is a coin flip per assembly; several rounds pin the property.
+  for (let i = 0; i < 6; i += 1) {
+    const out = tmp('.drt');
+    await drtTool.handler({ action: 'assemble', args: {
+      outputPath: out, targetAppVersion: '19.1.3',
+      spec: {
+        timelineName: 'CMPSUB',
+        media: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 }, cuts: [{ startFrame: 86400, durationFrames: 96 }] },
+        compounds: [{ name: 'CMP', startFrame: 86496, durationFrames: 24, cuts: [] }],
+        subtitlesSrt: '1\n00:00:00,500 --> 00:00:01,500\nPinCue\n',
+        markers: [{ frame: 86410, color: 'Blue', name: 'M' }],
+      },
+    }});
+    const zip = await JSZip.loadAsync(await fs.readFile(out));
+    const seqs = Object.keys(zip.files).filter((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+    assert.equal(seqs.length, 2, 'parent + compound inner');
+    let parent = null;
+    let inner = null;
+    for (const n of seqs) {
+      const xml = await zip.file(n).async('string');
+      if (/<Name>CMP<\/Name>/.test(xml)) parent = xml;
+      else inner = xml;
+    }
+    assert.ok(parent && inner, 'both containers identified');
+    assert.match(parent, /<Name>PinCue<\/Name>/, 'cue in the PARENT container');
+    assert.doesNotMatch(inner, /PinCue/, 'inner container has no cue');
+    const pj = await zip.file('project.xml').async('string');
+    // scope to the marker blob — the template carries other BlobOwner tags
+    const blk = pj.match(/<Sm2SequenceLockableBlob[\s\S]*?<\/Sm2SequenceLockableBlob>/)[0];
+    const owner = blk.match(/<BlobOwner>([0-9a-f-]{36})<\/BlobOwner>/)[1];
+    const parentSeqId = parent.match(/<Sequence>([0-9a-f-]{36})<\/Sequence>/)[1];
+    assert.equal(owner, parentSeqId, 'marker blob owned by the PARENT sequence');
+    await fs.unlink(out);
+  }
+});

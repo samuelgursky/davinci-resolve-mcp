@@ -544,3 +544,29 @@ test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', 
   assert.match(seq, /<Start>86412<\/Start>/); // 0.5s @24 + origin
   fsM.rmSync(tmpd, { recursive: true, force: true });
 });
+
+test('verifyRoundtrip drops zero-duration dissolve legs and maps reels via aliases', () => {
+  // An EDL dissolve writes a ZERO-duration outgoing leg before the D event —
+  // a pairing placeholder no export reproduces — and names sources by REEL
+  // (CUTSRC) while the re-export uses file basenames (cut_src). Both broke
+  // the first live EDL round-trip through the tool layer (E54).
+  const input = [
+    { track: 'V1', source: 'CUTSRC', recIn: 0, recOut: 48, srcIn: 24 },
+    { track: 'V1', source: 'CUTSRC', recIn: 48, recOut: 48, srcIn: 72 },
+    { track: 'V1', source: 'WHITESRC', recIn: 48, recOut: 96, srcIn: 24 },
+  ];
+  const exported = [
+    { track: 'V', source: 'cut_src.mp4', recIn: 86400, recOut: 86448, srcIn: 24 },
+    { track: 'V', source: 'white_src.mp4', recIn: 86448, recOut: 86496, srcIn: 24 },
+  ];
+  const res = verifyRoundtrip(input, exported, {
+    sourceAliases: { CUTSRC: 'cut_src.mp4', WHITESRC: 'white_src.mp4' },
+  });
+  assert.equal(res.pass, true, JSON.stringify(res.mismatches));
+  assert.equal(res.pairs, 2);
+  assert.deepEqual(res.srcOffsets, { cut_src: 0, white_src: 0 });
+  // without aliases the reel names cannot match — the miss is reported, not silent
+  const bare = verifyRoundtrip(input, exported);
+  assert.equal(bare.pass, false);
+  assert.equal(bare.mismatches[0].kind, 'source');
+});

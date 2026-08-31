@@ -608,13 +608,23 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     return m ? `${m[1]}${m[2] || '1'}` : String(t);
   };
   const canonSource = (x) => String(x || '').replace(/\.[^.]+$/, '').toLowerCase();
-  const vids = (evts) => evts.filter((e) => /^V\d*$/.test(String(e.track)) && e.recIn != null && e.recOut != null);
+  // Reel/tape aliases: an EDL names sources by REEL (CUTSRC) while the
+  // re-export names them by file basename (cut_src) — the sourceMap that
+  // drove the assemble is the authority linking the two. Keys and values
+  // canonicalize exactly like event sources.
+  const aliases = {};
+  for (const [k, v] of Object.entries(opts.sourceAliases || {})) aliases[canonSource(k)] = canonSource(v);
+  const mapSource = (s) => aliases[s] ?? s;
+  // recOut > recIn: an EDL dissolve writes a ZERO-duration outgoing leg
+  // before the D event — a pairing placeholder, never a rendered clip, and
+  // no export reproduces it.
+  const vids = (evts) => evts.filter((e) => /^V\d*$/.test(String(e.track)) && e.recIn != null && e.recOut != null && e.recOut > e.recIn);
   const norm = (evts) => {
     const v = vids(evts);
     if (!v.length) return [];
     const off = Math.min(...v.map((e) => e.recIn));
     return v
-      .map((e) => ({ track: canonTrack(e.track), source: canonSource(e.source), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0 }))
+      .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0 }))
       .sort((a, b) => a.track.localeCompare(b.track) || a.recIn - b.recIn);
   };
   const a = norm(inputEvents);

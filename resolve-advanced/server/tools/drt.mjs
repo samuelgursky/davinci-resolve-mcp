@@ -288,8 +288,7 @@ export const drtTool = {
         stamped,
         conform: report,
         note:
-          'Import with timeline.import_timeline_checked (timeline is named after the FILE). Dissolves/cross-fades, forward+reverse retimes, multi-track video, audio events and markers are AUTHORED when geometry allows; everything else drops WITH a reason — see `conform` for the ledger.' +
-          'Retimes are flattened and transitions become cuts — see `conform` for the ledger.',
+          'Import with timeline.import_timeline_checked (timeline is named after the FILE). Dissolves/cross-fades, forward+reverse retimes, multi-track video, audio events and markers are AUTHORED when geometry allows; everything else drops WITH a reason — see `conform` for the ledger.',
       };
     }
     if (action === 'assemble') {

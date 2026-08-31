@@ -156,8 +156,17 @@ export const editorialTool = {
         exported: z.array(z.any()).describe('Normalized events of the re-export (parse_interchange on the exported OTIO/EDL/XML)'),
         recTol: z.number().optional(),
         srcTol: z.number().optional(),
+        sourceMap: z.record(z.object({ mediaFilePath: z.string() }).passthrough()).optional()
+          .describe('The SAME reel→{mediaFilePath} map the assemble used — lets an EDL reel (CUTSRC) match the re-export\'s file basename (cut_src)'),
       }).parse(args);
-      return verifyRoundtrip(p.input, p.exported, { recTol: p.recTol, srcTol: p.srcTol });
+      // EDL reels vs exported basenames: derive the alias table from the
+      // sourceMap that drove the assemble (the one authority linking them).
+      const sourceAliases = {};
+      for (const [reel, src] of Object.entries(p.sourceMap || {})) {
+        const base = String(src.mediaFilePath).split('/').pop();
+        if (base) sourceAliases[reel] = base;
+      }
+      return verifyRoundtrip(p.input, p.exported, { recTol: p.recTol, srcTol: p.srcTol, sourceAliases });
     }
     if (action === 'marker_roundtrip') {
       const p = markerSchema.parse(args);
