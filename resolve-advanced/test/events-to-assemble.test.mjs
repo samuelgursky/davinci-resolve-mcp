@@ -624,3 +624,19 @@ test('assemble authors a freeze cut: freeze map present, <In/> EMPTY', async () 
   assert.equal(tm.slice(-700), expected.slice(-700), 'keyframes/DbType match');
   fs.unlinkSync(out);
 });
+
+test('audio tool refuses mistyped trim windows instead of silently copying', async () => {
+  // Measured through the MCP layer (E59 sweep): non-strict schemas stripped
+  // unknown keys, so trim with {start, duration} (wrong names) copied the
+  // WHOLE file and reported success — the silent-lie class. Schemas are now
+  // strict, and a windowless trim (no durationFrames) refuses outright.
+  const { audioTool } = await import('../server/tools/audio.mjs');
+  await assert.rejects(
+    audioTool.handler({ action: 'trim', args: { input: '/x.mp4', output: '/y.wav', start: 0, duration: 1 } }),
+    /unrecognized|durationFrames/i,
+  );
+  await assert.rejects(
+    audioTool.handler({ action: 'trim', args: { input: '/x.mp4', output: '/y.wav' } }),
+    /durationFrames/i,
+  );
+});

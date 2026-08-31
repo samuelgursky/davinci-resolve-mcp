@@ -22,9 +22,19 @@ function load(mod) {
   return require(`../../vendor/audio/${mod}.js`);
 }
 
-const splitSchema = z.object({ input: z.string(), output: z.string().optional(), mode: z.string().optional(), opts: z.object({}).passthrough().optional() });
-const trimSchema = z.object({ input: z.string(), output: z.string(), durationFrames: z.number().optional(), opts: z.object({}).passthrough().optional() });
-const convertSchema = z.object({ input: z.string(), output: z.string(), opts: z.object({}).passthrough().optional() });
+// .strict(): a mistyped window key (start/duration/…) must refuse, not be
+// silently stripped — a stripped window turned `trim` into a whole-file copy
+// reported as success (measured through the MCP layer, E59 sweep). Extra
+// ffmpeg knobs belong in `opts`, which stays passthrough.
+const splitSchema = z.object({ input: z.string(), output: z.string().optional(), mode: z.string().optional(), opts: z.object({}).passthrough().optional() }).strict();
+// durationFrames is REQUIRED: trim without a window is a no-op copy wearing
+// a trim's name. Use `convert` for windowless transcodes. fps converts it to
+// the vendored module's seconds vocabulary (default 24) — the module knows
+// {startTime, endTime, duration} in SECONDS only, so an untranslated
+// durationFrames was silently discarded and trim NEVER trimmed (measured
+// through the MCP layer, E59: durationFrames 24 returned the whole file).
+const trimSchema = z.object({ input: z.string(), output: z.string(), durationFrames: z.number().positive(), fps: z.number().positive().optional(), opts: z.object({}).passthrough().optional() }).strict();
+const convertSchema = z.object({ input: z.string(), output: z.string(), opts: z.object({}).passthrough().optional() }).strict();
 
 export const audioTool = {
   name: 'audio',
@@ -41,7 +51,7 @@ export const audioTool = {
       const p = trimSchema.parse(args);
       const m = load('trim');
       const fn = m.trimAudio || m.trim || m.default;
-      return fn(p.input, p.output, { durationFrames: p.durationFrames, ...(p.opts || {}) });
+      return fn(p.input, p.output, { duration: p.durationFrames / (p.fps ?? 24), ...(p.opts || {}) });
     }
     if (action === 'convert') {
       const p = convertSchema.parse(args);
