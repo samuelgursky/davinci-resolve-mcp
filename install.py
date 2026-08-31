@@ -1091,7 +1091,7 @@ def read_json(path):
     existing settings (issue #71: Zed's settings.json ships with comments).
     """
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             raw = f.read()
     except FileNotFoundError:
         return {}
@@ -1120,7 +1120,7 @@ def write_json(path, data):
         backup = path.with_suffix(path.suffix + ".backup")
         shutil.copy2(path, backup)
 
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
 
