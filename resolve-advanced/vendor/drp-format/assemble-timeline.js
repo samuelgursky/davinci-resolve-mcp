@@ -221,6 +221,13 @@ async function assembleTimeline(spec = {}) {
         insertedExtra.add(fp);
       }
     }
+    // Pin the PARENT container id BEFORE inserting inner containers: entry
+    // listing is name-sorted, so an inner container can alphabetically
+    // precede the parent and swallow the next compound's item (measured —
+    // CMP_B landed inside CMP_A's inner timeline).
+    const zip0 = await JSZip.loadAsync(buffer);
+    const parentEntry0 = Object.keys(zip0.files).find((n) => !zip0.files[n].dir && /SeqContainer\/.+\.xml$/.test(n));
+    const parentContainerId = ((await zip0.file(parentEntry0).async('string')).match(/<Sm2SequenceContainer DbId="([^"]+)"/) || [])[1];
     for (const [ci, comp] of spec.compounds.entries()) {
       if (!comp || typeof comp !== 'object') throw new TypeError(`assembleTimeline: compounds[${ci}] must be an object`);
       const res = await placeCompound(buffer, {
@@ -228,6 +235,7 @@ async function assembleTimeline(spec = {}) {
         startFrame: comp.startFrame,
         durationFrames: comp.durationFrames,
         track: comp.track,
+        timelineUuid: parentContainerId,
       });
       buffer = res.buffer;
       const innerCuts = (comp.cuts || []).map((cut, i) => {

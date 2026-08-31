@@ -29,6 +29,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { escapeXml } = require('./xml-builder');
 const { loadDrpZip, selectTargetSeq, getTrackVec, replaceTrackVec, getItemsInner, setItemsInner, freshDbIds } = require('./seq-surgery');
+const { decodeKeyedDict, encodeKeyedDict } = require('./keyed-dict');
 
 const T = (f) => path.join(__dirname, 'templates', f);
 
@@ -56,28 +57,47 @@ async function placeCompound(drpInput, opts = {}) {
   const zip = await loadDrpZip(drpInput);
   const { entry, xml: parentXml } = await selectTargetSeq(zip, timelineUuid);
 
-  // The harvested compound cluster keeps its ORIGINAL GUIDs verbatim: the
-  // embedded Sm2Sequence FieldsBlob almost certainly encodes cluster
-  // identities, and freshening the XML ids around an unchanged blob CRASHED
-  // Resolve on import (measured, E47/E47c — the app died, twice). The
-  // harvest GUIDs cannot collide with an assembled archive's fresh ids, so
-  // verbatim is safe — but it limits authoring to ONE compound per archive.
-  const pool0 = fs.readFileSync(T('compound-pool-r19.xml'), 'utf8');
-  const compoundId = pool0.match(/<Sm2MpCompoundClip DbId="([^"]+)"/)[1];
-  const innerSequenceId = pool0.match(/<Sm2Sequence DbId="([^"]+)"/)[1];
-  const inner0 = fs.readFileSync(T('compound-inner-r19.xml'), 'utf8');
-  const innerContainerId = inner0.match(/<Sm2SequenceContainer DbId="([^"]+)"/)[1];
-  if (zip.file(`SeqContainer/${innerContainerId}.xml`)) {
-    throw new Error('placeCompound: only one compound per archive is supported (the harvested donor identities are kept verbatim)');
-  }
+  // Cluster identity: the embedded Sm2Sequence FieldsBlob carries a keyed
+  // `SeqRef` entry naming the INNER CONTAINER's uuid — freshening the XML
+  // ids WITHOUT patching that entry orphans the blob and CRASHES Resolve on
+  // import (the app died, twice, before this was decoded). With SeqRef
+  // patched through the keyed-dict codec, every cluster id can be fresh, so
+  // multiple compounds per archive compose.
+  const compoundId = crypto.randomUUID();
+  const innerSequenceId = crypto.randomUUID();
+  const innerContainerId = crypto.randomUUID();
 
-  // 1) Inner container: template verbatim, Items emptied (content added by
-  //    the caller via the cuts machinery, 0-based frames).
-  const inner = inner0.replace(/<Items>[\s\S]*?<\/Items>/g, '<Items/>');
+  // 1) Inner container: fresh container/track ids, tracks point at the new
+  //    embedded sequence id, Items emptied (content added by the caller via
+  //    the cuts machinery, 0-based frames).
+  let inner = fs.readFileSync(T('compound-inner-r19.xml'), 'utf8');
+  inner = freshDbIds(inner);
+  inner = inner.replace(/<Sm2SequenceContainer DbId="[^"]+"/, `<Sm2SequenceContainer DbId="${innerContainerId}"`);
+  inner = inner.replace(/<Sequence>[0-9a-f-]{36}<\/Sequence>/g, `<Sequence>${innerSequenceId}</Sequence>`);
+  inner = inner.replace(/<Items>[\s\S]*?<\/Items>/g, '<Items/>');
   zip.file(`SeqContainer/${innerContainerId}.xml`, inner);
 
-  // 2) Pool compound element: verbatim identities; only name + extents change.
-  let pool = pool0;
+  // 2) Pool compound element: fresh identities + blob SeqRef patch.
+  let pool = fs.readFileSync(T('compound-pool-r19.xml'), 'utf8');
+  pool = pool.replace(/<Sm2MpCompoundClip DbId="[^"]+"/, `<Sm2MpCompoundClip DbId="${compoundId}"`);
+  pool = pool.replace(/<Sm2Sequence DbId="[^"]+"/, `<Sm2Sequence DbId="${innerSequenceId}"`);
+  pool = pool.replace(/<UniqueSequenceId>[^<]*<\/UniqueSequenceId>/, `<UniqueSequenceId>${crypto.randomUUID()}</UniqueSequenceId>`);
+  pool = pool.replace(/<UniqueMediaPoolItemId>[^<]*<\/UniqueMediaPoolItemId>/, `<UniqueMediaPoolItemId>${crypto.randomUUID()}</UniqueMediaPoolItemId>`);
+  pool = pool.replace(/<SmPTZRPreset DbId="[^"]+"/, `<SmPTZRPreset DbId="${crypto.randomUUID()}"`);
+  // The embedded sequence's <Parent> points BACK at the compound's own id —
+  // the reference sweep found it as the one un-rewired link (a dangling
+  // Parent is presumably as fatal as the dangling MpFolder/SeqRef were).
+  pool = pool.replace(/<Parent>[0-9a-f-]{36}<\/Parent>/, `<Parent>${compoundId}</Parent>`);
+  {
+    const fbM = pool.match(/(<Sm2Sequence DbId="[^"]+">\s*<FieldsBlob>)([0-9a-fA-F]+)(<\/FieldsBlob>)/);
+    if (!fbM) throw new Error('placeCompound: embedded Sm2Sequence FieldsBlob not found');
+    const dict = decodeKeyedDict(Buffer.from(fbM[2], 'hex'));
+    const seqRef = dict.entries.find((e) => e.key === 'SeqRef');
+    if (!seqRef) throw new Error('placeCompound: embedded blob has no SeqRef entry — schema drift, refusing to author a crasher');
+    seqRef.value = innerContainerId;
+    const patched = encodeKeyedDict({ hdr: dict.hdr, entries: dict.entries }).toString('hex');
+    pool = pool.replace(fbM[0], `${fbM[1]}${patched}${fbM[3]}`);
+  }
   pool = pool.replace(/<Name>[^<]*<\/Name>/, `<Name>${escapeXml(name)}</Name>`);
   // MediaExtents = [startSec, durationSec] LE doubles; inner starts at 0.
   const me = Buffer.alloc(16);

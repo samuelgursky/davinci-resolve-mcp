@@ -252,13 +252,16 @@ test('extract keeps a compound clip\'s inner container, recursively', async () =
   await fs.unlink(src); await fs.unlink(out);
 });
 
-test('placeCompound splices the donor cluster verbatim and refuses a second', async () => {
-  // Freshening the ids around the embedded Sm2Sequence FieldsBlob CRASHED
-  // Resolve on import (twice, measured E47) — the cluster rides VERBATIM,
-  // and the folder ref is rewired to the target pool (a dangling folder ref
-  // also crashed the importer). Render-proven: nested playback on 19.1.3.7.
+test('placeCompound rewires every cluster link — folder, SeqRef, Parent — and composes', async () => {
+  // The three danglers that each CRASHED Resolve on import (measured E47-E50):
+  // the pool element's <MpFolder>, the embedded blob's keyed SeqRef (the
+  // inner container uuid), and the embedded sequence's <Parent> (the
+  // compound's own id). With all three rewired, ids freshen safely and
+  // MULTIPLE compounds compose (render-proven nested playback, both inner
+  // edits, on 19.1.3.7).
   const requireC3 = createRequire(import.meta.url);
   const { placeCompound } = requireC3('../vendor/drp-format/place-compound.js');
+  const { decodeKeyedDict } = requireC3('../vendor/drp-format/keyed-dict.js');
   const { addMediaClip } = requireC3('../vendor/drp-format/author-project.js');
   const base = await addMediaClip({
     mediaFile: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 }, templateVersion: 19,
@@ -267,13 +270,19 @@ test('placeCompound splices the donor cluster verbatim and refuses a second', as
   const zip = await JSZip.loadAsync(res.buffer);
   const inner = await zip.file(`SeqContainer/${res.innerContainerId}.xml`).async('string');
   assert.match(inner, /<Items\/>/);
+  assert.ok(inner.includes(`<Sequence>${res.innerSequenceId}</Sequence>`));
   const mp = await zip.file('MediaPool/Master/MpFolder.xml').async('string');
   const folderId = mp.match(/<Sm2MpFolder DbId="([^"]+)"/)[1];
   const cmp = mp.match(/<Sm2MpCompoundClip[\s\S]*?<\/Sm2MpCompoundClip>/)[0];
-  assert.ok(cmp.includes(`<MpFolder>${folderId}</MpFolder>`), 'folder ref rewired to target pool');
-  assert.ok(cmp.includes('<Name>CMP</Name>'));
-  const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n) && !n.includes(res.innerContainerId));
-  const parent = await zip.file(seqName).async('string');
-  assert.ok(parent.includes(`<MediaRef>${res.compoundId}</MediaRef>`), 'parent item references the compound');
-  await assert.rejects(placeCompound(res.buffer, { name: 'CMP2', startFrame: 86500, durationFrames: 24 }), /one compound per archive/);
+  assert.ok(cmp.includes(`<MpFolder>${folderId}</MpFolder>`), 'folder ref rewired');
+  assert.ok(cmp.includes(`<Parent>${res.compoundId}</Parent>`), 'Parent rewired to the fresh compound id');
+  const fb = cmp.match(/<Sm2Sequence DbId="[^"]+">\s*<FieldsBlob>([0-9a-fA-F]+)<\/FieldsBlob>/)[1];
+  const seqRef = decodeKeyedDict(Buffer.from(fb, 'hex')).entries.find((e) => e.key === 'SeqRef');
+  assert.equal(seqRef.value, res.innerContainerId, 'blob SeqRef patched to the fresh inner container');
+  // a second compound composes with distinct identities
+  const res2 = await placeCompound(res.buffer, { name: 'CMP2', startFrame: 86500, durationFrames: 24 });
+  assert.notEqual(res2.compoundId, res.compoundId);
+  const zip2 = await JSZip.loadAsync(res2.buffer);
+  assert.ok(zip2.file(`SeqContainer/${res.innerContainerId}.xml`), 'first inner kept');
+  assert.ok(zip2.file(`SeqContainer/${res2.innerContainerId}.xml`), 'second inner added');
 });
