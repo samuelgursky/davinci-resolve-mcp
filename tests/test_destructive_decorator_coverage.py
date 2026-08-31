@@ -26,7 +26,7 @@ SERVER_PATH = os.path.join(
 class DestructiveDecoratorCoverage(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        with open(SERVER_PATH, "r") as fh:
+        with open(SERVER_PATH, "r", encoding="utf-8") as fh:
             cls.source = fh.read()
 
     def test_every_registered_tool_is_decorated(self) -> None:

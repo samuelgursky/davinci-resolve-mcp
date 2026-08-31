@@ -35,7 +35,7 @@ class UpdateHistoryRecording(unittest.TestCase):
         )
         path = self._history_path()
         self.assertTrue(os.path.isfile(path))
-        with open(path, "r") as fh:
+        with open(path, "r", encoding="utf-8") as fh:
             payload = json.load(fh)
         self.assertEqual(len(payload["entries"]), 1)
         entry = payload["entries"][0]
@@ -64,7 +64,7 @@ class UpdateHistoryRecording(unittest.TestCase):
                 self.tmp, kind="update", success=True,
                 from_version="x", to_version=str(i), initiator="test",
             )
-        with open(self._history_path(), "r") as fh:
+        with open(self._history_path(), "r", encoding="utf-8") as fh:
             payload = json.load(fh)
         self.assertEqual(len(payload["entries"]), 200)
         # Oldest should be entry 20 (220 - 200), newest 219
@@ -73,14 +73,14 @@ class UpdateHistoryRecording(unittest.TestCase):
 
     def test_history_survives_corrupt_file(self) -> None:
         os.makedirs(os.path.join(self.tmp, "logs"), exist_ok=True)
-        with open(self._history_path(), "w") as fh:
+        with open(self._history_path(), "w", encoding="utf-8") as fh:
             fh.write("{not json")
         # Should not crash; corrupted file is replaced with a fresh history.
         install._record_attempt(
             self.tmp, kind="update", success=True,
             from_version="x", to_version="y", initiator="test",
         )
-        with open(self._history_path(), "r") as fh:
+        with open(self._history_path(), "r", encoding="utf-8") as fh:
             payload = json.load(fh)
         self.assertEqual(len(payload["entries"]), 1)
 

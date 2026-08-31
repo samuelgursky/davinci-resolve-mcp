@@ -29,7 +29,7 @@ class DashboardTransportTest(unittest.TestCase):
         T.write_transport_state("streamable-http", "127.0.0.1", 8799, "tok")
         # ensure the state pid is this (alive) process so read_transport_state keeps it
         import json
-        with open(T.TRANSPORT_STATE_PATH, "w") as fh:
+        with open(T.TRANSPORT_STATE_PATH, "w", encoding="utf-8") as fh:
             json.dump({"transport": "streamable-http", "host": "127.0.0.1", "port": 8799,
                        "url": "http://127.0.0.1:8799", "token": "tok", "loopback": True,
                        "pid": os.getpid()}, fh)

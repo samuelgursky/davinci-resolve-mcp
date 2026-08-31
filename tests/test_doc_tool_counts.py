@@ -57,7 +57,7 @@ def _count_decorators(*rel_globs: str) -> int:
 
 
 def _advanced_count() -> int:
-    idx = (ROOT / "resolve-advanced" / "server" / "index.mjs").read_text()
+    idx = (ROOT / "resolve-advanced" / "server" / "index.mjs").read_text(encoding="utf-8")
     m = re.search(r"const TOOLS\s*=\s*\[([^\]]+)\]", idx)
     if not m:
         raise AssertionError("could not find the TOOLS array in resolve-advanced/server/index.mjs")
@@ -102,7 +102,7 @@ class DocToolCountsDriftTest(unittest.TestCase):
 
         stale = []
         for rel, needle in checks:
-            text = (ROOT / rel).read_text()
+            text = (ROOT / rel).read_text(encoding="utf-8")
             if needle not in text:
                 stale.append(f"{rel}: expected to contain {needle!r}")
 
@@ -112,7 +112,7 @@ class DocToolCountsDriftTest(unittest.TestCase):
         # went out to every agent. Any *other* number in front of the phrase is
         # drift, wherever it sits.
         for rel in ("src/server.py", "docs/SKILL.md", "docs/contributing.md"):
-            text = (ROOT / rel).read_text()
+            text = (ROOT / rel).read_text(encoding="utf-8")
             for wrong in re.findall(r"\b(\d+)\s+compound tools", text):
                 if int(wrong) != comp:
                     stale.append(

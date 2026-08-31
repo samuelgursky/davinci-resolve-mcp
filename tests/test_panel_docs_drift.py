@@ -37,8 +37,8 @@ def _labels_in_block(block: str) -> list[str]:
 class PanelDocsDriftTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = DASHBOARD.read_text()
-        cls.guide = GUIDE.read_text()
+        cls.source = DASHBOARD.read_text(encoding="utf-8")
+        cls.guide = GUIDE.read_text(encoding="utf-8")
         cls.guide_lower = cls.guide.lower()
 
     def test_every_panel_section_is_documented(self):
@@ -67,7 +67,7 @@ class PanelDocsDriftTest(unittest.TestCase):
 
     def test_no_orphaned_screenshots(self):
         referenced = set(re.findall(r"!\[[^\]]*\]\(\.\./images/control-panel/([^)]+)\)", self.guide))
-        readme = (ROOT / "README.md").read_text()
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
         referenced.update(re.findall(r"docs/images/control-panel/([\w.-]+)", readme))
         orphans = [p.name for p in IMAGES.glob("*.png") if p.name not in referenced]
         self.assertEqual(orphans, [], f"screenshots on disk that no doc references: {orphans}")

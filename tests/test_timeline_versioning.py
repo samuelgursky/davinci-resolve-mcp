@@ -46,7 +46,7 @@ class _MockTimeline:
         self.duplicates.append(new_name)
         return _MockTimeline(new_name, unique_id=f"{self._unique_id}_dup")
     def Export(self, path: str, export_type: int) -> bool:
-        with open(path, "w") as fh:
+        with open(path, "w", encoding="utf-8") as fh:
             fh.write(f"FAKE DRT for {self._name}")
         return True
 

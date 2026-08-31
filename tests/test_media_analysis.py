@@ -1301,7 +1301,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                 "clip_analysis_markers": {"markers": [], "marker_count": 0},
             }
             report_path = os.path.join(clip_dir, "analysis.json")
-            with open(report_path, "w") as handle:
+            with open(report_path, "w", encoding="utf-8") as handle:
                 json.dump(report, handle)
 
             clip = _PublishClipStub("clip-pub-1", "demo.mp4", media_file)
@@ -1388,7 +1388,7 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     ],
                 },
             }
-            with open(os.path.join(clip_dir, "analysis.json"), "w") as h:
+            with open(os.path.join(clip_dir, "analysis.json"), "w", encoding="utf-8") as h:
                 json.dump(report, h)
             jpeg = b"\xff\xd8\xff\xd9"
             with open(os.path.join(clip_dir, "frames", "sampled_0001.jpg"), "wb") as h:
@@ -4916,7 +4916,7 @@ class PathExistenceProbeTests(unittest.TestCase):
     def test_fresh_probe_reports_real_and_missing_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             real = os.path.join(tmp, "a.mov")
-            open(real, "w").close()
+            open(real, "w", encoding="utf-8").close()
             missing = os.path.join(tmp, "gone.mov")
             result = self.dash._probe_paths_exist([real, missing, None, ""], probe=True)
         self.assertTrue(result[real])
@@ -4927,7 +4927,7 @@ class PathExistenceProbeTests(unittest.TestCase):
     def test_background_poll_reuses_cache_without_restating(self):
         with tempfile.TemporaryDirectory() as tmp:
             real = os.path.join(tmp, "a.mov")
-            open(real, "w").close()
+            open(real, "w", encoding="utf-8").close()
             # Warm the cache with a real probe, then delete the file.
             self.dash._probe_paths_exist([real], probe=True)
             os.remove(real)
@@ -4943,7 +4943,7 @@ class PathExistenceProbeTests(unittest.TestCase):
     def test_fresh_probe_restats_after_cache_cleared(self):
         with tempfile.TemporaryDirectory() as tmp:
             real = os.path.join(tmp, "a.mov")
-            open(real, "w").close()
+            open(real, "w", encoding="utf-8").close()
             self.dash._probe_paths_exist([real], probe=True)
             os.remove(real)
             self.dash._PATH_EXISTS_CACHE.clear()  # simulate TTL expiry
@@ -4999,7 +4999,7 @@ class InventoryCacheReuseTests(unittest.TestCase):
             entry = self._entry()
             self.assertEqual(self.dash._assemble_inventory_payload(tmp, entry)["counts"]["analyzed"], 0)
             os.makedirs(os.path.join(tmp, "clips", "a-key"))
-            with open(os.path.join(tmp, "clips", "a-key", "analysis.json"), "w") as fh:
+            with open(os.path.join(tmp, "clips", "a-key", "analysis.json"), "w", encoding="utf-8") as fh:
                 fh.write("{}")
             self.assertEqual(self.dash._assemble_inventory_payload(tmp, entry)["counts"]["analyzed"], 1)
 

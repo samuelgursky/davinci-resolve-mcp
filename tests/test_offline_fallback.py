@@ -137,7 +137,7 @@ class TestAuthoring(unittest.TestCase):
     def test_otio_round_trips_through_our_own_parser(self):
         """Writing a file and Resolve honouring it are different claims; this is the first."""
         result = self._author("otio")
-        document = json.loads(pathlib.Path(result["output_path"]).read_text())
+        document = json.loads(pathlib.Path(result["output_path"]).read_text(encoding="utf-8"))
         self.assertEqual(document["OTIO_SCHEMA"].split(".")[0], "Timeline")
         clips = [
             child for track in document["tracks"]["children"]
@@ -153,7 +153,7 @@ class TestAuthoring(unittest.TestCase):
     def test_source_frames_are_timecode_absolute(self):
         """A source_range measured from zero imports as an EMPTY timeline in Resolve."""
         result = self._author("otio")
-        document = json.loads(pathlib.Path(result["output_path"]).read_text())
+        document = json.loads(pathlib.Path(result["output_path"]).read_text(encoding="utf-8"))
         clip = next(
             child for track in document["tracks"]["children"]
             for child in track["children"]
@@ -190,7 +190,7 @@ class TestAuthoring(unittest.TestCase):
         otio = offline_fallback.author(
             clips, os.path.join(self.dir, "keep.otio"), target="otio", fps=24)
         self.assertEqual([w["id"] for w in otio["warnings"]], [])
-        self.assertIn("LinearTimeWarp", pathlib.Path(otio["output_path"]).read_text())
+        self.assertIn("LinearTimeWarp", pathlib.Path(otio["output_path"]).read_text(encoding="utf-8"))
 
     def test_drt_names_the_resolve_version_it_targets(self):
         result = self._author("drt")
@@ -216,7 +216,7 @@ class TestAuthoring(unittest.TestCase):
 
     def test_edl_carries_the_record_timecode(self):
         result = self._author("edl")
-        text = pathlib.Path(result["output_path"]).read_text()
+        text = pathlib.Path(result["output_path"]).read_text(encoding="utf-8")
         self.assertIn("TITLE: Test", text)
         self.assertIn("00:00:00:00", text)
 

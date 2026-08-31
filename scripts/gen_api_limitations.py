@@ -139,7 +139,7 @@ def main(argv: list[str]) -> int:
     args = _parse_args(argv)
     content = render()
     if args.check:
-        current = DOC_PATH.read_text() if DOC_PATH.exists() else ""
+        current = DOC_PATH.read_text(encoding="utf-8") if DOC_PATH.exists() else ""
         if current != content:
             print(
                 f"STALE: {DOC_PATH.relative_to(REPO_ROOT)} is out of date.\n"
@@ -149,7 +149,7 @@ def main(argv: list[str]) -> int:
             return 1
         print(f"OK: {DOC_PATH.relative_to(REPO_ROOT)} is up to date.")
         return 0
-    DOC_PATH.write_text(content)
+    DOC_PATH.write_text(content, encoding="utf-8")
     print(f"Wrote {DOC_PATH.relative_to(REPO_ROOT)}")
     return 0
 

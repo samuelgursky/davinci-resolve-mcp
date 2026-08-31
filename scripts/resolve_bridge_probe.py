@@ -56,7 +56,7 @@ def process_name(pid):
         except Exception:
             return ""
     try:  # Linux
-        with open("/proc/%d/comm" % pid) as handle:
+        with open("/proc/%d/comm" % pid, encoding="utf-8") as handle:
             return handle.read().strip()
     except (OSError, IOError):
         pass
@@ -142,7 +142,7 @@ def main():
         directory = os.path.dirname(REPORT_PATH)
         if not os.path.isdir(directory):
             os.makedirs(directory)
-        with open(REPORT_PATH, "w") as handle:
+        with open(REPORT_PATH, "w", encoding="utf-8") as handle:
             json.dump(probe, handle, indent=2, sort_keys=True)
         written = REPORT_PATH
     except (OSError, IOError) as exc:

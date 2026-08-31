@@ -80,7 +80,7 @@ class SpecLoadTest(unittest.TestCase):
     def test_load_json_file(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "spec.json")
-            with open(path, "w") as fh:
+            with open(path, "w", encoding="utf-8") as fh:
                 json.dump(SPEC_DICT, fh)
             spec = ps.load_spec(path)
             self.assertEqual(spec.project, "MyShow")

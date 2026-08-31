@@ -103,7 +103,7 @@ def build_assets() -> None:
             for g in (0.0, 1.0):
                 for r in (0.0, 1.0):
                     lines.append(f"{min(b + 0.15, 1.0):.6f} {g:.6f} {min(r + 0.15, 1.0):.6f}")
-        LUT.write_text("\n".join(lines) + "\n")
+        LUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def frame_hashes(path: Path) -> List[str]:
@@ -338,7 +338,7 @@ def run(mode: str, out: Path) -> int:
 
 
 def compare(gui_path: Path, headless_path: Path, out: Optional[Path]) -> int:
-    gui, headless = json.loads(gui_path.read_text()), json.loads(headless_path.read_text())
+    gui, headless = json.loads(gui_path.read_text(encoding="utf-8")), json.loads(headless_path.read_text(encoding="utf-8"))
     if gui["metadata"]["headless"] is not False or headless["metadata"]["headless"] is not True:
         print("REFUSE: mode metadata does not match the arguments.", file=sys.stderr)
         return 1

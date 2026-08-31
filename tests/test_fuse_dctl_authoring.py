@@ -577,7 +577,7 @@ class TestRoundtripFilesystem(unittest.TestCase):
         # Drop a non-MCP file in the Fuses dir; default list should hide it.
         os.makedirs(self.fake_paths['fuses_dir'], exist_ok=True)
         non_mcp_path = os.path.join(self.fake_paths['fuses_dir'], 'Foreign.fuse')
-        with open(non_mcp_path, 'w') as f:
+        with open(non_mcp_path, 'w', encoding="utf-8") as f:
             f.write("-- not authored by MCP\nFuRegisterClass()\n")
 
         try:

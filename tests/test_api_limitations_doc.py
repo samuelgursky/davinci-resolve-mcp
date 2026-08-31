@@ -33,14 +33,14 @@ class ApiLimitationsDocTest(unittest.TestCase):
         gen = _load_generator()
         self.assertTrue(DOC.exists(), "api-limitations.md is missing — run the generator")
         self.assertEqual(
-            DOC.read_text(),
+            DOC.read_text(encoding="utf-8"),
             gen.render(),
             "api-limitations.md is stale; run: "
             "venv/bin/python scripts/gen_api_limitations.py",
         )
 
     def test_doc_is_marked_generated(self):
-        self.assertIn("GENERATED FILE", DOC.read_text())
+        self.assertIn("GENERATED FILE", DOC.read_text(encoding="utf-8"))
 
     def test_submit_values_are_valid(self):
         for e in API_TRUTH:

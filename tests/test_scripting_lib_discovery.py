@@ -69,7 +69,7 @@ def _windows_install(root: str) -> str:
     os.makedirs(root, exist_ok=True)
     exe = os.path.join(root, "Resolve.exe")
     for path in (exe, os.path.join(root, "fusionscript.dll")):
-        with open(path, "w"):
+        with open(path, "w", encoding="utf-8"):
             pass
     return exe
 
@@ -91,7 +91,7 @@ def _macos_install(root: str) -> str:
     os.makedirs(fusion, exist_ok=True)
     exe = f"{macos}/Resolve"
     for path in (exe, f"{fusion}/fusionscript.so"):
-        with open(path, "w"):
+        with open(path, "w", encoding="utf-8"):
             pass
     return exe
 
@@ -137,7 +137,7 @@ class RunningResolveLibTests(unittest.TestCase):
         """Derivation must confirm the file, not assume the layout."""
         with tempfile.TemporaryDirectory() as tmp:
             exe = os.path.join(tmp, "Resolve.exe")
-            with open(exe, "w"):
+            with open(exe, "w", encoding="utf-8"):
                 pass
             with mock.patch.object(rr.platform, "system", return_value="Windows"), \
                     mock.patch.object(rr.subprocess, "run", return_value=_ps(f'"{exe}"\n')):
@@ -208,7 +208,7 @@ class GetResolvePathsDiscoveryTests(unittest.TestCase):
     def test_discovery_fills_in_a_missing_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             lib = os.path.join(tmp, "fusionscript.so")
-            with open(lib, "w"):
+            with open(lib, "w", encoding="utf-8"):
                 pass
             with mock.patch.object(platform_utils, "get_platform", return_value="darwin"), \
                     mock.patch.object(platform_utils, "discover_scripting_lib", return_value=lib), \
@@ -222,7 +222,7 @@ class GetResolvePathsDiscoveryTests(unittest.TestCase):
             override = os.path.join(tmp, "override.so")
             discovered = os.path.join(tmp, "discovered.so")
             for path in (override, discovered):
-                with open(path, "w"):
+                with open(path, "w", encoding="utf-8"):
                     pass
             env = _env_without_overrides()
             env["RESOLVE_SCRIPT_LIB"] = override
@@ -268,7 +268,7 @@ class InstallerEnvTests(unittest.TestCase):
     def test_find_resolve_paths_falls_back_to_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             lib = os.path.join(tmp, "fusionscript.dll")
-            with open(lib, "w"):
+            with open(lib, "w", encoding="utf-8"):
                 pass
             with mock.patch.object(install, "RESOLVE_PATHS", _resolve_paths_with_api(tmp)), \
                     mock.patch.object(platform_utils, "discover_scripting_lib", return_value=lib), \
@@ -280,7 +280,7 @@ class InstallerEnvTests(unittest.TestCase):
     def test_an_env_override_is_preferred_over_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             override = os.path.join(tmp, "override.dll")
-            with open(override, "w"):
+            with open(override, "w", encoding="utf-8"):
                 pass
             env = _env_without_overrides()
             env["RESOLVE_SCRIPT_LIB"] = override

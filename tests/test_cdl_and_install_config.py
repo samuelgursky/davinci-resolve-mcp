@@ -380,7 +380,7 @@ class InstallConfigTests(unittest.TestCase):
         self.assertEqual(run_mock.call_args.kwargs["env"]["PYTHONPATH"], "modules")
 
     def test_windows_stdio_helper_disables_newline_translation(self):
-        source = (PROJECT_ROOT / "src" / "utils" / "mcp_stdio.py").read_text()
+        source = (PROJECT_ROOT / "src" / "utils" / "mcp_stdio.py").read_text(encoding="utf-8")
         self.assertIn('newline=""', source)
 
 
@@ -476,12 +476,12 @@ class ConfigMergeTests(unittest.TestCase):
                 '  "theme": "One Dark",\n'
                 '  "terminal": { "env": { "PATH": "/custom/bin:$PATH" } },\n'
                 "}\n"
-            )
+            , encoding="utf-8")
 
             success, _ = self._write_config(config_path)
             self.assertTrue(success)
 
-            result = json.loads(config_path.read_text())
+            result = json.loads(config_path.read_text(encoding="utf-8"))
             # Existing keys survive the merge.
             self.assertEqual(result["theme"], "One Dark")
             self.assertEqual(result["terminal"]["env"]["PATH"], "/custom/bin:$PATH")
@@ -493,12 +493,12 @@ class ConfigMergeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "settings.json"
-            config_path.write_text(json.dumps({"theme": "Ayu", "lsp": {"x": 1}}))
+            config_path.write_text(json.dumps({"theme": "Ayu", "lsp": {"x": 1}}), encoding="utf-8")
 
             success, _ = self._write_config(config_path)
             self.assertTrue(success)
 
-            result = json.loads(config_path.read_text())
+            result = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertEqual(result["theme"], "Ayu")
             self.assertEqual(result["lsp"], {"x": 1})
             self.assertIn("davinci-resolve", result["context_servers"])
@@ -509,14 +509,14 @@ class ConfigMergeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "settings.json"
             garbage = '{ "theme": "One Dark" this is not valid json at all '
-            config_path.write_text(garbage)
+            config_path.write_text(garbage, encoding="utf-8")
 
             success, message = self._write_config(config_path)
 
             self.assertFalse(success)
             self.assertIn("could not be parsed", message)
             # The original file must be left untouched.
-            self.assertEqual(config_path.read_text(), garbage)
+            self.assertEqual(config_path.read_text(encoding="utf-8"), garbage)
 
     def test_missing_file_is_created(self):
         import tempfile
@@ -527,7 +527,7 @@ class ConfigMergeTests(unittest.TestCase):
             success, _ = self._write_config(config_path)
             self.assertTrue(success)
 
-            result = json.loads(config_path.read_text())
+            result = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertIn("davinci-resolve", result["context_servers"])
 
     def test_opencode_config_merges_with_opencode_schema(self):
@@ -550,7 +550,7 @@ class ConfigMergeTests(unittest.TestCase):
                         "mcp": {"other-server": {"type": "local", "enabled": True}},
                     }
                 )
-            )
+            , encoding="utf-8")
             opencode_client["get_path"] = lambda: config_path
 
             success, _ = install.write_client_config(
@@ -562,7 +562,7 @@ class ConfigMergeTests(unittest.TestCase):
             )
             self.assertTrue(success)
 
-            result = json.loads(config_path.read_text())
+            result = json.loads(config_path.read_text(encoding="utf-8"))
             # Existing keys and sibling servers survive the merge.
             self.assertEqual(result["theme"], "tokyonight")
             self.assertIn("other-server", result["mcp"])
@@ -599,7 +599,7 @@ class ConfigMergeTests(unittest.TestCase):
             success, message = self._write_codex(config_path)
             self.assertTrue(success, message)
 
-            entry = _parse_toml(config_path.read_text())["mcp_servers"]["davinci-resolve"]
+            entry = _parse_toml(config_path.read_text(encoding="utf-8"))["mcp_servers"]["davinci-resolve"]
             self.assertEqual(entry["command"], "/tmp/python")
             self.assertEqual(entry["args"], ["/tmp/server.py"])
 
@@ -614,12 +614,12 @@ class ConfigMergeTests(unittest.TestCase):
                 "[mcp_servers.other]\n"
                 'command = "npx"\n'
                 'args = ["-y", "other-mcp"]\n'
-            )
+            , encoding="utf-8")
 
             success, message = self._write_codex(config_path)
             self.assertTrue(success, message)
 
-            text = config_path.read_text()
+            text = config_path.read_text(encoding="utf-8")
             parsed = _parse_toml(text)
             self.assertEqual(parsed["model"], "gpt-5-codex")
             self.assertEqual(parsed["approval_policy"], "on-request")
@@ -642,12 +642,12 @@ class ConfigMergeTests(unittest.TestCase):
                 "\n"
                 "[mcp_servers.other]\n"
                 'command = "npx"\n'
-            )
+            , encoding="utf-8")
 
             success, message = self._write_codex(config_path)
             self.assertTrue(success, message)
 
-            text = config_path.read_text()
+            text = config_path.read_text(encoding="utf-8")
             parsed = _parse_toml(text)
             self.assertEqual(
                 parsed["mcp_servers"]["davinci-resolve"]["command"], "/tmp/python"
@@ -657,7 +657,7 @@ class ConfigMergeTests(unittest.TestCase):
             self.assertEqual(parsed["mcp_servers"]["other"]["command"], "npx")
             # Rewriting twice is idempotent — no duplicate table.
             self._write_codex(config_path)
-            self.assertEqual(config_path.read_text().count("[mcp_servers.davinci-resolve]"), 1)
+            self.assertEqual(config_path.read_text(encoding="utf-8").count("[mcp_servers.davinci-resolve]"), 1)
 
     def test_codex_invalid_toml_is_not_overwritten(self):
         if install._toml_loader() is None:
@@ -665,13 +665,13 @@ class ConfigMergeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"
             garbage = 'model = "gpt-5-codex\n[oops\n'
-            config_path.write_text(garbage)
+            config_path.write_text(garbage, encoding="utf-8")
 
             success, message = self._write_codex(config_path)
 
             self.assertFalse(success)
             self.assertIn("not valid TOML", message)
-            self.assertEqual(config_path.read_text(), garbage)
+            self.assertEqual(config_path.read_text(encoding="utf-8"), garbage)
 
     def test_codex_inline_definition_is_refused_not_duplicated(self):
         # An inline `davinci-resolve = { ... }` cannot be spliced line-by-line;
@@ -683,13 +683,13 @@ class ConfigMergeTests(unittest.TestCase):
                 "[mcp_servers]\n"
                 'davinci-resolve = { command = "/old/python", args = ["/old/server.py"] }\n'
             )
-            config_path.write_text(original)
+            config_path.write_text(original, encoding="utf-8")
 
             success, message = self._write_codex(config_path)
 
             self.assertFalse(success)
             self.assertIn("manually", message)
-            self.assertEqual(config_path.read_text(), original)
+            self.assertEqual(config_path.read_text(encoding="utf-8"), original)
 
     def test_codex_merge_preserves_per_tool_subtables(self):
         # A hand-written Codex config puts per-tool approval modes in
@@ -710,12 +710,12 @@ class ConfigMergeTests(unittest.TestCase):
                 "\n"
                 "[mcp_servers.other]\n"
                 'command = "npx"\n'
-            )
+            , encoding="utf-8")
 
             success, message = self._write_codex(config_path)
             self.assertTrue(success, message)
 
-            text = config_path.read_text()
+            text = config_path.read_text(encoding="utf-8")
             entry = _parse_toml(text)["mcp_servers"]["davinci-resolve"]
             self.assertEqual(entry["command"], "/tmp/python")
             self.assertEqual(entry["tools"]["timeline"]["approval_mode"], "approve")
@@ -742,12 +742,12 @@ class ConfigMergeTests(unittest.TestCase):
                 '  "/old/server.py",\n'
                 "]\n"
                 "tool_timeout_sec = 90\n"
-            )
+            , encoding="utf-8")
 
             success, message = self._write_codex(config_path)
             self.assertTrue(success, message)
 
-            text = config_path.read_text()
+            text = config_path.read_text(encoding="utf-8")
             entry = _parse_toml(text)["mcp_servers"]["davinci-resolve"]
             self.assertEqual(entry["command"], "/tmp/python")
             self.assertEqual(entry["args"], ["/tmp/server.py"])
@@ -769,12 +769,12 @@ class ConfigMergeTests(unittest.TestCase):
                 "\n"
                 "[mcp_servers.davinci-resolve.tools.timeline]\n"
                 'approval_mode = "approve"\n'
-            )
+            , encoding="utf-8")
 
             self._write_codex(config_path)
-            once = config_path.read_text()
+            once = config_path.read_text(encoding="utf-8")
             self._write_codex(config_path)
-            self.assertEqual(config_path.read_text(), once)
+            self.assertEqual(config_path.read_text(encoding="utf-8"), once)
 
     def test_codex_dry_run_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -854,7 +854,7 @@ class AntigravityConfigPathTests(unittest.TestCase):
             for rel in existing:
                 target = fake_home / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text("{}\n")
+                target.write_text("{}\n", encoding="utf-8")
             with patch.object(install, "home", return_value=fake_home):
                 resolved = install.antigravity_config()
             return resolved.relative_to(fake_home).as_posix()

@@ -162,7 +162,7 @@ def completed_probes(path: Path) -> Dict[str, Dict[str, Any]]:
     results: Dict[str, Dict[str, Any]] = {}
     if not path.exists():
         return results
-    for line in path.read_text(errors="replace").splitlines():
+    for line in path.read_text(errors="replace", encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -183,7 +183,7 @@ def last_phase(path: Path) -> Optional[Dict[str, Any]]:
     if not path.exists():
         return None
     marker = None
-    for line in path.read_text(errors="replace").splitlines():
+    for line in path.read_text(errors="replace", encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -197,7 +197,7 @@ def last_phase(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def append(path: Path, record: Dict[str, Any]) -> None:
-    with path.open("a") as handle:
+    with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, default=str) + "\n")
 
 

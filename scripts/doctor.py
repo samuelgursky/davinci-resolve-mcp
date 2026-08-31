@@ -240,7 +240,7 @@ def _normalize_separators(text: str) -> str:
 def file_contains(path: Path, needles: list[str]) -> tuple[bool, str]:
     if not path.exists():
         return False, "missing"
-    text = _normalize_separators(path.read_text(errors="replace"))
+    text = _normalize_separators(path.read_text(errors="replace", encoding="utf-8"))
     missing = [needle for needle in needles if _normalize_separators(needle) not in text]
     if missing:
         return False, "missing: " + ", ".join(missing)
@@ -250,7 +250,7 @@ def file_contains(path: Path, needles: list[str]) -> tuple[bool, str]:
 def version_from_server() -> str:
     if not SERVER.exists():
         return "unknown"
-    match = re.search(r'^VERSION\s*=\s*"([^"]+)"', SERVER.read_text(errors="replace"), re.M)
+    match = re.search(r'^VERSION\s*=\s*"([^"]+)"', SERVER.read_text(errors="replace", encoding="utf-8"), re.M)
     return match.group(1) if match else "unknown"
 
 

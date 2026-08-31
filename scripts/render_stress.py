@@ -161,7 +161,7 @@ class CrashWatch:
             self.offset = size  # rotation/truncation resets the mark
             return None
         try:
-            with CRASH_ARCHIVE.open("r", errors="replace") as handle:
+            with CRASH_ARCHIVE.open("r", errors="replace", encoding="utf-8") as handle:
                 handle.seek(self.offset)
                 text = handle.read()
         except OSError:
@@ -172,7 +172,7 @@ class CrashWatch:
 
 def log_tail(lines: int = 80) -> str:
     try:
-        content = RESOLVE_LOG.read_text(errors="replace").splitlines()
+        content = RESOLVE_LOG.read_text(errors="replace", encoding="utf-8").splitlines()
     except OSError:
         return ""
     return "\n".join(content[-lines:])

@@ -40,7 +40,7 @@ class ResolvePathEnvOverrideTest(unittest.TestCase):
     def test_existing_env_lib_overrides_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             lib = os.path.join(tmp, "fusionscript.so")
-            with open(lib, "w"):
+            with open(lib, "w", encoding="utf-8"):
                 pass
             env = _env_without_overrides()
             env["RESOLVE_SCRIPT_LIB"] = lib
