@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+import { requireBetterSqlite3 } from './capabilities.mjs';
 const V = '../vendor/conform-qc';
 const parse = require(`${V}/parse/index.js`);
 const resolveTarget = require(`${V}/oracle/resolve.js`);
@@ -22,11 +23,7 @@ const resolveTarget = require(`${V}/oracle/resolve.js`);
 const TICKS_PER_SEC = 254016000000;
 
 function loadSqlite() {
-  try {
-    return require('better-sqlite3');
-  } catch {
-    throw new Error("lineage store needs the optional native dep 'better-sqlite3'. Install: npm i better-sqlite3");
-  }
+  return requireBetterSqlite3('The lineage DB');
 }
 
 const SCHEMA = `

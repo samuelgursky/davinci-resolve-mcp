@@ -15,6 +15,7 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+import { requireBetterSqlite3 } from './capabilities.mjs';
 
 export const DISK_DB_ROOT = path.join(os.homedir(), 'Library/Application Support/Blackmagic Design/DaVinci Resolve/Resolve Disk Database/Resolve Projects');
 
@@ -91,11 +92,7 @@ export async function responsiveRoots(roots = DB_ROOTS, deadlineMs = 3000) {
 }
 
 export function loadSqlite() {
-  try {
-    return require('better-sqlite3');
-  } catch {
-    throw new Error("Project.db patching needs the optional native dep 'better-sqlite3'. Install: npm i better-sqlite3");
-  }
+  return requireBetterSqlite3('Project.db patching');
 }
 
 /**

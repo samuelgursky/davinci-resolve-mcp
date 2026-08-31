@@ -14,12 +14,9 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+import { requireBetterSqlite3 } from './capabilities.mjs';
 function loadSqlite() {
-  try {
-    return require('better-sqlite3');
-  } catch {
-    throw new Error("project DB needs the optional native dep 'better-sqlite3'. Install: npm i better-sqlite3");
-  }
+  return requireBetterSqlite3('Project.db access');
 }
 
 export const ENTITY_KINDS = ['type', 'series', 'episode', 'sequence', 'group', 'deliverable'];

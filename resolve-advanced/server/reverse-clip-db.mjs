@@ -31,13 +31,10 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+import { requireBetterSqlite3 } from './capabilities.mjs';
 
 function loadSqlite() {
-  try {
-    return require('better-sqlite3');
-  } catch {
-    throw new Error("reverse-clip DB path needs the optional native dep 'better-sqlite3'. Install: npm i better-sqlite3");
-  }
+  return requireBetterSqlite3('Reversed-clip DB repair');
 }
 function loadPg() {
   try {
