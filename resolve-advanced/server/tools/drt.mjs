@@ -41,6 +41,7 @@ const assembleFromInterchangeSchema = z.object({
   outputPath: z.string().describe('Where the importable .drt is written'),
   targetAppVersion: z.union([z.string(), z.number()]).optional()
     .describe("Host Resolve version, e.g. '19.1' for pre-21"),
+  subtitlesSrtPath: z.string().optional().describe('Sidecar .srt for the turnover: cues are authored onto the subtitle track (anchored at the timeline origin)'),
   sequenceName: z.string().optional().describe('Multi-sequence AAF/prproj: assemble THIS sequence (see editorial.list_sequences)'),
   sequenceIndex: z.number().int().optional().describe('Multi-sequence AAF/prproj: assemble the sequence at this 0-based index'),
   preserveStartTimecode: z.boolean().optional()
@@ -262,6 +263,9 @@ export const drtTool = {
       });
       if (p.targetAppVersion !== undefined) {
         spec.templateVersion = parseFloat(p.targetAppVersion) >= 21 ? 21 : 19;
+      }
+      if (p.subtitlesSrtPath) {
+        spec.subtitlesSrt = await fs.readFile(p.subtitlesSrtPath, 'utf8');
       }
       const { assembleTimeline } = drp();
       const { buffer, timelineName, mediaDescriptor } = await assembleTimeline(spec);

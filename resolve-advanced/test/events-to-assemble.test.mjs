@@ -519,3 +519,28 @@ test('verifyRoundtrip flags real drift, not convention noise', () => {
   assert.equal(res2.pass, false);
   assert.equal(res2.mismatches[0].kind, 'record');
 });
+
+test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
+  const fsM = await import('node:fs');
+  const os = await import('node:os');
+  const pathM = await import('node:path');
+  const JSZipM = (await import('jszip')).default;
+  const { drtTool } = await import('../server/lib.mjs');
+  const tmpd = fsM.mkdtempSync(pathM.join(os.tmpdir(), 'srt-side-'));
+  const srt = pathM.join(tmpd, 'cues.srt');
+  fsM.writeFileSync(srt, '1\n00:00:00,500 --> 00:00:01,500\nSidecar cue\n');
+  const out = pathM.join(tmpd, 'out.drt');
+  const edl = 'TITLE: S\nFCM: NON-DROP FRAME\n001  TAPE1 V     C        00:00:01:00 00:00:03:00 01:00:00:00 01:00:02:00\n';
+  const res = await drtTool.handler({ action: 'assemble_from_interchange', args: {
+    format: 'edl', content: edl, outputPath: out, targetAppVersion: '19.1.3',
+    subtitlesSrtPath: srt,
+    sourceMap: { TAPE1: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } } },
+  }});
+  assert.ok(!res.error, res.error);
+  const zip = await JSZipM.loadAsync(fsM.readFileSync(out));
+  const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+  const seq = await zip.file(seqName).async('string');
+  assert.match(seq, /<Name>Sidecar cue<\/Name>/);
+  assert.match(seq, /<Start>86412<\/Start>/); // 0.5s @24 + origin
+  fsM.rmSync(tmpd, { recursive: true, force: true });
+});
