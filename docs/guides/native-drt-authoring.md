@@ -54,7 +54,9 @@ window. `render.verify_output` covers the container-level checks.
 | Fusion titles | `elements: [{type:'title', text}]` — **21-gen hosts only** | v2.108 |
 
 `assemble_from_interchange` drives the same engine from an EDL / OTIO /
-FCP7-XML / AAF plus a `sourceMap`, and returns an honesty ledger
+FCP7-XML / AAF plus a `sourceMap` — all four formats are route-proven
+end-to-end (parse → assemble → import → measured frames and RMS) — and
+returns an honesty ledger
 (`authoredTransitions`, `droppedTransitions` with reasons, `authoredRetimes`,
 `flattenedRetimes`, `authoredAudioEvents`, `upperTrackCutsVideoOnly`).
 
@@ -99,7 +101,10 @@ Everything else stays in `droppedTransitions` with the reason.
 ## Verification checklist for a delivered .drt
 
 1. `timeline.import_timeline_checked` — expect `linked == total` for media
-   (generators legitimately count as offline).
+   (generators legitimately count as offline). For `.drt`/`.drp` it also
+   cross-checks the files items ACTUALLY link against the archive's
+   `<MediaFilePath>` set and warns on a coarse-identity cross-link
+   (`cross_link_warning`) — `linked == total` alone cannot see one.
 2. Render a probe range; check frame luma at cut boundaries, dissolve
    midpoints (expect the blend average), and retime windows.
 3. For audio: RMS per window (silence = -inf is a failed placement).

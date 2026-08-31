@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.122.0"
+VERSION = "2.123.0"
 
 import base64
 import os
@@ -6966,6 +6966,49 @@ def _export_timeline_checked(tl, p: Dict[str, Any]):
     return _run_maybe_background("timeline.export_timeline_checked", p, _work)
 
 
+def _drt_expected_media_paths(path: str):
+    """Unique <MediaFilePath> values referenced by a .drt/.drp's timeline clips.
+
+    Feeds the cross-link check: Resolve merges pool media by a COARSE identity
+    across imports, so a clip can silently relink to a DIFFERENT pre-existing
+    file (measured: item readback even shows the wrong clip name). The archive
+    is the ground truth for which files the timeline meant.
+    """
+    import zipfile as _zf
+    paths = set()
+    try:
+        with _zf.ZipFile(path) as zf:
+            for n in zf.namelist():
+                if re.search(r"SeqContainer/.+\.xml$", n) or re.search(r"/SeqContainer\d*\.xml$", n):
+                    xml = zf.read(n).decode("utf-8", "replace")
+                    for m in re.finditer(r"<MediaFilePath>([^<]+)</MediaFilePath>", xml):
+                        paths.add(m.group(1))
+    except Exception:
+        return None
+    return paths or None
+
+
+def _timeline_cross_link_check(tl, expected_paths):
+    """Compare the media files a timeline ACTUALLY links against the expected set."""
+    actual = set()
+    for track_type in ("video", "audio"):
+        try:
+            count = int(tl.GetTrackCount(track_type) or 0)
+        except Exception:
+            count = 0
+        for i in range(1, count + 1):
+            for item in (tl.GetItemListInTrack(track_type, i) or []):
+                try:
+                    mpi = item.GetMediaPoolItem()
+                    fp = mpi.GetClipProperty("File Path") if mpi else None
+                    if fp:
+                        actual.add(str(fp))
+                except Exception:
+                    pass
+    missing = sorted(x for x in expected_paths if x not in actual)
+    return {"expected": sorted(expected_paths), "actual": sorted(actual), "missing": missing}
+
+
 def _timeline_media_coverage(tl) -> Dict[str, Any]:
     """Count how many timeline items are linked to a Media Pool Item vs. offline.
 
@@ -7427,6 +7470,20 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
             out["relink"] = relink_result
         if binary_relink_note:
             out["note"] = binary_relink_note
+        if ext in {".drt", ".drp"}:
+            expected_paths = _drt_expected_media_paths(path)
+            if expected_paths:
+                xcheck = _timeline_cross_link_check(imported, expected_paths)
+                if xcheck["missing"]:
+                    out["cross_link_warning"] = (
+                        "Media files this timeline references are NOT among the files its "
+                        f"items actually link to: {', '.join(xcheck['missing'])}. Resolve "
+                        "merges pool media by a coarse identity across imports, so clips "
+                        "can silently relink to a DIFFERENT pre-existing file (item names "
+                        "follow the wrong file too). Import into a fresh project, or "
+                        "render-probe before trusting this conform."
+                    )
+                    out["cross_link_check"] = xcheck
         if media["total"] and media["offline"]:
             msg = f"{media['offline']} of {media['total']} timeline items are offline (no linked media)."
             if is_binary:
