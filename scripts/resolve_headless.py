@@ -5,6 +5,7 @@
     python scripts/resolve_headless.py guard      # exit non-zero unless it is safe to start
     python scripts/resolve_headless.py start      # boot -nogui and wait until scriptable
     python scripts/resolve_headless.py stop       # Quit() and wait for the process to go
+    python scripts/resolve_headless.py stop --force  # TERM/KILL a wedged, unanswering instance
     python scripts/resolve_headless.py run -- python my_batch.py   # guard, start, run, stop
 
 Why a wrapper rather than a line in a Makefile:
@@ -122,6 +123,21 @@ def cmd_guard() -> int:
     return 0
 
 
+def _kill_process(proc: subprocess.Popen, grace: float = 10.0) -> bool:
+    """TERM then KILL the process we launched; True when it is gone."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=grace)
+        return True
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=grace)
+            return True
+        except subprocess.TimeoutExpired:
+            return False
+
+
 def start(timeout: float) -> int:
     guard = cmd_guard()
     if guard != 0:
@@ -131,25 +147,41 @@ def start(timeout: float) -> int:
         print("REFUSE: no DaVinci Resolve install found.", file=sys.stderr)
         return 3
     print(f"starting: {' '.join(command)}")
-    subprocess.Popen(command, stdin=subprocess.DEVNULL,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     started = time.monotonic()
     if wait_until_scriptable(timeout) is None:
+        # An unscriptable -nogui instance still holds the singleton, so the
+        # GUI cannot launch either — leaving it behind wedges the machine
+        # worse than never starting (issue #172). Kill only what WE spawned.
         print(f"FAILED: no scripting response within {timeout:.0f}s.", file=sys.stderr)
+        print("cleaning up the unscriptable instance this script started...", file=sys.stderr)
+        if _kill_process(proc):
+            print("cleaned up. Headless requires external scripting to connect without "
+                  "the GUI; on this setup it did not — use the GUI, or raise --timeout "
+                  "if this machine is just slow to boot Resolve.", file=sys.stderr)
+        else:
+            print(f"could not kill pid {proc.pid} — remove it by hand (kill -9 {proc.pid}).",
+                  file=sys.stderr)
         return 4
     print(f"ready in {time.monotonic() - started:.1f}s")
     return 0
 
 
-def stop(timeout: float) -> int:
+def stop(timeout: float, force: bool = False) -> int:
     mode = rr.runtime_mode()
     if not mode["running"]:
         print("nothing to stop")
         return 0
     resolve = _connect()
     if resolve is None:
-        print("REFUSE: Resolve is running but not answering; not killing it.", file=sys.stderr)
-        return 5
+        if not force:
+            print("REFUSE: Resolve is running but not answering; not killing it. "
+                  "If it never became scriptable (a wedged -nogui boot, a stuck "
+                  "modal), rerun with --force to TERM/KILL it — unclean: expect "
+                  "project locks and a slow next boot.", file=sys.stderr)
+            return 5
+        return _force_stop(timeout)
     started = time.monotonic()
     resolve.Quit()
     while time.monotonic() - started < timeout:
@@ -157,8 +189,53 @@ def stop(timeout: float) -> int:
         if not (rr.resolve_processes() or []):
             print(f"stopped in {time.monotonic() - started:.1f}s")
             return 0
-    print(f"FAILED: still running {timeout:.0f}s after Quit().", file=sys.stderr)
+    if force:
+        print(f"still running {timeout:.0f}s after Quit(); escalating.", file=sys.stderr)
+        return _force_stop(timeout)
+    print(f"FAILED: still running {timeout:.0f}s after Quit(). "
+          f"Rerun with --force to TERM/KILL it.", file=sys.stderr)
     return 6
+
+
+def _force_stop(timeout: float) -> int:
+    """TERM, then KILL, every running Resolve process (unix only)."""
+    import platform
+    import signal
+
+    if platform.system().lower() == "windows":
+        print("FAILED: --force is unix-only here; use `taskkill /F /IM Resolve.exe`.",
+              file=sys.stderr)
+        return 7
+
+    def pids() -> List[int]:
+        found: set = set()
+        for name in ("Resolve", "resolve"):
+            out = subprocess.run(["pgrep", "-x", name], capture_output=True,
+                                 text=True, check=False)
+            found.update(int(p) for p in out.stdout.split() if p.strip().isdigit())
+        return sorted(found)
+
+    for sig, grace in ((signal.SIGTERM, min(timeout, 10.0)), (signal.SIGKILL, min(timeout, 10.0))):
+        targets = pids()
+        if not targets:
+            print("force-stopped (unclean — expect a slower next boot).")
+            return 0
+        for pid in targets:
+            print(f"sending {sig.name} to pid {pid}", file=sys.stderr)
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                print(f"no permission to signal pid {pid}", file=sys.stderr)
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            if not pids():
+                print("force-stopped (unclean — expect a slower next boot).")
+                return 0
+    print("FAILED: Resolve survived SIGKILL; inspect by hand.", file=sys.stderr)
+    return 7
 
 
 def cmd_run(command: List[str], timeout: float) -> int:
@@ -200,7 +277,10 @@ def main() -> int:
     sub.add_parser("status")
     sub.add_parser("guard")
     sub.add_parser("start")
-    sub.add_parser("stop")
+    stop_p = sub.add_parser("stop")
+    stop_p.add_argument("--force", action="store_true",
+                        help="escalate to TERM/KILL when Resolve is running but not "
+                             "answering, or survives Quit() (unclean shutdown)")
     run = sub.add_parser("run")
     run.add_argument("argv", nargs=argparse.REMAINDER,
                      help="command to run; put it after a bare --")
@@ -213,7 +293,7 @@ def main() -> int:
     if args.command == "start":
         return start(args.timeout)
     if args.command == "stop":
-        return stop(args.timeout)
+        return stop(args.timeout, force=getattr(args, "force", False))
     argv = [a for a in args.argv if a != "--"]
     if not argv:
         print("run: nothing to run (put the command after `--`)", file=sys.stderr)

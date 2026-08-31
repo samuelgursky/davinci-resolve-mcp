@@ -14,6 +14,18 @@ the raw runs are in `docs/reference/evidence/`.
 `-nogui` — the flat round trip, the complex-cut round trip, and the moved-media
 relink. Choose a format on its properties, never on whether you have a UI.
 
+**Precondition first, though: headless requires external scripting to connect
+without the GUI.** That held everywhere it was measured here, but at least one
+field setup (Studio 21.0.4.5, scripting routed through an external bridge
+process — issue #172) boots `-nogui` into an instance that *never answers*
+`scriptapp('Resolve')`, and an unscriptable headless instance still holds the
+one-per-machine singleton, so the GUI cannot start either. Preflight in 30
+seconds before committing a loop to `-nogui`:
+`python scripts/resolve_headless.py run -- python -c "print('ok')"` — a clean
+`ok` proves boot-to-scriptable; a `FAILED: no scripting response` now cleans up
+the instance it started, and `stop --force` TERM/KILLs a wedged one (unclean:
+expect project locks and a slow next boot).
+
 **There is no single best format.** Three measurements pull in different
 directions, and the right choice depends on which one you are up against:
 
