@@ -46,7 +46,7 @@ const assembleSchema = z.object({
   spec: z
     .object({})
     .passthrough()
-    .describe("assembleTimeline spec: { timelineName?, media?: {mediaFilePath, spec:{width,height,frameCount,fps}, cuts:[{startFrame,durationFrames,srcIn?}]} | [same, ...] (multi-source needs media_pool.capture_media_template run once per file), elements?: [{type:'title'|'generator', track, startFrame, durationFrames?, text?, ...}], transitions? }. startFrame is timeline-absolute (origin 86400)."),
+    .describe("assembleTimeline spec: { timelineName?, media?: {mediaFilePath, spec:{width,height,frameCount,fps}, cuts:[{startFrame,durationFrames,srcIn?}]} | [same, ...] (multi-source needs media_pool.capture_media_template run once per file), elements?: [{type:'title'|'generator', track, startFrame, durationFrames?, text?, generatorName? ('Solid Color'|'SMPTE Color Bar'|'Grey Scale' render-verified on 19), ...}], transitions? }. startFrame is timeline-absolute (origin 86400)."),
   outputPath: z.string().describe('Absolute path where the importable .drt will be written'),
   targetAppVersion: z
     .union([z.string(), z.number()])
@@ -284,15 +284,17 @@ export const drtTool = {
         stamped,
         templateVersion: spec.templateVersion ?? 21,
         mediaDescriptor: mediaDescriptor ?? 'none',
-        ...((spec.elements || []).length && (spec.templateVersion ?? 21) < 21
+        ...((spec.elements || []).some((e) => e && e.type === 'title') && (spec.templateVersion ?? 21) < 21
           ? {
               elementsWarning:
-                'On a pre-21 host, imported Fusion elements render only via the machine\'s Fusion ' +
-                'disk cache, keyed to the EXACT comp bytes (measured: an identity recompression ' +
-                'rendered black) — so offline-authored titles/generators may render black, and ' +
-                'offline TEXT patching cannot work there. The working pre-21 flow: assemble media ' +
-                'offline, then set title text post-import with timeline.set_title_text (its ' +
-                'Fusion-comp path is live-verified on 19.1.3). Media cuts render everywhere.',
+                'On a pre-21 host, imported Fusion TITLE comps render only via the machine\'s ' +
+                'Fusion disk cache, keyed to the EXACT comp bytes (measured: an identity ' +
+                'recompression rendered black) — offline-authored titles may render black and ' +
+                'offline text patching cannot work there. The working pre-21 title flow: assemble ' +
+                'without title text, then set it post-import with timeline.set_title_text (its ' +
+                'Fusion-comp path is live-verified on 19.1.3). Media cuts and built-in GENERATORS ' +
+                '(Solid Color / SMPTE Color Bar / Grey Scale — plain Sm2TiGenerator, no Fusion ' +
+                'comp) render everywhere: generator kinds render-verified on 19.1.3.',
             }
           : {}),
         ...(mediaDescriptor === 'repoint-fallback'

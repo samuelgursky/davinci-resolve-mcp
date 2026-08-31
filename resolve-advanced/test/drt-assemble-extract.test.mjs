@@ -82,3 +82,32 @@ test('extract keeps the recipe and drops the other timeline block', async () => 
   await fs.unlink(src);
   await fs.unlink(out);
 });
+
+test('generator kind selection lands in the seq XML; title-only warning gate', async () => {
+  // Kind swap render-verified on 19.1.3.7: SMPTE Color Bar YAVG 104.9,
+  // Grey Scale 125.1, Solid Color 16 — plain Sm2TiGenerator, no Fusion comp,
+  // so the byte-keyed comp-cache law does not apply and no warning is due.
+  const out = tmp('.drt');
+  const res = await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    spec: { elements: [
+      { type: 'generator', generatorName: 'SMPTE Color Bar', track: 2, startFrame: 86400, durationFrames: 32 },
+      { type: 'generator', generatorName: 'Grey Scale', track: 2, startFrame: 86440, durationFrames: 32 },
+    ]},
+  }});
+  assert.equal(res.elementsWarning, undefined, 'generator-only pre-21 spec must not warn');
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+  const seq = await zip.file(seqName).async('string');
+  assert.match(seq, /<PrettyType>SMPTE Color Bar<\/PrettyType>/);
+  assert.match(seq, /<PrettyType>Grey Scale<\/PrettyType>/);
+  await fs.unlink(out);
+
+  const out2 = tmp('.drt');
+  const res2 = await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out2, targetAppVersion: '19.1.3',
+    spec: { elements: [{ type: 'title', track: 1, startFrame: 86400, durationFrames: 24 }] },
+  }});
+  assert.match(res2.elementsWarning || '', /byte|cache|set_title_text/i, 'pre-21 title spec must warn');
+  await fs.unlink(out2);
+});

@@ -133,7 +133,10 @@ class McpSdkPinTest(unittest.TestCase):
 def test_npm_package_metadata():
     package = json.loads((PROJECT_ROOT / "package.json").read_text())
     assert package["name"] == "davinci-resolve-mcp"
-    assert package["version"] == _string_assignment(PROJECT_ROOT / "install.py", "VERSION")
+    # Every VERSION stamp must move together — src/granular/common.py drifted
+    # unguarded through at least one release before it was added here.
+    for stamped in ("install.py", "src/server.py", "src/granular/common.py"):
+        assert package["version"] == _string_assignment(PROJECT_ROOT / stamped, "VERSION"), stamped
     assert package["bin"]["davinci-resolve-mcp"] == "./bin/davinci-resolve-mcp.mjs"
     assert (PROJECT_ROOT / "bin" / "davinci-resolve-mcp.mjs").exists()
 

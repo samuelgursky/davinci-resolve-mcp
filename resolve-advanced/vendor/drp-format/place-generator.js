@@ -9,7 +9,10 @@
  *
  * Clone-based: carry the bundled Solid Color template and swap PrettyType/Name/Start/
  * Duration + a fresh DbId. The same Sm2TiGenerator shape serves the other simple built-in
- * generators by changing PrettyType (verify per type before relying on it).
+ * generators by changing PrettyType — RENDER-VERIFIED on Studio 19.1.3.7 (2026-08-30):
+ * Solid Color YAVG 16 over white 234, SMPTE Color Bar 104.9, Grey Scale 125.1, all from a
+ * fully offline-authored .drt. Unlike Fusion titles, Sm2TiGenerator has no comp blob, so
+ * the byte-keyed Fusion render-cache law does NOT apply: generators render live everywhere.
  *
  * @module drp-format/place-generator
  */

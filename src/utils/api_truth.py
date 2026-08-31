@@ -1936,7 +1936,12 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "native-descriptor transplant) and set title text "
                        "POST-IMPORT with timeline.set_title_text, whose "
                        "Fusion-comp write path is live-verified on 19.1.3. "
-                       "Render-verify any imported Fusion element before "
+                       "Built-in GENERATORS are exempt: Sm2TiGenerator "
+                       "clips carry no Fusion comp, and offline-authored "
+                       "Solid Color / SMPTE Color Bar / Grey Scale all "
+                       "render live from an imported .drt (measured YAVG "
+                       "16 / 104.9 / 125.1 over a 234 white base). "
+                       "Render-verify any imported Fusion TITLE before "
                        "delivery; structural readback cannot see this.",
         "tags": ["fusion", "render", "import", "silent-failure"],
         "submit": "bug",
