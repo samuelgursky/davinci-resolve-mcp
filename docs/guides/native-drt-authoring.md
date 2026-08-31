@@ -54,8 +54,9 @@ window. `render.verify_output` covers the container-level checks.
 | Fusion titles | `elements: [{type:'title', text}]` — **21-gen hosts only** | v2.108 |
 
 `assemble_from_interchange` drives the same engine from an EDL / OTIO /
-FCP7-XML / AAF plus a `sourceMap` — all four formats are route-proven
-end-to-end (parse → assemble → import → measured frames and RMS) — and
+FCP7-XML / AAF / **.prproj** (Premiere, read offline — no Premiere needed)
+plus a `sourceMap` — all five formats are route-proven end-to-end
+(parse → assemble → import → measured frames and RMS) — and
 returns an honesty ledger
 (`authoredTransitions`, `droppedTransitions` with reasons, `authoredRetimes`,
 `flattenedRetimes`, `authoredAudioEvents`, `upperTrackCutsVideoOnly`).

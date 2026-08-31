@@ -432,3 +432,47 @@ test('OTIO track-level markers land at record positions', () => {
   const { spec } = eventsToAssembleSpec(parseOTIO(otio, { fps: 24 }), { sourceMap: MAP });
   assert.deepEqual(spec.markers, [{ frame: 86412, color: 'Cyan', name: 'reel start' }]);
 });
+
+// Premiere leg: a schema-faithful synthetic .prproj routes through the ACTUAL
+// tool handler into an assembled .drt (live-proven: renders 122.99/234 with
+// -21.1 dB audio on 19.1.3.7).
+test('assemble_from_interchange routes a .prproj through the handler', async () => {
+  const zlibM = await import('node:zlib');
+  const fsM = await import('node:fs');
+  const os = await import('node:os');
+  const pathM = await import('node:path');
+  const { drtTool } = await import('../server/lib.mjs');
+  const TPF24 = 254016000000 / 24;
+  const f = (fr) => Math.round(fr * TPF24);
+  const XML = `<?xml version="1.0" encoding="UTF-8"?>
+<PremiereData Version="3">
+  <Project ObjectID="1" ClassID="p0" Version="40"><RootProjectItem ObjectRef="2"/></Project>
+  <Sequence ObjectID="10" ClassID="s" Version="40">
+    <Node Version="1"><Properties><Name>PP CUT</Name><FrameRate>24</FrameRate></Properties></Node>
+    <VideoTracks><Track ObjectRef="20"/></VideoTracks>
+  </Sequence>
+  <VideoTrack ObjectID="20" ClassID="v" Version="1">
+    <TrackItems><TrackItem ObjectRef="40"/></TrackItems>
+  </VideoTrack>
+  <VideoClipTrackItem ObjectID="40" ClassID="c" Version="1">
+    <Start>${f(0)}</Start><End>${f(48)}</End><InPoint>${f(24)}</InPoint><OutPoint>${f(72)}</OutPoint>
+    <ClipProjectItem ObjectRef="60"/>
+  </VideoClipTrackItem>
+  <ClipProjectItem ObjectID="60" ClassID="pi" Version="1">
+    <ActualMediaFilePath>/m/a.mp4</ActualMediaFilePath>
+  </ClipProjectItem>
+</PremiereData>`;
+  const tmpd = fsM.mkdtempSync(pathM.join(os.tmpdir(), 'pp-route-'));
+  const pp = pathM.join(tmpd, 'cut.prproj');
+  fsM.writeFileSync(pp, zlibM.gzipSync(Buffer.from(XML, 'utf8')));
+  const out = pathM.join(tmpd, 'out.drt');
+  const res = await drtTool.handler({ action: 'assemble_from_interchange', args: {
+    format: 'prproj', path: pp, outputPath: out, targetAppVersion: '19.1.3',
+    sourceMap: { 'a.mp4': { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } } },
+  }});
+  assert.ok(!res.error, res.error);
+  assert.equal(res.conform.videoEvents, 1);
+  assert.match(res.note, /AUTHORED when geometry allows/);
+  assert.ok(fsM.existsSync(out));
+  fsM.rmSync(tmpd, { recursive: true, force: true });
+});

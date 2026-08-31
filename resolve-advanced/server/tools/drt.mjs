@@ -30,7 +30,7 @@ const authorSchema = z.object({
 });
 const validateSchema = z.object({ drtPath: z.string().describe('Absolute path to a .drt file') });
 const assembleFromInterchangeSchema = z.object({
-  format: z.enum(['edl', 'otio', 'xml', 'aaf']).describe('Interchange format of the input'),
+  format: z.enum(['edl', 'otio', 'xml', 'aaf', 'prproj']).describe('Interchange format of the input'),
   path: z.string().optional().describe('Path to the interchange file (aaf REQUIRES a path)'),
   content: z.string().optional().describe('Inline interchange text (edl/otio/xml)'),
   fps: z.number().optional().describe('Event frame rate for parsing (default 24; use e.g. 29.97 for NTSC EDLs)'),
@@ -211,14 +211,23 @@ export const drtTool = {
       const { parseInterchange } = await import('../editorial.mjs');
       const { eventsToAssembleSpec } = await import('../author-interchange.mjs');
       let content = p.content;
+      let events;
       if (p.format === 'aaf') {
         if (!p.path) return { error: 'aaf input requires path' };
         content = p.path;
+      } else if (p.format === 'prproj') {
+        // Premiere: offline gunzip+graph read (no Premiere, no Resolve import
+        // path). parsePrproj flattens EVERY sequence's events; a multi-sequence
+        // .prproj with overlapping record ranges refuses naturally in the
+        // overlap check — pre-split via editorial.list_sequences if needed.
+        if (!p.path) return { error: 'prproj input requires path' };
+        const { parsePrproj } = await import('../prproj.mjs');
+        events = parsePrproj(p.path);
       } else if (!content) {
         if (!p.path) return { error: 'provide content or path' };
         content = await fs.readFile(p.path, 'utf8');
       }
-      const events = parseInterchange(p.format, content, { fps: p.fps ?? 24 });
+      if (!events) events = parseInterchange(p.format, content, { fps: p.fps ?? 24 });
       if (!events || !events.length) return { error: 'no events parsed from the interchange input' };
       const { spec, report } = eventsToAssembleSpec(events, {
         sourceMap: p.sourceMap, timelineName: p.timelineName,
@@ -248,7 +257,7 @@ export const drtTool = {
         stamped,
         conform: report,
         note:
-          'Import with timeline.import_timeline_checked (timeline is named after the FILE). ' +
+          'Import with timeline.import_timeline_checked (timeline is named after the FILE). Dissolves/cross-fades, forward+reverse retimes, multi-track video, audio events and markers are AUTHORED when geometry allows; everything else drops WITH a reason — see `conform` for the ledger.' +
           'Retimes are flattened and transitions become cuts — see `conform` for the ledger.',
       };
     }
