@@ -476,3 +476,46 @@ test('assemble_from_interchange routes a .prproj through the handler', async () 
   assert.ok(fsM.existsSync(out));
   fsM.rmSync(tmpd, { recursive: true, force: true });
 });
+
+// Round-trip QC verifier: normalizes the three measured cross-format
+// conventions and fits per-source TC offsets (live-proven pass on the
+// AAF→assemble→import→OTIO-export loop with srcOffsets 86400).
+import { verifyRoundtrip } from '../server/author-interchange.mjs';
+
+test('verifyRoundtrip passes across naming/track/TC-base conventions', () => {
+  const input = [
+    { track: 'V1', source: 'rt_source_1', recIn: 0, recOut: 191, srcIn: 0 },
+    { track: 'V1', source: 'rt_source_2', recIn: 191, recOut: 238, srcIn: 24 },
+    { track: 'V2', source: 'rt_source_2', recIn: 96, recOut: 143, srcIn: 0 },
+  ];
+  const exported = [
+    { track: 'V', source: 'rt_source_1.mov', recIn: 86400, recOut: 86591, srcIn: 86400 },
+    { track: 'V', source: 'RT_SOURCE_2.mov', recIn: 86591, recOut: 86638, srcIn: 86424 },
+    { track: 'V2', source: 'rt_source_2.mov', recIn: 86496, recOut: 86543, srcIn: 86400 },
+  ];
+  const res = verifyRoundtrip(input, exported);
+  assert.equal(res.pass, true, JSON.stringify(res.mismatches));
+  assert.deepEqual(res.srcOffsets, { rt_source_1: 86400, rt_source_2: 86400 });
+});
+
+test('verifyRoundtrip flags real drift, not convention noise', () => {
+  const input = [
+    { track: 'V1', source: 'A', recIn: 0, recOut: 48, srcIn: 0 },
+    { track: 'V1', source: 'A', recIn: 48, recOut: 96, srcIn: 100 },
+  ];
+  // second cut's source frames slipped by 5 beyond the fitted offset
+  const exported = [
+    { track: 'V', source: 'A.mov', recIn: 0, recOut: 48, srcIn: 86400 },
+    { track: 'V', source: 'A.mov', recIn: 48, recOut: 96, srcIn: 86505 },
+  ];
+  const res = verifyRoundtrip(input, exported);
+  assert.equal(res.pass, false);
+  assert.equal(res.mismatches[0].kind, 'source-frames');
+  // record drift too
+  const res2 = verifyRoundtrip(input, [
+    { track: 'V', source: 'A.mov', recIn: 0, recOut: 48, srcIn: 0 },
+    { track: 'V', source: 'A.mov', recIn: 50, recOut: 96, srcIn: 100 },
+  ]);
+  assert.equal(res2.pass, false);
+  assert.equal(res2.mismatches[0].kind, 'record');
+});

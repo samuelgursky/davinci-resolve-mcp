@@ -575,3 +575,62 @@ export async function authorInterchange(events, target, opts = {}) {
   }
   throw new Error(`authorInterchange: unknown target '${target}' (otio|edl|drt)`);
 }
+
+/**
+ * verifyRoundtrip — assert that a re-EXPORT of an authored timeline matches
+ * the interchange it was built from, normalizing the three cross-format
+ * conventions measured on a live AAF→assemble→import→OTIO-export loop
+ * (19.1.3.7):
+ *   1. track labels: first tracks read 'V'/'A' in one format, 'V1'/'A1' in
+ *      the other — canonicalized to the numbered form;
+ *   2. source names: AAF mob name vs file basename ('rt_source_1' vs
+ *      'rt_source_1.mov') — compared after stripping the extension,
+ *      case-insensitively;
+ *   3. source frames: Resolve's OTIO export is TIMECODE-ABSOLUTE while
+ *      event lists are usually source-relative — a CONSTANT per-source
+ *      offset is fitted from the first pair and every other pair must agree
+ *      (the offset itself is reported, e.g. 86400 for a 01:00:00:00 source).
+ * Record positions are min-anchored per side. Video events only (audio
+ * channel legs merge by design).
+ *
+ * @returns {{pass:boolean, pairs:number, srcOffsets:Object, mismatches:Array}}
+ */
+export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
+  const recTol = opts.recTol ?? 1;
+  const srcTol = opts.srcTol ?? 1;
+  const canonTrack = (t) => {
+    const m = /^([VA])(\d+)?$/.exec(String(t || ''));
+    return m ? `${m[1]}${m[2] || '1'}` : String(t);
+  };
+  const canonSource = (x) => String(x || '').replace(/\.[^.]+$/, '').toLowerCase();
+  const vids = (evts) => evts.filter((e) => /^V\d*$/.test(String(e.track)) && e.recIn != null && e.recOut != null);
+  const norm = (evts) => {
+    const v = vids(evts);
+    if (!v.length) return [];
+    const off = Math.min(...v.map((e) => e.recIn));
+    return v
+      .map((e) => ({ track: canonTrack(e.track), source: canonSource(e.source), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0 }))
+      .sort((a, b) => a.track.localeCompare(b.track) || a.recIn - b.recIn);
+  };
+  const a = norm(inputEvents);
+  const b = norm(exportedEvents);
+  const mismatches = [];
+  if (a.length !== b.length) mismatches.push({ kind: 'count', input: a.length, exported: b.length });
+  const srcOffsets = {};
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 1) {
+    const x = a[i], y = b[i];
+    if (x.track !== y.track) { mismatches.push({ kind: 'track', at: i, input: x.track, exported: y.track }); continue; }
+    if (x.source !== y.source) { mismatches.push({ kind: 'source', at: i, input: x.source, exported: y.source }); continue; }
+    if (Math.abs(x.recIn - y.recIn) > recTol || Math.abs(x.recOut - y.recOut) > recTol) {
+      mismatches.push({ kind: 'record', at: i, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
+      continue;
+    }
+    const off = y.srcIn - x.srcIn;
+    if (srcOffsets[x.source] === undefined) srcOffsets[x.source] = off;
+    else if (Math.abs(off - srcOffsets[x.source]) > srcTol) {
+      mismatches.push({ kind: 'source-frames', at: i, source: x.source, expectedOffset: srcOffsets[x.source], gotOffset: off });
+    }
+  }
+  return { pass: mismatches.length === 0, pairs: n, srcOffsets, mismatches };
+}

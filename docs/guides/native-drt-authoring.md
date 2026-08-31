@@ -111,6 +111,12 @@ Everything else stays in `droppedTransitions` with the reason.
 3. For audio: RMS per window (silence = -inf is a failed placement).
 4. Never trust `created_new: false` — a same-named timeline already in the
    project is returned as "success" (internal-name-wins law).
+5. Close the loop with `editorial.verify_roundtrip`: parse the original
+   interchange and Resolve's own re-export of the imported timeline, and the
+   verifier normalizes track labels, source naming, and per-source
+   TC-absolute source frames (fitting the offsets, e.g. 86400 for a
+   01:00:00:00 source) — `pass: true` means the authored timeline's export
+   matches the turnover's intent event-for-event.
 
 ## References
 
