@@ -248,8 +248,8 @@ async function assembleTimeline(spec = {}) {
     // Recursive: compounds nest (comp.compounds, frames inner-relative like
     // cuts). Depth-2 playback is RENDER-VERIFIED on 19.1.3.7 (E56, white 234
     // through two levels) — the historical depth-2 black was one missing key,
-    // SequenceSetup, in the donor template's embedded-sequence blob. Depths
-    // beyond 2 compose structurally but are not render-verified.
+    // SequenceSetup, in the donor template's embedded-sequence blob. Depth-3 is
+    // render-verified too (E58, white 234 through three levels).
     const placeTree = async (comp, parentUuid, label) => {
       if (!comp || typeof comp !== 'object') throw new TypeError(`assembleTimeline: ${label} must be an object`);
       const res = await placeCompound(buffer, {
