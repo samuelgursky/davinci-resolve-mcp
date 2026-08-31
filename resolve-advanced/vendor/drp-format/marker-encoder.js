@@ -1,6 +1,12 @@
 /**
  * DaVinci Resolve Timeline Marker Encoder/Decoder
  *
+ * DEPRECATED for .drp/.drt authoring: this module's color map and emitted
+ * bytes never matched a real Resolve export (measured 2026-08-30 — Yellow is
+ * 16 not 8, Purple is 128, and the framing differs). Use
+ * timeline-markers-blob.js, whose encoder is byte-exact against a live
+ * 19.1.3.7 export and render/readback-verified through drt.assemble.
+ *
  * Encodes and decodes timeline markers into DaVinci Resolve's
  * compressed protobuf format stored in Sm2SequenceLockableBlob.FieldsBlob.
  *

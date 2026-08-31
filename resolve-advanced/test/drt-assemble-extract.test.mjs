@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
 import { drtTool } from '../server/lib.mjs';
+import { createRequire } from 'node:module';
 
 const tmp = (ext) => path.join(os.tmpdir(), `drtns-${Math.random().toString(36).slice(2)}${ext}`);
 
@@ -136,3 +137,41 @@ test('spec.startFrame patches MediaExtents and moves the origin guard', async ()
       cuts: [{ startFrame: 86000, durationFrames: 24 }] } },
   }}), /before the timeline origin 86208/);
 });
+
+test('spec.markers encode byte-exact and attach to the sequence owner', async () => {
+  const requireC = createRequire(import.meta.url);
+  const { encodeTimelineMarkersBlob, decodeTimelineMarkersBlob, MARKER_COLOR_BITS } =
+    requireC('../vendor/drp-format/timeline-markers-blob.js');
+  // Fixture: the Sm2SequenceLockableBlob FieldsBlob Resolve 19.1.3.7 itself
+  // wrote for two markers (harvested via the marker API + ExportProject).
+  const harvest = Buffer.from(
+    (await fs.readFile(new URL('./fixtures-r19-markers-2.hex', import.meta.url), 'utf8')).trim(), 'hex');
+  const dec = decodeTimelineMarkersBlob(harvest);
+  assert.equal(dec.length, 2);
+  assert.deepEqual(dec.map((m) => [m.frame, m.color, m.name]), [[60, 'Red', 'MK_BETA'], [24, 'Blue', 'MK_ALPHA']]);
+  assert.ok(encodeTimelineMarkersBlob(dec).equals(harvest), 'byte-exact re-encode');
+  assert.equal(Object.keys(MARKER_COLOR_BITS).length, 16);
+
+  const out = tmp('.drt');
+  const res = await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    spec: { timelineName: 'MRK', media: {
+      mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+      cuts: [{ startFrame: 86400, durationFrames: 96 }],
+    }, markers: [{ frame: 86424, color: 'Red', name: 'A', note: 'n', duration: 12 }] },
+  }});
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const pj = await zip.file('project.xml').async('string');
+  const blk = pj.match(/<Sm2SequenceLockableBlob[\s\S]*?<\/Sm2SequenceLockableBlob>/);
+  assert.ok(blk, 'lockable blob inserted');
+  const owner = blk[0].match(/<BlobOwner>([0-9a-f-]{36})<\/BlobOwner>/)[1];
+  const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+  const seq = await zip.file(seqName).async('string');
+  assert.ok(seq.includes(`<Sequence>${owner}</Sequence>`), 'owner is the Sm2Sequence id');
+  const fb = Buffer.from(blk[0].match(/<FieldsBlob>([0-9a-fA-F]*)<\/FieldsBlob>/)[1], 'hex');
+  const decoded = decodeTimelineMarkersBlob(fb);
+  assert.deepEqual(decoded, [{ frame: 24, color: 'Red', note: 'n', duration: 12, name: 'A', customData: '' }]);
+  await fs.unlink(out);
+});
+
+test('createRequire import for marker tests', () => { assert.ok(createRequire); });

@@ -26,6 +26,7 @@ const { loadMediaTemplate, transplantMediaElement, insertMediaElement } = requir
 const JSZip = require('jszip');
 const { cutSourceIntoClips } = require('./cut-media');
 const { buildConstantSpeedTimemapKeyed } = require('./media-timemap');
+const { encodeTimelineMarkersBlob } = require('./timeline-markers-blob');
 const { randomUUID } = require('node:crypto');
 const { placeFusionTitle } = require('./place-fusion-title');
 const { placeGenerator } = require('./place-generator');
@@ -190,6 +191,33 @@ async function assembleTimeline(spec = {}) {
       track: tr.track, atFrame: tr.atFrame, durationFrames: tr.durationFrames,
       trackType: tr.trackType || 'video',
     }));
+  }
+
+  if (Array.isArray(spec.markers) && spec.markers.length) {
+    // Timeline markers ride in project.xml as a Sm2SequenceLockableBlob whose
+    // BlobOwner is the timeline's Sm2Sequence DbId (the uuid every track's
+    // <Sequence> references). Encoder byte-exact vs a live 19.1.3.7 export.
+    // Marker frames here are TIMELINE-ABSOLUTE for consistency with cuts;
+    // the blob stores them start-relative.
+    const zipM = await JSZip.loadAsync(buffer);
+    const seqName = Object.keys(zipM.files).find((n) => !zipM.files[n].dir && /SeqContainer\/.+\.xml$/.test(n));
+    const seqXml2 = await zipM.file(seqName).async('string');
+    const seqIdM = (seqXml2.match(/<Sequence>([0-9a-f-]{36})<\/Sequence>/) || [])[1];
+    if (!seqIdM) throw new Error('assembleTimeline: cannot find the Sm2Sequence id for markers');
+    const rel = spec.markers.map((m) => {
+      if (!Number.isInteger(m.frame) || m.frame < originFrame) {
+        throw new RangeError(`assembleTimeline: marker frame ${m.frame} is before the timeline origin ${originFrame} (frames are timeline-absolute)`);
+      }
+      return { ...m, frame: m.frame - originFrame };
+    });
+    const blob = encodeTimelineMarkersBlob(rel);
+    let pjX = await zipM.file('project.xml').async('string');
+    const setM = pjX.match(/<LocableBlobSet>[\s\S]*?<\/LocableBlobSet>/);
+    if (!setM) throw new Error('assembleTimeline: project.xml has no LocableBlobSet to hold markers');
+    const el = `<Element>\n     <Sm2SequenceLockableBlob DbId="${randomUUID()}">\n      <FieldsBlob>${blob.toString('hex')}</FieldsBlob>\n      <BlobOwner>${seqIdM}</BlobOwner>\n      <DbSavedTime>0</DbSavedTime>\n     </Sm2SequenceLockableBlob>\n    </Element>\n   `;
+    pjX = pjX.replace('</LocableBlobSet>', `${el}</LocableBlobSet>`);
+    zipM.file('project.xml', pjX);
+    buffer = await zipM.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   }
 
   if (originFrame !== DEFAULT_START_FRAME) {
