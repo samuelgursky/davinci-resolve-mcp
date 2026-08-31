@@ -1957,7 +1957,12 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "envelope with the Y endpoints swapped - kf0=(0,YMax), "
                    "kf1=(XMax,0) - and In then measures from the source "
                    "END: (frames - srcIn - dur*speed)/speed (measured: a "
-                   "reversed srcIn-24 dur-48 cut reads back source 71->23).",
+                   "reversed srcIn-24 dur-48 cut reads back source 71->23). "
+                   "A FLAT map (both keyframes at the same Y - a freeze) is "
+                   "the one shape where readback and render DIVERGE: the "
+                   "item reads back frozen (source 96..96) but renders "
+                   "MOVING (48/48 unique frames measured). Do not author "
+                   "freezes as flat timemaps.",
         "recommended": "Author retimes for pre-21 hosts with the keyed "
                        "form (drt.assemble cuts[].speed does this; encoder "
                        "byte-exact against a live 19.1.3.7 harvest). Treat "
