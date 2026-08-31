@@ -102,8 +102,9 @@ Each dispatches on an `action`. Highlights:
   point across xml/edl/otio/drt/drp/aaf/prproj), `convert_to_interchange` (author OTIO/EDL/DRT that Resolve
   imports, from events or a parsed source — **the .prproj→Resolve conform bridge**, no Premiere needed;
   editorial timing/cuts/transitions carry, per-clip effects/color do not; speed/reverse carry on
-  the `otio` and `edl` targets only — `drt` has no per-clip speed field and reports every retime it
-  flattens in `flattened`),
+  the `otio` and `edl` targets only — this flat `drt` target has no per-clip speed field and reports
+  every retime it flattens in `flattened`; for a `.drt` that AUTHORS retimes (plus dissolves,
+  multi-track, audio) use `drt.assemble_from_interchange` instead),
   `turnover_changelist` (moved/retimed/replaced/new/gone + timing silent-lie guards), `conform_manifest`,
   `marker_roundtrip`.
 - **`provenance`** — provenance / audit: `gallery_lineage`, `grade_provenance` ("why is this graded this
