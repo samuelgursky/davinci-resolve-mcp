@@ -47,7 +47,7 @@ def _implemented_actions(fn):
 
 def _destructive_op_tools():
     """Map @_destructive_op("tool") -> set of implemented action strings."""
-    tree = ast.parse(SERVER.read_text())
+    tree = ast.parse(SERVER.read_text(encoding="utf-8"))
     out = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef):

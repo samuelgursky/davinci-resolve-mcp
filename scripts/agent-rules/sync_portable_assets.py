@@ -72,24 +72,24 @@ def run(check_only: bool) -> int:
             problems.append(f"skill '{name}': canonical exists but .claude adapter is missing — it would never load in Claude Code")
             if not check_only and agent_p.exists():
                 claude_p.parent.mkdir(parents=True, exist_ok=True)
-                claude_p.write_text(agent_p.read_text())
+                claude_p.write_text(agent_p.read_text(encoding="utf-8"), encoding="utf-8")
             continue
-        src = claude_p.read_text()
-        if not agent_p.exists() or agent_p.read_text() != src:
+        src = claude_p.read_text(encoding="utf-8")
+        if not agent_p.exists() or agent_p.read_text(encoding="utf-8") != src:
             problems.append(f"skill '{name}': .agents copy {'missing' if not agent_p.exists() else 'differs'}")
             if not check_only:
                 agent_p.parent.mkdir(parents=True, exist_ok=True)
-                agent_p.write_text(src)
+                agent_p.write_text(src, encoding="utf-8")
     for name, claude_p, role_p in role_pairs():
         if not claude_p.exists():
             problems.append(f"role '{name}': .agents/roles exists but .claude/agents is missing — restore the frontmatter file by hand (it carries tools/model pins this script cannot invent)")
             continue
-        body = strip_frontmatter(claude_p.read_text())
-        if not role_p.exists() or role_p.read_text() != body:
+        body = strip_frontmatter(claude_p.read_text(encoding="utf-8"))
+        if not role_p.exists() or role_p.read_text(encoding="utf-8") != body:
             problems.append(f"role '{name}': .agents/roles {'missing' if not role_p.exists() else 'differs from the .claude/agents body'}")
             if not check_only:
                 role_p.parent.mkdir(parents=True, exist_ok=True)
-                role_p.write_text(body)
+                role_p.write_text(body, encoding="utf-8")
     if problems:
         for p in problems:
             print(("DRIFT: " if check_only else "SYNCED: ") + p)

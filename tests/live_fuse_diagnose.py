@@ -68,21 +68,21 @@ def main():
     installed = []
 
     minimal_path = os.path.join(fuses_dir, "McpMinimal.fuse")
-    with open(minimal_path, "w") as f:
+    with open(minimal_path, "w", encoding="utf-8") as f:
         f.write(MINIMAL_FUSE)
     installed.append(("minimal", "McpMinimal", minimal_path))
     print(f"[OK] hand-written minimal: {os.path.basename(minimal_path)}")
 
     gen_source = fuse_templates.color_matrix("McpGenerated", {"ops": ["brightness"]})
     gen_path = os.path.join(fuses_dir, "McpGenerated.fuse")
-    with open(gen_path, "w") as f:
+    with open(gen_path, "w", encoding="utf-8") as f:
         f.write(gen_source)
     installed.append(("generated", "McpGenerated", gen_path))
     print(f"[OK] generated color_matrix: {os.path.basename(gen_path)}")
 
     # Print what's in the generated file for visual inspection
     print("\n=== Generated Fuse first 40 lines ===")
-    with open(gen_path) as f:
+    with open(gen_path, encoding="utf-8") as f:
         for i, line in enumerate(f):
             if i >= 40:
                 break

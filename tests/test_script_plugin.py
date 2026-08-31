@@ -428,7 +428,7 @@ class TestRoundtripFilesystem(unittest.TestCase):
         edit_dir = os.path.join(self.fake_paths['scripts_root'], 'Edit')
         os.makedirs(edit_dir, exist_ok=True)
         foreign = os.path.join(edit_dir, 'Foreign.lua')
-        with open(foreign, 'w') as f:
+        with open(foreign, 'w', encoding="utf-8") as f:
             f.write("-- not authored by MCP\nprint('hi')\n")
 
         try:
@@ -537,7 +537,7 @@ class TestScriptExecution(unittest.TestCase):
         target_dir = os.path.join(self.fake_paths['scripts_root'], category)
         os.makedirs(target_dir, exist_ok=True)
         path = os.path.join(target_dir, f"{name}.{language}")
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding="utf-8") as f:
             f.write(source)
         return path
 
@@ -809,10 +809,10 @@ class TestPythonScriptExitGuard(unittest.TestCase):
     def test_script_directory_is_on_sys_path_for_sibling_imports(self):
         from src.server import _execute_python_script
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, 'helper.py'), 'w') as f:
+            with open(os.path.join(d, 'helper.py'), 'w', encoding="utf-8") as f:
                 f.write("VALUE = 'from-sibling'\n")
             path = os.path.join(d, 'main.py')
-            with open(path, 'w') as f:
+            with open(path, 'w', encoding="utf-8") as f:
                 f.write("import helper\nprint(helper.VALUE)\n")
             with patch('src.server.get_resolve', return_value=None):
                 r = _execute_python_script(path, [], timeout=30)

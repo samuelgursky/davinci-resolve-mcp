@@ -261,7 +261,7 @@ def main() -> None:
     
     # Save results to file
     result_file = f"benchmark_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(result_file, 'w') as f:
+    with open(result_file, 'w', encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     
     logger.info(f"Benchmark results saved to {result_file}")

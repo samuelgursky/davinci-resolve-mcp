@@ -224,7 +224,7 @@ class EscapedPathMatchingTests(unittest.TestCase):
         path = self._write(json.dumps({"args": [needle]}))
         # Round-tripping through json is the point: this is the escaping doctor
         # reads back off disk, not a hand-written approximation of it.
-        self.assertIn("\\\\", path.read_text())
+        self.assertIn("\\\\", path.read_text(encoding="utf-8"))
         ok, detail = doctor.file_contains(path, [needle])
         self.assertTrue(ok, detail)
 
@@ -327,10 +327,10 @@ class ResolveProbeLifecycleTests(unittest.TestCase):
         modules = root / "modules"
         utils.mkdir(parents=True)
         modules.mkdir()
-        (repo / "src" / "__init__.py").write_text("")
-        (utils / "__init__.py").write_text("")
-        (utils / "resolve_connection.py").write_text(helper)
-        (modules / "DaVinciResolveScript.py").write_text(dvr)
+        (repo / "src" / "__init__.py").write_text("", encoding="utf-8")
+        (utils / "__init__.py").write_text("", encoding="utf-8")
+        (utils / "resolve_connection.py").write_text(helper, encoding="utf-8")
+        (modules / "DaVinciResolveScript.py").write_text(dvr, encoding="utf-8")
         return repo, modules
 
     def test_bridge_first_skips_native_fusion_import(self) -> None:

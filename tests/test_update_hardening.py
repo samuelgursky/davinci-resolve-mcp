@@ -128,7 +128,7 @@ class RestartMarker(unittest.TestCase):
     def test_marker_handles_corrupt_json(self) -> None:
         from src.analysis_dashboard import _read_restart_marker
         os.makedirs(os.path.join(self.tmp, "logs"), exist_ok=True)
-        with open(os.path.join(self.tmp, "logs", ".mcp_restart_needed"), "w") as fh:
+        with open(os.path.join(self.tmp, "logs", ".mcp_restart_needed"), "w", encoding="utf-8") as fh:
             fh.write("not json")
         marker = _read_restart_marker(self.tmp)
         # File exists → marker still reads as needed even when corrupt.

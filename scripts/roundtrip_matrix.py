@@ -391,8 +391,8 @@ def _verdict(entry: Dict[str, Any], strategy: str) -> str:
 
 
 def compare(gui_path: Path, headless_path: Path, out: Optional[Path]) -> int:
-    gui = json.loads(gui_path.read_text())
-    headless = json.loads(headless_path.read_text())
+    gui = json.loads(gui_path.read_text(encoding="utf-8"))
+    headless = json.loads(headless_path.read_text(encoding="utf-8"))
     assert gui["metadata"]["headless"] is False, f"{gui_path} is not a GUI run"
     assert headless["metadata"]["headless"] is True, f"{headless_path} is not a headless run"
 

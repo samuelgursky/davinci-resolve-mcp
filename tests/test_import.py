@@ -11,7 +11,7 @@ GRANULAR_DIR = PROJECT_ROOT / "src" / "granular"
 
 
 def _parse(path: Path) -> ast.AST:
-    return ast.parse(path.read_text())
+    return ast.parse(path.read_text(encoding="utf-8"))
 
 
 def _is_mcp_tool_decorator(decorator: ast.expr) -> bool:
@@ -98,7 +98,7 @@ class McpSdkPinTest(unittest.TestCase):
         # lets a fresh install resolve to 2.x. Conditional on server.py's
         # import so the guard retires itself when the server is ported to the
         # 2.x layout, rather than blocking that port.
-        server_src = (PROJECT_ROOT / "src" / "server.py").read_text()
+        server_src = (PROJECT_ROOT / "src" / "server.py").read_text(encoding="utf-8")
         if "from mcp.server.fastmcp import" not in server_src:
             self.skipTest("server.py no longer imports mcp.server.fastmcp")
 
@@ -114,7 +114,7 @@ class McpSdkPinTest(unittest.TestCase):
         ]
         specs += [
             line.strip()
-            for line in (PROJECT_ROOT / "requirements.txt").read_text().splitlines()
+            for line in (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
             if line.strip().startswith("mcp[cli]")
         ]
         self.assertGreaterEqual(
@@ -131,7 +131,7 @@ class McpSdkPinTest(unittest.TestCase):
 
 
 def test_npm_package_metadata():
-    package = json.loads((PROJECT_ROOT / "package.json").read_text())
+    package = json.loads((PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))
     assert package["name"] == "davinci-resolve-mcp"
     # Every VERSION stamp must move together — src/granular/common.py drifted
     # unguarded through at least one release before it was added here.
@@ -153,8 +153,8 @@ def test_package_lock_in_sync():
 
     Regenerate with `npm install --package-lock-only`, and commit the result.
     """
-    package = json.loads((PROJECT_ROOT / "package.json").read_text())
-    lock = json.loads((PROJECT_ROOT / "package-lock.json").read_text())
+    package = json.loads((PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((PROJECT_ROOT / "package-lock.json").read_text(encoding="utf-8"))
     root = lock["packages"][""]
 
     assert lock["version"] == package["version"], (
@@ -186,7 +186,7 @@ def test_compound_tool_count():
 
 
 def test_prompt_registrations():
-    source = (PROJECT_ROOT / "src" / "server.py").read_text()
+    source = (PROJECT_ROOT / "src" / "server.py").read_text(encoding="utf-8")
     # 2 baseline (davinci_resolve_workflow + analyze_media) + 5 F2 workflow prompts
     # + 7 per-domain workflow routers.
     assert source.count("@mcp.prompt") == 14

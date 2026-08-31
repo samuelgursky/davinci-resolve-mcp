@@ -417,7 +417,7 @@ class OperationSurfaceTests(unittest.TestCase):
     def test_media_paths_outside_the_roots_are_not_leaked(self) -> None:
         import os
         inside = os.path.join(self.ROOT, "a.mov")
-        open(inside, "w").close()
+        open(inside, "w", encoding="utf-8").close()
         ops = self._ops(clips=[("inside", inside), ("outside", "/etc/passwd")])
         by_name = {c["name"]: c["file_path"] for c in ops.dispatch("list_media", {})["clips"]}
         # Resolve's own path is returned verbatim (it is what relinking needs);
@@ -2600,7 +2600,7 @@ class BoundMethodKeywordTests(unittest.TestCase):
         import re
 
         root = pathlib.Path(__file__).resolve().parent.parent
-        api_doc = (root / "docs" / "reference" / "resolve_scripting_api.txt").read_text()
+        api_doc = (root / "docs" / "reference" / "resolve_scripting_api.txt").read_text(encoding="utf-8")
         api_methods = set(re.findall(r"^\s{2}([A-Z][A-Za-z0-9]+)\(", api_doc, re.M))
         self.assertGreater(len(api_methods), 100, "API doc parse looks broken")
 

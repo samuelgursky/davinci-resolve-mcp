@@ -266,7 +266,7 @@ def main():
         cleanup(pm, original_project_name)
 
     out_path = os.path.join(os.path.dirname(__file__), "test_resolve20_results.json")
-    with open(out_path, "w") as handle:
+    with open(out_path, "w", encoding="utf-8") as handle:
         json.dump(results, handle, indent=2)
 
     print("\n=== Results ===")

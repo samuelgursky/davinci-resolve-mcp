@@ -31,7 +31,7 @@ class SkillParity(unittest.TestCase):
             with self.subTest(skill=name):
                 self.assertTrue(claude_p.exists(), f"{name}: no .claude adapter — the skill would never load in Claude Code")
                 self.assertTrue(agent_p.exists(), f"{name}: no canonical .agents copy")
-                self.assertEqual(claude_p.read_text(), agent_p.read_text(),
+                self.assertEqual(claude_p.read_text(encoding="utf-8"), agent_p.read_text(encoding="utf-8"),
                                  f"{name}: adapter and canonical differ — run scripts/agent-rules/sync_portable_assets.py")
 
     def test_adapters_keep_rich_trigger_descriptions(self):
@@ -39,7 +39,7 @@ class SkillParity(unittest.TestCase):
         # trimmed description degrades routing on every session.
         for name, claude_p, _ in skill_pairs():
             with self.subTest(skill=name):
-                text = claude_p.read_text()
+                text = claude_p.read_text(encoding="utf-8")
                 m = re.search(r"^description:\s*(.+?)$", text, re.M)
                 self.assertIsNotNone(m, f"{name}: no description frontmatter")
                 self.assertGreater(len(m.group(1)), 60,
@@ -56,7 +56,7 @@ class RoleParity(unittest.TestCase):
             with self.subTest(role=name):
                 self.assertTrue(claude_p.exists(), f"{name}: no .claude/agents file")
                 self.assertTrue(role_p.exists(), f"{name}: no .agents/roles file")
-                self.assertEqual(strip_frontmatter(claude_p.read_text()), role_p.read_text(),
+                self.assertEqual(strip_frontmatter(claude_p.read_text(encoding="utf-8")), role_p.read_text(encoding="utf-8"),
                                  f"{name}: role differs from the agent body — run sync_portable_assets.py")
 
     def test_claude_agents_keep_their_frontmatter_pins(self):
@@ -65,7 +65,7 @@ class RoleParity(unittest.TestCase):
         # .claude file loses it from the repo.
         for name, claude_p, _ in role_pairs():
             with self.subTest(role=name):
-                text = claude_p.read_text()
+                text = claude_p.read_text(encoding="utf-8")
                 self.assertRegex(text, r"^---\n", f"{name}: missing frontmatter")
                 self.assertRegex(text, r"(?m)^tools:", f"{name}: frontmatter lost its tools pin")
                 self.assertRegex(text, r"(?m)^model:\s*\S+", f"{name}: frontmatter lost its model pin")
@@ -82,13 +82,13 @@ class HookShims(unittest.TestCase):
                 shim = REPO / client / "hooks" / hook.name
                 with self.subTest(hook=hook.name, client=client):
                     self.assertTrue(shim.exists(), f"{client}/hooks/{hook.name} shim missing")
-                    self.assertIn(f".agents/hooks/{hook.name}", shim.read_text(),
+                    self.assertIn(f".agents/hooks/{hook.name}", shim.read_text(encoding="utf-8"),
                                   f"{client} shim does not delegate to the canonical hook")
 
     def test_scratch_prefixes_stay_narrow(self):
         # This tuple EXEMPTS paths from the source-media deny. A generic
         # prefix (e.g. "agent-") would make real directories deletable.
-        guard = (REPO / ".agents" / "hooks" / "source_media_guard.py").read_text()
+        guard = (REPO / ".agents" / "hooks" / "source_media_guard.py").read_text(encoding="utf-8")
         m = re.search(r"SCRATCH_COMPONENT_PREFIXES\s*=\s*\(([^)]*)\)", guard)
         self.assertIsNotNone(m)
         prefixes = set(re.findall(r'"([^"]+)"', m.group(1)))

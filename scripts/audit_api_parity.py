@@ -49,7 +49,7 @@ def parse_documented_methods(docs_path: Path) -> Dict[str, Set[str]]:
     """
     classes: Dict[str, Set[str]] = {}
     current_class: str | None = None
-    text = docs_path.read_text()
+    text = docs_path.read_text(encoding="utf-8")
     # Truncate at the first deprecation marker
     for marker in ("\nDeprecated Resolve API Functions",
                    "\nUnsupported Resolve API Functions"):
@@ -86,7 +86,7 @@ def collect_source_text() -> str:
         if "__pycache__" in py_path.parts:
             continue
         try:
-            parts.append(py_path.read_text())
+            parts.append(py_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):
             continue
     return "\n".join(parts)
@@ -100,7 +100,7 @@ def find_broken_api_imports() -> List[Tuple[Path, int, str]]:
         if "__pycache__" in py_path.parts:
             continue
         try:
-            for i, line in enumerate(py_path.read_text().splitlines(), 1):
+            for i, line in enumerate(py_path.read_text(encoding="utf-8").splitlines(), 1):
                 if pattern.search(line):
                     hits.append((py_path.relative_to(REPO_ROOT), i, line.strip()))
         except (OSError, UnicodeDecodeError):
@@ -199,7 +199,7 @@ def find_undocumented_method_wrappers(
         if "__pycache__" in py_path.parts:
             continue
         try:
-            for i, line in enumerate(py_path.read_text().splitlines(), 1):
+            for i, line in enumerate(py_path.read_text(encoding="utf-8").splitlines(), 1):
                 for m in call_pattern.finditer(line):
                     name = m.group(1)
                     if name in documented or name in seen:

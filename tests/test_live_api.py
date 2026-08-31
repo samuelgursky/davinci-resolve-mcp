@@ -307,7 +307,7 @@ def test_api():
     print(f"Pass rate: {ok/(ok+fail)*100:.1f}%")
 
     # Save results
-    with open('tests/live_api_results.json', 'w') as f:
+    with open('tests/live_api_results.json', 'w', encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     print(f"\nDetailed results saved to tests/live_api_results.json")
 

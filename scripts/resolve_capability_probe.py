@@ -231,7 +231,7 @@ def main():
     try:
         if not os.path.isdir(REPORT_DIR):
             os.makedirs(REPORT_DIR)
-        with open(path, "w") as handle:
+        with open(path, "w", encoding="utf-8") as handle:
             json.dump(report, handle, indent=2, sort_keys=True)
         written = path
     except (OSError, IOError) as exc:

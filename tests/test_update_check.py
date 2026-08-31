@@ -68,7 +68,7 @@ class UpdateCheckTests(unittest.TestCase):
             self.assertEqual(cached["status"], "update_available")
             self.assertTrue(cached["cached"])
             self.assertEqual(urlopen.call_count, 1)
-            self.assertEqual(json.loads(state_path.read_text())["status"], "update_available")
+            self.assertEqual(json.loads(state_path.read_text(encoding="utf-8"))["status"], "update_available")
 
     def test_check_for_updates_can_be_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -101,7 +101,7 @@ class UpdateCheckTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "disabled")
             self.assertEqual(result["update_mode"], "never")
-            self.assertEqual(json.loads(state_path.read_text())["update_mode"], "never")
+            self.assertEqual(json.loads(state_path.read_text(encoding="utf-8"))["update_mode"], "never")
 
     def test_update_prompt_decision_respects_ignore_snooze_and_auto(self):
         base = {

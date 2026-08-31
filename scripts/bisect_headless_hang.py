@@ -74,7 +74,7 @@ def step(label, fn, secs=45, pm=None):
 
 
 def dump():
-    Path(sys.argv[1]).write_text(json.dumps(RESULTS, indent=2, default=str))
+    Path(sys.argv[1]).write_text(json.dumps(RESULTS, indent=2, default=str), encoding="utf-8")
 
 
 def main():

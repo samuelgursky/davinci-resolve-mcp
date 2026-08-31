@@ -118,7 +118,7 @@ def main() -> int:
         for row in manifest["clips"]:
             record = row["record"]
             is_talk = "talk" in str(record.get("clip_name"))
-            with open(row["analysis_json"]) as fh:
+            with open(row["analysis_json"], encoding="utf-8") as fh:
                 report = json.load(fh)
             duration = (report.get("cut_analysis") or {}).get("duration_seconds") or 20.0
             visual = {

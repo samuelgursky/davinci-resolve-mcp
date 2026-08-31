@@ -36,7 +36,7 @@ class StateFileTest(unittest.TestCase):
 
     def test_stale_pid_treated_as_gone(self):
         import json
-        with open(T.TRANSPORT_STATE_PATH, "w") as fh:
+        with open(T.TRANSPORT_STATE_PATH, "w", encoding="utf-8") as fh:
             json.dump({"pid": 2 ** 31 - 1, "transport": "sse"}, fh)  # nonexistent pid
         self.assertIsNone(T.read_transport_state())
 

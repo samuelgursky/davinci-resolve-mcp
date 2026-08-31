@@ -498,7 +498,7 @@ def main():
 
 def readme_date():
     try:
-        with open(SCRIPTING_README, "r", errors="replace") as fh:
+        with open(SCRIPTING_README, "r", errors="replace", encoding="utf-8") as fh:
             for line in fh:
                 if line.lower().startswith("last updated"):
                     return line.strip()
@@ -661,7 +661,7 @@ def emit(report, path):
     for status, count in sorted(tally.items()):
         print(f"  {status:20} {count}")
     if path:
-        with open(path, "w") as fh:
+        with open(path, "w", encoding="utf-8") as fh:
             json.dump(report, fh, indent=2, default=str)
         print(f"\n  report written to {path}")
 

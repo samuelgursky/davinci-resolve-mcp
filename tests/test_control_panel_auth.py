@@ -299,7 +299,7 @@ class PrivateStateTest(unittest.TestCase):
                 self.assertEqual(d, tmp)
                 path = os.path.join(d, "x.json")
                 # Pre-existing world-readable file must not survive.
-                with open(path, "w") as fh:
+                with open(path, "w", encoding="utf-8") as fh:
                     fh.write("old")
                 os.chmod(path, 0o644)
                 private_state.write_private_json(path, {"token": "s"})

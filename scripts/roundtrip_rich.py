@@ -385,7 +385,7 @@ def run(mode: str, out: Path) -> int:
 
 
 def compare(gui_path: Path, headless_path: Path, out: Optional[Path]) -> int:
-    gui, headless = json.loads(gui_path.read_text()), json.loads(headless_path.read_text())
+    gui, headless = json.loads(gui_path.read_text(encoding="utf-8")), json.loads(headless_path.read_text(encoding="utf-8"))
     assert gui["metadata"]["headless"] is False and headless["metadata"]["headless"] is True
     lines = ["# Complex-cut round trip: what each format keeps", "",
              "Two video tracks, audio, a per-item transform, clip colours, flags, item and "

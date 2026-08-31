@@ -90,7 +90,7 @@ class TestCubeLut(unittest.TestCase):
 
     def test_one_dimensional_lut_is_refused_by_name(self):
         path = os.path.join(self.dir, "curve.cube")
-        with open(path, "w") as handle:
+        with open(path, "w", encoding="utf-8") as handle:
             handle.write("LUT_1D_SIZE 4\n0 0 0\n0.3 0.3 0.3\n0.6 0.6 0.6\n1 1 1\n")
         with self.assertRaises(cube_lut.CubeLutError) as caught:
             cube_lut.read_cube(path)
@@ -98,7 +98,7 @@ class TestCubeLut(unittest.TestCase):
 
     def test_truncated_table_is_refused(self):
         path = os.path.join(self.dir, "short.cube")
-        with open(path, "w") as handle:
+        with open(path, "w", encoding="utf-8") as handle:
             handle.write("LUT_3D_SIZE 4\n0 0 0\n1 1 1\n")
         with self.assertRaises(cube_lut.CubeLutError):
             cube_lut.read_cube(path)
@@ -288,7 +288,7 @@ class TestPlanAndValidation(unittest.TestCase):
         self.source = os.path.join(self.dir, "source.mov")
         pathlib.Path(self.source).write_bytes(b"x")
         self.lut = os.path.join(self.dir, "look.cube")
-        pathlib.Path(self.lut).write_text("LUT_3D_SIZE 2\n" + "0 0 0\n" * 8)
+        pathlib.Path(self.lut).write_text("LUT_3D_SIZE 2\n" + "0 0 0\n" * 8, encoding="utf-8")
 
     def test_plan_reports_the_budget_and_touches_nothing(self):
         before = sorted(os.listdir(self.dir))
@@ -424,7 +424,7 @@ class TestToolSurface(unittest.TestCase):
         source = os.path.join(directory, "s.mov")
         pathlib.Path(source).write_bytes(b"x")
         lut = os.path.join(directory, "l.cube")
-        pathlib.Path(lut).write_text("LUT_3D_SIZE 2\n" + "0 0 0\n" * 8)
+        pathlib.Path(lut).write_text("LUT_3D_SIZE 2\n" + "0 0 0\n" * 8, encoding="utf-8")
         result = self._call(action="grade_loop",
                             params={"source_path": source, "lut_path": lut, "times": [0.0]})
         self.assertTrue(result["dry_run"])

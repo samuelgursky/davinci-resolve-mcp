@@ -89,7 +89,7 @@ def _listed_actions(fn, consts):
 
 class ActionListDriftTest(unittest.TestCase):
     def test_unknown_action_lists_match_dispatch(self):
-        tree = ast.parse(SERVER.read_text())
+        tree = ast.parse(SERVER.read_text(encoding="utf-8"))
         consts = _module_list_constants(tree)
         problems = []
         checked_names = []
@@ -125,7 +125,7 @@ class ActionListDriftTest(unittest.TestCase):
         because of exactly this — the panel proxied to the helpers directly,
         which masked it. Guard the whole class.
         """
-        tree = ast.parse(SERVER.read_text())
+        tree = ast.parse(SERVER.read_text(encoding="utf-8"))
         problems = []
 
         def membership_set(test):

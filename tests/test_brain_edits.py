@@ -189,14 +189,14 @@ class BrainEdits(unittest.TestCase):
         # live there and contain both entries.
         registry_path = os.path.join(self.base, brain_edits.REGISTRY_FILENAME)
         self.assertTrue(os.path.isfile(registry_path), msg="registry not created")
-        with open(registry_path, "r") as fh:
+        with open(registry_path, "r", encoding="utf-8") as fh:
             payload = json.load(fh)
         project_names = {e["project_name"] for e in payload["entries"]}
         self.assertEqual(project_names, {"project_a", "project_b"})
 
     def test_registry_handles_corrupt_file(self) -> None:
         registry_path = os.path.join(self.base, brain_edits.REGISTRY_FILENAME)
-        with open(registry_path, "w") as fh:
+        with open(registry_path, "w", encoding="utf-8") as fh:
             fh.write("not json {")
         # Should not raise — corrupt registry is replaced fresh.
         brain_edits.log_brain_edit(
@@ -205,7 +205,7 @@ class BrainEdits(unittest.TestCase):
             edit_type="x",
             project_name="project_a",
         )
-        with open(registry_path, "r") as fh:
+        with open(registry_path, "r", encoding="utf-8") as fh:
             payload = json.load(fh)
         self.assertEqual(len(payload["entries"]), 1)
 

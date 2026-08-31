@@ -177,7 +177,7 @@ def main() -> int:
     wanted = set(args.probes)
     probes = [p for p in CATALOGUE if p.name in wanted]
 
-    with args.out.open("a") as handle:
+    with args.out.open("a", encoding="utf-8") as handle:
         try:
             build_fixture(ctx)
         except Exception as exc:
