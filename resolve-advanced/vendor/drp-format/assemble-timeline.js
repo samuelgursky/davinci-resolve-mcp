@@ -33,6 +33,13 @@ const { placeTransition } = require('./place-transition');
 
 async function assembleTimeline(spec = {}) {
   const { timelineName, elements = [], transitions = [], media, templateVersion } = spec;
+  // Timeline start (frames @24). The start timecode lives in ONE place — the
+  // pool timeline clip's MediaExtents [startSeconds, durationSeconds]
+  // double-LE pair (measured: patching it imports with the new start TC and
+  // renders; no other non-cosmetic copy exists). Clips are absolute frames,
+  // so a custom origin just moves the guard.
+  const originFrame = spec.startFrame ?? DEFAULT_START_FRAME;
+  if (!Number.isInteger(originFrame) || originFrame < 0) throw new TypeError('assembleTimeline: spec.startFrame must be a non-negative integer');
   if (!Array.isArray(elements)) throw new TypeError('assembleTimeline: elements must be an array');
   if (!Array.isArray(transitions)) throw new TypeError('assembleTimeline: transitions must be an array');
 
@@ -59,9 +66,9 @@ async function assembleTimeline(spec = {}) {
     const validateCuts = (src, label) => {
       const mediaSpec = src.spec;
       (src.cuts || []).forEach((cut, i) => {
-        if (cut.startFrame < DEFAULT_START_FRAME) {
+        if (cut.startFrame < originFrame) {
           throw new RangeError(
-            `assembleTimeline: ${label}.cuts[${i}].startFrame ${cut.startFrame} is before the timeline origin ${DEFAULT_START_FRAME} — Resolve silently drops it on import`,
+            `assembleTimeline: ${label}.cuts[${i}].startFrame ${cut.startFrame} is before the timeline origin ${originFrame} — Resolve silently drops it on import`,
           );
         }
         if (mediaSpec && Number.isFinite(mediaSpec.frameCount) && Number.isFinite(mediaSpec.fps)) {
@@ -81,7 +88,7 @@ async function assembleTimeline(spec = {}) {
     base = await addMediaClip({
       mediaFile: sources[0].mediaFilePath, spec: sources[0].spec, timelineName, templateVersion,
     });
-    base.startFrame = DEFAULT_START_FRAME;
+    base.startFrame = originFrame;
 
     // Transplant/insert native pool elements BEFORE cutting, so each cut can
     // reference its source's MediaRef.
@@ -185,7 +192,28 @@ async function assembleTimeline(spec = {}) {
     }));
   }
 
-  return { buffer, timelineName: tlName, startFrame, mediaDescriptor: mediaDescriptorState };
+  if (originFrame !== DEFAULT_START_FRAME) {
+    const zipF = await JSZip.loadAsync(buffer);
+    const mpP = 'MediaPool/Master/MpFolder.xml';
+    let mpF = await zipF.file(mpP).async('string');
+    const tlBlocks = mpF.match(/<Sm2MpTimelineClip[\s\S]*?<\/Sm2MpTimelineClip>/g) || [];
+    const tlBlock = tlBlocks.find((b) => b.includes(`<Name>${tlName}</Name>`)) || tlBlocks[0];
+    if (!tlBlock) throw new Error('assembleTimeline: timeline pool clip not found for startFrame patch');
+    const meM = tlBlock.match(/<MediaExtents>([0-9a-fA-F]*)<\/MediaExtents>/);
+    if (!meM) throw new Error('assembleTimeline: timeline pool clip has no MediaExtents to patch');
+    let maxEnd = originFrame;
+    const collect = (arr) => (arr || []).forEach((x) => { const e = (x.startFrame ?? 0) + (x.durationFrames ?? 0); if (e > maxEnd) maxEnd = e; });
+    (Array.isArray(media) ? media : media ? [media] : []).forEach((src) => collect(src.cuts));
+    collect(elements);
+    const me = Buffer.alloc(16);
+    me.writeDoubleLE(originFrame / 24, 0);
+    me.writeDoubleLE((maxEnd - originFrame) / 24, 8);
+    mpF = mpF.replace(tlBlock, tlBlock.replace(meM[0], `<MediaExtents>${me.toString('hex')}</MediaExtents>`));
+    zipF.file(mpP, mpF);
+    buffer = await zipF.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  }
+
+  return { buffer, timelineName: tlName, startFrame: originFrame, mediaDescriptor: mediaDescriptorState };
 }
 
 module.exports = { assembleTimeline };

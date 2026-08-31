@@ -1915,6 +1915,28 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["media-pool", "import", "render", "silent-failure", "readback"],
     },
     {
+        "symbol": "A timeline's start timecode lives in the pool clip's MediaExtents blob (patchable offline)",
+        "object": "Sm2MpTimelineClip.MediaExtents",
+        "reality": "The start timecode of a timeline is stored in exactly "
+                   "one non-cosmetic place in a .drp/.drt: the media pool "
+                   "timeline clip's MediaExtents blob, a 16-byte pair of "
+                   "LE doubles [startSeconds, durationSeconds] (measured: "
+                   "02:03:04:05 @24 appears only as 7384.2083 there and in "
+                   "a UI-state blob). Patching startSeconds offline and "
+                   "importing yields a timeline at the new start timecode "
+                   "with clips at their absolute frames, and it renders.",
+        "recommended": "To author a non-default start TC offline, patch "
+                       "MediaExtents (drt.assemble spec.startFrame does "
+                       "this) and keep clip Start frames >= the new origin "
+                       "- clips before it are silently dropped on import. "
+                       "For conform, assemble_from_interchange "
+                       "preserveStartTimecode=true anchors at the "
+                       "turnover's real first record frame instead of "
+                       "01:00:00:00.",
+        "tags": ["timecode", "drt", "import"],
+        "submit": "missing",
+    },
+    {
         "symbol": "Audio tracks cannot be grown in an imported timeline; Fairlight strips live in the pool Sm2Sequence.FieldsBlob",
         "object": "Sm2TiTrack (audio) / FLStudioModelBA",
         "reality": "An audio track added to a SeqContainer by cloning "

@@ -41,12 +41,14 @@ const assembleFromInterchangeSchema = z.object({
   outputPath: z.string().describe('Where the importable .drt is written'),
   targetAppVersion: z.union([z.string(), z.number()]).optional()
     .describe("Host Resolve version, e.g. '19.1' for pre-21"),
+  preserveStartTimecode: z.boolean().optional()
+    .describe('Keep the interchange\'s ABSOLUTE record start: the assembled timeline starts at the turnover\'s real first record frame instead of 01:00:00:00 (start-TC patch render-verified on 19). AAF conforms should pass true.'),
 });
 const assembleSchema = z.object({
   spec: z
     .object({})
     .passthrough()
-    .describe("assembleTimeline spec: { timelineName?, media?: {mediaFilePath, spec:{width,height,frameCount,fps}, cuts:[{startFrame,durationFrames,srcIn?,track? (1-based video track; >1 = video-only, render-verified stacking),speed?/reverse? (constant retime, e.g. 0.5, forward or backwards; video-only; readback+render-verified on 19),audioOnly?+track? (explicit AUDIO placement on audio track 1-8; presence suppresses the A1 mirror; render-verified on 19)}]} | [same, ...] (multi-source needs media_pool.capture_media_template run once per file), transitions?: [{track, atFrame, durationFrames?, trackType? ('video' dissolve | 'audio' cross-fade, both render-verified on 19)}], elements?: [{type:'title'|'generator', track, startFrame, durationFrames?, text?, generatorName? ('Solid Color'|'SMPTE Color Bar'|'Grey Scale' render-verified on 19), ...}] }. startFrame is timeline-absolute (origin 86400)."),
+    .describe("assembleTimeline spec: { timelineName?, startFrame? (timeline start frame @24, default 86400=01:00:00:00 — sets the start TIMECODE, render-verified on 19), media?: {mediaFilePath, spec:{width,height,frameCount,fps}, cuts:[{startFrame,durationFrames,srcIn?,track? (1-based video track; >1 = video-only, render-verified stacking),speed?/reverse? (constant retime, e.g. 0.5, forward or backwards; video-only; readback+render-verified on 19),audioOnly?+track? (explicit AUDIO placement on audio track 1-8; presence suppresses the A1 mirror; render-verified on 19)}]} | [same, ...] (multi-source needs media_pool.capture_media_template run once per file), transitions?: [{track, atFrame, durationFrames?, trackType? ('video' dissolve | 'audio' cross-fade, both render-verified on 19)}], elements?: [{type:'title'|'generator', track, startFrame, durationFrames?, text?, generatorName? ('Solid Color'|'SMPTE Color Bar'|'Grey Scale' render-verified on 19), ...}] }. startFrame is timeline-absolute (origin 86400)."),
   outputPath: z.string().describe('Absolute path where the importable .drt will be written'),
   targetAppVersion: z
     .union([z.string(), z.number()])
@@ -220,6 +222,7 @@ export const drtTool = {
       if (!events || !events.length) return { error: 'no events parsed from the interchange input' };
       const { spec, report } = eventsToAssembleSpec(events, {
         sourceMap: p.sourceMap, timelineName: p.timelineName,
+        preserveStartTimecode: p.preserveStartTimecode,
       });
       if (p.targetAppVersion !== undefined) {
         spec.templateVersion = parseFloat(p.targetAppVersion) >= 21 ? 21 : 19;

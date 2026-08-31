@@ -341,3 +341,26 @@ test('an audio dissolve without an abutting predecessor drops with trackType aud
   assert.equal(report.droppedTransitions[0].trackType, 'audio');
   assert.match(report.droppedTransitions[0].reason, /no abutting predecessor/);
 });
+
+// Start-timecode fidelity: preserveStartTimecode anchors at the turnover's
+// real record start (the start TC lives in the pool timeline clip's
+// MediaExtents [startSec, durSec] LE-double pair — patched, imported, and
+// render-verified on 19.1.3.7: a 00:59:52:00 EDL comes back at 00:59:52:00).
+test('preserveStartTimecode keeps absolute record positions and sets spec.startFrame', () => {
+  const edl = [
+    'TITLE: STC',
+    'FCM: NON-DROP FRAME',
+    '001  TAPE1 V     C        00:00:01:00 00:00:03:00 00:59:52:00 00:59:54:00',
+    '002  TAPE2 V     C        00:00:01:00 00:00:03:00 00:59:54:00 00:59:56:00',
+    '',
+  ].join('\n');
+  const events = parseEDL(edl, { fps: 24 });
+  const preserved = eventsToAssembleSpec(events, { sourceMap: MAP, preserveStartTimecode: true });
+  assert.equal(preserved.spec.startFrame, 86208);
+  assert.equal(preserved.report.origin, 86208);
+  assert.equal(preserved.spec.media.find((m) => m.mediaFilePath === '/m/a.mp4').cuts[0].startFrame, 86208);
+  const anchored = eventsToAssembleSpec(events, { sourceMap: MAP });
+  assert.equal(anchored.spec.startFrame, undefined);
+  assert.equal(anchored.report.origin, 86400);
+  assert.equal(anchored.spec.media.find((m) => m.mediaFilePath === '/m/a.mp4').cuts[0].startFrame, 86400);
+});

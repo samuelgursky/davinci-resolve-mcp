@@ -220,14 +220,14 @@ export function eventsToOTIO(events, opts = {}) {
  * @returns {{spec: object, report: object}}
  */
 export function eventsToAssembleSpec(events, opts = {}) {
-  const { sourceMap, timelineName } = opts;
+  const { sourceMap, timelineName, preserveStartTimecode = false } = opts;
   if (!Array.isArray(events) || !events.length) {
     throw new TypeError('eventsToAssembleSpec: events must be a non-empty array');
   }
   if (!sourceMap || typeof sourceMap !== 'object') {
     throw new TypeError('eventsToAssembleSpec: sourceMap {reel: {mediaFilePath, spec}} is required');
   }
-  const ORIGIN = 86400;
+  const DEFAULT_ORIGIN = 86400;
   const isAudio = (t) => /^A\d*$/.test(String(t || ''));
   const vids = events.filter((e) => !isAudio(e.track) && e.recIn != null && e.recOut != null);
   const auds = events.filter((e) => isAudio(e.track) && e.recIn != null && e.recOut != null);
@@ -252,7 +252,15 @@ export function eventsToAssembleSpec(events, opts = {}) {
   const perSource = new Map();
   const placements = [];
 
-  const minRec = Math.min(...vids.map((e) => toTl(e.recIn, e.fps)));
+  // Default: anchor the earliest event at the template origin (86400).
+  // preserveStartTimecode keeps the interchange's ABSOLUTE record positions —
+  // the assembled timeline starts at the turnover's real first record frame
+  // (MediaExtents start-TC patch, measured: imports with the new start TC and
+  // renders). AAF conforms need this: build at THAT start, not 01:00:00:00.
+  const minRecRaw = Math.min(...vids.map((e) => toTl(e.recIn, e.fps)));
+  const minRec = preserveStartTimecode ? 0 : minRecRaw;
+  const ORIGIN = preserveStartTimecode ? 0 : DEFAULT_ORIGIN;
+  const startFrame = preserveStartTimecode ? minRecRaw : DEFAULT_ORIGIN;
   for (const e of vids) {
     const recIn = ORIGIN + (toTl(e.recIn, e.fps) - minRec);
     const recOut = ORIGIN + (toTl(e.recOut, e.fps) - minRec);
@@ -419,7 +427,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
   }
 
   return {
-    spec: { timelineName, media, ...(transitions.length ? { transitions } : {}) },
+    spec: { timelineName, media, ...(preserveStartTimecode ? { startFrame } : {}), ...(transitions.length ? { transitions } : {}) },
     report: {
       videoEvents: vids.length,
       sources: media.length,
@@ -431,7 +439,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
       authoredRetimes,
       authoredTransitions: transitions,
       droppedTransitions,
-      origin: ORIGIN,
+      origin: startFrame,
     },
   };
 }

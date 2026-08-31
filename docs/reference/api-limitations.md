@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 33 missing capabilities, 44 bugs / unreliable behaviors.
+**Totals:** 34 missing capabilities, 44 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -213,6 +213,13 @@ equivalent, blocking full automation.
 - **Behavior:** Returns None, so a caller cannot tell whether it took effect, and there is no Enable... counterpart anywhere in the shipped 21.0.2 scripting README — the only documented way back is restarting Resolve. The scope is the whole session, so a script disables background tasks for every project open in that instance, not just its own. Present in dir(resolve) on Studio 21.0.2.4; deliberately not executed during validation for exactly that reason.
 - **Workaround / current handling:** Treat as irreversible within a session. server returns _ok() unconditionally because there is nothing to check.
 - **Tags:** resolve-21, unreliable-return, irreversible, session-wide
+
+### A timeline's start timecode lives in the pool clip's MediaExtents blob (patchable offline)
+
+- **Object:** `Sm2MpTimelineClip.MediaExtents`
+- **Behavior:** The start timecode of a timeline is stored in exactly one non-cosmetic place in a .drp/.drt: the media pool timeline clip's MediaExtents blob, a 16-byte pair of LE doubles [startSeconds, durationSeconds] (measured: 02:03:04:05 @24 appears only as 7384.2083 there and in a UI-state blob). Patching startSeconds offline and importing yields a timeline at the new start timecode with clips at their absolute frames, and it renders.
+- **Workaround / current handling:** To author a non-default start TC offline, patch MediaExtents (drt.assemble spec.startFrame does this) and keep clip Start frames >= the new origin - clips before it are silently dropped on import. For conform, assemble_from_interchange preserveStartTimecode=true anchors at the turnover's real first record frame instead of 01:00:00:00.
+- **Tags:** timecode, drt, import
 
 ### MediaPool.ImportMedia (current-folder destination only)
 

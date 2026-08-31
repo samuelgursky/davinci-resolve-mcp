@@ -47,6 +47,7 @@ window. `render.verify_output` covers the container-level checks.
 | Constant retimes, reverse | `cuts[].reverse` | v2.114 |
 | Audio placements, A1–A8 | `cuts[].audioOnly + track` | v2.115 |
 | Built-in generators | `elements: [{type:'generator', generatorName}]` | v2.110 |
+| Custom start timecode | `spec.startFrame` / `preserveStartTimecode` | v2.117 |
 | Fusion titles | `elements: [{type:'title', text}]` — **21-gen hosts only** | v2.108 |
 
 `assemble_from_interchange` drives the same engine from an EDL / OTIO /

@@ -111,3 +111,28 @@ test('generator kind selection lands in the seq XML; title-only warning gate', a
   assert.match(res2.elementsWarning || '', /byte|cache|set_title_text/i, 'pre-21 title spec must warn');
   await fs.unlink(out2);
 });
+
+test('spec.startFrame patches MediaExtents and moves the origin guard', async () => {
+  const out = tmp('.drt');
+  const res = await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    spec: { timelineName: 'STC', startFrame: 86208, media: {
+      mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+      cuts: [{ startFrame: 86208, durationFrames: 48, srcIn: 0 }],
+    } },
+  }});
+  assert.equal(res.startFrame, 86208);
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const mp = await zip.file('MediaPool/Master/MpFolder.xml').async('string');
+  const tl = mp.match(/<Sm2MpTimelineClip[\s\S]*?<\/Sm2MpTimelineClip>/g).find((b) => b.includes('<Name>STC</Name>'));
+  const me = Buffer.from(tl.match(/<MediaExtents>([0-9a-fA-F]*)<\/MediaExtents>/)[1], 'hex');
+  assert.equal(me.readDoubleLE(0), 86208 / 24);
+  assert.equal(me.readDoubleLE(8), 48 / 24);
+  await fs.unlink(out);
+  // a cut before the custom origin still refuses
+  await assert.rejects(drtTool.handler({ action: 'assemble', args: {
+    outputPath: tmp('.drt'),
+    spec: { startFrame: 86208, media: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+      cuts: [{ startFrame: 86000, durationFrames: 24 }] } },
+  }}), /before the timeline origin 86208/);
+});
