@@ -1299,3 +1299,31 @@ print(json.dumps(state))
 `);
   assert.deepEqual(out.effectsWithoutEvents, { SubCap: 1 }, 'the innermost cause, once');
 });
+
+// Regression: assemble_from_interchange format 'aaf' used to fall through to
+// the sync parseInterchange, which THROWS for aaf — the tool-layer AAF route
+// never worked before v2.126.0 (every earlier proof called parseAAF directly).
+test('assemble_from_interchange aaf routes through the async parser (stubbed)', async () => {
+  // Single-source events (the multi-source path needs captured templates,
+  // which is not what this regression is about).
+  const ONE_SEQ = {
+    sequences: [{ id: 'urn:mob:9', name: 'ONE', eventCount: 2, events: [
+      { index: 1, track: 'V', source: 'A001', srcIn: 0, srcOut: 48, recIn: 0, recOut: 48, speed: 100, reverse: false, transition: null, fps: 24 },
+      { index: 2, track: 'V', source: 'A001', srcIn: 96, srcOut: 120, recIn: 48, recOut: 72, speed: 100, reverse: false, transition: null, fps: 24 },
+    ] }],
+  };
+  const stubOne = writeStub('py_one.sh', `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify(ONE_SEQ)}\nJSON\n`);
+  process.env.AAF_PROBE_PYTHON = stubOne;
+  const { drtTool } = await import('../server/lib.mjs');
+  const out = path.join(TMP, 'aaf-route.drt');
+  const r = await drtTool.handler({ action: 'assemble_from_interchange', args: {
+    format: 'aaf', path: FAKE_AAF, outputPath: out, targetAppVersion: '19.1.3',
+    sourceMap: {
+      A001: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
+    },
+  }});
+  assert.ok(!r.error, r.error);
+  assert.equal(r.conform.videoEvents, 2);
+  assert.ok(fs.existsSync(out));
+  fs.rmSync(out, { force: true });
+});

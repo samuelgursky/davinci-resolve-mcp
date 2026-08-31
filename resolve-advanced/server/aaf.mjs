@@ -18,7 +18,13 @@ const PROBE = fileURLToPath(new URL('./aaf_probe.py', import.meta.url));
 
 /** python interpreter — overridable for environments/tests (must have `aaf2` importable). */
 function pythonCmd() {
-  return process.env.AAF_PROBE_PYTHON || process.env.PYTHON || 'python3';
+  if (process.env.AAF_PROBE_PYTHON) return process.env.AAF_PROBE_PYTHON;
+  if (process.env.PYTHON) return process.env.PYTHON;
+  // The repo venv carries pyaaf2; a bare python3 usually does not. Prefer it
+  // when present so the tool path works without env plumbing.
+  const venvPy = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'venv', 'bin', 'python');
+  if (existsSync(venvPy)) return venvPy;
+  return 'python3';
 }
 
 const REMEDIATION =

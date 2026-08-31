@@ -213,8 +213,13 @@ export const drtTool = {
       let content = p.content;
       let events;
       if (p.format === 'aaf') {
+        // BUG FIX: this branch used to fall through to the sync
+        // parseInterchange, which THROWS for aaf ("parse it via the async
+        // AAF path") — the tool-layer AAF route never worked until now.
         if (!p.path) return { error: 'aaf input requires path' };
-        content = p.path;
+        const { parseAAF } = await import('../aaf.mjs');
+        const parsed = await parseAAF(p.path);
+        events = Array.isArray(parsed) ? parsed : parsed.events;
       } else if (p.format === 'prproj') {
         // Premiere: offline gunzip+graph read (no Premiere, no Resolve import
         // path). parsePrproj flattens EVERY sequence's events; a multi-sequence
