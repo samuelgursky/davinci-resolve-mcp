@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.119.0"
+VERSION = "2.120.0"
 
 import base64
 import os
@@ -13879,6 +13879,21 @@ def _capture_media_template(r, pm, p: Dict[str, Any]) -> Dict[str, Any]:
         media_ref_m = re.search(r"<MediaRef>([0-9a-f-]{36})</MediaRef>", seq_xml)
         if end < 0 or not media_ref_m:
             return _err("could not isolate the media element / MediaRef from the capture")
+        # Embedded source timecode: Resolve's own timeline clip stores it as
+        # <MediaStartTime> SECONDS. A transplant clone keeping the donor's 0
+        # renders "Full resolution media not found at <TC>" (measured on a
+        # 01:00:00:00-TC source). Carry it so assemble can set it per cut.
+        mst_m = re.search(r"<MediaStartTime>([-0-9.eE]+)</MediaStartTime>", seq_xml)
+        media_start_time = float(mst_m.group(1)) if mst_m else 0.0
+        # Harvest the NATIVE timeline clip elements too: for multi-source
+        # authoring, cloning the template donor leaves the donor's identity
+        # FieldsBlob on other sources' cuts — readback-fine, but the render
+        # fails ("Full resolution media not found") or, once Name/path are
+        # corrected, the whole import aborts on the inconsistency (measured,
+        # E31). Cloning the source's own captured clip carries every native
+        # field at once.
+        vclip_m = re.search(r"<Element>\s*<Sm2TiVideoClip[\s\S]*?</Sm2TiVideoClip>\s*</Element>", seq_xml)
+        aclip_m = re.search(r"<Element>\s*<Sm2TiAudioClip[\s\S]*?</Sm2TiAudioClip>\s*</Element>", seq_xml)
         pool_element = mp_xml[start:end]
         media_ref = media_ref_m.group(1)
         if media_ref not in pool_element:
@@ -13892,7 +13907,10 @@ def _capture_media_template(r, pm, p: Dict[str, Any]) -> Dict[str, Any]:
             "mtimeMs": stat.st_mtime * 1000.0,
             "sizeBytes": stat.st_size,
             "mediaRef": media_ref,
+            "mediaStartTime": media_start_time,
             "poolElement": pool_element,
+            "videoClipElement": vclip_m.group(0) if vclip_m else None,
+            "audioClipElement": aclip_m.group(0) if aclip_m else None,
         }
         with open(cache_path, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)

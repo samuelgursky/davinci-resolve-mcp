@@ -73,8 +73,19 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
   let xml = seqXml;
   const clipDbIds = [];
 
-  const cloneCut = (donor, cut) => {
-    let c = freshDbIds(donor);
+  const cloneCut = (donor, cut, kind) => {
+    // Prefer the source's own CAPTURED clip of the matching kind — the A1
+    // mirror clones AUDIO even for plain video cuts, so the donor must be
+    // chosen per track type, never per cut flavor (a video element in an
+    // audio track aborts the whole import, measured E31e).
+    // NATIVE-DONOR PATH (live verification PENDING — a stuck Resolve modal
+    // ended the E31 session before any import of this path could be
+    // measured cleanly; only caches that carry videoClipElement /
+    // audioClipElement reach it, so ordinary captures keep the proven donor
+    // path). Donor clones from splitClipElements come <Element>-wrapped and
+    // Items concatenation depends on the wrapper.
+    const native = kind === 'audio' ? cut.donorClipAudio : cut.donorClipVideo;
+    let c = freshDbIds(native ? native.trim() : donor);
     c = setClipStart(c, cut.startFrame);
     c = setClipDuration(c, cut.durationFrames);
     c = setClipIn(c, cut.srcIn ?? 0);
@@ -83,13 +94,13 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
       // element instead of the donor's.
       c = c.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/, `<MediaRef>${cut.mediaRef}</MediaRef>`);
     }
-    if (cut.audioOnly && cut.srcMeta) {
-      // An audio-only clone must carry ITS OWN source identity — a live
-      // A2-placed clip (harvested via AppendToTimeline mediaType:2) differs
-      // from a donor clone in Name, MediaFilePath, MediaFrameRate (the
-      // template donor's was 29.97!), the identity MediaTimemapBA extent,
-      // and FieldsBlob. A clone keeping donor values imports and reads back
-      // fine but renders SILENT off A1.
+    if (cut.srcMeta && !native && cut.audioOnly) {
+      // Every clone must carry ITS OWN source identity — a donor clone
+      // keeping stale Name/MediaFilePath/MediaFrameRate (the template
+      // donor's was 29.97!) or the donor's identity-timemap extent imports
+      // and reads back fine but fails at render: audio renders SILENT off
+      // A1 (measured, E15), and a TC-bearing video source fails the whole
+      // render with "Full resolution media not found" (measured, E31).
       const { name, mediaFilePath, fps, frameCount } = cut.srcMeta;
       c = c.replace(/<Name>[\s\S]*?<\/Name>/, `<Name>${name}</Name>`);
       c = c.replace(/<MediaFilePath>[\s\S]*?<\/MediaFilePath>/, `<MediaFilePath>${mediaFilePath}</MediaFilePath>`);
@@ -100,8 +111,17 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
       idm.writeUInt8(0x02, 0);
       idm.writeDoubleBE((frameCount - 1) / fps, 1);
       c = c.replace(/<MediaTimemapBA>[0-9a-fA-F]*<\/MediaTimemapBA>/, `<MediaTimemapBA>${idm.toString('hex')}</MediaTimemapBA>`);
-      // Generic audio-clip FieldsBlob, verbatim from the live A2 harvest.
-      c = c.replace(/<FieldsBlob>[0-9a-fA-F]*<\/FieldsBlob>/, '<FieldsBlob>0000000200000005800a022001</FieldsBlob>');
+      if (cut.audioOnly) {
+        // Generic audio-clip FieldsBlob, verbatim from the live A2 harvest.
+        // (Video clones keep their blob — repointClipBlobsInXml owns it.)
+        c = c.replace(/<FieldsBlob>[0-9a-fA-F]*<\/FieldsBlob>/, '<FieldsBlob>0000000200000005800a022001</FieldsBlob>');
+      }
+    }
+    if (cut.mediaStartTime !== undefined && cut.mediaStartTime !== null && !native) {
+      // Embedded source timecode base, in SECONDS (harvested with the media
+      // template). Donor default 0 makes Resolve seek the wrong TC and fail
+      // the render with "Full resolution media not found at <TC>".
+      c = c.replace(/<MediaStartTime>[\s\S]*?<\/MediaStartTime>/, `<MediaStartTime>${cut.mediaStartTime}</MediaStartTime>`);
     }
     if (cut.timemap) {
       // Constant-speed retime: swap the identity MediaTimemapBA for the
@@ -140,13 +160,13 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
         for (let t = 1; t <= tracks.length; t += 1) {
           const mine = audioCuts.filter((cut) => (cut.track ?? 1) === t);
           if (t > 1 && !mine.length) continue;
-          tracks[t - 1] = setItemsInner(tracks[t - 1], mine.map((cut) => cloneCut(donor, cut)).join(''));
+          tracks[t - 1] = setItemsInner(tracks[t - 1], mine.map((cut) => cloneCut(donor, cut, 'audio')).join(''));
         }
       } else {
         // A1 mirrors track-1 video cuts only; higher video tracks stay
         // video-only, and so do RETIMED cuts (the audio clone would need its
         // own timemap and pitch handling — video-only is stated, not silent).
-        const a1 = cuts.filter((cut) => (cut.track ?? 1) === 1 && !cut.timemap).map((cut) => cloneCut(donor, cut));
+        const a1 = cuts.filter((cut) => (cut.track ?? 1) === 1 && !cut.timemap).map((cut) => cloneCut(donor, cut, 'audio'));
         tracks[0] = setItemsInner(tracks[0], a1.join(''));
       }
       xml = replaceTrackVec(xml, trackType, match, tracks);
@@ -159,7 +179,7 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     for (let t = 1; t <= tracks.length; t += 1) {
       const mine = vCuts.filter((cut) => (cut.track ?? 1) === t);
       if (t > 1 && !mine.length) continue; // grown-empty or untouched track keeps its items
-      const clones = mine.map((cut) => cloneCut(donor, cut));
+      const clones = mine.map((cut) => cloneCut(donor, cut, 'video'));
       for (const c of clones) clipDbIds.push(clipDbId(c));
       tracks[t - 1] = setItemsInner(tracks[t - 1], clones.join(''));
     }

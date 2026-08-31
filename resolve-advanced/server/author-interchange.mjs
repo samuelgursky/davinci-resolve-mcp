@@ -231,9 +231,22 @@ export function eventsToAssembleSpec(events, opts = {}) {
   const isAudio = (t) => /^A\d*$/.test(String(t || ''));
   const isMarker = (t) => t === 'MARKER';
   const vids = events.filter((e) => !isAudio(e.track) && !isMarker(e.track) && e.recIn != null && e.recOut != null);
-  const auds = events.filter((e) => isAudio(e.track) && e.recIn != null && e.recOut != null);
+  // AAF exports one event per audio CHANNEL — a stereo/dual-mono clip arrives
+  // as identical A-track legs (measured on a Resolve 19 rich export: every
+  // audio event duplicated). Merge exact duplicates (same track/source/range)
+  // so they place once instead of refusing as a same-track overlap.
+  const audsRaw = events.filter((e) => isAudio(e.track) && e.recIn != null && e.recOut != null);
+  const seenAud = new Set();
+  const auds = [];
+  let audioChannelLegsMerged = 0;
+  for (const e of audsRaw) {
+    const k = `${e.track}|${e.source}|${e.recIn}|${e.recOut}|${e.srcIn}`;
+    if (seenAud.has(k)) { audioChannelLegsMerged += 1; continue; }
+    seenAud.add(k);
+    auds.push(e);
+  }
   const markerEvents = events.filter((e) => isMarker(e.track) && e.recIn != null);
-  const audioSkipped = events.length - vids.length - auds.length - markerEvents.length;
+  const audioSkipped = events.length - vids.length - audsRaw.length - markerEvents.length;
   if (!vids.length) throw new Error('eventsToAssembleSpec: no video events with record ranges');
 
   const unmapped = [...new Set([...vids, ...auds].map((e) => e.source).filter((srcName) => !sourceMap[srcName]))];
@@ -453,6 +466,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
       sources: media.length,
       audioEventsSkipped: audioSkipped,
       authoredMarkers: markers.length,
+      audioChannelLegsMerged,
       authoredAudioEvents: audioPlacements.length,
       audioRetimesSkipped,
       upperTrackCutsVideoOnly: placements.filter((pl) => pl.track > 1).length,

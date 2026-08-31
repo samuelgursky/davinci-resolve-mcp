@@ -401,3 +401,18 @@ test('OTIO clip markers land at their record position', () => {
   // clip srcIn 24 at record 0; marker at source 36 → record 12 → frame 86412
   assert.deepEqual(spec.markers, [{ frame: 86412, color: 'Green', name: 'beat' }]);
 });
+
+// AAF exports duplicate every audio clip per channel; identical A-track legs
+// merge instead of refusing as a same-track overlap (measured on a Resolve 19
+// rich AAF export: every audio event arrived twice).
+test('identical audio channel legs merge instead of overlapping', () => {
+  const base = { track: 'A', srcIn: 0, srcOut: 48, fps: 24, recIn: 0, recOut: 48, source: 'TAPE1' };
+  const vid = { track: 'V', srcIn: 0, srcOut: 48, fps: 24, recIn: 0, recOut: 48, source: 'TAPE1', index: 1 };
+  const events = [vid, { ...base, index: 2 }, { ...base, index: 3 }];
+  const { spec, report } = eventsToAssembleSpec(events, { sourceMap: MAP });
+  assert.equal(report.audioChannelLegsMerged, 1);
+  assert.equal(report.authoredAudioEvents, 1);
+  assert.equal(report.audioEventsSkipped, 0);
+  const cuts = spec.media[0].cuts.filter((c) => c.audioOnly);
+  assert.equal(cuts.length, 1);
+});
