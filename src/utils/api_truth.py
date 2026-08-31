@@ -1937,6 +1937,55 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "missing",
     },
     {
+        "symbol": "Timeline import MERGES pool media by a coarse identity - similar files can silently cross-link",
+        "object": "ImportTimelineFromFile / media pool",
+        "reality": "When a .drt import lands in a project that already "
+                   "holds a media entry whose pool identity blob matches "
+                   "the incoming one, Resolve MERGES them and every clip "
+                   "relinks to the EXISTING media - silently. The identity "
+                   "is coarse: two different files (5.6MB vs 93KB, "
+                   "different names, mtimes 1s apart) had identity blobs "
+                   "byte-identical except internal uuids, and the second "
+                   "file's clips all played the first file's picture "
+                   "(readback showed the wrong clip NAME; measured E33/E34 "
+                   "on 19.1.3.7). Importing the same archive into a FRESH "
+                   "project materialized both files correctly - the merge "
+                   "only bites across imports.",
+        "recommended": "After importing an authored timeline into a "
+                       "non-empty project, verify per-item file paths (or "
+                       "render probe frames) before trusting the conform - "
+                       "linked==total cannot see a cross-link. Files "
+                       "generated in the same second are the risk class; "
+                       "distinct mtimes distinguish them.",
+        "tags": ["import", "media-pool", "silent-failure", "drt"],
+        "submit": "bug",
+    },
+    {
+        "symbol": "Embedded source timecode lives in the clip's MediaStartTime (SECONDS); AAF duplicates audio per channel",
+        "object": "Sm2TiVideoClip.MediaStartTime / AAF export",
+        "reality": "Two conform-ingest measurements (2026-08-30, rich "
+                   "Resolve 19 AAF export + its sources). (1) A source with "
+                   "embedded timecode is referenced by the timeline clip's "
+                   "<MediaStartTime> in SECONDS (01:00:00:00 -> 3600); a "
+                   "transplant clone keeping the template donor's 0 imports "
+                   "and reads back fine but the render fails with 'Full "
+                   "resolution media not found at 01:00:00:00'. (2) The AAF "
+                   "export carries one event per audio CHANNEL: every "
+                   "A-track event of a dual-mono clip arrives twice with "
+                   "identical ranges.",
+        "recommended": "capture_media_template harvests mediaStartTime and "
+                       "the native clip elements; drt.assemble clones the "
+                       "source's own captured clip per cut (render-verified: "
+                       "the TC-bearing source plays picture and audio, and "
+                       "the full AAF route renders frame-accurately). "
+                       "Re-capture templates for TC-bearing media. The "
+                       "assemble bridge merges identical audio channel legs "
+                       "(report.audioChannelLegsMerged) instead of refusing "
+                       "them as a same-track overlap.",
+        "tags": ["timecode", "aaf", "audio", "drt", "silent-failure"],
+        "submit": "missing",
+    },
+    {
         "symbol": "Audio tracks cannot be grown in an imported timeline; Fairlight strips live in the pool Sm2Sequence.FieldsBlob",
         "object": "Sm2TiTrack (audio) / FLStudioModelBA",
         "reality": "An audio track added to a SeqContainer by cloning "

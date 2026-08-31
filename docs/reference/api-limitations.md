@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 34 missing capabilities, 44 bugs / unreliable behaviors.
+**Totals:** 35 missing capabilities, 45 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -220,6 +220,13 @@ equivalent, blocking full automation.
 - **Behavior:** The start timecode of a timeline is stored in exactly one non-cosmetic place in a .drp/.drt: the media pool timeline clip's MediaExtents blob, a 16-byte pair of LE doubles [startSeconds, durationSeconds] (measured: 02:03:04:05 @24 appears only as 7384.2083 there and in a UI-state blob). Patching startSeconds offline and importing yields a timeline at the new start timecode with clips at their absolute frames, and it renders.
 - **Workaround / current handling:** To author a non-default start TC offline, patch MediaExtents (drt.assemble spec.startFrame does this) and keep clip Start frames >= the new origin - clips before it are silently dropped on import. For conform, assemble_from_interchange preserveStartTimecode=true anchors at the turnover's real first record frame instead of 01:00:00:00.
 - **Tags:** timecode, drt, import
+
+### Embedded source timecode lives in the clip's MediaStartTime (SECONDS); AAF duplicates audio per channel
+
+- **Object:** `Sm2TiVideoClip.MediaStartTime / AAF export`
+- **Behavior:** Two conform-ingest measurements (2026-08-30, rich Resolve 19 AAF export + its sources). (1) A source with embedded timecode is referenced by the timeline clip's <MediaStartTime> in SECONDS (01:00:00:00 -> 3600); a transplant clone keeping the template donor's 0 imports and reads back fine but the render fails with 'Full resolution media not found at 01:00:00:00'. (2) The AAF export carries one event per audio CHANNEL: every A-track event of a dual-mono clip arrives twice with identical ranges.
+- **Workaround / current handling:** capture_media_template harvests mediaStartTime and the native clip elements; drt.assemble clones the source's own captured clip per cut (render-verified: the TC-bearing source plays picture and audio, and the full AAF route renders frame-accurately). Re-capture templates for TC-bearing media. The assemble bridge merges identical audio channel legs (report.audioChannelLegsMerged) instead of refusing them as a same-track overlap.
+- **Tags:** timecode, aaf, audio, drt, silent-failure
 
 ### MediaPool.ImportMedia (current-folder destination only)
 
@@ -532,6 +539,13 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Rewrite the <sequence><name> inside the file to the intended name before importing — timeline.import_timeline_checked does this automatically for FCP7 XML and errors when a non-rewritable format still returns an existing timeline. Never treat a truthy return as proof of creation; check the returned timeline's id against the pre-import set.
 - **Reference:** [issue #171](https://github.com/samuelgursky/davinci-resolve-mcp/issues/171)
 - **Tags:** timeline, import, silent-failure, unreliable-return
+
+### Timeline import MERGES pool media by a coarse identity - similar files can silently cross-link
+
+- **Object:** `ImportTimelineFromFile / media pool`
+- **Behavior:** When a .drt import lands in a project that already holds a media entry whose pool identity blob matches the incoming one, Resolve MERGES them and every clip relinks to the EXISTING media - silently. The identity is coarse: two different files (5.6MB vs 93KB, different names, mtimes 1s apart) had identity blobs byte-identical except internal uuids, and the second file's clips all played the first file's picture (readback showed the wrong clip NAME; measured E33/E34 on 19.1.3.7). Importing the same archive into a FRESH project materialized both files correctly - the merge only bites across imports.
+- **Workaround / current handling:** After importing an authored timeline into a non-empty project, verify per-item file paths (or render probe frames) before trusting the conform - linked==total cannot see a cross-link. Files generated in the same second are the risk class; distinct mtimes distinguish them.
+- **Tags:** import, media-pool, silent-failure, drt
 
 ### Audio tracks cannot be grown in an imported timeline; Fairlight strips live in the pool Sm2Sequence.FieldsBlob
 

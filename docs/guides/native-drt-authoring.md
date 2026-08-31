@@ -50,6 +50,7 @@ window. `render.verify_output` covers the container-level checks.
 | Custom start timecode | `spec.startFrame` / `preserveStartTimecode` | v2.117 |
 | Timeline markers | `spec.markers` (16 colors, notes, durations, customData) | v2.118 |
 | Turnover markers | EDL `* LOC:` locators + OTIO markers → authored | v2.119 |
+| TC-bearing sources (AAF route) | native clip capture (`MediaStartTime`), channel-leg merge | v2.120–2.122 |
 | Fusion titles | `elements: [{type:'title', text}]` — **21-gen hosts only** | v2.108 |
 
 `assemble_from_interchange` drives the same engine from an EDL / OTIO /

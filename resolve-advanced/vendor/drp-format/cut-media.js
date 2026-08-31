@@ -78,12 +78,14 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     // mirror clones AUDIO even for plain video cuts, so the donor must be
     // chosen per track type, never per cut flavor (a video element in an
     // audio track aborts the whole import, measured E31e).
-    // NATIVE-DONOR PATH (live verification PENDING — a stuck Resolve modal
-    // ended the E31 session before any import of this path could be
-    // measured cleanly; only caches that carry videoClipElement /
-    // audioClipElement reach it, so ordinary captures keep the proven donor
-    // path). Donor clones from splitClipElements come <Element>-wrapped and
-    // Items concatenation depends on the wrapper.
+    // NATIVE-DONOR PATH — RENDER-VERIFIED on 19.1.3.7 (E36): a TC-bearing
+    // .mov source (embedded 01:00:00:00) renders picture AND audio through a
+    // cloned native clip, and the full AAF route (two sources, V2 stacking,
+    // merged audio legs) renders every window frame-accurately. Only caches
+    // that carry videoClipElement/audioClipElement reach this; ordinary
+    // captures keep the proven donor path. Donor clones from
+    // splitClipElements come <Element>-wrapped and Items concatenation
+    // depends on the wrapper.
     const native = kind === 'audio' ? cut.donorClipAudio : cut.donorClipVideo;
     let c = freshDbIds(native ? native.trim() : donor);
     c = setClipStart(c, cut.startFrame);
