@@ -2033,7 +2033,12 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "the one shape where readback and render DIVERGE: the "
                    "item reads back frozen (source 96..96) but renders "
                    "MOVING (48/48 unique frames measured). Do not author "
-                   "freezes as flat timemaps.",
+                   "freezes as flat timemaps. AUDIO clips ignore the "
+                   "timemap entirely: a 50% keyed map on an imported audio "
+                   "clip reads back retimed (source 0..48 over 96 record "
+                   "frames) but RENDERS at 100% - unchanged pitch and "
+                   "spectrum (highpass/lowpass split identical to the 1x "
+                   "reference).",
         "recommended": "Author retimes for pre-21 hosts with the keyed "
                        "form (drt.assemble cuts[].speed does this; encoder "
                        "byte-exact against a live 19.1.3.7 harvest). Treat "

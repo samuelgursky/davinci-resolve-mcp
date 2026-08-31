@@ -329,7 +329,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
     const durationFrames = recOut - recIn;
     if (durationFrames <= 0) continue;
     if ((e.speed ?? 100) !== 100 || e.reverse) {
-      audioRetimesSkipped.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse, reason: 'audio retime not supported — played at 100%' });
+      audioRetimesSkipped.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse, reason: 'audio retime not authorable — the audio engine ignores the clip timemap (measured: reads back retimed, renders 100%); played at 100%' });
     }
     const track = audioTrackNum(e.track);
     const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps), audioOnly: true, track };
