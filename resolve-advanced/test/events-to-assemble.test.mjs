@@ -640,3 +640,19 @@ test('audio tool refuses mistyped trim windows instead of silently copying', asy
     /durationFrames/i,
   );
 });
+
+test('cdlDiff reads array-shaped CDLs and refuses garbage instead of identity-defaulting', async () => {
+  // E60: an [r,g,b]-array CDL silently decayed to identity through the old
+  // .r/.g/.b reader — two different grades diffed as saturation-only.
+  const { cdlDiff } = await import('../server/provenance-audit.mjs');
+  const arr = cdlDiff(
+    { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], saturation: 1 },
+    { slope: [1.1, 1, 0.95], offset: [0.01, 0, 0], power: [1, 1, 1], saturation: 0.9 },
+  );
+  const params = arr.deltas.map((d) => d.param).sort();
+  assert.deepEqual(params, ['offset.r', 'saturation', 'slope.b', 'slope.r']);
+  const obj = cdlDiff({ slope: { r: 1, g: 1, b: 1 } }, { slope: { r: 1.2, g: 1, b: 1 } });
+  assert.equal(obj.deltas[0].param, 'slope.r');
+  assert.throws(() => cdlDiff({ slope: 'oops' }, {}), /refusing to silently treat it as identity/);
+  assert.throws(() => cdlDiff({ slope: [1, 1] }, {}), /exactly \[r, g, b\]/);
+});

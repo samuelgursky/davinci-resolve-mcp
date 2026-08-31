@@ -120,13 +120,34 @@ export async function cdlExport(ref, opts = {}) {
 }
 
 /** Diff two ASC CDL objects (slope/offset/power/saturation) → per-param deltas. */
+// Accept BOTH common CDL shapes — {r,g,b} objects (this repo's internal
+// vocabulary) and [r,g,b] arrays (the common interchange form) — and REFUSE
+// anything else. The old reader indexed .r/.g/.b unconditionally, so an
+// array-shaped CDL silently decayed to identity and cdl_diff reported two
+// different grades as matching everywhere but saturation (measured, E60).
+function cdlChannels(value, grp, side) {
+  if (value == null) return { r: undefined, g: undefined, b: undefined };
+  if (Array.isArray(value)) {
+    if (value.length !== 3 || value.some((v) => typeof v !== 'number')) {
+      throw new Error(`cdlDiff: ${side}.${grp} array must be exactly [r, g, b] numbers`);
+    }
+    return { r: value[0], g: value[1], b: value[2] };
+  }
+  if (typeof value === 'object' && ['r', 'g', 'b'].every((k) => value[k] === undefined || typeof value[k] === 'number')) {
+    return value;
+  }
+  throw new Error(`cdlDiff: ${side}.${grp} must be {r,g,b} or [r,g,b] — refusing to silently treat it as identity`);
+}
+
 export function cdlDiff(a, b, opts = {}) {
   const tol = opts.tol ?? 1e-4;
   const deltas = [];
   for (const grp of ['slope', 'offset', 'power']) {
+    const ac = cdlChannels(a[grp], grp, 'a');
+    const bc = cdlChannels(b[grp], grp, 'b');
     for (const k of ['r', 'g', 'b']) {
-      const av = (a[grp] && a[grp][k]) ?? (grp === 'offset' ? 0 : 1);
-      const bv = (b[grp] && b[grp][k]) ?? (grp === 'offset' ? 0 : 1);
+      const av = ac[k] ?? (grp === 'offset' ? 0 : 1);
+      const bv = bc[k] ?? (grp === 'offset' ? 0 : 1);
       if (Math.abs(av - bv) > tol) deltas.push({ param: `${grp}.${k}`, a: +av.toFixed(5), b: +bv.toFixed(5), delta: +(bv - av).toFixed(5) });
     }
   }
