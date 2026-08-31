@@ -62,7 +62,9 @@ test('forward retimes author, reverse flattens; overlaps refuse; unmapped reels 
   assert.equal(r1.spec.media[0].cuts[0].speed, 0.5);
   const reversed = [{ ...base, index: 1, source: 'TAPE1', recIn: 0, recOut: 48, speed: 100, reverse: true }];
   const r2 = eventsToAssembleSpec(reversed, { sourceMap: MAP });
-  assert.equal(r2.report.flattenedRetimes.length, 1);
+  assert.equal(r2.report.flattenedRetimes.length, 0);
+  assert.equal(r2.spec.media[0].cuts[0].reverse, true);
+  assert.deepEqual(r2.report.authoredRetimes, [{ index: 1, source: 'TAPE1', speed: 100, reverse: true }]);
   const overlapping = [
     { ...base, index: 1, source: 'TAPE1', recIn: 0, recOut: 48 },
     { ...base, index: 2, source: 'TAPE2', recIn: 24, recOut: 72 },
@@ -210,7 +212,7 @@ test('the r19 keyed timemap encoder is byte-exact against the live harvest', () 
   assert.equal(mine.toString('hex'), harvest);
 });
 
-test('OTIO LinearTimeWarp authors cut.speed; reverse flattens with the reason', () => {
+test('OTIO LinearTimeWarp authors cut.speed; negative scalar authors reverse', () => {
   const rtv = (value) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate: 24 });
   const otio = { OTIO_SCHEMA: 'Timeline.1', tracks: { children: [
     { OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [
@@ -227,7 +229,23 @@ test('OTIO LinearTimeWarp authors cut.speed; reverse flattens with the reason', 
   const { spec, report } = eventsToAssembleSpec(parseOTIO(otio, { fps: 24 }), { sourceMap: MAP });
   const t1 = spec.media.find((m) => m.mediaFilePath === '/m/a.mp4');
   assert.deepEqual(t1.cuts, [{ startFrame: 86400, durationFrames: 48, srcIn: 96, speed: 0.5 }]);
-  assert.deepEqual(report.authoredRetimes, [{ index: 1, source: 'TAPE1', speed: 50 }]);
-  assert.equal(report.flattenedRetimes.length, 1);
-  assert.match(report.flattenedRetimes[0].reason, /reverse not supported/);
+  assert.deepEqual(report.authoredRetimes, [
+    { index: 1, source: 'TAPE1', speed: 50 },
+    { index: 2, source: 'TAPE2', speed: 100, reverse: true },
+  ]);
+  assert.equal(report.flattenedRetimes.length, 0);
+  const t2 = spec.media.find((m) => m.mediaFilePath === '/m/b.mp4');
+  assert.equal(t2.cuts[0].reverse, true);
+  assert.equal(t2.cuts[0].speed, undefined); // |−1×| = 100% backwards
+});
+
+test('the reverse timemap encoder is byte-exact against the live -100% harvest shape', () => {
+  // Same envelope as forward with the Y endpoints swapped: kf0=(0,YMax),
+  // kf1=(XMax,0) — harvested from Resolve 19.1.3.7's own -100% XMEML retime
+  // and verified byte-exact live; offline E14 readback: srcIn-24 dur-48
+  // reversed cut reads back source 71→23.
+  const fwd = buildConstantSpeedTimemapKeyed({ speed: 1, sourceFrames: 192, fps: 24, uniqueId: 'x'.repeat(0) || '3a71f4f4-0b0a-425a-aab7-7b7d766b6c55' });
+  const rev = buildConstantSpeedTimemapKeyed({ speed: 1, sourceFrames: 192, fps: 24, uniqueId: '3a71f4f4-0b0a-425a-aab7-7b7d766b6c55', reverse: true });
+  assert.notEqual(fwd.toString('hex'), rev.toString('hex'));
+  assert.equal(fwd.length, rev.length);
 });

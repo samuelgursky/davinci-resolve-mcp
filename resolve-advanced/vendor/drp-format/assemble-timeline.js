@@ -114,19 +114,28 @@ async function assembleTimeline(spec = {}) {
     sources.forEach((src, i) => {
       (src.cuts || []).forEach((cut) => {
         const out = mediaRefs[i] ? { ...cut, mediaRef: mediaRefs[i] } : { ...cut };
-        if (cut.speed !== undefined && cut.speed !== 1) {
+        if (cut.reverse || (cut.speed !== undefined && cut.speed !== 1)) {
           // Constant-speed retime (forward only). The Sm2TimeMap spans the
           // whole source stretched by 1/speed; the clip windows into it with
           // RECORD-domain In/Duration (measured live on 19.1.3.7), so the
           // source-domain srcIn converts by /speed here.
-          if (!(cut.speed > 0)) throw new RangeError('assembleTimeline: cut.speed must be > 0 (reverse not supported)');
+          const speed = cut.speed ?? 1;
+          if (!(speed > 0)) throw new RangeError('assembleTimeline: cut.speed must be > 0 (use cut.reverse for backwards)');
           const fps = Math.round(src.spec.fps || 24);
           out.timemap = buildConstantSpeedTimemapKeyed({
-            speed: cut.speed, sourceFrames: src.spec.frameCount, fps,
-            uniqueId: randomUUID(),
+            speed, sourceFrames: src.spec.frameCount, fps,
+            uniqueId: randomUUID(), reverse: !!cut.reverse,
           }).toString('hex');
-          out.srcIn = Math.round((cut.srcIn ?? 0) / cut.speed);
+          // Record-domain In. Forward: srcIn/speed. Reverse: the clip plays
+          // source [srcIn, srcIn + dur*speed) BACKWARDS — the map descends
+          // from the source tail, so In measures from the END:
+          // (sourceFrames - srcIn - dur*speed)/speed  (measured live: In=0
+          // on a reversed full-speed clip reads back source 191→143).
+          out.srcIn = cut.reverse
+            ? Math.round((src.spec.frameCount - (cut.srcIn ?? 0) - cut.durationFrames * speed) / speed)
+            : Math.round((cut.srcIn ?? 0) / speed);
           delete out.speed;
+          delete out.reverse;
         }
         allCuts.push(out);
       });

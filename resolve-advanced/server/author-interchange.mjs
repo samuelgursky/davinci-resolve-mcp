@@ -202,9 +202,8 @@ export function eventsToOTIO(events, opts = {}) {
  * timeline runs 24fps with origin 86400, so rec/src frames convert as
  * round(frames × 24 / nominalFps). Placement anchors the EARLIEST video
  * event at the origin. Honesty ledger in the returned report: flattened
- * reverse retimes (forward constant speeds are AUTHORED as real Sm2TimeMaps
- * — r19 keyed form, render/readback-verified; reverse flattens with the
- * reason), authored vs
+ * zero-speed freezes (constant retimes — forward AND reverse — are AUTHORED
+ * as real Sm2TimeMaps, r19 keyed form, readback/render-verified), authored vs
  * dropped transitions (cross-dissolves are AUTHORED when the predecessor
  * abuts the cut and both sides have handle media — render-verified on
  * 19.1.3.7; otherwise dropped with the reason, as a cut at the boundary),
@@ -258,15 +257,17 @@ export function eventsToAssembleSpec(events, opts = {}) {
     const vTrack = trackNum(e.track);
     const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps), ...(vTrack > 1 ? { track: vTrack } : {}) };
     if ((e.speed ?? 100) !== 100 || e.reverse) {
-      if (e.reverse || !(e.speed > 0)) {
-        // Reverse needs a descending timemap (not yet measured) — flatten, with the reason.
-        flattenedRetimes.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse, reason: 'reverse not supported — played forward at 100%' });
+      const spd = Math.abs(e.speed ?? 100);
+      if (!(spd > 0)) {
+        flattenedRetimes.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse, reason: 'zero speed (freeze) not supported — played forward at 100%' });
       } else {
-        // Forward constant speed: authored as a real Sm2TimeMap on the cut
-        // (r19 keyed form; render/readback-verified on 19.1.3.7). Audio for
-        // retimed cuts is video-only downstream.
-        cut.speed = e.speed / 100;
-        authoredRetimes.push({ index: e.index, source: e.source, speed: e.speed });
+        // Constant speed, forward or reverse: authored as a real Sm2TimeMap
+        // on the cut (r19 keyed form; readback/render-verified on 19.1.3.7 —
+        // reverse reads back source 71→23 for a srcIn-24 dur-48 cut). Audio
+        // for retimed cuts is video-only downstream.
+        if (spd !== 100) cut.speed = spd / 100;
+        if (e.reverse) cut.reverse = true;
+        authoredRetimes.push({ index: e.index, source: e.source, speed: spd, ...(e.reverse ? { reverse: true } : {}) });
       }
     }
     if (e.transition) {

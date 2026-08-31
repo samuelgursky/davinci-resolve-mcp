@@ -227,8 +227,8 @@ function buildConstantSpeedTimemap({ speed, sourceDurationSec, uniqueId, recordD
  * @param {string} p.uniqueId     - fresh uuid (bare, no braces).
  * @returns {Buffer}
  */
-function buildConstantSpeedTimemapKeyed({ speed, sourceFrames, fps = 24, uniqueId }) {
-  if (!(speed > 0)) throw new RangeError('buildConstantSpeedTimemapKeyed: speed must be > 0 (reverse not supported here)');
+function buildConstantSpeedTimemapKeyed({ speed, sourceFrames, fps = 24, uniqueId, reverse = false }) {
+  if (!(speed > 0)) throw new RangeError('buildConstantSpeedTimemapKeyed: speed must be > 0 (pass reverse:true for backwards)');
   if (!Number.isInteger(sourceFrames) || sourceFrames < 1) throw new TypeError('buildConstantSpeedTimemapKeyed: sourceFrames must be a positive integer');
   const YMax = (sourceFrames - 1) / fps;
   const XMax = (sourceFrames / speed - 1) / fps;
@@ -241,9 +241,13 @@ function buildConstantSpeedTimemapKeyed({ speed, sourceFrames, fps = 24, uniqueI
     { key: 'XIn', type: T_DOUBLE, subType: 0, value: 0 },
     { key: 'X', type: T_DOUBLE, subType: 0, value: X },
   ] }).toString('hex');
+  // Reverse (harvested from a live 19.1.3.7 -100% XMEML retime): the SAME
+  // envelope with the Y endpoints swapped — kf0=(0, YMax), kf1=(XMax, 0),
+  // a descending line. Forward keeps kf1 Y = XMax*speed (harvest: +half-frame
+  // convention falls out of the arithmetic, byte-exact either way).
   const keyframes = encodeKeyedDict({ hdr: 1, entries: [
-    { key: '1', type: T_BYTES, subType: 0, value: kf(XMax, XMax * speed) },
-    { key: '0', type: T_BYTES, subType: 0, value: kf(0, 0) },
+    { key: '1', type: T_BYTES, subType: 0, value: reverse ? kf(XMax, 0) : kf(XMax, XMax * speed) },
+    { key: '0', type: T_BYTES, subType: 0, value: reverse ? kf(0, YMax) : kf(0, 0) },
   ] }).toString('hex');
   return encodeKeyedDict({ hdr: 1, entries: [
     { key: 'YMax', type: T_DOUBLE, subType: 0, value: YMax },

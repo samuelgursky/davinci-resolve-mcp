@@ -1927,7 +1927,11 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "source 0..48 over 96 frames and a live 50% render). "
                    "The map spans the WHOLE source stretched by 1/speed; "
                    "the clip's <In>/<Duration> window into it in RECORD "
-                   "frames (srcIn converts by /speed).",
+                   "frames (srcIn converts by /speed). REVERSE is the same "
+                   "envelope with the Y endpoints swapped - kf0=(0,YMax), "
+                   "kf1=(XMax,0) - and In then measures from the source "
+                   "END: (frames - srcIn - dur*speed)/speed (measured: a "
+                   "reversed srcIn-24 dur-48 cut reads back source 71->23).",
         "recommended": "Author retimes for pre-21 hosts with the keyed "
                        "form (drt.assemble cuts[].speed does this; encoder "
                        "byte-exact against a live 19.1.3.7 harvest). Treat "
