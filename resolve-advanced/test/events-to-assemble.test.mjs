@@ -249,3 +249,62 @@ test('the reverse timemap encoder is byte-exact against the live -100% harvest s
   assert.notEqual(fwd.toString('hex'), rev.toString('hex'));
   assert.equal(fwd.length, rev.length);
 });
+
+// Audio events: authored as audioOnly cuts on their own audio tracks
+// (render-verified on 19.1.3.7 — an offline A3 cut plays at the native
+// control level through the captured 8-audio-track template).
+test('OTIO audio tracks author audioOnly cuts and suppress nothing else', () => {
+  const rta = (value) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate: 24 });
+  const otio = { OTIO_SCHEMA: 'Timeline.1', tracks: { children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [
+      { OTIO_SCHEMA: 'Clip.1', name: 'TAPE1', source_range: { start_time: rta(0), duration: rta(48) }, media_reference: { name: 'TAPE1' } },
+    ] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', children: [
+      { OTIO_SCHEMA: 'Clip.1', name: 'TAPE1', source_range: { start_time: rta(0), duration: rta(48) }, media_reference: { name: 'TAPE1' } },
+    ] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', children: [
+      { OTIO_SCHEMA: 'Gap.1', source_range: { duration: rta(24) } },
+      { OTIO_SCHEMA: 'Clip.1', name: 'TAPE2', source_range: { start_time: rta(12), duration: rta(24) }, media_reference: { name: 'TAPE2' } },
+    ] },
+  ] } };
+  const events = parseOTIO(otio, { fps: 24 });
+  assert.deepEqual([...new Set(events.map((e) => e.track))].sort(), ['A', 'A2', 'V']);
+  const { spec, report } = eventsToAssembleSpec(events, { sourceMap: MAP });
+  const t1 = spec.media.find((m) => m.mediaFilePath === '/m/a.mp4');
+  const t2 = spec.media.find((m) => m.mediaFilePath === '/m/b.mp4');
+  assert.deepEqual(t1.cuts, [
+    { startFrame: 86400, durationFrames: 48, srcIn: 0 },
+    { startFrame: 86400, durationFrames: 48, srcIn: 0, audioOnly: true, track: 1 },
+  ]);
+  assert.deepEqual(t2.cuts, [{ startFrame: 86424, durationFrames: 24, srcIn: 12, audioOnly: true, track: 2 }]);
+  assert.equal(report.authoredAudioEvents, 2);
+  assert.equal(report.audioEventsSkipped, 0);
+});
+
+test('EDL A2 channel keeps its audio track number', () => {
+  const edl = [
+    'TITLE: A2',
+    'FCM: NON-DROP FRAME',
+    '001  TAPE1 V     C        00:00:00:00 00:00:02:00 01:00:00:00 01:00:02:00',
+    '002  TAPE2 A2    C        00:00:00:00 00:00:02:00 01:00:00:00 01:00:02:00',
+    '',
+  ].join('\n');
+  const events = parseEDL(edl, { fps: 24 });
+  assert.equal(events[1].track, 'A2');
+  const { spec } = eventsToAssembleSpec(events, { sourceMap: MAP });
+  const t2 = spec.media.find((m) => m.mediaFilePath === '/m/b.mp4');
+  assert.deepEqual(t2.cuts, [{ startFrame: 86400, durationFrames: 48, srcIn: 0, audioOnly: true, track: 2 }]);
+});
+
+test('audio cuts beyond the template ceiling refuse at assemble time', async () => {
+  const requireC = createRequire(import.meta.url);
+  const { cutSourceIntoClips } = requireC('../vendor/drp-format/cut-media.js');
+  const { addMediaClip } = requireC('../vendor/drp-format/author-project.js');
+  const base = await addMediaClip({
+    mediaFile: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 }, templateVersion: 19,
+  });
+  await assert.rejects(
+    cutSourceIntoClips(base.buffer, { cuts: [{ startFrame: 86400, durationFrames: 24, audioOnly: true, track: 9 }] }),
+    /audio track 9 exceeds the template's 8 audio tracks/,
+  );
+});

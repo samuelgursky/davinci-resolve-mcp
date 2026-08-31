@@ -207,7 +207,9 @@ export function eventsToOTIO(events, opts = {}) {
  * dropped transitions (cross-dissolves are AUTHORED when the predecessor
  * abuts the cut and both sides have handle media — render-verified on
  * 19.1.3.7; otherwise dropped with the reason, as a cut at the boundary),
- * and skipped audio events (cuts carry linked A1 audio already).
+ * and audio: A-track events are AUTHORED as audioOnly cuts on their own
+ * audio tracks (render-verified; the template carries 8 Fairlight-valid
+ * audio tracks) — their presence suppresses the A1 convenience mirror.
  *
  * @param {Array} events - normalized events (parseInterchange shape)
  * @param {object} opts
@@ -226,11 +228,13 @@ export function eventsToAssembleSpec(events, opts = {}) {
     throw new TypeError('eventsToAssembleSpec: sourceMap {reel: {mediaFilePath, spec}} is required');
   }
   const ORIGIN = 86400;
-  const vids = events.filter((e) => e.track !== 'A' && e.recIn != null && e.recOut != null);
-  const audioSkipped = events.length - vids.length;
+  const isAudio = (t) => /^A\d*$/.test(String(t || ''));
+  const vids = events.filter((e) => !isAudio(e.track) && e.recIn != null && e.recOut != null);
+  const auds = events.filter((e) => isAudio(e.track) && e.recIn != null && e.recOut != null);
+  const audioSkipped = events.length - vids.length - auds.length;
   if (!vids.length) throw new Error('eventsToAssembleSpec: no video events with record ranges');
 
-  const unmapped = [...new Set(vids.map((e) => e.source).filter((srcName) => !sourceMap[srcName]))];
+  const unmapped = [...new Set([...vids, ...auds].map((e) => e.source).filter((srcName) => !sourceMap[srcName]))];
   if (unmapped.length) {
     throw new Error(
       `eventsToAssembleSpec: unmapped source reel(s): ${unmapped.join(', ')} — ` +
@@ -285,6 +289,44 @@ export function eventsToAssembleSpec(events, opts = {}) {
     placements.push({ start: recIn, end: recOut, index: e.index, source: e.source, srcIn: cut.srcIn, durationFrames, track: vTrack });
     if (!perSource.has(e.source)) perSource.set(e.source, []);
     perSource.get(e.source).push(cut);
+  }
+
+  // Audio events become explicit audioOnly cuts on their own audio tracks —
+  // this SUPPRESSES the convenience A1 mirror downstream (explicit audio
+  // wins). Render-verified on 19.1.3.7: an offline A3 cut plays at the
+  // native control level through the captured 8-audio-track template's
+  // Fairlight strips. Retimed audio is not authored (no audio timemap yet).
+  const audioTrackNum = (t) => { const m = /^A(\d+)?$/.exec(String(t)); return m && m[1] ? parseInt(m[1], 10) : 1; };
+  const audioPlacements = [];
+  const audioRetimesSkipped = [];
+  for (const e of auds) {
+    const recIn = ORIGIN + (toTl(e.recIn, e.fps) - minRec);
+    const recOut = ORIGIN + (toTl(e.recOut, e.fps) - minRec);
+    const durationFrames = recOut - recIn;
+    if (durationFrames <= 0) continue;
+    if ((e.speed ?? 100) !== 100 || e.reverse) {
+      audioRetimesSkipped.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse, reason: 'audio retime not supported — played at 100%' });
+    }
+    const track = audioTrackNum(e.track);
+    const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps), audioOnly: true, track };
+    audioPlacements.push({ start: recIn, end: recOut, index: e.index, track });
+    if (!perSource.has(e.source)) perSource.set(e.source, []);
+    perSource.get(e.source).push(cut);
+  }
+  audioPlacements.sort((a, b) => a.start - b.start);
+  const audByTrack = new Map();
+  for (const pl of audioPlacements) {
+    if (!audByTrack.has(pl.track)) audByTrack.set(pl.track, []);
+    audByTrack.get(pl.track).push(pl);
+  }
+  for (const [trk, pls] of audByTrack) {
+    for (let i = 1; i < pls.length; i += 1) {
+      if (pls[i].start < pls[i - 1].end) {
+        throw new Error(
+          `eventsToAssembleSpec: audio events ${pls[i - 1].index} and ${pls[i].index} ` +
+          `overlap on audio track ${trk} after frame conversion — one track cannot hold both.`);
+      }
+    }
   }
 
   // Overlap is judged PER VIDEO TRACK — V2 stacking over V1 is legitimate
@@ -349,6 +391,8 @@ export function eventsToAssembleSpec(events, opts = {}) {
       videoEvents: vids.length,
       sources: media.length,
       audioEventsSkipped: audioSkipped,
+      authoredAudioEvents: audioPlacements.length,
+      audioRetimesSkipped,
       upperTrackCutsVideoOnly: placements.filter((pl) => pl.track > 1).length,
       flattenedRetimes,
       authoredRetimes,

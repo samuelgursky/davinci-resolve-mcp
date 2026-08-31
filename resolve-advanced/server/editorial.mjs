@@ -91,7 +91,9 @@ export function parseEDL(text, opts = {}) {
     const head = tokens.slice(0, tokens.indexOf(tcs[tcs.length - 4]));
     const [eventNum, reel, channel, transition] = head;
     const dur = transition && transition !== 'C' ? Number(head[4]) : 0;
-    const track = /A/i.test(channel || '') && !/V/i.test(channel || '') ? 'A' : 'V';
+    const chan = String(channel || '');
+    const am = /^A(\d+)?$/i.exec(chan);
+    const track = am && !/V/i.test(chan) ? (am[1] && am[1] !== '1' ? `A${am[1]}` : 'A') : (/A/i.test(chan) && !/V/i.test(chan) ? 'A' : 'V');
     events.push(
       evt({
         index: Number(eventNum),
@@ -117,11 +119,13 @@ export function parseOTIO(otio, opts = {}) {
   const events = [];
   let idx = 1;
   let vNum = 0;
+  let aNum = 0;
   for (const track of tracks) {
     const isAudio = track.kind === 'Audio';
-    if (!isAudio) vNum += 1;
-    // First video track stays 'V' (compat); higher tracks are 'V2', 'V3', …
-    const kind = isAudio ? 'A' : (vNum === 1 ? 'V' : `V${vNum}`);
+    if (isAudio) aNum += 1; else vNum += 1;
+    // First track of each kind keeps the bare letter (compat); higher tracks
+    // are numbered ('V2', 'A2', …).
+    const kind = isAudio ? (aNum === 1 ? 'A' : `A${aNum}`) : (vNum === 1 ? 'V' : `V${vNum}`);
     let rec = 0;
     for (const child of track.children || []) {
       const schema = child.OTIO_SCHEMA || '';

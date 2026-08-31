@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 33 missing capabilities, 43 bugs / unreliable behaviors.
+**Totals:** 33 missing capabilities, 44 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -525,6 +525,13 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Rewrite the <sequence><name> inside the file to the intended name before importing — timeline.import_timeline_checked does this automatically for FCP7 XML and errors when a non-rewritable format still returns an existing timeline. Never treat a truthy return as proof of creation; check the returned timeline's id against the pre-import set.
 - **Reference:** [issue #171](https://github.com/samuelgursky/davinci-resolve-mcp/issues/171)
 - **Tags:** timeline, import, silent-failure, unreliable-return
+
+### Audio tracks cannot be grown in an imported timeline; Fairlight strips live in the pool Sm2Sequence.FieldsBlob
+
+- **Object:** `Sm2TiTrack (audio) / FLStudioModelBA`
+- **Behavior:** An audio track added to a SeqContainer by cloning imports fine, reads back fine (track count, items, everything), and renders SILENT. The per-timeline Fairlight model (FLStudioModelBA, ~7KB compressed to ~420KB, inside the media pool's Sm2Sequence.FieldsBlob) holds one strip per audio track, and a track without a strip is mute. Measured by elimination on 19.1.3.7: clip byte-identical to a live-authored one, track byte-identical (SubType is the CHANNEL FORMAT code - 1=mono - not an ordinal), pool entry shared with a playing A1 clip - still silent; only a timeline whose template was CAPTURED with the tracks plays.
+- **Workaround / current handling:** Never clone audio tracks offline. Capture the template with the audio tracks already present (the r19 media template carries 8 mono tracks with valid strips; drt.assemble audioOnly cuts land on them and render at native level). Refuse placements beyond the captured ceiling. Audio aliveness is readback-blind: verify by rendered RMS, not structure.
+- **Tags:** fairlight, audio, import, silent-failure, drt
 
 ### MediaTimemapBA keyframes are generation-split; 19.x silently ignores the R21 protobuf form
 

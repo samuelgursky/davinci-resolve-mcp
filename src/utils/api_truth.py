@@ -1915,6 +1915,32 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["media-pool", "import", "render", "silent-failure", "readback"],
     },
     {
+        "symbol": "Audio tracks cannot be grown in an imported timeline; Fairlight strips live in the pool Sm2Sequence.FieldsBlob",
+        "object": "Sm2TiTrack (audio) / FLStudioModelBA",
+        "reality": "An audio track added to a SeqContainer by cloning "
+                   "imports fine, reads back fine (track count, items, "
+                   "everything), and renders SILENT. The per-timeline "
+                   "Fairlight model (FLStudioModelBA, ~7KB compressed to "
+                   "~420KB, inside the media pool's Sm2Sequence.FieldsBlob) "
+                   "holds one strip per audio track, and a track without a "
+                   "strip is mute. Measured by elimination on 19.1.3.7: "
+                   "clip byte-identical to a live-authored one, track "
+                   "byte-identical (SubType is the CHANNEL FORMAT code - "
+                   "1=mono - not an ordinal), pool entry shared with a "
+                   "playing A1 clip - still silent; only a timeline whose "
+                   "template was CAPTURED with the tracks plays.",
+        "recommended": "Never clone audio tracks offline. Capture the "
+                       "template with the audio tracks already present "
+                       "(the r19 media template carries 8 mono tracks with "
+                       "valid strips; drt.assemble audioOnly cuts land on "
+                       "them and render at native level). Refuse placements "
+                       "beyond the captured ceiling. Audio aliveness is "
+                       "readback-blind: verify by rendered RMS, not "
+                       "structure.",
+        "tags": ["fairlight", "audio", "import", "silent-failure", "drt"],
+        "submit": "bug",
+    },
+    {
         "symbol": "MediaTimemapBA keyframes are generation-split; 19.x silently ignores the R21 protobuf form",
         "object": "Sm2TimeMap (per-clip retime blob)",
         "reality": "Resolve 21 encodes a retimed clip's KeyframesBA as "

@@ -38,6 +38,10 @@ const { clipDbId, setClipStart, setClipDuration, setClipIn } = require('./splice
  *   track is the 1-based VIDEO track (default 1); missing tracks are grown as
  *   empty clones. Cuts on track > 1 are placed VIDEO-ONLY — their audio would
  *   overlap the track-1 cuts' audio on A1 (the template has a single A1).
+ *   audioOnly:true makes a cut an AUDIO clip placement instead (track then
+ *   indexes AUDIO tracks, grown as needed) — and the presence of ANY
+ *   audioOnly cut suppresses the implicit A1 mirror of track-1 video cuts
+ *   (explicit audio wins over the convenience mirror).
  * @param {string} [opts.timelineUuid]
  * @returns {Promise<{buffer: Buffer, cutCount: number, clipDbIds: string[]}>}
  */
@@ -79,6 +83,26 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
       // element instead of the donor's.
       c = c.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/, `<MediaRef>${cut.mediaRef}</MediaRef>`);
     }
+    if (cut.audioOnly && cut.srcMeta) {
+      // An audio-only clone must carry ITS OWN source identity — a live
+      // A2-placed clip (harvested via AppendToTimeline mediaType:2) differs
+      // from a donor clone in Name, MediaFilePath, MediaFrameRate (the
+      // template donor's was 29.97!), the identity MediaTimemapBA extent,
+      // and FieldsBlob. A clone keeping donor values imports and reads back
+      // fine but renders SILENT off A1.
+      const { name, mediaFilePath, fps, frameCount } = cut.srcMeta;
+      c = c.replace(/<Name>[\s\S]*?<\/Name>/, `<Name>${name}</Name>`);
+      c = c.replace(/<MediaFilePath>[\s\S]*?<\/MediaFilePath>/, `<MediaFilePath>${mediaFilePath}</MediaFilePath>`);
+      const rate = Buffer.alloc(16);
+      rate.writeDoubleLE(fps, 0);
+      c = c.replace(/<MediaFrameRate>[0-9a-fA-F]*<\/MediaFrameRate>/, `<MediaFrameRate>${rate.toString('hex')}</MediaFrameRate>`);
+      const idm = Buffer.alloc(9);
+      idm.writeUInt8(0x02, 0);
+      idm.writeDoubleBE((frameCount - 1) / fps, 1);
+      c = c.replace(/<MediaTimemapBA>[0-9a-fA-F]*<\/MediaTimemapBA>/, `<MediaTimemapBA>${idm.toString('hex')}</MediaTimemapBA>`);
+      // Generic audio-clip FieldsBlob, verbatim from the live A2 harvest.
+      c = c.replace(/<FieldsBlob>[0-9a-fA-F]*<\/FieldsBlob>/, '<FieldsBlob>0000000200000005800a022001</FieldsBlob>');
+    }
     if (cut.timemap) {
       // Constant-speed retime: swap the identity MediaTimemapBA for the
       // caller-built Sm2TimeMap (r19 keyed form render/readback-verified;
@@ -96,19 +120,44 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     if (!clips.length) continue; // audio-less media: nothing to cut on A1
     const donor = clips[0];
     if (trackType === 'audio') {
-      // A1 mirrors track-1 video cuts only; higher video tracks stay video-only,
-      // and so do RETIMED cuts (the audio clone would need its own timemap and
-      // pitch handling — video-only is stated, not silent).
-      const a1 = cuts.filter((cut) => (cut.track ?? 1) === 1 && !cut.timemap).map((cut) => cloneCut(donor, cut));
-      tracks[0] = setItemsInner(tracks[0], a1.join(''));
+      const audioCuts = cuts.filter((cut) => cut.audioOnly);
+      if (audioCuts.length) {
+        // Explicit audio placements: grow audio tracks and place per track;
+        // the implicit A1 mirror is suppressed (explicit audio wins).
+        const maxA = Math.max(1, ...audioCuts.map((cut) => cut.track ?? 1));
+        if (maxA > tracks.length) {
+          // Audio tracks CANNOT be grown by cloning: the per-timeline
+          // Fairlight model (FLStudioModelBA inside the pool's
+          // Sm2Sequence.FieldsBlob) holds one strip per track, and a cloned
+          // track without a strip imports fine, reads back fine, and renders
+          // SILENT (measured). The r19 media template is captured with 8
+          // audio tracks (valid strips included); beyond that, refuse.
+          throw new Error(
+            `cutSourceIntoClips: audio track ${maxA} exceeds the template's ${tracks.length} ` +
+            'audio tracks — audio tracks cannot be grown offline (no Fairlight strip = silent). ' +
+            'Re-capture a template with more audio tracks to raise the ceiling.');
+        }
+        for (let t = 1; t <= tracks.length; t += 1) {
+          const mine = audioCuts.filter((cut) => (cut.track ?? 1) === t);
+          if (t > 1 && !mine.length) continue;
+          tracks[t - 1] = setItemsInner(tracks[t - 1], mine.map((cut) => cloneCut(donor, cut)).join(''));
+        }
+      } else {
+        // A1 mirrors track-1 video cuts only; higher video tracks stay
+        // video-only, and so do RETIMED cuts (the audio clone would need its
+        // own timemap and pitch handling — video-only is stated, not silent).
+        const a1 = cuts.filter((cut) => (cut.track ?? 1) === 1 && !cut.timemap).map((cut) => cloneCut(donor, cut));
+        tracks[0] = setItemsInner(tracks[0], a1.join(''));
+      }
       xml = replaceTrackVec(xml, trackType, match, tracks);
       continue;
     }
-    const maxTrack = Math.max(1, ...cuts.map((cut) => cut.track ?? 1));
+    const vCuts = cuts.filter((cut) => !cut.audioOnly);
+    const maxTrack = Math.max(1, ...vCuts.map((cut) => cut.track ?? 1));
     const cloneSource = tracks[0];
     while (tracks.length < maxTrack) tracks.push(emptyTrackClone(cloneSource));
     for (let t = 1; t <= tracks.length; t += 1) {
-      const mine = cuts.filter((cut) => (cut.track ?? 1) === t);
+      const mine = vCuts.filter((cut) => (cut.track ?? 1) === t);
       if (t > 1 && !mine.length) continue; // grown-empty or untouched track keeps its items
       const clones = mine.map((cut) => cloneCut(donor, cut));
       for (const c of clones) clipDbIds.push(clipDbId(c));

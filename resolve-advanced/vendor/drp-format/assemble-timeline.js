@@ -114,6 +114,14 @@ async function assembleTimeline(spec = {}) {
     sources.forEach((src, i) => {
       (src.cuts || []).forEach((cut) => {
         const out = mediaRefs[i] ? { ...cut, mediaRef: mediaRefs[i] } : { ...cut };
+        if (cut.audioOnly) {
+          out.srcMeta = {
+            name: src.mediaFilePath.split('/').pop(),
+            mediaFilePath: src.mediaFilePath,
+            fps: Math.round(src.spec.fps || 24),
+            frameCount: src.spec.frameCount,
+          };
+        }
         if (cut.reverse || (cut.speed !== undefined && cut.speed !== 1)) {
           // Constant-speed retime (forward only). The Sm2TimeMap spans the
           // whole source stretched by 1/speed; the clip windows into it with
