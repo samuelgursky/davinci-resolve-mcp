@@ -9,6 +9,12 @@ this repo's own sources do (`tests/test_import.py` failed parsing
 
 Exemptions mirror the sweep: binary-mode opens (no text decoding happens) and
 `Image.open(...)` (PIL's, takes no encoding argument).
+
+PRs #175/#176 extended the sweep to `src/` and `install.py`. Those trees host
+the exotic `.open()`s that take no encoding at all (`os.open`,
+`webbrowser.open`, `aaf2.open`, `zipfile` members, Pillow), so there the
+guard checks only bare `open()` and `Path.read_text/write_text` — the calls
+where a missing encoding is unambiguously a locale-decoding bug.
 """
 
 from __future__ import annotations
@@ -18,7 +24,9 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-SCAN_DIRS = ("tests", "scripts")
+# dir → whether attribute-.open(...) calls are also checked there
+SCAN_DIRS = {"tests": True, "scripts": True, "src": False}
+EXTRA_FILES = ("install.py",)
 TEXT_METHODS = {"read_text", "write_text", "open"}
 
 
@@ -41,7 +49,7 @@ def _is_pil_image_open(func: ast.Attribute) -> bool:
     return isinstance(value, ast.Name) and value.id == "Image"
 
 
-def unencoded_text_calls(path: Path):
+def unencoded_text_calls(path: Path, check_attr_open: bool):
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -51,7 +59,7 @@ def unencoded_text_calls(path: Path):
             if not _mode_is_binary(node) and not _has_encoding(node):
                 yield node.lineno, "open(...)"
         elif isinstance(func, ast.Attribute) and func.attr in TEXT_METHODS:
-            if func.attr == "open" and _is_pil_image_open(func):
+            if func.attr == "open" and (not check_attr_open or _is_pil_image_open(func)):
                 continue
             if not _mode_is_binary(node) and not _has_encoding(node):
                 yield node.lineno, f".{func.attr}(...)"
@@ -60,10 +68,11 @@ def unencoded_text_calls(path: Path):
 class Utf8Discipline(unittest.TestCase):
     def test_no_unencoded_text_file_calls(self):
         offenders = []
-        for d in SCAN_DIRS:
-            for py in sorted((REPO / d).rglob("*.py")):
-                for lineno, what in unencoded_text_calls(py):
-                    offenders.append(f"{py.relative_to(REPO)}:{lineno} {what}")
+        targets = [(py, attr) for d, attr in SCAN_DIRS.items() for py in sorted((REPO / d).rglob("*.py"))]
+        targets += [(REPO / f, False) for f in EXTRA_FILES]
+        for py, check_attr_open in targets:
+            for lineno, what in unencoded_text_calls(py, check_attr_open):
+                offenders.append(f"{py.relative_to(REPO)}:{lineno} {what}")
         self.assertEqual(offenders, [],
                          "text-mode file calls without encoding=\"utf-8\" (crash on Windows cp1252):\n  "
                          + "\n  ".join(offenders))

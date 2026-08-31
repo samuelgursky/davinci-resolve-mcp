@@ -49,7 +49,7 @@ def page_lock():
     try:
         if _depth == 1 and _HAS_FCNTL:
             try:
-                _fh = open(_LOCKFILE, "w")
+                _fh = open(_LOCKFILE, "w", encoding="utf-8")
                 fcntl.flock(_fh, fcntl.LOCK_EX)
             except OSError:
                 # Advisory lock is best-effort; never block real work on it.

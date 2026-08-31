@@ -37,7 +37,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.136.1"
+VERSION = "2.137.0"
 # Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
 # Resolve's scripting bridge loads into newer interpreters on recent builds
 # (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
@@ -1091,7 +1091,7 @@ def read_json(path):
     existing settings (issue #71: Zed's settings.json ships with comments).
     """
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             raw = f.read()
     except FileNotFoundError:
         return {}
@@ -1120,7 +1120,7 @@ def write_json(path, data):
         backup = path.with_suffix(path.suffix + ".backup")
         shutil.copy2(path, backup)
 
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
 
@@ -1183,10 +1183,59 @@ def build_advanced_entry(server_path, python_path=None):
     """
     project_dir = Path(server_path).resolve().parents[1]  # .../src/server.py -> repo root
     advanced_bin = project_dir / "bin" / "davinci-resolve-advanced-mcp.mjs"
-    entry = {"command": "node", "args": [str(advanced_bin)]}
+    entry = {"command": resolve_node_command(), "args": [str(advanced_bin)]}
     if python_path:
         entry["env"] = {"AAF_PROBE_PYTHON": str(python_path)}
     return entry
+
+
+# Node floor for the advanced server (package.json engines). Below it the
+# pure-JS tools limp along while native-dep paths (better-sqlite3) die with a
+# cryptic NODE_MODULE_VERSION mismatch — measured live when a client config's
+# bare "node" resolved to an nvm v18 that a GUI app had on PATH.
+NODE_MIN = (20, 9)
+
+
+def _node_version(cmd):
+    try:
+        out = subprocess.run([cmd, "--version"], capture_output=True, text=True,
+                             encoding="utf-8", timeout=10, check=False).stdout.strip()
+        parts = out.lstrip("v").split(".")
+        return (int(parts[0]), int(parts[1]))
+    except Exception:
+        return None
+
+
+def resolve_node_command():
+    """Absolute path to a Node >= the floor, or bare "node" as a last resort.
+
+    A bare "node" in a client config resolves against WHATEVER PATH the
+    launching GUI app has — which on this machine meant an nvm v18 while the
+    repo floor is 20.9. Pin the binary at install time instead: prefer the
+    node on the installer's PATH if it meets the floor, else the newest
+    nvm-managed node that does.
+    """
+    on_path = shutil.which("node")
+    if on_path:
+        ver = _node_version(on_path)
+        if ver and ver >= NODE_MIN:
+            return str(Path(on_path).resolve())
+    nvm_dir = Path.home() / ".nvm" / "versions" / "node"
+    if nvm_dir.is_dir():
+        candidates = []
+        for d in nvm_dir.iterdir():
+            node_bin = d / "bin" / "node"
+            if node_bin.exists():
+                ver = _node_version(str(node_bin))
+                if ver and ver >= NODE_MIN:
+                    candidates.append((ver, str(node_bin)))
+        if candidates:
+            return max(candidates)[1]
+    print(
+        f"  {yellow('Node:')} no Node >= {NODE_MIN[0]}.{NODE_MIN[1]} found; writing a bare 'node' command. "
+        "The advanced server will refuse to start under an older Node and name this fix."
+    )
+    return "node"
 
 
 def generate_manual_config(python_path, server_path, api_path, lib_path):

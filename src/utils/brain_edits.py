@@ -348,7 +348,7 @@ def update_brain_edits_registry(
     payload: Dict[str, Any]
     if os.path.isfile(path):
         try:
-            with open(path, "r") as fh:
+            with open(path, "r", encoding="utf-8") as fh:
                 payload = json.load(fh)
         except (OSError, json.JSONDecodeError):
             payload = {"entries": []}
@@ -368,7 +368,7 @@ def update_brain_edits_registry(
     payload["updated_at"] = _now_iso()
 
     tmp_path = path + ".tmp"
-    with open(tmp_path, "w") as fh:
+    with open(tmp_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, default=str)
     os.replace(tmp_path, path)
     return {"success": True, "registry_path": path, "entry_count": len(entries)}
@@ -379,7 +379,7 @@ def read_brain_edits_registry(project_root: str) -> Dict[str, Any]:
     if not os.path.isfile(path):
         return {"entries": [], "registry_path": path}
     try:
-        with open(path, "r") as fh:
+        with open(path, "r", encoding="utf-8") as fh:
             payload = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return {"entries": [], "registry_path": path}
