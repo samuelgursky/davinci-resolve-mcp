@@ -216,27 +216,46 @@ function readBusConfig(data) {
  * @returns {{ busFormat, buses, data, rawBlob, fieldsBlob, entries }}
  */
 function readFromDatabase(db) {
-  const row = db.prepare('SELECT FieldsBlob FROM Sm2Sequence WHERE FieldsBlob IS NOT NULL').get();
-  if (!row) throw new Error('No Sm2Sequence with FieldsBlob found');
-
-  const fieldsBlobBuf = Buffer.from(row.FieldsBlob);
-  const { entries } = parseFieldsBlob(fieldsBlobBuf);
+  // Iterate EVERY blob-bearing sequence row and pick one that actually
+  // carries the Fairlight model. "First row wins" is wrong the moment a
+  // project holds a COMPOUND CLIP: a compound's embedded Sm2Sequence has a
+  // FieldsBlob (SeqRef/SequenceSetup/thumbnail) but no FLStudioModelBA, and
+  // whichever row the engine returns first decided whether this function
+  // worked at all (measured: a one-timeline project with compounds reported
+  // "No FLStudioModelBA found" while the model sat in the next row).
+  const rows = db.prepare('SELECT Sm2Sequence_id, FieldsBlob FROM Sm2Sequence WHERE FieldsBlob IS NOT NULL').all();
+  if (!rows.length) throw new Error('No Sm2Sequence with FieldsBlob found');
 
   let busFormat = null;
   let rawBlob = null;
   let data = null;
+  let fieldsBlobBuf = null;
+  let entries = null;
+  let sequenceId = null;
+  let modelRowCount = 0;
 
-  for (const e of entries) {
-    if (e.key === 'FirstMainBusFormat') {
-      busFormat = e.rawValue.readUInt32BE(0);
+  for (const row of rows) {
+    const buf = Buffer.from(row.FieldsBlob);
+    let parsed;
+    try {
+      parsed = parseFieldsBlob(buf);
+    } catch {
+      continue; // not a keyed FieldsBlob — not a candidate
     }
-    if (e.key === 'FLStudioModelBA') {
-      rawBlob = e.rawValue.slice(4); // skip size prefix
-      data = decompressFLModel(rawBlob);
-    }
+    const model = parsed.entries.find(e => e.key === 'FLStudioModelBA');
+    if (!model) continue;
+    modelRowCount += 1;
+    if (data) continue; // keep the first model-bearing row; count the rest
+    fieldsBlobBuf = buf;
+    entries = parsed.entries;
+    sequenceId = row.Sm2Sequence_id;
+    const fmt = parsed.entries.find(e => e.key === 'FirstMainBusFormat');
+    if (fmt) busFormat = fmt.rawValue.readUInt32BE(0);
+    rawBlob = model.rawValue.slice(4); // skip size prefix
+    data = decompressFLModel(rawBlob);
   }
 
-  if (!data) throw new Error('No FLStudioModelBA found in FieldsBlob');
+  if (!data) throw new Error('No FLStudioModelBA found in any Sm2Sequence FieldsBlob');
 
   const busConfig = readBusConfig(data);
 
@@ -247,6 +266,8 @@ function readFromDatabase(db) {
     rawBlob,
     fieldsBlobBuf,
     entries,
+    sequenceId,
+    modelRowCount,
     busNameOffset: busConfig.busNameOffset,
   };
 }
@@ -269,12 +290,22 @@ function readFromDatabase(db) {
  * @returns {{ success: boolean, details: string }}
  */
 function applyTemplate(db, templateData, options = {}) {
-  // Read existing FieldsBlob
-  const row = db.prepare('SELECT FieldsBlob FROM Sm2Sequence WHERE FieldsBlob IS NOT NULL').get();
-  if (!row) throw new Error('No Sm2Sequence with FieldsBlob found');
-
-  const fieldsBlobBuf = Buffer.from(row.FieldsBlob);
-  const { entries } = parseFieldsBlob(fieldsBlobBuf);
+  // Read the MODEL-BEARING FieldsBlob and remember which row it came from —
+  // the write below must target exactly that row. The old blanket
+  // `UPDATE ... WHERE FieldsBlob IS NOT NULL` stamped one timeline's blob
+  // into EVERY sequence row: compound clips' embedded sequences (whose blob
+  // carries their SeqRef container link), other timelines, everything —
+  // cross-wiring the project. Scoped by Sm2Sequence_id instead, and refused
+  // when several timelines carry models and no target was named.
+  const model = readFromDatabase(db);
+  if (model.modelRowCount > 1 && options.sequenceId === undefined) {
+    throw new Error(
+      `applyTemplate: ${model.modelRowCount} sequences carry a Fairlight model (multi-timeline project) — ` +
+        'pass options.sequenceId (Sm2Sequence_id) to name the target, or use the timeline-scoped actions.',
+    );
+  }
+  const targetSequenceId = options.sequenceId !== undefined ? options.sequenceId : model.sequenceId;
+  const { entries } = model;
 
   let patchedData = Buffer.from(templateData);
 
@@ -313,8 +344,8 @@ function applyTemplate(db, templateData, options = {}) {
   // Encode new FieldsBlob
   const newFieldsBlob = encodeFieldsBlob(newEntries);
 
-  // Write to database
-  db.prepare('UPDATE Sm2Sequence SET FieldsBlob = ? WHERE FieldsBlob IS NOT NULL').run(newFieldsBlob);
+  // Write to database — ONLY the row the model came from.
+  db.prepare('UPDATE Sm2Sequence SET FieldsBlob = ? WHERE Sm2Sequence_id = ?').run(newFieldsBlob, targetSequenceId);
 
   return {
     success: true,

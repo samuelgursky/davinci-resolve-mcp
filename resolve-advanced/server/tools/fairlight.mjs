@@ -53,7 +53,18 @@ export const fairlightTool = {
       const p = dbReadSchema.parse(args);
       const db = openDb(p.dbPath, false);
       try {
-        return patcher.readFromDatabase(db);
+        // Summarize: the full readFromDatabase result carries the multi-
+        // hundred-KB decompressed model + raw blobs — dumped into the tool
+        // response as JSON byte arrays (measured E60). Return the facts.
+        const m = patcher.readFromDatabase(db);
+        return {
+          busFormat: m.busFormat,
+          buses: m.buses,
+          sequenceId: m.sequenceId,
+          modelRowCount: m.modelRowCount,
+          modelBytes: m.data.length,
+          compressedBytes: m.rawBlob.length,
+        };
       } finally {
         db.close();
       }
