@@ -41,6 +41,8 @@ const assembleFromInterchangeSchema = z.object({
   outputPath: z.string().describe('Where the importable .drt is written'),
   targetAppVersion: z.union([z.string(), z.number()]).optional()
     .describe("Host Resolve version, e.g. '19.1' for pre-21"),
+  sequenceName: z.string().optional().describe('Multi-sequence AAF/prproj: assemble THIS sequence (see editorial.list_sequences)'),
+  sequenceIndex: z.number().int().optional().describe('Multi-sequence AAF/prproj: assemble the sequence at this 0-based index'),
   preserveStartTimecode: z.boolean().optional()
     .describe('Keep the interchange\'s ABSOLUTE record start: the assembled timeline starts at the turnover\'s real first record frame instead of 01:00:00:00 (start-TC patch render-verified on 19). AAF conforms should pass true.'),
 });
@@ -212,22 +214,42 @@ export const drtTool = {
       const { eventsToAssembleSpec } = await import('../author-interchange.mjs');
       let content = p.content;
       let events;
+      const pickSequence = (sequences) => {
+        // Multi-sequence containers (AAF/prproj): pick ONE sequence by name
+        // or index instead of flattening everything (overlapping record
+        // ranges across sequences would refuse in the overlap check).
+        if (p.sequenceName !== undefined) {
+          const hit = sequences.find((sq) => sq.name === p.sequenceName);
+          if (!hit) throw new Error(`sequenceName ${JSON.stringify(p.sequenceName)} not found — available: ${sequences.map((sq) => sq.name).join(', ')}`);
+          return hit.events;
+        }
+        if (p.sequenceIndex !== undefined) {
+          if (p.sequenceIndex < 0 || p.sequenceIndex >= sequences.length) throw new Error(`sequenceIndex ${p.sequenceIndex} out of range (${sequences.length} sequences)`);
+          return sequences[p.sequenceIndex].events;
+        }
+        if (sequences.length > 1) {
+          const nonEmpty = sequences.filter((sq) => (sq.events || []).length);
+          if (nonEmpty.length > 1) throw new Error(
+            `the file holds ${nonEmpty.length} sequences with events — pass sequenceName or sequenceIndex ` +
+            `(available: ${sequences.map((sq, i) => `${i}:${sq.name}`).join(', ')})`);
+          if (nonEmpty.length === 1) return nonEmpty[0].events;
+        }
+        return sequences.flatMap((sq) => sq.events || []);
+      };
       if (p.format === 'aaf') {
-        // BUG FIX: this branch used to fall through to the sync
-        // parseInterchange, which THROWS for aaf ("parse it via the async
-        // AAF path") — the tool-layer AAF route never worked until now.
+        // BUG FIX (v2.126.0): this branch used to fall through to the sync
+        // parseInterchange, which THROWS for aaf — the tool-layer AAF route
+        // never worked before.
         if (!p.path) return { error: 'aaf input requires path' };
-        const { parseAAF } = await import('../aaf.mjs');
-        const parsed = await parseAAF(p.path);
-        events = Array.isArray(parsed) ? parsed : parsed.events;
+        const { parseAafDocument } = await import('../aaf.mjs');
+        const parsed = await parseAafDocument(p.path);
+        events = pickSequence(parsed.sequences);
       } else if (p.format === 'prproj') {
-        // Premiere: offline gunzip+graph read (no Premiere, no Resolve import
-        // path). parsePrproj flattens EVERY sequence's events; a multi-sequence
-        // .prproj with overlapping record ranges refuses naturally in the
-        // overlap check — pre-split via editorial.list_sequences if needed.
+        // Premiere: offline gunzip+graph read (no Premiere, no Resolve
+        // import path).
         if (!p.path) return { error: 'prproj input requires path' };
-        const { parsePrproj } = await import('../prproj.mjs');
-        events = parsePrproj(p.path);
+        const { parsePrprojDoc } = await import('../prproj.mjs');
+        events = pickSequence(parsePrprojDoc(p.path).sequences);
       } else if (!content) {
         if (!p.path) return { error: 'provide content or path' };
         content = await fs.readFile(p.path, 'utf8');

@@ -382,11 +382,16 @@ export function eventsToAssembleSpec(events, opts = {}) {
     }
   }
 
-  const media = [...perSource.entries()].map(([reel, cuts]) => ({
-    mediaFilePath: sourceMap[reel].mediaFilePath,
-    spec: sourceMap[reel].spec,
-    cuts,
-  }));
+  // Reel aliasing: multiple reels legitimately map to ONE file (Avid mob
+  // names vs tape names, re-linked dailies). Group by mediaFilePath so the
+  // assembly sees one source per FILE, not per reel.
+  const byFile = new Map();
+  for (const [reel, cuts] of perSource.entries()) {
+    const fp = sourceMap[reel].mediaFilePath;
+    if (!byFile.has(fp)) byFile.set(fp, { mediaFilePath: fp, spec: sourceMap[reel].spec, cuts: [] });
+    byFile.get(fp).cuts.push(...cuts);
+  }
+  const media = [...byFile.values()];
 
   // Author cross-dissolves where the geometry allows it (render-verified on
   // 19.1.3.7: an offline Sm2TiTransition over transplanted cross-source media

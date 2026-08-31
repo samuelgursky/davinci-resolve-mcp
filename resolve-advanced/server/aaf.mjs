@@ -133,7 +133,9 @@ export async function parseAafDocument(contentOrPath) {
   const { sequences } = await runProbe(aafPath);
   const events = [];
   for (const seq of sequences || []) for (const ev of seq.events || []) events.push(ev);
-  return { events, sequences: (sequences || []).map(sequenceSummary) };
+  // Summaries PLUS each sequence's own events — the assemble picker needs
+  // per-sequence events without a second probe run.
+  return { events, sequences: (sequences || []).map((sq) => ({ ...sequenceSummary(sq), events: sq.events || [] })) };
 }
 
 /**

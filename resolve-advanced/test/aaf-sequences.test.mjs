@@ -1327,3 +1327,25 @@ test('assemble_from_interchange aaf routes through the async parser (stubbed)', 
   assert.ok(fs.existsSync(out));
   fs.rmSync(out, { force: true });
 });
+
+test('assemble_from_interchange picks a sequence by name from a multi-seq AAF', async () => {
+  process.env.AAF_PROBE_PYTHON = STUB_OK; // EP012 CONFORM (2 events) + EP012 BONUS (0)
+  const { drtTool } = await import('../server/lib.mjs');
+  const out = path.join(TMP, 'aaf-pick.drt');
+  const mkArgs = (extra) => ({ action: 'assemble_from_interchange', args: {
+    format: 'aaf', path: FAKE_AAF, outputPath: out, targetAppVersion: '19.1.3',
+    sourceMap: {
+      A001: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
+      B002: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
+    }, ...extra,
+  }});
+  // only ONE sequence has events → auto-picks it, no flag needed
+  const r1 = await drtTool.handler(mkArgs({}));
+  assert.ok(!r1.error, r1.error);
+  assert.equal(r1.conform.videoEvents, 2);
+  // explicit name works too; a wrong name names the available ones
+  const r2 = await drtTool.handler(mkArgs({ sequenceName: 'EP012 CONFORM' }));
+  assert.ok(!r2.error, r2.error);
+  await assert.rejects(drtTool.handler(mkArgs({ sequenceName: 'NOPE' })), /available: EP012 CONFORM, EP012 BONUS/);
+  fs.rmSync(out, { force: true });
+});
