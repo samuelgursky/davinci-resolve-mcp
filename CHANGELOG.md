@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.198.0 — E146: verify_roundtrip consults the changelist's laws
+
+### Added
+
+- **`verify_roundtrip` consults the changelist's laws.** A round-trip verify
+  of a real offline→online reel reported 216 mismatches, 191 of them the
+  proxies' `4K-2K` names against the masters' `4K`. The verify now runs the
+  changelist first and adopts its inferred source renames (reported in
+  `sourceAliases` beside any explicit ones), excuses a record edge the
+  changelist folded into a `junction_realigned` (reported in
+  `junctionRealigned`, like fade reshapes), treats a black generator by any
+  name as black on both sides, and reports a named generator the export
+  does not carry (a counting leader) as `generatorsNotInExport` instead of
+  an index cascade over every cut that follows it. `inferAliases: false`
+  turns the adoption off. On the real reel: 216 → 57 mismatches against the
+  bridge-authored timeline and 205 → 21 against the hand conform, what
+  remains being the conform's own differences (the eye-matched re-conform
+  onto other media, and the hand conform's four retimed layers) plus one
+  missing clip's index cascade.
+
 ## What's New in v2.197.0 — E145: a named generator is a black leg or a named hole
 
 ### Fixed

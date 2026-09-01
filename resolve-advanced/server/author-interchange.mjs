@@ -9,6 +9,7 @@
  * fidelity; per-clip effects/color do NOT (the Premiere→Resolve semantic gap, flagged not faked).
  */
 import { drt } from './libs.mjs';
+import { diffChangelist } from './editorial.mjs';
 
 const COLOR_MAP = {
   blue: 'Blue', cyan: 'Cyan', green: 'Green', yellow: 'Yellow', red: 'Red',
@@ -940,15 +941,44 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
   // canonicalize exactly like event sources.
   const aliases = {};
   for (const [k, v] of Object.entries(opts.sourceAliases || {})) aliases[canonSource(k)] = canonSource(v);
+  // RELINK + REALIGN laws (E146): the changelist already knows how an
+  // offline→online turnover renames its media (proxies "4K-2K" → masters
+  // "4K", ".mp4" → ".mov"; E141) and how a conform re-centres a cut inside
+  // an unchanged dissolve (E142). A round-trip verify that ignores them
+  // reports 191 source mismatches on a real reel whose picture is the same.
+  // Run the changelist once, adopt its inferred aliases, and let its
+  // junction_realigned list excuse the record edges it explains.
+  const changelistAliases = [];
+  const realignedJunctions = [];
+  if (opts.inferAliases !== false) {
+    try {
+      const explicit = Object.entries(opts.sourceAliases || {}).map(([from, to]) => ({ from, to }));
+      const d = diffChangelist(inputEvents, exportedEvents, { sourceAliases: explicit, inferAliases: true });
+      for (const a of d.sourceAliases || []) {
+        if (!a.inferred) continue;
+        changelistAliases.push(a);
+        if (aliases[canonSource(a.from)] === undefined) aliases[canonSource(a.from)] = canonSource(a.to);
+      }
+      for (const c of d.changes || []) if (c.kind === 'junction_realigned') realignedJunctions.push(c);
+    } catch {
+      /* the changelist is advisory here — a verify never fails because the diff could not run */
+    }
+  }
   const mapSource = (s) => aliases[s] ?? s;
   // recOut > recIn: an EDL dissolve writes a ZERO-duration outgoing leg
   // before the D event — a pairing placeholder, never a rendered clip, and
   // no export reproduces it.
   const vids = (evts) => evts.filter((e) => /^V\d*$/.test(String(e.track)) && e.recIn != null && e.recOut != null && e.recOut > e.recIn);
   const audsOf = (evts) => evts.filter((e) => /^A\d*$/.test(String(e.track)) && e.recIn != null && e.recOut != null && e.recOut > e.recIn);
+  // The record origin anchors on real PICTURE: a named generator leg (a
+  // counting leader at 0) is synthetic and an export may drop it (E146), and
+  // an anchor that moved with it would slide every later cut by its length.
+  const isNamedGenerator = (e) => Boolean(e.generatorName) && !/^(black|black video|solid color|slug)$/i.test(String(e.generatorName));
   const anchorOfSide = (evts) => {
-    const v = vids(evts);
+    const v = vids(evts).filter((e) => !isNamedGenerator(e));
     if (v.length) return Math.min(...v.map((e) => e.recIn));
+    const vg = vids(evts);
+    if (vg.length) return Math.min(...vg.map((e) => e.recIn));
     const au = audsOf(evts);
     return au.length ? Math.min(...au.map((e) => e.recIn)) : 0;
   };
@@ -957,7 +987,7 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     if (!v.length) return [];
     const off = anchorOfSide(evts);
     return v
-      .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0, speed: e.speed ?? 100, reverse: Boolean(e.reverse), color: e.color && typeof e.color === 'object' ? { r: Number(e.color.r) || 0, g: Number(e.color.g) || 0, b: Number(e.color.b) || 0 } : null, compound: e.compound || null, fromCompound: e.fromCompound || null }))
+      .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0, speed: e.speed ?? 100, reverse: Boolean(e.reverse), color: e.color && typeof e.color === 'object' ? { r: Number(e.color.r) || 0, g: Number(e.color.g) || 0, b: Number(e.color.b) || 0 } : null, compound: e.compound || null, fromCompound: e.fromCompound || null, generatorName: e.generatorName || null }))
       .sort((a, b) => a.track.localeCompare(b.track) || a.recIn - b.recIn);
   };
   // FADES (E94): BL legs on the input side and the Solid Color generators a
@@ -968,8 +998,15 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
   // picture edge by up to the transition duration (matching Resolve's own
   // start-at-cut reshaping), so an edge within an input junction's fade
   // window is excused — and reported, not silently absorbed.
-  const isBlackSeg = (e) => /^(bl|black|solid color)$/.test(e.source);
+  // A black generator by any name (E145: Premiere's Black Video, a slug) is black too.
+  const isBlackSeg = (e) => /^(bl|black|solid color|black video|black matte|slug)$/.test(e.source) || Boolean(e.generatorName && /^(black|black video|solid color|slug)$/i.test(e.generatorName));
   const inAnchor = anchorOfSide(inputEvents);
+  const exAnchor = anchorOfSide(exportedEvents);
+  // A record edge that the changelist folded into a junction_realigned is
+  // the same picture — excused and reported, like a fade reshape.
+  const junctionRealigned = [];
+  const realignedEdge = (edgeIn, edgeExp, track) => realignedJunctions.some((c) => canonTrack(c.track) === track
+    && Math.abs((c.oldRecIn - inAnchor) - edgeIn) <= recTol && Math.abs((c.newRecIn - exAnchor) - edgeExp) <= recTol);
   const junctionsFor = (trackRe) => inputEvents
     .filter((e) => trackRe.test(String(e.track)) && e.recIn != null && e.transition && e.transition.duration > 0)
     .map((e) => ({ frame: e.recIn - inAnchor, d: e.transition.duration }));
@@ -990,9 +1027,13 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
       const inBad = Math.abs(x.recIn - y.recIn) > recTol;
       const outBad = Math.abs(x.recOut - y.recOut) > recTol;
       if (inBad || outBad) {
-        const inExcused = !inBad || inFadeWindow(x.recIn, y.recIn);
-        const outExcused = !outBad || inFadeWindow(x.recOut, y.recOut);
-        if (inExcused && outExcused) {
+        const inRealigned = inBad && realignedEdge(x.recIn, y.recIn, x.track);
+        const outRealigned = outBad && realignedEdge(x.recOut, y.recOut, x.track);
+        const inExcused = !inBad || inRealigned || inFadeWindow(x.recIn, y.recIn);
+        const outExcused = !outBad || outRealigned || inFadeWindow(x.recOut, y.recOut);
+        if ((inRealigned || outRealigned) && inExcused && outExcused) {
+          junctionRealigned.push({ at: i, ...tt, source: x.source, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
+        } else if (inExcused && outExcused) {
           fadeReshapedBoundaries.push({ at: i, ...tt, source: x.source, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
         } else {
           mismatches.push({ kind: 'record', ...tt, at: i, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
@@ -1078,9 +1119,23 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     for (const e of inner) collapsedIn.add(e);
     collapsedEx.add(ex);
   }
-  const a = a0.filter((e) => !isBlackSeg(e) && !collapsedIn.has(e));
+  // GENERATORS THE EXPORT DOES NOT CARRY (E146): a named generator leg on
+  // the input (a counting leader) that no exported event of the same name
+  // covers is a capability hole the bridge already names
+  // (unresolvedGenerators) — reported as generatorsNotInExport, never a
+  // count/index cascade over every cut that follows it.
+  const generatorsNotInExport = [];
+  const genMissing = new Set();
+  for (const e of a0) {
+    if (!e.generatorName || isBlackSeg(e) || collapsedIn.has(e)) continue;
+    const partner = b0.find((x) => x.track === e.track && x.source === e.source && x.recIn < e.recOut && x.recOut > e.recIn);
+    if (partner) continue;
+    genMissing.add(e);
+    generatorsNotInExport.push({ name: e.generatorName, track: e.track, record: [e.recIn, e.recOut] });
+  }
+  const a = a0.filter((e) => !isBlackSeg(e) && !collapsedIn.has(e) && !genMissing.has(e));
   const b = b0.filter((e) => !isBlackSeg(e) && !collapsedEx.has(e));
-  const blackSegments = { input: a0.length - a.length, exported: b0.length - b.length };
+  const blackSegments = { input: a0.length - a.length - genMissing.size, exported: b0.length - b.length };
   const n = comparePairs(a, b, junctionsFor(/^V\d*$/), 'video');
 
   // AUDIO (E97): compared only when the INPUT declares audio events — a
@@ -1148,6 +1203,9 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
   mismatches.push(...generatorColours.mismatches);
   return {
     pass: mismatches.length === 0, pairs: n, srcOffsets, mismatches, markers,
+    sourceAliases: [...Object.entries(opts.sourceAliases || {}).map(([from, to]) => ({ from, to, inferred: false })), ...changelistAliases],
+    junctionRealigned,
+    generatorsNotInExport,
     ...(generatorColours.compared ? { generatorColours } : {}),
     ...(generatorColourNotInExport ? { generatorColourNotInExport } : {}),
     ...(compoundsCollapsedInExport.length ? { compoundsCollapsedInExport } : {}),

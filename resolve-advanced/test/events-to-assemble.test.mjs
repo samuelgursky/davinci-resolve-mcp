@@ -1593,3 +1593,44 @@ test('eventsToAssembleSpec authors a Black Video as a BL leg and drops a countin
   const mapped = eventsToAssembleSpec(events, { sourceMap: { ...MAP, 'Universal Counting Leader': MAP.TAPE1 }, timelineName: 'GEN2' });
   assert.deepEqual(mapped.report.unresolvedGenerators, []);
 });
+
+// ── E146: verify_roundtrip consults the changelist laws ──
+test('verifyRoundtrip adopts an inferred proxy→master rename, excuses a re-centred junction and names a missing leader — a real conform passes (E146)', () => {
+  const ev = (track, source, srcIn, recIn, dur, extra = {}) => ({ track, source, srcIn, srcOut: srcIn + dur, recIn, recOut: recIn + dur, speed: 100, reverse: false, transition: null, fps: 24, ...extra });
+  const dis = (type, recStart) => ({ type, duration: 24, recStart });
+  const input = [
+    ev('V', 'Universal Counting Leader', 72, 0, 192, { generatorName: 'Universal Counting Leader' }),
+    ev('V', 'Reel 4K-2K 0515.mov', 1000, 192, 100),
+    ev('V', 'Reel 4K-2K 0515.mov', 5000, 292, 100, { transition: dis('Cross Dissolve (Legacy)', 280) }),
+    ev('V', 'Reel 4K-2K 0520.mov', 300, 392, 60),
+    ev('V', 'Reel 4K-2K 0515.mov', 7000, 452, 48),
+  ];
+  // the online cut: masters, the leader dropped, the dissolve re-centred (cut 292 → 303 with both source windows sliding by 11)
+  const exported = [
+    ev('V', 'Reel 4K 0515.mov', 1000, 192, 111),
+    { ...ev('V', 'Reel 4K 0515.mov', 5011, 303, 89, { transition: dis('Cross Dissolve', 280) }), srcOut: 5100 },
+    ev('V', 'Reel 4K 0520.mov', 300, 392, 60),
+    ev('V', 'Reel 4K 0515.mov', 7000, 452, 48),
+  ];
+  const r = verifyRoundtrip(input, exported, { exportedFormat: 'drt' });
+  assert.deepEqual(r.mismatches, [], JSON.stringify(r));
+  assert.equal(r.pass, true);
+  assert.deepEqual(r.sourceAliases.map((a) => [a.from, a.to, a.inferred]).sort(), [['Reel 4K-2K 0515.mov', 'Reel 4K 0515.mov', true], ['Reel 4K-2K 0520.mov', 'Reel 4K 0520.mov', true]]);
+  // the leader's record window reads relative to the first REAL picture (192), which anchors both sides
+  assert.deepEqual(r.generatorsNotInExport, [{ name: 'Universal Counting Leader', track: 'V1', record: [-192, 0] }]);
+  assert.equal(r.junctionRealigned.length, 2, 'both sides of the re-centred junction are excused');
+  assert.equal(r.pairs, 4);
+  // null controls: inference off → the rename is real drift again; a genuinely different shot still fails 'source'
+  const off = verifyRoundtrip(input, exported, { exportedFormat: 'drt', inferAliases: false });
+  assert.ok(off.mismatches.some((m) => m.kind === 'source'));
+  const swapped = exported.map((e, i) => (i === 2 ? { ...e, source: 'ZEBRA_pickup.mov' } : e));
+  const sw = verifyRoundtrip(input, swapped, { exportedFormat: 'drt' });
+  assert.ok(sw.mismatches.some((m) => m.kind === 'source' && m.exported === 'zebra_pickup'));
+  assert.equal(sw.pass, false);
+  // a black generator by name is black on both sides — never a picture leg
+  const withBlack = [...input, ev('V', 'Black Video', 0, 500, 48, { generatorName: 'Black Video' })];
+  const withSolid = [...exported, ev('V', 'Solid Color', 0, 500, 48)];
+  const bk = verifyRoundtrip(withBlack, withSolid, { exportedFormat: 'drt' });
+  assert.equal(bk.pass, true);
+  assert.deepEqual(bk.blackSegments, { input: 1, exported: 1 });
+});
