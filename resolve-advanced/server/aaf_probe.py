@@ -726,6 +726,11 @@ def _retime_fields(op_group):
     play = None
     speed_map = None
     offset_map = None
+    # An EXPLICIT zero play rate is a freeze (Avid motion effect at 0%,
+    # E104): PARAM_SPEED_RATIO_U == 0.0 or a flat PARAM_SPEED_MAP_U at 0.
+    # It must not read as "nothing recoverable" — a freeze that silently
+    # became 100% is the loudest timing lie of all.
+    zero_seen = False
     length = _length(op_group)
     for param in _op_parameters(op_group):
         cls = type(param).__name__
@@ -754,6 +759,8 @@ def _retime_fields(op_group):
                 continue
             if value:
                 play = value  # *_U family stores the play rate directly
+            else:
+                zero_seen = True
     curve = {}
     for key, param in (("playRate", speed_map), ("sourceOffset", offset_map)):
         if param is None:
@@ -782,7 +789,11 @@ def _retime_fields(op_group):
             return {"speedVarying": True, **extra}
         if play is None and values and values[0]:
             play = values[0]  # a flat map's single value IS the constant play rate
+        elif play is None and values and values[0] == 0:
+            zero_seen = True
     if not play:
+        if zero_seen:
+            return {"speedRatio": 0.0, "speed": 0, "reverse": False, "freeze": True, **extra}
         return extra
     return {
         "speedRatio": round(abs(play), 6),

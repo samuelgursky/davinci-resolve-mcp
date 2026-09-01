@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.162.0 — freeze parity: Avid 0% motion effects are freezes
+
+### Fixed
+
+- **An Avid freeze frame silently read as a 100% clip.** A motion effect at
+  0% (`PARAM_SPEED_RATIO_U 0.0`, or a flat speed map at 0) fell into the AAF
+  walker's "no play rate recoverable" branch, and the freeze vanished. An
+  explicit zero now reports `speed: 0, freeze: true`, and the bridge authors
+  the real freeze — completing freeze parity across all five ingest formats
+  (EDL `M2 000.0`, OTIO `FreezeFrame`, XMEML `timeremap` 0, PrProj
+  `InPoint == OutPoint`, and now AAF).
+
 ## What's New in v2.161.0 — OTIO freeze frames close the loop
 
 ### Fixed

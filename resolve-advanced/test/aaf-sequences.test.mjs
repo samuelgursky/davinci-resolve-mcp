@@ -491,6 +491,30 @@ print(json.dumps(state))
   assert.deepEqual(out.unhandled, {});
 });
 
+test('aaf_probe: a 0% motion effect is a FREEZE, not "nothing recoverable" (E104)', { skip: PY ? false : 'python3 not available' }, () => {
+  // Avid freeze frames arrive as a motion effect at 0% — PARAM_SPEED_RATIO_U 0.0
+  // or a flat speed map at 0. Both used to fall through the "no play rate"
+  // branch and reach consumers as a plain 100% clip.
+  const out = runWalker(`
+fz1 = opgroup("Motion Control", 48, [mk("Sequence", components=[clip("A001", 1, start=10)])])
+fz1.parameters = [mk("ConstantValue", name="PARAM_SPEED_RATIO_U", value=0.0)]
+fz2 = opgroup("Motion Control", 24, [mk("Sequence", components=[clip("A002", 1)])])
+fz2.parameters = [mk("VaryingValue", name="PARAM_SPEED_MAP_U", pointlist=[mk("ControlPoint", time=0.0, value=0.0), mk("ControlPoint", time=1.0, value=0.0)])]
+seq = mk("Sequence", components=[fz1, fz2, clip("B001", 25)])
+state = new_state()
+ap._walk_slot(seq, prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  assert.deepEqual(
+    out.events.map((e) => [e.source, e.recIn, e.recOut, e.speed, e.freeze === true]),
+    [
+      ['A001', 0, 48, 0, true],
+      ['A002', 48, 72, 0, true],
+      ['B001', 72, 97, 100, false],
+    ],
+  );
+});
+
 test('aaf_probe: variable-speed timewarp → speedVarying, never a fabricated number', { skip: PY ? false : 'python3 not available' }, () => {
   const out = runWalker(`
 from fractions import Fraction
