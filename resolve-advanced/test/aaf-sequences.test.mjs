@@ -225,7 +225,7 @@ test('list_sequences drt → enumerates authored timelines', async () => {
 test('list_sequences drp → enumerates the template project', async () => {
   const r = await drtTool.handler({ action: 'list_sequences', args: { drpPath: 'vendor/drp-format/templates/media-clip-h264.drp' } });
   assert.ok(r.count >= 1);
-  assert.equal(r.sequences[0].name, 'sample.mp4');
+  assert.equal(r.sequences[0].name, 'MediaTemplate');  // E127: the pool's timeline name, not the first clip's (was the fallback 'sample.mp4')
   assert.ok(typeof r.sequences[0].id === 'string' && r.sequences[0].id.length);
 });
 

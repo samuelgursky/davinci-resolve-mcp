@@ -2859,7 +2859,14 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "compound to a single media-less clipitem named after it "
                    "(no inner content). editorial.parse_interchange flattens "
                    "the OTIO Stacks into record time (fromCompound on each "
-                   "cut).",
+                   "cut). EXPORT_DRT of the same timeline holds THREE "
+                   "SeqContainers (top + one per compound); a SeqContainer XML "
+                   "carries NO timeline name — its first <Name> is the first "
+                   "clip's — while MediaPool/Master/MpFolder.xml's "
+                   "Sm2MpTimelineClip / Sm2MpCompoundClip embed the "
+                   "<Sm2Sequence DbId> the container's track-level <Sequence> "
+                   "names (measured E127); the compound on the parent track is "
+                   "a plain Sm2TiVideoClip named after it with no MediaFilePath.",
         "recommended": "Author fade-to-white / colour mattes by placing a "
                        "Solid Color generator with that blob "
                        "(drp-format placeGenerator `color`, drt.assemble "

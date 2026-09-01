@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.181.0 — E127: DRT timelines get their real names, and compounds their kind
+
+### Fixed
+
+- **`drt.parse` / `list_sequences` named a timeline after its first clip.**
+  A SeqContainer XML carries no timeline name — its first `<Name>` is the
+  first clip's — so Resolve's DRT export of a compound timeline listed
+  "cut_src.mp4" and "white_src.mp4" as sequences (measured on 19.1.3.7; the
+  export is a permanent fixture). The pool folder's `Sm2MpTimelineClip` and
+  `Sm2MpCompoundClip` embed the `Sm2Sequence` each container's `<Sequence>`
+  names; the parser now takes names and `kind` (`timeline` | `compound`) from
+  there, tags a media-less clip named after a compound as `compound`, and
+  `list_sequences` reports `kind` and `nestedIn` so a picker can demote the
+  compound containers (E57_IN nested in E57_OUT, nested in E57_NESTED). The
+  bundled media template's sequence now lists by its real name,
+  `MediaTemplate`, where it used to read as its clip `sample.mp4`.
+
 ## What's New in v2.180.0 — E126: the sequence picker knows a nested composition from a turnover
 
 ### Added

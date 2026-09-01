@@ -58,6 +58,7 @@ function extractClipsFromTrackXml(trackXml, trackType) {
     }
     clips.push({
       clipId: m[3],
+      name: extractScalar(inner, 'Name'),
       start,
       duration,
       mediaFilePath,
@@ -94,9 +95,44 @@ function extractTracks(seqXml, trackVecTag, trackTagBase, trackType) {
   return tracks;
 }
 
-function parseSeqContainer(seqXml, sequenceName) {
-  return {
-    name: extractScalar(seqXml, 'Name') || sequenceName,
+/**
+ * The pool folder's own naming of every sequence (E127, measured against
+ * Resolve 19.1.3.7's EXPORT_DRT of a compound timeline): a SeqContainer XML
+ * carries NO timeline name — its first <Name> is the first CLIP's — while
+ * MediaPool/Master/MpFolder.xml holds an Sm2MpTimelineClip (a timeline) or
+ * Sm2MpCompoundClip (a compound) whose EMBEDDED <Sm2Sequence DbId=X> equals
+ * the container's track-level <Sequence>X</Sequence>. Map X → {name, kind}.
+ */
+async function loadPoolSequenceNames(zip) {
+  const map = new Map();
+  const entries = [];
+  zip.forEach((p, e) => { if (!e.dir && /(^|\/)MpFolder[^/]*\.xml$/.test(p)) entries.push(p); });
+  for (const p of entries) {
+    const xml = await zip.file(p).async('string');
+    const re = /<(Sm2MpTimelineClip|Sm2MpCompoundClip) DbId="([^"]+)">([\s\S]*?)<\/\1>/g;
+    let m;
+    while ((m = re.exec(xml)) !== null) {
+      const body = m[3];
+      const name = extractScalar(body, 'Name');
+      const seqRe = /<Sm2Sequence DbId="([^"]+)">/g;
+      let sm;
+      while ((sm = seqRe.exec(body)) !== null) {
+        if (!map.has(sm[1])) map.set(sm[1], { name, kind: m[1] === 'Sm2MpCompoundClip' ? 'compound' : 'timeline' });
+      }
+    }
+  }
+  return map;
+}
+
+function parseSeqContainer(seqXml, sequenceName, poolNames = new Map()) {
+  const seqId = extractScalar(seqXml, 'Sequence');
+  const pool = seqId ? poolNames.get(seqId) : null;
+  const compoundNames = new Set([...poolNames.values()].filter((v) => v.kind === 'compound' && v.name).map((v) => v.name));
+  const parsed = {
+    // The pool's name for this sequence when the export carries one; the
+    // first <Name> in the container is a CLIP name and only a fallback.
+    name: (pool && pool.name) || extractScalar(seqXml, 'Name') || sequenceName,
+    kind: pool ? pool.kind : null,
     sequence: sequenceName,
     frameRate: extractScalar(seqXml, 'FrameRate'),
     startTimecode: extractScalar(seqXml, 'StartTC'),
@@ -107,9 +143,16 @@ function parseSeqContainer(seqXml, sequenceName) {
       if (w === null || h === null) return null;
       return `${w}x${h}`;
     })(),
-    videoTracks: extractTracks(seqXml, 'VideoTrackVec', 'Sm2TiVideoTrack', 'video'),
+    videoTracks: extractTracks(seqXml, 'VideoTrackVec', 'Sm2TiVideoTrack', 'video').map((t) => ({
+      ...t,
+      // A media-less clip named after a compound in the pool IS that compound
+      // placed on this track (E127) — tag it so consumers do not read it as a
+      // missing source.
+      clips: (t.clips || []).map((c) => (c.mediaFilePath == null && c.name && compoundNames.has(c.name) ? { ...c, compound: c.name } : c)),
+    })),
     audioTracks: extractTracks(seqXml, 'AudioTrackVec', 'Sm2TiAudioTrack', 'audio'),
   };
+  return parsed;
 }
 
 async function loadMetadata(zip) {
@@ -146,10 +189,11 @@ async function parseDRT(drtPathOrBuffer, options = {}) {
     throw new Error('parseDRT: no SeqContainer*.xml entries found — is this a DRT/DRP?');
   }
 
+  const poolNames = await loadPoolSequenceNames(zip);
   const timelines = [];
   for (const p of seqEntries) {
     const xml = await zip.file(p).async('string');
-    timelines.push(parseSeqContainer(xml, p));
+    timelines.push(parseSeqContainer(xml, p, poolNames));
   }
 
   const metadata = await loadMetadata(zip);
