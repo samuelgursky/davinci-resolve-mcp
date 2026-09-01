@@ -2847,7 +2847,11 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "parameterless Transform effect — no colour anywhere "
                    "(measured E117) — so only an XML re-export witnesses a "
                    "generator colour (editorial.verify_roundtrip exportedFormat "
-                   "→ generatorColourNotInExport).",
+                   "→ generatorColourNotInExport). Such an OTIO export DOES "
+                   "re-conform through drt.assemble_from_interchange (E118): the "
+                   "media-less generator clips walk as black legs and the "
+                   "clip→generator fade renders 124→16 — black, the colour "
+                   "having been lost by the writer.",
         "recommended": "Author fade-to-white / colour mattes by placing a "
                        "Solid Color generator with that blob "
                        "(drp-format placeGenerator `color`, drt.assemble "

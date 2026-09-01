@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.173.0 — E118: Resolve's own OTIO exports re-conform
+
+### Fixed
+
+- **A Resolve OTIO export with generators could not conform.** Resolve's
+  OTIO writer emits a Solid Color as a `Clip` with a NULL `media_reference`
+  named after the generator (E117), which the parser read as a source reel —
+  `assemble_from_interchange` refused the turnover ("unmapped source reel:
+  Solid Color"). Generator clips — a null or `MissingReference` with a
+  generator name, or a proper OTIO `GeneratorReference` — now walk as BL legs
+  carrying `generatorName` (and the colour when a `GeneratorReference`
+  declares one), so the bridge authors generators. Render-verified on
+  19.1.3.7: the E110 fade-to-white conform, re-exported as OTIO and
+  re-conformed, plays its clip → generator fade 124 → 96 → 68 → 41 → 18 → 16
+  and holds 16 — black, because the OTIO writer carries no colour (E117),
+  which `verify_roundtrip` reports as `generatorColourNotInExport`.
+
 ## What's New in v2.172.0 — E117: colour QC knows which writers are colour-blind
 
 ### Fixed

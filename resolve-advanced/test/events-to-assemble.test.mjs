@@ -1405,3 +1405,28 @@ test('verifyRoundtrip reports generatorColourNotInExport for a colour-blind OTIO
   assert.equal(viaXml.pass, true);
   assert.deepEqual(viaXml.generatorColours, { compared: 2, mismatches: [] });
 });
+
+// E118: Resolve's OTIO writer emits a Solid Color as a Clip with a NULL
+// media_reference named after the generator (E117 fixture). Read as a source
+// reel, the bridge refused the whole turnover ("unmapped source reel: Solid
+// Color"). Generator clips — null/Missing reference with a generator name, or
+// an OTIO GeneratorReference — now walk as BL legs with generatorName (and a
+// colour when a GeneratorReference carries one), so the export re-conforms.
+test('parseOTIO walks media-less generator clips as BL legs and the bridge authors them (E118)', () => {
+  const otio = JSON.parse(fs.readFileSync(new URL('./fixtures/E117_resolve_ftw_export.otio', import.meta.url), 'utf8'));
+  const ev = parseOTIO(otio, { fps: 24 });
+  const vid = ev.filter((e) => e.track === 'V');
+  assert.deepEqual(vid.map((e) => [e.source.split('/').pop(), e.generatorName, e.recIn, e.recOut]), [['cut_src.mp4', undefined, 0, 96], ['BL', 'Solid Color', 96, 192], ['BL', 'Solid Color', 192, 240]]);
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const { spec, report } = eventsToAssembleSpec(ev, { sourceMap: { [vid[0].source]: { mediaFilePath: '/m/cut_src.mp4', spec: spec24 } } });
+  assert.equal(spec.elements.filter((el) => el.type === 'generator').length, 2);
+  assert.equal(spec.transitions.length, 1);
+  assert.deepEqual(report.droppedTransitions, []);
+  // A GeneratorReference with a colour carries it; a real media clip stays a clip.
+  const rt = (v) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: 24, value: v });
+  const tr = (s, d) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s), duration: rt(d) });
+  const gen = { OTIO_SCHEMA: 'Clip.2', name: 'White', source_range: tr(0, 24), media_reference: { OTIO_SCHEMA: 'GeneratorReference.1', generator_kind: 'SolidColor', parameters: { color: { r: 1, g: 1, b: 1 } } }, effects: [], markers: [] };
+  const clip = { OTIO_SCHEMA: 'Clip.2', name: 'Solid Color', source_range: tr(0, 24), media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: '/m/solid color.mp4' }, effects: [], markers: [] };
+  const ev2 = parseOTIO({ OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [gen, clip] }] } }, { fps: 24 });
+  assert.deepEqual(ev2.map((e) => [e.source.split('/').pop(), e.color || null]), [['BL', { r: 1, g: 1, b: 1, a: 1 }], ['solid color.mp4', null]]);
+});

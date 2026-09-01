@@ -51,6 +51,7 @@ function evt(o) {
     track: o.track || 'V',
     ...(o.name !== undefined ? { name: o.name } : {}),
     ...(o.color !== undefined ? { color: o.color } : {}),
+    ...(o.generatorName !== undefined ? { generatorName: o.generatorName } : {}),
     source: o.source || 'UNKNOWN',
     srcIn: o.srcIn ?? null,
     srcOut: o.srcOut ?? null,
@@ -247,7 +248,25 @@ export function parseOTIO(otio, opts = {}) {
             reverse = false;
           }
         }
-        const src = (child.media_reference && (child.media_reference.target_url || child.media_reference.name)) || child.name || 'UNKNOWN';
+        const mref = child.media_reference || null;
+        const mrefSchema = String((mref && mref.OTIO_SCHEMA) || '');
+        const clipName = String(child.name || '');
+        // GENERATOR clips (E118): Resolve's OTIO writer emits a Solid Color as
+        // a Clip with a NULL media_reference named after the generator
+        // (measured E117); OTIO proper uses a GeneratorReference. Neither
+        // is a source reel — they walk as BL legs (a colour, when a
+        // GeneratorReference carries one, rides along) so the bridge authors
+        // a generator instead of refusing the turnover as an unmapped reel.
+        const isGeneratorRef = /^GeneratorReference/.test(mrefSchema);
+        const isGeneratorClip = isGeneratorRef || ((!mref || /^MissingReference/.test(mrefSchema)) && /solid color|colou?r matte|^black$/i.test(clipName));
+        let genColor;
+        if (isGeneratorRef && mref.parameters && typeof mref.parameters === 'object') {
+          const pc = mref.parameters.color || mref.parameters.Color || mref.parameters.fillcolor || null;
+          if (pc && typeof pc === 'object' && pc.r != null) genColor = { r: Number(pc.r) || 0, g: Number(pc.g) || 0, b: Number(pc.b) || 0, a: pc.a != null ? Number(pc.a) : 1 };
+          else if (Array.isArray(pc) && pc.length >= 3) genColor = { r: Number(pc[0]) || 0, g: Number(pc[1]) || 0, b: Number(pc[2]) || 0, a: pc.length > 3 ? Number(pc[3]) : 1 };
+          if (genColor && genColor.r === 0 && genColor.g === 0 && genColor.b === 0) genColor = undefined;
+        }
+        const src = isGeneratorClip ? 'BL' : ((mref && (mref.target_url || mref.name)) || clipName || 'UNKNOWN');
         // CLIP markers belong to the ITEM, not the sequence — carried as
         // itemMarkers (frames CLIP-relative) so the bridge authors them as
         // Sm2TiItemLockableBlobs (E80). Track-level markers above remain
@@ -270,6 +289,8 @@ export function parseOTIO(otio, opts = {}) {
             reverse,
             transition: pendingTransition,
             itemMarkers: itemMarkers.length ? itemMarkers : undefined,
+            color: genColor,
+            generatorName: isGeneratorClip ? (clipName || (mref && mref.name) || 'Solid Color') : undefined,
             fps: rate,
           }),
         );
