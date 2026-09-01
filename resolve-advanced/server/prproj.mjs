@@ -264,7 +264,15 @@ function walkSequence(seqEntry, byId, depth = 0, seen = new Set()) {
     for (const tref of trackRefs) {
       const tEntry = byId.get(refId(tref));
       if (!tEntry) continue;
-      const itemRefs = asArray(tEntry.node.TrackItems?.TrackItem).concat(asArray(tEntry.node.ClipTrack?.ClipItems?.TrackItems?.TrackItem), asArray(tEntry.node.ClipItems?.TrackItems?.TrackItem));
+      // Real Premiere 2025 keeps a track's TRANSITIONS in a separate list,
+      // ClipTrack.TransitionItems (E134, measured: 2 video + 1 audio on the
+      // reel — none reached the parser from ClipItems alone).
+      const itemRefs = asArray(tEntry.node.TrackItems?.TrackItem).concat(
+        asArray(tEntry.node.ClipTrack?.ClipItems?.TrackItems?.TrackItem),
+        asArray(tEntry.node.ClipItems?.TrackItems?.TrackItem),
+        asArray(tEntry.node.ClipTrack?.TransitionItems?.TrackItems?.TrackItem),
+        asArray(tEntry.node.TransitionItems?.TrackItems?.TrackItem),
+      );
       const transitions = [];
       const clipEvents = [];
       for (const iref of itemRefs) {
@@ -301,7 +309,13 @@ function walkSequence(seqEntry, byId, depth = 0, seen = new Set()) {
         } else if (/Transition/.test(cEntry.tag)) {
           const ti = itemTiming(cEntry.node);
           const dur = ticksToFrames(Number(ti.end) - Number(ti.start), fps);
-          transitions.push({ recIn: ticksToFrames(ti.start, fps), duration: dur || 0 });
+          // Real shape carries the type and the fade semantics on the item
+          // (E134): DisplayName/MatchName name the effect; HasOutgoingClip
+          // false = a fade-IN from black/silence, HasIncomingClip false = a
+          // fade-OUT — the BL synthesis below keys on the missing neighbour.
+          const tti = asArray(cEntry.node.TransitionTrackItem)[0] || {};
+          const type = childText(tti, 'DisplayName') || childText(tti, 'MatchName') || childText(cEntry.node, 'DisplayName') || null;
+          transitions.push({ recIn: ticksToFrames(ti.start, fps), duration: dur || 0, type });
         }
       }
       // Attach each transition to the INCOMING clip whose record-in falls
@@ -313,7 +327,7 @@ function walkSequence(seqEntry, byId, depth = 0, seen = new Set()) {
       // bridge's black machinery (E91-E96).
       for (const tr of transitions) {
         const end = tr.recIn + tr.duration;
-        const trans = { type: 'dissolve', duration: tr.duration, recStart: tr.recIn };
+        const trans = { type: tr.type || 'dissolve', duration: tr.duration, recStart: tr.recIn };
         const incoming = clipEvents.find((e) => e.recIn > tr.recIn - 1 && e.recIn <= end);
         if (incoming) {
           incoming.transition = trans;

@@ -2912,7 +2912,14 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "AudioSequenceSource → SequenceSource.Sequence ObjectURef "
                        "→ the nested Sequence (E133: 3607 such items in the "
                        "reels project); parse_interchange flattens them through "
-                       "the clip\'s InPoint window with fromCompound.",
+                       "the clip\'s InPoint window with fromCompound. "
+                       "TRANSITIONS sit in a SEPARATE track list, "
+                       "ClipTrack.TransitionItems.TrackItems (E134): a "
+                       "Video/AudioTransitionTrackItem carries "
+                       "TransitionTrackItem.TrackItem{Start,End} (the span), "
+                       "DisplayName / MatchName (the effect), Alignment (ticks) "
+                       "and HasIncomingClip / HasOutgoingClip — false marks a "
+                       "fade from/to black or silence.",
         "tags": ["prproj", "premiere", "interchange", "silent-failure"],
         "submit": "missing",
         "mitigation": ["editorial.parse_interchange prproj", "editorial.list_sequences"],

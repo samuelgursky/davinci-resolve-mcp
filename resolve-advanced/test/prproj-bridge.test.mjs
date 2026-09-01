@@ -377,7 +377,8 @@ const REAL_SHAPE_XML = `<?xml version="1.0" encoding="UTF-8" ?>
   <VideoClip ObjectID="101140" ClassID="vc" Version="11"><Clip Version="18"><Source ObjectRef="5078"/><InPoint>508032000000</InPoint><OutPoint>762048000000</OutPoint></Clip></VideoClip>
   <VideoTrackGroup ObjectID="28140" ClassID="v" Version="1"><TrackGroup Version="1"><Tracks Version="1"><Track Index="0" ObjectURef="4f2d4adc-1632-4dec-afaf-183607bd663b"/></Tracks><FrameRate>10584000000</FrameRate></TrackGroup></VideoTrackGroup>
   <AudioTrackGroup ObjectID="28141" ClassID="a" Version="1"><TrackGroup Version="1"><Tracks Version="1"><Track Index="0" ObjectURef="aa2d4adc-1632-4dec-afaf-183607bd663b"/></Tracks><FrameRate>10584000000</FrameRate></TrackGroup></AudioTrackGroup>
-  <VideoClipTrack ObjectUID="4f2d4adc-1632-4dec-afaf-183607bd663b" ClassID="vt" Version="1"><ClipTrack Version="1"><ClipItems Version="1"><TrackItems Version="1"><TrackItem Index="0" ObjectRef="50187"/><TrackItem Index="1" ObjectRef="50188"/><TrackItem Index="2" ObjectRef="50189"/></TrackItems></ClipItems></ClipTrack></VideoClipTrack>
+  <VideoClipTrack ObjectUID="4f2d4adc-1632-4dec-afaf-183607bd663b" ClassID="vt" Version="1"><ClipTrack Version="1"><ClipItems Version="1"><TrackItems Version="1"><TrackItem Index="0" ObjectRef="50187"/><TrackItem Index="1" ObjectRef="50188"/><TrackItem Index="2" ObjectRef="50189"/></TrackItems></ClipItems><TransitionItems Version="1"><TrackItems Version="1"><TrackItem Index="0" ObjectRef="50521"/></TrackItems></TransitionItems></ClipTrack></VideoClipTrack>
+  <VideoTransitionTrackItem ObjectID="50521" ClassID="tr" Version="6"><TransitionTrackItem Version="3"><TrackItem Version="4"><Start>1778112000000</Start><End>2286144000000</End></TrackItem><DisplayName>Cross Dissolve (Legacy)</DisplayName><Alignment>254016000000</Alignment><HasIncomingClip>true</HasIncomingClip><HasOutgoingClip>true</HasOutgoingClip><MatchName>AE.ADBE Cross Dissolve New</MatchName></TransitionTrackItem></VideoTransitionTrackItem>
   <VideoClipTrackItem ObjectID="50189" ClassID="ci" Version="1"><ClipTrackItem Version="8"><TrackItem Version="4"><Start>2540160000000</Start><End>2921184000000</End></TrackItem><SubClip ObjectRef="69290"/></ClipTrackItem></VideoClipTrackItem>
   <SubClip ObjectID="69290" ClassID="sc" Version="6"><Clip ObjectRef="101150"/><MasterClip ObjectURef="9b0363ba-2a3a-4206-ac09-20f6e5a1b399"/><Name>NESTED_SELECTS</Name></SubClip>
   <VideoClip ObjectID="101150" ClassID="vc" Version="11"><Clip Version="18"><Source ObjectRef="5090"/><InPoint>127008000000</InPoint><OutPoint>508032000000</OutPoint></Clip></VideoClip>
@@ -407,6 +408,10 @@ test('parsePrproj walks the real Premiere 2025 shape: UID/URef graph, TrackGroup
   const ev = doc.sequences.find((s) => s.name === 'REAL_REEL').events;
   // The nested sequence (leader 0-24, then the Arrow clip 24-48 from src 217) is used from its
   // frame 12 for 36 frames at record 240: leader frames 12-24 → 240-252, Arrow → 252-276 (E133).
+  // E134: the dissolve lives in the track's TransitionItems list; its span 168-216 attaches to the
+  // incoming Arrow clip (record-in 192 inside the span) with the real DisplayName as its type.
+  const xf = ev.find((e) => e.recIn === 192 && e.track === 'V');
+  assert.deepEqual(xf.transition, { type: 'Cross Dissolve (Legacy)', duration: 48, recStart: 168 });
   assert.deepEqual(ev.map((e) => [e.track, e.source, e.srcIn, e.srcOut, e.recIn, e.recOut, e.fromCompound || null]), [
     ['V', 'leader.mov', 0, 192, 0, 192, null],
     ['V', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 192, 240, null],

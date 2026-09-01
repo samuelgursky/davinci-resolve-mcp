@@ -2,6 +2,28 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.187.0 — E134: real Premiere transitions attach, with their real type
+
+### Fixed
+
+- **Real Premiere transitions were invisible.** A Premiere 2025 track keeps
+  its transitions in a separate `TransitionItems` list, not among
+  `ClipItems` (measured on the reel: two video `Cross Dissolve (Legacy)`
+  items and one audio `Constant Power` fade-in, none of which reached the
+  parser). Each carries its span under `TransitionTrackItem.TrackItem`, an
+  `Alignment`, `HasIncomingClip` / `HasOutgoingClip` (false = a fade from or
+  to black or silence) and a `DisplayName`. The walk now reads
+  `TransitionItems` alongside `ClipItems`; transitions attach to the
+  incoming clip whose record-in falls inside the span and carry the real
+  `DisplayName` as their type, so the bridge routes dissolves and audio
+  cross-fades by name; a transition with no outgoing clip synthesizes the
+  black/silence leg as before. The synthetic real-shape fixture pins a
+  `TransitionItems` dissolve attaching at its explicit span.
+
+### Measured (filed in api-limitations)
+
+- The Premiere 2025 transition item shape and its fade flags.
+
 ## What's New in v2.186.0 — E133: Premiere nested sequences flatten into the reel
 
 ### Fixed
