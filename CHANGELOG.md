@@ -2,6 +2,28 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.139.0 — speed ramps, and the easing crash law
+
+### Added
+
+- **Variable-speed ramps authored offline** (`cuts[].ramp:
+  [{durationFrames, speed}, …]` — two or more linear segments from the cut
+  head, `srcIn` honored). No harvest was needed: the engine honors
+  intermediate keyframes in the same seconds-domain keyed `Sm2TimeMap` the
+  constant retimes use. E63/E64 proof on 19.1.3.7: a 50%→100% knee read back
+  the exact source window AND rendered the predicted frame cadence (11/23
+  doubled frames in the half-speed window, none at full speed; the 2×
+  segment moved at 4.3× the 0.5× segment's per-frame motion), with `srcIn`
+  landing on the right source frame by luma.
+
+### Measured and closed
+
+- **Eased ramps are a crasher, not a boundary.** A keyframe with
+  `interp = 2` crashed Resolve outright on import (E65 — app death, headless
+  recovery per doctrine). The builders hardcode `interp = 0`, the test suite
+  asserts it, and the guide records the law: linear segments are the
+  authorable envelope on 19.1.3.
+
 ## What's New in v2.138.0 — wipes join the conform
 
 ### Added

@@ -304,10 +304,62 @@ function buildFreezeTimemapKeyed({ freezeFrame, sourceFrames, fps = 24, uniqueId
   ] });
 }
 
+/**
+ * VARIABLE-SPEED RAMP — piecewise-constant speed segments as a multi-keyframe
+ * r19 keyed Sm2TimeMap. E63 (2026-08-31): the engine honors intermediate
+ * keyframes with the SAME seconds-domain conventions as the constant maps —
+ * a synthesized 3-keyframe 50%→100% ramp read back source 0..36 over 48
+ * record frames AND rendered with exactly the predicted cadence (11/23
+ * doubled frames in the 50% window, 0/24 at 100%). Record domain starts at
+ * the cut head (clip In stays 0); srcIn bakes into the first keyframe's Y.
+ *
+ * @param {Array<{durationFrames:number, speed:number}>} segments - record-domain
+ *   pieces, in order from the cut head; speeds are source/record multipliers.
+ */
+function buildRampTimemapKeyed({ segments, srcIn = 0, sourceFrames, fps = 24, uniqueId }) {
+  if (!Array.isArray(segments) || segments.length < 2) throw new TypeError('buildRampTimemapKeyed: segments must be an array of >= 2 {durationFrames, speed} pieces (use speed/freeze for a single one)');
+  if (!Number.isInteger(sourceFrames) || sourceFrames < 1) throw new TypeError('buildRampTimemapKeyed: sourceFrames must be a positive integer');
+  if (!Number.isInteger(srcIn) || srcIn < 0) throw new TypeError('buildRampTimemapKeyed: srcIn must be a non-negative integer');
+  const kf = (X, Y) => encodeKeyedDict({ hdr: 1, entries: [
+    { key: 'interp', type: 0x02, subType: 0, value: 0 },
+    { key: 'YOut', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'YIn', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'Y', type: T_DOUBLE, subType: 0, value: Y },
+    { key: 'XOut', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'XIn', type: T_DOUBLE, subType: 0, value: 0 },
+    { key: 'X', type: T_DOUBLE, subType: 0, value: X },
+  ] }).toString('hex');
+  let x = 0;
+  let y = srcIn / fps;
+  const points = [[x, y]];
+  for (const [i, seg] of segments.entries()) {
+    if (!Number.isInteger(seg.durationFrames) || seg.durationFrames < 1) throw new TypeError(`buildRampTimemapKeyed: segments[${i}].durationFrames must be a positive integer`);
+    if (!(seg.speed > 0)) throw new RangeError(`buildRampTimemapKeyed: segments[${i}].speed must be > 0 (freeze/reverse segments are not authorable in a ramp)`);
+    x += seg.durationFrames / fps;
+    y += (seg.durationFrames * seg.speed) / fps;
+    points.push([x, y]);
+  }
+  const sourceEnd = y * fps;
+  if (sourceEnd > sourceFrames) {
+    throw new RangeError(`buildRampTimemapKeyed: ramp consumes source frame ${Math.ceil(sourceEnd)} but the media has ${sourceFrames}`);
+  }
+  const entries = points.map(([X, Y], i) => ({ key: String(i), type: T_BYTES, subType: 0, value: kf(X, Y) })).reverse();
+  const keyframes = encodeKeyedDict({ hdr: 1, entries }).toString('hex');
+  const [XMax, YMax] = points[points.length - 1];
+  return encodeKeyedDict({ hdr: 1, entries: [
+    { key: 'YMax', type: T_DOUBLE, subType: 0, value: YMax },
+    { key: 'XMax', type: T_DOUBLE, subType: 0, value: XMax },
+    { key: 'UniqueId', type: T_STRING, subType: 0, value: uniqueId },
+    { key: 'LastValidYOffset', type: T_DOUBLE, subType: 0, value: (sourceFrames - 1) / fps },
+    { key: 'KeyframesBA', type: T_BYTES, subType: 0, value: keyframes },
+    { key: 'DbType', type: T_STRING, subType: 0, value: 'Sm2TimeMap' },
+  ] });
+}
+
 module.exports = {
   decodeTimemap, encodeTimemap, encodeRetimedTimemap,
   identityTimemap, buildConstantSpeedTimemap, buildConstantSpeedTimemapKeyed,
-  buildFreezeTimemapKeyed,
+  buildFreezeTimemapKeyed, buildRampTimemapKeyed,
   buildTimemap, decodeProtobuf,
   TYPE_LINEAR,
 };

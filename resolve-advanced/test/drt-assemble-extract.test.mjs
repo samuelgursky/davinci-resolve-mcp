@@ -397,3 +397,28 @@ test('transitions[].type wipe swaps the harvested style blob; audio wipes refuse
       transitions: [{ track: 1, atFrame: 86448, durationFrames: 24, type: 'wipe', trackType: 'audio' }] },
   }}), /wipes are video-only/);
 });
+
+test('cuts[].ramp authors a multi-keyframe map with In=0; bad geometry refuses', async () => {
+  const out = tmp('.drt');
+  await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    spec: { timelineName: 'RAMP', media: {
+      mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 },
+      cuts: [{ startFrame: 86400, durationFrames: 48, srcIn: 96,
+        ramp: [{ durationFrames: 24, speed: 0.5 }, { durationFrames: 24, speed: 2.0 }] }],
+    } },
+  }});
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+  const seq = await zip.file(seqName).async('string');
+  const clip = seq.match(/<Element>\s*<Sm2TiVideoClip[\s\S]*?<\/Sm2TiVideoClip>\s*<\/Element>/)[0];
+  assert.match(clip, /<In>0\|/, 'ramp cuts anchor record at the cut head (srcIn lives in the map)');
+  const tm = clip.match(/<MediaTimemapBA>([0-9a-fA-F]+)<\/MediaTimemapBA>/)[1];
+  assert.ok(tm.length > 1500, 'multi-keyframe map present');
+  await fs.unlink(out);
+  const base = { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 } };
+  await assert.rejects(drtTool.handler({ action: 'assemble', args: { outputPath: tmp('.drt'),
+    spec: { media: { ...base, cuts: [{ startFrame: 86400, durationFrames: 48, ramp: [{ durationFrames: 24, speed: 1 }] }] } } } }), /sum to 24 frames but the cut is 48/);
+  await assert.rejects(drtTool.handler({ action: 'assemble', args: { outputPath: tmp('.drt'),
+    spec: { media: { ...base, cuts: [{ startFrame: 86400, durationFrames: 48, speed: 0.5, ramp: [{ durationFrames: 24, speed: 1 }, { durationFrames: 24, speed: 1 }] }] } } } }), /cannot combine/);
+});

@@ -47,6 +47,7 @@ window. `render.verify_output` covers the container-level checks.
 | Constant retimes, forward | `cuts[].speed` (e.g. `0.5`) | v2.113 |
 | Constant retimes, reverse | `cuts[].reverse` | v2.114 |
 | Freeze frames | `cuts[].freeze` (holds source frame `srcIn`) | v2.134 |
+| Speed ramps | `cuts[].ramp: [{durationFrames, speed}, …]` (linear segments only) | v2.139 |
 | Audio placements, A1–A8 | `cuts[].audioOnly + track` | v2.115 |
 | Built-in generators | `elements: [{type:'generator', generatorName}]` | v2.110 |
 | Custom start timecode | `spec.startFrame` / `preserveStartTimecode` | v2.117 |
@@ -95,6 +96,14 @@ Resolve's own output. The map spans the whole source stretched by 1/speed;
 the clip's `<In>`/`<Duration>` window into it in record-domain frames.
 Reverse is the same map with the Y endpoints swapped, and `In` then measures
 from the source end.
+
+**Ramps are just more keyframes — but easing is a crasher.** The engine
+honors intermediate keyframes in the same seconds-domain map (E63/E64:
+a synthesized 50%→100% knee read back AND rendered with the exact predicted
+frame cadence, srcIn baked into the first keyframe's Y, clip `In` at the cut
+head). `cuts[].ramp` authors piecewise-constant segments. The keyframes'
+`interp` field must stay **0**: an `interp=2` keyframe crashed Resolve
+19.1.3 outright on import (app death, E65) — eased ramps are not authorable.
 
 **Freezes are a third shape, not a flat retime.** A flat line in the retime's
 frame domain reads back frozen but *renders moving* — the one divergence that

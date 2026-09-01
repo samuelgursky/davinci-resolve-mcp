@@ -675,3 +675,32 @@ test('EDL W-codes author as wipes; D stays a plain dissolve (E61/E62)', () => {
   const d = eventsToAssembleSpec(parseEDL(disEdl, { fps: 24 }), { sourceMap: MAP });
   assert.deepEqual(d.spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24 }]);
 });
+
+test('buildRampTimemapKeyed: piecewise arithmetic, srcIn baking, and refusals (E63/E64)', () => {
+  const requireR = requireCjs;
+  const { buildRampTimemapKeyed } = requireR('../vendor/drp-format/media-timemap.js');
+  const { decodeKeyedDict } = requireR('../vendor/drp-format/keyed-dict.js');
+  // E64 live-verified shape: srcIn 96, 24f @0.5 then 24f @2.0 → source 96..156,
+  // rendered f0 at the source-96 luma family, second half at 4.3x the first
+  // half's per-frame motion. interp stays 0 EVERYWHERE: an interp=2 keyframe
+  // CRASHED Resolve outright on import (E65, app death) — easing is a
+  // measured crasher on 19.1.3, linear segments are the envelope.
+  const map = buildRampTimemapKeyed({
+    segments: [{ durationFrames: 24, speed: 0.5 }, { durationFrames: 24, speed: 2.0 }],
+    srcIn: 96, sourceFrames: 192, fps: 24, uniqueId: 'u-ramp',
+  });
+  const d = decodeKeyedDict(map);
+  const get = (k) => d.entries.find((e) => e.key === k).value;
+  assert.equal(get('XMax'), 2);                       // 48 record frames
+  assert.equal(get('YMax'), 156 / 24);                // source end
+  assert.equal(get('LastValidYOffset'), 191 / 24);    // whole-source extent, as always
+  const kfs = decodeKeyedDict(Buffer.from(get('KeyframesBA'), 'hex')).entries;
+  assert.equal(kfs.length, 3);
+  for (const k of kfs) {
+    const inner = decodeKeyedDict(Buffer.from(k.value, 'hex')).entries;
+    assert.equal(inner.find((e) => e.key === 'interp').value, 0, 'interp must stay 0 — easing crashes Resolve (measured)');
+  }
+  assert.throws(() => buildRampTimemapKeyed({ segments: [{ durationFrames: 24, speed: 2 }], srcIn: 0, sourceFrames: 192, fps: 24, uniqueId: 'u' }), />= 2/);
+  assert.throws(() => buildRampTimemapKeyed({ segments: [{ durationFrames: 24, speed: 4 }, { durationFrames: 24, speed: 4 }], srcIn: 0, sourceFrames: 100, fps: 24, uniqueId: 'u' }), /consumes source frame/);
+  assert.throws(() => buildRampTimemapKeyed({ segments: [{ durationFrames: 24, speed: 0 }, { durationFrames: 24, speed: 1 }], srcIn: 0, sourceFrames: 192, fps: 24, uniqueId: 'u' }), /speed must be > 0/);
+});

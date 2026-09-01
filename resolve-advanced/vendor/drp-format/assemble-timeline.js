@@ -25,7 +25,7 @@ const { createEmptyProject, addMediaClip, DEFAULT_START_FRAME } = require('./aut
 const { loadMediaTemplate, transplantMediaElement, insertMediaElement } = require('./media-template-cache');
 const JSZip = require('jszip');
 const { cutSourceIntoClips } = require('./cut-media');
-const { buildConstantSpeedTimemapKeyed, buildFreezeTimemapKeyed } = require('./media-timemap');
+const { buildConstantSpeedTimemapKeyed, buildFreezeTimemapKeyed, buildRampTimemapKeyed } = require('./media-timemap');
 const { encodeTimelineMarkersBlob } = require('./timeline-markers-blob');
 const { placeSubtitles, parseSrt } = require('./place-subtitles');
 const { placeCompound } = require('./place-compound');
@@ -78,7 +78,9 @@ async function assembleTimeline(spec = {}) {
           // srcIn/duration are TIMELINE frames (24fps template); the media's
           // extent converts: frameCount / mediaFps × 24.
           const maxTimelineFrames = Math.floor((mediaSpec.frameCount / mediaSpec.fps) * 24);
-          if ((cut.srcIn ?? 0) + cut.durationFrames > maxTimelineFrames) {
+          // Ramps consume sum(duration × speed) source, not durationFrames —
+          // the ramp builder enforces its own source-extent bound.
+          if (!Array.isArray(cut.ramp) && (cut.srcIn ?? 0) + cut.durationFrames > maxTimelineFrames) {
             throw new RangeError(
               `assembleTimeline: ${label}.cuts[${i}] reads past the media's end — (srcIn ?? 0) + durationFrames exceeds ${maxTimelineFrames} timeline frames (media ${mediaSpec.frameCount} frames @ ${mediaSpec.fps} fps on the 24fps template timeline)`,
             );
@@ -137,7 +139,26 @@ async function assembleTimeline(spec = {}) {
         // captured before clip elements were harvested.
         if (caches[i] && caches[i].videoClipElement) out.donorClipVideo = caches[i].videoClipElement;
         if (caches[i] && caches[i].audioClipElement) out.donorClipAudio = caches[i].audioClipElement;
-        if (cut.freeze || cut.speed === 0) {
+        if (Array.isArray(cut.ramp)) {
+          // VARIABLE-SPEED RAMP (E63, render-verified): piecewise-constant
+          // segments as one multi-keyframe Sm2TimeMap. Record domain starts
+          // at the cut head (In stays 0); srcIn bakes into the map's first
+          // keyframe. Video-only, like every retime.
+          if (cut.freeze || cut.reverse || (cut.speed !== undefined && cut.speed !== 1)) {
+            throw new RangeError('assembleTimeline: cut.ramp cannot combine with speed/reverse/freeze');
+          }
+          const fpsR = Math.round(src.spec.fps || 24);
+          const total = cut.ramp.reduce((s, seg) => s + (seg && seg.durationFrames || 0), 0);
+          if (total !== cut.durationFrames) {
+            throw new RangeError(`assembleTimeline: ramp segments sum to ${total} frames but the cut is ${cut.durationFrames}`);
+          }
+          out.timemap = buildRampTimemapKeyed({
+            segments: cut.ramp, srcIn: cut.srcIn ?? 0,
+            sourceFrames: src.spec.frameCount, fps: fpsR, uniqueId: randomUUID(),
+          }).toString('hex');
+          out.srcIn = 0; // record-domain In is the cut head; the map carries srcIn
+          delete out.ramp;
+        } else if (cut.freeze || cut.speed === 0) {
           // FREEZE frame (r19 keyed map harvested from a live EDL M2 000.0
           // import, E55; render-proven frozen). Holds source frame srcIn for
           // the whole cut. The frozen clip's <In> stays EMPTY; the position
