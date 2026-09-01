@@ -216,6 +216,13 @@ export function parseOTIO(otio, opts = {}) {
             speed = +(eff.time_scalar * 100).toFixed(2);
             reverse = eff.time_scalar < 0;
           }
+          // OTIO FreezeFrame is a LinearTimeWarp subclass whose time_scalar
+          // is 0 by definition — writers commonly omit the field, which
+          // read as a plain 100% clip here (E103). Speed 0 authors a freeze.
+          if (/^FreezeFrame\b/.test(String(eff.OTIO_SCHEMA || ''))) {
+            speed = 0;
+            reverse = false;
+          }
         }
         const src = (child.media_reference && (child.media_reference.target_url || child.media_reference.name)) || child.name || 'UNKNOWN';
         // CLIP markers belong to the ITEM, not the sequence — carried as

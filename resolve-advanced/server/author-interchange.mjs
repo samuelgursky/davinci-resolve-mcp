@@ -152,7 +152,11 @@ export function eventsToOTIO(events, opts = {}) {
         },
         active_media_reference_key: 'DEFAULT_MEDIA',
       };
-      if ((e.speed ?? 100) !== 100 || e.reverse) {
+      if ((e.speed ?? 100) === 0) {
+        // Zero speed = freeze: OTIO's own schema for it (a LinearTimeWarp
+        // subclass with time_scalar 0), readable by both conventions (E103).
+        clip.effects.push({ OTIO_SCHEMA: 'FreezeFrame.1', name: 'Freeze', metadata: {}, effect_name: 'FreezeFrame', time_scalar: 0 });
+      } else if ((e.speed ?? 100) !== 100 || e.reverse) {
         clip.effects.push({ OTIO_SCHEMA: 'LinearTimeWarp.1', name: 'Speed', metadata: {}, effect_name: 'LinearTimeWarp', time_scalar: (e.reverse ? -1 : 1) * ((e.speed ?? 100) / 100) });
       }
       if (e.transition) {

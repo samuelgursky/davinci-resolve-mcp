@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.161.0 — OTIO freeze frames close the loop
+
+### Fixed
+
+- **OTIO `FreezeFrame` effects were silently lost at parse**: the reader only
+  looked at `time_scalar`, which FreezeFrame writers commonly omit, so a
+  turnover freeze read as a plain 100% clip. The schema itself now means
+  speed 0, and the bridge authors the real freeze `Sm2TimeMap`.
+
+### Added
+
+- The OTIO writer emits `FreezeFrame.1` (time_scalar 0) for zero-speed
+  events — OTIO's own schema for it, readable by both conventions.
+
+### Measured
+
+- **Resolve's `EXPORT_OTIO` writes an authored freeze back as
+  `FreezeFrame.1` with `time_scalar: 0`** — the freeze round-trips
+  losslessly, and `verify_roundtrip` now catches a freeze flattened to 100%
+  as retime drift.
+
 ## What's New in v2.160.0 — write-side span fidelity; the flat DRT target stops lying about black
 
 ### Fixed

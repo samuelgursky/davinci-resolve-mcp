@@ -892,6 +892,36 @@ test('eventsToOTIO carries transition alignment; the flat DRT target omits BL le
   assert.deepEqual(drtSpec.timelines[0].videoTracks[0].clips.map((c) => c.mediaFilePath), ['TAPE1']);
 });
 
+test('OTIO FreezeFrame effects ingest as freezes, write back as FreezeFrame, and verify (E103)', async () => {
+  const { eventsToOTIO } = await import('../server/author-interchange.mjs');
+  const rt = (v, r = 24) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: r, value: v });
+  const tr = (s, d, r = 24) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s, r), duration: rt(d, r) });
+  // A FreezeFrame WITHOUT time_scalar (common writer shape) used to read as
+  // a plain 100% clip — the freeze vanished at parse.
+  const otio = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [
+      { OTIO_SCHEMA: 'Clip.2', name: 'A', source_range: tr(0, 48), media_reference: { target_url: 'A' }, effects: [], markers: [] },
+      { OTIO_SCHEMA: 'Clip.2', name: 'A', source_range: tr(48, 48), media_reference: { target_url: 'A' }, effects: [{ OTIO_SCHEMA: 'FreezeFrame.1', name: 'Freeze' }], markers: [] },
+    ] },
+  ] } };
+  const events = parseOTIO(otio, { fps: 24 });
+  assert.equal(events[1].speed, 0);
+  const { spec, report } = eventsToAssembleSpec(events, { sourceMap: { A: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } } } });
+  assert.equal(spec.media[0].cuts[1].freeze, true);
+  assert.deepEqual(report.authoredRetimes, [{ index: 2, source: 'A', speed: 0, freeze: true }]);
+  // Writer emits OTIO's own schema for it (Resolve's EXPORT_OTIO writes the
+  // same FreezeFrame.1 for an authored freeze — measured live).
+  const doc = eventsToOTIO(events, { fps: 24 });
+  const eff = doc.tracks.children[0].children.find((c) => c.OTIO_SCHEMA === 'Clip.2' && c.effects.length).effects[0];
+  assert.equal(eff.OTIO_SCHEMA, 'FreezeFrame.1');
+  assert.equal(eff.time_scalar, 0);
+  // and the round trip verifies; a freeze flattened to 100% fails as retime drift
+  const back = parseOTIO(doc, { fps: 24 });
+  assert.equal(verifyRoundtrip(events, back).pass, true);
+  const flat = back.map((e) => ({ ...e, speed: 100 }));
+  assert.equal(verifyRoundtrip(events, flat).mismatches[0].kind, 'retime');
+});
+
 test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
   const fsM = await import('node:fs');
   const os = await import('node:os');
