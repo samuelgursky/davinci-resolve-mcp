@@ -1474,7 +1474,7 @@ def verify_resolve_connection(python_path, api_path, lib_path):
 
 def print_banner():
     title = f"DaVinci Resolve MCP Server — Installer v{VERSION}"
-    subtitle = "32 compound · 329 full · 3 platforms"
+    subtitle = "36 compound · 353 full · 3 platforms"
     print()
     print(bold("  ╔══════════════════════════════════════════════════════╗"))
     print(bold(f"  ║{title:^54}║"))
