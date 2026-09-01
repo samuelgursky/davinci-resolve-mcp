@@ -177,11 +177,26 @@ export async function qcSnapshot(dbPath, snapshotId, opts = {}) {
     // read qc_record_frame / qc_source_frame when present.
     const pick = pickQcFrame(cut);
     const cutForSample = { ...cut, qc_record_frame: pick.recordFrame, qc_source_frame: pick.sourceFrame };
-    const conform = await opts.sampleConform(cutForSample);
-    const reference = await opts.sampleReference(cutForSample);
+    // A flattened COMPOUND cut (E122) has no flat source to sample: the XML
+    // writer left only its name. Judging it against the reference could only
+    // ever read WRONG — a false red — so it is review, with the reason.
+    const isCompoundCut = !!cut.is_compound;
+    const conform = isCompoundCut ? null : await opts.sampleConform(cutForSample);
+    const reference = isCompoundCut ? null : await opts.sampleReference(cutForSample);
     const refFrame = pick.recordFrame ?? cut.record_start;
     let v;
-    if (!reference) {
+    if (isCompoundCut) {
+      v = {
+        snapshot_id: snapshotId,
+        cut_index: cut.cut_index,
+        reference_ref: ref,
+        reference_frame: refFrame,
+        verdict: 'UNREADABLE',
+        category: 'review',
+        ran_at: opts.now ?? null,
+      };
+      pick.note = `compound clip "${cut.source_basename || ''}" — no flat source to sample; QC its inner cuts from an OTIO export (nested Stacks flatten)`;
+    } else if (!reference) {
       // can't sample the reference → can't verify → human review
       v = {
         snapshot_id: snapshotId,

@@ -268,3 +268,15 @@ test('ingest of a verbatim Resolve export: junctions paired in record order, ora
   const w1 = JSON.parse(cuts[1].transition);
   assert.deepEqual([w1.in.start, w1.in.end, w1.out.start, w1.out.end], [96, 120, 192, 216]);
 });
+
+
+test('ingest tags a flattened XML compound clipitem and old sidecars migrate the column (E122)', () => {
+  const db = tmpDb();
+  const fx = new URL('./fixtures/E120_resolve_nested_export.xml', import.meta.url);
+  const r = ingestXml(db, fx.pathname, { reel: 'E122', now: 't', mediaFrames: { 'cut_src.mp4': 192 } });
+  const cuts = getSnapshot(db, r.snapshotId).cuts;
+  assert.deepEqual(cuts.map((c) => [c.source_basename, c.is_compound]), [['cut_src.mp4', 0], ['E57_OUT', 1]]);
+  // Null control: a plain XML carries no compound.
+  const r0 = ingestXml(db, writeXml(xmeml()), { reel: 'R0', now: 't' });
+  assert.ok(getSnapshot(db, r0.snapshotId).cuts.every((c) => c.is_compound === 0));
+});

@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.176.0 — E122: frame QC never scores a compound clip as a false red
+
+### Fixed
+
+- **A flattened compound cut read as a conform error in frame QC.** The
+  lineage ingest of Resolve's FCP7 export read a compound's media-less
+  clipitem as a source named after the compound with an oracle frame of 0;
+  the sampler would then look for a source that does not exist and score
+  the cut WRONG. The geometry parser now flags a clipitem whose `<file>`
+  carries an explicitly empty `<pathurl>` as a compound, the lineage store
+  keeps `is_compound` (pre-E122 sidecars migrate in place), and `qc` never
+  samples such a cut: it reports `UNREADABLE` / review with a note naming
+  the compound and pointing at the OTIO export, where compounds keep their
+  inner content and flatten (E120). Picture cuts around it are judged as
+  before.
+
 ## What's New in v2.175.0 — E121: a flattened XML compound is a named hole, not a refusal
 
 ### Fixed

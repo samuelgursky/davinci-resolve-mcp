@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS cuts (snapshot_id TEXT, cut_index INTEGER, record_sta
  source_basename TEXT, source_path TEXT, xml_in INTEGER, xml_out INTEGER,
  ppro_ticks_in INTEGER, oracle_source_frame INTEGER, is_subclip INTEGER,
  subclip_startoffset INTEGER, subclip_endoffset INTEGER, reverse INTEGER,
- scale_corrected REAL, pan_h REAL, pan_v REAL, rotation REAL, transition TEXT, speed REAL,
+ scale_corrected REAL, pan_h REAL, pan_v REAL, rotation REAL, transition TEXT, speed REAL, is_compound INTEGER,
  cut_hash TEXT, PRIMARY KEY (snapshot_id, cut_index));
 CREATE TABLE IF NOT EXISTS qc_verdicts (snapshot_id TEXT, cut_index INTEGER, reference_ref TEXT, reference_frame INTEGER,
  verdict TEXT, category TEXT, structure REAL, psnr REAL, dx INTEGER, dy INTEGER,
@@ -52,6 +52,7 @@ export function openStore(dbPath) {
   // cannot add a column, so migrate in place (idempotent).
   const cols = db.prepare('PRAGMA table_info(cuts)').all().map((c) => c.name);
   if (!cols.includes('speed')) db.exec('ALTER TABLE cuts ADD COLUMN speed REAL');
+  if (!cols.includes('is_compound')) db.exec('ALTER TABLE cuts ADD COLUMN is_compound INTEGER');
   return db;
 }
 
@@ -138,6 +139,7 @@ function buildCuts(xml, mediaFrames) {
         ? JSON.stringify({ in: c.transition_in || null, out: c.transition_out || null })
         : null,
       speed: c.speed ?? null,
+      is_compound: c.is_compound ? 1 : 0,
     };
     if (c.edges_resolved) resolvedEdges += 1;
     if (c.edges_unresolved) unresolvedEdges.push({ cut_index: i, source_basename: cut.source_basename });
@@ -160,8 +162,8 @@ function writeSnapshot(dbPath, cuts, meta) {
  (snapshot_id, reel, kind, source_ref, label, parent_id, content_hash, seq_w, seq_h, fps, cut_count, created_at, provenance)
  VALUES (@snapshot_id,@reel,@kind,@source_ref,@label,@parent_id,@content_hash,@seq_w,@seq_h,@fps,@cut_count,@created_at,@provenance)`);
     const insertCut = db.prepare(`INSERT INTO cuts
- (snapshot_id, cut_index, record_start, record_end, source_basename, source_path, xml_in, xml_out, ppro_ticks_in, oracle_source_frame, is_subclip, subclip_startoffset, subclip_endoffset, reverse, scale_corrected, pan_h, pan_v, rotation, transition, speed, cut_hash)
- VALUES (@snapshot_id,@cut_index,@record_start,@record_end,@source_basename,@source_path,@xml_in,@xml_out,@ppro_ticks_in,@oracle_source_frame,@is_subclip,@subclip_startoffset,@subclip_endoffset,@reverse,@scale_corrected,@pan_h,@pan_v,@rotation,@transition,@speed,@cut_hash)`);
+ (snapshot_id, cut_index, record_start, record_end, source_basename, source_path, xml_in, xml_out, ppro_ticks_in, oracle_source_frame, is_subclip, subclip_startoffset, subclip_endoffset, reverse, scale_corrected, pan_h, pan_v, rotation, transition, speed, is_compound, cut_hash)
+ VALUES (@snapshot_id,@cut_index,@record_start,@record_end,@source_basename,@source_path,@xml_in,@xml_out,@ppro_ticks_in,@oracle_source_frame,@is_subclip,@subclip_startoffset,@subclip_endoffset,@reverse,@scale_corrected,@pan_h,@pan_v,@rotation,@transition,@speed,@is_compound,@cut_hash)`);
     db.transaction(() => {
       insertSnap.run({
         snapshot_id: snapshotId,
@@ -295,6 +297,7 @@ export async function ingestLiveTimeline(dbPath, opts = {}) {
       rotation: t.rotation ?? null,
       transition: null,
       speed: null,
+      is_compound: 0,
     };
     cut.cut_hash = cutHash(cut);
     return cut;

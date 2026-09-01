@@ -232,3 +232,21 @@ test('qcSnapshot: a fade-in cut is judged clear of its window — MATCH, not REF
   assert.equal(referenceIsBlank(refAt(0)), true);
   assert.equal(classifyCut(tex(2), refAt(96), { width: W, height: H }).verdict !== 'MATCH', true);
 });
+
+
+test('qcSnapshot: a flattened compound cut is review with a reason, never a false WRONG (E122)', async () => {
+  const db = tmpDb();
+  const snap = ingestXml(db, new URL('./fixtures/E120_resolve_nested_export.xml', import.meta.url).pathname, { reel: 'E122', now: 't', mediaFrames: { 'cut_src.mp4': 192 } });
+  let sampled = 0;
+  const r = await qcSnapshot(db, snap.snapshotId, {
+    referenceRef: 'ref.mov', width: W, height: H, now: 't',
+    satisfiability: () => ({ sourceOnline: true, frameInRange: true, aspectOk: true }),
+    sampleConform: () => { sampled += 1; return tex(0); },
+    sampleReference: () => tex(0),
+  });
+  assert.equal(sampled, 1, 'the compound cut is never sampled');
+  assert.equal(r.results[0].verdict, 'MATCH');
+  assert.equal(r.results[1].verdict, 'UNREADABLE');
+  assert.equal(r.results[1].category, 'review');
+  assert.match(r.results[1].sample_note, /compound clip "E57_OUT"/);
+});

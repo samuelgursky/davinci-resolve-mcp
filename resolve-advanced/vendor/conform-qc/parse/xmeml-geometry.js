@@ -254,6 +254,10 @@ function parseGeometry(xml) {
       const fileNode = ci.file;
       const fileId = fileNode && fileNode['@_id'] != null ? String(fileNode['@_id']) : null;
       const def = fileId ? fileDefs[fileId] : null;
+      // Resolve's FCP7 writer flattens a COMPOUND CLIP to a clipitem whose
+      // <file> carries an explicitly EMPTY <pathurl> and no inner content
+      // (measured E120/E121). It has no flat source to sample.
+      const isCompound = !!(fileNode && typeof fileNode.pathurl === 'string' && fileNode.pathurl.trim() === '');
       const sub = ci.subclipinfo;
       const startoffset = sub ? num(sub.startoffset) : null;
       const endoffset = sub ? num(sub.endoffset) : null;
@@ -311,6 +315,7 @@ function parseGeometry(xml) {
         srcH: def ? def.srcH : null,
         edges_resolved: edgesResolved,
         edges_unresolved: unresolved,
+        is_compound: isCompound,
         transition_in: win(inWin),
         transition_out: win(outWin),
       });
