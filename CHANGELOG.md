@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.200.0 — E148: the timing guards read through the changelist's aliases
+
+### Fixed
+
+- **The timing guards read the old cut through the changelist's aliases.**
+  `turnover_changelist` ran its silent-lie guards on raw source names, so an
+  offline→online rename (proxies `4K-2K` → masters `4K`) flagged every
+  dissolve as `transition_dropped` — 11 bogus flags on a real reel, none once
+  the changelist's inferred aliases applied. `timingGuards` now accepts the
+  same `sourceAliases` the changelist reports (explicit or inferred) and the
+  tool passes them through. A dissolve that really vanished still flags
+  through the aliases.
+
 ## What's New in v2.199.0 — E147: verify_roundtrip pairs cuts by window
 
 ### Fixed

@@ -521,3 +521,22 @@ test('turnover_changelist null controls: a dissolve whose span moved is a real m
   assert.equal(w.counts.transition_changed, 1);
   assert.deepEqual(w.transitionRelabels, []);
 });
+
+// ── E148: the timing guards read through the changelist's aliases ──
+test('timingGuards flags every dissolve dropped across a proxy→master rename until the changelist aliases apply (E148)', () => {
+  const dis = (recStart) => ({ type: 'Cross Dissolve', duration: 24, recStart });
+  const offline = [cut('V', 'Reel 4K-2K 0515.mov', 1000, 0, 100), cut('V', 'Reel 4K-2K 0515.mov', 5000, 100, 100, { transition: dis(88) }), cut('V', 'Reel 4K-2K 0515.mov', 9000, 200, 100)];
+  const online = offline.map((e) => ({ ...e, source: 'Reel 4K 0515.mov' }));
+  const raw = timingGuards(offline, online);
+  assert.ok(raw.flags.some((f) => f.kind === 'transition_dropped'), 'raw names: the rename reads as a dropped dissolve');
+  const d = diffChangelist(offline, online);
+  assert.equal(d.shape, 'identical');
+  const through = timingGuards(offline, online, { sourceAliases: d.sourceAliases });
+  assert.deepEqual(through.flags, []);
+  // an explicit pattern alias works the same way, and a REAL dropped dissolve still flags through the aliases
+  const explicit = timingGuards(offline, online, { sourceAliases: [{ pattern: ' 4K-2K ', replace: ' 4K ' }] });
+  assert.deepEqual(explicit.flags, []);
+  const lost = online.map((e) => ({ ...e, transition: null }));
+  const real = timingGuards(offline, lost, { sourceAliases: d.sourceAliases });
+  assert.equal(real.flags.filter((f) => f.kind === 'transition_dropped').length, 1);
+});

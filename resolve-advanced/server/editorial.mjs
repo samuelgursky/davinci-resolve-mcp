@@ -1204,7 +1204,17 @@ function diffChangelistOnce(oldEvents, newEvents, opts = {}) {
  * instance — never the second old against the first new.
  * @returns {{flags:Array<{kind, source, detail}>}}
  */
-export function timingGuards(oldEvents, newEvents) {
+export function timingGuards(oldEventsRaw, newEvents, opts = {}) {
+  // E148: the guards pair by (track, source) like the changelist, so an
+  // offline→online rename (proxies "4K-2K" → masters "4K") read as every
+  // dissolve dropped — 11 bogus transition_dropped flags on a real reel,
+  // none once the changelist's aliases applied. Accept the same
+  // sourceAliases the changelist reports (explicit or inferred) and read
+  // the old cut through them first.
+  const aliases = (opts.sourceAliases || []).map((a) => (a.pattern != null
+    ? { re: new RegExp(a.pattern, a.flags || 'g'), replace: String(a.replace ?? '') }
+    : { from: String(a.from), to: String(a.to) }));
+  const oldEvents = aliases.length ? applyAliases(oldEventsRaw, aliases) : oldEventsRaw;
   const flags = [];
   const P = pairEvents(oldEvents, newEvents);
   for (const oe of P.unmatchedOld) {
