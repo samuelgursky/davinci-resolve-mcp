@@ -738,8 +738,29 @@ function pairEvents(oldEvents, newEvents, recTol = 1) {
  */
 export function diffChangelist(oldEvents, newEvents, opts = {}) {
   const recTol = opts.recTolerance ?? 1;
-  const P = pairEvents(oldEvents, newEvents, recTol);
   const changes = [];
+  // COMPOUND FORMS (E124): a compound is one collapsed item in an XML cut
+  // (`compound`) and its flattened inner cuts in an OTIO cut (`fromCompound`).
+  // The same compound in both forms is not a replacement plus a gone cut —
+  // it is reported once as compound_collapsed / compound_expanded and its
+  // cuts leave the pairing.
+  const skipOld = new Set(), skipNew = new Set();
+  const sameName = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+  for (const ne of newEvents) {
+    if (!ne.compound) continue;
+    const inner = oldEvents.filter((oe) => oe.fromCompound && sameName(oe.fromCompound, ne.compound) && oe.track === ne.track && oe.recIn < ne.recOut && oe.recOut > ne.recIn);
+    if (!inner.length) continue;
+    inner.forEach((oe) => skipOld.add(oe)); skipNew.add(ne);
+    changes.push({ kind: 'compound_collapsed', name: ne.compound, track: ne.track, oldRecIn: Math.min(...inner.map((o) => o.recIn)), newRecIn: ne.recIn, innerCuts: inner.length });
+  }
+  for (const oe of oldEvents) {
+    if (!oe.compound || skipOld.has(oe)) continue;
+    const inner = newEvents.filter((ne) => ne.fromCompound && sameName(ne.fromCompound, oe.compound) && ne.track === oe.track && ne.recIn < oe.recOut && ne.recOut > oe.recIn);
+    if (!inner.length) continue;
+    inner.forEach((ne) => skipNew.add(ne)); skipOld.add(oe);
+    changes.push({ kind: 'compound_expanded', name: oe.compound, track: oe.track, oldRecIn: oe.recIn, newRecIn: Math.min(...inner.map((n) => n.recIn)), innerCuts: inner.length });
+  }
+  const P = pairEvents(oldEvents.filter((e) => !skipOld.has(e)), newEvents.filter((e) => !skipNew.has(e)), recTol);
 
   for (const { oe, ne } of P.pairs) {
     const deltas = {};
@@ -887,6 +908,14 @@ export function conformManifest(events, resolution = {}, opts = {}) {
       }
       const blPass = checks.every((c) => c.pass);
       rows.push({ index: e.index, source: e.source, track: e.track, pass: blPass, checks });
+      continue;
+    }
+    if (e.compound && !(res.path || res.online)) {
+      // A compound clipitem (Resolve's XML writer collapses a compound to one
+      // media-less item, E121) has no flat source unless the resolution maps
+      // its name to a flattened file — say so instead of "no resolved path".
+      add('source_resolved', false, `compound clip "${e.compound}" — the XML carries no inner content; map its name to a flattened media file, or turn over as OTIO (nested Stacks flatten)`);
+      rows.push({ index: e.index, source: e.source, track: e.track, pass: false, compound: e.compound, checks });
       continue;
     }
     add('source_resolved', res.online !== false && !!(res.path || res.online), res.online === false ? 'offline' : res.path ? undefined : 'no resolved path');

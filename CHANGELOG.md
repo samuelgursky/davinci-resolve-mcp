@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.178.0 — E124: the manifest and the changelist know a compound when they see one
+
+### Fixed
+
+- **`conform_manifest` names a compound clipitem.** Resolve's XML writer
+  collapses a compound to one media-less item (E121); the manifest failed it
+  as "no resolved path". It now fails by NAME with the remedy — map the
+  compound's name to a flattened media file, or turn over as OTIO, where
+  nested Stacks flatten (E120) — and resolves like any source once mapped.
+- **`turnover_changelist` reports a compound collapse once.** The same
+  compound seen flattened in one cut (OTIO) and collapsed in the other
+  (XML) read as a replacement plus a gone cut. It is now
+  `compound_collapsed` / `compound_expanded` (name, track, positions,
+  inner cut count) and its cuts leave the pairing; a collapsed compound of
+  another name over those cuts stays a real replacement.
+
 ## What's New in v2.177.0 — E123: round-trip QC is compound-aware; flattening keeps the junctions
 
 ### Added

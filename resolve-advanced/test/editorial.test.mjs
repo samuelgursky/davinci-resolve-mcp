@@ -3,6 +3,7 @@
  * guards, conform manifest, marker round-trip. All deterministic, no Resolve.
  */
 import { test } from 'node:test';
+import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { parseEDL, parseOTIO, parseInterchange, diffChangelist, timingGuards, listTransitions, conformManifest, markerRoundtrip } from '../server/editorial.mjs';
 import { editorialTool } from '../server/tools/editorial.mjs';
@@ -315,4 +316,32 @@ test('editorial tool surfaces the junction diff through the protocol shape (E106
   assert.equal(r.counts.transition_dropped, 2);
   assert.deepEqual(r.carriersFolded, { old: 4, new: 1 });
   assert.ok(r.timing.flags.some((f) => f.kind === 'transition_dropped'));
+});
+
+
+// E124: compound forms in the manifest and the changelist. Resolve's XML writer
+// collapses a compound to one media-less clipitem (E121); its OTIO writer
+// flattens the inner cuts (E120). Fixtures are the verbatim exports.
+test('conform_manifest names a compound clipitem; turnover_changelist reports a collapse once (E124)', () => {
+  const xml = parseInterchange('xml', fs.readFileSync(new URL('./fixtures/E120_resolve_nested_export.xml', import.meta.url), 'utf8'));
+  const otio = parseInterchange('otio', fs.readFileSync(new URL('./fixtures/E120_resolve_nested_export.otio', import.meta.url), 'utf8'), { fps: 24 });
+  const m = conformManifest(xml, { 'cut_src.mp4': { path: '/m/cut_src.mp4', handleIn: 24, handleOut: 24 } });
+  const row = m.rows.find((r) => r.source === 'E57_OUT');
+  assert.equal(row.pass, false);
+  assert.equal(row.compound, 'E57_OUT');
+  assert.match(row.checks[0].detail, /compound clip "E57_OUT".*OTIO/);
+  // Mapped to a flattened file it resolves like any source.
+  const mapped = conformManifest(xml, { 'cut_src.mp4': { path: '/m/cut_src.mp4' }, E57_OUT: { path: '/m/e57_out_flat.mov' } });
+  assert.equal(mapped.rows.find((r) => r.source === 'E57_OUT').pass, true);
+  // Changelist: flattened (OTIO) → collapsed (XML) is one compound_collapsed, not replaced + gone.
+  const d = diffChangelist(otio, xml);
+  assert.deepEqual(d.counts, { compound_collapsed: 1 }, JSON.stringify(d.changes));
+  assert.deepEqual(d.changes[0], { kind: 'compound_collapsed', name: 'E57_OUT', track: 'V', oldRecIn: 48, newRecIn: 48, innerCuts: 2 });
+  const back = diffChangelist(xml, otio);
+  assert.deepEqual(back.counts, { compound_expanded: 1 });
+  // Null control: a collapsed compound of ANOTHER name over those cuts is a real replacement.
+  const stranger = xml.map((e) => (e.compound ? { ...e, compound: 'OTHER', source: 'OTHER' } : e));
+  const d2 = diffChangelist(otio, stranger);
+  assert.equal(d2.counts.compound_collapsed, undefined);
+  assert.ok((d2.counts.replaced || 0) + (d2.counts.gone || 0) + (d2.counts.new || 0) >= 2);
 });
