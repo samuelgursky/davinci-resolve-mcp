@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.147.0 — the round-trip QC loop learns markers
+
+### Added
+
+- **`editorial.verify_roundtrip` is marker-aware**: timeline markers compare
+  through the loop (min-anchored frames within tolerance, names when both
+  sides carry them). A re-export with NO markers while the turnover has them
+  raises the `markersNotInExport` honesty flag without failing the pass — a
+  missing exporter capability is not a conform drift.
+
+### Measured (new Resolve bug, filed in api-limitations)
+
+- **`EXPORT_OTIO` drops timeline markers wholesale**: two markers readable
+  through the marker API, zero in the exported .otio — while Resolve's own
+  OTIO *importer* reads Marker objects fine. Marker-fidelity checks must go
+  through the marker API, never an OTIO re-export.
+
 ## What's New in v2.146.0 — bins, and the folder registry law
 
 ### Added

@@ -2716,6 +2716,27 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
         "mitigation": ["drt.assemble cuts[].markers"],
     },
+    {
+        "symbol": "Timeline.Export EXPORT_OTIO (drops timeline markers)",
+        "object": "Timeline",
+        "signature": "(filePath, EXPORT_OTIO) -> bool",
+        "reality": "Timeline markers present and readable through the marker "
+                   "API do not appear in the exported .otio at all — the OTIO "
+                   "Marker schema exists and Resolve's importer reads it, but "
+                   "the exporter writes none (measured on Studio 19.1.3.7: two "
+                   "markers read back at frames 12/72; the export carried "
+                   "zero). Any marker-fidelity QC built on an OTIO re-export "
+                   "silently sees an unmarked timeline.",
+        "recommended": "Do not use EXPORT_OTIO to carry or verify markers. "
+                       "editorial.verify_roundtrip reports this case as "
+                       "`markersNotInExport` (honesty flag, not a failure); "
+                       "read markers through the marker API for fidelity "
+                       "checks, and author them offline via drt.assemble "
+                       "spec.markers when a .drt must carry them.",
+        "tags": ["timeline", "export", "otio", "markers", "silent-failure"],
+        "submit": "bug",
+        "mitigation": ["editorial.verify_roundtrip markersNotInExport"],
+    },
 ]
 
 

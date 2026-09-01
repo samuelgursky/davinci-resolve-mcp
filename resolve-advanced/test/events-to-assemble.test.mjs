@@ -762,3 +762,30 @@ test('OTIO Transition children attach to the incoming clip and author (E70)', ()
   // carry the span (12 before the cut).
   assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24, startFrame: 86436 }]);
 });
+
+test('verifyRoundtrip compares markers; a marker-less export is flagged, not failed (E88)', () => {
+  const base = [
+    { track: 'V1', source: 'A', recIn: 0, recOut: 48, srcIn: 0 },
+    { track: 'MARKER', source: '', recIn: 12, recOut: null, name: 'first' },
+    { track: 'MARKER', source: '', recIn: 40, recOut: null, name: 'second' },
+  ];
+  const exportedNoMk = [{ track: 'V', source: 'A.mov', recIn: 86400, recOut: 86448, srcIn: 0 }];
+  // Resolve's OTIO export drops timeline markers wholesale (measured live:
+  // 2 read back through the marker API, 0 in the export) — honesty flag.
+  const r1 = verifyRoundtrip(base, exportedNoMk);
+  assert.equal(r1.pass, true);
+  assert.equal(r1.markersNotInExport, true);
+  // when the export DOES carry markers, they compare strictly
+  const exportedMk = [...exportedNoMk,
+    { track: 'MARKER', source: '', recIn: 86412, recOut: null, name: 'first' },
+    { track: 'MARKER', source: '', recIn: 86445, recOut: null, name: 'second' }];
+  const r2 = verifyRoundtrip(base, exportedMk);
+  assert.equal(r2.pass, false);
+  assert.equal(r2.mismatches[0].kind, 'marker-frame'); // 40 vs 45
+  const exportedGood = [...exportedNoMk,
+    { track: 'MARKER', source: '', recIn: 86412, recOut: null, name: 'first' },
+    { track: 'MARKER', source: '', recIn: 86440, recOut: null, name: 'second' }];
+  const r3 = verifyRoundtrip(base, exportedGood);
+  assert.equal(r3.pass, true);
+  assert.equal(r3.markers.exported, 2);
+});

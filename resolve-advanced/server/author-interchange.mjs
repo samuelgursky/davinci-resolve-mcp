@@ -746,5 +746,36 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
       mismatches.push({ kind: 'source-frames', at: i, source: x.source, expectedOffset: srcOffsets[x.source], gotOffset: off });
     }
   }
-  return { pass: mismatches.length === 0, pairs: n, srcOffsets, mismatches };
+  // MARKERS (E88): compare track-'MARKER' pseudo-events, min-anchored to
+  // each side's own VIDEO record origin like everything else. When the
+  // re-export carries NO markers at all while the input has them, that is
+  // reported as markersNotInExport rather than failed — several export
+  // formats drop markers wholesale, and a missing capability is not a
+  // conform drift. When both sides carry markers, they compare strictly.
+  const mks = (evts, anchor) => evts
+    .filter((e) => String(e.track) === 'MARKER' && e.recIn != null)
+    .map((e) => ({ frame: e.recIn - anchor, name: e.name || '' }))
+    .sort((x, y) => x.frame - y.frame);
+  const anchorOf = (evts) => {
+    const v = vids(evts);
+    return v.length ? Math.min(...v.map((e) => e.recIn)) : 0;
+  };
+  const am = mks(inputEvents, anchorOf(inputEvents));
+  const bm = mks(exportedEvents, anchorOf(exportedEvents));
+  const markers = { input: am.length, exported: bm.length, mismatches: [] };
+  let markersNotInExport = false;
+  if (am.length && !bm.length) {
+    markersNotInExport = true;
+  } else {
+    if (am.length !== bm.length) markers.mismatches.push({ kind: 'marker-count', input: am.length, exported: bm.length });
+    for (let i = 0; i < Math.min(am.length, bm.length); i += 1) {
+      if (Math.abs(am[i].frame - bm[i].frame) > recTol) {
+        markers.mismatches.push({ kind: 'marker-frame', at: i, input: am[i].frame, exported: bm[i].frame });
+      } else if (am[i].name && bm[i].name && am[i].name !== bm[i].name) {
+        markers.mismatches.push({ kind: 'marker-name', at: i, input: am[i].name, exported: bm[i].name });
+      }
+    }
+    mismatches.push(...markers.mismatches);
+  }
+  return { pass: mismatches.length === 0, pairs: n, srcOffsets, mismatches, markers, ...(markersNotInExport ? { markersNotInExport } : {}) };
 }
