@@ -2,6 +2,15 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.184.0 — E131: a nested Stack's audio tracks flatten onto the parent audio lanes
+
+### Verified
+
+- A compound's inner Audio tracks flatten onto the parent's audio lanes
+  (`A`, `A2` …) tagged `fromCompound`, and the bridge places them on those
+  lanes — three audio placements across two lanes, none dropped. Pinned as a
+  test; the flatten from E120 already did this.
+
 ## What's New in v2.183.0 — E129/E130: `import_from_drp` names from the pool, imports timelines, keeps compounds
 
 ### Fixed

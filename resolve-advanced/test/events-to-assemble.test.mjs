@@ -1530,3 +1530,28 @@ test('verifyRoundtrip reports compoundsCollapsedInExport instead of count/source
   assert.equal(r2.pass, false);
   assert.equal(r2.compoundsCollapsedInExport, undefined);
 });
+
+// E131: a nested Stack's AUDIO tracks flatten onto the parent audio lanes
+// (A, A2 …) with fromCompound, and the bridge places them on those lanes.
+test('flattened stacks carry their audio tracks onto the parent audio lanes (E131)', () => {
+  const rt = (v) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: 24, value: v });
+  const tr = (s, d) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s), duration: rt(d) });
+  const clip = (u, i, d) => ({ OTIO_SCHEMA: 'Clip.2', name: u, source_range: tr(i, d), media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: '/m/' + u }, effects: [], markers: [] });
+  const stack = { OTIO_SCHEMA: 'Stack.1', name: 'CMP', source_range: tr(0, 48), children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('v.mp4', 0, 48)] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', markers: [], children: [clip('v.mp4', 0, 48)] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', markers: [], children: [clip('bed.wav', 100, 48)] }] };
+  const tl = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('a.mp4', 0, 24), stack] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', markers: [], children: [clip('a.mp4', 0, 24), stack] }] } };
+  const ev = parseOTIO(tl, { fps: 24 });
+  assert.deepEqual(ev.map((e) => [e.track, e.source.split('/').pop(), e.srcIn, e.recIn, e.recOut, e.fromCompound || null]), [
+    ['V', 'a.mp4', 0, 0, 24, null], ['V', 'v.mp4', 0, 24, 72, 'CMP'],
+    ['A', 'a.mp4', 0, 0, 24, null], ['A', 'v.mp4', 0, 24, 72, 'CMP'], ['A2', 'bed.wav', 100, 24, 72, 'CMP'],
+  ]);
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const sm = Object.fromEntries(['a.mp4', 'v.mp4', 'bed.wav'].map((u) => ['/m/' + u, { mediaFilePath: '/m/' + u, spec: spec24 }]));
+  const { spec, report } = eventsToAssembleSpec(ev, { sourceMap: sm });
+  assert.equal(report.authoredAudioEvents, 3);
+  assert.deepEqual(spec.media.flatMap((m) => m.cuts.filter((c) => c.audioOnly).map((c) => [m.mediaFilePath.split('/').pop(), c.track])).sort(), [['a.mp4', 1], ['bed.wav', 2], ['v.mp4', 1]]);
+});

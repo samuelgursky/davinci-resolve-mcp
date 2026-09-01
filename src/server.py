@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.183.0"
+VERSION = "2.184.0"
 
 import base64
 import os
