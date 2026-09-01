@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.156.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.156.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#服务器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.156.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v2.156.1 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -221,6 +221,8 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 | [多机位设置助手指南](docs/guides/multicam-setup-guide.md) | 堆叠时间线准备、助手/API 边界、Resolve UI 转换步骤 |
 | [剪辑决策指南](docs/guides/editorial-decision-guide.md) | 项目自有的剪辑手艺指引，用于分析与时间线决策 |
 | [套底 Avid AAF](docs/guides/conforming-an-avid-aaf.md) | 为何三条 Resolve 原生路径在合并交接上全部失败，以及哪条最危险 |
+| [原生 .drt 离线创作](docs/guides/native-drt-authoring.md) | 离线模板拼接式时间线创作：剪切、变速、转场、淡入淡出、标记、复合片段，以及背后的实测规律 |
+| [无界面剪辑循环](docs/guides/headless-edit-loop.md) | 纯命令行驱动 Resolve：哪些交换格式能重新链接并往返，GUI 与 -nogui 双双实测 |
 | [调色决策指南](docs/guides/color-decision-guide.md) | 项目自有的校色指引与 Resolve 调色 API 边界 |
 | [贡献与项目布局](docs/contributing.md) | 贡献流程、平台支持、安全说明、仓库结构 |
 | [安全策略](SECURITY.md) | 本地 stdio 信任边界、工具元数据、确认指引、漏洞报告 |

@@ -45,6 +45,7 @@ window. `render.verify_output` covers the container-level checks.
 | Wipes (EDL `W`-codes) | `transitions[].type: 'wipe'` (single soft-edge style — host-importer parity) | v2.138 |
 | Transition styles | `transitions[].type: 'dip' \| 'additive' \| 'fade-to-color' \| 'smooth-cut' \| 'non-additive'` (XMEML effectids route automatically) | v2.140 |
 | Audio cross-fades | `transitions[].trackType: 'audio'` | v2.116 |
+| Fades to/from black | EDL `BL` dissolves, OTIO gap-adjacent Transitions, XMEML/PrProj edge spans, AAF filler-adjacent Transitions — authored as Solid-Color-generator dissolves | v2.150–2.155 |
 | Constant retimes, forward | `cuts[].speed` (e.g. `0.5`) | v2.113 |
 | Constant retimes, reverse | `cuts[].reverse` | v2.114 |
 | Freeze frames | `cuts[].freeze` (holds source frame `srcIn`) | v2.134 |
@@ -70,7 +71,8 @@ plus a `sourceMap` — all five formats are route-proven end-to-end
 (parse → assemble → import → measured frames and RMS) — and
 returns an honesty ledger
 (`authoredTransitions`, `droppedTransitions` with reasons, `authoredRetimes`,
-`flattenedRetimes`, `authoredAudioEvents`, `upperTrackCutsVideoOnly`).
+`flattenedRetimes`, `authoredAudioEvents`, `upperTrackCutsVideoOnly`,
+`blackLegs` for authored fade generators and skipped audio-silence legs).
 
 ## The laws (why the constraints are what they are)
 
@@ -153,6 +155,24 @@ for the post-cut portion. Off-center spans render (blend measured across an
 uneven [cut-6, cut+18) span); everything unauthorable stays in
 `droppedTransitions` with the reason.
 
+**Fade law.** A transition needs a physical item on BOTH sides of its
+junction: a hand-authored single-sided transition element (span at a lone
+clip head or tail) refuses to import entirely, and Resolve's own EDL
+importer silently DROPS dissolves involving the `BL` reel (the fade-in
+vanishes; the fade-out hard-cuts into the Solid Color it creates). The
+authorable form — used automatically by `assemble_from_interchange` for all
+five formats — is a real clip↔Solid-Color-generator dissolve: a zero-length
+black leg materializes/grows to cover its side of the span (empty track
+renders black, so the growth is render-neutral), and the CMX zero-length
+fade-in slug grows through the boundary shift. Audio fades to silence have
+no authorable form (no silence source) and drop with the stated reason.
+
+**AAF overlap law.** An AAF Transition CONSUMES record time: the incoming
+component legitimately overlaps the outgoing by the transition duration.
+The bridge trims the outgoing's tail to the overlap start and lets the
+boundary shift re-extend it to the `CutPoint` — the AAF notional-cut
+semantics exactly.
+
 ## Verification checklist for a delivered .drt
 
 1. `timeline.import_timeline_checked` — expect `linked == total` for media
@@ -170,7 +190,15 @@ uneven [cut-6, cut+18) span); everything unauthorable stays in
    verifier normalizes track labels, source naming, and per-source
    TC-absolute source frames (fitting the offsets, e.g. 86400 for a
    01:00:00:00 source) — `pass: true` means the authored timeline's export
-   matches the turnover's intent event-for-event.
+   matches the turnover's intent event-for-event. The verify surface covers
+   the whole authored family: timeline markers (`markersNotInExport` flags a
+   marker-less export instead of failing — EXPORT_OTIO drops them), fades
+   (BL/Solid-Color legs merge out as `blackSegments`; fade-window boundary
+   reshapes are excused into `fadeReshapedBoundaries`, never silently),
+   retimes (speed/reverse compare pairwise — EXPORT_OTIO round-trips an
+   authored Sm2TimeMap as LinearTimeWarp), and audio (declared audio events
+   compare with `trackType: 'audio'` tags; the A1 convenience mirror on a
+   video-only turnover stays informational).
 
 ## References
 

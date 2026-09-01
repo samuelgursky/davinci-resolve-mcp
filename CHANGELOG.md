@@ -2,6 +2,17 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.156.1 — docs catch up with the fade + QC arc
+
+### Documentation
+
+- `docs/guides/native-drt-authoring.md` learns the v2.148–2.156 arc: the
+  A1–A16 audio ceiling, the fade capability row and the fade/AAF-overlap
+  laws, the `blackLegs` ledger field, and the full `verify_roundtrip`
+  surface (markers, fades, retimes, audio) in the delivery checklist.
+- The Native .drt Authoring and Headless Edit Loop guides are now linked
+  from both READMEs' guide tables — both were orphaned.
+
 ## What's New in v2.156.0 — the QC loop learns audio; the verify surface is complete
 
 ### Added
