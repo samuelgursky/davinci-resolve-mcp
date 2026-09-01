@@ -801,6 +801,58 @@ test('conformManifest is BL-aware: fades need no black-side source or handles (E
   assert.match(failing.checks.find((c) => c.name === 'handles').detail, /outgoing TAPE1 needs tail/);
 });
 
+// E100 certification: every authored structure in ONE turnover — fade-in,
+// stack, centered dissolve, retime, fade-out, two audio legs, track + clip
+// markers. Live loop measured 2026-09-01: all 16 video windows and 16 audio
+// windows correct, verify_roundtrip pass:true against Resolve's re-export.
+test('kitchen-sink OTIO turnover conforms with a complete ledger (E100)', () => {
+  const rt = (v, r = 24) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: r, value: v });
+  const tr = (s, d, r = 24) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s, r), duration: rt(d, r) });
+  const clip = (url, sIn, d, extra = {}) => ({ OTIO_SCHEMA: 'Clip.2', name: url, source_range: tr(sIn, d), media_reference: { target_url: url }, effects: [], markers: [], ...extra });
+  const otio = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [
+      { OTIO_SCHEMA: 'Marker.2', name: 'TM1', color: 'BLUE', marked_range: tr(30, 0) },
+      { OTIO_SCHEMA: 'Marker.2', name: 'TM2', color: 'RED', marked_range: tr(100, 0) },
+    ], children: [
+      { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(0), out_offset: rt(24) },
+      clip('/m/cut.mp4', 24, 72),
+      { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(12), out_offset: rt(12) },
+      clip('/m/wht.mp4', 24, 48, { markers: [{ OTIO_SCHEMA: 'Marker.2', name: 'CM1', color: 'GREEN', marked_range: tr(34, 0) }] }),
+      clip('/m/cut.mp4', 0, 48, { effects: [{ OTIO_SCHEMA: 'LinearTimeWarp.1', time_scalar: 0.5 }] }),
+      { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(12), out_offset: rt(12) },
+      { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 48) },
+    ] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [
+      { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 24) }, clip('/m/wht.mp4', 96, 24),
+    ] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', markers: [], children: [
+      { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 12) }, clip('/m/cut.mp4', 12, 60),
+    ] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', markers: [], children: [
+      { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 96) }, clip('/m/cut.mp4', 0, 48),
+    ] },
+  ] } };
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const { spec, report } = eventsToAssembleSpec(parseOTIO(otio, { fps: 24 }), {
+    sourceMap: { '/m/cut.mp4': { mediaFilePath: '/m/cut.mp4', spec: spec24 }, '/m/wht.mp4': { mediaFilePath: '/m/wht.mp4', spec: spec24 } },
+  });
+  assert.equal(report.droppedTransitions.length, 0, JSON.stringify(report.droppedTransitions));
+  assert.equal(spec.transitions.length, 3);
+  assert.equal(spec.elements.length, 2);
+  assert.equal(spec.markers.length, 2);
+  assert.equal(report.authoredRetimes.length, 1);
+  assert.equal(report.authoredAudioEvents, 2);
+  assert.equal(report.upperTrackCutsVideoOnly, 1);
+  const whiteCut = spec.media.find((m) => m.mediaFilePath === '/m/wht.mp4').cuts.find((c) => c.markers);
+  assert.deepEqual(whiteCut.markers, [{ frame: 10, color: 'Green', name: 'CM1' }]);
+});
+
+test('verifyRoundtrip matches path-style OTIO sources against basename re-exports (E100)', () => {
+  const input = [{ track: 'V', source: '/media/deep/cut_src.mp4', recIn: 0, recOut: 48, srcIn: 0 }];
+  const exported = [{ track: 'V', source: 'cut_src.mp4', recIn: 0, recOut: 48, srcIn: 0 }];
+  assert.equal(verifyRoundtrip(input, exported).pass, true);
+});
+
 test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
   const fsM = await import('node:fs');
   const os = await import('node:os');

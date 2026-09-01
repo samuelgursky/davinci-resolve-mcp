@@ -826,7 +826,10 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     const m = /^([VA])(\d+)?$/.exec(String(t || ''));
     return m ? `${m[1]}${m[2] || '1'}` : String(t);
   };
-  const canonSource = (x) => String(x || '').replace(/\.[^.]+$/, '').toLowerCase();
+  // Basename + extension-stripped + case-folded: an OTIO turnover names
+  // sources by target_url PATH while Resolve's re-export names them by file
+  // basename (measured E100) — same file, different spelling.
+  const canonSource = (x) => String(x || '').split(/[\\/]/).pop().replace(/\.[^.]+$/, '').toLowerCase();
   // Reel/tape aliases: an EDL names sources by REEL (CUTSRC) while the
   // re-export names them by file basename (cut_src) — the sourceMap that
   // drove the assemble is the authority linking the two. Keys and values

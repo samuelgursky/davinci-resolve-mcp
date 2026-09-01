@@ -2,6 +2,31 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.158.0 — E100: the kitchen-sink certification
+
+### Verified (one turnover, everything at once)
+
+- A single OTIO turnover carrying a fade-in, a V2 stack, a centered
+  dissolve, a 50% retime, a retime-adjacent fade-out, two audio legs, two
+  track markers, and a clip marker conformed, imported, and **rendered
+  correct in all 32 measured windows** — including the previously unmeasured
+  interactions (the boundary shift extending a retimed cut into its
+  fade-out; an upper-track stack compositing over the fade region). The
+  round-trip QC closed `pass: true` against Resolve's own re-export, and
+  the fixture is now a permanent offline test.
+
+### Fixed
+
+- `verify_roundtrip` compares sources by **basename**: an OTIO turnover
+  names sources by `target_url` path while Resolve's re-export uses the file
+  basename — the same file read as six spurious source mismatches.
+
+### Measured
+
+- **Fairlight level law**: the template's A1 strip plays at source level
+  while the added mono strips (A2–A16) play 3 dB down per channel (center
+  pan law). Both render; it is mixer semantics, not a placement failure.
+
 ## What's New in v2.157.0 — the conform manifest learns fades too
 
 ### Fixed
