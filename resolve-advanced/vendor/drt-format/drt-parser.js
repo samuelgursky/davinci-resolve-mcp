@@ -56,17 +56,39 @@ function beUint64(hex, offset = 0) {
   const v = Number(Buffer.from(h.slice(offset, offset + 16), 'hex').readBigUInt64BE(0));
   return Number.isFinite(v) ? v : null;
 }
-// <MediaTimemapBA>: tag byte 0x02 + one double = a LINEAR (100%) clip whose
-// double is the media length in seconds; a blob opening 00000001… is a keyed
-// speed CURVE (retime) whose speed this parser does not decode — it is
-// reported as 'curve' so a consumer never fakes 100%.
-function timemapKind(hex) {
+// <MediaTimemapBA> (E139/E140): tag byte 0x02 + one double = a LINEAR (100%)
+// clip whose double is the media length in seconds; a keyed Sm2TimeMap
+// (00000001…) is a speed map. E140 decodes it through the DRP library's
+// decodeTimemap (the same reader the .drp side uses): the keyframe slope is
+// the speed ratio (0.8 on all four retimed clips of a real reel — Premiere's
+// 80 for the same cuts), XMax 60000 with a zero slope is the FREEZE sentinel,
+// a negative slope is a reverse. A map the decoder cannot read is 'unknown',
+// never a faked 100%.
+const FREEZE_XMAX_SENTINEL = 60000;
+function decodeTimemapField(hex) {
   const h = String(hex || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
   if (!h) return null;
-  if (h.startsWith('02') && h.length === 18) return 'linear';
-  if (h.startsWith('02')) return 'linear-multi';
-  if (h.startsWith('00000001')) return 'curve';
-  return 'unknown';
+  if (h.startsWith('02')) {
+    return { form: 'identity', kind: h.length === 18 ? 'linear' : 'linear-multi', speed: 1, reverse: false };
+  }
+  let d;
+  try {
+    d = require('../drp-format/media-timemap').decodeTimemap(h);
+  } catch {
+    return { form: 'retimed', kind: 'unknown', speed: null, reverse: false };
+  }
+  if (!d || d.form !== 'retimed') return { form: 'retimed', kind: 'unknown', speed: null, reverse: false };
+  const slope = d.segments && d.segments.length ? d.segments[0].speed : null;
+  const base = { form: 'retimed', recordDurationSec: d.recordDurationSec ?? null, sourceDurationSec: d.sourceDurationSec ?? null };
+  if (d.recordDurationSec === FREEZE_XMAX_SENTINEL && slope === 0) return { ...base, kind: 'freeze', speed: 0, reverse: false };
+  if (!Number.isFinite(slope) || slope === 0 || Math.abs(slope) > 100) return { ...base, kind: 'unknown', speed: null, reverse: false };
+  return {
+    ...base,
+    kind: d.variable ? 'variable' : 'constant',
+    speed: Math.abs(slope),
+    reverse: slope < 0,
+    ...(d.variable ? { segments: d.segments } : {}),
+  };
 }
 // Sm2TiTransition alignment (E139, witnessed against the cut points of 11
 // real dissolves): 2 = centred on the cut, 3 = ends at the cut (the
@@ -124,7 +146,7 @@ function extractClipsFromTrackXml(trackXml, trackType) {
       in: inRaw === null || inRaw === '' ? null : (Number.isFinite(Number.parseInt(inRaw, 10)) ? Number.parseInt(inRaw, 10) : null),
       mediaStartTime: mst === null || mst === '' ? null : (Number.isFinite(Number(mst)) ? Number(mst) : null),
       mediaFrameRate: leDouble(extractScalar(inner, 'MediaFrameRate')),
-      timemap: timemapKind(extractScalar(inner, 'MediaTimemapBA')),
+      timemap: decodeTimemapField(extractScalar(inner, 'MediaTimemapBA')),
       prettyType: extractScalar(inner, 'PrettyType') || null,
     });
   }

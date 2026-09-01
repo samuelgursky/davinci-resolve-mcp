@@ -622,7 +622,9 @@ export function parseInterchange(format, content, opts = {}) {
  * <Start>/<Duration>, its source in-point <In> (EMPTY on audio clips and on
  * generator tails — reported srcInAbsent, never faked to 0 silently), its
  * media <MediaFilePath>; <MediaTimemapBA> tag 0x02 = linear 100%, a keyed
- * curve = a retime this reader does not decode (speed null + retimeUnknown);
+ * Sm2TimeMap decodes to the speed (E140: constant 80% on a real reel's four
+ * retimes = Premiere's 80; XMax 60000 + zero slope = freeze; negative = reverse;
+ * an unreadable map stays speed null + retimeUnknown);
  * Sm2TiTransition alignment 2 centres on the cut, 3 ends at it. Record
  * positions are sequence-relative (start frame subtracted), like every other
  * parser here; `startFrame` is returned beside the events.
@@ -651,16 +653,27 @@ export function drtEventsFromParsed(parsed, opts = {}) {
         const srcIn = c.in != null ? c.in : 0;
         const media = c.mediaFilePath || null;
         const isGen = !media && !c.compound;
+        // E140: the decoded Sm2TimeMap gives the speed. A ratio becomes the
+        // percent every other parser speaks (0.8 → 80); the source OUT follows
+        // the record window at that speed (37 record frames × 0.8 = 30 source
+        // frames — the same srcOut Premiere wrote for the same cut); a freeze
+        // is the zero-speed in==out event the other parsers emit; a map the
+        // decoder could not read stays speed/srcOut null + retimeUnknown.
+        const tm = c.timemap && typeof c.timemap === 'object' ? c.timemap : null;
+        const kind = tm ? tm.kind : (c.timemap === 'curve' ? 'unknown' : 'linear');
+        let speed = 100, srcOut = srcIn + c.duration, unknown = false;
+        if (kind === 'freeze') { speed = 0; srcOut = srcIn; }
+        else if (kind === 'constant' || kind === 'variable') { speed = Math.round(tm.speed * 10000) / 100; srcOut = srcIn + Math.round(c.duration * tm.speed); }
+        else if (kind === 'unknown') { speed = null; srcOut = null; unknown = true; }
         const ev = {
           index: index++, track: label, source: media ? base(media, c.name) : (c.name || 'BL'),
-          // A keyed speed curve makes the source OUT unknowable here — null, never
-          // srcIn + duration as if it played at 100%.
-          srcIn, srcOut: c.timemap === 'curve' ? null : srcIn + c.duration, recIn: c.start - startFrame, recOut: c.start - startFrame + c.duration,
-          speed: c.timemap === 'curve' ? null : 100, reverse: false, transition: null, fps,
+          srcIn, srcOut, recIn: c.start - startFrame, recOut: c.start - startFrame + c.duration,
+          speed, reverse: Boolean(tm && tm.reverse), transition: null, fps,
         };
         if (media) ev.sourcePath = media;
         if (c.in == null) ev.srcInAbsent = true;
-        if (c.timemap === 'curve') ev.retimeUnknown = true;
+        if (unknown) ev.retimeUnknown = true;
+        if (kind === 'variable') { ev.variableSpeed = true; ev.retimeSegments = tm.segments; }
         if (c.compound) ev.compound = c.compound;
         if (isGen) ev.generatorName = c.name || null;
         events.push(ev);

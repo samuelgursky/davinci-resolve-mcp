@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.192.0 — E140: a .drt retime decodes to its speed
+
+### Added
+
+- **A `.drt` retime decodes to its speed.** The keyed `MediaTimemapBA`
+  (`Sm2TimeMap`) that E139 could only flag now reads through the DRP library's
+  `decodeTimemap`, the same reader the `.drp` side uses: the keyframe slope is
+  the speed ratio, `XMax 60000` with a zero slope is the freeze sentinel, a
+  negative slope is a reverse. The parser's `timemap` becomes an object
+  (`kind` linear | linear-multi | constant | variable | freeze | unknown,
+  `speed`, `reverse`, durations, ramp `segments`), and a DRT event carries
+  `speed` in the percent every other parser speaks with `srcOut` following the
+  record window at that speed; a freeze is the zero-speed in==out event; a map
+  the decoder cannot read stays `speed`/`srcOut` null + `retimeUnknown`, never
+  a faked 100%. Measured on the real REEL_02 export: all four retimed clips
+  read 80, and their `srcOut` lands frame for frame on what Premiere wrote for
+  the same cuts (42423, 41949, 42178, 42178); the Black Video generator reads
+  as a freeze; the tail leader reads as a reverse; nothing is left unknown.
+
+### Measured (filed in api-limitations)
+
+- A 19.1.3.7 EXPORT_DRT writes `KeyframesBA` in the protobuf point form, not
+  the keyed-dict form its XMEML retime import writes; both decode.
+
 ## What's New in v2.191.0 — E139: a .drt timeline walks into events; two Resolve versions diff
 
 ### Added
