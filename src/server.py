@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.169.0"
+VERSION = "2.170.0"
 
 import base64
 import os
@@ -2602,6 +2602,35 @@ def _find_timeline_item_by_id(tl, timeline_item_id) -> Optional[Any]:
                 except Exception:
                     continue
     return None
+
+
+def _describe_track_item(it) -> Dict[str, Any]:
+    """One GetItemListInTrack entry → {name, id, start, end, duration, kind}.
+
+    Transitions ARE items in that list (api_truth): a video Cross Dissolve
+    enumerates by its name, but an AUDIO cross-fade enumerates with an EMPTY
+    name (measured 2026-09-01, Studio 19.1.3.7, E113) — so the name string can
+    never be the discriminator. A transition has no MediaPoolItem and an empty
+    GetProperty() dict; a clip has both. `kind` reports that.
+    """
+    kind = "clip"
+    try:
+        has_media = it.GetMediaPoolItem() is not None
+    except Exception:
+        has_media = True  # an API surprise must not demote a clip to a transition
+    if not has_media:
+        try:
+            props = it.GetProperty()
+        except Exception:
+            props = None
+        if not props:
+            kind = "transition"
+        else:
+            kind = "generator"  # no media, but transform keys: Solid Color / titles
+    return {
+        "name": it.GetName(), "id": it.GetUniqueId(), "start": it.GetStart(),
+        "end": it.GetEnd(), "duration": it.GetDuration(), "kind": kind,
+    }
 
 
 def _get_timeline_item_for_fusion(p: Dict[str, Any]):
@@ -24415,7 +24444,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if err:
             return _err(err)
         items = tl.GetItemListInTrack(track_type, track_index)
-        return {"items": [{"name": it.GetName(), "id": it.GetUniqueId(), "start": it.GetStart(), "end": it.GetEnd(), "duration": it.GetDuration()} for it in (items or [])]}
+        return {"items": [_describe_track_item(it) for it in (items or [])]}
     elif action == "delete_clips":
         # Find timeline items by unique IDs
         ids_set = set(p["clip_ids"])
@@ -26203,9 +26232,9 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
     },
     "timeline": {
         "get_items": {
-            "summary": "List items on one track as a summary (name/id/start/end/duration).",
+            "summary": "List items on one track as a summary (name/id/start/end/duration/kind). Transitions ARE items — a video Cross Dissolve by name, an AUDIO cross-fade with an EMPTY name — so `kind` (clip | transition | generator) is the discriminator, never the name.",
             "params": "track_type (video|audio|subtitle), index|track_index (1-based)",
-            "returns": "{items: [{name, id, start, end, duration}]}",
+            "returns": "{items: [{name, id, start, end, duration, kind}]}",
             "example": 'timeline(action="get_items", params={"track_type": "video", "index": 1})',
         },
         "get_items_in_track": {

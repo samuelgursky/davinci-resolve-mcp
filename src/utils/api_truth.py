@@ -889,7 +889,15 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "comp. WHAT IS GENUINELY MISSING: creation, cloning, and any "
                    "type/alignment/parameter detail — the transition's kind is "
                    "knowable ONLY from its name string, and there is no way to "
-                   "read its alignment (centered/start/end) or edit its duration.",
+                   "read its alignment (centered/start/end) or edit its duration. "
+                   "AUDIO NUANCE (measured 2026-09-01 on 19.1.3.7, E113): an "
+                   "audio cross-fade enumerates in GetItemListInTrack('audio', n) "
+                   "with an EMPTY GetName() (24 frames, centered on the cut, "
+                   "between the two clips) — so on audio lanes even the kind is "
+                   "not readable from the name. The discriminator that holds for "
+                   "BOTH: GetMediaPoolItem() is None AND GetProperty() is empty; "
+                   "a Solid Color generator has no MediaPoolItem either but DOES "
+                   "return transform keys. timeline.get_items reports `kind`.",
         "recommended": "Automated QC of existing transitions IS possible and is "
                        "the main practical need — enumerate GetItemListInTrack, "
                        "treat any item whose GetProperty() is empty and whose "

@@ -2,6 +2,25 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.170.0 — E113: `get_items` knows a transition from a clip
+
+### Added
+
+- **`timeline.get_items` reports `kind`** — `clip`, `transition`, or
+  `generator`. `GetItemListInTrack` lists transitions as items, and a video
+  Cross Dissolve enumerates by name; an AUDIO cross-fade enumerates with an
+  EMPTY name (measured on 19.1.3.7 on an assembled AAF turnover: 24 frames,
+  centered on the cut, between the two dialog clips), so the name can never
+  be the discriminator. A transition has no MediaPoolItem and an empty
+  property dict; a Solid Color generator has no media but transform keys;
+  everything else is a clip. An API surprise on the probe never demotes a
+  clip.
+
+### Measured (filed in api-limitations)
+
+- The transition entry now records the nameless audio form and the
+  media-pool/property discriminator, measured on both kinds.
+
 ## What's New in v2.169.0 — E112: round-trip QC is colour-aware
 
 `verify_roundtrip` merged every generator leg out of the compare as "black",
