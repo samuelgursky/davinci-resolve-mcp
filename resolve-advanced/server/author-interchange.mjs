@@ -156,13 +156,22 @@ export function eventsToOTIO(events, opts = {}) {
         clip.effects.push({ OTIO_SCHEMA: 'LinearTimeWarp.1', name: 'Speed', metadata: {}, effect_name: 'LinearTimeWarp', time_scalar: (e.reverse ? -1 : 1) * ((e.speed ?? 100) / 100) });
       }
       if (e.transition) {
+        // Span fidelity (E102): carry the source event's actual alignment
+        // instead of forcing centered — a centered rewrite of a start-at-cut
+        // fade-in demands incoming pre-roll the source never needed, and the
+        // conform then drops it as handle starvation.
+        const d = e.transition.duration || 0;
+        let inOff = Math.ceil(d / 2);
+        if (e.transition.alignment === 'start') inOff = 0;
+        else if (e.transition.inOffset != null) inOff = Math.max(0, Math.min(d, e.transition.inOffset));
+        else if (e.transition.recStart != null && e.recIn != null) inOff = Math.max(0, Math.min(d, e.recIn - e.transition.recStart));
         children.push({
           OTIO_SCHEMA: 'Transition.1',
           metadata: {},
           name: 'Cross Dissolve',
           transition_type: 'SMPTE_Dissolve',
-          in_offset: rt(Math.ceil((e.transition.duration || 0) / 2), fps),
-          out_offset: rt(Math.floor((e.transition.duration || 0) / 2), fps),
+          in_offset: rt(inOff, fps),
+          out_offset: rt(d - inOff, fps),
         });
       }
       children.push(clip);
@@ -780,7 +789,13 @@ export function drtFlattenedRetimes(events) {
 /** Build a buildDRT spec (Resolve-native .drt) from normalized events. */
 export function eventsToDrtSpec(events, opts = {}) {
   const fps = opts.fps || events.find((e) => e.fps)?.fps || 24;
-  const groups = byTrack(events);
+  // BL legs are OMITTED on this flat target (E102): a 'BL' mediaFilePath
+  // would author a bogus offline clip, while an empty track region renders
+  // black anyway — the same picture without the media-offline lie. (The
+  // fade transitions themselves flatten on DRT by design; use
+  // drt.assemble_from_interchange for a .drt that AUTHORS them.)
+  const isBLev = (e) => /^(BL|BLACK)$/i.test(String(e.source || '').trim());
+  const groups = byTrack(events.filter((e) => !isBLev(e)));
   const mkTrack = (list) => ({
     clips: list.map((e) => ({ start: e.recIn ?? 0, duration: (e.recOut ?? 0) - (e.recIn ?? 0), in: e.srcIn ?? 0, mediaFilePath: e.source || '' })),
   });
@@ -817,7 +832,11 @@ export async function authorInterchange(events, target, opts = {}) {
   if (t === 'drt') {
     const spec = eventsToDrtSpec(events, opts);
     const buf = await drt().buildDRT(spec);
-    return { target: 'drt', spec, buffer: buf, bytes: buf.length, flattened: drtFlattenedRetimes(events) };
+    const blackLegsOmitted = events.filter((e) => /^(BL|BLACK)$/i.test(String(e.source || '').trim())).length;
+    return {
+      target: 'drt', spec, buffer: buf, bytes: buf.length, flattened: drtFlattenedRetimes(events),
+      ...(blackLegsOmitted ? { blackLegsOmitted } : {}),
+    };
   }
   throw new Error(`authorInterchange: unknown target '${target}' (otio|edl|drt)`);
 }

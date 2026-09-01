@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.160.0 — write-side span fidelity; the flat DRT target stops lying about black
+
+### Fixed
+
+- **`eventsToOTIO` forced every transition to centered**, so a start-at-cut
+  fade-in re-written to OTIO demanded incoming pre-roll the source never
+  needed — and the round-trip dropped the fade as handle starvation. The
+  writer now carries the source event's actual alignment (start-at-cut,
+  `inOffset`, or derived from `recStart`).
+- **The flat DRT target omitted nothing and authored a bogus `BL` offline
+  clip** for black legs. BL legs are now omitted — an empty track region
+  renders the same black without the media-offline lie — and the `drt`
+  result reports `blackLegsOmitted`.
+
 ## What's New in v2.159.0 — the EDL writer learns transitions
 
 ### Fixed

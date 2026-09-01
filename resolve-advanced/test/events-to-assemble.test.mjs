@@ -873,6 +873,25 @@ test('eventsToEDL writes the CMX transition pairs — dissolves and fades surviv
   assert.equal(report.droppedTransitions.length, 0);
 });
 
+test('eventsToOTIO carries transition alignment; the flat DRT target omits BL legs (E102)', async () => {
+  const { eventsToOTIO, eventsToDrtSpec } = await import('../server/author-interchange.mjs');
+  const events = [
+    { index: 1, track: 'V', source: 'BL', recIn: 0, recOut: 0, srcIn: 0, srcOut: 0, fps: 24 },
+    { index: 2, track: 'V', source: 'TAPE1', recIn: 0, recOut: 96, srcIn: 0, srcOut: 96, fps: 24, transition: { type: 'D', duration: 24, alignment: 'start' } },
+    { index: 3, track: 'V', source: 'BL', recIn: 96, recOut: 144, srcIn: 0, srcOut: 0, fps: 24, transition: { type: 'D', duration: 24, alignment: 'start' } },
+  ];
+  // A centered rewrite of a start-at-cut fade-in used to demand incoming
+  // pre-roll the source never needed — the round-trip dropped the fade.
+  const back = parseOTIO(eventsToOTIO(events, { fps: 24 }), { fps: 24 });
+  const { spec, report } = eventsToAssembleSpec(back, { sourceMap: MAP });
+  assert.equal(spec.transitions.length, 2, JSON.stringify(report.droppedTransitions));
+  assert.equal(spec.elements.length, 2);
+  assert.equal(report.droppedTransitions.length, 0);
+  // BL never becomes a bogus offline clip on the flat DRT target.
+  const drtSpec = eventsToDrtSpec(events, { fps: 24 });
+  assert.deepEqual(drtSpec.timelines[0].videoTracks[0].clips.map((c) => c.mediaFilePath), ['TAPE1']);
+});
+
 test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
   const fsM = await import('node:fs');
   const os = await import('node:os');
