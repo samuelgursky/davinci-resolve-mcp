@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.172.0 — E117: colour QC knows which writers are colour-blind
+
+### Fixed
+
+- **`verify_roundtrip` no longer fails a colour compare against a re-export
+  that cannot carry colour.** Measured on 19.1.3.7: Resolve's OTIO writer
+  emits a Solid Color as a `Clip` with a null `media_reference` and empty
+  `Resolve_OTIO` metadata — no colour anywhere (its FCP7 XML writer echoes
+  the colour as `input_1`). Pass `exportedFormat` (otio|edl|xml|drt): a
+  colour-blind export reports `generatorColourNotInExport` (like
+  `markersNotInExport`) instead of `generator-colour` failures; an XML
+  export keeps the strict compare. Without the format the compare stays
+  strict. Resolve's OTIO export is a permanent fixture.
+
+### Measured (filed in api-limitations)
+
+- `EXPORT_OTIO` writes generators as media-less clips named after the
+  generator with no parameters; `Cross Dissolve` transitions carry a
+  `transitionCustomCurvesKeyframes` 0→1 curve in `Resolve_OTIO` metadata.
+
 ## What's New in v2.171.0 — E114: audio-lane `-1` edges take their own lane's junctions
 
 ### Fixed

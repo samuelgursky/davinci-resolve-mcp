@@ -986,10 +986,20 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
   const colourKey = (c) => (c ? [c.r, c.g, c.b].map((v) => Math.round(v * 255)).join(',') : '0,0,0');
   const colourTol = 1 / 255 + 1e-9;
   const sameColour = (x, y) => ['r', 'g', 'b'].every((k) => Math.abs((x ? x[k] : 0) - (y ? y[k] : 0)) <= colourTol);
+  // Which writers can WITNESS a generator colour (measured, E112/E117):
+  // Resolve's FCP7 XML export echoes it (`input_1`); its OTIO export writes
+  // a Solid Color as a Clip with a NULL media_reference and empty metadata —
+  // no colour anywhere — and an EDL/DRT re-export carries none either. A
+  // colour compare against such an export can only ever "fail", so it is
+  // reported as generatorColourNotInExport instead (like markersNotInExport).
+  const exportedFormat = String(opts.exportedFormat || '').toLowerCase();
+  const colourCapable = exportedFormat === '' || /^(xml|xmeml|fcp7|fcpxml)$/.test(exportedFormat);
+  let generatorColourNotInExport = false;
   {
     const inLegs = a0.filter((e) => isBlackSeg(e) && e.color);
+    if (inLegs.length && !colourCapable) generatorColourNotInExport = true;
     const exLegs = b0.filter((e) => isBlackSeg(e));
-    for (const leg of inLegs) {
+    for (const leg of generatorColourNotInExport ? [] : inLegs) {
       const partner = exLegs.find((x) => x.track === leg.track && x.recIn < leg.recOut && x.recOut > leg.recIn);
       generatorColours.compared += 1;
       if (!partner) {
@@ -1070,6 +1080,7 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
   return {
     pass: mismatches.length === 0, pairs: n, srcOffsets, mismatches, markers,
     ...(generatorColours.compared ? { generatorColours } : {}),
+    ...(generatorColourNotInExport ? { generatorColourNotInExport } : {}),
     ...(markersNotInExport ? { markersNotInExport } : {}),
     ...(blackSegments.input || blackSegments.exported ? { blackSegments } : {}),
     ...(fadeReshapedBoundaries.length ? { fadeReshapedBoundaries } : {}),

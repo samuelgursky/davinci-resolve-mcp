@@ -1380,3 +1380,28 @@ test('audio-lane -1 edges take the junction offset from their own lane (E114)', 
   assert.equal(r.pass, true, JSON.stringify(r.mismatches));
   assert.equal(r.audio.compared, true);
 });
+
+// E117: Resolve's OTIO writer CANNOT carry a generator colour — a Solid Color
+// exports as a Clip with a null media_reference and empty Resolve_OTIO
+// metadata (fixture = verbatim EXPORT_OTIO of the E110 fade-to-white conform).
+// A colour compare against such an export can only fail, so with the export
+// format declared it reports generatorColourNotInExport instead.
+test('verifyRoundtrip reports generatorColourNotInExport for a colour-blind OTIO re-export (E117)', () => {
+  const input = parseXMEMLEvents(fs.readFileSync(new URL('./fixtures/E110_ftw_turnover.xml', import.meta.url), 'utf8'));
+  const otio = JSON.parse(fs.readFileSync(new URL('./fixtures/E117_resolve_ftw_export.otio', import.meta.url), 'utf8'));
+  const exported = parseOTIO(otio, { fps: 24 });
+  assert.ok(exported.filter((e) => e.track === 'V').every((e) => e.color === undefined), 'the OTIO parser never sees a colour');
+  const honest = verifyRoundtrip(input, exported, { exportedFormat: 'otio' });
+  assert.equal(honest.pass, true, JSON.stringify(honest.mismatches));
+  assert.equal(honest.generatorColourNotInExport, true);
+  assert.equal(honest.generatorColours, undefined);
+  // Without the format declared the compare is strict — and honestly fails.
+  const strict = verifyRoundtrip(input, exported);
+  assert.equal(strict.pass, false);
+  assert.equal(strict.mismatches.filter((m) => m.kind === 'generator-colour').length, 2);
+  // An XML re-export IS colour-capable: declaring it keeps the compare strict.
+  const xmlExp = parseXMEMLEvents(fs.readFileSync(new URL('./fixtures/E112_resolve_ftw_export.xml', import.meta.url), 'utf8'));
+  const viaXml = verifyRoundtrip(input, xmlExp, { exportedFormat: 'xml' });
+  assert.equal(viaXml.pass, true);
+  assert.deepEqual(viaXml.generatorColours, { compared: 2, mismatches: [] });
+});

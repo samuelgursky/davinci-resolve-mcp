@@ -2841,7 +2841,13 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "a Solid Color's colour as the FxPlug parameter `input_1` "
                    "(effectid FxPlugWrapper:C18E8B62_…), not `fillcolor` — an "
                    "authored EffectFiltersBA colour came back exactly (white, "
-                   "128/64/191; E112).",
+                   "128/64/191; E112). The OTIO writer CANNOT: EXPORT_OTIO "
+                   "emits a Solid Color as a Clip.2 named 'Solid Color' with a "
+                   "NULL media_reference, metadata {\"Resolve_OTIO\": {}} and a "
+                   "parameterless Transform effect — no colour anywhere "
+                   "(measured E117) — so only an XML re-export witnesses a "
+                   "generator colour (editorial.verify_roundtrip exportedFormat "
+                   "→ generatorColourNotInExport).",
         "recommended": "Author fade-to-white / colour mattes by placing a "
                        "Solid Color generator with that blob "
                        "(drp-format placeGenerator `color`, drt.assemble "
