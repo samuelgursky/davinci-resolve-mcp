@@ -42,6 +42,7 @@ window. `render.verify_output` covers the container-level checks.
 | Media cuts, multi-source | `media: [{mediaFilePath, spec, cuts}]` | v2.106–2.107 |
 | Multi-track video (V2+ stacking) | `cuts[].track` (video-only above V1) | v2.112 |
 | Cross-dissolves | `transitions: [{track, atFrame, durationFrames}]` | v2.111 |
+| Wipes (EDL `W`-codes) | `transitions[].type: 'wipe'` (single soft-edge style — host-importer parity) | v2.138 |
 | Audio cross-fades | `transitions[].trackType: 'audio'` | v2.116 |
 | Constant retimes, forward | `cuts[].speed` (e.g. `0.5`) | v2.113 |
 | Constant retimes, reverse | `cuts[].reverse` | v2.114 |

@@ -425,7 +425,12 @@ export function eventsToAssembleSpec(events, opts = {}) {
       });
       continue;
     }
-    transitions.push({ track: c.track, atFrame: c.atFrame, durationFrames: c.durationFrames });
+    // EDL W-codes author as a WIPE (Resolve's own EDL importer maps every
+    // W-code to its single soft-edge wipe style — W001/W002/W005 measured
+    // identical — so one style is host-importer parity; render-verified
+    // spatial split at the midpoint). Everything else is a dissolve.
+    const kind = /^W/i.test(String(c.type || '')) ? 'wipe' : 'dissolve';
+    transitions.push({ track: c.track, atFrame: c.atFrame, durationFrames: c.durationFrames, ...(kind === 'wipe' ? { type: 'wipe' } : {}) });
   }
   // Audio cross-fades, same geometry rules (render-verified on 19.1.3.7 via
   // the harvested cross-fade template: the highpass RMS ramps, not steps).

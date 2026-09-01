@@ -656,3 +656,22 @@ test('cdlDiff reads array-shaped CDLs and refuses garbage instead of identity-de
   assert.throws(() => cdlDiff({ slope: 'oops' }, {}), /refusing to silently treat it as identity/);
   assert.throws(() => cdlDiff({ slope: [1, 1] }, {}), /exactly \[r, g, b\]/);
 });
+
+test('EDL W-codes author as wipes; D stays a plain dissolve (E61/E62)', () => {
+  // Resolve's own EDL importer maps EVERY W-code to its single soft-edge
+  // wipe style (W001/W002/W005 harvested identical), stored as a Cross
+  // Dissolve element whose FieldsBlob zeroes the style id. Render-proven:
+  // authored wipe midpoint splits spatially (158/205) where a dissolve is
+  // uniform (181.6), and matches the live-import wipe's split.
+  const wipeEdl = [
+    'TITLE: W', 'FCM: NON-DROP FRAME',
+    '001  TAPE1 V     C        00:00:01:00 00:00:03:00 01:00:00:00 01:00:02:00',
+    '002  TAPE2 V     W001 024 00:00:01:00 00:00:03:00 01:00:02:00 01:00:04:00',
+    '',
+  ].join('\n');
+  const w = eventsToAssembleSpec(parseEDL(wipeEdl, { fps: 24 }), { sourceMap: MAP });
+  assert.deepEqual(w.spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24, type: 'wipe' }]);
+  const disEdl = wipeEdl.replace('W001 024', 'D    024');
+  const d = eventsToAssembleSpec(parseEDL(disEdl, { fps: 24 }), { sourceMap: MAP });
+  assert.deepEqual(d.spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24 }]);
+});

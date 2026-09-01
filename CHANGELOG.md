@@ -2,6 +2,24 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.138.0 — wipes join the conform
+
+### Added
+
+- **Wipe transitions authored offline** (`transitions[].type: 'wipe'`;
+  EDL `W`-codes route to it automatically through
+  `assemble_from_interchange`). Harvested from a live 19.1.3.7 EDL W-code
+  import (E61): Resolve stores a wipe as the same Cross Dissolve element
+  whose FieldsBlob zlib payload zeroes the style-id field the dissolve
+  fills — and its own importer maps EVERY W-code (W001/W002/W005 measured
+  identical) to one soft-edge wipe style, so a single style is full parity
+  with the host importer. Render-proven both directions: the live wipe's
+  midpoint splits spatially (157.2/206.3 left/right vs the dissolve's
+  uniform 181.6), the element survives the .drt round-trip bit-exact, and
+  the offline-authored wipe through the full EDL → assemble → import →
+  render route reproduces the split (158.1/205.0). Audio wipes refuse
+  (junctions cross-fade).
+
 ## What's New in v2.137.0 — the sweep reaches the database tier
 
 ### Fixed

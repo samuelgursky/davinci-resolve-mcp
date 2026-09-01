@@ -369,3 +369,31 @@ test('compounds nest recursively through the spec', async () => {
   assert.equal(compounds.length, 2, 'both compounds pooled flat');
   await fs.unlink(out);
 });
+
+test('transitions[].type wipe swaps the harvested style blob; audio wipes refuse', async () => {
+  const out = tmp('.drt');
+  await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    spec: { timelineName: 'WIPE', media: {
+      mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+      cuts: [
+        { startFrame: 86400, durationFrames: 48, srcIn: 24 },
+        { startFrame: 86448, durationFrames: 48, srcIn: 120 },
+      ],
+    }, transitions: [{ track: 1, atFrame: 86448, durationFrames: 24, type: 'wipe' }] },
+  }});
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+  const seq = await zip.file(seqName).async('string');
+  const trans = seq.match(/<Sm2TiTransition DbId="[^"]+">[\s\S]*?<\/Sm2TiTransition>/)[0];
+  // the E61 harvest constant: zlib payload with the style-id field zeroed
+  assert.match(trans, /<FieldsBlob>00000002000000158012120000002c789c636660642016000000da0005<\/FieldsBlob>/);
+  assert.match(trans, /<PrettyType>Cross Dissolve<\/PrettyType>/, 'wipes ride the Cross Dissolve element, as Resolve stores them');
+  await fs.unlink(out);
+  await assert.rejects(drtTool.handler({ action: 'assemble', args: {
+    outputPath: tmp('.drt'),
+    spec: { media: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+      cuts: [{ startFrame: 86400, durationFrames: 96 }] },
+      transitions: [{ track: 1, atFrame: 86448, durationFrames: 24, type: 'wipe', trackType: 'audio' }] },
+  }}), /wipes are video-only/);
+});

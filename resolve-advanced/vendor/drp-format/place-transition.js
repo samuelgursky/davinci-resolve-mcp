@@ -55,8 +55,21 @@ const clipDuration = (c) => { const m = c.match(/<Duration>(\d+)<\/Duration>/); 
  * @returns {Promise<{buffer:Buffer, entry:string, timelineUuid:string, track:number,
  *   atFrame:number, start:number, durationFrames:number, transitionDbId:string|null}>}
  */
+// The WIPE variant (harvested from a live 19.1.3.7 EDL W-code import, E61):
+// Resolve stores a wipe as the SAME Cross Dissolve transition element whose
+// FieldsBlob zlib payload zeroes the style-id field the dissolve fills with
+// 08 c79fc3e9. EffectFiltersBA, alignment, everything else is byte-identical.
+// Render-proven: midpoint splits spatially (left 157.2 / right 206.3 on the
+// standard probe media) vs the dissolve's uniform 181.6, and the element
+// survives the .drt round-trip bit-exact. Resolve's own EDL importer maps
+// EVERY W-code (W001/W002/W005 measured identical) to this single soft-edge
+// wipe style, so one style is full parity with the host importer.
+const WIPE_FIELDS_BLOB = '00000002000000158012120000002c789c636660642016000000da0005';
+
 async function placeTransition(drpInput, opts = {}) {
-  const { track, atFrame, durationFrames = 24, trackType = 'video', timelineUuid } = opts;
+  const { track, atFrame, durationFrames = 24, trackType = 'video', type = 'dissolve', timelineUuid } = opts;
+  if (type !== 'dissolve' && type !== 'wipe') throw new Error("placeTransition: type must be 'dissolve' or 'wipe'");
+  if (type === 'wipe' && trackType === 'audio') throw new Error('placeTransition: wipes are video-only (audio junctions cross-fade)');
   if (!Number.isInteger(track) || track < 1) throw new TypeError('placeTransition: track must be a positive integer');
   if (!Number.isInteger(atFrame)) throw new TypeError('placeTransition: atFrame must be an integer');
   if (!Number.isInteger(durationFrames) || durationFrames < 2) throw new TypeError('placeTransition: durationFrames must be an integer >= 2');
@@ -78,6 +91,9 @@ async function placeTransition(drpInput, opts = {}) {
 
   let trans = fs.readFileSync(trackType === 'audio' ? AUDIO_TEMPLATE_PATH : TEMPLATE_PATH, 'utf8').trim();
   trans = freshDbIds(trans);
+  if (type === 'wipe') {
+    trans = trans.replace(/<FieldsBlob>[0-9a-fA-F]*<\/FieldsBlob>/, `<FieldsBlob>${WIPE_FIELDS_BLOB}</FieldsBlob>`);
+  }
   const start = atFrame - Math.floor(durationFrames / 2); // centered (AlignmentType 2)
   trans = trans.replace(/<Start>\d+<\/Start>/, `<Start>${start}</Start>`);
   trans = trans.replace(/<Duration>\d+<\/Duration>/, `<Duration>${durationFrames}</Duration>`);
