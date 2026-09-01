@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.189.0 — E136: Premiere markers belong to their sequence and read their real fields
+
+### Fixed
+
+- **Every project marker landed on every sequence, at frame 0, unnamed.**
+  The marker walk returned every `Marker` object in the project for each
+  sequence and read fields the real shape does not carry: on a real Premiere
+  2025 turnover that was 1,228 bogus markers per sequence. A sequence's
+  markers are its own — `Sequence.MarkerOwner.Markers` → a markers container
+  → `<Marker>` pairs → marker objects whose payload is a `DVAMarker` JSON
+  blob (`mStartTime.ticks`, `mName`, `mComment`, `mType`, `mEndTime`). They
+  now read from that blob (ticks to frames, duration from an end time),
+  sorted by frame; the legacy field shape still reads when a sequence owns
+  it; a sequence without a marker owner reports none. On the turnover: 188
+  markers across 66 sequences, where every sequence used to show 1,228.
+
+### Measured (filed in api-limitations)
+
+- The Premiere 2025 marker ownership chain and the `DVAMarker` JSON payload.
+
 ## What's New in v2.188.0 — E135: Premiere tracks are lanes; nested blocks first-fit; an audio lane ceiling
 
 ### Fixed

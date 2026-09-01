@@ -2919,7 +2919,14 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "TransitionTrackItem.TrackItem{Start,End} (the span), "
                        "DisplayName / MatchName (the effect), Alignment (ticks) "
                        "and HasIncomingClip / HasOutgoingClip — false marks a "
-                       "fade from/to black or silence.",
+                       "fade from/to black or silence. MARKERS (E136): a "
+                       "sequence owns its markers through Sequence.MarkerOwner."
+                       "Markers → a Markers container → <Markers><Marker><Second "
+                       "ObjectRef> → a Marker object whose payload is a DVAMarker "
+                       "JSON string ({mMarkerID, mStartTime.ticks, mType, mName?, "
+                       "mComment?, mEndTime?}); clips own theirs the same way via "
+                       "Clip.MarkerOwner. Marker objects exist project-wide (1228 "
+                       "on the turnover) — only the owner chain says whose they are.",
         "tags": ["prproj", "premiere", "interchange", "silent-failure"],
         "submit": "missing",
         "mitigation": ["editorial.parse_interchange prproj", "editorial.list_sequences"],

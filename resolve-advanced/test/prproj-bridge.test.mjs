@@ -31,6 +31,7 @@ const PRPROJ_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <Node Version="1"><Properties><Name>EP01 CUT</Name><FrameRate>24</FrameRate></Properties></Node>
     <VideoTracks><Track ObjectRef="20"/></VideoTracks>
     <AudioTracks><Track ObjectRef="30"/></AudioTracks>
+      <MarkerOwner Version="1"><Markers ObjectRef="71"/></MarkerOwner>
   </Sequence>
   <Sequence ObjectID="11" ClassID="s" Version="40">
     <Node Version="1"><Properties><Name>EP01 BONUS</Name><FrameRate>24</FrameRate></Properties></Node>
@@ -71,6 +72,7 @@ const PRPROJ_XML = `<?xml version="1.0" encoding="UTF-8"?>
   <ClipProjectItem ObjectID="62" ClassID="p" Version="1">
     <ActualMediaFilePath>/media/C003.mov</ActualMediaFilePath>
   </ClipProjectItem>
+  <Markers ObjectID="71" ClassID="mk" Version="4"><Markers Version="1"><Marker Version="1" Index="0"><First>legacy-m1</First><Second ObjectRef="70"/></Marker></Markers></Markers>
   <Marker ObjectID="70" ClassID="m" Version="1">
     <Position>${f(12)}</Position><Duration>0</Duration><Name>M1</Name><Comment>flash</Comment><MarkerType>0</MarkerType><ColorIndex>1</ColorIndex>
   </Marker>
@@ -363,7 +365,11 @@ const REAL_SHAPE_XML = `<?xml version="1.0" encoding="UTF-8" ?>
       <TrackGroup Version="1" Index="1"><First>80b8e3d5-6dca-4195-aefb-cb5f407ab009</First><Second ObjectRef="28141"/></TrackGroup>
     </TrackGroups>
     <Name>REAL_REEL</Name>
+    <MarkerOwner Version="1"><Markers ObjectRef="38768"/></MarkerOwner>
   </Sequence>
+  <Markers ObjectID="38768" ClassID="bee50706-b524-416c-9f03-b596ce5f6866" Version="4"><Markers Version="1"><Marker Version="1" Index="0"><First>550bffde-cd97-4083-a3f4-10a70b170786</First><Second ObjectRef="50612"/></Marker><Marker Version="1" Index="1"><First>894d7c68-fca2-45e0-9233-7779b16e80a9</First><Second ObjectRef="50613"/></Marker></Markers></Markers>
+  <Marker ObjectID="50612" ClassID="a45508e0-3ff7-4d04-90a7-2e0dfff4c910" Version="3"><DVAMarker>{"DVAMarker":{"mMarkerID":"550bffde-cd97-4083-a3f4-10a70b170786","mStartTime":{"ticks":508032000000},"mType":"Comment","mName":"VFX 01","mComment":"clean plate"}}</DVAMarker></Marker>
+  <Marker ObjectID="50613" ClassID="a45508e0-3ff7-4d04-90a7-2e0dfff4c910" Version="3"><DVAMarker>{"DVAMarker":{"mMarkerID":"894d7c68-fca2-45e0-9233-7779b16e80a9","mStartTime":{"ticks":254016000000},"mEndTime":{"ticks":508032000000},"mType":"Comment"}}</DVAMarker></Marker>
   <Sequence ObjectUID="2b0665a8-e73d-4b91-82f2-d130a2cd9c32" ClassID="6a15d903-8739-11d5-af2d-9b7855ad8974" Version="12">
     <Node Version="1"><Properties Version="1"/></Node>
     <TrackGroups Version="1"><TrackGroup Version="1" Index="0"><First>228cda18-3625-4d2d-951e-348879e4ed93</First><Second ObjectRef="28150"/></TrackGroup></TrackGroups>
@@ -424,4 +430,8 @@ test('parsePrproj walks the real Premiere 2025 shape: UID/URef graph, TrackGroup
     ['A', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 192, 240, null],
   ]);
   assert.equal(doc.sequences.find((s) => s.name === 'REAL_REEL').fps, 24);
+  // E136: markers are the SEQUENCE's own, read from the DVAMarker JSON, sorted by frame;
+  // a sequence without a MarkerOwner reports none (the old walk put every project marker on every sequence).
+  assert.deepEqual(doc.sequences.find((s) => s.name === 'REAL_REEL').markers.map((m) => [m.frame, m.duration, m.name, m.note]), [[24, 24, '', ''], [48, 0, 'VFX 01', 'clean plate']]);
+  assert.deepEqual(doc.sequences.find((s) => s.name === 'NESTED_SELECTS').markers, []);
 });

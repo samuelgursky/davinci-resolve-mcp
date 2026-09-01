@@ -396,21 +396,54 @@ function expandNestedPlaceholders(events, byId, fps, depth) {
   return out;
 }
 
-/** Enumerate marker objects (project- or sequence-level) with tick→frame positions. */
-function collectMarkers(byId, fps) {
-  const markers = [];
-  for (const { tag, node } of byId.values()) {
-    if (tag !== 'Marker') continue;
-    markers.push({
-      frame: ticksToFrames(childText(node, 'Position'), fps),
-      duration: ticksToFrames(childText(node, 'Duration'), fps) || 0,
-      name: childText(node, 'Name') || '',
-      note: childText(node, 'Comment') || '',
-      type: Number(childText(node, 'MarkerType')) || 0,
-      colorIndex: Number(childText(node, 'ColorIndex')) || 0,
-    });
+/**
+ * A sequence's OWN markers (E136). Real Premiere 2025: Sequence.MarkerOwner.
+ * Markers → a Markers container → <Markers><Marker><Second ObjectRef> → a
+ * Marker object whose payload is a DVAMarker JSON string ({mStartTime.ticks,
+ * mName, mComment, mType, mMarkerID}; a duration/end when present). The old
+ * walk returned EVERY Marker object in the project on EVERY sequence, with
+ * frame 0 and an empty name (1228 bogus markers per sequence on a real
+ * turnover). Legacy/synthetic Marker objects (Position/Name/Comment fields)
+ * are read the same way when a sequence owns them; without an owner chain a
+ * sequence reports none.
+ */
+function markerFromObject(node, fps) {
+  const raw = childText(node, 'DVAMarker');
+  if (raw) {
+    try {
+      const m = JSON.parse(String(raw)).DVAMarker || {};
+      const startTicks = m.mStartTime && m.mStartTime.ticks != null ? Number(m.mStartTime.ticks) : null;
+      const endTicks = m.mEndTime && m.mEndTime.ticks != null ? Number(m.mEndTime.ticks) : null;
+      const frame = startTicks != null ? ticksToFrames(startTicks, fps) : null;
+      const duration = startTicks != null && endTicks != null ? Math.max(0, ticksToFrames(endTicks - startTicks, fps) || 0) : 0;
+      return { frame, duration, name: m.mName || '', note: m.mComment || '', type: m.mType || 'Comment', id: m.mMarkerID || null };
+    } catch {
+      return null;
+    }
   }
-  return markers;
+  return {
+    frame: ticksToFrames(childText(node, 'Position'), fps),
+    duration: ticksToFrames(childText(node, 'Duration'), fps) || 0,
+    name: childText(node, 'Name') || '',
+    note: childText(node, 'Comment') || '',
+    type: Number(childText(node, 'MarkerType')) || 0,
+    colorIndex: Number(childText(node, 'ColorIndex')) || 0,
+  };
+}
+
+function collectMarkers(seqEntry, byId, fps) {
+  const owner = asArray(seqEntry.node.MarkerOwner)[0];
+  const container = owner ? byId.get(ref(owner, 'Markers') || '') : null;
+  if (!container) return [];
+  const list = asArray(container.node.Markers && container.node.Markers.Marker);
+  const markers = [];
+  for (const pair of list) {
+    const mk = byId.get(refId(asArray(pair.Second)[0]) || '');
+    if (!mk || mk.tag !== 'Marker') continue;
+    const m = markerFromObject(mk.node, fps);
+    if (m && m.frame != null) markers.push(m);
+  }
+  return markers.sort((a, b) => a.frame - b.frame);
 }
 
 function sequenceEntries(byId) {
@@ -435,7 +468,7 @@ export function parsePrprojDoc(pathOrBuffer) {
       fps,
       eventCount: events.length,
       events,
-      markers: collectMarkers(byId, fps),
+      markers: collectMarkers(entry, byId, fps),
     };
   });
   const mediaPaths = [...new Set(collectMediaPaths(byId))].sort();
