@@ -258,7 +258,13 @@ export function eventsToAssembleSpec(events, opts = {}) {
   const audioSkipped = events.length - vids.length - audsRaw.length - markerEvents.length;
   if (!vids.length) throw new Error('eventsToAssembleSpec: no video events with record ranges');
 
-  const unmapped = [...new Set([...vids, ...auds].map((e) => e.source).filter((srcName) => !sourceMap[srcName]))];
+  // BL/BLACK reels are the EDL's built-in black source — they never need a
+  // sourceMap entry. Video BL legs author as Solid Color generator elements
+  // (Resolve's own EDL importer creates exactly that for the slug — but DROPS
+  // the fade dissolves around it, measured E91); audio BL legs are silence,
+  // which an empty track already is.
+  const isBL = (srcName) => /^(BL|BLACK)$/i.test(String(srcName || '').trim());
+  const unmapped = [...new Set([...vids, ...auds].map((e) => e.source).filter((srcName) => !isBL(srcName) && !sourceMap[srcName]))];
   if (unmapped.length) {
     throw new Error(
       `eventsToAssembleSpec: unmapped source reel(s): ${unmapped.join(', ')} — ` +
@@ -285,12 +291,40 @@ export function eventsToAssembleSpec(events, opts = {}) {
   const minRec = preserveStartTimecode ? 0 : minRecRaw;
   const ORIGIN = preserveStartTimecode ? 0 : DEFAULT_ORIGIN;
   const startFrame = preserveStartTimecode ? minRecRaw : DEFAULT_ORIGIN;
+  const blackLegs = [];
   for (const e of vids) {
     const recIn = ORIGIN + (toTl(e.recIn, e.fps) - minRec);
     const recOut = ORIGIN + (toTl(e.recOut, e.fps) - minRec);
     const durationFrames = recOut - recIn;
+    const vTrackEarly = trackNum(e.track);
+    if (isBL(e.source)) {
+      // BL leg → Solid Color generator element (renders black; the authored
+      // clip↔generator dissolve render-verified E91: luma ramps 124→16
+      // through the junction). ZERO-length BL is kept as a placement so a
+      // fade-in's boundary-shift can GROW it — the CMX fade-in form is a
+      // zero-length BL cut followed by a D event, and a single-sided
+      // transition refuses to import (measured E91), so the shift is the
+      // only authorable shape.
+      if (durationFrames < 0) continue;
+      const el = { type: 'generator', generatorName: 'Solid Color', track: vTrackEarly, startFrame: recIn, durationFrames, srcIn: 0 };
+      blackLegs.push(el);
+      if (e.transition) {
+        let d = Math.max(2, toTl(e.transition.duration || 0, e.fps) || 2);
+        d += d % 2;
+        let pre = Math.floor(d / 2);
+        if (e.transition.alignment === 'start') pre = 0;
+        transitionCandidates.push({
+          atFrame: recIn, durationFrames: d, track: vTrackEarly, pre,
+          explicitSpan: e.transition.alignment != null,
+          index: e.index, type: e.transition.type, rawDuration: e.transition.duration,
+          source: e.source, srcIn: Infinity, incomingCutRef: el, cutPoint: e.transition.cutPoint,
+        });
+      }
+      placements.push({ start: recIn, end: recOut, index: e.index, source: e.source, srcIn: Infinity, durationFrames, track: vTrackEarly, cutRef: el });
+      continue;
+    }
     if (durationFrames <= 0) continue;
-    const vTrack = trackNum(e.track);
+    const vTrack = vTrackEarly;
     const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps), ...(vTrack > 1 ? { track: vTrack } : {}) };
     // CLIP markers from the turnover (OTIO clip markers, XMEML clipitem
     // <marker>s) become ITEM markers on the cut (frames clip-relative,
@@ -363,7 +397,21 @@ export function eventsToAssembleSpec(events, opts = {}) {
   const audioPlacements = [];
   const audioRetimesSkipped = [];
   const audioTransCandidates = [];
+  let audioBlackLegsSkipped = 0;
   for (const e of auds) {
+    if (isBL(e.source)) {
+      // Audio BL = silence, which an empty track already is. A fade to/from
+      // it has no authorable form (no silence source to cross-fade against);
+      // the level steps at the cut instead of ramping — stated, not silent.
+      audioBlackLegsSkipped += 1;
+      if (e.transition) {
+        droppedTransitions.push({
+          index: e.index, type: e.transition.type, duration: e.transition.duration, trackType: 'audio',
+          reason: 'audio fade to/from BL (silence) — no silence source to cross-fade against; the level steps at the cut',
+        });
+      }
+      continue;
+    }
     const recIn = ORIGIN + (toTl(e.recIn, e.fps) - minRec);
     const recOut = ORIGIN + (toTl(e.recOut, e.fps) - minRec);
     const durationFrames = recOut - recIn;
@@ -408,7 +456,10 @@ export function eventsToAssembleSpec(events, opts = {}) {
 
   // Overlap is judged PER VIDEO TRACK — V2 stacking over V1 is legitimate
   // conform geometry (render-verified: an upper-track clip covers the lower).
-  placements.sort((a, b) => a.start - b.start);
+  // end-tiebreak keeps a zero-length BL placement AHEAD of the picture leg
+  // that starts at the same frame (fade-in form) — start-only sorting would
+  // read them as an overlap.
+  placements.sort((a, b) => a.start - b.start || a.end - b.end);
   const byTrack = new Map();
   for (const pl of placements) {
     if (!byTrack.has(pl.track)) byTrack.set(pl.track, []);
@@ -457,10 +508,14 @@ export function eventsToAssembleSpec(events, opts = {}) {
     // FULL-duration outgoing tail.
     const pre = c.pre ?? c.durationFrames / 2;
     const post = c.durationFrames - pre;
+    // A BL side has infinite handles: a Solid Color generator extends freely
+    // in both directions (srcIn is already Infinity on BL candidates).
     const bHandle = c.srcIn >= pre;
     const aSpec = sourceMap[prev.source] && sourceMap[prev.source].spec;
     const aFrames = aSpec && Number(aSpec.frameCount);
-    const aHandle = Number.isFinite(aFrames) ? prev.srcIn + prev.durationFrames + post <= aFrames : false;
+    const aHandle = isBL(prev.source)
+      ? true
+      : (Number.isFinite(aFrames) ? prev.srcIn + prev.durationFrames + post <= aFrames : false);
     if (!bHandle || !aHandle) {
       droppedTransitions.push({
         index: c.index, type: c.type, duration: c.rawDuration,
@@ -496,6 +551,16 @@ export function eventsToAssembleSpec(events, opts = {}) {
       // span, the edge law), else center.
       const cp = Number.isInteger(c.cutPoint) ? Math.min(c.durationFrames - 1, Math.max(1, c.cutPoint)) : c.durationFrames / 2;
       const shift = (pre === 0 ? 1 : -1) * cp;
+      // The shift must leave BOTH legs with positive duration — a leg
+      // shorter than the boundary shift cannot host its half of the span
+      // (and a zero-length survivor would re-create the inert edge form).
+      if (c.incomingCutRef.durationFrames - shift <= 0 || prev.cutRef.durationFrames + shift <= 0) {
+        droppedTransitions.push({
+          index: c.index, type: c.type, duration: c.rawDuration,
+          reason: `a leg is shorter than the ${Math.abs(shift)}f boundary shift the edge-aligned span requires`,
+        });
+        continue;
+      }
       prev.cutRef.durationFrames += shift;
       c.incomingCutRef.startFrame += shift;
       c.incomingCutRef.srcIn += shift;
@@ -563,8 +628,15 @@ export function eventsToAssembleSpec(events, opts = {}) {
     }))
     .filter((m) => m.frame >= (preserveStartTimecode ? startFrame : DEFAULT_ORIGIN));
 
+  // BL legs with surviving extent (a fade-in's zero-length slug GROWS through
+  // the boundary shift; one that never met a dissolve stays zero and drops
+  // out). srcIn was only scaffolding for the shift math — strip it.
+  const elements = blackLegs
+    .filter((el) => el.durationFrames > 0)
+    .map(({ srcIn: _srcIn, ...rest }) => rest);
+
   return {
-    spec: { timelineName, media, ...(preserveStartTimecode ? { startFrame } : {}), ...(markers.length ? { markers } : {}), ...(transitions.length ? { transitions } : {}) },
+    spec: { timelineName, media, ...(preserveStartTimecode ? { startFrame } : {}), ...(markers.length ? { markers } : {}), ...(transitions.length ? { transitions } : {}), ...(elements.length ? { elements } : {}) },
     report: {
       videoEvents: vids.length,
       sources: media.length,
@@ -573,7 +645,10 @@ export function eventsToAssembleSpec(events, opts = {}) {
       audioChannelLegsMerged,
       authoredAudioEvents: audioPlacements.length,
       audioRetimesSkipped,
-      upperTrackCutsVideoOnly: placements.filter((pl) => pl.track > 1).length,
+      ...(elements.length || audioBlackLegsSkipped ? {
+        blackLegs: { authoredGenerators: elements.length, audioSilenceLegsSkipped: audioBlackLegsSkipped },
+      } : {}),
+      upperTrackCutsVideoOnly: placements.filter((pl) => pl.track > 1 && !isBL(pl.source)).length,
       flattenedRetimes,
       authoredRetimes,
       authoredTransitions: transitions,

@@ -27,6 +27,8 @@ const {
   insertClipIntoTrack,
   replaceTrackVec,
   getTrackVec,
+  getItemsInner,
+  setItemsInner,
   freshDbIds,
 } = require('./seq-surgery');
 
@@ -72,7 +74,23 @@ async function placeGenerator(drpInput, opts = {}) {
   let createdTracks = 0;
   const cloneSource = tracks[0];
   while (tracks.length < trackIndex) { tracks.push(emptyTrackClone(cloneSource)); createdTracks += 1; }
-  tracks[trackIndex - 1] = insertClipIntoTrack(tracks[trackIndex - 1], gen);
+  // Insert in CHRONOLOGICAL item order, not appended: placeTransition detects
+  // junctions by listed adjacency, so a generator that precedes a clip in
+  // time (a fade-in's black slug, E91) must precede it in <Items> too.
+  // Compound-clip elements are not scanned (their nested inner <Element>s
+  // defeat the lazy regex); a generator meant to sit before one appends.
+  const track = tracks[trackIndex - 1];
+  const innerItems = getItemsInner(track);
+  const clipRe = /<Element>\s*<Sm2Ti(?:VideoClip|AudioClip|Generator)\b[\s\S]*?<\/Sm2Ti(?:VideoClip|AudioClip|Generator)>\s*<\/Element>/g;
+  let insertAt = -1;
+  let m;
+  while ((m = clipRe.exec(innerItems)) !== null) {
+    const sm = /<Start>(\d+)<\/Start>/.exec(m[0]);
+    if (sm && parseInt(sm[1], 10) > startFrame) { insertAt = m.index; break; }
+  }
+  tracks[trackIndex - 1] = insertAt >= 0
+    ? setItemsInner(track, innerItems.slice(0, insertAt) + gen + innerItems.slice(insertAt))
+    : insertClipIntoTrack(track, gen);
 
   const xml = replaceTrackVec(seqXml, 'video', vtv, tracks);
   zip.file(entry, xml);

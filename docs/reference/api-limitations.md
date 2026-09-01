@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 35 missing capabilities, 49 bugs / unreliable behaviors.
+**Totals:** 35 missing capabilities, 50 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -687,6 +687,14 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Timeline markers present and readable through the marker API do not appear in the exported .otio at all — the OTIO Marker schema exists and Resolve's importer reads it, but the exporter writes none (measured on Studio 19.1.3.7: two markers read back at frames 12/72; the export carried zero). Any marker-fidelity QC built on an OTIO re-export silently sees an unmarked timeline.
 - **Workaround / current handling:** Do not use EXPORT_OTIO to carry or verify markers. editorial.verify_roundtrip reports this case as `markersNotInExport` (honesty flag, not a failure); read markers through the marker API for fidelity checks, and author them offline via drt.assemble spec.markers when a .drt must carry them.
 - **Tags:** timeline, export, otio, markers, silent-failure
+
+### MediaPool.ImportTimelineFromFile EDL (drops BL fades)
+
+- **Object:** `MediaPool`
+- **Signature:** `(filePath.edl, importOptions) -> Timeline`
+- **Behavior:** EDL dissolves involving the BL (black) reel are dropped silently on import (measured on Studio 19.1.3.7, E91): a CMX fade-in (zero-length BL cut + D event) vanishes wholesale — frame 0 renders at full brightness — and a fade-out to a BL leg imports the BL as a Solid Color generator but drops the dissolve, leaving a hard cut to black. Import succeeds; the importer authors dissolves normally between two real media clips. A related law: a hand-authored SINGLE-SIDED transition element (span at a lone clip head or tail, only one neighboring item) refuses to import entirely — Resolve creates no timeline.
+- **Workaround / current handling:** Conform EDLs with fades through drt.assemble_from_interchange: BL legs author as Solid Color generator elements and the fades as real clip-to-generator dissolves (render-verified: luma ramps 18->123 across a 24f fade-in and 123->16 across the fade-out, black tail holding 16). Audio BL fades (to silence) drop with a stated reason — there is no silence source to cross-fade against.
+- **Tags:** edl, import, transitions, fades, silent-failure
 
 ### Project.SetRenderSettings ExportSubtitle/SubtitleFormat (inert on 19.x)
 

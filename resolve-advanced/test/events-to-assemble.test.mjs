@@ -319,6 +319,59 @@ test('audio cuts beyond the template ceiling refuse at assemble time', async () 
 // cross-fade template renders a RAMP through the junction (verified on
 // 19.1.3.7 against a Resolve-authored control: -27.6 → -25.6 → -23.0 → -21.9
 // highpass-RMS, identical shape).
+// ── BL (black) legs and fades (E91, render-verified on 19.1.3.7) ─────────
+// Resolve's OWN EDL importer drops BL dissolves silently (fade-in vanishes,
+// fade-out leaves a hard cut to the Solid Color it creates). This bridge
+// authors them: BL legs become Solid Color generator elements, fades become
+// real clip↔generator dissolves — luma ramped 18→123 (in) and 123→16 (out)
+// on the live render.
+test('EDL BL fades author as generator elements + dissolves (E91)', () => {
+  const edl = [
+    'TITLE: FADES', 'FCM: NON-DROP FRAME',
+    '001  BL    V     C        00:00:00:00 00:00:00:00 01:00:00:00 01:00:00:00',
+    '002  TAPE1 V     D    024 00:00:00:00 00:00:04:00 01:00:00:00 01:00:04:00',
+    '003  TAPE1 V     C        00:00:04:00 00:00:04:00 01:00:04:00 01:00:04:00',
+    '004  BL    V     D    024 00:00:00:00 00:00:02:00 01:00:04:00 01:00:06:00',
+    '',
+  ].join('\n');
+  const events = parseEDL(edl, { fps: 24 });
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: { TAPE1: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 } } },
+  });
+  // Fade-in: the zero-length BL slug GROWS through the boundary shift
+  // (single-sided transitions refuse to import, measured), the picture
+  // trims its head with source staying record-aligned.
+  assert.deepEqual(spec.elements, [
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86400, durationFrames: 12 },
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86508, durationFrames: 36 },
+  ]);
+  assert.deepEqual(spec.media[0].cuts, [{ startFrame: 86412, durationFrames: 96, srcIn: 12 }]);
+  assert.deepEqual(spec.transitions, [
+    { track: 1, atFrame: 86412, durationFrames: 24, startFrame: 86400 },
+    { track: 1, atFrame: 86508, durationFrames: 24, startFrame: 86496 },
+  ]);
+  assert.deepEqual(report.blackLegs, { authoredGenerators: 2, audioSilenceLegsSkipped: 0 });
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+test('audio BL fades drop with the no-silence-source reason; BL needs no sourceMap entry', () => {
+  const edl = [
+    'TITLE: AFADE', 'FCM: NON-DROP FRAME',
+    '001  TAPE1 A     C        00:00:00:00 00:00:02:00 01:00:00:00 01:00:02:00',
+    '002  BL    A     D    024 00:00:00:00 00:00:01:00 01:00:02:00 01:00:03:00',
+    '003  TAPE1 V     C        00:00:00:00 00:00:03:00 01:00:00:00 01:00:03:00',
+    '',
+  ].join('\n');
+  const events = parseEDL(edl, { fps: 24 });
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: { TAPE1: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 } } },
+  });
+  assert.equal(spec.elements, undefined); // audio BL never becomes a generator
+  assert.equal(report.blackLegs.audioSilenceLegsSkipped, 1);
+  const drop = report.droppedTransitions.find((d) => d.trackType === 'audio');
+  assert.match(drop.reason, /no silence source/);
+});
+
 test('an EDL audio dissolve with handles authors an audio cross-fade', () => {
   const edl = [
     'TITLE: AX',

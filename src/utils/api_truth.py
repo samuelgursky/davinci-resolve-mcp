@@ -2738,6 +2738,33 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["editorial.verify_roundtrip markersNotInExport"],
     },
     {
+        "symbol": "MediaPool.ImportTimelineFromFile EDL (drops BL fades)",
+        "object": "MediaPool",
+        "signature": "(filePath.edl, importOptions) -> Timeline",
+        "reality": "EDL dissolves involving the BL (black) reel are dropped "
+                   "silently on import (measured on Studio 19.1.3.7, E91): a "
+                   "CMX fade-in (zero-length BL cut + D event) vanishes "
+                   "wholesale — frame 0 renders at full brightness — and a "
+                   "fade-out to a BL leg imports the BL as a Solid Color "
+                   "generator but drops the dissolve, leaving a hard cut to "
+                   "black. Import succeeds; the importer authors dissolves "
+                   "normally between two real media clips. A related law: a "
+                   "hand-authored SINGLE-SIDED transition element (span at a "
+                   "lone clip head or tail, only one neighboring item) "
+                   "refuses to import entirely — Resolve creates no timeline.",
+        "recommended": "Conform EDLs with fades through "
+                       "drt.assemble_from_interchange: BL legs author as "
+                       "Solid Color generator elements and the fades as real "
+                       "clip-to-generator dissolves (render-verified: luma "
+                       "ramps 18->123 across a 24f fade-in and 123->16 "
+                       "across the fade-out, black tail holding 16). Audio "
+                       "BL fades (to silence) drop with a stated reason — "
+                       "there is no silence source to cross-fade against.",
+        "tags": ["edl", "import", "transitions", "fades", "silent-failure"],
+        "submit": "bug",
+        "mitigation": ["drt.assemble_from_interchange black-leg authoring"],
+    },
+    {
         "symbol": "Project.SetRenderSettings ExportSubtitle/SubtitleFormat (inert on 19.x)",
         "object": "Project",
         "signature": "({'ExportSubtitle': bool, 'SubtitleFormat': str}) -> bool",

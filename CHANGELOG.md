@@ -2,6 +2,31 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.150.0 — fades conform: BL legs author, and Resolve's own EDL importer drops them
+
+### Added
+
+- **EDL fades author end-to-end** in `drt.assemble_from_interchange`: BL
+  (black) legs become Solid Color generator elements and the fades real
+  clip-to-generator dissolves. A CMX fade-in's zero-length BL slug grows
+  through the boundary-shift machinery (single-sided transitions refuse to
+  import — measured); the picture trims its head with source staying
+  record-aligned. Render-proven: luma ramps 18→123 across a 24-frame
+  fade-in and 123→16 across the fade-out, with the black tail holding.
+  Audio BL fades (to silence) drop with a stated reason — there is no
+  silence source to cross-fade against.
+- Generator elements now insert into the track in **chronological item
+  order** (junction detection reads listed adjacency), and an edge-aligned
+  span whose leg is shorter than its boundary shift drops with a reason
+  instead of authoring a broken geometry.
+
+### Measured (new Resolve bug, filed in api-limitations)
+
+- **Resolve's own EDL importer silently drops BL dissolves**: the fade-in
+  vanishes wholesale (frame 0 renders full-bright) and a fade-out leaves a
+  hard cut into the Solid Color generator it creates for the BL slug. A
+  single-sided transition element refuses to import entirely.
+
 ## What's New in v2.149.0 — subtitle render truth: ExportSubtitle lies on 19.x
 
 ### Measured (new Resolve bug, filed in api-limitations)
