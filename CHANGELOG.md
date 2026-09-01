@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.146.0 — bins, and the folder registry law
+
+### Added
+
+- **`assemble_project` `timelines[].folder`** — place reels in named Master
+  bins (entries sharing a name share the bin; media stays in Master).
+  Live-proven: a Reels bin holding both timeline clips, both timelines
+  materialized, and a binned reel rendering its exact content.
+
+### Measured (the folder registry law)
+
+- **The parent folder's FieldsBlob is the subfolder registry.** Media and
+  timeline children are discovered by scan; subfolders are NOT — an
+  unregistered bin directory imports as nothing and silently takes its
+  clips' timelines with it. The registry's inner format is byte-verified
+  against the template harvest (a keyed child-id dict in a protobuf wrapper,
+  zstd-framed). Natively created Resolve projects carry an EMPTY folder blob
+  when binless — the assembly templates now match that convention
+  (render-verified as a no-op).
+
 ## What's New in v2.145.2 — launcher metadata before dependencies
 
 ### Fixed

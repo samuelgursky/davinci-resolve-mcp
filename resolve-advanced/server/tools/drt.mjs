@@ -303,16 +303,23 @@ export const drtTool = {
       // single-timeline .drt import path only takes one timeline per file.
       const p = z.object({
         timelines: z.array(z.object({}).passthrough()).min(2)
-          .describe('Two or more assembleTimeline specs (same shape as `assemble` spec); timelineName required and unique per entry'),
+          .describe("Two or more assembleTimeline specs (same shape as `assemble` spec); timelineName required and unique per entry. Optional per-entry `folder` places that timeline's pool clip in a named Master subfolder (bins for reel-per-timeline packages; entries sharing a name share the bin)."),
         outputPath: z.string().describe('Where the multi-timeline .drp is written'),
         targetAppVersion: z.union([z.string(), z.number()]).optional(),
       }).parse(args);
       const names = p.timelines.map((t, i) => t.timelineName || `Timeline ${i + 1}`);
       if (new Set(names).size !== names.length) throw new Error(`assemble_project: timelineName must be unique per timeline (got: ${names.join(', ')})`);
+      const folders = p.timelines.map((t) => {
+        if (t.folder === undefined) return null;
+        const f = String(t.folder).trim();
+        if (!f || /[\/\\]/.test(f)) throw new Error(`assemble_project: folder must be a plain bin name (no path separators): ${JSON.stringify(t.folder)}`);
+        return f;
+      });
       const { assembleTimeline } = drp();
       const buffers = [];
       for (const [i, spec] of p.timelines.entries()) {
         const s = { ...spec, timelineName: names[i] };
+        delete s.folder;
         if (s.templateVersion === undefined && p.targetAppVersion !== undefined) {
           s.templateVersion = parseFloat(p.targetAppVersion) >= 21 ? 21 : 19;
         }
@@ -433,6 +440,60 @@ export const drtTool = {
         // future merges must not collide with THIS timeline's fresh ids either
         for (const id of remap.values()) baseIds.add(id);
         for (const id of clusterText.match(UUID_RE) || []) if (!remap.has(id)) baseIds.add(id);
+      }
+      // SUBFOLDERS (E87): a bin is just a directory + its own MpFolder.xml —
+      // the directory TREE is the registry (measured: no folder vec exists;
+      // children carry <MpFolder> back-refs). Move each foldered timeline's
+      // pool clip from Master's MediaVec into its bin's, and repoint the
+      // back-ref. Media elements stay in Master (shared by design).
+      if (folders.some(Boolean)) {
+        const masterFolderId = mpXml.match(/<Sm2MpFolder DbId="([^"]+)"/)[1];
+        const poolId = (mpXml.match(/<MediaPool>([^<]+)<\/MediaPool>/) || [])[1] || '';
+        const bins = new Map();
+        for (const [i, folder] of folders.entries()) {
+          if (!folder) continue;
+          if (!bins.has(folder)) {
+            const binId = randomUUID();
+            const bin = { id: binId, entry: `MediaPool/Master/${folder}/MpFolder.xml`, clips: [] };
+            bins.set(folder, bin);
+          }
+          const bin = bins.get(folder);
+          const tlRe = new RegExp(`<Element>\\s*<Sm2MpTimelineClip DbId="[^"]+">(?:(?!<\\/Element>\\s*<Element>)[\\s\\S])*?<Name>${names[i].replace(/[.*+?^$()|[\]{}]/g, '\\$&')}<\\/Name>[\\s\\S]*?<\\/Sm2MpTimelineClip>\\s*<\\/Element>`);
+          const hit = mpXml.match(tlRe);
+          if (!hit) throw new Error(`assemble_project: could not locate pool clip for timeline ${names[i]} to move into folder ${folder}`);
+          mpXml = mpXml.replace(hit[0], '');
+          bin.clips.push(hit[0].replace(/<MpFolder>[^<]*<\/MpFolder>/, `<MpFolder>${bin.id}</MpFolder>`));
+        }
+        // Register the bins in Master's FieldsBlob — the parent folder blob
+        // is the SUBFOLDER registry (measured: with it blanked, a bin's
+        // directory + MpFolder.xml import as NOTHING — its clips and their
+        // timelines all vanish; media/timeline children are discovered by
+        // scan, subfolders are not). Inner format byte-verified against the
+        // template harvest: protobuf{field2: keyedDict{"0": binId, ...},
+        // field4: time-varint} in the [u32 2][u32 len][0x81][zstd] wrapper.
+        const { zstdRawFrame } = requireCjs('../../vendor/drp-format/timeline-markers-blob.js');
+        const binIds = [...bins.values()].map((b) => b.id);
+        const childDict = encodeKeyedDict({ hdr: 1, entries: binIds.map((id, i) => ({ key: String(i), type: 0x0a, subType: 0, value: id })) });
+        const inner = Buffer.concat([
+          Buffer.from([0x12, childDict.length]), childDict,
+          Buffer.from([0x20]), Buffer.from('b6cba6a90d', 'hex'),
+        ]);
+        const frame = zstdRawFrame(inner);
+        const folderBlob = Buffer.concat([
+          Buffer.from([0, 0, 0, 2]),
+          (() => { const b = Buffer.alloc(4); b.writeUInt32BE(frame.length + 1, 0); return b; })(),
+          Buffer.from([0x81]), frame,
+        ]).toString('hex');
+        mpXml = mpXml.replace(/(<Sm2MpFolder DbId="[^"]+">\s*)<FieldsBlob\/>/, `$1<FieldsBlob>${folderBlob}</FieldsBlob>`);
+        for (const [folder, bin] of bins) {
+          base.file(bin.entry,
+            `<?xml version="1.0" encoding="UTF-8"?>\n` +
+            `<Sm2MpFolder DbId="${bin.id}">\n <FieldsBlob/>\n <Name>${folder}</Name>\n` +
+            ` <MpFolder>${masterFolderId}</MpFolder>\n <UniqueMediaPoolItemId>${randomUUID()}</UniqueMediaPoolItemId>\n` +
+            ` <MediaVec>\n${bin.clips.join('\n')}\n </MediaVec>\n` +
+            ` <MediaPool>${poolId}</MediaPool>\n <Folded>false</Folded>\n <ColorTag>FOLDER_COLOR_NONE</ColorTag>\n` +
+            ` <LockSysId/>\n <DbSavedTime>0</DbSavedTime>\n</Sm2MpFolder>\n`);
+        }
       }
       base.file(mpP, mpXml);
       base.file('project.xml', pjXml);

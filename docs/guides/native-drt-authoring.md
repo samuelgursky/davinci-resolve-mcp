@@ -62,6 +62,7 @@ window. `render.verify_output` covers the container-level checks.
 | Nested compounds | `compounds[].compounds` (depth-2 through depth-4 playback render-verified) | v2.134–2.141 |
 | Fusion titles | `elements: [{type:'title', text}]` — **21-gen hosts only** | v2.108 |
 | Multi-timeline projects | `drt.assemble_project` (reel-per-timeline .drp; import as a project) | v2.145 |
+| Pool bins | `assemble_project` `timelines[].folder` (named Master subfolders, registry-backed) | v2.146 |
 
 `assemble_from_interchange` drives the same engine from an EDL / OTIO /
 FCP7-XML / AAF / **.prproj** (Premiere, read offline — no Premiere needed)

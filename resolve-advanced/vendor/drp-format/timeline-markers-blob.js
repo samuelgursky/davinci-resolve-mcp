@@ -156,4 +156,4 @@ function decodeTimelineMarkersBlob(buf) {
   return markers;
 }
 
-module.exports = { encodeTimelineMarkersBlob, decodeTimelineMarkersBlob, MARKER_COLOR_BITS };
+module.exports = { encodeTimelineMarkersBlob, decodeTimelineMarkersBlob, MARKER_COLOR_BITS, zstdRawFrame };
