@@ -260,10 +260,17 @@ function walkSequence(seqEntry, byId, depth = 0, seen = new Set()) {
     const refs = asArray(grp.node.TrackGroup?.Tracks?.Track);
     if (refs.length) trackLists.push({ trackKind, refs });
   }
+  // Lanes number per kind in track order — V, V2, V3 … / A, A2 … — like
+  // every other parser (E109/E135): labelling every track 'V'/'A' stacked
+  // 687 of 741 real sequences' cuts onto one lane (4631 overlapping pairs).
+  const laneCount = { V: 0, A: 0 };
   for (const { trackKind, refs: trackRefs } of trackLists) {
     for (const tref of trackRefs) {
       const tEntry = byId.get(refId(tref));
       if (!tEntry) continue;
+      laneCount[trackKind] += 1;
+      const laneNum = laneCount[trackKind];
+      const trackLabel = laneNum === 1 ? trackKind : `${trackKind}${laneNum}`;
       // Real Premiere 2025 keeps a track's TRANSITIONS in a separate list,
       // ClipTrack.TransitionItems (E134, measured: 2 video + 1 audio on the
       // reel — none reached the parser from ClipItems alone).
@@ -279,29 +286,19 @@ function walkSequence(seqEntry, byId, depth = 0, seen = new Set()) {
         const cEntry = byId.get(refId(iref));
         if (!cEntry) continue;
         if (/ClipTrackItem$/.test(cEntry.tag)) {
-          const ev = clipEvent(cEntry.node, byId, trackKind, fps, idx++);
+          const ev = clipEvent(cEntry.node, byId, trackLabel, fps, idx++);
           const nested = ev.__nested;
           delete ev.__nested;
           const nestedKey = nested ? String(nested.node['@_ObjectUID'] ?? nested.node['@_ObjectID'] ?? '') : '';
           if (nested && depth < 8 && !seenHere.has(nestedKey)) {
-            // FLATTEN the nested sequence into this record span (E133, the
-            // OTIO Stack / AAF nested-composition flatten for Premiere): walk
-            // it with its own cursor, keep this track kind's lanes, translate
-            // through the window [srcIn, srcIn + record length), tag fromCompound.
-            const inner = walkSequence(nested, byId, depth + 1, seenHere).filter((e) => e.track.charAt(0) === trackKind && e.recIn != null && e.recOut != null);
-            const winStart = ev.srcIn ?? 0;
-            const winLen = (ev.recOut ?? 0) - (ev.recIn ?? 0);
-            let first = true;
-            for (const e of inner) {
-              const a = e.recIn - winStart, b = e.recOut - winStart;
-              const a2 = Math.max(0, a), b2 = Math.min(winLen, b);
-              if (b2 <= a2) continue;
-              const k = ((e.speed ?? 100) / 100) * (e.reverse ? -1 : 1);
-              const flat = { ...e, index: idx++, recIn: ev.recIn + a2, recOut: ev.recIn + b2, srcIn: e.srcIn != null ? Math.round(e.srcIn + (a2 - a) * k) : e.srcIn, srcOut: e.srcOut != null ? Math.round(e.srcOut - (b - b2) * k) : e.srcOut, fromCompound: ev.source };
-              if (first && ev.transition && !flat.transition) flat.transition = ev.transition;
-              first = false;
-              clipEvents.push(flat);
-            }
+            // Defer the FLATTEN (E133/E135): expanded after every parent lane
+            // is known, so a nested block's inner lanes can first-fit above
+            // whatever the parent already stacks there — two nested
+            // sequences on different parent lanes each bring their own inner
+            // lanes, and a fixed offset collides (measured: 7615 overlapping
+            // pairs on the reels project).
+            ev.__nestedExpand = { nested, laneNum, trackKind, seenHere };
+            clipEvents.push(ev);
             continue;
           }
           if (nested) ev.compound = ev.source; // cycle/depth guard: keep it as a named compound hole
@@ -333,19 +330,70 @@ function walkSequence(seqEntry, byId, depth = 0, seen = new Set()) {
           incoming.transition = trans;
           const outgoing = clipEvents.find((e) => e !== incoming && e.recOut > tr.recIn - 1 && e.recOut <= end);
           if (!outgoing) {
-            clipEvents.push({ index: idx++, track: trackKind, source: 'BL', srcIn: 0, srcOut: 0, recIn: incoming.recIn, recOut: incoming.recIn, speed: 100, reverse: false, transition: null, fps });
+            clipEvents.push({ index: idx++, track: trackLabel, source: 'BL', srcIn: 0, srcOut: 0, recIn: incoming.recIn, recOut: incoming.recIn, speed: 100, reverse: false, transition: null, fps });
           }
         } else {
           const outgoing = clipEvents.find((e) => e.recOut > tr.recIn - 1 && e.recOut <= end);
           if (outgoing) {
-            clipEvents.push({ index: idx++, track: trackKind, source: 'BL', srcIn: 0, srcOut: 0, recIn: outgoing.recOut, recOut: outgoing.recOut, speed: 100, reverse: false, transition: trans, fps });
+            clipEvents.push({ index: idx++, track: trackLabel, source: 'BL', srcIn: 0, srcOut: 0, recIn: outgoing.recOut, recOut: outgoing.recOut, speed: 100, reverse: false, transition: trans, fps });
           }
         }
       }
       events.push(...clipEvents);
     }
   }
-  return events;
+  return expandNestedPlaceholders(events, byId, fps, depth);
+}
+
+/**
+ * Flatten every deferred nested-sequence placeholder into the parent record
+ * time (E133/E135). Inner lanes land on the parent's lane and the lanes above
+ * it, shifted up by the smallest offset at which none of the block's cuts
+ * overlap what the parent (or an earlier block) already holds on those lanes.
+ */
+function expandNestedPlaceholders(events, byId, fps, depth) {
+  const laneOf = (t) => parseInt(String(t).replace(/\D/g, '') || '1', 10);
+  const label = (kind, n) => (n === 1 ? kind : `${kind}${n}`);
+  const occupancy = new Map(); // lane label → [[recIn, recOut], …]
+  const occupy = (e) => { if (e.recIn == null || e.recOut == null) return; (occupancy.get(e.track) || occupancy.set(e.track, []).get(e.track)).push([e.recIn, e.recOut]); };
+  const free = (lane, a, b) => !(occupancy.get(lane) || []).some(([x, y]) => a < y && b > x);
+  for (const e of events) if (!e.__nestedExpand) occupy(e);
+  const out = [];
+  let idx = 1;
+  for (const ev of events) {
+    const ph = ev.__nestedExpand;
+    if (!ph) { out.push({ ...ev, index: idx++ }); continue; }
+    delete ev.__nestedExpand;
+    const { nested, laneNum, trackKind, seenHere } = ph;
+    const inner = walkSequence(nested, byId, depth + 1, seenHere).filter((e) => e.track.charAt(0) === trackKind && e.recIn != null && e.recOut != null);
+    const winStart = ev.srcIn ?? 0;
+    const winLen = (ev.recOut ?? 0) - (ev.recIn ?? 0);
+    const block = [];
+    for (const e of inner) {
+      const a = e.recIn - winStart, b = e.recOut - winStart;
+      const a2 = Math.max(0, a), b2 = Math.min(winLen, b);
+      if (b2 <= a2) continue;
+      const k = ((e.speed ?? 100) / 100) * (e.reverse ? -1 : 1);
+      block.push({ ...e, recIn: ev.recIn + a2, recOut: ev.recIn + b2, srcIn: e.srcIn != null ? Math.round(e.srcIn + (a2 - a) * k) : e.srcIn, srcOut: e.srcOut != null ? Math.round(e.srcOut - (b - b2) * k) : e.srcOut, fromCompound: ev.source, __innerLane: laneOf(e.track) });
+    }
+    // First-fit: the smallest upward shift at which every cut of the block finds its lane free.
+    let shift = 0;
+    for (; shift < 64; shift += 1) {
+      if (block.every((e) => free(label(trackKind, laneNum + e.__innerLane - 1 + shift), e.recIn, e.recOut))) break;
+    }
+    let first = true;
+    for (const e of block) {
+      const placed = { ...e, index: idx++, track: label(trackKind, laneNum + e.__innerLane - 1 + shift) };
+      delete placed.__innerLane;
+      if (shift) placed.laneShift = shift;
+      if (first && ev.transition && !placed.transition) placed.transition = ev.transition;
+      first = false;
+      occupy(placed);
+      out.push(placed);
+    }
+    if (!block.length) out.push({ ...ev, index: idx++, compound: ev.source });
+  }
+  return out;
 }
 
 /** Enumerate marker objects (project- or sequence-level) with tick→frame positions. */

@@ -1555,3 +1555,17 @@ test('flattened stacks carry their audio tracks onto the parent audio lanes (E13
   assert.equal(report.authoredAudioEvents, 3);
   assert.deepEqual(spec.media.flatMap((m) => m.cuts.filter((c) => c.audioOnly).map((c) => [m.mediaFilePath.split('/').pop(), c.track])).sort(), [['a.mp4', 1], ['bed.wav', 2], ['v.mp4', 1]]);
 });
+
+
+// E135: flattened nested Premiere sequences stack audio lanes far past A16
+// (A40 measured). The bridge authors A1–A16 and drops the rest with a reason.
+test('audio events above lane 16 drop with a reason instead of authoring blind (E135)', () => {
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const base = { srcIn: 0, srcOut: 48, recIn: 0, recOut: 48, speed: 100, reverse: false, transition: null, fps: 24 };
+  const ev = [{ index: 1, track: 'V', source: 'a.mp4', ...base }, { index: 2, track: 'A16', source: 'a.mp4', ...base }, { index: 3, track: 'A17', source: 'b.mp4', ...base }];
+  const { spec, report } = eventsToAssembleSpec(ev, { sourceMap: { 'a.mp4': { mediaFilePath: '/m/a.mp4', spec: spec24 }, 'b.mp4': { mediaFilePath: '/m/b.mp4', spec: spec24 } } });
+  assert.equal(report.authoredAudioEvents, 1);
+  assert.deepEqual(spec.media.flatMap((m) => m.cuts.filter((c) => c.audioOnly).map((c) => c.track)), [16]);
+  assert.deepEqual(report.audioLanesBeyondCeiling.map((d) => [d.track, d.source]), [['A17', 'b.mp4']]);
+  assert.match(report.audioLanesBeyondCeiling[0].reason, /A16 ceiling/);
+});

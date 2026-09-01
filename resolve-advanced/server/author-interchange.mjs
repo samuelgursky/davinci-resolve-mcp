@@ -436,6 +436,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
   const audioTrackNum = (t) => { const m = /^A(\d+)?$/.exec(String(t)); return m && m[1] ? parseInt(m[1], 10) : 1; };
   const audioPlacements = [];
   const audioRetimesSkipped = [];
+  const audioLanesBeyondCeiling = [];
   const audioTransCandidates = [];
   let audioBlackLegsSkipped = 0;
   for (const e of auds) {
@@ -460,6 +461,14 @@ export function eventsToAssembleSpec(events, opts = {}) {
       audioRetimesSkipped.push({ index: e.index, source: e.source, speed: e.speed, reverse: !!e.reverse, reason: 'audio retime not authorable — the audio engine ignores the clip timemap (measured: reads back retimed, renders 100%); played at 100%' });
     }
     const track = audioTrackNum(e.track);
+    // AUDIO LANE CEILING (E135): Resolve authors audio tracks A1–A16 (A9–A16
+    // render-verified); flattened nested sequences can stack lanes far past
+    // that (A40 measured on a real Premiere reels project). Anything above
+    // 16 drops with a reason — named in the ledger, never authored blind.
+    if (track > 16) {
+      audioLanesBeyondCeiling.push({ index: e.index, source: e.source, track: e.track, recIn: e.recIn, recOut: e.recOut, reason: `audio lane ${track} exceeds the A16 ceiling Resolve authors — flatten fewer stacked nested sequences or remix the bed` });
+      continue;
+    }
     const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps), audioOnly: true, track };
     if (e.transition) {
       let d = Math.max(2, toTl(e.transition.duration || 0, e.fps) || 2);
@@ -730,6 +739,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
       unresolvedCompounds,
       authoredAudioEvents: audioPlacements.length,
       audioRetimesSkipped,
+      audioLanesBeyondCeiling,
       ...(elements.length || audioBlackLegsSkipped ? {
         blackLegs: { authoredGenerators: elements.length, audioSilenceLegsSkipped: audioBlackLegsSkipped },
       } : {}),
