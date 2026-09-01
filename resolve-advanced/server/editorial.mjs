@@ -491,15 +491,44 @@ export function timingGuards(oldEvents, newEvents) {
  */
 export function conformManifest(events, resolution = {}, opts = {}) {
   const minHandle = opts.minHandle ?? 0;
+  const isBLsrc = (s) => /^(BL|BLACK)$/i.test(String(s || '').trim());
   const rows = [];
   for (const e of events) {
     const res = resolution[e.source] || {};
     const checks = [];
     const add = (name, pass, detail) => checks.push({ name, pass, ...(detail ? { detail } : {}) });
+    // BL/BLACK is the EDL's built-in black source: it needs no resolution
+    // entry (it conforms as a Solid Color generator, E91), and its side of a
+    // fade needs no handles (a generator extends freely). A fade-out's
+    // outgoing tail requirement belongs to the PICTURE source, checked on
+    // this BL event against the abutting predecessor.
+    if (isBLsrc(e.source)) {
+      add('source_resolved', true, 'built-in black (BL) — conforms as a Solid Color generator, no source needed');
+      if (e.transition && (e.transition.duration || 0) > 0) {
+        const half = Math.ceil(e.transition.duration / 2);
+        const prev = events.find((o) => o !== e && o.track === e.track && o.recOut === e.recIn && !isBLsrc(o.source));
+        if (prev) {
+          const pres = resolution[prev.source] || {};
+          const ok = (pres.handleOut ?? 0) >= half;
+          add('handles', ok, ok
+            ? `fade-out: ${prev.source} carries the outgoing tail`
+            : `fade-out to black: outgoing ${prev.source} needs tail ≥${half}; has ${pres.handleOut ?? 0}`);
+        }
+      }
+      const blPass = checks.every((c) => c.pass);
+      rows.push({ index: e.index, source: e.source, track: e.track, pass: blPass, checks });
+      continue;
+    }
     add('source_resolved', res.online !== false && !!(res.path || res.online), res.online === false ? 'offline' : res.path ? undefined : 'no resolved path');
     // Handles — and transition-handle starvation (a dissolve needs handle ≥ half its duration each side).
     const needHandle = Math.max(minHandle, e.transition ? Math.ceil((e.transition.duration || 0) / 2) : 0);
-    if (needHandle > 0) {
+    const fadeInFromBlack = e.transition
+      && events.some((o) => o !== e && o.track === e.track && o.recOut === e.recIn && isBLsrc(o.source));
+    if (e.transition && fadeInFromBlack) {
+      // Fade from black: the boundary shift trims the picture head inside
+      // its own material — neither side needs handle media (E91, measured).
+      add('handles', true, 'fade from black — no handles needed (the black side extends freely)');
+    } else if (needHandle > 0) {
       const ok = (res.handleIn ?? 0) >= needHandle && (res.handleOut ?? 0) >= needHandle;
       add(
         'handles',

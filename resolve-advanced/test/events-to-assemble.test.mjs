@@ -780,6 +780,27 @@ test('verifyRoundtrip is audio-aware: declared audio compares, the A1 mirror sta
   assert.equal(r4.audio.input, 1);
 });
 
+test('conformManifest is BL-aware: fades need no black-side source or handles (E99)', async () => {
+  const { conformManifest } = await import('../server/editorial.mjs');
+  const edl = [
+    'TITLE: F', 'FCM: NON-DROP FRAME', '',
+    '001  BL       V     C        00:00:00:00 00:00:00:00 01:00:00:00 01:00:00:00',
+    '002  TAPE1    V     D    024 00:00:00:00 00:00:04:00 01:00:00:00 01:00:04:00',
+    '003  TAPE1    V     C        00:00:04:00 00:00:04:00 01:00:04:00 01:00:04:00',
+    '004  BL       V     D    024 00:00:00:00 00:00:02:00 01:00:04:00 01:00:06:00', '',
+  ].join('\n');
+  const events = parseEDL(edl, { fps: 24 });
+  // A conformable fade EDL passes: BL needs no source, the fade-in needs no
+  // handles, and the fade-out's tail requirement lands on the PICTURE source.
+  const ok = conformManifest(events, { TAPE1: { path: '/m/a.mp4', handleIn: 0, handleOut: 48 } });
+  assert.equal(ok.pass, true, JSON.stringify(ok.rows));
+  // A starved outgoing tail still fails — named on the fade-out row.
+  const starved = conformManifest(events, { TAPE1: { path: '/m/a.mp4', handleIn: 0, handleOut: 4 } });
+  assert.equal(starved.pass, false);
+  const failing = starved.rows.find((r) => !r.pass);
+  assert.match(failing.checks.find((c) => c.name === 'handles').detail, /outgoing TAPE1 needs tail/);
+});
+
 test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
   const fsM = await import('node:fs');
   const os = await import('node:os');

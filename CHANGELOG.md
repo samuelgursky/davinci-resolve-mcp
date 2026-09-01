@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.157.0 — the conform manifest learns fades too
+
+### Fixed
+
+- **`editorial.conform_manifest` failed every conformable fade EDL**: BL
+  legs failed `source_resolved` ("no resolved path") and the fade-in failed
+  `handles` — but BL is the EDL's built-in black (it conforms as a Solid
+  Color generator, no source needed), and a fade from black needs no handle
+  media at all (the boundary shift trims the picture head inside its own
+  material). A fade-out's real requirement — outgoing tail on the PICTURE
+  source — now lands on the right source: a starved tail still fails,
+  named precisely.
+
 ## What's New in v2.156.1 — docs catch up with the fade + QC arc
 
 ### Documentation
