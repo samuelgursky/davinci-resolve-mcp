@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.179.0 — E125: an Avid nested sequence used as a clip flattens into the parent
+
+### Fixed
+
+- **A nested sequence in an AAF turnover was an unmapped reel.** A
+  SourceClip that references a NAMED CompositionMob is an Avid nested
+  timeline used as a clip; the walker's reference chase stopped at the first
+  named mob and emitted the composition's name as a source reel while its own
+  cuts sat in the same AAF. The walk now descends into the named
+  composition's editorial slot and translates its cuts through the
+  reference's window (source trimmed at each cut's play rate), tagging
+  `fromCompound` — the OTIO Stack flatten (E120) for AAF. Unnamed
+  intermediate compositions (subclips, group clips) keep the reference
+  chase. Render-verified on 19.1.3.7: the flattened turnover conforms and
+  plays the nested sequence's white insert exactly where the parent used it
+  (234 across its 24 frames, picture either side).
+
 ## What's New in v2.178.0 — E124: the manifest and the changelist know a compound when they see one
 
 ### Fixed

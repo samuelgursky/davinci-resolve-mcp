@@ -418,6 +418,35 @@ def _source_position_fields(clip):
     return fields
 
 
+def _nested_named_composition(clip):
+    """(CompositionMob, inner segment) when `clip` references a NAMED CompositionMob
+    whose referenced slot holds editorial content — an Avid nested sequence used as a
+    clip (E125). None for MasterMobs and for the unnamed intermediate compositions
+    that subclips and group clips route through (those keep the reference chase)."""
+    try:
+        mob = getattr(clip, "mob", None)
+    except Exception:
+        return None
+    if mob is None or type(mob).__name__ != "CompositionMob" or not _usable_name(mob):
+        return None
+    try:
+        slot_id = getattr(clip, "slot_id", None)
+        slot = None
+        for candidate in getattr(mob, "slots", []) or []:
+            if slot_id is None or getattr(candidate, "slot_id", None) == slot_id:
+                if _is_editorial_slot(candidate):
+                    slot = candidate
+                    break
+        if slot is None:
+            return None
+        segment = getattr(slot, "segment", None)
+    except Exception:
+        return None
+    if segment is None:
+        return None
+    return mob, segment
+
+
 def _emit_source_clip(clip, *, index, track, rec, fps, transition=None):
     """Turn a SourceClip into a normalized event. Returns (event, length)."""
     try:
@@ -1050,6 +1079,46 @@ def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
         return declared
 
     if cls == "SourceClip":
+        # NESTED SEQUENCE (E125): a SourceClip that references a NAMED
+        # CompositionMob is an Avid nested timeline used as a clip. Its inner
+        # cuts are right here in the AAF, so flatten them into this record
+        # position through the reference's window (start/length) — the way
+        # OTIO Stacks flatten (E120) — instead of emitting the composition's
+        # NAME as a source reel the bridge cannot map. Unnamed compositions
+        # (subclips, group clips) keep the reference chase.
+        nested = _nested_named_composition(segment)
+        if nested is not None and depth < _MAX_DEPTH:
+            comp_mob, inner_segment = nested
+            length = _length(segment)
+            try:
+                start = int(getattr(segment, "start", 0) or 0)
+            except Exception:
+                start = 0
+            sub = {"idx": 1, "events": [], "unhandled": state.setdefault("unhandled", {}), "effectsWithoutEvents": state.setdefault("effectsWithoutEvents", {})}
+            _walk_segment(inner_segment, track=track, fps=fps, rec=0, state=sub, depth=depth + 1)
+            first = True
+            for ev in sub["events"]:
+                if ev.get("recIn") is None or ev.get("recOut") is None:
+                    continue
+                a, b = ev["recIn"] - start, ev["recOut"] - start
+                a2, b2 = max(0, a), min(length, b)
+                if b2 <= a2:
+                    continue
+                k = (float(ev.get("speed") or 100) / 100.0) * (-1 if ev.get("reverse") else 1)
+                flat = dict(ev)
+                flat["index"] = state["idx"]
+                flat["recIn"], flat["recOut"] = rec + a2, rec + b2
+                if flat.get("srcIn") is not None:
+                    flat["srcIn"] = int(round(flat["srcIn"] + (a2 - a) * k))
+                if flat.get("srcOut") is not None:
+                    flat["srcOut"] = int(round(flat["srcOut"] - (b - b2) * k))
+                flat["fromCompound"] = _usable_name(comp_mob)
+                if first and transition is not None and not flat.get("transition"):
+                    flat["transition"] = transition
+                first = False
+                state["events"].append(flat)
+                state["idx"] += 1
+            return length
         ev, length = _emit_source_clip(
             segment, index=state["idx"], track=track, rec=rec, fps=fps, transition=transition
         )
