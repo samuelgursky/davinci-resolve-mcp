@@ -639,6 +639,49 @@ class InstallerTargetTests(unittest.TestCase):
                 pathlib.Path.home() / "private/resolve-bridge.json",
             )
 
+    def test_existing_overridden_config_preserves_token_and_roots(self) -> None:
+        import json
+        import pathlib
+        import tempfile
+        from unittest import mock
+
+        config = pathlib.Path(tempfile.mkdtemp(prefix="bridge_existing_config_")) / "bridge.json"
+        token = "p" * 48
+        config.write_text(
+            json.dumps({
+                "token": token,
+                "allowed_media_roots": ["/existing/media"],
+                "allowed_output_roots": ["/existing/output"],
+            }),
+            encoding="utf-8",
+        )
+        with mock.patch.dict(
+            os.environ, {self.installer.ENV_CONFIG_PATH: str(config)}, clear=True
+        ):
+            result = self.installer.ensure_config(port=50124, rotate=False)
+
+        self.assertEqual(result["token"], token)
+        self.assertEqual(result["port"], 50124)
+        self.assertEqual(result["allowed_media_roots"], ["/existing/media"])
+        self.assertEqual(result["allowed_output_roots"], ["/existing/output"])
+
+    def test_invalid_existing_overridden_config_is_replaced_safely(self) -> None:
+        import json
+        import pathlib
+        import tempfile
+        from unittest import mock
+
+        config = pathlib.Path(tempfile.mkdtemp(prefix="bridge_invalid_config_")) / "bridge.json"
+        config.write_text("{not valid json", encoding="utf-8")
+        with mock.patch.dict(
+            os.environ, {self.installer.ENV_CONFIG_PATH: str(config)}, clear=True
+        ):
+            result = self.installer.ensure_config(port=50125, rotate=False)
+
+        self.assertEqual(result["port"], 50125)
+        self.assertGreaterEqual(len(result["token"]), 43)
+        self.assertEqual(json.loads(config.read_text(encoding="utf-8")), result)
+
     def test_install_writes_embeds_and_reports_the_overridden_config(self) -> None:
         import base64
         import pathlib
