@@ -49,7 +49,7 @@ window. `render.verify_output` covers the container-level checks.
 | Constant retimes, reverse | `cuts[].reverse` | v2.114 |
 | Freeze frames | `cuts[].freeze` (holds source frame `srcIn`) | v2.134 |
 | Speed ramps | `cuts[].ramp: [{durationFrames, speed}, …]` (linear segments only) | v2.139 |
-| Audio placements, A1–A8 | `cuts[].audioOnly + track` | v2.115 |
+| Audio placements, A1–A16 | `cuts[].audioOnly + track` | v2.115 (A1–A8) · v2.148 (A9–A16) |
 | Built-in generators | `elements: [{type:'generator', generatorName}]` | v2.110 |
 | Custom start timecode | `spec.startFrame` / `preserveStartTimecode` | v2.117 |
 | Timeline markers | `spec.markers` (16 colors, notes, durations, customData) | v2.118 |

@@ -305,9 +305,13 @@ test('audio cuts beyond the template ceiling refuse at assemble time', async () 
   const base = await addMediaClip({
     mediaFile: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 }, templateVersion: 19,
   });
+  // The r19 template ships 16 audio tracks with valid Fairlight strips
+  // (re-captured live E89, 2026-09-01); A16 assembles, A17 refuses.
+  const ok = await cutSourceIntoClips(base.buffer, { cuts: [{ startFrame: 86400, durationFrames: 24, audioOnly: true, track: 16 }] });
+  assert.equal(ok.cutCount, 1);
   await assert.rejects(
-    cutSourceIntoClips(base.buffer, { cuts: [{ startFrame: 86400, durationFrames: 24, audioOnly: true, track: 9 }] }),
-    /audio track 9 exceeds the template's 8 audio tracks/,
+    cutSourceIntoClips(base.buffer, { cuts: [{ startFrame: 86400, durationFrames: 24, audioOnly: true, track: 17 }] }),
+    /audio track 17 exceeds the template's 16 audio tracks/,
   );
 });
 

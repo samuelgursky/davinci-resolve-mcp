@@ -164,8 +164,10 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
           // Fairlight model (FLStudioModelBA inside the pool's
           // Sm2Sequence.FieldsBlob) holds one strip per track, and a cloned
           // track without a strip imports fine, reads back fine, and renders
-          // SILENT (measured). The r19 media template is captured with 8
-          // audio tracks (valid strips included); beyond that, refuse.
+          // SILENT (measured). The r19 media template is captured with 16
+          // audio tracks (valid strips included; A9/A16 render-verified at
+          // the same -24.1 dB as A1's mono-strip law, E89 2026-09-01);
+          // beyond that, refuse.
           throw new Error(
             `cutSourceIntoClips: audio track ${maxA} exceeds the template's ${tracks.length} ` +
             'audio tracks — audio tracks cannot be grown offline (no Fairlight strip = silent). ' +

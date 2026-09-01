@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.148.0 — the audio ceiling doubles: A1–A16
+
+### Changed
+
+- **Offline audio placement now reaches A16** (was A8). The r19 media
+  template was re-captured live with 16 mono audio tracks — valid Fairlight
+  strips included, because a cloned track without a strip renders silent
+  (the measured strip law). A9 and A16 placements render-verified on
+  Studio 19.1.3.7 at the same -24.1 dB mono-strip level as A1, with the
+  gaps digitally silent at the sample level. `drt.assemble` cuts refuse
+  at A17 with the re-capture guidance.
+
 ## What's New in v2.147.0 — the round-trip QC loop learns markers
 
 ### Added
