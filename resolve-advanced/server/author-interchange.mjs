@@ -905,7 +905,7 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     if (!v.length) return [];
     const off = anchorOfSide(evts);
     return v
-      .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0, speed: e.speed ?? 100, reverse: Boolean(e.reverse) }))
+      .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0, speed: e.speed ?? 100, reverse: Boolean(e.reverse), color: e.color && typeof e.color === 'object' ? { r: Number(e.color.r) || 0, g: Number(e.color.g) || 0, b: Number(e.color.b) || 0 } : null }))
       .sort((a, b) => a.track.localeCompare(b.track) || a.recIn - b.recIn);
   };
   // FADES (E94): BL legs on the input side and the Solid Color generators a
@@ -975,6 +975,30 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
 
   const a0 = norm(inputEvents);
   const b0 = norm(exportedEvents);
+  // GENERATOR COLOUR (E112): a black leg is only "black" by default — an
+  // XMEML fillcolor rides on it (fade-to-white, colour mattes; E110), and
+  // Resolve's FCP7 writer emits the colour back. Black legs still merge out
+  // of the pairwise geometry compare (their extents follow the picture), but
+  // every input leg that CARRIES a colour must find an exported leg on the
+  // same track overlapping its span with the same colour — a white fade that
+  // came back black is a conform error geometry alone cannot see.
+  const generatorColours = { compared: 0, mismatches: [] };
+  const colourKey = (c) => (c ? [c.r, c.g, c.b].map((v) => Math.round(v * 255)).join(',') : '0,0,0');
+  const colourTol = 1 / 255 + 1e-9;
+  const sameColour = (x, y) => ['r', 'g', 'b'].every((k) => Math.abs((x ? x[k] : 0) - (y ? y[k] : 0)) <= colourTol);
+  {
+    const inLegs = a0.filter((e) => isBlackSeg(e) && e.color);
+    const exLegs = b0.filter((e) => isBlackSeg(e));
+    for (const leg of inLegs) {
+      const partner = exLegs.find((x) => x.track === leg.track && x.recIn < leg.recOut && x.recOut > leg.recIn);
+      generatorColours.compared += 1;
+      if (!partner) {
+        generatorColours.mismatches.push({ kind: 'generator-colour', track: leg.track, record: [leg.recIn, leg.recOut], input: colourKey(leg.color), exported: null });
+      } else if (!sameColour(leg.color, partner.color)) {
+        generatorColours.mismatches.push({ kind: 'generator-colour', track: leg.track, record: [leg.recIn, leg.recOut], input: colourKey(leg.color), exported: colourKey(partner.color) });
+      }
+    }
+  }
   const a = a0.filter((e) => !isBlackSeg(e));
   const b = b0.filter((e) => !isBlackSeg(e));
   const blackSegments = { input: a0.length - a.length, exported: b0.length - b.length };
@@ -1042,8 +1066,10 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     }
     mismatches.push(...markers.mismatches);
   }
+  mismatches.push(...generatorColours.mismatches);
   return {
     pass: mismatches.length === 0, pairs: n, srcOffsets, mismatches, markers,
+    ...(generatorColours.compared ? { generatorColours } : {}),
     ...(markersNotInExport ? { markersNotInExport } : {}),
     ...(blackSegments.input || blackSegments.exported ? { blackSegments } : {}),
     ...(fadeReshapedBoundaries.length ? { fadeReshapedBoundaries } : {}),

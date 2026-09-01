@@ -1315,3 +1315,44 @@ test('parseXMEMLEvents carries generatoritem fillcolor on BL legs and the bridge
   const { spec: spec0 } = eventsToAssembleSpec(ev0, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 } } });
   assert.ok(spec0.elements.filter((el) => el.type === 'generator').every((g) => g.color === undefined));
 });
+
+// E112: verify_roundtrip is COLOUR-AWARE. Black legs merge out of the geometry
+// compare, but an input leg carrying a fillcolor must find an exported leg on
+// the same track over its span with the same colour — a white fade that came
+// back black is a conform error geometry cannot see. Fixture = Resolve's own
+// FCP7 export of red + blue generators (E110).
+test('verifyRoundtrip compares generator colours and catches a colour that came back black (E112)', () => {
+  const xml = fs.readFileSync(new URL('./fixtures/E110_resolve_color_generators.xml', import.meta.url), 'utf8');
+  const input = parseXMEMLEvents(xml);
+  const ok = verifyRoundtrip(input, parseXMEMLEvents(xml));
+  assert.equal(ok.pass, true, JSON.stringify(ok.mismatches));
+  assert.deepEqual(ok.generatorColours, { compared: 2, mismatches: [] });
+  const black = verifyRoundtrip(input, parseXMEMLEvents(xml.replace('<red>255</red>', '<red>0</red>')));
+  assert.equal(black.pass, false);
+  assert.deepEqual(black.mismatches, [{ kind: 'generator-colour', track: 'V1', record: [0, 48], input: '255,0,0', exported: '0,0,0' }]);
+  // A coloured leg the export lost entirely is reported with exported: null.
+  const gone = verifyRoundtrip(input, parseXMEMLEvents(xml).filter((e) => !(e.source === 'BL' && e.recIn === 48)));
+  assert.ok(gone.mismatches.some((m) => m.kind === 'generator-colour' && m.exported === null && m.record[0] === 48));
+  // Null control: black-only legs (no colour anywhere) compare nothing and stay silent.
+  const plain = xml.replace('<red>255</red>', '<red>0</red>').replace('<blue>255</blue>', '<blue>0</blue>');
+  const r0 = verifyRoundtrip(parseXMEMLEvents(plain), parseXMEMLEvents(plain));
+  assert.equal(r0.pass, true);
+  assert.equal(r0.generatorColours, undefined);
+});
+
+// E112 live loop, kept as fixtures: the hand-authored fade-to-white turnover
+// (E110_ftw_turnover.xml) conformed through assemble_from_interchange, imported
+// into Resolve 19.1.3.7, rendered (124 → 234 across the fade; the custom matte
+// Y100 U174 V147), and re-exported with EXPORT_FCP_7_XML. Resolve's writer emits
+// the authored colours back as the FxPlug parameter `input_1` (not `fillcolor`).
+test('verifyRoundtrip closes the fade-to-white loop against Resolve\'s own re-export (E112)', () => {
+  const input = parseXMEMLEvents(fs.readFileSync(new URL('./fixtures/E110_ftw_turnover.xml', import.meta.url), 'utf8'));
+  const exportXml = fs.readFileSync(new URL('./fixtures/E112_resolve_ftw_export.xml', import.meta.url), 'utf8');
+  assert.ok(exportXml.includes('<parameterid>input_1</parameterid>'), 'fixture must stay a verbatim Resolve export');
+  const exported = parseXMEMLEvents(exportXml);
+  assert.deepEqual(exported.filter((e) => e.source === 'BL').map((e) => [e.recIn, e.recOut, e.color && [e.color.r, e.color.g, e.color.b].map((v) => Math.round(v * 255))]),
+    [[96, 192, [255, 255, 255]], [192, 240, [128, 64, 191]]]);
+  const r = verifyRoundtrip(input, exported);
+  assert.equal(r.pass, true, JSON.stringify(r.mismatches));
+  assert.deepEqual(r.generatorColours, { compared: 2, mismatches: [] });
+});

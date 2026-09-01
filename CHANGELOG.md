@@ -2,6 +2,36 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.169.0 — E112: round-trip QC is colour-aware
+
+`verify_roundtrip` merged every generator leg out of the compare as "black",
+so a fade-to-white that came back black — or a colour matte that lost its
+colour — passed QC on geometry alone.
+
+### Added
+
+- **`verify_roundtrip` compares generator colours.** An input leg carrying a
+  fill colour must come back on the same track over its span with the same
+  colour (±1/255), else `generator-colour` fails; `generatorColours` reports
+  the compare. Black-only turnovers compare nothing and stay silent.
+
+### Fixed
+
+- **Resolve's own re-export of an authored colour reads back.** The FCP7
+  writer emits a Solid Color's colour as the FxPlug parameter `input_1`
+  (not Premiere's `fillcolor`); the walker now reads any RGB-valued
+  generator parameter. Live loop closed on 19.1.3.7: the E110 fade-to-white
+  turnover conformed, imported, rendered, re-exported, and verified
+  `pass: true` with both colours (white, and 128/64/191) compared — the
+  writer echoing the authored `EffectFiltersBA` is a second witness to the
+  blob layout. A black-for-white export fails as `generator-colour`.
+
+### Measured (filed in api-limitations)
+
+- The XML importer ignores a `Dip to Color Dissolve`'s colour parameter:
+  white and red imported as byte-identical default blobs and rendered inert.
+  The dip colour stays GUI-only on 19.1.3.7 (E111).
+
 ## What's New in v2.168.0 — E110: Solid Color has a colour — fade-to-white and colour mattes author
 
 The one thing the black-leg machinery could not do was be anything but

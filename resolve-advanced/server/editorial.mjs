@@ -297,8 +297,10 @@ export function parseOTIO(otio, opts = {}) {
 function xmemlFillColor(g) {
   const params = g && g.effect && g.effect.parameter ? (Array.isArray(g.effect.parameter) ? g.effect.parameter : [g.effect.parameter]) : [];
   for (const pm of params) {
-    const pid = String(pm.parameterid || pm.name || '').trim().toLowerCase();
-    if (pid !== 'fillcolor' || !pm.value || typeof pm.value !== 'object') continue;
+    // Premiere writes the matte colour as `fillcolor`; Resolve's OWN writer
+    // emits a Solid Color's colour as the FxPlug input parameter `input_1`
+    // (measured E112) — any RGB-valued generator parameter is the colour.
+    if (!pm.value || typeof pm.value !== 'object' || pm.value.red == null || pm.value.green == null || pm.value.blue == null) continue;
     const ch = (k) => { const v = Number(pm.value[k]); return Number.isFinite(v) ? Math.max(0, Math.min(255, v)) / 255 : 0; };
     const c = { r: ch('red'), g: ch('green'), b: ch('blue'), a: pm.value.alpha != null ? ch('alpha') : 1 };
     if (c.r === 0 && c.g === 0 && c.b === 0) return null; // black = the default leg
