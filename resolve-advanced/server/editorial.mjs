@@ -152,12 +152,25 @@ export function parseOTIO(otio, opts = {}) {
       }));
     }
     let rec = 0;
+    // An OTIO Transition occupies NO record time (like an AAF transition —
+    // it overlaps its neighbours); it describes the junction between the
+    // previous and NEXT clip. Carry it to the next clip event's transition
+    // field so the bridge can author it (type strings like SMPTE_Dissolve
+    // map through the same style table as XMEML effectids).
+    let pendingTransition = null;
     for (const child of track.children || []) {
       const schema = child.OTIO_SCHEMA || '';
       const dur = (child.source_range && child.source_range.duration && child.source_range.duration.value) || 0;
       const rate = (child.source_range && child.source_range.duration && child.source_range.duration.rate) || opts.fps || 24;
       if (schema.startsWith('Gap')) {
         rec += dur;
+        pendingTransition = null; // a gap breaks the junction
+        continue;
+      }
+      if (schema.startsWith('Transition')) {
+        const inOff = (child.in_offset && child.in_offset.value) || 0;
+        const outOff = (child.out_offset && child.out_offset.value) || 0;
+        pendingTransition = { type: String(child.transition_type || 'SMPTE_Dissolve'), duration: inOff + outOff };
         continue;
       }
       if (schema.startsWith('Clip')) {
@@ -191,9 +204,11 @@ export function parseOTIO(otio, opts = {}) {
             recOut: rec + dur,
             speed: Math.abs(speed),
             reverse,
+            transition: pendingTransition,
             fps: rate,
           }),
         );
+        pendingTransition = null;
         rec += dur;
       }
     }

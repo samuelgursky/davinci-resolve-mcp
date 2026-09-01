@@ -722,3 +722,23 @@ test('XMEML transitionitems parse and map to render-verified styles (E66-E69)', 
   assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24, type: 'dip' }]);
   assert.equal(report.authoredTransitions[0].type, 'dip');
 });
+
+test('OTIO Transition children attach to the incoming clip and author (E70)', () => {
+  const rt = (v) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: 24, value: v });
+  const clip = (name, start, dur) => ({ OTIO_SCHEMA: 'Clip.1', name,
+    source_range: { OTIO_SCHEMA: 'TimeRange.1', start_time: rt(start), duration: rt(dur) },
+    media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: name } });
+  const doc = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [
+      clip('TAPE1', 24, 48),
+      { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(12), out_offset: rt(12) },
+      clip('TAPE2', 24, 48),
+    ] },
+  ] } };
+  const events = parseOTIO(doc, { fps: 24 });
+  const incoming = events.find((e) => e.recIn === 48);
+  assert.deepEqual(incoming.transition, { type: 'SMPTE_Dissolve', duration: 24 });
+  const { spec } = eventsToAssembleSpec(events, { sourceMap: MAP });
+  // SMPTE_Dissolve maps to the plain dissolve (no type field)
+  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24 }]);
+});

@@ -58,7 +58,7 @@ window. `render.verify_output` covers the container-level checks.
 | Subtitles | `spec.subtitles` / `spec.subtitlesSrt` (raw SRT) | v2.128 |
 | Compound clips | survive `extract_from_drp` → `.drt` (inner containers kept, recursive) | v2.130 |
 | Compound authoring | `spec.compounds` (multiple compose; nested edits render) | v2.131–2.132 |
-| Nested compounds | `compounds[].compounds` (depth-2 and depth-3 playback render-verified) | v2.134 |
+| Nested compounds | `compounds[].compounds` (depth-2 through depth-4 playback render-verified) | v2.134–2.141 |
 | Fusion titles | `elements: [{type:'title', text}]` — **21-gen hosts only** | v2.108 |
 
 `assemble_from_interchange` drives the same engine from an EDL / OTIO /
@@ -114,6 +114,10 @@ runs in the "working" direction. The real freeze (harvested from a live EDL
 `XMax = 60000` (a fixed sentinel, not the clip length), and the clip's `<In>`
 left **empty**. `cuts[].freeze: true` authors exactly that; EDL `M2 000.0`
 and zero-speed warps route to it through `assemble_from_interchange`.
+
+**Gaps are legitimate.** Cuts need not abut: record gaps between placements
+render as clean black (measured: cut 122.9 / gap 16 / white 234), so sparse
+turnovers assemble without synthetic filler.
 
 **Timeline origin.** Template timelines start at frame 86400
 (01:00:00:00 @ 24fps). Clips placed before the origin are silently dropped

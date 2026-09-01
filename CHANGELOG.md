@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.141.0 — OTIO transitions, depth-4, and honest gaps
+
+### Added
+
+- **OTIO `Transition` children parse and author** — they occupy no record
+  time (the AAF overlap convention), attach to the incoming clip, and route
+  through the same style table as XMEML effectids (`SMPTE_Dissolve` → plain
+  dissolve; wipe-named types → the wipe). A Gap breaks the junction.
+
+### Measured
+
+- **Depth-4 nested compounds render** (234 through four levels via the spec
+  route) — nesting depth is effectively unbounded on 19.1.3.
+- **Record gaps render clean black** (cut 122.9 / gap 16.0 / white 234) —
+  sparse turnovers assemble without synthetic filler.
+
 ## What's New in v2.140.0 — the transition style registry
 
 ### Added
