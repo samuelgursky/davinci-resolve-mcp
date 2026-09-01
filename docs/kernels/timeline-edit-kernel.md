@@ -188,8 +188,10 @@ timelines and reasons over editorial interchange with **no Resolve running**:
 
 - **`editorial`** — `parse_interchange` (EDL/OTIO/XMEML natively; **AAF via pyaaf2**,
   multi-layer Avid turnovers included — honest refuse only when pyaaf2 is absent),
-  `turnover_changelist` (moved/retimed/replaced/new/gone between two cuts, with
-  timing silent-lie guards), `conform_manifest`, `marker_roundtrip`.
+  `turnover_changelist` (moved/retimed/trimmed/replaced/new/gone between two cuts PLUS
+  the junction diff — transitions added/dropped/changed with fade in/out and span deltas,
+  CMX carriers and BL fade legs folded in — with timing silent-lie guards),
+  `conform_manifest`, `marker_roundtrip`.
 - **`drt`** — `.drt` timeline file authoring + structural diff.
 
 Use these to answer "what changed between v3 and v4" or to hand a conform an

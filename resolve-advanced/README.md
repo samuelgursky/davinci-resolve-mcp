@@ -105,7 +105,11 @@ Each dispatches on an `action`. Highlights:
   the `otio` and `edl` targets only — this flat `drt` target has no per-clip speed field and reports
   every retime it flattens in `flattened`; for a `.drt` that AUTHORS retimes (plus dissolves,
   multi-track, audio) use `drt.assemble_from_interchange` instead),
-  `turnover_changelist` (moved/retimed/replaced/new/gone + timing silent-lie guards), `conform_manifest`,
+  `turnover_changelist` (moved/retimed/trimmed/replaced/new/gone PLUS the junction diff —
+  `transition_added`/`transition_dropped`/`transition_changed` with fade in/out, outgoing/incoming, span and
+  duration/type/pre-roll deltas; CMX carrier lines and BL fade legs fold into the junctions instead of
+  reading as gone/new sources; events pair instance-to-instance by closest record position — + timing
+  silent-lie guards incl. lost transitions and dropped audio on any A-track), `conform_manifest`,
   `marker_roundtrip`.
 - **`provenance`** — provenance / audit: `gallery_lineage`, `grade_provenance` ("why is this graded this
   way"), `cdl_export` (+ `cdl_diff`, round-trip asserted), `revision_tracking`, `episode_report`.
@@ -196,7 +200,7 @@ plausible-looking short event list. Three limits are deliberate:
   mattes) applies to what shows through from below and references no media of its own. OTIO materializes
   such layers as tracks of gaps, so its track count can exceed the number of layers with media.
 - **Only `NestedScope` layers are numbered.** Non-nested slots keep the flat `V`/`A` label, which is what
-  `editorial.mjs`'s `track === 'A'` audio-follows-video heuristic reads.
+  `editorial.mjs`'s `/^A\d*$/` audio-follows-video heuristic reads (`A`, `A2`, … all count as audio).
 
 ## Provenance & license
 Vendored libraries are clean offline format-interop and deterministic compute code: no secrets, no

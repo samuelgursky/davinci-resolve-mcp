@@ -2,6 +2,42 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.164.0 — E106: the changelist sees junctions
+
+`editorial.turnover_changelist` diffed clips and was blind to everything
+that happens *between* them. Measured on a faded, dissolved, retimed EDL
+pair: a 24→12-frame dissolve change reported nothing, both dropped fades
+read as "BL gone", and the zero-length CMX carrier line of a dissolve's
+outgoing side read as "B002 gone". The timing guards paired first-row-wins,
+so an identical cut with one A2 leg dropped flagged a FALSE flattened
+retime and never flagged the audio drop (`track === 'A'` missed `A2`).
+
+### Fixed
+
+- **The changelist diffs junctions.** `transition_added` /
+  `transition_dropped` / `transition_changed` entries name the outgoing and
+  incoming sources, classify fade in/out vs dissolve, and carry the span and
+  duration/type/pre-roll deltas — a dissolve reshaped from centered to
+  start-at-cut is a change even when both clips stayed put. Spans derive
+  exactly as the bridge places them (CMX start-at-cut, OTIO `in_offset`,
+  XMEML/PrProj `recStart`, AAF overlap start).
+- **Carrier lines and fade legs never read as sources.** Zero-length events
+  (CMX outgoing marker lines, the synthesized BL fade slugs) and the black
+  legs a transition references fold into the junction diff; the changelist
+  reports how many in `carriersFolded`. A cut diffed against itself is
+  silent on every axis.
+- **`timingGuards` pairs instance-to-instance.** Same track+source, closest
+  record position, consumed once — the pairing the changelist already used —
+  so a source cut twice at two speeds no longer cross-compares. Flags carry
+  `recIn`. Dropped-audio detection reads any `A`-track (`A`, `A2`, …), and a
+  lost fade or dissolve is now a timing lie (`transition_dropped`).
+
+### Added
+
+- `editorial.mjs` exports `transitionSpan(event)` and
+  `listTransitions(events)` — the junction model shared by the changelist
+  and the guards.
+
 ## What's New in v2.163.0 — E105: QC through every export format
 
 One faded, dissolved, retimed conform exported from Resolve three ways — OTIO,

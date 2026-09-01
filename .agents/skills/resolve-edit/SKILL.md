@@ -136,8 +136,10 @@ stammered restart. These work on the words instead and are complementary to
 ## Offline editorial (`editorial` actions)
 
 - `parse_interchange` — EDL / OTIO / XMEML (AAF = an honest refuse, not a fake).
-- `turnover_changelist` — moved / retimed / replaced / new / gone between two
-  cuts, with timing silent-lie guards (it flags what it cannot verify).
+- `turnover_changelist` — moved / retimed / trimmed / replaced / new / gone between
+  two cuts PLUS the junction diff (transitions added / dropped / changed, fade
+  in/out, span deltas — carrier lines and BL fade legs never read as sources),
+  with timing silent-lie guards (it flags what it cannot verify).
 - `conform_manifest`, `marker_roundtrip`.
 
 Use these to answer "what changed between v3 and v4" or to hand a conform an

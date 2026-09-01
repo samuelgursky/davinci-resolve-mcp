@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseEDL, parseOTIO, parseInterchange, diffChangelist, timingGuards, conformManifest, markerRoundtrip } from '../server/editorial.mjs';
+import { parseEDL, parseOTIO, parseInterchange, diffChangelist, timingGuards, listTransitions, conformManifest, markerRoundtrip } from '../server/editorial.mjs';
 import { editorialTool } from '../server/tools/editorial.mjs';
 import { drtTool } from '../server/tools/drt.mjs';
 
@@ -208,4 +208,111 @@ test('editorial tool dispatches turnover_changelist with timing guards', async (
   const newE = [{ track: 'V', source: 'RAMP', recIn: 0, speed: 100, reverse: false, fps: 24 }];
   const r = await editorialTool.handler({ action: 'turnover_changelist', args: { old: oldE, new: newE } });
   assert.ok(r.timing.flags.some((f) => f.kind === 'flattened_retime'));
+});
+
+// ── E106: the changelist sees junctions ────────────────────────────────
+// Measured 2026-09-01: a 24→12 dissolve change reported NOTHING, dropped
+// fades read as "BL gone", and the zero-length CMX carrier line of the
+// outgoing side read as "B002 gone". timingGuards paired first-row-wins,
+// so an identical cut with a dropped A2 leg flagged a FALSE flattened
+// retime and never flagged the audio drop (track 'A2' ≠ 'A').
+const FADE_EDL_OLD = `TITLE: OLD
+FCM: NON-DROP FRAME
+001  BL       V     C        00:00:00:00 00:00:00:00 01:00:00:00 01:00:00:00
+002  A001     V     D    024 00:00:00:00 00:00:04:00 01:00:00:00 01:00:04:00
+003  A001     AA    C        00:00:00:00 00:00:04:00 01:00:00:00 01:00:04:00
+004  A001     V     C        00:00:04:00 00:00:04:00 01:00:04:00 01:00:04:00
+005  B002     V     D    024 00:00:00:00 00:00:04:00 01:00:04:00 01:00:08:00
+006  B002     V     C        00:00:04:00 00:00:04:00 01:00:08:00 01:00:08:00
+007  BL       V     D    024 00:00:00:00 00:00:01:00 01:00:08:00 01:00:09:00
+008  A001     V     C        00:00:08:00 00:00:10:00 01:00:09:00 01:00:11:00
+M2   A001           012.0                00:00:08:00
+`;
+const FADE_EDL_NEW = `TITLE: NEW
+FCM: NON-DROP FRAME
+001  A001     V     C        00:00:00:00 00:00:04:00 01:00:00:00 01:00:04:00
+002  A001     AA    C        00:00:00:00 00:00:04:00 01:00:00:00 01:00:04:00
+003  A001     V     C        00:00:04:00 00:00:04:00 01:00:04:00 01:00:04:00
+004  B002     V     D    012 00:00:00:00 00:00:04:00 01:00:04:00 01:00:08:00
+005  A001     V     C        00:00:08:00 00:00:10:00 01:00:08:00 01:00:10:00
+`;
+
+test('listTransitions classifies EDL fades and dissolves with bridge-exact spans (E106)', () => {
+  const trs = listTransitions(parseEDL(FADE_EDL_OLD));
+  assert.deepEqual(trs.map((t) => [t.fade, t.outgoing, t.incoming, t.duration, t.start, t.end, t.pre]), [
+    ['in', 'BL', 'A001', 24, 86400, 86424, 0],
+    [null, 'A001', 'B002', 24, 86496, 86520, 0],
+    ['out', 'B002', 'BL', 24, 86592, 86616, 0],
+  ]);
+});
+
+test('turnover_changelist reports dropped fades and a shortened dissolve — never a gone BL or carrier (E106)', () => {
+  const oldE = parseEDL(FADE_EDL_OLD), newE = parseEDL(FADE_EDL_NEW);
+  const d = diffChangelist(oldE, newE);
+  assert.deepEqual(d.counts, { retimed: 1, transition_changed: 1, transition_dropped: 2 }, JSON.stringify(d.changes));
+  assert.ok(!d.changes.some((c) => c.kind === 'gone' || c.kind === 'new'), 'carrier lines and fade legs must not read as sources');
+  const fadeIn = d.changes.find((c) => c.kind === 'transition_dropped' && c.fade === 'in');
+  assert.equal(fadeIn.incoming, 'A001');
+  assert.equal(fadeIn.oldRecIn, 86400);
+  const fadeOut = d.changes.find((c) => c.kind === 'transition_dropped' && c.fade === 'out');
+  assert.equal(fadeOut.outgoing, 'B002');
+  const dis = d.changes.find((c) => c.kind === 'transition_changed');
+  assert.deepEqual(dis.deltas, { duration: { old: 24, new: 12 } });
+  assert.deepEqual([dis.outgoing, dis.incoming, dis.fade], ['A001', 'B002', null]);
+  assert.deepEqual(d.transitions, { old: 3, new: 1 });
+  assert.deepEqual(d.carriersFolded, { old: 4, new: 1 });
+  // Null control: a cut diffed against itself is silent on every axis.
+  const self = diffChangelist(oldE, parseEDL(FADE_EDL_OLD));
+  assert.equal(self.changedCount, 0, JSON.stringify(self.changes));
+  assert.deepEqual(timingGuards(oldE, parseEDL(FADE_EDL_OLD)).flags, []);
+});
+
+test('timingGuards flags lost fades/dissolves as timing lies (E106)', () => {
+  const g = timingGuards(parseEDL(FADE_EDL_OLD), parseEDL(FADE_EDL_NEW));
+  const kinds = g.flags.map((f) => f.kind).sort();
+  assert.deepEqual(kinds, ['flattened_retime', 'transition_dropped', 'transition_dropped']);
+  assert.ok(g.flags.some((f) => f.kind === 'transition_dropped' && /fade-in/.test(f.detail)));
+  assert.ok(g.flags.some((f) => f.kind === 'transition_dropped' && /fade-out/.test(f.detail)));
+});
+
+test('timingGuards pairs a twice-used source instance-to-instance and sees A2 (E106)', () => {
+  const oldE = [
+    { track: 'V', source: 'A001', srcIn: 0, srcOut: 48, recIn: 0, recOut: 48, speed: 100, reverse: false, fps: 24 },
+    { track: 'V', source: 'A001', srcIn: 100, srcOut: 124, recIn: 200, recOut: 248, speed: 50, reverse: false, fps: 24 },
+    { track: 'A2', source: 'A001', srcIn: 0, srcOut: 48, recIn: 0, recOut: 48, speed: 100, reverse: false, fps: 24 },
+  ];
+  // Same video, listed in the other order, A2 leg dropped: the ONLY truth is the audio drop.
+  const g = timingGuards(oldE, [oldE[1], oldE[0]]);
+  assert.deepEqual(g.flags.map((f) => f.kind), ['dropped_split_audio']);
+  assert.equal(g.flags[0].track, 'A2');
+  // The second instance flattened → flagged at ITS record position, not the first's.
+  const g2 = timingGuards(oldE, [oldE[0], { ...oldE[1], speed: 100 }]);
+  const flat = g2.flags.find((f) => f.kind === 'flattened_retime');
+  assert.equal(flat.recIn, 200);
+  // Null control: identical lists, either order, flag nothing.
+  assert.deepEqual(timingGuards(oldE, [oldE[2], oldE[1], oldE[0]]).flags, []);
+});
+
+test('turnover_changelist sees an OTIO span reshaped from centered to start-at-cut (E106)', () => {
+  const rt = (v, r = 24) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: r, value: v });
+  const tr = (s, d, r = 24) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s, r), duration: rt(d, r) });
+  const clip = (url, sIn, d) => ({ OTIO_SCHEMA: 'Clip.2', name: url, source_range: tr(sIn, d), media_reference: { target_url: url }, effects: [], markers: [] });
+  const T = (i, o) => ({ OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(i), out_offset: rt(o) });
+  const tl = (children) => ({ OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children }] } });
+  const build = (pre) => parseOTIO(tl([T(pre, 24 - pre), clip('/m/cut.mp4', 24, 72), T(pre, 24 - pre), clip('/m/wht.mp4', 24, 48), T(12, 12), { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 48) }]), { fps: 24 });
+  const oldE = build(12), newE = build(0);
+  const trs = listTransitions(oldE);
+  // A pre-rolled fade-in at track start spans before frame 0; its outgoing is still the BL slug.
+  assert.deepEqual(trs.map((t) => [t.fade, t.start, t.end, t.junction]), [['in', -12, 12, 0], [null, 60, 84, 72], ['out', 108, 132, 120]]);
+  const d = diffChangelist(oldE, newE);
+  assert.deepEqual(d.counts, { transition_changed: 2 }, JSON.stringify(d.changes));
+  assert.ok(d.changes.every((c) => c.deltas.pre.old === 12 && c.deltas.pre.new === 0));
+  assert.equal(diffChangelist(oldE, build(12)).changedCount, 0);
+});
+
+test('editorial tool surfaces the junction diff through the protocol shape (E106)', async () => {
+  const r = await editorialTool.handler({ action: 'turnover_changelist', args: { old: parseEDL(FADE_EDL_OLD), new: parseEDL(FADE_EDL_NEW) } });
+  assert.equal(r.counts.transition_dropped, 2);
+  assert.deepEqual(r.carriersFolded, { old: 4, new: 1 });
+  assert.ok(r.timing.flags.some((f) => f.kind === 'transition_dropped'));
 });

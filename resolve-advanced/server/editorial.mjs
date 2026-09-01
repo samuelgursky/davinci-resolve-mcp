@@ -476,38 +476,139 @@ export function parseInterchange(format, content, opts = {}) {
 
 // ── turnover_changelist ────────────────────────────────────────────────
 const sig = (e) => `${e.track}:${e.source}`;
+const isBlackSource = (s) => /^(bl|black|solid color)$/i.test(String(s || '').trim());
+const isAudioTrack = (t) => /^A\d*$/i.test(String(t || ''));
+// A zero-length event is a CARRIER, never a cut: the outgoing marker line of
+// a CMX dissolve pair, or the zero-length BL slug every parser synthesizes at
+// a fade (E91/E92/E93). It has no picture of its own to be moved/gone/new.
+const isCarrier = (e) => e.recIn != null && e.recOut != null && e.recIn === e.recOut;
 
 /**
- * Diff two normalized event lists → per-event {kind: moved|retimed|replaced|new|gone|unchanged}.
+ * The record SPAN a transition event occupies, derived exactly the way the
+ * bridge places it (author-interchange): alignment 'start' → the span begins
+ * at the incoming's recIn (CMX start-at-cut / AAF overlap start); OTIO
+ * inOffset → that many frames before the cut; XMEML/PrProj recStart → the
+ * explicit span start; nothing declared → centered. `junction` is the
+ * incoming event's recIn — the same frame verify_roundtrip's fade windows
+ * key on.
+ * @param {Object} e normalized event carrying `transition`
+ */
+export function transitionSpan(e) {
+  const t = e.transition;
+  if (!t || e.recIn == null) return null;
+  const d = Math.max(0, Number(t.duration) || 0);
+  let pre;
+  if (t.alignment === 'start') pre = 0;
+  else if (t.inOffset != null) pre = Math.max(0, Math.min(d, Number(t.inOffset) || 0));
+  else if (t.recStart != null) pre = Math.max(0, Math.min(d, e.recIn - Number(t.recStart)));
+  else pre = Math.floor(d / 2);
+  const start = e.recIn - pre;
+  return { start, end: start + d, junction: e.recIn, pre, duration: d };
+}
+
+/**
+ * Every junction in an event list as a transition record: span, type, the
+ * OUTGOING event (the same-track neighbour whose extent touches the span
+ * start — a CMX carrier line, an abutting clip, or the overlapping AAF
+ * predecessor) and the INCOMING (the carrier of the `transition` field), with
+ * black on either side classified as a fade. Pure over events.
+ * @param {Array} events
+ * @returns {Array<{track,type,duration,start,end,junction,pre,outgoing,incoming,fade,incomingEvent,outgoingEvent}>}
+ */
+export function listTransitions(events) {
+  const out = [];
+  for (const e of events) {
+    if (!e.transition || !(Number(e.transition.duration) > 0)) continue;
+    const span = transitionSpan(e);
+    if (!span) continue;
+    const cands = events.filter((o) => o !== e && o.track === e.track && o.recIn != null && o.recOut != null
+      && o.recIn <= span.start && o.recOut >= span.start);
+    // The latest-ending toucher is the outgoing: a carrier line sits exactly
+    // at the span start, an abutting clip ends there, an AAF predecessor
+    // overlaps past it. Prefer a picture over black only when both touch.
+    cands.sort((a, b) => (b.recOut - a.recOut) || ((events.indexOf(b)) - events.indexOf(a)));
+    let outgoingEvent = cands[0] || null;
+    if (!outgoingEvent) {
+      // Nothing touches the span start (a pre-rolled fade-in at track start
+      // whose span begins before frame 0, or a gap-adjacent junction): the
+      // outgoing is whatever last ENDED at or before the junction — the
+      // zero-length BL slug the parsers synthesize sits exactly there.
+      const before = events.filter((o) => o !== e && o.track === e.track && o.recOut != null && o.recOut <= span.junction);
+      before.sort((a, b) => (b.recOut - a.recOut) || (events.indexOf(b) - events.indexOf(a)));
+      outgoingEvent = before[0] || null;
+    }
+    const outgoing = outgoingEvent ? outgoingEvent.source : null;
+    const incoming = e.source;
+    const fade = isBlackSource(outgoing) ? 'in' : isBlackSource(incoming) ? 'out' : null;
+    out.push({
+      track: e.track, type: e.transition.type || 'dissolve', duration: span.duration,
+      start: span.start, end: span.end, junction: span.junction, pre: span.pre,
+      outgoing, incoming, fade, incomingEvent: e, outgoingEvent,
+    });
+  }
+  return out;
+}
+
+/**
+ * Pair old and new PICTURE/AUDIO events once each: same track+source, closest
+ * record position wins, consumed on match (a source used twice at two speeds
+ * pairs each instance with its own — never first-row-wins). Carriers and the
+ * black legs a transition references never enter the pairing: they are the
+ * junction's business (listTransitions), not sources.
+ */
+function pairEvents(oldEvents, newEvents, recTol = 1) {
+  const cutsOf = (events) => {
+    const trs = listTransitions(events);
+    const fadeBlack = new Set();
+    for (const t of trs) {
+      if (t.outgoingEvent && isBlackSource(t.outgoingEvent.source)) fadeBlack.add(t.outgoingEvent);
+      if (isBlackSource(t.incomingEvent.source)) fadeBlack.add(t.incomingEvent);
+    }
+    const cuts = [], carriers = [];
+    for (const e of events) {
+      if (e.track === 'MARKER') continue;
+      if (isCarrier(e) || fadeBlack.has(e)) carriers.push(e);
+      else cuts.push(e);
+    }
+    return { cuts, carriers, transitions: trs };
+  };
+  const o = cutsOf(oldEvents), n = cutsOf(newEvents);
+  const pool = o.cuts.map((e) => ({ e, used: false }));
+  const pairs = [], unmatchedNew = [];
+  for (const ne of n.cuts) {
+    const cands = pool.filter((p) => !p.used && sig(p.e) === sig(ne));
+    if (!cands.length) { unmatchedNew.push(ne); continue; }
+    cands.sort((a, b) => Math.abs((a.e.recIn ?? 0) - (ne.recIn ?? 0)) - Math.abs((b.e.recIn ?? 0) - (ne.recIn ?? 0)));
+    cands[0].used = true;
+    pairs.push({ oe: cands[0].e, ne });
+  }
+  const unmatchedOld = pool.filter((p) => !p.used).map((p) => p.e);
+  return { pairs, unmatchedOld, unmatchedNew, old: o, new: n, recTol };
+}
+
+/**
+ * Diff two normalized event lists → per-event {kind: moved|retimed|trimmed|replaced|new|gone}
+ * PLUS per-junction {kind: transition_added|transition_dropped|transition_changed}
+ * (fade 'in'/'out' or null for a dissolve). Zero-length carrier lines and the
+ * black legs that carry fades fold into the junction diff instead of reading
+ * as gone/new sources; a dissolve whose duration, type or span shape changed
+ * is a change even when both clips stayed put.
  * @param {Array} oldEvents
  * @param {Array} newEvents
  * @param {{recTolerance?:number}} [opts]
  */
 export function diffChangelist(oldEvents, newEvents, opts = {}) {
   const recTol = opts.recTolerance ?? 1;
-  const oldPool = oldEvents.map((e) => ({ e, used: false }));
+  const P = pairEvents(oldEvents, newEvents, recTol);
   const changes = [];
 
-  for (const ne of newEvents) {
-    // Prefer a same-source match; among those, the closest record position.
-    const candidates = oldPool.filter((o) => !o.used && sig(o.e) === sig(ne));
-    let match = null;
-    if (candidates.length) {
-      candidates.sort((a, b) => Math.abs((a.e.recIn ?? 0) - (ne.recIn ?? 0)) - Math.abs((b.e.recIn ?? 0) - (ne.recIn ?? 0)));
-      match = candidates[0];
-    }
-    if (!match) {
-      changes.push({ kind: 'new', source: ne.source, track: ne.track, newRecIn: ne.recIn });
-      continue;
-    }
-    match.used = true;
-    const oe = match.e;
+  for (const { oe, ne } of P.pairs) {
     const deltas = {};
     let kind = 'unchanged';
-    if (Math.abs((oe.speed ?? 100) - (ne.speed ?? 100)) > 0.01 || oe.reverse !== ne.reverse) {
+    if (Math.abs((oe.speed ?? 100) - (ne.speed ?? 100)) > 0.01 || Boolean(oe.reverse) !== Boolean(ne.reverse)) {
       kind = 'retimed';
       deltas.speed = { old: oe.speed, new: ne.speed };
-      if (oe.reverse !== ne.reverse) deltas.reverse = { old: oe.reverse, new: ne.reverse };
+      if (Boolean(oe.reverse) !== Boolean(ne.reverse)) deltas.reverse = { old: oe.reverse, new: ne.reverse };
     } else if (Math.abs((oe.recIn ?? 0) - (ne.recIn ?? 0)) > recTol) {
       kind = 'moved';
       deltas.recIn = { old: oe.recIn, new: ne.recIn };
@@ -517,51 +618,97 @@ export function diffChangelist(oldEvents, newEvents, opts = {}) {
     }
     if (kind !== 'unchanged') changes.push({ kind, source: ne.source, track: ne.track, oldRecIn: oe.recIn, newRecIn: ne.recIn, deltas });
   }
+  for (const ne of P.unmatchedNew) changes.push({ kind: 'new', source: ne.source, track: ne.track, newRecIn: ne.recIn });
   // Unconsumed old events → gone (unless a 'new' at the same rec position → replaced).
-  for (const o of oldPool.filter((x) => !x.used)) {
-    const replacement = changes.find((c) => c.kind === 'new' && c.track === o.e.track && Math.abs((c.newRecIn ?? 0) - (o.e.recIn ?? 0)) <= recTol);
+  for (const oe of P.unmatchedOld) {
+    const replacement = changes.find((c) => c.kind === 'new' && c.track === oe.track && Math.abs((c.newRecIn ?? 0) - (oe.recIn ?? 0)) <= recTol);
     if (replacement) {
       replacement.kind = 'replaced';
-      replacement.oldSource = o.e.source;
-      replacement.oldRecIn = o.e.recIn;
+      replacement.oldSource = oe.source;
+      replacement.oldRecIn = oe.recIn;
     } else {
-      changes.push({ kind: 'gone', source: o.e.source, track: o.e.track, oldRecIn: o.e.recIn });
+      changes.push({ kind: 'gone', source: oe.source, track: oe.track, oldRecIn: oe.recIn });
     }
   }
+
+  // Junction diff: a transition is identified by what it joins (track,
+  // outgoing, incoming, fade side) and pairs with the closest junction; only
+  // its SHAPE (duration / type / pre-roll) makes a change — a junction that
+  // travelled with its clips is the clips' move, already reported.
+  const tKey = (t) => `${t.track}|${t.outgoing ?? ''}|${t.incoming}|${t.fade ?? 'x'}`;
+  const tPool = P.old.transitions.map((t) => ({ t, used: false }));
+  const tDesc = (t) => ({ track: t.track, outgoing: t.outgoing, incoming: t.incoming, fade: t.fade, type: t.type, duration: t.duration });
+  for (const nt of P.new.transitions) {
+    const cands = tPool.filter((p) => !p.used && tKey(p.t) === tKey(nt));
+    if (!cands.length) {
+      changes.push({ kind: 'transition_added', ...tDesc(nt), newRecIn: nt.junction, newSpan: [nt.start, nt.end] });
+      continue;
+    }
+    cands.sort((a, b) => Math.abs(a.t.junction - nt.junction) - Math.abs(b.t.junction - nt.junction));
+    cands[0].used = true;
+    const ot = cands[0].t;
+    const deltas = {};
+    if (ot.duration !== nt.duration) deltas.duration = { old: ot.duration, new: nt.duration };
+    if (String(ot.type) !== String(nt.type)) deltas.type = { old: ot.type, new: nt.type };
+    if (ot.pre !== nt.pre) deltas.pre = { old: ot.pre, new: nt.pre };
+    if (Object.keys(deltas).length) {
+      changes.push({
+        kind: 'transition_changed', ...tDesc(nt), oldRecIn: ot.junction, newRecIn: nt.junction,
+        oldSpan: [ot.start, ot.end], newSpan: [nt.start, nt.end], deltas,
+      });
+    }
+  }
+  for (const p of tPool.filter((x) => !x.used)) {
+    changes.push({ kind: 'transition_dropped', ...tDesc(p.t), oldRecIn: p.t.junction, oldSpan: [p.t.start, p.t.end] });
+  }
+
   const counts = {};
   for (const c of changes) counts[c.kind] = (counts[c.kind] || 0) + 1;
   changes.sort((a, b) => (a.newRecIn ?? a.oldRecIn ?? 0) - (b.newRecIn ?? b.oldRecIn ?? 0));
-  return { changes, counts, changedCount: changes.length, gate: 'review' };
+  return {
+    changes, counts, changedCount: changes.length,
+    transitions: { old: P.old.transitions.length, new: P.new.transitions.length },
+    carriersFolded: { old: P.old.carriers.length, new: P.new.carriers.length },
+    gate: 'review',
+  };
 }
 
 // ── TIMING silent-lie guards ───────────────────────────────────────────
 /**
  * Detect timing lies between an old (locked-cut) and new (conformed) event list.
+ * Pairs events the same way the changelist does (closest record position,
+ * consumed once) so a source cut twice at two speeds is compared instance to
+ * instance — never the second old against the first new.
  * @returns {{flags:Array<{kind, source, detail}>}}
  */
 export function timingGuards(oldEvents, newEvents) {
   const flags = [];
-  const newBySig = new Map();
-  for (const e of newEvents) {
-    if (!newBySig.has(sig(e))) newBySig.set(sig(e), []);
-    newBySig.get(sig(e)).push(e);
+  const P = pairEvents(oldEvents, newEvents);
+  for (const oe of P.unmatchedOld) {
+    // A dropped audio event where its video sibling survives → dropped J/L-cut audio.
+    if (isAudioTrack(oe.track) && P.new.cuts.some((x) => !isAudioTrack(x.track) && x.track !== 'MARKER' && x.source === oe.source))
+      flags.push({ kind: 'dropped_split_audio', source: oe.source, track: oe.track, detail: `audio event (${oe.track}) gone but video sibling present (J/L-cut lost)` });
   }
-  for (const oe of oldEvents) {
-    const matches = newBySig.get(sig(oe)) || [];
-    const ne = matches[0];
-    if (!ne) {
-      // A dropped audio event where its video sibling survives → dropped J/L-cut audio.
-      if (oe.track === 'A' && newEvents.some((x) => x.track !== 'A' && x.source === oe.source))
-        flags.push({ kind: 'dropped_split_audio', source: oe.source, detail: 'audio event gone but video sibling present (J/L-cut lost)' });
-      continue;
-    }
+  for (const { oe, ne } of P.pairs) {
     // Flattened retime: a speed ramp/change flattened to 100%.
     if ((oe.speed ?? 100) !== 100 && (ne.speed ?? 100) === 100)
-      flags.push({ kind: 'flattened_retime', source: oe.source, detail: `speed ${oe.speed}% → 100% (retime lost)` });
+      flags.push({ kind: 'flattened_retime', source: oe.source, recIn: oe.recIn, detail: `speed ${oe.speed}% → 100% (retime lost)` });
     // Reverse dropped.
-    if (oe.reverse && !ne.reverse) flags.push({ kind: 'reverse_dropped', source: oe.source, detail: 'reversed clip conformed forward' });
+    if (oe.reverse && !ne.reverse) flags.push({ kind: 'reverse_dropped', source: oe.source, recIn: oe.recIn, detail: 'reversed clip conformed forward' });
     // Framerate/pulldown slip.
-    if (oe.fps && ne.fps && oe.fps !== ne.fps) flags.push({ kind: 'framerate_slip', source: oe.source, detail: `fps ${oe.fps} → ${ne.fps}` });
+    if (oe.fps && ne.fps && oe.fps !== ne.fps) flags.push({ kind: 'framerate_slip', source: oe.source, recIn: oe.recIn, detail: `fps ${oe.fps} → ${ne.fps}` });
+  }
+  // A fade or dissolve the conform lost is a timing lie too: the picture
+  // edges stay put while the blend at the junction silently hard-cuts.
+  const tKey = (t) => `${t.track}|${t.outgoing ?? ''}|${t.incoming}|${t.fade ?? 'x'}`;
+  const newKeys = P.new.transitions.map(tKey);
+  for (const ot of P.old.transitions) {
+    const i = newKeys.indexOf(tKey(ot));
+    if (i >= 0) { newKeys.splice(i, 1); continue; }
+    flags.push({
+      kind: 'transition_dropped', source: ot.incoming, track: ot.track, recIn: ot.junction,
+      detail: ot.fade ? `fade-${ot.fade} (${ot.duration}f) at ${ot.junction} lost` : `${ot.outgoing}→${ot.incoming} dissolve (${ot.duration}f) at ${ot.junction} lost`,
+    });
   }
   return { flags, flagged: flags.length > 0 };
 }
