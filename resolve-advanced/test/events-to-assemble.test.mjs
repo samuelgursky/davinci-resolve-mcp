@@ -689,6 +689,46 @@ test('verifyRoundtrip flags real drift, not convention noise', () => {
   assert.equal(res2.mismatches[0].kind, 'record');
 });
 
+test('verifyRoundtrip is fade-aware: black legs merge out, reshaped edges excused with a report (E94)', () => {
+  // A faded conform (measured E94 live): input EDL has a zero-length BL +
+  // picture + BL tail; the re-export shows Solid Color legs and the picture
+  // shifted +12 both ends by the fade boundary-shift.
+  const input = [
+    { track: 'V', source: 'BL', recIn: 0, recOut: 0, srcIn: 0 },
+    { track: 'V', source: 'TAPE1', recIn: 0, recOut: 96, srcIn: 0, transition: { type: 'D', duration: 24, alignment: 'start' } },
+    { track: 'V', source: 'BL', recIn: 96, recOut: 144, srcIn: 0, transition: { type: 'D', duration: 24, alignment: 'start' } },
+  ];
+  const exported = [
+    { track: 'V', source: 'Solid Color', recIn: 0, recOut: 12, srcIn: 0 },
+    { track: 'V', source: 'cut_src.mp4', recIn: 12, recOut: 108, srcIn: 12 },
+    { track: 'V', source: 'Solid Color', recIn: 108, recOut: 144, srcIn: 0 },
+  ];
+  const res = verifyRoundtrip(input, exported, { sourceAliases: { TAPE1: 'cut_src' } });
+  assert.equal(res.pass, true, JSON.stringify(res.mismatches));
+  assert.deepEqual(res.blackSegments, { input: 1, exported: 2 });
+  assert.deepEqual(res.fadeReshapedBoundaries, [
+    { at: 0, source: 'cut_src', input: [0, 96], exported: [12, 108] },
+  ]);
+  assert.deepEqual(res.srcOffsets, { cut_src: 0 });
+  // A shift BEYOND the fade window is still real drift.
+  const drifted = JSON.parse(JSON.stringify(exported));
+  drifted[1].recIn = 40; drifted[1].srcIn = 40;
+  const res2 = verifyRoundtrip(input, drifted, { sourceAliases: { TAPE1: 'cut_src' } });
+  assert.equal(res2.pass, false);
+  assert.equal(res2.mismatches[0].kind, 'record');
+  // And a shifted edge NOWHERE NEAR a junction is drift even when small-ish.
+  const noFade = [
+    { track: 'V', source: 'A', recIn: 0, recOut: 96, srcIn: 0 },
+    { track: 'V', source: 'A', recIn: 96, recOut: 144, srcIn: 100 },
+  ];
+  const res3 = verifyRoundtrip(noFade, [
+    { track: 'V', source: 'A.mov', recIn: 0, recOut: 96, srcIn: 0 },
+    { track: 'V', source: 'A.mov', recIn: 108, recOut: 156, srcIn: 112 },
+  ]);
+  assert.equal(res3.pass, false);
+  assert.equal(res3.mismatches[0].kind, 'record');
+});
+
 test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
   const fsM = await import('node:fs');
   const os = await import('node:os');

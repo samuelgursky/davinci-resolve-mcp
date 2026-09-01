@@ -842,8 +842,29 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
       .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0 }))
       .sort((a, b) => a.track.localeCompare(b.track) || a.recIn - b.recIn);
   };
-  const a = norm(inputEvents);
-  const b = norm(exportedEvents);
+  const a0 = norm(inputEvents);
+  const b0 = norm(exportedEvents);
+  // FADES (E94): BL legs on the input side and the Solid Color generators a
+  // fade conform authors for them are the same thing — BLACK. Black segments
+  // are synthesized filler whose extents follow from the picture boundaries,
+  // so the pairwise compare runs over PICTURE legs only; black is counted
+  // informationally. And a fade's boundary-shift legitimately moves a
+  // picture edge by up to the transition duration (matching Resolve's own
+  // start-at-cut reshaping), so an edge within an input junction's fade
+  // window is excused — and reported, not silently absorbed.
+  const isBlackSeg = (e) => /^(bl|black|solid color)$/.test(e.source);
+  const a = a0.filter((e) => !isBlackSeg(e));
+  const b = b0.filter((e) => !isBlackSeg(e));
+  const blackSegments = { input: a0.length - a.length, exported: b0.length - b.length };
+  const rawVids = vids(inputEvents);
+  const inOff = rawVids.length ? Math.min(...rawVids.map((e) => e.recIn)) : 0;
+  const junctions = inputEvents
+    .filter((e) => /^V\d*$/.test(String(e.track)) && e.recIn != null && e.transition && e.transition.duration > 0)
+    .map((e) => ({ frame: e.recIn - inOff, d: e.transition.duration }));
+  const inFadeWindow = (edgeIn, edgeExp) => junctions.some(
+    (j) => Math.abs(edgeIn - j.frame) <= j.d && Math.abs(edgeExp - edgeIn) <= j.d,
+  );
+  const fadeReshapedBoundaries = [];
   const mismatches = [];
   if (a.length !== b.length) mismatches.push({ kind: 'count', input: a.length, exported: b.length });
   const srcOffsets = {};
@@ -852,11 +873,23 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     const x = a[i], y = b[i];
     if (x.track !== y.track) { mismatches.push({ kind: 'track', at: i, input: x.track, exported: y.track }); continue; }
     if (x.source !== y.source) { mismatches.push({ kind: 'source', at: i, input: x.source, exported: y.source }); continue; }
-    if (Math.abs(x.recIn - y.recIn) > recTol || Math.abs(x.recOut - y.recOut) > recTol) {
-      mismatches.push({ kind: 'record', at: i, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
-      continue;
+    const inBad = Math.abs(x.recIn - y.recIn) > recTol;
+    const outBad = Math.abs(x.recOut - y.recOut) > recTol;
+    if (inBad || outBad) {
+      const inExcused = !inBad || inFadeWindow(x.recIn, y.recIn);
+      const outExcused = !outBad || inFadeWindow(x.recOut, y.recOut);
+      if (inExcused && outExcused) {
+        fadeReshapedBoundaries.push({ at: i, source: x.source, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
+      } else {
+        mismatches.push({ kind: 'record', at: i, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
+        continue;
+      }
     }
-    const off = y.srcIn - x.srcIn;
+    // A fade-reshaped head trims record AND source together (source stays
+    // record-aligned), so the per-source constant offset is fitted net of
+    // the record shift — otherwise a source cut both plain and faded would
+    // read as a source-frames drift.
+    const off = (y.srcIn - (y.recIn - x.recIn)) - x.srcIn;
     if (srcOffsets[x.source] === undefined) srcOffsets[x.source] = off;
     else if (Math.abs(off - srcOffsets[x.source]) > srcTol) {
       mismatches.push({ kind: 'source-frames', at: i, source: x.source, expectedOffset: srcOffsets[x.source], gotOffset: off });
@@ -893,5 +926,10 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     }
     mismatches.push(...markers.mismatches);
   }
-  return { pass: mismatches.length === 0, pairs: n, srcOffsets, mismatches, markers, ...(markersNotInExport ? { markersNotInExport } : {}) };
+  return {
+    pass: mismatches.length === 0, pairs: n, srcOffsets, mismatches, markers,
+    ...(markersNotInExport ? { markersNotInExport } : {}),
+    ...(blackSegments.input || blackSegments.exported ? { blackSegments } : {}),
+    ...(fadeReshapedBoundaries.length ? { fadeReshapedBoundaries } : {}),
+  };
 }

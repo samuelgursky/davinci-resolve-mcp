@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.153.0 — the QC loop learns fades
+
+### Added
+
+- **`editorial.verify_roundtrip` is fade-aware.** A correct fade conform
+  used to fail QC three ways: the re-export's Solid Color legs mismatched
+  the EDL's BL reels, the leg counts differed, and the fade boundary-shift
+  moved picture edges by half the transition. Now BL/Solid-Color legs
+  canonicalize to BLACK and drop out of the pairwise compare (counted in
+  `blackSegments`), picture edges inside an input junction's fade window are
+  excused into `fadeReshapedBoundaries` — reported, never silently absorbed
+  — and the per-source TC offset is fitted net of the record shift so a
+  source cut both plain and faded doesn't read as source-frames drift.
+  Live loop verified: EDL fades → conform → import → OTIO re-export →
+  `pass: true` with the reshape named. Beyond-window shifts and shifts at
+  junction-free edges still fail as real record drift.
+
 ## What's New in v2.152.0 — AAF dissolves conform at last, and AAF fades join the family
 
 ### Fixed
