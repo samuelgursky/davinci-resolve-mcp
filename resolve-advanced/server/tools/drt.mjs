@@ -291,6 +291,167 @@ export const drtTool = {
           'Import with timeline.import_timeline_checked (timeline is named after the FILE). Dissolves/cross-fades, forward+reverse retimes, multi-track video, audio events and markers are AUTHORED when geometry allows; everything else drops WITH a reason — see `conform` for the ledger.',
       };
     }
+    if (action === 'assemble_project') {
+      // MULTI-TIMELINE archive (E85): assemble each timeline spec with the
+      // full single-timeline engine, then merge the later archives into the
+      // first — SeqContainers copied wholesale, MpFolder elements merged with
+      // DbId dedup (captured media templates carry FIXED pool DbIds, so the
+      // same source assembled twice IS the same element and every clip's
+      // MediaRef already points at it), and LocableBlobSet marker blobs
+      // carried over. Import the result as a PROJECT
+      // (project_manager.import_project / safe_project_import) — the
+      // single-timeline .drt import path only takes one timeline per file.
+      const p = z.object({
+        timelines: z.array(z.object({}).passthrough()).min(2)
+          .describe('Two or more assembleTimeline specs (same shape as `assemble` spec); timelineName required and unique per entry'),
+        outputPath: z.string().describe('Where the multi-timeline .drp is written'),
+        targetAppVersion: z.union([z.string(), z.number()]).optional(),
+      }).parse(args);
+      const names = p.timelines.map((t, i) => t.timelineName || `Timeline ${i + 1}`);
+      if (new Set(names).size !== names.length) throw new Error(`assemble_project: timelineName must be unique per timeline (got: ${names.join(', ')})`);
+      const { assembleTimeline } = drp();
+      const buffers = [];
+      for (const [i, spec] of p.timelines.entries()) {
+        const s = { ...spec, timelineName: names[i] };
+        if (s.templateVersion === undefined && p.targetAppVersion !== undefined) {
+          s.templateVersion = parseFloat(p.targetAppVersion) >= 21 ? 21 : 19;
+        }
+        buffers.push((await assembleTimeline(s)).buffer);
+      }
+      // Every assembly reuses the TEMPLATE's fixed identities across the
+      // whole TIMELINE CLUSTER — pool clip element (which nests a version
+      // table with back-references: MpTimelineClip, pActive, UniqueSequenceId,
+      // UniqueMediaPoolItemId, numeric IDs), the parent container, its shared
+      // sequence and track ids — so archives 2..n silently collide with
+      // archive 1 (measured twice: the merge imported as ONE timeline, first
+      // via container overwrite, then via UniqueMediaPoolItemId dedup).
+      // Rather than freshening named fields one by one, remap EVERY uuid the
+      // later archive's cluster shares with the first archive's cluster —
+      // except media-element ids, which are shared BY DESIGN (captured
+      // templates carry fixed pool DbIds so identical sources dedup and
+      // MediaRefs keep pointing at the survivor). The keyed SeqRef inside the
+      // pool clip's embedded sequence blob is patched through the codec.
+      const { createRequire } = await import('node:module');
+      const requireCjs = createRequire(import.meta.url);
+      const { decodeKeyedDict, encodeKeyedDict } = requireCjs('../../vendor/drp-format/keyed-dict.js');
+      const { randomUUID } = await import('node:crypto');
+      const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+      const TL_EL_RE = /<Element>\s*<Sm2MpTimelineClip DbId="[^"]+">[\s\S]*?<\/Sm2MpTimelineClip>\s*<\/Element>/g;
+      // Media pool elements: Sm2MpVideoClip/Sm2MpAudioClip (captured
+      // template media — the tag is NOT Sm2MpMedia; measured the hard way
+      // when an over-narrow pattern left media ids in the remap set and
+      // every item MediaRef in the merged reel went dangling → offline)
+      // plus Sm2MpCompoundClip clusters.
+      const MEDIA_EL_RE = /<Element>\s*<Sm2Mp(?:VideoClip|AudioClip|Media|CompoundClip) DbId="[^"]+">[\s\S]*?<\/Sm2Mp(?:VideoClip|AudioClip|Media|CompoundClip)>\s*<\/Element>/g;
+      const base = await JSZip.loadAsync(buffers[0]);
+      const mpP = 'MediaPool/Master/MpFolder.xml';
+      let mpXml = await base.file(mpP).async('string');
+      let pjXml = await base.file('project.xml').async('string');
+      const baseIds = new Set((mpXml + pjXml).match(UUID_RE) || []);
+      for (const n of Object.keys(base.files)) {
+        if (!base.files[n].dir && /SeqContainer\/.+\.xml$/.test(n)) {
+          for (const id of (await base.file(n).async('string')).match(UUID_RE) || []) baseIds.add(id);
+        }
+      }
+      let nextPoolId = 101; // template pool clips carry <ID>100</ID>
+      for (const buf of buffers.slice(1)) {
+        const zip = await JSZip.loadAsync(buf);
+        let mp2 = await zip.file(mpP).async('string');
+        const mediaEls = mp2.match(MEDIA_EL_RE) || [];
+        const mediaIds = new Set(mediaEls.flatMap((el) => el.match(UUID_RE) || []));
+        const tlEl = (mp2.match(TL_EL_RE) || [])[0];
+        if (!tlEl) throw new Error('assemble_project: merged archive has no timeline pool clip');
+        // cluster text: the pool clip element + every SeqContainer entry
+        const containers = {};
+        for (const n of Object.keys(zip.files)) {
+          if (!zip.files[n].dir && /SeqContainer\/.+\.xml$/.test(n)) containers[n] = await zip.file(n).async('string');
+        }
+        const clusterText = tlEl + Object.values(containers).join('');
+        const remap = new Map();
+        for (const id of new Set(clusterText.match(UUID_RE) || [])) {
+          if (baseIds.has(id) && !mediaIds.has(id)) remap.set(id, randomUUID());
+        }
+        const apply = (text) => { let t = text; for (const [a, b] of remap) t = t.split(a).join(b); return t; };
+        // Keyed FieldsBlobs store uuid VALUES as UTF-16 — invisible to the
+        // plaintext remap. (Measured the hard way: the pool clip's top
+        // FieldsBlob is keyed {ActiveVer→uuid}; left unpatched it pointed
+        // REEL_02's active version at REEL_01's cluster and the timeline
+        // silently never materialized.) Decode every keyed blob, remap any
+        // string entry matching a remapped uuid, re-encode. Non-keyed blobs
+        // (zstd bodies etc.) decode-fail and pass through untouched.
+        const applyBlobs = (text) => text.replace(/<FieldsBlob>([0-9a-fA-F]+)<\/FieldsBlob>/g, (whole, hex) => {
+          try {
+            const dict = decodeKeyedDict(Buffer.from(hex, 'hex'));
+            let changed = false;
+            for (const e of dict.entries) {
+              if (typeof e.value === 'string' && remap.has(e.value)) { e.value = remap.get(e.value); changed = true; }
+            }
+            if (!changed) return whole;
+            return `<FieldsBlob>${encodeKeyedDict({ hdr: dict.hdr, entries: dict.entries }).toString('hex')}</FieldsBlob>`;
+          } catch { return whole; }
+        });
+        // pool clip: uuid remap + keyed SeqRef patch + fresh numeric IDs
+        let tlNew = applyBlobs(apply(tlEl)).replace(/<ID>\d+<\/ID>/g, `<ID>${nextPoolId}<\/ID>`.replace('<\/ID>', '</ID>'));
+        nextPoolId += 1;
+        const fbM = tlNew.match(/(<Sm2Sequence DbId="[^"]+">\s*<FieldsBlob>)([0-9a-fA-F]+)(<\/FieldsBlob>)/);
+        if (fbM) {
+          const dict = decodeKeyedDict(Buffer.from(fbM[2], 'hex'));
+          const seqRef = dict.entries.find((e) => e.key === 'SeqRef');
+          if (seqRef && remap.has(String(seqRef.value))) {
+            seqRef.value = remap.get(String(seqRef.value));
+            tlNew = tlNew.replace(fbM[0], `${fbM[1]}${encodeKeyedDict({ hdr: dict.hdr, entries: dict.entries }).toString('hex')}${fbM[3]}`);
+          }
+        }
+        for (const [n, xml] of Object.entries(containers)) {
+          const remapped = applyBlobs(apply(xml));
+          const cid = (remapped.match(/<Sm2SequenceContainer DbId="([^"]+)"/) || [])[1];
+          base.file(cid ? `SeqContainer/${cid}.xml` : n, remapped);
+        }
+        // Children live INSIDE <MediaVec> — an element appended after its
+        // close parses fine and is silently invisible (measured: the whole
+        // REEL_02 subtree vanished while every id chain checked out).
+        mpXml = mpXml.replace('</MediaVec>', `${tlNew}\n</MediaVec>`);
+        for (const el of mediaEls) {
+          const id = el.match(/DbId="([^"]+)"/)[1];
+          if (!mpXml.includes(`DbId="${id}"`)) mpXml = mpXml.replace('</MediaVec>', `${el}\n</MediaVec>`);
+        }
+        const pj2 = await zip.file('project.xml').async('string');
+        for (const blob of pj2.match(/<Element>\s*<Sm2(?:Sequence|TiItem)LockableBlob DbId="[^"]+">[\s\S]*?<\/Sm2(?:Sequence|TiItem)LockableBlob>\s*<\/Element>/g) || []) {
+          pjXml = pjXml.replace('</LocableBlobSet>', `${apply(blob)}</LocableBlobSet>`);
+        }
+        // THE timeline registry (found the hard way — two invisible merges):
+        // project.xml's <TimelineHandleVec> lists each pool clip's embedded
+        // Sm2Timeline DbId; a pool clip absent from the vec imports as pool
+        // furniture but never materializes as a timeline. Carry the later
+        // archive's handles over, remapped with its cluster.
+        const vec2 = pj2.match(/<TimelineHandleVec>([\s\S]*?)<\/TimelineHandleVec>/);
+        if (vec2) {
+          for (const h of vec2[1].match(/<Element>[^<]*<\/Element>/g) || []) {
+            pjXml = pjXml.replace('</TimelineHandleVec>', ` ${apply(h)}\n </TimelineHandleVec>`);
+          }
+        }
+        // future merges must not collide with THIS timeline's fresh ids either
+        for (const id of remap.values()) baseIds.add(id);
+        for (const id of clusterText.match(UUID_RE) || []) if (!remap.has(id)) baseIds.add(id);
+      }
+      base.file(mpP, mpXml);
+      base.file('project.xml', pjXml);
+      let outBuf = await base.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+      let stamped = null;
+      if (p.targetAppVersion !== undefined) {
+        const targetPV = resolveTargetProjectVersion({ targetAppVersion: p.targetAppVersion });
+        const appVer = `${p.targetAppVersion}${'.0'.repeat(Math.max(0, 4 - String(p.targetAppVersion).split('.').length))}`;
+        const zip = await JSZip.loadAsync(outBuf);
+        const { out, elementPatches, stampPatches } = await applyVersionStamps(zip, targetPV, appVer);
+        outBuf = await out.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+        stamped = { targetProjectVersion: targetPV, elementPatches, stampPatches };
+      }
+      await fs.writeFile(p.outputPath, outBuf);
+      return {
+        outputPath: p.outputPath, bytes: outBuf.length, timelines: names, stamped,
+        note: 'Import as a PROJECT (project_manager.safe_project_import); timeline.import_timeline_checked takes one timeline per file — use drt.extract_from_drp to pull singles.',
+      };
+    }
     if (action === 'assemble') {
       const p = assembleSchema.parse(args);
       // Native-schema authoring: template-spliced real Resolve structures

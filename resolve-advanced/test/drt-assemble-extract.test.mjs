@@ -490,3 +490,41 @@ test('cuts[].markers author Sm2TiItemLockableBlobs owned by the placed clips (E7
       cuts: [{ startFrame: 86400, durationFrames: 48, markers: [{ frame: 48, name: 'X' }] }] } },
   }}), /ITEM-relative/);
 });
+
+test('assemble_project merges timelines with the four hard-won laws (E85)', async () => {
+  // (1) cluster uuids remap (template-fixed identities collide); (2) keyed
+  // blobs carry uuids as UTF-16 (ActiveVer/SeqRef) and need codec-level
+  // remap; (3) project.xml <TimelineHandleVec> is THE timeline registry;
+  // (4) folder children live INSIDE <MediaVec> — an element appended after
+  // its close is silently invisible. Media pool elements (Sm2MpVideoClip/
+  // AudioClip) share ids BY DESIGN. Live-proven: two-reel .drp imported
+  // with both timelines and REEL_02 rendered its exact content.
+  const out = tmp('.drp');
+  const spec = (name, srcIn) => ({ timelineName: name, media: [{
+    mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+    cuts: [{ startFrame: 86400, durationFrames: 48, srcIn }] }] });
+  const res = await drtTool.handler({ action: 'assemble_project', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    timelines: [spec('R1', 0), spec('R2', 96)],
+  }});
+  assert.deepEqual(res.timelines, ['R1', 'R2']);
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const pj = await zip.file('project.xml').async('string');
+  const vec = pj.match(/<TimelineHandleVec>([\s\S]*?)<\/TimelineHandleVec>/)[1];
+  const handles = vec.match(/<Element>[^<]*<\/Element>/g) || [];
+  assert.equal(handles.length, 2, 'both timelines registered in the handle vec');
+  const mp = await zip.file('MediaPool/Master/MpFolder.xml').async('string');
+  const mediaVec = mp.slice(mp.indexOf('<MediaVec>'), mp.indexOf('</MediaVec>'));
+  assert.equal((mediaVec.match(/<Sm2MpTimelineClip DbId=/g) || []).length, 2, 'both pool clips INSIDE MediaVec');
+  const tlEls = mediaVec.match(/<Sm2MpTimelineClip DbId="([^"]+)"/g);
+  assert.notEqual(tlEls[0], tlEls[1], 'pool clip ids freshened');
+  const umpis = mediaVec.match(/<UniqueMediaPoolItemId>([^<]*)<\/UniqueMediaPoolItemId>/g).filter(u => !u.includes('0e7b8603'));
+  assert.equal(new Set(umpis).size, umpis.length, 'UniqueMediaPoolItemIds distinct');
+  // shared media element: exactly ONE Sm2MpVideoClip for the single source
+  assert.equal((mediaVec.match(/<Sm2MpVideoClip DbId=/g) || []).length, 1, 'identical source dedups to one pool element');
+  const seqs = Object.keys(zip.files).filter((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+  assert.equal(seqs.length, 2, 'two containers');
+  await fs.unlink(out);
+  await assert.rejects(drtTool.handler({ action: 'assemble_project', args: {
+    outputPath: tmp('.drp'), timelines: [spec('X', 0), spec('X', 0)] } }), /unique/);
+});

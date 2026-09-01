@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.145.0 — whole projects, assembled offline
+
+### Added
+
+- **`drt.assemble_project`: multi-timeline .drp archives** — two or more
+  full assemble specs merge into one project file (reel-per-timeline conform
+  packages). Import as a project (`safe_project_import`); pull singles with
+  `extract_from_drp`. Live-proven: a two-reel .drp imported with both
+  timelines materialized and the second reel rendering its exact content.
+
+### The five merge laws (each found by a failed import)
+
+1. Template-fixed cluster identities collide — the pool clip, its version
+   table, container, sequence and track ids must remap; media pool element
+   ids are the deliberate exception (fixed by capture, so identical sources
+   dedup and MediaRefs keep pointing at the survivor).
+2. Keyed FieldsBlobs carry uuids as UTF-16 (`ActiveVer`, `SeqRef`) —
+   invisible to plaintext remaps; patched through the keyed codec.
+3. `project.xml`'s `<TimelineHandleVec>` is THE timeline registry: a pool
+   clip absent from it imports as pool furniture and never materializes.
+4. Folder children live INSIDE `<MediaVec>` — an element appended after its
+   close parses fine and is silently invisible.
+5. Media pool tags are `Sm2MpVideoClip`/`Sm2MpAudioClip`, not `Sm2MpMedia`
+   — an over-narrow tag set let media ids into the remap and every
+   `MediaRef` in the merged reel dangled (whole reel offline).
+
 ## What's New in v2.144.0 — turnover clip markers ride the items
 
 ### Added
