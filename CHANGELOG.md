@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.197.0 — E145: a named generator is a black leg or a named hole
+
+### Fixed
+
+- **A named generator no longer refuses the whole reel.** Once E141 named
+  Premiere's synthetic items by their title, a Universal Counting Leader
+  arrived at the bridge as an event with no file and no source-map entry,
+  and `eventsToAssembleSpec` refused the entire 228-cut reel as an "unmapped
+  source reel". Now a black generator (Black Video, black, slug) authors as
+  the BL leg it is — a Solid Color that renders black — and any other named
+  generator with no Resolve equivalent is dropped with a reason in
+  `report.unresolvedGenerators` (name, track, record window), a hole the
+  ledger names, the way unresolved compounds already are. A source map that
+  maps the generator's name to a rendered file places it like media. An
+  unmapped real reel still refuses.
+
+On the real turnover: reels 02, 03 and 04 now conform offline through the
+bridge — 226 / 147 / 257 video cuts, every dissolve and retime authored,
+two leaders per reel reported as holes, black authored as black.
+
 ## What's New in v2.196.0 — E144: Resolve's own retimes decode; a flat map is a freeze
 
 ### Fixed

@@ -1569,3 +1569,27 @@ test('audio events above lane 16 drop with a reason instead of authoring blind (
   assert.deepEqual(report.audioLanesBeyondCeiling.map((d) => [d.track, d.source]), [['A17', 'b.mp4']]);
   assert.match(report.audioLanesBeyondCeiling[0].reason, /A16 ceiling/);
 });
+
+// ── E145: named generators — black authors as black, a leader is a named hole, never a refused reel ──
+test('eventsToAssembleSpec authors a Black Video as a BL leg and drops a counting leader with a reason instead of refusing the reel (E145)', () => {
+  const ev = (track, source, srcIn, recIn, dur, extra = {}) => ({ track, source, srcIn, srcOut: srcIn + dur, recIn, recOut: recIn + dur, speed: 100, reverse: false, transition: null, fps: 24, ...extra });
+  const events = [
+    ev('V', 'Universal Counting Leader', 72, 0, 192, { generatorName: 'Universal Counting Leader' }),
+    ev('V', 'TAPE1', 96, 192, 48),
+    ev('V', 'Black Video', 0, 240, 48, { generatorName: 'Black Video' }),
+  ];
+  const { spec, report } = eventsToAssembleSpec(events, { sourceMap: MAP, timelineName: 'GEN' });
+  assert.deepEqual(report.unresolvedGenerators.map((g) => [g.name, g.track, g.recIn, g.recOut]), [['Universal Counting Leader', 'V', 0, 192]]);
+  assert.match(report.unresolvedGenerators[0].reason, /no Resolve equivalent/);
+  // the black window is a Solid Color generator element at its record position (origin 86400 anchors the earliest KEPT event)
+  const gens = (spec.elements || []).filter((el) => el.type === 'generator');
+  assert.equal(gens.length, 1);
+  assert.equal(gens[0].generatorName, 'Solid Color');
+  assert.equal(gens[0].durationFrames, 48);
+  assert.equal(spec.media.length, 1);
+  // null control: an unmapped REAL reel still refuses
+  assert.throws(() => eventsToAssembleSpec([ev('V', 'TAPE9', 0, 0, 24)], { sourceMap: MAP }), /unmapped source reel/);
+  // and a generator the sourceMap DOES map (a rendered leader file) places like media
+  const mapped = eventsToAssembleSpec(events, { sourceMap: { ...MAP, 'Universal Counting Leader': MAP.TAPE1 }, timelineName: 'GEN2' });
+  assert.deepEqual(mapped.report.unresolvedGenerators, []);
+});

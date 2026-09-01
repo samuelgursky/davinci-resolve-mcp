@@ -296,6 +296,27 @@ export function eventsToAssembleSpec(events, opts = {}) {
       }
     }
   }
+  // NAMED GENERATORS (E145): a Premiere Universal Counting Leader / Black
+  // Video (E141 names them by their Media <Title>) or a DRT generator clip
+  // arrives as an event with generatorName and no file. Black authors as the
+  // BL leg it is (a Solid Color that renders black); anything else has no
+  // Resolve equivalent the bridge can place, so it is DROPPED with a reason
+  // in unresolvedGenerators — a hole the ledger names — instead of refusing
+  // the whole reel as an unmapped source (a real 228-cut reel refused over
+  // its counting leader).
+  const unresolvedGenerators = [];
+  const isBlackGenerator = (name) => /^(black|black video|black matte|slug)$/i.test(String(name || '').trim());
+  for (const list of [vids, auds]) {
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const e = list[i];
+      if (sourceMap[e.source] || isBL(e.source)) continue;
+      const gen = e.generatorName || (isBlackGenerator(e.source) ? e.source : null);
+      if (!gen) continue;
+      if (isBlackGenerator(gen)) { list[i] = { ...e, source: 'BL', generatorName: gen }; continue; }
+      unresolvedGenerators.push({ name: gen, track: e.track, recIn: e.recIn, recOut: e.recOut, reason: 'a named generator with no media and no Resolve equivalent the bridge can author — map its name to a rendered file in sourceMap, or accept the hole' });
+      list.splice(i, 1);
+    }
+  }
   const unmapped = [...new Set([...vids, ...auds].map((e) => e.source).filter((srcName) => !isBL(srcName) && !sourceMap[srcName]))];
   if (unmapped.length) {
     throw new Error(
@@ -737,6 +758,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
       flattenedCompounds: [...new Set(events.filter((e) => e.fromCompound).map((e) => e.fromCompound))],
       flattenedCompoundEvents: events.filter((e) => e.fromCompound).length,
       unresolvedCompounds,
+      unresolvedGenerators,
       authoredAudioEvents: audioPlacements.length,
       audioRetimesSkipped,
       audioLanesBeyondCeiling,
