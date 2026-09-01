@@ -837,7 +837,11 @@ function pairEvents(oldEvents, newEvents, recTol = 1) {
 
 /**
  * Diff two normalized event lists → a SHAPE verdict (identical|subset|superset|edit, E138)
- * plus per-event {kind: moved|retimed|trimmed|replaced|new|gone}
+ * plus per-event {kind: moved|retimed|trimmed|replaced|new|gone}; RELINK-aware (E141):
+ * opts.sourceAliases ({from,to} | {pattern,replace}) rename old sources first, a
+ * systematic rename is inferred from same-window unpaired cuts (opts.inferAliases
+ * !== false) and reported in sourceAliases, and a constant per-source source-window
+ * shift witnessed on ≥2 cuts is a TC rebase (sourceTcOffsets), not trims.
  * PLUS per-junction {kind: transition_added|transition_dropped|transition_changed}
  * (fade 'in'/'out' or null for a dissolve). Zero-length carrier lines and the
  * black legs that carry fades fold into the junction diff instead of reading
@@ -847,7 +851,94 @@ function pairEvents(oldEvents, newEvents, recTol = 1) {
  * @param {Array} newEvents
  * @param {{recTolerance?:number}} [opts]
  */
+// ── RELINK awareness (E141) ────────────────────────────────────────────
+// A real offline→online turnover (Premiere REEL_02 → the Resolve conform of
+// the same reel) paired 15 of 228 cuts: the offline media was named
+// "… 4K-2K … .mov" (proxies) where the online cut used "… 4K … .mov"
+// (masters) and ".mp4" became ".mov", so 203 identical cuts read as
+// `replaced`; and the masters carry a different timecode base, so the same
+// cuts read as `trimmed` by a constant per-source shift. Neither is an edit.
+const normalizeAliases = (list) => (Array.isArray(list) ? list : []).map((a) => {
+  if (!a || typeof a !== 'object') throw new Error('sourceAliases: each entry is {from,to} or {pattern,replace}');
+  if (a.pattern != null) return { pattern: String(a.pattern), replace: String(a.replace ?? ''), re: new RegExp(a.pattern, a.flags || 'g'), inferred: false };
+  if (a.from != null && a.to != null) return { from: String(a.from), to: String(a.to), inferred: false };
+  throw new Error('sourceAliases: each entry is {from,to} or {pattern,replace}');
+});
+const aliasSource = (src, aliases) => {
+  let s = String(src ?? '');
+  for (const a of aliases) {
+    if (a.re) s = s.replace(a.re, a.replace);
+    else if (s === a.from) s = a.to;
+  }
+  return s;
+};
+const applyAliases = (events, aliases) => (aliases.length
+  ? events.map((e) => { const s = aliasSource(e.source, aliases); return s === String(e.source ?? '') ? e : { ...e, source: s, aliasedFrom: e.source }; })
+  : events);
+// Longest-common-subsequence ratio, case-insensitive: 1 = identical names.
+function nameSimilarity(a, b) {
+  const x = String(a || '').toLowerCase(), y = String(b || '').toLowerCase();
+  if (!x.length || !y.length) return 0;
+  let prev = new Array(y.length + 1).fill(0);
+  for (let i = 1; i <= x.length; i++) {
+    const cur = new Array(y.length + 1).fill(0);
+    for (let j = 1; j <= y.length; j++) cur[j] = x[i - 1] === y[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    prev = cur;
+  }
+  return (2 * prev[y.length]) / (x.length + y.length);
+}
+/**
+ * Infer a systematic RENAME from the cuts a first pass could not pair: an
+ * unpaired old cut and an unpaired new cut on the same track with the same
+ * record window are the same cut under two names. An alias is adopted when
+ * the mapping is one-to-one both ways and either recurs (≥2 cuts) or the two
+ * names are clearly the same name (LCS similarity ≥ 0.6) — a genuinely
+ * different shot dropped into the same window is neither.
+ */
+function inferSourceAliases(P, recTol) {
+  const cands = new Map(); // from -> Map(to -> count)
+  const usedNew = new Set();
+  for (const oe of P.unmatchedOld) {
+    const hit = P.unmatchedNew.find((ne) => !usedNew.has(ne) && ne.track === oe.track
+      && Math.abs((ne.recIn ?? 0) - (oe.recIn ?? 0)) <= recTol && Math.abs((ne.recOut ?? 0) - (oe.recOut ?? 0)) <= recTol);
+    if (!hit) continue;
+    usedNew.add(hit);
+    const from = String(oe.source ?? ''), to = String(hit.source ?? '');
+    if (from === to) continue;
+    if (!cands.has(from)) cands.set(from, new Map());
+    cands.get(from).set(to, (cands.get(from).get(to) || 0) + 1);
+  }
+  const claimed = new Map(); // to -> from
+  const out = [];
+  for (const [from, tos] of cands) {
+    if (tos.size !== 1) continue;
+    const [to, count] = [...tos][0];
+    if (claimed.has(to) && claimed.get(to) !== from) continue;
+    const similarity = Math.round(nameSimilarity(from, to) * 1000) / 1000;
+    if (count >= 2 || similarity >= 0.6) { claimed.set(to, from); out.push({ from, to, cuts: count, similarity, inferred: true }); }
+  }
+  // A 'to' claimed by two different 'from's is ambiguous — drop both.
+  const toCounts = new Map(); for (const a of out) toCounts.set(a.to, (toCounts.get(a.to) || 0) + 1);
+  return out.filter((a) => toCounts.get(a.to) === 1);
+}
+
 export function diffChangelist(oldEvents, newEvents, opts = {}) {
+  const explicit = normalizeAliases(opts.sourceAliases);
+  let aliases = explicit;
+  let result = diffChangelistOnce(applyAliases(oldEvents, aliases), newEvents, opts);
+  if (opts.inferAliases !== false) {
+    const inferred = inferSourceAliases(result.__P, opts.recTolerance ?? 1);
+    if (inferred.length) {
+      aliases = [...explicit, ...inferred];
+      result = diffChangelistOnce(applyAliases(oldEvents, aliases), newEvents, opts);
+    }
+  }
+  const { __P, ...out } = result;
+  out.sourceAliases = aliases.map((a) => (a.re ? { pattern: a.pattern, replace: a.replace, inferred: false } : { from: a.from, to: a.to, inferred: Boolean(a.inferred), ...(a.cuts != null ? { cuts: a.cuts, similarity: a.similarity } : {}) }));
+  return out;
+}
+
+function diffChangelistOnce(oldEvents, newEvents, opts = {}) {
   const recTol = opts.recTolerance ?? 1;
   const changes = [];
   // COMPOUND FORMS (E124): a compound is one collapsed item in an XML cut
@@ -873,10 +964,41 @@ export function diffChangelist(oldEvents, newEvents, opts = {}) {
   }
   const P = pairEvents(oldEvents.filter((e) => !skipOld.has(e)), newEvents.filter((e) => !skipNew.has(e)), recTol);
 
+  // TC REBASE (E141): when every differing cut of a source shifts its source
+  // window by the SAME amount in and out, the media was relinked to a copy
+  // with a different timecode base (offline proxies at 0, masters at their
+  // camera TC) — not N trims. A shift witnessed on ≥2 cuts of a source is
+  // that source's offset; the compare below reads old through it, and a cut
+  // that still differs is a real trim on top of the rebase.
+  const shiftTally = new Map(), differing = new Map();
+  for (const { oe, ne } of P.pairs) {
+    if ([oe.srcIn, oe.srcOut, ne.srcIn, ne.srcOut].some((v) => v == null)) continue;
+    const dIn = ne.srcIn - oe.srcIn, dOut = ne.srcOut - oe.srcOut;
+    if (dIn === 0 && dOut === 0) continue;
+    const key = String(ne.source ?? '');
+    differing.set(key, (differing.get(key) || 0) + 1);
+    if (dIn === 0 || dIn !== dOut) continue;
+    if (!shiftTally.has(key)) shiftTally.set(key, new Map());
+    shiftTally.get(key).set(dIn, (shiftTally.get(key).get(dIn) || 0) + 1);
+  }
+  // A rebase is the source's DOMINANT story: the same shift on ≥2 cuts AND
+  // on more than half of the cuts whose windows differ at all. A source whose
+  // cuts each shift by a different amount (an eye-matched re-conform onto
+  // other media — measured: two of seven cuts happened to share a shift) is
+  // trims, not a base change.
+  const tcOffsets = new Map();
+  for (const [source, tally] of shiftTally) {
+    const [offset, cuts] = [...tally].sort((a, b) => b[1] - a[1])[0];
+    if (cuts >= 2 && cuts > (differing.get(source) || 0) / 2) tcOffsets.set(source, { source, offset, cuts, rebased: 0 });
+  }
+
   const retained = [];
   for (const { oe, ne } of P.pairs) {
     const deltas = {};
     let kind = 'unchanged';
+    const tc = tcOffsets.get(String(ne.source ?? ''));
+    const off = tc ? tc.offset : 0;
+    const oIn = oe.srcIn == null ? null : oe.srcIn + off, oOut = oe.srcOut == null ? null : oe.srcOut + off;
     if (Math.abs((oe.speed ?? 100) - (ne.speed ?? 100)) > 0.01 || Boolean(oe.reverse) !== Boolean(ne.reverse)) {
       kind = 'retimed';
       deltas.speed = { old: oe.speed, new: ne.speed };
@@ -884,9 +1006,11 @@ export function diffChangelist(oldEvents, newEvents, opts = {}) {
     } else if (Math.abs((oe.recIn ?? 0) - (ne.recIn ?? 0)) > recTol) {
       kind = 'moved';
       deltas.recIn = { old: oe.recIn, new: ne.recIn };
-    } else if ((oe.srcIn ?? null) !== (ne.srcIn ?? null) || (oe.srcOut ?? null) !== (ne.srcOut ?? null)) {
+    } else if ((oIn ?? null) !== (ne.srcIn ?? null) || (oOut ?? null) !== (ne.srcOut ?? null)) {
       kind = 'trimmed';
-      deltas.src = { old: [oe.srcIn, oe.srcOut], new: [ne.srcIn, ne.srcOut] };
+      deltas.src = { old: [oIn, oOut], new: [ne.srcIn, ne.srcOut], ...(off ? { tcOffset: off, oldBeforeRebase: [oe.srcIn, oe.srcOut] } : {}) };
+    } else if (off && ((oe.srcIn ?? null) !== (ne.srcIn ?? null))) {
+      tc.rebased += 1;
     }
     if (kind !== 'unchanged') changes.push({ kind, source: ne.source, track: ne.track, oldRecIn: oe.recIn, newRecIn: ne.recIn, deltas });
     else retained.push(ne);
@@ -972,7 +1096,9 @@ export function diffChangelist(oldEvents, newEvents, opts = {}) {
     transitions: { old: P.old.transitions.length, new: P.new.transitions.length },
     carriersFolded: { old: P.old.carriers.length, new: P.new.carriers.length },
     ...shapeInfo,
+    sourceTcOffsets: [...tcOffsets.values()].map((t) => ({ source: t.source, offset: t.offset, cuts: t.cuts, rebased: t.rebased })),
     gate: 'review',
+    __P: P,
   };
 }
 

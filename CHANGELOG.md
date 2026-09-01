@@ -2,6 +2,41 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.193.0 — E141: relink-aware changelist
+
+### Added
+
+- **`turnover_changelist` is relink-aware.** A real offline→online turnover
+  (the Premiere REEL_02 pix-lock against the Resolve conform of the same reel)
+  paired 15 of 228 cuts: the offline media was named `… 4K-2K … .mov`
+  (proxies) where the online cut used `… 4K … .mov` (masters) and `.mp4`
+  became `.mov`, so 203 identical cuts read as `replaced`. Now `sourceAliases`
+  (`{from,to}` exact or `{pattern,replace}` regex) rename old sources before
+  pairing, and a systematic rename is INFERRED from unpaired cuts that share
+  a record window — adopted only when one-to-one both ways and either
+  recurring or clearly the same name (LCS similarity ≥ 0.6), so a different
+  shot dropped into the same window stays `replaced`. The result reports
+  every alias with its cut count, similarity and whether it was inferred.
+- **A per-source timecode rebase is not N trims.** Masters carry a different
+  timecode base than the proxies: the same cuts read as `trimmed` by one
+  constant shift. When one shift is a source's dominant story (≥2 cuts and
+  more than half of its differing cuts) the compare reads old through it and
+  reports it in `sourceTcOffsets`; a cut that still differs is a real trim on
+  top of the rebase, with the pre-rebase window kept in its deltas. A source
+  whose cuts each shift by a different amount (an eye-matched re-conform onto
+  other media) stays trims — measured: two of seven cuts sharing a shift is a
+  coincidence, not a base.
+- **Premiere synthetic items name themselves.** A Universal Counting Leader
+  or Black Video has no file: its `Media` writes a bare numeric id as the
+  path and the human name in `<Title>`. They now read by title and carry
+  `generatorName`, so they pair with the online cut's generators by name
+  instead of reporting a numeric id replaced.
+
+On the real reel: 189 of 228 cuts retained (was 15), 16 aliases inferred, one
+source rebased by 47745 frames, symmetric in both directions; what remains is
+the conform's own story — 27 trims, 10 junctions moved inside dissolves, the
+online reel's second mix track, its reversed tail leader and frozen black.
+
 ## What's New in v2.192.0 — E140: a .drt retime decodes to its speed
 
 ### Added

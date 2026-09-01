@@ -401,7 +401,7 @@ const REAL_SHAPE_XML = `<?xml version="1.0" encoding="UTF-8" ?>
   <VideoClip ObjectID="101129" ClassID="vc" Version="11"><Clip Version="18"><Source ObjectRef="5079"/><InPoint>2296728000000</InPoint><OutPoint>2804760000000</OutPoint></Clip></VideoClip>
   <VideoMediaSource ObjectID="5078" ClassID="ms" Version="1"><MediaSource Version="4"><Media ObjectURef="1bd72032-c2ce-49e8-833a-ecc000e12508"/></MediaSource></VideoMediaSource>
   <VideoMediaSource ObjectID="5079" ClassID="ms" Version="1"><MediaSource Version="4"><Media ObjectURef="0bd72032-c2ce-49e8-833a-ecc000e12509"/></MediaSource></VideoMediaSource>
-  <Media ObjectUID="1bd72032-c2ce-49e8-833a-ecc000e12508" ClassID="m" Version="1"><FilePath>/Volumes/RAID/leader.mov</FilePath></Media>
+  <Media ObjectUID="1bd72032-c2ce-49e8-833a-ecc000e12508" ClassID="m" Version="1"><Title>Universal Counting Leader</Title><ActualMediaFilePath>1279607108</ActualMediaFilePath><FilePath>1279607108</FilePath></Media>
   <Media ObjectUID="0bd72032-c2ce-49e8-833a-ecc000e12509" ClassID="m" Version="1"><ActualMediaFilePath>/Volumes/RAID/Arrow S16mm 78E 4K 0821.mp4</ActualMediaFilePath></Media>
   <MasterClip ObjectUID="897fc7cf-a22c-4759-a6e2-0adeea00c0d1" ClassID="mc" Version="1"><Name>Universal Counting Leader</Name></MasterClip>
   <MasterClip ObjectUID="9b0363ba-2a3a-4206-ac09-20f6e5a1b360" ClassID="mc" Version="1"><Name>BLACK_02</Name></MasterClip>
@@ -421,9 +421,9 @@ test('parsePrproj walks the real Premiere 2025 shape: UID/URef graph, TrackGroup
   const xf = ev.find((e) => e.recIn === 192 && e.track === 'V');
   assert.deepEqual(xf.transition, { type: 'Cross Dissolve (Legacy)', duration: 48, recStart: 168 });
   assert.deepEqual(ev.map((e) => [e.track, e.source, e.srcIn, e.srcOut, e.recIn, e.recOut, e.fromCompound || null]), [
-    ['V', 'leader.mov', 0, 192, 0, 192, null],
+    ['V', 'Universal Counting Leader', 0, 192, 0, 192, null],
     ['V', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 192, 240, null],
-    ['V', 'leader.mov', 60, 72, 240, 252, 'NESTED_SELECTS'],
+    ['V', 'Universal Counting Leader', 60, 72, 240, 252, 'NESTED_SELECTS'],
     ['V', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 252, 276, 'NESTED_SELECTS'],
     // E135: the second video track is its own lane (V2), never stacked onto V.
     ['V2', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 96, 144, null],
@@ -434,4 +434,7 @@ test('parsePrproj walks the real Premiere 2025 shape: UID/URef graph, TrackGroup
   // a sequence without a MarkerOwner reports none (the old walk put every project marker on every sequence).
   assert.deepEqual(doc.sequences.find((s) => s.name === 'REAL_REEL').markers.map((m) => [m.frame, m.duration, m.name, m.note]), [[24, 24, '', ''], [48, 0, 'VFX 01', 'clean plate']]);
   assert.deepEqual(doc.sequences.find((s) => s.name === 'NESTED_SELECTS').markers, []);
+  // E141: a synthetic Premiere item names itself by its Media <Title> (its FilePath is a bare numeric id) and is a generator
+  assert.equal(ev[0].generatorName, 'Universal Counting Leader');
+  assert.equal(ev.find((e) => e.source === 'BLACK_02' || /0821/.test(e.source)).generatorName, undefined);
 });

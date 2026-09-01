@@ -419,3 +419,60 @@ test('pairEvents is closest-first globally — a later new instance keeps the ol
   assert.deepEqual(down.counts, { gone: 1 });
   assert.equal(down.changes[0].oldRecIn, 0);
 });
+
+// ── E141: relink-aware changelist — proxy→master rename + TC rebase are not edits ──
+const cut = (track, source, srcIn, recIn, dur, extra = {}) => ({ track, source, srcIn, srcOut: srcIn + dur, recIn, recOut: recIn + dur, speed: 100, reverse: false, transition: null, ...extra });
+
+test('turnover_changelist infers a systematic rename and a per-source TC rebase — the same cut, not 5 replaced/trimmed (E141)', () => {
+  const offline = [cut('V', 'Reel A 4K-2K 0515.mov', 100, 0, 48), cut('V', 'Reel A 4K-2K 0515.mov', 400, 48, 24), cut('V', 'Reel A 4K-2K 0515.mov', 900, 72, 30), cut('V', 'B_scan.mp4', 10, 102, 20), cut('A', 'mix.wav', 0, 0, 122)];
+  const online = [cut('V', 'Reel A 4K 0515.mov', 100 + 47745, 0, 48), cut('V', 'Reel A 4K 0515.mov', 400 + 47745, 48, 24), cut('V', 'Reel A 4K 0515.mov', 900 + 47745, 72, 30), cut('V', 'B_scan.mov', 10, 102, 20), cut('A', 'mix.wav', 0, 0, 122)];
+  const d = diffChangelist(offline, online);
+  assert.equal(d.shape, 'identical', JSON.stringify(d.changes));
+  assert.equal(d.retained, 5);
+  assert.deepEqual(d.sourceAliases.map((a) => [a.from, a.to, a.cuts, a.inferred]), [['Reel A 4K-2K 0515.mov', 'Reel A 4K 0515.mov', 3, true], ['B_scan.mp4', 'B_scan.mov', 1, true]]);
+  assert.ok(d.sourceAliases[1].similarity >= 0.6, 'a single-cut rename needs a clearly-similar name');
+  assert.deepEqual(d.sourceTcOffsets, [{ source: 'Reel A 4K 0515.mov', offset: 47745, cuts: 3, rebased: 3 }]);
+});
+
+test('turnover_changelist: a rebased source still reports a real trim on top of the offset (E141)', () => {
+  const offline = [cut('V', 'X.mov', 100, 0, 48), cut('V', 'X.mov', 400, 48, 24), cut('V', 'X.mov', 900, 72, 30)];
+  const online = [cut('V', 'X.mov', 100 + 500, 0, 48), cut('V', 'X.mov', 400 + 500, 48, 24), cut('V', 'X.mov', 900 + 500 + 11, 72, 30)];
+  online[2].srcOut = online[2].srcIn + 30;
+  const d = diffChangelist(offline, online);
+  assert.equal(d.shape, 'edit');
+  assert.deepEqual(d.counts, { trimmed: 1 });
+  assert.deepEqual(d.changes[0].deltas.src, { old: [1400, 1430], new: [1411, 1441], tcOffset: 500, oldBeforeRebase: [900, 930] });
+  assert.deepEqual(d.sourceTcOffsets, [{ source: 'X.mov', offset: 500, cuts: 2, rebased: 2 }]);
+});
+
+test('turnover_changelist null controls: a different shot in the same window is replaced, one shifted cut is a trim, a rename is never inferred across tracks (E141)', () => {
+  const oldE = [cut('V', 'Reel A 4K-2K 0515.mov', 100, 0, 48), cut('V', 'Reel A 4K-2K 0515.mov', 400, 48, 24)];
+  // a genuinely different clip name in the same window: low similarity, single instance → replaced
+  const swapped = [cut('V', 'ZEBRA_pickup_take3.mov', 100, 0, 48), cut('V', 'Reel A 4K-2K 0515.mov', 400, 48, 24)];
+  const r = diffChangelist(oldE, swapped);
+  assert.deepEqual(r.counts, { replaced: 1 }, JSON.stringify(r.sourceAliases));
+  assert.deepEqual(r.sourceAliases, []);
+  // one cut shifted alone has no second witness → a trim, no offset
+  const oneShift = [cut('V', 'Reel A 4K-2K 0515.mov', 100 + 500, 0, 48), cut('V', 'Reel A 4K-2K 0515.mov', 400, 48, 24)];
+  const t = diffChangelist(oldE, oneShift);
+  assert.deepEqual(t.counts, { trimmed: 1 });
+  assert.deepEqual(t.sourceTcOffsets, []);
+  // a coincidence is not a base change: 2 of 7 cuts sharing a shift while the other 5 each differ (measured on a real re-conform)
+  const seven = [0, 1, 2, 3, 4, 5, 6].map((i) => cut('V', 'S.mov', 1000 * i, 100 * i, 50));
+  const shifts = [5411, 8849, 13230, 6530, 13230, 8849, 1904];
+  const scattered = seven.map((e, i) => ({ ...e, srcIn: e.srcIn + shifts[i], srcOut: e.srcOut + shifts[i] }));
+  const sc = diffChangelist(seven, scattered);
+  assert.deepEqual(sc.sourceTcOffsets, [], 'two coinciding shifts of seven must not become an offset');
+  assert.equal(sc.counts.trimmed, 7);
+  // same window on a DIFFERENT track is not a rename
+  const otherLane = [cut('V2', 'Reel A 4K 0515.mov', 100, 0, 48), cut('V2', 'Reel A 4K 0515.mov', 400, 48, 24)];
+  const x = diffChangelist(oldE, otherLane);
+  assert.deepEqual(x.sourceAliases, []);
+  assert.equal(x.counts.gone, 2);
+  // inference can be switched off; an explicit alias still applies
+  const off = diffChangelist(oldE, [cut('V', 'Reel A 4K 0515.mov', 100, 0, 48), cut('V', 'Reel A 4K 0515.mov', 400, 48, 24)], { inferAliases: false });
+  assert.deepEqual(off.counts, { replaced: 2 });
+  const explicit = diffChangelist(oldE, [cut('V', 'Reel A 4K 0515.mov', 100, 0, 48), cut('V', 'Reel A 4K 0515.mov', 400, 48, 24)], { inferAliases: false, sourceAliases: [{ pattern: ' 4K-2K ', replace: ' 4K ' }] });
+  assert.equal(explicit.shape, 'identical');
+  assert.deepEqual(explicit.sourceAliases, [{ pattern: ' 4K-2K ', replace: ' 4K ', inferred: false }]);
+});

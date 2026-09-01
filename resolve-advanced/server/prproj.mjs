@@ -189,15 +189,24 @@ function realClipSource(clipNode, byId) {
   }
   const ms = srcEntry && asArray(srcEntry.node.MediaSource)[0];
   const media = ms && byId.get(ref(ms, 'Media') || '');
+  let generator = false;
   if (media) {
     const path = findFirstText(media.node, ['ActualMediaFilePath', 'FilePath', 'RelativePath'], 6);
-    if (path) name = String(path).split(/[\\/]/).pop();
+    // A synthetic Premiere item (Universal Counting Leader, Black Video, colour
+    // matte…) has NO file: its Media writes a bare numeric id as the path and
+    // carries the human name in <Title> (E141, measured: FilePath 1279607108 /
+    // Title "Universal Counting Leader"). Name it by the title and tag it a
+    // generator so a changelist pairs it with the online cut's generator by
+    // NAME instead of reporting a numeric id replaced.
+    const title = findFirstText(media.node, ['Title'], 3);
+    if (path && /^\d+$/.test(String(path).trim()) && title) { name = String(title); generator = true; }
+    else if (path) name = String(path).split(/[\\/]/).pop();
   }
   if (!name) {
     const master = byId.get(ref(sub.node, 'MasterClip') || '');
     name = (master && nodeName(master.node)) || nodeName(sub.node) || null;
   }
-  return { inPt, outPt, name };
+  return { inPt, outPt, name, generator };
 }
 
 function clipEvent(clipNode, byId, track, fps, index) {
@@ -225,6 +234,7 @@ function clipEvent(clipNode, byId, track, fps, index) {
     track,
     source: (real && real.name) || resolveSourceName(clipNode, byId),
     ...(real && real.nestedSequence ? { __nested: real.nestedSequence } : {}),
+    ...(real && real.generator ? { generatorName: real.name } : {}),
     srcIn: reverse ? srcOut : srcIn,
     srcOut: reverse ? srcIn : srcOut,
     recIn,
