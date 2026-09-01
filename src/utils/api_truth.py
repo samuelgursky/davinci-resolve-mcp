@@ -2795,6 +2795,41 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["editorial.verify_roundtrip audioNotInExport", "timeline.export_timeline_checked"],
     },
     {
+        "symbol": "Timeline.Export EXPORT_FCP_7_XML (no pproTicksIn, -1 edges under transitions)",
+        "object": "Timeline",
+        "signature": "(filePath, EXPORT_FCP_7_XML, EXPORT_NONE) -> bool",
+        "reality": "Resolve's FCP7 XML writer (measured on Studio 19.1.3.7, "
+                   "E107, verbatim export kept as a fixture) emits NO "
+                   "pproTicksIn/pproTicksOut on any clipitem — the Premiere "
+                   "tick fields a Premiere-shaped oracle treats as the "
+                   "authoritative source position are simply absent, so a "
+                   "reader that requires them derives no source frame for "
+                   "ANY cut of a Resolve export. Every clipitem edge that "
+                   "sits under a transitionitem is written as -1 and means "
+                   "the transition's junction (span center for alignment "
+                   "center; the writer emitted `center` for every dissolve "
+                   "and fade authored centered), `out - in` is the record "
+                   "duration, and a -1 START edge's <in> is the source at the "
+                   "overlap start. With three centered transitions two "
+                   "equal-length clips both carry -1/-1 edges, so a reader "
+                   "must pair junctions in record order — the first pair "
+                   "that fits places both clips at the same position. Black "
+                   "legs are Solid Color generatoritems whose -1 edge "
+                   "resolves the same way.",
+        "recommended": "Read <in> as the literal source frame (Resolve reads "
+                       "and writes it that way), record-align it by the "
+                       "junction-minus-span-start offset on a -1 start, and "
+                       "walk -1/-1 clips with a record-order cursor. "
+                       "conform.snapshot ingest_xml and "
+                       "editorial.parse_interchange both do; the frame QC "
+                       "then samples each cut CLEAR of its transition "
+                       "windows (inside one the reference is a blend, or "
+                       "black for a fade).",
+        "tags": ["timeline", "export", "xml", "fcp7", "transitions", "silent-failure"],
+        "submit": "missing",
+        "mitigation": ["conform.snapshot ingest_xml", "editorial.parse_interchange", "conform.qc"],
+    },
+    {
         "symbol": "Project.SetRenderSettings ExportSubtitle/SubtitleFormat (inert on 19.x)",
         "object": "Project",
         "signature": "({'ExportSubtitle': bool, 'SubtitleFormat': str}) -> bool",

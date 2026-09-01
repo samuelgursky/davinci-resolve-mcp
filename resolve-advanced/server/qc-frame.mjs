@@ -95,6 +95,60 @@ export function markerCategory(verdict, sat = {}) {
   return { category: 'conform', color: 'Red' };
 }
 
+
+/**
+ * Which frame to compare for a cut (E107). A cut whose edge sits under a
+ * transition is a BLEND there — or black, for a fade — so its first record
+ * frame proves nothing: a fade-in reads REF_OFFLINE, a dissolve reads WRONG,
+ * both false. Sample the first frame CLEAR of the incoming window and before
+ * the outgoing one; advance the source frame by the same record offset at the
+ * cut's speed (reverse walks backward). A cut that lies entirely inside its
+ * windows samples its midpoint and says so — the verdict is then a blend
+ * compare, reported, never silently trusted.
+ * @returns {{recordFrame:number|null, sourceFrame:number|null, offset:number, note:string|null}}
+ */
+export function pickQcFrame(cut) {
+  const rs = cut.record_start;
+  if (rs == null) return { recordFrame: null, sourceFrame: cut.oracle_source_frame ?? null, offset: 0, note: null };
+  let win = null;
+  if (cut.transition) {
+    try {
+      win = typeof cut.transition === 'string' ? JSON.parse(cut.transition) : cut.transition;
+    } catch {
+      win = null;
+    }
+  }
+  let rec = rs;
+  let note = null;
+  if (win && (win.in || win.out)) {
+    const last = cut.record_end != null ? cut.record_end - 1 : null;
+    let lo = rs;
+    let hi = last;
+    if (win.in && win.in.end > lo) lo = win.in.end;
+    if (win.out && hi != null && win.out.start - 1 < hi) hi = win.out.start - 1;
+    if (hi == null || lo <= hi) {
+      rec = lo;
+      if (rec !== rs) note = `sampled at ${rec}, clear of the transition window (cut starts ${rs})`;
+    } else {
+      rec = Math.round((rs + (cut.record_end ?? rs)) / 2);
+      note = `cut lies entirely inside transition windows — sampled midpoint ${rec} (a blend; verdict is indicative)`;
+    }
+  }
+  const offset = rec - rs;
+  let src = cut.oracle_source_frame ?? null;
+  if (src != null && offset) {
+    let k = 1;
+    if (cut.speed != null && Number.isFinite(Number(cut.speed)) && Number(cut.speed) !== 0) k = Math.abs(Number(cut.speed)) / 100;
+    else if (cut.record_end != null && cut.xml_in != null && cut.xml_out != null && cut.record_end > rs) {
+      const recSpan = cut.record_end - rs;
+      const srcSpan = Math.abs(cut.xml_out - cut.xml_in);
+      if (srcSpan && srcSpan !== recSpan) k = srcSpan / recSpan;
+    }
+    src = Math.round(src + (cut.reverse ? -1 : 1) * offset * k);
+  }
+  return { recordFrame: rec, sourceFrame: src, offset, note };
+}
+
 /**
  * QC a whole snapshot against a reference. Samplers are injected:
  * opts.sampleConform(cut) -> Float64 gray | null
@@ -119,8 +173,13 @@ export async function qcSnapshot(dbPath, snapshotId, opts = {}) {
         continue;
       }
     }
-    const conform = await opts.sampleConform(cut);
-    const reference = await opts.sampleReference(cut);
+    // E107: compare a frame CLEAR of the cut's transition windows — samplers
+    // read qc_record_frame / qc_source_frame when present.
+    const pick = pickQcFrame(cut);
+    const cutForSample = { ...cut, qc_record_frame: pick.recordFrame, qc_source_frame: pick.sourceFrame };
+    const conform = await opts.sampleConform(cutForSample);
+    const reference = await opts.sampleReference(cutForSample);
+    const refFrame = pick.recordFrame ?? cut.record_start;
     let v;
     if (!reference) {
       // can't sample the reference → can't verify → human review
@@ -128,7 +187,7 @@ export async function qcSnapshot(dbPath, snapshotId, opts = {}) {
         snapshot_id: snapshotId,
         cut_index: cut.cut_index,
         reference_ref: ref,
-        reference_frame: cut.record_start,
+        reference_frame: refFrame,
         verdict: 'UNREADABLE',
         category: 'review',
         ran_at: opts.now ?? null,
@@ -139,7 +198,7 @@ export async function qcSnapshot(dbPath, snapshotId, opts = {}) {
         snapshot_id: snapshotId,
         cut_index: cut.cut_index,
         reference_ref: ref,
-        reference_frame: cut.record_start,
+        reference_frame: refFrame,
         verdict: 'REF_OFFLINE',
         category: 'ref_offline',
         ran_at: opts.now ?? null,
@@ -150,7 +209,7 @@ export async function qcSnapshot(dbPath, snapshotId, opts = {}) {
         snapshot_id: snapshotId,
         cut_index: cut.cut_index,
         reference_ref: ref,
-        reference_frame: cut.record_start,
+        reference_frame: refFrame,
         verdict: 'WRONG',
         category: 'turnover',
         ran_at: opts.now ?? null,
@@ -163,7 +222,7 @@ export async function qcSnapshot(dbPath, snapshotId, opts = {}) {
         snapshot_id: snapshotId,
         cut_index: cut.cut_index,
         reference_ref: ref,
-        reference_frame: cut.record_start,
+        reference_frame: refFrame,
         verdict: c.verdict,
         category: mc.category,
         structure: c.structure,
@@ -175,7 +234,9 @@ export async function qcSnapshot(dbPath, snapshotId, opts = {}) {
       };
     }
     lineage.writeVerdict(dbPath, v);
-    results.push(v);
+    // The sampling note rides on the result (not the verdict row): where the
+    // frame came from is part of the evidence, not part of the verdict.
+    results.push(pick.note ? { ...v, sample_note: pick.note, sample_offset: pick.offset } : v);
     scanned += 1;
   }
   const counts = {};

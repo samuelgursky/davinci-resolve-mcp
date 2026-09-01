@@ -201,3 +201,70 @@ test('diff: a clip that moves record position is reported as moved', () => {
   assert.equal(d.moved[0].source_basename, 'B.mov');
   assert.deepEqual([d.moved[0].from, d.moved[0].to], [48, 60]);
 });
+
+// ── E107: Resolve-written FCP7 edges and transition windows ────────────
+// Measured 2026-09-01: Resolve's FCP7 writer puts `-1` on every clipitem
+// edge that sits under a transitionitem. Ingested raw, those cuts landed
+// at record -1 with no oracle frame — the reference sampled at frame 0 and
+// the source could not be sampled at all, so every transition-adjacent cut
+// read as a false yellow turnover. The parser now resolves them to the
+// junction (E105 law) and records the windows the QC must sample clear of.
+const resolveFadeXml = () => `<?xml version="1.0"?><xmeml version="5"><sequence><name>F</name><rate><timebase>24</timebase></rate>
+<media><video><format><samplecharacteristics><width>640</width><height>360</height><rate><timebase>24</timebase></rate></samplecharacteristics></format>
+<track>
+<transitionitem><start>0</start><end>24</end><alignment>start-black</alignment><effect><name>Cross Dissolve</name><effectid>Cross Dissolve</effectid></effect></transitionitem>
+<clipitem id="c1"><name>A</name><start>-1</start><end>-1</end><in>24</in><out>120</out><pproTicksIn>${24 * TPF}</pproTicksIn>
+<file id="f1"><name>A.mov</name><pathurl>file:///m/A.mov</pathurl><media><video><samplecharacteristics><width>640</width><height>360</height></samplecharacteristics></video></media></file></clipitem>
+<transitionitem><start>84</start><end>108</end><alignment>center</alignment><effect><name>Cross Dissolve</name><effectid>Cross Dissolve</effectid></effect></transitionitem>
+<clipitem id="c2"><name>B</name><start>-1</start><end>192</end><in>0</in><out>96</out><pproTicksIn>0</pproTicksIn>
+<file id="f2"><name>B.mov</name><pathurl>file:///m/B.mov</pathurl><media><video><samplecharacteristics><width>640</width><height>360</height></samplecharacteristics></video></media></file></clipitem>
+</track></video></media></sequence></xmeml>`;
+
+test('ingest resolves Resolve-written -1 edges to junctions and records transition windows (E107)', () => {
+  const db = tmpDb();
+  const r = ingestXml(db, writeXml(resolveFadeXml()), { reel: 'R01', label: 'fade', now: 't' });
+  assert.equal(r.resolvedEdges, 2);
+  assert.deepEqual(r.unresolvedEdges, []);
+  const [a, b] = getSnapshot(db, r.snapshotId).cuts;
+  // A: both edges -1 → anchored by record duration (out-in=96) against the junction pair 0/96.
+  assert.deepEqual([a.record_start, a.record_end, a.xml_in, a.xml_out, a.oracle_source_frame], [0, 96, 24, 120, 24]);
+  const wa = JSON.parse(a.transition);
+  assert.deepEqual([wa.in.start, wa.in.end, wa.in.junction, wa.in.alignment], [0, 24, 0, 'start-black']);
+  assert.deepEqual([wa.out.start, wa.out.end, wa.out.junction], [84, 108, 96]);
+  // B: -1 start = the centered dissolve's junction (96); its <in> was the source at the OVERLAP start (84),
+  // so in/out advance by 12 and the oracle frame at record 96 is source 12.
+  assert.deepEqual([b.record_start, b.record_end, b.xml_in, b.xml_out, b.oracle_source_frame], [96, 192, 12, 108, 12]);
+  assert.equal(b.speed, 100);
+  const wb = JSON.parse(b.transition);
+  assert.equal(wb.in.junction, 96);
+  assert.equal(wb.out, null);
+  // Null control: a plain XML (no transitions) carries no window and resolves no edges.
+  const r0 = ingestXml(db, writeXml(xmeml()), { reel: 'R02', now: 't' });
+  assert.equal(r0.resolvedEdges, 0);
+  assert.ok(getSnapshot(db, r0.snapshotId).cuts.every((c) => c.transition === null));
+});
+
+test('a pre-E107 sidecar without cuts.speed migrates in place (E107)', () => {
+  const db = tmpDb();
+  const Database = require2('better-sqlite3');
+  const d = new Database(db);
+  d.exec('CREATE TABLE cuts (snapshot_id TEXT, cut_index INTEGER, record_start INTEGER, record_end INTEGER, source_basename TEXT, source_path TEXT, xml_in INTEGER, xml_out INTEGER, ppro_ticks_in INTEGER, oracle_source_frame INTEGER, is_subclip INTEGER, subclip_startoffset INTEGER, subclip_endoffset INTEGER, reverse INTEGER, scale_corrected REAL, pan_h REAL, pan_v REAL, rotation REAL, transition TEXT, cut_hash TEXT)');
+  d.close();
+  const r = ingestXml(db, writeXml(resolveFadeXml()), { reel: 'R01', now: 't' });
+  assert.equal(getSnapshot(db, r.snapshotId).cuts[0].speed, 100);
+});
+
+test('ingest of a verbatim Resolve export: junctions paired in record order, oracle from <in> when ticks are absent (E107)', () => {
+  const db = tmpDb();
+  const fx = new URL('./fixtures/E107_resolve_fades.xml', import.meta.url);
+  const r = ingestXml(db, fx.pathname, { reel: 'E107', label: 'resolve', now: 't', mediaFrames: { 'cut_src.mp4': 192, 'white_src.mp4': 192 } });
+  assert.equal(r.resolvedEdges, 2);
+  assert.equal(r.ticksAbsent, 2);
+  const cuts = getSnapshot(db, r.snapshotId).cuts;
+  assert.deepEqual(cuts.map((c) => [c.source_basename, c.record_start, c.record_end, c.oracle_source_frame]), [
+    ['cut_src.mp4', 12, 108, 36],
+    ['white_src.mp4', 108, 204, 12],
+  ]);
+  const w1 = JSON.parse(cuts[1].transition);
+  assert.deepEqual([w1.in.start, w1.in.end, w1.out.start, w1.out.end], [96, 120, 192, 216]);
+});

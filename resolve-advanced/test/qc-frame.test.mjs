@@ -170,3 +170,65 @@ test('markerPlan: emits red/yellow markers from verdicts (skips ok)', async () =
   assert.equal(plan[0].color, 'Yellow'); // unsatisfiable → turnover
   assert.equal(plan[0].record_start, 48);
 });
+
+// ── E107: sample clear of transition windows ───────────────────────────
+// Inside a transition window the reference is a blend — or black, for a
+// fade-in — so the cut's first record frame proves nothing: a fade-in read
+// REF_OFFLINE ("offline upstream") and a dissolve read WRONG, both false.
+import { pickQcFrame } from '../server/qc-frame.mjs';
+
+test('pickQcFrame steps past the incoming window and advances the source frame at speed (E107)', () => {
+  const fadeIn = { record_start: 0, record_end: 96, oracle_source_frame: 24, speed: 100, reverse: 0, xml_in: 24, xml_out: 120,
+    transition: JSON.stringify({ in: { start: 0, end: 24, junction: 0 }, out: { start: 84, end: 108, junction: 96 } }) };
+  assert.deepEqual(pickQcFrame(fadeIn), { recordFrame: 24, sourceFrame: 48, offset: 24, note: 'sampled at 24, clear of the transition window (cut starts 0)' });
+  // A reversed clip walks backward through the source; a 50% clip advances half as far.
+  assert.equal(pickQcFrame({ ...fadeIn, reverse: 1, oracle_source_frame: 100 }).sourceFrame, 76);
+  assert.equal(pickQcFrame({ ...fadeIn, speed: 50 }).sourceFrame, 36);
+  // Premiere-style XML: no speed param, but source span ≠ record span → derived ratio.
+  assert.equal(pickQcFrame({ ...fadeIn, speed: null, xml_in: 24, xml_out: 216 }).sourceFrame, 72);
+  // Null controls: no window → the record start, untouched; no transition column at all → same.
+  assert.deepEqual(pickQcFrame({ record_start: 10, record_end: 50, oracle_source_frame: 5, transition: null }), { recordFrame: 10, sourceFrame: 5, offset: 0, note: null });
+  assert.equal(pickQcFrame({ record_start: 10, record_end: 50, oracle_source_frame: 5 }).offset, 0);
+  // A cut swallowed whole by its windows samples the midpoint and SAYS so.
+  const tiny = { record_start: 90, record_end: 100, oracle_source_frame: 0, transition: JSON.stringify({ in: { start: 84, end: 108, junction: 96 }, out: null }) };
+  const p = pickQcFrame(tiny);
+  assert.equal(p.recordFrame, 95);
+  assert.match(p.note, /entirely inside/);
+});
+
+test('qcSnapshot: a fade-in cut is judged clear of its window — MATCH, not REF_OFFLINE (E107)', async () => {
+  const db = tmpDb();
+  const xml = `<?xml version="1.0"?><xmeml version="5"><sequence><name>F</name><rate><timebase>24</timebase></rate>
+<media><video><format><samplecharacteristics><width>640</width><height>360</height><rate><timebase>24</timebase></rate></samplecharacteristics></format>
+<track>
+<transitionitem><start>0</start><end>24</end><alignment>start-black</alignment><effect><effectid>Cross Dissolve</effectid></effect></transitionitem>
+<clipitem id="c1"><name>A</name><start>-1</start><end>-1</end><in>24</in><out>120</out><pproTicksIn>${24 * TPF}</pproTicksIn>
+<file id="f1"><name>A.mov</name><pathurl>file:///m/A.mov</pathurl><media><video><samplecharacteristics><width>640</width><height>360</height></samplecharacteristics></video></media></file></clipitem>
+<transitionitem><start>84</start><end>108</end><alignment>center</alignment><effect><effectid>Cross Dissolve</effectid></effect></transitionitem>
+<clipitem id="c2"><name>B</name><start>-1</start><end>192</end><in>0</in><out>96</out><pproTicksIn>0</pproTicksIn>
+<file id="f2"><name>B.mov</name><pathurl>file:///m/B.mov</pathurl><media><video><samplecharacteristics><width>640</width><height>360</height></samplecharacteristics></video></media></file></clipitem>
+</track></video></media></sequence></xmeml>`;
+  const snap = ingestXml(db, writeXml(xml), { reel: 'R01', label: 'fade', now: 't' });
+  // The reference render: black through the fade-in (frames 0-23), a 50/50 blend at the
+  // dissolve junction (96), clean picture elsewhere. The sources are clean everywhere.
+  const blend = () => { const a = tex(0), b = tex(2), d = new Float64Array(W * H); for (let i = 0; i < d.length; i++) d[i] = 0.5 * a[i] + 0.5 * b[i]; return d; };
+  const refAt = (f) => (f < 24 ? black() : f >= 84 && f < 108 ? blend() : f < 96 ? tex(0) : tex(2));
+  const sampled = [];
+  const opts = {
+    referenceRef: 'ref.mov', width: W, height: H, now: 't',
+    satisfiability: () => ({ sourceOnline: true, frameInRange: true, aspectOk: true }),
+    sampleReference: (cut) => { sampled.push(cut.qc_record_frame); return refAt(cut.qc_record_frame); },
+    sampleConform: (cut) => (cut.source_basename === 'A.mov' ? tex(0) : tex(2)),
+  };
+  const r = await qcSnapshot(db, snap.snapshotId, opts);
+  assert.deepEqual(sampled, [24, 108], 'both cuts sampled at the first frame clear of their incoming window');
+  assert.equal(r.counts.MATCH, 2, JSON.stringify(r.results));
+  assert.equal(r.counts.REF_OFFLINE, undefined);
+  assert.equal(r.counts.WRONG, undefined);
+  assert.equal(r.results[0].reference_frame, 24);
+  assert.match(r.results[0].sample_note, /clear of the transition window/);
+  // Counter-proof: the SAME reference judged at the record starts (the pre-E107 frames)
+  // reads black for the fade-in and a blend for the dissolve — the false verdicts this closes.
+  assert.equal(referenceIsBlank(refAt(0)), true);
+  assert.equal(classifyCut(tex(2), refAt(96), { width: W, height: H }).verdict !== 'MATCH', true);
+});

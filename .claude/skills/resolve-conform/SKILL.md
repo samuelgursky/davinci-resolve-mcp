@@ -86,7 +86,10 @@ source. It also does:
   `masterFrames − 1 − endoffset` (live-validated); DB-level repair.
 - **Sequence lineage store + diff** — hashed timeline snapshots, diff, rollback.
 - **Per-cut frame QC** — oracle-frame vs reference-render compare (scale-corrected;
-  red/yellow/cyan verdicts), the standard finishing QC.
+  red/yellow/cyan verdicts), the standard finishing QC. Each cut is judged at the
+  first frame CLEAR of its transition windows (inside one the reference is a blend,
+  or black for a fade); Resolve's own FCP7 export ingests with `-1` edges resolved
+  to junctions and its absent `pproTicksIn` tolerated (`<in>` is the source frame).
 - **Reference-render compare** — build a `REF_OFFLINE` verdict when a burn-in-free
   reference exists.
 

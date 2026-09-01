@@ -2,6 +2,45 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.165.0 — E107: frame QC reads Resolve's own XML and samples clear of transitions
+
+The lineage store's `ingest_xml` was measured against a verbatim
+`EXPORT_FCP_7_XML` of a fade-in → clip → centered dissolve → clip → fade-out
+timeline (rendered and luma-verified: 18→123 over the fade-in, a blend over
+96–119, 230→21 over the fade-out). Every transition-adjacent cut landed at
+record `-1` with no oracle frame — the reference sampled at frame 0 read
+black and the conform side could not be sampled at all, so each read as a
+false yellow turnover. Two laws of Resolve's writer explain it.
+
+### Fixed
+
+- **`-1` clip edges resolve to junctions in the lineage ingest** (the E105
+  law the editorial parser already knew), and with a record-order cursor:
+  under three centered transitions two equal-length clips both carry
+  `-1/-1` edges, and the first junction pair that fits placed BOTH clips at
+  the same position — in the editorial parser too. Both parsers now walk
+  clips with a cursor; the verbatim export is a permanent fixture.
+- **Resolve writes no `pproTicksIn`.** The oracle insisted on Premiere ticks
+  and derived no source frame for any cut of a Resolve export. When ticks
+  are absent, `<in>` (record-aligned by the `-1` resolution) is the oracle
+  frame; the ingest reports `ticksAbsent`, `resolvedEdges`, `unresolvedEdges`.
+- **Frame QC samples clear of transition windows.** Each cut records the
+  windows its edges sit in (`cuts.transition`, plus `cuts.speed`; existing
+  sidecars migrate in place) and `qc` compares the first frame past the
+  incoming window and before the outgoing one, advancing the source frame
+  at the cut's speed (reverse walks backward). Measured on the render:
+  structure 0.982 at the dissolve junction → 0.999 clear of it; the result
+  carries `sample_note` saying where it looked, and a cut swallowed whole by
+  its windows samples its midpoint and says so.
+
+### Measured (filed in api-limitations)
+
+- `EXPORT_FCP_7_XML` writes no `pproTicksIn`/`pproTicksOut`, `-1` on every
+  transition-adjacent edge (junction), `center` alignment for every
+  centered-authored dissolve and fade, and Solid Color generatoritems for
+  black legs. A flat/untextured frame (a white card) is `UNREADABLE` to the
+  brightness-robust classifier — an honest review, not a false verdict.
+
 ## What's New in v2.164.0 — E106: the changelist sees junctions
 
 `editorial.turnover_changelist` diffed clips and was blind to everything

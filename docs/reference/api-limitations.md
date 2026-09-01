@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 36 missing capabilities, 50 bugs / unreliable behaviors.
+**Totals:** 37 missing capabilities, 50 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -308,6 +308,14 @@ equivalent, blocking full automation.
 - **Behavior:** Resolve's CMX EDL writer (measured on Studio 19.1.3.7, E105) emits VIDEO events only — audio legs never appear; names every file source by the generic reel AX and carries the real names in `* FROM CLIP NAME:` / `* TO CLIP NAME:` comments; writes black legs as reel BL; places dissolve junctions at the CMX start-at-cut position (the overlap start, not the centered junction the timeline holds); and WRITES BL fades that its own EDL importer then drops. The FCP7 XML writer, by contrast, carries audio, writes transition-adjacent clip edges as -1 (the junction), and emits `speed` followed by `variablespeed` 0 in the same timeremap effect.
 - **Workaround / current handling:** For round-trip QC prefer EXPORT_OTIO (carries audio, retimes as LinearTimeWarp/FreezeFrame, exact spans). When an EDL is the required deliverable, expect no audio (editorial.verify_roundtrip reports audioNotInExport) and resolve AX reels through the clip-name comments (parseEDL does). Use EXPORT_EDL — there is no EXPORT_CMX_3600 constant, and an unknown name reaches Export as a string that returns a bare False (timeline.export_timeline_checked now refuses it loudly).
 - **Tags:** timeline, export, edl, audio, silent-failure
+
+### Timeline.Export EXPORT_FCP_7_XML (no pproTicksIn, -1 edges under transitions)
+
+- **Object:** `Timeline`
+- **Signature:** `(filePath, EXPORT_FCP_7_XML, EXPORT_NONE) -> bool`
+- **Behavior:** Resolve's FCP7 XML writer (measured on Studio 19.1.3.7, E107, verbatim export kept as a fixture) emits NO pproTicksIn/pproTicksOut on any clipitem — the Premiere tick fields a Premiere-shaped oracle treats as the authoritative source position are simply absent, so a reader that requires them derives no source frame for ANY cut of a Resolve export. Every clipitem edge that sits under a transitionitem is written as -1 and means the transition's junction (span center for alignment center; the writer emitted `center` for every dissolve and fade authored centered), `out - in` is the record duration, and a -1 START edge's <in> is the source at the overlap start. With three centered transitions two equal-length clips both carry -1/-1 edges, so a reader must pair junctions in record order — the first pair that fits places both clips at the same position. Black legs are Solid Color generatoritems whose -1 edge resolves the same way.
+- **Workaround / current handling:** Read <in> as the literal source frame (Resolve reads and writes it that way), record-align it by the junction-minus-span-start offset on a -1 start, and walk -1/-1 clips with a record-order cursor. conform.snapshot ingest_xml and editorial.parse_interchange both do; the frame QC then samples each cut CLEAR of its transition windows (inside one the reference is a blend, or black for a fade).
+- **Tags:** timeline, export, xml, fcp7, transitions, silent-failure
 
 ## Bugs / Unreliable Behavior (please fix)
 

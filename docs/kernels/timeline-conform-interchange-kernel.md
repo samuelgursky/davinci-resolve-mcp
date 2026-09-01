@@ -135,7 +135,9 @@ files and the project DB.
   source). Also: reverse/retimed subclip DB repair (reversed `source_start` =
   `masterFrames − 1 − endoffset`, live-validated), sequence lineage store + diff +
   rollback (hashed snapshots), and per-cut frame QC (oracle-frame vs
-  reference-render, scale-corrected, red/yellow/cyan verdicts).
+  reference-render, scale-corrected, red/yellow/cyan verdicts; each cut is
+  compared clear of its transition windows, and Resolve's own FCP7 export
+  ingests with its `-1` edges resolved and its missing ticks tolerated).
 - **`color_trace`** — cross-project clip matching → a trace plan for carrying
   grades across a re-conform (pairs with the color kernel's `drx grade_transfer`).
 - **`offline_ref`** — offline-reference clips have **no scripting API** but live

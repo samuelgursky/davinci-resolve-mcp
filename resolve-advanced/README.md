@@ -80,7 +80,8 @@ Each dispatches on an `action`. Highlights:
   `export_cdl`, `merge`, plus the **grading/QC catalog** below.
 - **`drp` / `drt`** — project / timeline file authoring + editing + grade injection + structural diff.
 - **`conform`** — offline conform/relink QC engine (frame-oracle math, not filename matching),
-  reverse-clip DB repair, sequence lineage store + diff, per-cut frame QC.
+  reverse-clip DB repair, sequence lineage store + diff, per-cut frame QC (sampled clear of
+  transition windows; ingests Resolve's own FCP7 export — `-1` edges → junctions, no ticks needed).
 - **`color_trace`** — cross-project clip matching → a trace plan for carrying grades across a re-conform.
 - **`project_read` / `project_db`** — read/patch the Resolve project DB (SQLite or Postgres).
   Includes `list_subtitle_styles` / `set_subtitle_style` — caption font family/size/weight/italic

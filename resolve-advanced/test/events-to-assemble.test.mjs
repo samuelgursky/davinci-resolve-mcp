@@ -1233,3 +1233,23 @@ test('verifyRoundtrip compares markers; a marker-less export is flagged, not fai
   assert.equal(r3.pass, true);
   assert.equal(r3.markers.exported, 2);
 });
+
+// E107: measured against Resolve 19.1.3.7's OWN FCP7 writer (fixture is the
+// verbatim export of a fade-in → clip → centered dissolve → clip → fade-out
+// timeline, rendered and luma-verified 2026-09-01). Two laws: (1) with three
+// centered transitions, two equal-length clips both carry -1/-1 edges and
+// the first-pair rule put BOTH at the first junction pair; a record-order
+// cursor fixes it. (2) The writer emits NO pproTicksIn at all.
+const E107_XML = fs.readFileSync(new URL('./fixtures/E107_resolve_fades.xml', import.meta.url), 'utf8');
+
+test('parseXMEMLEvents places equal-length -1/-1 clips at successive junction pairs (E107)', () => {
+  const ev = parseXMEMLEvents(E107_XML);
+  const vid = ev.filter((e) => e.track === 'V' && !/^BL$/.test(e.source));
+  assert.deepEqual(vid.map((e) => [e.source, e.recIn, e.recOut, e.srcIn, e.srcOut]), [
+    ['cut_src.mp4', 12, 108, 36, 132],
+    ['white_src.mp4', 108, 204, 12, 108],
+  ]);
+  const black = ev.filter((e) => e.track === 'V' && e.source === 'BL');
+  assert.deepEqual(black.map((e) => [e.recIn, e.recOut]), [[0, 12], [204, 216]]);
+  assert.ok(!E107_XML.includes('pproTicksIn'), 'the fixture must stay a verbatim Resolve export (no ticks)');
+});

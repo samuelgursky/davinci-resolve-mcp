@@ -1,9 +1,9 @@
 /**
  * ffmpeg sampler adapter for frame-QC (Phase 9 wiring). Builds the two injected
  * samplers qcSnapshot expects, from real media:
- * sampleReference(cut) — the reference render at the cut's record position (burn-in
- * masked, brightness-robust).
- * sampleConform(cut) — the highres source at oracle_source_frame, scaled by the
+ * sampleReference(cut) — the reference render at the cut's QC record frame (the record
+ * start, or the first frame clear of a transition window — E107), burn-in masked.
+ * sampleConform(cut) — the highres source at the matching QC source frame, scaled by the
  * corrected zoom and centre-cropped to the sequence frame (the picture Resolve
  * shows). Residual pan is left to classify's findOffset → OFFSET (still flagged).
  *
@@ -42,8 +42,9 @@ export function makeSamplers(opts = {}) {
   let n = 0;
 
   const sampleReference = async (cut) => {
-    if (cut.record_start == null) return null;
-    const frame = cut.record_start + (opts.refOffset || 0);
+    const recFrame = cut.qc_record_frame ?? cut.record_start;
+    if (recFrame == null) return null;
+    const frame = recFrame + (opts.refOffset || 0);
     const p = path.join(tmp, `ref-${n}.png`);
     if (!grab(opts.referenceMovie, frame / fps, p, `scale=${DW}:${DH}`, opts.ffmpegPath)) return null;
     // classify()/referenceIsBlank() consume a raw Float64Array — unwrap the decode result.
@@ -52,13 +53,14 @@ export function makeSamplers(opts = {}) {
 
   const sampleConform = async (cut) => {
     const src = (opts.mediaMap && opts.mediaMap[cut.source_basename]) || cut.source_path;
-    if (!src || cut.oracle_source_frame == null) return null;
+    const srcFrame = cut.qc_source_frame ?? cut.oracle_source_frame;
+    if (!src || srcFrame == null) return null;
     const zoom = cut.scale_corrected != null ? cut.scale_corrected / 100 : 1;
     const H = Math.round(opts.seqH * zoom);
     const W = Math.round(H * (opts.hrW / opts.hrH));
     const vf = `scale=${W}:${H},crop=${opts.seqW}:${opts.seqH}:(iw-${opts.seqW})/2:(ih-${opts.seqH})/2,scale=${DW}:${DH}`;
     const p = path.join(tmp, `conf-${n++}.png`);
-    if (!grab(src, cut.oracle_source_frame / fps, p, vf, opts.ffmpegPath)) return null;
+    if (!grab(src, srcFrame / fps, p, vf, opts.ffmpegPath)) return null;
     // classify() consumes a raw Float64Array — unwrap the decode result.
     return (await decodeGrayNormalized(p, { width: DW, height: DH })).data;
   };

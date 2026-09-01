@@ -297,7 +297,13 @@ export function parseXMEMLEvents(xml, opts = {}) {
   let idx = 1;
   const seqRate = opts.fps || 24;
   let currentJunctions = [];
-  const walk = (node, track) => {
+  // Record-order cursor for -1/-1 edge resolution (E107): a clip whose both
+  // edges are -1 pairs junctions at or after the previous CLIP's end —
+  // generator legs (walked first) never advance it. Without this, two
+  // equal-length clips under three centered transitions both resolved to
+  // the first junction pair (measured against Resolve's own writer).
+  let clipCursor = 0;
+  const walk = (node, track, advanceCursor = true) => {
     if (!node) return;
     const items = Array.isArray(node) ? node : [node];
     for (const it of items) {
@@ -340,9 +346,11 @@ export function parseXMEMLEvents(xml, opts = {}) {
       else if (end === -1 && start !== -1 && dur != null) end = start + dur;
       else if (start === -1 && end === -1 && dur != null && junctions.length) {
         const js = junctions.map((j) => j.frame).sort((a, b) => a - b);
-        const pair = js.find((a) => js.includes(a + dur));
+        const floor = advanceCursor ? clipCursor : 0;
+        const pair = js.find((a) => a >= floor && js.includes(a + dur));
         if (pair != null) { start = pair; end = pair + dur; }
       }
+      if (advanceCursor && Number.isFinite(end) && end >= 0) clipCursor = Math.max(clipCursor, end);
       // A -1 START edge's `in` is the source at the OVERLAP start (the
       // clip's material begins under the transition), while the resolved
       // start is the junction — so `in` advances by the same offset to stay
@@ -383,8 +391,9 @@ export function parseXMEMLEvents(xml, opts = {}) {
       const gens = t.generatoritem ? (Array.isArray(t.generatoritem) ? t.generatoritem : [t.generatoritem]) : [];
       for (const g of gens) {
         if (!/solid color|black/i.test(String(g.name || ''))) continue;
-        walk([{ ...g, name: 'BL', filter: undefined, marker: undefined }], label);
+        walk([{ ...g, name: 'BL', filter: undefined, marker: undefined }], label, false);
       }
+      clipCursor = 0;
       if (t.clipitem) walk(t.clipitem, label);
       currentJunctions = [];
       // <transitionitem> siblings: attach each to the INCOMING clip event —

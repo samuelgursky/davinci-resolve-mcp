@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS cuts (snapshot_id TEXT, cut_index INTEGER, record_sta
  source_basename TEXT, source_path TEXT, xml_in INTEGER, xml_out INTEGER,
  ppro_ticks_in INTEGER, oracle_source_frame INTEGER, is_subclip INTEGER,
  subclip_startoffset INTEGER, subclip_endoffset INTEGER, reverse INTEGER,
- scale_corrected REAL, pan_h REAL, pan_v REAL, rotation REAL, transition TEXT,
+ scale_corrected REAL, pan_h REAL, pan_v REAL, rotation REAL, transition TEXT, speed REAL,
  cut_hash TEXT, PRIMARY KEY (snapshot_id, cut_index));
 CREATE TABLE IF NOT EXISTS qc_verdicts (snapshot_id TEXT, cut_index INTEGER, reference_ref TEXT, reference_frame INTEGER,
  verdict TEXT, category TEXT, structure REAL, psnr REAL, dx INTEGER, dy INTEGER,
@@ -48,6 +48,10 @@ export function openStore(dbPath) {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.exec(SCHEMA);
+  // Sidecars created before E107 lack cuts.speed — CREATE IF NOT EXISTS
+  // cannot add a column, so migrate in place (idempotent).
+  const cols = db.prepare('PRAGMA table_info(cuts)').all().map((c) => c.name);
+  if (!cols.includes('speed')) db.exec('ALTER TABLE cuts ADD COLUMN speed REAL');
   return db;
 }
 
@@ -79,6 +83,9 @@ function cutHash(cut) {
 
 function buildCuts(xml, mediaFrames) {
   const g = parse.parseGeometry(xml);
+  const unresolvedEdges = [];
+  let resolvedEdges = 0;
+  let ticksAbsent = 0;
   const seqW = g.sequence.width || null;
   const seqH = g.sequence.height || null;
   const fps = g.sequence.fps || 24;
@@ -91,6 +98,15 @@ function buildCuts(xml, mediaFrames) {
       oracleFrame = resolveTarget.deriveSourceFrame(c, ctx);
     } catch {
       /* reverse w/o frame count, etc. */
+    }
+    // Resolve's FCP7 writer emits NO pproTicksIn (measured, E107) and the
+    // oracle insists on ticks, so every cut of a Resolve export lost its
+    // source frame — the conform side could never be sampled. Resolve reads
+    // and writes <in> as the literal source frame (api-truth), and the -1
+    // resolution above has already record-aligned it, so <in> IS the frame.
+    if (oracleFrame == null && c.pproTicksIn == null && c.xml_in != null && !c.reverse) {
+      oracleFrame = (c.is_subclip ? c.subclip_startoffset || 0 : 0) + c.xml_in;
+      ticksAbsent += 1;
     }
     try {
       scaleCorrected = resolveTarget.deriveScaleCorrected(c, ctx);
@@ -115,12 +131,20 @@ function buildCuts(xml, mediaFrames) {
       pan_h: c.center ? c.center.h : null,
       pan_v: c.center ? c.center.v : null,
       rotation: c.rotation ?? null,
-      transition: null,
+      // The transition windows this cut's edges sit in (E107): frame-QC
+      // samples clear of them — inside a window the reference is a blend, or
+      // black for a fade, and the first frame of the cut proves nothing.
+      transition: c.transition_in || c.transition_out
+        ? JSON.stringify({ in: c.transition_in || null, out: c.transition_out || null })
+        : null,
+      speed: c.speed ?? null,
     };
+    if (c.edges_resolved) resolvedEdges += 1;
+    if (c.edges_unresolved) unresolvedEdges.push({ cut_index: i, source_basename: cut.source_basename });
     cut.cut_hash = cutHash(cut);
     return cut;
   });
-  return { cuts, seqW, seqH, fps, transitions: g.transitions };
+  return { cuts, seqW, seqH, fps, transitions: g.transitions, unresolvedEdges, resolvedEdges, ticksAbsent };
 }
 
 // Write a built cut list as a snapshot (dedup on (reel, content_hash)). Shared by
@@ -136,8 +160,8 @@ function writeSnapshot(dbPath, cuts, meta) {
  (snapshot_id, reel, kind, source_ref, label, parent_id, content_hash, seq_w, seq_h, fps, cut_count, created_at, provenance)
  VALUES (@snapshot_id,@reel,@kind,@source_ref,@label,@parent_id,@content_hash,@seq_w,@seq_h,@fps,@cut_count,@created_at,@provenance)`);
     const insertCut = db.prepare(`INSERT INTO cuts
- (snapshot_id, cut_index, record_start, record_end, source_basename, source_path, xml_in, xml_out, ppro_ticks_in, oracle_source_frame, is_subclip, subclip_startoffset, subclip_endoffset, reverse, scale_corrected, pan_h, pan_v, rotation, transition, cut_hash)
- VALUES (@snapshot_id,@cut_index,@record_start,@record_end,@source_basename,@source_path,@xml_in,@xml_out,@ppro_ticks_in,@oracle_source_frame,@is_subclip,@subclip_startoffset,@subclip_endoffset,@reverse,@scale_corrected,@pan_h,@pan_v,@rotation,@transition,@cut_hash)`);
+ (snapshot_id, cut_index, record_start, record_end, source_basename, source_path, xml_in, xml_out, ppro_ticks_in, oracle_source_frame, is_subclip, subclip_startoffset, subclip_endoffset, reverse, scale_corrected, pan_h, pan_v, rotation, transition, speed, cut_hash)
+ VALUES (@snapshot_id,@cut_index,@record_start,@record_end,@source_basename,@source_path,@xml_in,@xml_out,@ppro_ticks_in,@oracle_source_frame,@is_subclip,@subclip_startoffset,@subclip_endoffset,@reverse,@scale_corrected,@pan_h,@pan_v,@rotation,@transition,@speed,@cut_hash)`);
     db.transaction(() => {
       insertSnap.run({
         snapshot_id: snapshotId,
@@ -170,8 +194,11 @@ function writeSnapshot(dbPath, cuts, meta) {
  */
 export function ingestXml(dbPath, xmlPath, opts = {}) {
   const xml = fs.readFileSync(xmlPath, 'utf8');
-  const { cuts, seqW, seqH, fps } = buildCuts(xml, opts.mediaFrames || {});
-  return writeSnapshot(dbPath, cuts, {
+  const { cuts, seqW, seqH, fps, unresolvedEdges, resolvedEdges, ticksAbsent } = buildCuts(xml, opts.mediaFrames || {});
+  // Edge accounting rides on the ingest result: how many Resolve-written -1
+  // edges resolved to junctions, and which (if any) could not be anchored.
+  const withEdges = (r) => ({ ...r, resolvedEdges, unresolvedEdges, ticksAbsent });
+  return withEdges(writeSnapshot(dbPath, cuts, {
     ...opts,
     kind: opts.kind ?? 'conform_xml',
     source_ref: xmlPath,
@@ -179,7 +206,7 @@ export function ingestXml(dbPath, xmlPath, opts = {}) {
     seqH,
     fps,
     provenance: opts.provenance ?? 'ingestXml',
-  });
+  }));
 }
 
 function loadPg() {
@@ -267,6 +294,7 @@ export async function ingestLiveTimeline(dbPath, opts = {}) {
       pan_v: t.pan_v ?? null,
       rotation: t.rotation ?? null,
       transition: null,
+      speed: null,
     };
     cut.cut_hash = cutHash(cut);
     return cut;
