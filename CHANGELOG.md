@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.171.0 — E114: audio-lane `-1` edges take their own lane's junctions
+
+### Fixed
+
+- **XMEML audio cross-fades lost 12 source frames on the incoming clip.**
+  Resolve's FCP7 writer emits an audio cross-fade as a transitionitem on the
+  audio track with `-1` clip edges exactly like video (measured on 19.1.3.7
+  from the E109 AAF conform; its OTIO writer emits the same cross-fade as a
+  `Custom_Transition` with 12/12 offsets). The E108 audio walk attached the
+  transition but never computed that lane's junction list, so the incoming
+  clip's `<in>` (the source at the OVERLAP start) lost its junction offset and
+  `verify_roundtrip` failed the AAF → conform → import → XML loop with a
+  12-frame audio `source-frames` drift. Each lane now resolves against its
+  own transitionitems; the loop verifies `pass: true` through both writers.
+- **v2.170.0's `kind` classifier was wrong for generators and subtitles.**
+  Measured on 19.1.3.7 (E115): a Solid Color generator and a subtitle item
+  return no MediaPoolItem and `None` from GetProperty() — exactly like a
+  transition — so the "no media, empty properties" rule labelled both
+  `transition`. The discriminator is now GEOMETRY: a transition straddles a
+  cut (one neighbour ends inside its span, another starts inside it), a
+  generator owns its span, subtitle tracks report `subtitle`, and known
+  transition names short-circuit. Verified against Resolve's own enumeration
+  of the E107 fades timeline (generator, dissolve, clip, dissolve, clip,
+  dissolve, generator).
+- **v2.170.0 also shipped with two red Python tests** — an item-shape
+  assertion in the `get_items` selector test that did not expect the new
+  `kind` field. The expectation is updated.
+
 ## What's New in v2.170.0 — E113: `get_items` knows a transition from a clip
 
 ### Added

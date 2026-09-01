@@ -1356,3 +1356,27 @@ test('verifyRoundtrip closes the fade-to-white loop against Resolve\'s own re-ex
   assert.equal(r.pass, true, JSON.stringify(r.mismatches));
   assert.deepEqual(r.generatorColours, { compared: 2, mismatches: [] });
 });
+
+// E114: Resolve's FCP7 writer emits an AUDIO cross-fade as a transitionitem on
+// the audio track with -1 clip edges, exactly like video. The E108 audio walk
+// attached the transition but never computed that lane's junction list, so
+// the incoming clip's <in> (the source at the OVERLAP start) lost its junction
+// offset — verify_roundtrip failed the E109 AAF loop with a 12-frame audio
+// source-frames drift. Fixture = verbatim EXPORT_FCP_7_XML of the E109 timeline.
+test('audio-lane -1 edges take the junction offset from their own lane (E114)', () => {
+  const xml = fs.readFileSync(new URL('./fixtures/E114_resolve_audio_xfade_export.xml', import.meta.url), 'utf8');
+  const ev = parseXMEMLEvents(xml);
+  const aud = ev.filter((e) => /^A/.test(e.track)).map((e) => [e.track, e.source, e.recIn, e.recOut, e.srcIn, e.transition && e.transition.duration]);
+  assert.deepEqual(aud, [['A', 'cut_src.mp4', 0, 84, 0, null], ['A', 'quiet_src.mp4', 84, 168, 12, 24], ['A2', 'quiet_src.mp4', 0, 168, 0, null]]);
+  // The AAF-shaped input (E109): dialog lane with a 24f cross-fade consuming 12 frames of overlap, music bed on A2.
+  const input = [
+    { index: 1, track: 'V', source: 'DIAL', srcIn: 0, srcOut: 96, recIn: 0, recOut: 96, speed: 100, reverse: false, transition: null, fps: 24 },
+    { index: 2, track: 'V', source: 'DIAL2', srcIn: 0, srcOut: 96, recIn: 96, recOut: 192, speed: 100, reverse: false, transition: null, fps: 24 },
+    { index: 3, track: 'A', source: 'DIAL', srcIn: 0, srcOut: 96, recIn: 0, recOut: 96, speed: 100, reverse: false, transition: null, fps: 24 },
+    { index: 4, track: 'A', source: 'DIAL2', srcIn: 0, srcOut: 96, recIn: 72, recOut: 168, speed: 100, reverse: false, transition: { type: 'dissolve', duration: 24, alignment: 'start', cutPoint: 12 }, fps: 24 },
+    { index: 5, track: 'A2', source: 'MUSIC', srcIn: 0, srcOut: 168, recIn: 0, recOut: 168, speed: 100, reverse: false, transition: null, fps: 24 },
+  ];
+  const r = verifyRoundtrip(input, ev, { sourceAliases: { DIAL: 'cut_src.mp4', DIAL2: 'quiet_src.mp4', MUSIC: 'quiet_src.mp4' } });
+  assert.equal(r.pass, true, JSON.stringify(r.mismatches));
+  assert.equal(r.audio.compared, true);
+});

@@ -28,7 +28,7 @@ def _dispatch(action, params, track_items=()):
 class GetItemsSelectorTest(unittest.TestCase):
     def test_get_items_returns_summary(self):
         out, tl = _dispatch("get_items", {"track_type": "video", "index": 1}, [_item()])
-        self.assertEqual(out["items"], [{"name": "clip", "id": "ti-1", "start": 0, "end": 100, "duration": 100}])
+        self.assertEqual(out["items"], [{"name": "clip", "id": "ti-1", "start": 0, "end": 100, "duration": 100, "kind": "clip"}])
         tl.GetItemListInTrack.assert_called_once_with("video", 1)
 
     def test_get_items_accepts_track_index_alias(self):
@@ -56,7 +56,7 @@ class GetItemsSelectorTest(unittest.TestCase):
         out, _ = _dispatch("get_items_in_track", {"track_type": "video", "index": 1}, [_item()])
         self.assertEqual(
             out["items"],
-            [{"name": "clip", "id": "ti-1", "start": 0, "end": 100, "duration": 100}],
+            [{"name": "clip", "id": "ti-1", "start": 0, "end": 100, "duration": 100, "kind": "clip"}],
         )
 
     def test_missing_index_error_names_both_aliases(self):

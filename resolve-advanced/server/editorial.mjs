@@ -390,6 +390,18 @@ export function parseXMEMLEvents(xml, opts = {}) {
       }
     }
   };
+  // A track's transitionitems as -1-edge junctions (alignment-dependent frame
+  // plus the span), shared by video and audio lanes.
+  const trackJunctionsOf = (t) => {
+    const tlist = t.transitionitem ? (Array.isArray(t.transitionitem) ? t.transitionitem : [t.transitionitem]) : [];
+    return tlist.map((tr) => {
+      const s0 = Number(tr.start), e0 = Number(tr.end);
+      if (!Number.isFinite(s0) || !Number.isFinite(e0)) return null;
+      const al = String(tr.alignment || 'center').toLowerCase();
+      const frame = al === 'start-black' || al === 'start' ? s0 : al === 'end-black' || al === 'end' ? e0 : Math.round((s0 + e0) / 2);
+      return { frame, start: s0, end: e0 };
+    }).filter(Boolean);
+  };
   // Attach a track's <transitionitem> siblings to its walked events. Shared
   // by VIDEO and AUDIO tracks (E108): audio cross-fades used to be dropped at
   // parse because only the video walk looked at transitionitems, so an XMEML
@@ -447,14 +459,7 @@ export function parseXMEMLEvents(xml, opts = {}) {
       const label = vi === 0 ? 'V' : `V${vi + 1}`;
       const before = events.length;
       // Junctions of this track's transitionitems, for -1 edge resolution.
-      const tlist = t.transitionitem ? (Array.isArray(t.transitionitem) ? t.transitionitem : [t.transitionitem]) : [];
-      currentJunctions = tlist.map((tr) => {
-        const s0 = Number(tr.start), e0 = Number(tr.end);
-        if (!Number.isFinite(s0) || !Number.isFinite(e0)) return null;
-        const al = String(tr.alignment || 'center').toLowerCase();
-        const frame = al === 'start-black' || al === 'start' ? s0 : al === 'end-black' || al === 'end' ? e0 : Math.round((s0 + e0) / 2);
-        return { frame, start: s0, end: e0 };
-      }).filter(Boolean);
+      currentJunctions = trackJunctionsOf(t);
       // Solid Color / Color Matte generatoritems are GENERATOR legs: black by
       // default (what Resolve writes for a fade's black side), or the
       // `fillcolor` the item declares — Resolve's importer honours it and
@@ -480,6 +485,11 @@ export function parseXMEMLEvents(xml, opts = {}) {
       const label = ai === 0 ? 'A' : `A${ai + 1}`;
       const before = events.length;
       clipCursor = 0;
+      // Audio lanes carry -1 edges under their cross-fades exactly like video
+      // (Resolve's writer, measured E114: the incoming clip's <in> is the
+      // source at the overlap start and needs the junction offset) — the
+      // junction list must be THIS lane's, not the last video track's.
+      currentJunctions = trackJunctionsOf(t);
       if (t.clipitem) walk(t.clipitem, label);
       currentJunctions = [];
       attachTransitions(t, label, before);

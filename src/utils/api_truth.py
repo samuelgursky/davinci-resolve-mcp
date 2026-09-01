@@ -895,9 +895,14 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "with an EMPTY GetName() (24 frames, centered on the cut, "
                    "between the two clips) — so on audio lanes even the kind is "
                    "not readable from the name. The discriminator that holds for "
-                   "BOTH: GetMediaPoolItem() is None AND GetProperty() is empty; "
-                   "a Solid Color generator has no MediaPoolItem either but DOES "
-                   "return transform keys. timeline.get_items reports `kind`.",
+                   "BOTH: GetMediaPoolItem() is None AND GetProperty() is empty — "
+                   "BUT a Solid Color generator AND a subtitle item read the same "
+                   "way (GetProperty() None, no MediaPoolItem; measured E115), so "
+                   "that pair only separates clips from non-clips. What separates "
+                   "a transition from a generator is GEOMETRY: a transition "
+                   "straddles a cut (one neighbour ends inside its span, another "
+                   "starts inside it) while a generator owns its span. "
+                   "timeline.get_items reports `kind` on that basis.",
         "recommended": "Automated QC of existing transitions IS possible and is "
                        "the main practical need — enumerate GetItemListInTrack, "
                        "treat any item whose GetProperty() is empty and whose "
@@ -2787,7 +2792,11 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "FCP7 XML writer, by contrast, carries audio, writes "
                    "transition-adjacent clip edges as -1 (the junction), and "
                    "emits `speed` followed by `variablespeed` 0 in the same "
-                   "timeremap effect.",
+                   "timeremap effect. AUDIO cross-fades are written the same way "
+                   "— a transitionitem on the audio track between -1-edged "
+                   "clipitems (measured E114); the OTIO writer emits them as a "
+                   "`Custom_Transition` with symmetric offsets on the Audio "
+                   "track.",
         "recommended": "For round-trip QC prefer EXPORT_OTIO (carries audio, "
                        "retimes as LinearTimeWarp/FreezeFrame, exact spans). "
                        "When an EDL is the required deliverable, expect no "
