@@ -443,6 +443,29 @@ export function eventsToAssembleSpec(events, opts = {}) {
     if (!perSource.has(e.source)) perSource.set(e.source, []);
     perSource.get(e.source).push(cut);
   }
+  // AAF overlap reconciliation (E93): an AAF Transition CONSUMES record time
+  // — the incoming component starts `duration` frames before the outgoing
+  // ends, so the walker legitimately emits OVERLAPPING events with the
+  // transition on the incoming (alignment 'start' at the overlap start).
+  // Trim the outgoing's tail to the overlap start before the overlap gates:
+  // the boundary-shift below then re-extends it to the cut point, which is
+  // exactly the AAF notional-cut semantics (CutPoint, centered by default).
+  // Without this the overlap gate threw and NO AAF dissolve could conform.
+  const reconcileAafOverlap = (cands, pls) => {
+    for (const c of cands) {
+      if (!c.explicitSpan || c.pre !== 0) continue;
+      const prev = pls.find((pl) => pl.track === c.track && pl.start < c.atFrame && pl.end > c.atFrame && pl.end - c.atFrame <= c.durationFrames);
+      if (!prev) continue;
+      const o = prev.end - c.atFrame;
+      if (prev.durationFrames <= o) continue; // degenerate: leave for the drop paths
+      prev.end -= o;
+      prev.durationFrames -= o;
+      prev.cutRef.durationFrames -= o;
+    }
+  };
+  reconcileAafOverlap(transitionCandidates, placements);
+  reconcileAafOverlap(audioTransCandidates, audioPlacements);
+
   audioPlacements.sort((a, b) => a.start - b.start);
   const audByTrack = new Map();
   for (const pl of audioPlacements) {

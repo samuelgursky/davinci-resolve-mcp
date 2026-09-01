@@ -640,9 +640,11 @@ print(json.dumps(state))
   );
 });
 
-test('aaf_probe: a transition at the head clamps instead of going negative', { skip: PY ? false : 'python3 not available' }, () => {
-  // A leading transition has no preceding material to overlap. Malformed, but a
-  // negative record position would be a worse lie than the file that produced it.
+test('aaf_probe: a transition at the head clamps — and is a fade-in from black (E93)', { skip: PY ? false : 'python3 not available' }, () => {
+  // A leading transition has no preceding material to overlap: the rewind
+  // clamps at the sequence start, and since the sequence head counts as
+  // black, a zero-length BL pseudo-event materializes the fade-in side for
+  // the bridge's black machinery.
   const out = runWalker(`
 seq = mk("Sequence", components=[mk("Transition", length=25), clip("A001", 50), clip("A002", 10)])
 state = new_state()
@@ -652,12 +654,14 @@ print(json.dumps({"events": state["events"], "walked": walked}))
   assert.deepEqual(
     out.events.map((e) => [e.source, e.recIn, e.recOut]),
     [
+      ['BL', 0, 0],
       ['A001', 0, 50],
       ['A002', 50, 60],
     ],
   );
   assert.equal(out.walked, 60, 'the clamp does not let the rewind escape the sequence start');
-  assert.deepEqual(out.events[0].transition, { type: 'dissolve', duration: 25, alignment: 'start' });
+  assert.equal(out.events[0].transition, null);
+  assert.deepEqual(out.events[1].transition, { type: 'dissolve', duration: 25, alignment: 'start' });
 });
 
 test('aaf_probe: back-to-back clips are unaffected by the subtraction', { skip: PY ? false : 'python3 not available' }, () => {

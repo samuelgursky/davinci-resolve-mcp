@@ -406,6 +406,47 @@ test('XMEML fade transitionitems (no outgoing / no incoming clip) synthesize BL 
   assert.equal(report.droppedTransitions.length, 0);
 });
 
+// AAF overlap reconciliation (E93): an AAF Transition CONSUMES record time,
+// so the walker emits the incoming clip OVERLAPPING the outgoing by the
+// transition duration. Before this, the overlap gate threw and NO AAF
+// dissolve could conform. Render-verified live: fade-in 18→123, dissolve to
+// white through the 181.8 midpoint fingerprint, fade-out 230→21.
+test('AAF-shaped overlapping dissolve events reconcile and author (E93)', () => {
+  const MAP2 = {
+    A: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
+    B: { mediaFilePath: '/m/b.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
+  };
+  const events = [
+    { index: 1, track: 'V', source: 'A', srcIn: 0, srcOut: 96, recIn: 0, recOut: 96, fps: 24 },
+    { index: 2, track: 'V', source: 'B', srcIn: 48, srcOut: 144, recIn: 72, recOut: 168, fps: 24, transition: { type: 'dissolve', duration: 24, alignment: 'start', cutPoint: 12 } },
+  ];
+  const { spec, report } = eventsToAssembleSpec(events, { sourceMap: MAP2 });
+  // Outgoing trimmed to the overlap start, then re-extended to the cut point
+  // by the boundary shift — the AAF notional-cut semantics exactly.
+  assert.deepEqual(spec.media.find((m) => m.mediaFilePath === '/m/a.mp4').cuts,
+    [{ startFrame: 86400, durationFrames: 84, srcIn: 0 }]);
+  assert.deepEqual(spec.media.find((m) => m.mediaFilePath === '/m/b.mp4').cuts,
+    [{ startFrame: 86484, durationFrames: 84, srcIn: 60 }]);
+  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86484, durationFrames: 24, startFrame: 86472 }]);
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+test('AAF walker-shaped BL fades author through the reconciliation (E93)', () => {
+  // The exact shape aaf_probe emits for [Transition, SC, Transition, Filler]:
+  // zero-length BL legs at the overlap starts, clips at post-rewind record.
+  const events = [
+    { index: 1, track: 'V', source: 'BL', srcIn: 0, srcOut: 0, recIn: 0, recOut: 0, fps: 24 },
+    { index: 2, track: 'V', source: 'A', srcIn: 0, srcOut: 96, recIn: 0, recOut: 96, fps: 24, transition: { type: 'dissolve', duration: 24, alignment: 'start', cutPoint: 12 } },
+    { index: 3, track: 'V', source: 'BL', srcIn: 0, srcOut: 0, recIn: 72, recOut: 72, fps: 24, transition: { type: 'dissolve', duration: 24, alignment: 'start', cutPoint: 12 } },
+  ];
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: { A: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } } },
+  });
+  assert.equal(spec.elements.length, 2);
+  assert.equal(spec.transitions.length, 2);
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
 test('audio BL fades drop with the no-silence-source reason; BL needs no sourceMap entry', () => {
   const edl = [
     'TITLE: AFADE', 'FCM: NON-DROP FRAME',

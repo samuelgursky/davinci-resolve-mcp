@@ -1161,6 +1161,21 @@ def _walk_components(sequence, *, track, fps, rec, state, depth, transition=None
     """
     start = rec
     pending_transition = transition
+    # Sequence start counts as black: a Transition with Filler (or nothing)
+    # on one side is a FADE. Synthesize zero-length BL pseudo-events so the
+    # bridge's black machinery (E91-E93) authors a real clip-to-generator
+    # dissolve — Resolve renders empty track as black, and the bridge grows
+    # the BL leg to cover its side of the overlap.
+    at_black = True
+
+    def _emit_bl(rec_pos, trans):
+        state["events"].append({
+            "index": state["idx"], "track": track, "source": "BL",
+            "srcIn": 0, "srcOut": 0, "recIn": rec_pos, "recOut": rec_pos,
+            "speed": 100, "reverse": False, "transition": trans, "fps": fps,
+        })
+        state["idx"] += 1
+
     components = getattr(sequence, "components", None)
     if components is None:
         components = [sequence]
@@ -1190,15 +1205,29 @@ def _walk_components(sequence, *, track, fps, rec, state, depth, transition=None
                 # be a worse lie than the malformed AAF that produced it.
                 rec = max(start, rec - duration)
                 continue
+            if pending_transition is not None and cls in ("Filler", "ScopeReference"):
+                # Transition then Filler = fade-OUT into black: the fade
+                # attaches to a synthetic BL leg at the overlap start.
+                _emit_bl(rec, pending_transition)
+                pending_transition = None
+            elif pending_transition is not None and at_black:
+                # Filler (or sequence start) then Transition then clip =
+                # fade-IN from black: zero-length BL predecessor at the
+                # overlap start; the bridge's boundary shift grows it.
+                _emit_bl(rec, None)
             rec += _walk_segment(
                 comp, track=track, fps=fps, rec=rec, state=state, depth=depth, transition=pending_transition
             )
             pending_transition = None
+            at_black = cls in ("Filler", "ScopeReference")
         except Exception:
             # Never let one bad component abort the whole sequence — but say so.
             _note_unhandled(state, cls)
             pending_transition = None
             continue
+    if pending_transition is not None:
+        # Transition as the LAST component = fade-out to the sequence end.
+        _emit_bl(rec, pending_transition)
     return rec - start
 
 

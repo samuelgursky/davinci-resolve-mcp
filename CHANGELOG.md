@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.152.0 — AAF dissolves conform at last, and AAF fades join the family
+
+### Fixed
+
+- **No AAF dissolve could ever conform through `assemble_from_interchange`**:
+  an AAF Transition consumes record time, so the walker (correctly) emits the
+  incoming clip overlapping the outgoing — and the bridge's overlap gate
+  threw on exactly that shape. A reconciliation pre-pass now trims the
+  outgoing's tail to the overlap start; the boundary shift then re-extends it
+  to the cut point, which is the AAF notional-cut (`CutPoint`) semantics
+  exactly. Render-verified: the dissolve blends through the 181.8 midpoint
+  fingerprint.
+
+### Added
+
+- **AAF fades**: the walker synthesizes BL pseudo-events at filler-adjacent
+  and sequence-edge Transitions, completing fade parity across all four
+  formats (EDL v2.150, OTIO/XMEML v2.151, AAF now). The head-transition
+  "clamp" case is reinterpreted as what it is — a fade-in from black.
+  Full triple render-verified: fade-in 18→123, dissolve-to-white through the
+  midpoint, fade-out 230→21.
+- A pyaaf2-authored AAF fixture test exercises the real walker end to end
+  (no stubs), skipped only where pyaaf2 is unavailable.
+
 ## What's New in v2.151.0 — fade parity: OTIO and XMEML fades author too
 
 ### Added
