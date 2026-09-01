@@ -52,6 +52,7 @@ function evt(o) {
     ...(o.name !== undefined ? { name: o.name } : {}),
     ...(o.color !== undefined ? { color: o.color } : {}),
     ...(o.generatorName !== undefined ? { generatorName: o.generatorName } : {}),
+    ...(o.fromCompound !== undefined ? { fromCompound: o.fromCompound } : {}),
     source: o.source || 'UNKNOWN',
     srcIn: o.srcIn ?? null,
     srcOut: o.srcOut ?? null,
@@ -179,6 +180,10 @@ export function parseOTIO(otio, opts = {}) {
         name: mk.name || undefined, color: mk.color || undefined, fps: mrRate,
       }));
     }
+    // Walk one track's children into `sink`. Recursive: a nested Stack (a
+    // compound clip) walks its inner tracks with a private cursor and is
+    // flattened into the parent's record time (E120).
+    const walkChildren = (children, kind, sink) => {
     let rec = 0;
     // An OTIO Transition occupies NO record time (like an AAF transition —
     // it overlaps its neighbours); it describes the junction between the
@@ -193,7 +198,7 @@ export function parseOTIO(otio, opts = {}) {
     // empty track renders black anyway, so the growth is render-neutral.
     let atBlack = true;
     const lastRate = () => opts.fps || 24;
-    for (const child of track.children || []) {
+    for (const child of children || []) {
       const schema = child.OTIO_SCHEMA || '';
       const dur = (child.source_range && child.source_range.duration && child.source_range.duration.value) || 0;
       const rate = (child.source_range && child.source_range.duration && child.source_range.duration.rate) || opts.fps || 24;
@@ -201,7 +206,7 @@ export function parseOTIO(otio, opts = {}) {
         if (pendingTransition) {
           // Transition then Gap = fade-out into black: attach it to a
           // synthetic BL leg at the junction (the bridge grows it forward).
-          events.push(evt({
+          sink.push(evt({
             index: idx++, track: kind, source: 'BL',
             recIn: rec, recOut: rec, transition: pendingTransition, fps: lastRate(),
           }));
@@ -211,6 +216,50 @@ export function parseOTIO(otio, opts = {}) {
         }
         rec += dur;
         atBlack = true;
+        continue;
+      }
+      if (schema.startsWith('Stack')) {
+        // NESTED STACK = a compound clip (E120, measured against Resolve's
+        // OTIO writer: a compound exports as a Stack inside the track with
+        // its own source_range = the trim window into the compound, nested
+        // recursively). It was silently DROPPED. Flatten it: walk each inner
+        // track of this kind with a private cursor, then translate its
+        // events into the parent's record time through the trim window,
+        // trimming source frames at the clip's own play rate. Inner tracks
+        // beyond the first land on the next lanes up (V2, V3 …).
+        const sr = child.source_range || {};
+        const winStart = (sr.start_time && sr.start_time.value) || 0;
+        const winDur = (sr.duration && sr.duration.value) || 0;
+        const wantAudio = /^A/.test(kind);
+        const innerTracks = (child.children || []).filter((t) => String(t.OTIO_SCHEMA || '').startsWith('Track') && ((t.kind === 'Audio') === wantAudio));
+        const baseLetter = kind.replace(/\d+$/, '');
+        const baseNum = parseInt(kind.replace(/\D/g, '') || '1', 10);
+        let first = true;
+        innerTracks.forEach((it, i) => {
+          const label = baseNum + i === 1 ? baseLetter : `${baseLetter}${baseNum + i}`;
+          const tmp = [];
+          walkChildren(it.children || [], label, tmp);
+          for (const e of tmp) {
+            if (e.track === 'MARKER') continue;
+            const a = e.recIn - winStart, b = e.recOut - winStart;
+            const a2 = Math.max(0, a), b2 = Math.min(winDur, b);
+            if (b2 <= a2) continue;
+            const k = ((e.speed ?? 100) / 100) * (e.reverse ? -1 : 1);
+            const flat = {
+              ...e, index: idx++, recIn: rec + a2, recOut: rec + b2,
+              srcIn: e.srcIn != null ? e.srcIn + (a2 - a) * k : e.srcIn,
+              srcOut: e.srcOut != null ? e.srcOut - (b - b2) * k : e.srcOut,
+              fromCompound: child.name || 'compound',
+            };
+            // A transition pending INTO the compound attaches to its first flattened cut.
+            if (first && pendingTransition && !flat.transition) flat.transition = pendingTransition;
+            first = false;
+            sink.push(flat);
+          }
+        });
+        pendingTransition = null;
+        atBlack = false;
+        rec += winDur;
         continue;
       }
       if (schema.startsWith('Transition')) {
@@ -225,7 +274,7 @@ export function parseOTIO(otio, opts = {}) {
         if (pendingTransition && atBlack) {
           // Gap (or track start) then Transition then Clip = fade-IN from
           // black — the CMX zero-length-BL form, grown by the bridge.
-          events.push(evt({
+          sink.push(evt({
             index: idx++, track: kind, source: 'BL',
             recIn: rec, recOut: rec, fps: rate,
           }));
@@ -276,7 +325,7 @@ export function parseOTIO(otio, opts = {}) {
           const mrStart = (mk.marked_range && mk.marked_range.start_time && mk.marked_range.start_time.value) || 0;
           itemMarkers.push({ frame: mrStart - startVal, name: mk.name || undefined, color: mk.color || undefined });
         }
-        events.push(
+        sink.push(
           evt({
             index: idx++,
             track: kind,
@@ -300,11 +349,13 @@ export function parseOTIO(otio, opts = {}) {
     }
     if (pendingTransition) {
       // Transition as the LAST child = fade-out to the end of the track.
-      events.push(evt({
+      sink.push(evt({
         index: idx++, track: kind, source: 'BL',
         recIn: rec, recOut: rec, transition: pendingTransition, fps: lastRate(),
       }));
     }
+    };
+    walkChildren(track.children || [], kind, events);
   }
   return events;
 }

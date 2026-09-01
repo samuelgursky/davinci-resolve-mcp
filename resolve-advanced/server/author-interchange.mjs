@@ -708,6 +708,10 @@ export function eventsToAssembleSpec(events, opts = {}) {
       audioEventsSkipped: audioSkipped,
       authoredMarkers: markers.length,
       audioChannelLegsMerged,
+      // Compound clips flattened out of nested OTIO Stacks (E120): named so
+      // the ledger says which compounds became flat cuts.
+      flattenedCompounds: [...new Set(events.filter((e) => e.fromCompound).map((e) => e.fromCompound))],
+      flattenedCompoundEvents: events.filter((e) => e.fromCompound).length,
       authoredAudioEvents: audioPlacements.length,
       audioRetimesSkipped,
       ...(elements.length || audioBlackLegsSkipped ? {

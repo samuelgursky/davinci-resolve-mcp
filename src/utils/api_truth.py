@@ -2851,7 +2851,15 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "re-conform through drt.assemble_from_interchange (E118): the "
                    "media-less generator clips walk as black legs and the "
                    "clip→generator fade renders 124→16 — black, the colour "
-                   "having been lost by the writer.",
+                   "having been lost by the writer. COMPOUND CLIPS: EXPORT_OTIO "
+                   "nests a compound as a Stack.1 inside the track (its "
+                   "source_range = the trim window into the compound; nested "
+                   "compounds nest Stacks recursively — measured E120 on a "
+                   "depth-2 timeline), while EXPORT_FCP_7_XML flattens the "
+                   "compound to a single media-less clipitem named after it "
+                   "(no inner content). editorial.parse_interchange flattens "
+                   "the OTIO Stacks into record time (fromCompound on each "
+                   "cut).",
         "recommended": "Author fade-to-white / colour mattes by placing a "
                        "Solid Color generator with that blob "
                        "(drp-format placeGenerator `color`, drt.assemble "

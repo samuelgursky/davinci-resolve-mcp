@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.174.0 — E120: compound clips in Resolve's OTIO exports flatten instead of vanishing
+
+### Fixed
+
+- **A compound clip in an OTIO turnover was silently dropped.** Resolve's
+  OTIO writer nests a compound as a `Stack` inside the track — its
+  `source_range` is the trim window into the compound, and nested compounds
+  nest Stacks recursively (measured on 19.1.3.7 from a depth-2 timeline).
+  `parseOTIO` skipped the Stack, so a 96-frame timeline parsed as 48 with no
+  error. Nested Stacks now flatten into the parent's record time through
+  their trim window (source frames trimmed at each clip's own play rate,
+  inner upper tracks landing on the next lanes), each flattened cut tagged
+  `fromCompound`, and the bridge's ledger names them
+  (`flattenedCompounds`, `flattenedCompoundEvents`). Render-verified: the
+  flattened conform of Resolve's own export is luma-identical to the
+  original compound render at every sampled frame (three picture regions
+  at 123–125, the 24-frame white insert at 234).
+
+### Measured (filed in api-limitations)
+
+- `EXPORT_FCP_7_XML` flattens a compound to a single media-less clipitem
+  named after it, with no inner content; `EXPORT_OTIO` keeps the nesting.
+
 ## What's New in v2.173.0 — E118: Resolve's own OTIO exports re-conform
 
 ### Fixed

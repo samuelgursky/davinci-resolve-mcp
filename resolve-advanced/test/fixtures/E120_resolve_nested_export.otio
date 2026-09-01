@@ -1,0 +1,1150 @@
+{
+    "OTIO_SCHEMA": "Timeline.1",
+    "metadata": {
+        "Resolve_OTIO": {
+            "Resolve OTIO Meta Version": "1.0"
+        }
+    },
+    "name": "",
+    "global_start_time": {
+        "OTIO_SCHEMA": "RationalTime.1",
+        "rate": 24.0,
+        "value": 86400.0
+    },
+    "tracks": {
+        "OTIO_SCHEMA": "Stack.1",
+        "metadata": {},
+        "name": "",
+        "source_range": null,
+        "effects": [],
+        "markers": [],
+        "enabled": true,
+        "children": [
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {
+                    "Resolve_OTIO": {
+                        "Locked": false
+                    }
+                },
+                "name": "Video 1",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "Resolve_OTIO": {}
+                        },
+                        "name": "cut_src.mp4",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 48.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 24.0
+                            }
+                        },
+                        "effects": [
+                            {
+                                "OTIO_SCHEMA": "Effect.1",
+                                "metadata": {
+                                    "Resolve_OTIO": {
+                                        "Effect Name": "Transform",
+                                        "Enabled": true,
+                                        "Name": "Transform",
+                                        "Parameters": [],
+                                        "Type": 2
+                                    }
+                                },
+                                "name": "",
+                                "effect_name": "Resolve Effect"
+                            },
+                            {
+                                "OTIO_SCHEMA": "Effect.1",
+                                "metadata": {
+                                    "Resolve_OTIO": {
+                                        "Effect Name": "Cropping",
+                                        "Enabled": true,
+                                        "Name": "Cropping",
+                                        "Parameters": [],
+                                        "Type": 3
+                                    }
+                                },
+                                "name": "",
+                                "effect_name": "Resolve Effect"
+                            },
+                            {
+                                "OTIO_SCHEMA": "Effect.1",
+                                "metadata": {
+                                    "Resolve_OTIO": {
+                                        "Effect Name": "Dynamic Zoom",
+                                        "Enabled": false,
+                                        "Name": "Dynamic Zoom",
+                                        "Parameters": [
+                                            {
+                                                "Default Parameter Value": [
+                                                    0.0,
+                                                    0.0
+                                                ],
+                                                "Key Frames": {
+                                                    "-24": {
+                                                        "Value": [
+                                                            0.0,
+                                                            0.0
+                                                        ],
+                                                        "Variant Type": "POINTF"
+                                                    },
+                                                    "976": {
+                                                        "Value": [
+                                                            0.0,
+                                                            0.0
+                                                        ],
+                                                        "Variant Type": "POINTF"
+                                                    }
+                                                },
+                                                "Parameter ID": "dynamicZoomCenter",
+                                                "Parameter Value": [
+                                                    0.0,
+                                                    0.0
+                                                ],
+                                                "Variant Type": "POINTF"
+                                            },
+                                            {
+                                                "Default Parameter Value": 1.0,
+                                                "Key Frames": {
+                                                    "-24": {
+                                                        "Value": 0.8,
+                                                        "Variant Type": "Double"
+                                                    },
+                                                    "976": {
+                                                        "Value": 1.0,
+                                                        "Variant Type": "Double"
+                                                    }
+                                                },
+                                                "Parameter ID": "dynamicZoomScale",
+                                                "Parameter Value": 1.0,
+                                                "Variant Type": "Double",
+                                                "maxValue": 100.0,
+                                                "minValue": 0.01
+                                            }
+                                        ],
+                                        "Type": 59
+                                    }
+                                },
+                                "name": "",
+                                "effect_name": "Resolve Effect"
+                            },
+                            {
+                                "OTIO_SCHEMA": "Effect.1",
+                                "metadata": {
+                                    "Resolve_OTIO": {
+                                        "Effect Name": "Composite",
+                                        "Enabled": true,
+                                        "Name": "Composite",
+                                        "Parameters": [],
+                                        "Type": 1
+                                    }
+                                },
+                                "name": "",
+                                "effect_name": "Resolve Effect"
+                            },
+                            {
+                                "OTIO_SCHEMA": "Effect.1",
+                                "metadata": {
+                                    "Resolve_OTIO": {
+                                        "Effect Name": "Lens Correction",
+                                        "Enabled": true,
+                                        "Name": "Lens Correction",
+                                        "Parameters": [],
+                                        "Type": 43
+                                    }
+                                },
+                                "name": "",
+                                "effect_name": "Resolve Effect"
+                            },
+                            {
+                                "OTIO_SCHEMA": "Effect.1",
+                                "metadata": {
+                                    "Resolve_OTIO": {
+                                        "Effect Name": "Retime and Scaling",
+                                        "Enabled": true,
+                                        "Name": "Retime and Scaling",
+                                        "Parameters": [],
+                                        "Type": 22
+                                    }
+                                },
+                                "name": "",
+                                "effect_name": "Resolve Effect"
+                            },
+                            {
+                                "OTIO_SCHEMA": "Effect.1",
+                                "metadata": {
+                                    "Resolve_OTIO": {
+                                        "Effect Name": "Video Faders",
+                                        "Enabled": true,
+                                        "Name": "Video Faders",
+                                        "Parameters": [],
+                                        "Type": 36
+                                    }
+                                },
+                                "name": "",
+                                "effect_name": "Resolve Effect"
+                            }
+                        ],
+                        "markers": [],
+                        "enabled": true,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "cut_src.mp4",
+                                "available_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 24.0,
+                                        "value": 192.0
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 24.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "available_image_bounds": null,
+                                "target_url": "/Users/samuelgursky/Movies/mcp_probe_tmp/cut_src.mp4"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Stack.1",
+                        "metadata": {
+                            "Resolve_OTIO": {
+                                "Sequence Fps": 24.0,
+                                "Sequence ID": "{5dde2e21-701c-454b-9a58-ce43d28ad047}",
+                                "Sequence Type": "Compound Clip"
+                            }
+                        },
+                        "name": "E57_OUT",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 48.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 0.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [],
+                        "enabled": true,
+                        "children": [
+                            {
+                                "OTIO_SCHEMA": "Track.1",
+                                "metadata": {
+                                    "Resolve_OTIO": {
+                                        "Locked": false
+                                    }
+                                },
+                                "name": "Video 1",
+                                "source_range": null,
+                                "effects": [],
+                                "markers": [],
+                                "enabled": true,
+                                "children": [
+                                    {
+                                        "OTIO_SCHEMA": "Stack.1",
+                                        "metadata": {
+                                            "Resolve_OTIO": {
+                                                "Sequence Fps": 24.0,
+                                                "Sequence ID": "{27f9be7f-b3da-4c14-9e3a-e4d6275e6d66}",
+                                                "Sequence Type": "Compound Clip"
+                                            }
+                                        },
+                                        "name": "E57_IN",
+                                        "source_range": {
+                                            "OTIO_SCHEMA": "TimeRange.1",
+                                            "duration": {
+                                                "OTIO_SCHEMA": "RationalTime.1",
+                                                "rate": 24.0,
+                                                "value": 24.0
+                                            },
+                                            "start_time": {
+                                                "OTIO_SCHEMA": "RationalTime.1",
+                                                "rate": 24.0,
+                                                "value": 0.0
+                                            }
+                                        },
+                                        "effects": [],
+                                        "markers": [],
+                                        "enabled": true,
+                                        "children": [
+                                            {
+                                                "OTIO_SCHEMA": "Track.1",
+                                                "metadata": {
+                                                    "Resolve_OTIO": {
+                                                        "Locked": false
+                                                    }
+                                                },
+                                                "name": "Video 1",
+                                                "source_range": null,
+                                                "effects": [],
+                                                "markers": [],
+                                                "enabled": true,
+                                                "children": [
+                                                    {
+                                                        "OTIO_SCHEMA": "Clip.2",
+                                                        "metadata": {
+                                                            "Resolve_OTIO": {}
+                                                        },
+                                                        "name": "white_src.mp4",
+                                                        "source_range": {
+                                                            "OTIO_SCHEMA": "TimeRange.1",
+                                                            "duration": {
+                                                                "OTIO_SCHEMA": "RationalTime.1",
+                                                                "rate": 24.0,
+                                                                "value": 24.0
+                                                            },
+                                                            "start_time": {
+                                                                "OTIO_SCHEMA": "RationalTime.1",
+                                                                "rate": 24.0,
+                                                                "value": 0.0
+                                                            }
+                                                        },
+                                                        "effects": [
+                                                            {
+                                                                "OTIO_SCHEMA": "Effect.1",
+                                                                "metadata": {
+                                                                    "Resolve_OTIO": {
+                                                                        "Effect Name": "Transform",
+                                                                        "Enabled": true,
+                                                                        "Name": "Transform",
+                                                                        "Parameters": [],
+                                                                        "Type": 2
+                                                                    }
+                                                                },
+                                                                "name": "",
+                                                                "effect_name": "Resolve Effect"
+                                                            },
+                                                            {
+                                                                "OTIO_SCHEMA": "Effect.1",
+                                                                "metadata": {
+                                                                    "Resolve_OTIO": {
+                                                                        "Effect Name": "Cropping",
+                                                                        "Enabled": true,
+                                                                        "Name": "Cropping",
+                                                                        "Parameters": [],
+                                                                        "Type": 3
+                                                                    }
+                                                                },
+                                                                "name": "",
+                                                                "effect_name": "Resolve Effect"
+                                                            },
+                                                            {
+                                                                "OTIO_SCHEMA": "Effect.1",
+                                                                "metadata": {
+                                                                    "Resolve_OTIO": {
+                                                                        "Effect Name": "Dynamic Zoom",
+                                                                        "Enabled": false,
+                                                                        "Name": "Dynamic Zoom",
+                                                                        "Parameters": [
+                                                                            {
+                                                                                "Default Parameter Value": [
+                                                                                    0.0,
+                                                                                    0.0
+                                                                                ],
+                                                                                "Key Frames": {
+                                                                                    "0": {
+                                                                                        "Value": [
+                                                                                            0.0,
+                                                                                            0.0
+                                                                                        ],
+                                                                                        "Variant Type": "POINTF"
+                                                                                    },
+                                                                                    "1000": {
+                                                                                        "Value": [
+                                                                                            0.0,
+                                                                                            0.0
+                                                                                        ],
+                                                                                        "Variant Type": "POINTF"
+                                                                                    }
+                                                                                },
+                                                                                "Parameter ID": "dynamicZoomCenter",
+                                                                                "Parameter Value": [
+                                                                                    0.0,
+                                                                                    0.0
+                                                                                ],
+                                                                                "Variant Type": "POINTF"
+                                                                            },
+                                                                            {
+                                                                                "Default Parameter Value": 1.0,
+                                                                                "Key Frames": {
+                                                                                    "0": {
+                                                                                        "Value": 0.8,
+                                                                                        "Variant Type": "Double"
+                                                                                    },
+                                                                                    "1000": {
+                                                                                        "Value": 1.0,
+                                                                                        "Variant Type": "Double"
+                                                                                    }
+                                                                                },
+                                                                                "Parameter ID": "dynamicZoomScale",
+                                                                                "Parameter Value": 1.0,
+                                                                                "Variant Type": "Double",
+                                                                                "maxValue": 100.0,
+                                                                                "minValue": 0.01
+                                                                            }
+                                                                        ],
+                                                                        "Type": 59
+                                                                    }
+                                                                },
+                                                                "name": "",
+                                                                "effect_name": "Resolve Effect"
+                                                            },
+                                                            {
+                                                                "OTIO_SCHEMA": "Effect.1",
+                                                                "metadata": {
+                                                                    "Resolve_OTIO": {
+                                                                        "Effect Name": "Composite",
+                                                                        "Enabled": true,
+                                                                        "Name": "Composite",
+                                                                        "Parameters": [],
+                                                                        "Type": 1
+                                                                    }
+                                                                },
+                                                                "name": "",
+                                                                "effect_name": "Resolve Effect"
+                                                            },
+                                                            {
+                                                                "OTIO_SCHEMA": "Effect.1",
+                                                                "metadata": {
+                                                                    "Resolve_OTIO": {
+                                                                        "Effect Name": "Lens Correction",
+                                                                        "Enabled": true,
+                                                                        "Name": "Lens Correction",
+                                                                        "Parameters": [],
+                                                                        "Type": 43
+                                                                    }
+                                                                },
+                                                                "name": "",
+                                                                "effect_name": "Resolve Effect"
+                                                            },
+                                                            {
+                                                                "OTIO_SCHEMA": "Effect.1",
+                                                                "metadata": {
+                                                                    "Resolve_OTIO": {
+                                                                        "Effect Name": "Retime and Scaling",
+                                                                        "Enabled": true,
+                                                                        "Name": "Retime and Scaling",
+                                                                        "Parameters": [],
+                                                                        "Type": 22
+                                                                    }
+                                                                },
+                                                                "name": "",
+                                                                "effect_name": "Resolve Effect"
+                                                            },
+                                                            {
+                                                                "OTIO_SCHEMA": "Effect.1",
+                                                                "metadata": {
+                                                                    "Resolve_OTIO": {
+                                                                        "Effect Name": "Video Faders",
+                                                                        "Enabled": true,
+                                                                        "Name": "Video Faders",
+                                                                        "Parameters": [],
+                                                                        "Type": 36
+                                                                    }
+                                                                },
+                                                                "name": "",
+                                                                "effect_name": "Resolve Effect"
+                                                            }
+                                                        ],
+                                                        "markers": [],
+                                                        "enabled": true,
+                                                        "media_references": {
+                                                            "DEFAULT_MEDIA": {
+                                                                "OTIO_SCHEMA": "ExternalReference.1",
+                                                                "metadata": {},
+                                                                "name": "white_src.mp4",
+                                                                "available_range": {
+                                                                    "OTIO_SCHEMA": "TimeRange.1",
+                                                                    "duration": {
+                                                                        "OTIO_SCHEMA": "RationalTime.1",
+                                                                        "rate": 24.0,
+                                                                        "value": 192.0
+                                                                    },
+                                                                    "start_time": {
+                                                                        "OTIO_SCHEMA": "RationalTime.1",
+                                                                        "rate": 24.0,
+                                                                        "value": 0.0
+                                                                    }
+                                                                },
+                                                                "available_image_bounds": null,
+                                                                "target_url": "/Users/samuelgursky/Movies/mcp_probe_tmp/white_src.mp4"
+                                                            }
+                                                        },
+                                                        "active_media_reference_key": "DEFAULT_MEDIA"
+                                                    }
+                                                ],
+                                                "kind": "Video"
+                                            },
+                                            {
+                                                "OTIO_SCHEMA": "Track.1",
+                                                "metadata": {
+                                                    "Resolve_OTIO": {
+                                                        "Audio Type": "Stereo",
+                                                        "Locked": false,
+                                                        "SoloOn": false
+                                                    }
+                                                },
+                                                "name": "Audio 1",
+                                                "source_range": null,
+                                                "effects": [],
+                                                "markers": [],
+                                                "enabled": true,
+                                                "children": [
+                                                    {
+                                                        "OTIO_SCHEMA": "Gap.1",
+                                                        "metadata": {},
+                                                        "name": "",
+                                                        "source_range": {
+                                                            "OTIO_SCHEMA": "TimeRange.1",
+                                                            "duration": {
+                                                                "OTIO_SCHEMA": "RationalTime.1",
+                                                                "rate": 24.0,
+                                                                "value": 24.0
+                                                            },
+                                                            "start_time": {
+                                                                "OTIO_SCHEMA": "RationalTime.1",
+                                                                "rate": 24.0,
+                                                                "value": 0.0
+                                                            }
+                                                        },
+                                                        "effects": [],
+                                                        "markers": [],
+                                                        "enabled": true
+                                                    }
+                                                ],
+                                                "kind": "Audio"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "OTIO_SCHEMA": "Clip.2",
+                                        "metadata": {
+                                            "Resolve_OTIO": {}
+                                        },
+                                        "name": "cut_src.mp4",
+                                        "source_range": {
+                                            "OTIO_SCHEMA": "TimeRange.1",
+                                            "duration": {
+                                                "OTIO_SCHEMA": "RationalTime.1",
+                                                "rate": 24.0,
+                                                "value": 24.0
+                                            },
+                                            "start_time": {
+                                                "OTIO_SCHEMA": "RationalTime.1",
+                                                "rate": 24.0,
+                                                "value": 96.0
+                                            }
+                                        },
+                                        "effects": [
+                                            {
+                                                "OTIO_SCHEMA": "Effect.1",
+                                                "metadata": {
+                                                    "Resolve_OTIO": {
+                                                        "Effect Name": "Transform",
+                                                        "Enabled": true,
+                                                        "Name": "Transform",
+                                                        "Parameters": [],
+                                                        "Type": 2
+                                                    }
+                                                },
+                                                "name": "",
+                                                "effect_name": "Resolve Effect"
+                                            },
+                                            {
+                                                "OTIO_SCHEMA": "Effect.1",
+                                                "metadata": {
+                                                    "Resolve_OTIO": {
+                                                        "Effect Name": "Cropping",
+                                                        "Enabled": true,
+                                                        "Name": "Cropping",
+                                                        "Parameters": [],
+                                                        "Type": 3
+                                                    }
+                                                },
+                                                "name": "",
+                                                "effect_name": "Resolve Effect"
+                                            },
+                                            {
+                                                "OTIO_SCHEMA": "Effect.1",
+                                                "metadata": {
+                                                    "Resolve_OTIO": {
+                                                        "Effect Name": "Dynamic Zoom",
+                                                        "Enabled": false,
+                                                        "Name": "Dynamic Zoom",
+                                                        "Parameters": [
+                                                            {
+                                                                "Default Parameter Value": [
+                                                                    0.0,
+                                                                    0.0
+                                                                ],
+                                                                "Key Frames": {
+                                                                    "-96": {
+                                                                        "Value": [
+                                                                            0.0,
+                                                                            0.0
+                                                                        ],
+                                                                        "Variant Type": "POINTF"
+                                                                    },
+                                                                    "904": {
+                                                                        "Value": [
+                                                                            0.0,
+                                                                            0.0
+                                                                        ],
+                                                                        "Variant Type": "POINTF"
+                                                                    }
+                                                                },
+                                                                "Parameter ID": "dynamicZoomCenter",
+                                                                "Parameter Value": [
+                                                                    0.0,
+                                                                    0.0
+                                                                ],
+                                                                "Variant Type": "POINTF"
+                                                            },
+                                                            {
+                                                                "Default Parameter Value": 1.0,
+                                                                "Key Frames": {
+                                                                    "-96": {
+                                                                        "Value": 0.8,
+                                                                        "Variant Type": "Double"
+                                                                    },
+                                                                    "904": {
+                                                                        "Value": 1.0,
+                                                                        "Variant Type": "Double"
+                                                                    }
+                                                                },
+                                                                "Parameter ID": "dynamicZoomScale",
+                                                                "Parameter Value": 1.0,
+                                                                "Variant Type": "Double",
+                                                                "maxValue": 100.0,
+                                                                "minValue": 0.01
+                                                            }
+                                                        ],
+                                                        "Type": 59
+                                                    }
+                                                },
+                                                "name": "",
+                                                "effect_name": "Resolve Effect"
+                                            },
+                                            {
+                                                "OTIO_SCHEMA": "Effect.1",
+                                                "metadata": {
+                                                    "Resolve_OTIO": {
+                                                        "Effect Name": "Composite",
+                                                        "Enabled": true,
+                                                        "Name": "Composite",
+                                                        "Parameters": [],
+                                                        "Type": 1
+                                                    }
+                                                },
+                                                "name": "",
+                                                "effect_name": "Resolve Effect"
+                                            },
+                                            {
+                                                "OTIO_SCHEMA": "Effect.1",
+                                                "metadata": {
+                                                    "Resolve_OTIO": {
+                                                        "Effect Name": "Lens Correction",
+                                                        "Enabled": true,
+                                                        "Name": "Lens Correction",
+                                                        "Parameters": [],
+                                                        "Type": 43
+                                                    }
+                                                },
+                                                "name": "",
+                                                "effect_name": "Resolve Effect"
+                                            },
+                                            {
+                                                "OTIO_SCHEMA": "Effect.1",
+                                                "metadata": {
+                                                    "Resolve_OTIO": {
+                                                        "Effect Name": "Retime and Scaling",
+                                                        "Enabled": true,
+                                                        "Name": "Retime and Scaling",
+                                                        "Parameters": [],
+                                                        "Type": 22
+                                                    }
+                                                },
+                                                "name": "",
+                                                "effect_name": "Resolve Effect"
+                                            },
+                                            {
+                                                "OTIO_SCHEMA": "Effect.1",
+                                                "metadata": {
+                                                    "Resolve_OTIO": {
+                                                        "Effect Name": "Video Faders",
+                                                        "Enabled": true,
+                                                        "Name": "Video Faders",
+                                                        "Parameters": [],
+                                                        "Type": 36
+                                                    }
+                                                },
+                                                "name": "",
+                                                "effect_name": "Resolve Effect"
+                                            }
+                                        ],
+                                        "markers": [],
+                                        "enabled": true,
+                                        "media_references": {
+                                            "DEFAULT_MEDIA": {
+                                                "OTIO_SCHEMA": "ExternalReference.1",
+                                                "metadata": {},
+                                                "name": "cut_src.mp4",
+                                                "available_range": {
+                                                    "OTIO_SCHEMA": "TimeRange.1",
+                                                    "duration": {
+                                                        "OTIO_SCHEMA": "RationalTime.1",
+                                                        "rate": 24.0,
+                                                        "value": 192.0
+                                                    },
+                                                    "start_time": {
+                                                        "OTIO_SCHEMA": "RationalTime.1",
+                                                        "rate": 24.0,
+                                                        "value": 0.0
+                                                    }
+                                                },
+                                                "available_image_bounds": null,
+                                                "target_url": "/Users/samuelgursky/Movies/mcp_probe_tmp/cut_src.mp4"
+                                            }
+                                        },
+                                        "active_media_reference_key": "DEFAULT_MEDIA"
+                                    }
+                                ],
+                                "kind": "Video"
+                            },
+                            {
+                                "OTIO_SCHEMA": "Track.1",
+                                "metadata": {
+                                    "Resolve_OTIO": {
+                                        "Audio Type": "Stereo",
+                                        "Locked": false,
+                                        "SoloOn": false
+                                    }
+                                },
+                                "name": "Audio 1",
+                                "source_range": null,
+                                "effects": [],
+                                "markers": [],
+                                "enabled": true,
+                                "children": [
+                                    {
+                                        "OTIO_SCHEMA": "Gap.1",
+                                        "metadata": {},
+                                        "name": "",
+                                        "source_range": {
+                                            "OTIO_SCHEMA": "TimeRange.1",
+                                            "duration": {
+                                                "OTIO_SCHEMA": "RationalTime.1",
+                                                "rate": 24.0,
+                                                "value": 48.0
+                                            },
+                                            "start_time": {
+                                                "OTIO_SCHEMA": "RationalTime.1",
+                                                "rate": 24.0,
+                                                "value": 0.0
+                                            }
+                                        },
+                                        "effects": [],
+                                        "markers": [],
+                                        "enabled": true
+                                    }
+                                ],
+                                "kind": "Audio"
+                            }
+                        ]
+                    }
+                ],
+                "kind": "Video"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {
+                    "Resolve_OTIO": {
+                        "Audio Type": "Stereo",
+                        "Locked": false,
+                        "SoloOn": false
+                    }
+                },
+                "name": "Audio 1",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Clip.2",
+                        "metadata": {
+                            "Resolve_OTIO": {
+                                "Channels": [
+                                    {
+                                        "Source Channel ID": 0,
+                                        "Source Track ID": 0
+                                    }
+                                ]
+                            }
+                        },
+                        "name": "cut_src.mp4",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 48.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 24.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [],
+                        "enabled": true,
+                        "media_references": {
+                            "DEFAULT_MEDIA": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "metadata": {},
+                                "name": "cut_src.mp4",
+                                "available_range": {
+                                    "OTIO_SCHEMA": "TimeRange.1",
+                                    "duration": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 24.0,
+                                        "value": 192.0
+                                    },
+                                    "start_time": {
+                                        "OTIO_SCHEMA": "RationalTime.1",
+                                        "rate": 24.0,
+                                        "value": 0.0
+                                    }
+                                },
+                                "available_image_bounds": null,
+                                "target_url": "/Users/samuelgursky/Movies/mcp_probe_tmp/cut_src.mp4"
+                            }
+                        },
+                        "active_media_reference_key": "DEFAULT_MEDIA"
+                    },
+                    {
+                        "OTIO_SCHEMA": "Gap.1",
+                        "metadata": {},
+                        "name": "",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 48.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 0.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [],
+                        "enabled": true
+                    }
+                ],
+                "kind": "Audio"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {
+                    "Resolve_OTIO": {
+                        "Audio Type": "Mono",
+                        "Locked": false,
+                        "SoloOn": false
+                    }
+                },
+                "name": "Audio 2",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Gap.1",
+                        "metadata": {},
+                        "name": "",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 96.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 0.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [],
+                        "enabled": true
+                    }
+                ],
+                "kind": "Audio"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {
+                    "Resolve_OTIO": {
+                        "Audio Type": "Mono",
+                        "Locked": false,
+                        "SoloOn": false
+                    }
+                },
+                "name": "Audio 3",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Gap.1",
+                        "metadata": {},
+                        "name": "",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 96.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 0.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [],
+                        "enabled": true
+                    }
+                ],
+                "kind": "Audio"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {
+                    "Resolve_OTIO": {
+                        "Audio Type": "Mono",
+                        "Locked": false,
+                        "SoloOn": false
+                    }
+                },
+                "name": "Audio 4",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Gap.1",
+                        "metadata": {},
+                        "name": "",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 96.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 0.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [],
+                        "enabled": true
+                    }
+                ],
+                "kind": "Audio"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {
+                    "Resolve_OTIO": {
+                        "Audio Type": "Mono",
+                        "Locked": false,
+                        "SoloOn": false
+                    }
+                },
+                "name": "Audio 5",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Gap.1",
+                        "metadata": {},
+                        "name": "",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 96.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 0.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [],
+                        "enabled": true
+                    }
+                ],
+                "kind": "Audio"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {
+                    "Resolve_OTIO": {
+                        "Audio Type": "Mono",
+                        "Locked": false,
+                        "SoloOn": false
+                    }
+                },
+                "name": "Audio 6",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Gap.1",
+                        "metadata": {},
+                        "name": "",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 96.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 0.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [],
+                        "enabled": true
+                    }
+                ],
+                "kind": "Audio"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {
+                    "Resolve_OTIO": {
+                        "Audio Type": "Mono",
+                        "Locked": false,
+                        "SoloOn": false
+                    }
+                },
+                "name": "Audio 7",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Gap.1",
+                        "metadata": {},
+                        "name": "",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 96.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 0.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [],
+                        "enabled": true
+                    }
+                ],
+                "kind": "Audio"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {
+                    "Resolve_OTIO": {
+                        "Audio Type": "Mono",
+                        "Locked": false,
+                        "SoloOn": false
+                    }
+                },
+                "name": "Audio 8",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Gap.1",
+                        "metadata": {},
+                        "name": "",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 96.0
+                            },
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": 24.0,
+                                "value": 0.0
+                            }
+                        },
+                        "effects": [],
+                        "markers": [],
+                        "enabled": true
+                    }
+                ],
+                "kind": "Audio"
+            }
+        ]
+    }
+}

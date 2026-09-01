@@ -1430,3 +1430,36 @@ test('parseOTIO walks media-less generator clips as BL legs and the bridge autho
   const ev2 = parseOTIO({ OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [gen, clip] }] } }, { fps: 24 });
   assert.deepEqual(ev2.map((e) => [e.source.split('/').pop(), e.color || null]), [['BL', { r: 1, g: 1, b: 1, a: 1 }], ['solid color.mp4', null]]);
 });
+
+// E120: Resolve's OTIO writer nests a COMPOUND CLIP as a Stack inside the
+// track (its source_range = the trim window into the compound, nested
+// recursively); parseOTIO silently dropped it — a 96-frame timeline parsed as
+// 48. Fixture = verbatim EXPORT_OTIO of the E57 nested-compound timeline
+// (depth 2). Stacks now flatten into the parent's record time with
+// fromCompound on each flattened cut.
+test('parseOTIO flattens nested Stacks (compound clips) into record time (E120)', () => {
+  const otio = JSON.parse(fs.readFileSync(new URL('./fixtures/E120_resolve_nested_export.otio', import.meta.url), 'utf8'));
+  const ev = parseOTIO(otio, { fps: 24 }).filter((e) => e.track === 'V');
+  assert.deepEqual(ev.map((e) => [e.source.split('/').pop(), e.srcIn, e.srcOut, e.recIn, e.recOut, e.fromCompound || null]), [
+    ['cut_src.mp4', 24, 72, 0, 48, null],
+    ['white_src.mp4', 0, 24, 48, 72, 'E57_OUT'],
+    ['cut_src.mp4', 96, 120, 72, 96, 'E57_OUT'],
+  ]);
+  // A trimmed window: a Stack whose source_range starts 6 frames in and runs 30 → the inner
+  // 24f white clip is cut to 18 frames from its 7th source frame; the inner second clip is clipped at 30.
+  const rt = (v) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: 24, value: v });
+  const tr = (s, d) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s), duration: rt(d) });
+  const clip = (u, i, d) => ({ OTIO_SCHEMA: 'Clip.2', name: u, source_range: tr(i, d), media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: '/m/' + u }, effects: [], markers: [] });
+  const stack = { OTIO_SCHEMA: 'Stack.1', name: 'CMP', source_range: tr(6, 30), children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('w.mp4', 0, 24), clip('c.mp4', 100, 24)] }] };
+  const tl = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('a.mp4', 0, 10), stack] }] } };
+  const ev2 = parseOTIO(tl, { fps: 24 });
+  assert.deepEqual(ev2.map((e) => [e.source.split('/').pop(), e.srcIn, e.srcOut, e.recIn, e.recOut]), [['a.mp4', 0, 10, 0, 10], ['w.mp4', 6, 24, 10, 28], ['c.mp4', 100, 112, 28, 40]]);
+  // The bridge's ledger names the flattened compound.
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const { report } = eventsToAssembleSpec(ev, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 }, 'white_src.mp4': { mediaFilePath: '/m/white_src.mp4', spec: spec24 } } });
+  assert.deepEqual(report.flattenedCompounds, ['E57_OUT']);
+  assert.equal(report.flattenedCompoundEvents, 2);
+  // Null control: a stack-free OTIO walks exactly as before.
+  const plain = parseOTIO({ OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('a.mp4', 0, 10)] }] } }, { fps: 24 });
+  assert.deepEqual(plain.map((e) => [e.source.split('/').pop(), e.recIn, e.recOut, e.fromCompound]), [['a.mp4', 0, 10, undefined]]);
+});
