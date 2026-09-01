@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.194.0 — E142: a cut re-aligned inside a dissolve is the same picture
+
+### Added
+
+- **A cut re-aligned inside an unchanged dissolve is the same picture.**
+  Premiere keeps a fractional dissolve alignment (its cut sat 12 frames into a
+  46-frame span); Resolve's conform re-centres it (23). The dissolve covers
+  the same record frames from the same media either way, but the changelist
+  read each one as a `moved` incoming plus a `trimmed` outgoing. When a
+  transition's span is unchanged and the cut inside it moved with the
+  incoming's source-in and the outgoing's source-out sliding by the same
+  delta (scaled by the clip's speed for a retimed clip, read through a TC
+  rebase), the pair folds into ONE `junction_realigned` — a consequence, not
+  an edit — both sides count as retained, and the junction diff no longer
+  reports the pre-roll change as a second fact. A dissolve whose span moved,
+  or a cut whose source did not slide with it, stays a real move.
+- **Two labels of one transition family are a relabel.** `Cross Dissolve
+  (Legacy)` in Premiere and `Cross Dissolve` in Resolve are the same effect;
+  they now land in `transitionRelabels` instead of `transition_changed`. A
+  different family (a push, a wipe) is still a type change.
+- **Shape `equivalent`.** A diff whose only changes are consequences (junctions
+  re-aligned, labels) now says so, with a note, instead of `edit`.
+
+On the real reel (Premiere REEL_02 pix-lock vs the Resolve conform): 206 of
+228 cuts retained (189 before), 9 junctions re-aligned, 10 relabels, one real
+move (a dissolve whose span moved), one real transition change, 19 trims on
+the eye-matched files, the second mix track, the reversed tail leader and
+frozen black — symmetric in both directions.
+
 ## What's New in v2.193.0 — E141: relink-aware changelist
 
 ### Added

@@ -476,3 +476,48 @@ test('turnover_changelist null controls: a different shot in the same window is 
   assert.equal(explicit.shape, 'identical');
   assert.deepEqual(explicit.sourceAliases, [{ pattern: ' 4K-2K ', replace: ' 4K ', inferred: false }]);
 });
+
+// ── E142: a junction re-aligned inside an unchanged dissolve is the same picture ──
+test('turnover_changelist folds a re-centred cut inside an unchanged dissolve into junction_realigned → shape equivalent (E142)', () => {
+  const dis = (type, recStart) => ({ type, duration: 24, recStart });
+  const old = [cut('V', 'A.mov', 1000, 0, 100), cut('V', 'B.mov', 5000, 100, 100, { transition: dis('Cross Dissolve (Legacy)', 88) })];
+  // Resolve re-centred the 24-frame span 88–112: the cut moves 100 → 111, A's source out and B's source in slide by 11
+  const nu = [cut('V', 'A.mov', 1000, 0, 111), cut('V', 'B.mov', 5011, 111, 89, { transition: dis('Cross Dissolve', 88) })];
+  nu[1].srcOut = 5100;
+  const d = diffChangelist(old, nu);
+  assert.equal(d.shape, 'equivalent', JSON.stringify(d.changes));
+  assert.deepEqual(d.counts, { junction_realigned: 1 });
+  const j = d.changes[0];
+  assert.deepEqual([j.track, j.oldRecIn, j.newRecIn, j.delta, j.span, j.outgoing, j.incoming], ['V', 100, 111, 11, [88, 112], 'A.mov', 'B.mov']);
+  assert.deepEqual(d.transitionRelabels, [{ track: 'V', junction: 111, old: 'Cross Dissolve (Legacy)', new: 'Cross Dissolve' }]);
+  assert.match(d.note, /1 junction\(s\) re-aligned/);
+  assert.equal(d.retained, 2, 'both sides of a re-aligned junction are retained cuts');
+});
+
+test('turnover_changelist null controls: a dissolve whose span moved is a real move + trim; a source slide that does not match the cut is a trim (E142)', () => {
+  const dis = (type, recStart) => ({ type, duration: 24, recStart });
+  const old = [cut('V', 'A.mov', 1000, 0, 100), cut('V', 'B.mov', 5000, 100, 100, { transition: dis('Cross Dissolve', 88) })];
+  // the span itself moved (88–112 → 60–84) with the cut: not a realign
+  const moved = [cut('V', 'A.mov', 1000, 0, 72), cut('V', 'B.mov', 4972, 72, 128, { transition: dis('Cross Dissolve', 60) })];
+  moved[1].srcOut = 5100;
+  const m = diffChangelist(old, moved);
+  assert.equal(m.shape, 'edit');
+  assert.equal(m.counts.junction_realigned, undefined);
+  assert.equal(m.counts.moved, 1);
+  // same span, cut moved, but B's source did NOT slide with it → the picture changed → still moved
+  const slipped = [cut('V', 'A.mov', 1000, 0, 111), cut('V', 'B.mov', 5000, 111, 89, { transition: dis('Cross Dissolve', 88) })];
+  const sl = diffChangelist(old, slipped);
+  assert.equal(sl.counts.moved, 1);
+  assert.equal(sl.counts.junction_realigned, undefined);
+  // a RETIMED incoming slides its source at its speed: an 8-frame cut move on an 80% clip slides 6 source frames (measured: the reel's V3 fade-in)
+  const fadeOld = [cut('V3', 'BL', 0, 100, 0), { ...cut('V3', 'R.mov', 41917, 100, 41, { transition: { type: 'Cross Dissolve (Legacy)', duration: 8, recStart: 100 } }), srcOut: 41949, speed: 80 }];
+  const fadeNew = [cut('V3', 'BL', 0, 108, 0), { ...cut('V3', 'R.mov', 41923, 108, 33, { transition: { type: 'Cross Dissolve', duration: 8, recStart: 100 } }), srcOut: 41949, speed: 80 }];
+  const f = diffChangelist(fadeOld, fadeNew);
+  assert.deepEqual(f.counts, { junction_realigned: 1 }, JSON.stringify(f.changes));
+  assert.equal(f.shape, 'equivalent');
+  // a genuinely different transition family is still a type change
+  const wipe = [cut('V', 'A.mov', 1000, 0, 100), cut('V', 'B.mov', 5000, 100, 100, { transition: dis('Push', 88) })];
+  const w = diffChangelist(old, wipe);
+  assert.equal(w.counts.transition_changed, 1);
+  assert.deepEqual(w.transitionRelabels, []);
+});

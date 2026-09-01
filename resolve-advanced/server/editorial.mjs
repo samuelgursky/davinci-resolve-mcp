@@ -841,7 +841,11 @@ function pairEvents(oldEvents, newEvents, recTol = 1) {
  * opts.sourceAliases ({from,to} | {pattern,replace}) rename old sources first, a
  * systematic rename is inferred from same-window unpaired cuts (opts.inferAliases
  * !== false) and reported in sourceAliases, and a constant per-source source-window
- * shift witnessed on ≥2 cuts is a TC rebase (sourceTcOffsets), not trims.
+ * shift witnessed on ≥2 cuts is a TC rebase (sourceTcOffsets), not trims. A cut moved
+ * INSIDE an unchanged dissolve span with both source windows sliding by the same delta
+ * is one junction_realigned (E142) — a consequence — and two labels of one transition
+ * family are a relabel (transitionRelabels), so a picture-identical conform reads
+ * shape 'equivalent'.
  * PLUS per-junction {kind: transition_added|transition_dropped|transition_changed}
  * (fade 'in'/'out' or null for a dissolve). Zero-length carrier lines and the
  * black legs that carry fades fold into the junction diff instead of reading
@@ -1028,10 +1032,60 @@ function diffChangelistOnce(oldEvents, newEvents, opts = {}) {
     }
   }
 
+  // JUNCTION REALIGN (E142): a cut that moved INSIDE an unchanged dissolve
+  // span, with the incoming's source in and the outgoing's source out
+  // sliding by the same amount, shows the identical picture — the dissolve
+  // covers the same record frames from the same media either way. Premiere
+  // keeps a fractional alignment (its cut sat 12 frames into a 46-frame
+  // span); Resolve's conform re-centred it (23). Measured on a real reel: 9
+  // of 10 residual 'moved' cuts were this, the tenth a real edit (its span
+  // moved too). Fold each into one junction_realigned — a consequence, not
+  // an edit — and let the junction diff read the pre-roll change as the
+  // same fact.
+  const realigned = new Set();
+  const pairAtIn = (recIn, track) => P.pairs.find((pr) => pr.oe.track === track && pr.oe.recIn === recIn);
+  const pairAtOut = (recOut, track) => P.pairs.find((pr) => pr.oe.track === track && pr.oe.recOut === recOut);
+  for (const ot of P.old.transitions) {
+    const nt = P.new.transitions.find((t) => t.track === ot.track && Math.abs(t.start - ot.start) <= recTol && Math.abs(t.end - ot.end) <= recTol);
+    if (!nt) continue;
+    const delta = nt.junction - ot.junction;
+    if (!delta) continue;
+    const inc = pairAtIn(ot.junction, ot.track), out = pairAtOut(ot.junction, ot.track);
+    if (!inc || inc.ne.recIn !== nt.junction) continue;
+    // The source slides by the cut delta at the clip's speed (a retimed
+    // incoming at 80% slides 6 source frames for an 8-frame cut move —
+    // measured on the reel's V3 fade-in); a TC-rebased outgoing is read
+    // through its offset.
+    const slide = (ev) => Math.round(delta * ((ev.speed ?? 100) / 100));
+    const near = (a, b) => a != null && b != null && Math.abs(a - b) <= 1;
+    const offOf = (ev) => (tcOffsets.get(String(ev.source ?? '')) ? tcOffsets.get(String(ev.source ?? '')).offset : 0);
+    const incOk = near(inc.ne.srcIn - (inc.oe.srcIn + offOf(inc.ne)), slide(inc.ne)) && near(inc.ne.srcOut, inc.oe.srcOut + offOf(inc.ne));
+    const outOk = !out || (out.ne.recOut === nt.junction
+      && near(out.ne.srcOut - (out.oe.srcOut + offOf(out.ne)), slide(out.ne))
+      && near(out.ne.srcIn, out.oe.srcIn == null ? null : out.oe.srcIn + offOf(out.ne)));
+    if (!incOk || !outOk) continue;
+    const isMoveOfInc = (c) => c.kind === 'moved' && c.track === ot.track && c.oldRecIn === inc.oe.recIn && c.newRecIn === inc.ne.recIn;
+    const isTrimOfOut = (c) => out && c.kind === 'trimmed' && c.track === ot.track && c.oldRecIn === out.oe.recIn && c.newRecIn === out.ne.recIn;
+    const before = changes.length;
+    for (let i = changes.length - 1; i >= 0; i--) if (isMoveOfInc(changes[i]) || isTrimOfOut(changes[i])) changes.splice(i, 1);
+    if (changes.length === before && !P.pairs.includes(inc)) continue;
+    realigned.add(`${nt.track}|${nt.junction}`);
+    // Both sides show the same picture: they are retained cuts, not edits.
+    for (const pr of [inc, out]) if (pr && !retained.includes(pr.ne)) retained.push(pr.ne);
+    changes.push({
+      kind: 'junction_realigned', track: ot.track, oldRecIn: ot.junction, newRecIn: nt.junction, delta,
+      span: [nt.start, nt.end], outgoing: nt.outgoing, incoming: nt.incoming, type: nt.type, duration: nt.duration,
+    });
+  }
+
   // Junction diff: a transition is identified by what it joins (track,
   // outgoing, incoming, fade side) and pairs with the closest junction; only
   // its SHAPE (duration / type / pre-roll) makes a change — a junction that
-  // travelled with its clips is the clips' move, already reported.
+  // travelled with its clips is the clips' move, already reported. Two
+  // labels for one effect family ("Cross Dissolve (Legacy)" in Premiere,
+  // "Cross Dissolve" in Resolve — E142) are a relabel, not a change.
+  const typeFamily = (t) => String(t ?? '').toLowerCase().replace(/\(legacy\)/g, '').replace(/^(video|audio)\s+/, '').replace(/\s+/g, ' ').trim();
+  const relabels = [];
   const tKey = (t) => `${t.track}|${t.outgoing ?? ''}|${t.incoming}|${t.fade ?? 'x'}`;
   const tPool = P.old.transitions.map((t) => ({ t, used: false }));
   const tDesc = (t) => ({ track: t.track, outgoing: t.outgoing, incoming: t.incoming, fade: t.fade, type: t.type, duration: t.duration });
@@ -1046,8 +1100,11 @@ function diffChangelistOnce(oldEvents, newEvents, opts = {}) {
     const ot = cands[0].t;
     const deltas = {};
     if (ot.duration !== nt.duration) deltas.duration = { old: ot.duration, new: nt.duration };
-    if (String(ot.type) !== String(nt.type)) deltas.type = { old: ot.type, new: nt.type };
-    if (ot.pre !== nt.pre) deltas.pre = { old: ot.pre, new: nt.pre };
+    if (String(ot.type) !== String(nt.type)) {
+      if (typeFamily(ot.type) === typeFamily(nt.type)) relabels.push({ track: nt.track, junction: nt.junction, old: ot.type, new: nt.type });
+      else deltas.type = { old: ot.type, new: nt.type };
+    }
+    if (ot.pre !== nt.pre && !realigned.has(`${nt.track}|${nt.junction}`)) deltas.pre = { old: ot.pre, new: nt.pre };
     if (Object.keys(deltas).length) {
       changes.push({
         kind: 'transition_changed', ...tDesc(nt), oldRecIn: ot.junction, newRecIn: nt.junction,
@@ -1073,16 +1130,19 @@ function diffChangelistOnce(oldEvents, newEvents, opts = {}) {
   // appeared with the cuts it joins) is a consequence, not an edit.
   const touches = (kind, junction, track) => changes.some((c) => c.kind === kind && c.track === track
     && ((kind === 'gone' ? [c.oldRecIn, c.oldRecOut] : [c.newRecIn, c.newRecOut]).some((v) => Math.abs((v ?? -1e9) - junction) <= recTol)));
-  const consequential = (c) => (c.kind === 'transition_dropped' && touches('gone', c.oldRecIn, c.track))
+  const consequential = (c) => c.kind === 'junction_realigned'
+    || (c.kind === 'transition_dropped' && touches('gone', c.oldRecIn, c.track))
     || (c.kind === 'transition_added' && touches('new', c.newRecIn, c.track));
   const edits = changes.filter((c) => c.kind !== 'gone' && c.kind !== 'new' && !consequential(c)).length;
   const gone = counts.gone || 0, added = counts.new || 0;
   const oldCuts = P.old.cuts.length + skipOld.size, newCuts = P.new.cuts.length + skipNew.size;
   let shape = 'edit';
   if (!changes.length) shape = 'identical';
+  else if (!edits && !gone && !added) shape = 'equivalent';
   else if (!edits && gone && !added && retained.length) shape = 'subset';
   else if (!edits && added && !gone && retained.length) shape = 'superset';
   const shapeInfo = { shape, retained: retained.length, oldCuts, newCuts };
+  if (shape === 'equivalent') shapeInfo.note = `same picture: ${counts.junction_realigned || 0} junction(s) re-aligned inside unchanged dissolves${relabels.length ? `, ${relabels.length} transition label(s) differ` : ''} — nothing edited`;
   if (shape === 'subset' || shape === 'superset') {
     const of = shape === 'subset' ? oldCuts : newCuts;
     shapeInfo.sparse = retained.length / Math.max(1, of) < 0.5;
@@ -1097,6 +1157,7 @@ function diffChangelistOnce(oldEvents, newEvents, opts = {}) {
     carriersFolded: { old: P.old.carriers.length, new: P.new.carriers.length },
     ...shapeInfo,
     sourceTcOffsets: [...tcOffsets.values()].map((t) => ({ source: t.source, offset: t.offset, cuts: t.cuts, rebased: t.rebased })),
+    transitionRelabels: relabels.slice(0, 200),
     gate: 'review',
     __P: P,
   };
