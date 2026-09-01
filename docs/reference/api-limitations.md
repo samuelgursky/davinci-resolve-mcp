@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 35 missing capabilities, 50 bugs / unreliable behaviors.
+**Totals:** 36 missing capabilities, 50 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -300,6 +300,14 @@ equivalent, blocking full automation.
 - **Behavior:** There is no GetCDL, so applied CDL values cannot be read back; the bool is the only signal and it returns False with no reason (missing node, still/generator item, values silently rejected). NodeIndex is 1-based (README line 6) and must not exceed Graph.GetNumNodes() — note TimelineItem.GetNumNodes is deprecated; the count lives on item.GetNodeGraph().
 - **Workaround / current handling:** Read item.GetNodeGraph().GetNumNodes() before SetCDL and diagnose a False against the node count and clip type. Prove the applied look with a rendered frame (gallery_stills grab_and_export or Project.ExportCurrentFrameAsStill), not the return value.
 - **Tags:** color, cdl, readback, silent-failure
+
+### Timeline.Export EXPORT_EDL (video-only, reel AX, clip-name comments)
+
+- **Object:** `Timeline`
+- **Signature:** `(filePath, EXPORT_EDL, EXPORT_NONE) -> bool`
+- **Behavior:** Resolve's CMX EDL writer (measured on Studio 19.1.3.7, E105) emits VIDEO events only — audio legs never appear; names every file source by the generic reel AX and carries the real names in `* FROM CLIP NAME:` / `* TO CLIP NAME:` comments; writes black legs as reel BL; places dissolve junctions at the CMX start-at-cut position (the overlap start, not the centered junction the timeline holds); and WRITES BL fades that its own EDL importer then drops. The FCP7 XML writer, by contrast, carries audio, writes transition-adjacent clip edges as -1 (the junction), and emits `speed` followed by `variablespeed` 0 in the same timeremap effect.
+- **Workaround / current handling:** For round-trip QC prefer EXPORT_OTIO (carries audio, retimes as LinearTimeWarp/FreezeFrame, exact spans). When an EDL is the required deliverable, expect no audio (editorial.verify_roundtrip reports audioNotInExport) and resolve AX reels through the clip-name comments (parseEDL does). Use EXPORT_EDL — there is no EXPORT_CMX_3600 constant, and an unknown name reaches Export as a string that returns a bare False (timeline.export_timeline_checked now refuses it loudly).
+- **Tags:** timeline, export, edl, audio, silent-failure
 
 ## Bugs / Unreliable Behavior (please fix)
 

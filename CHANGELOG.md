@@ -2,6 +2,45 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.163.0 — E105: QC through every export format
+
+One faded, dissolved, retimed conform exported from Resolve three ways — OTIO,
+FCP7 XML, and CMX EDL — and pushed through `editorial.verify_roundtrip`. All
+three now close `pass: true`; getting there measured four laws of Resolve's own
+writers and fixed the parsers to match.
+
+### Fixed
+
+- **Every FCP7-XML retime read as a FREEZE**: Resolve's timeremap effect
+  writes `speed` 50 followed by `variablespeed` 0, and a loose `/speed/`
+  parameter match let the second overwrite the first. Exact parameter
+  matching now, with the `reverse` flag read alongside.
+- **FCP7 `-1` clip edges** (transition-adjacent) are resolved to the
+  transition's junction — the span center for `center` alignment — with the
+  clip's `in` advanced by the overlap offset so source stays record-aligned;
+  `out - in` is the record duration even under a retime. Solid Color
+  `generatoritem`s walk as black legs, and fade transitions attach to the
+  picture rather than the black.
+- **CMX EDL exports name every file source reel `AX`** with the real names in
+  `* FROM/TO CLIP NAME` comments; `parseEDL` now applies them (TO = incoming,
+  FROM = outgoing of a dissolve pair), keeping specific reels intact.
+- **`timeline.export_timeline_checked` refuses unresolved export constants
+  loudly.** A made-up `EXPORT_CMX_3600` reached `Timeline.Export` as a string
+  and came back as a bare `success: false`; the real constant is `EXPORT_EDL`,
+  and the refusal now lists the vocabulary.
+
+### Added
+
+- `verify_roundtrip` reports `audioNotInExport` when the export carries no
+  audio at all (Resolve's EDL writer is video-only — measured) instead of
+  failing, mirroring `markersNotInExport`.
+
+### Measured (filed in api-limitations)
+
+- `EXPORT_EDL` is video-only, writes reel `AX` + clip-name comments, places
+  dissolve junctions at the CMX start-at-cut position, and writes the BL
+  fades its own importer drops.
+
 ## What's New in v2.162.0 — freeze parity: Avid 0% motion effects are freezes
 
 ### Fixed

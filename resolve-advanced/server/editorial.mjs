@@ -90,6 +90,29 @@ export function parseEDL(text, opts = {}) {
     // at an absolute record timecode. Emitted as track 'MARKER' pseudo-events
     // (recIn only) so the assemble bridge can author them; consumers that
     // filter video/audio by track shape ignore them.
+    // `* FROM CLIP NAME:` / `* TO CLIP NAME:` comments (E105): Resolve's own
+    // EDL writer names every file source by the generic reel AX and carries
+    // the real clip name here. TO names the incoming (the last event, a D
+    // line's), FROM the outgoing (the event before a transition pair, else
+    // the last event). A generic reel (AX/BL-less) takes the clip name as
+    // its source so sourceMap and QC key on something real; a specific reel
+    // keeps it, with clipName carried alongside.
+    const cn = /^\*\s*(FROM|TO)\s+CLIP\s+NAME:\s*(.+?)\s*$/i.exec(line);
+    if (cn) {
+      const which = cn[1].toUpperCase();
+      const clipName = cn[2];
+      const last = [...events].reverse().find((e) => e.track !== 'MARKER');
+      let target = last;
+      if (which === 'FROM' && last && last.transition) {
+        const prev = [...events].reverse().find((e) => e !== last && e.track === last.track && e.recOut === last.recIn);
+        if (prev) target = prev;
+      }
+      if (target && !/^(BL|BLACK)$/i.test(String(target.source))) {
+        target.clipName = clipName;
+        if (/^AX$/i.test(String(target.source))) target.source = clipName;
+      }
+      continue;
+    }
     const loc = /^\*\s*LOC:\s*(\d{2}:\d{2}:\d{2}[:;]\d{2})\s+(\S+)\s*(.*)$/i.exec(line);
     if (loc) {
       events.push(evt({
@@ -273,36 +296,69 @@ export function parseXMEMLEvents(xml, opts = {}) {
   const events = [];
   let idx = 1;
   const seqRate = opts.fps || 24;
+  let currentJunctions = [];
   const walk = (node, track) => {
     if (!node) return;
     const items = Array.isArray(node) ? node : [node];
     for (const it of items) {
       const name = it.name || (it.file && it.file.name) || 'UNKNOWN';
-      const start = Number(it.start);
-      const end = Number(it.end);
+      const start0 = Number(it.start);
+      const end0 = Number(it.end);
       const inF = Number(it.in);
       const outF = Number(it.out);
       let speed = 100,
         reverse = false;
-      // speed via a timeremap/motion filter (best-effort)
+      // speed via a timeremap/motion filter. EXACT parameter match (E105):
+      // Resolve's own FCP7 writer emits `speed` 50 followed by
+      // `variablespeed` 0 in the same effect, and a loose /speed/ match let
+      // the second overwrite the first — every retime read as a FREEZE.
       const filters = it.filter ? (Array.isArray(it.filter) ? it.filter : [it.filter]) : [];
       for (const fl of filters) {
         const params = fl.effect && fl.effect.parameter ? (Array.isArray(fl.effect.parameter) ? fl.effect.parameter : [fl.effect.parameter]) : [];
         for (const pm of params) {
-          if (/speed/i.test(pm.name || '') && pm.value != null) {
-            speed = Math.abs(Number(pm.value));
-            reverse = Number(pm.value) < 0;
+          const pid = String(pm.parameterid || pm.name || '').trim().toLowerCase();
+          if (pid === 'speed' && pm.value != null && typeof pm.value !== 'object') {
+            const v = Number(pm.value);
+            if (Number.isFinite(v)) { speed = Math.abs(v); reverse = v < 0; }
+          } else if (pid === 'reverse' && /^true$/i.test(String(pm.value))) {
+            reverse = true;
           }
         }
       }
-      if (Number.isFinite(start) && Number.isFinite(end)) {
+      // FCP7 `-1` EDGES (E105, measured against Resolve's own FCP7 writer):
+      // a clipitem edge under a transitionitem is written as -1 and means
+      // "this edge is the adjacent transition's JUNCTION" — the span center
+      // for alignment center, its start/end for start-black/end-black.
+      // `out - in` is the RECORD duration even under a retime (Resolve
+      // writes out = in + record length), which anchors the missing edge.
+      let start = start0;
+      let end = end0;
+      let inAdj = 0;
+      const dur = Number.isFinite(inF) && Number.isFinite(outF) ? outF - inF : null;
+      const junctions = currentJunctions;
+      if (start === -1 && end !== -1 && dur != null) start = end - dur;
+      else if (end === -1 && start !== -1 && dur != null) end = start + dur;
+      else if (start === -1 && end === -1 && dur != null && junctions.length) {
+        const js = junctions.map((j) => j.frame).sort((a, b) => a - b);
+        const pair = js.find((a) => js.includes(a + dur));
+        if (pair != null) { start = pair; end = pair + dur; }
+      }
+      // A -1 START edge's `in` is the source at the OVERLAP start (the
+      // clip's material begins under the transition), while the resolved
+      // start is the junction — so `in` advances by the same offset to stay
+      // record-aligned (measured: srcIn read 12 short without this).
+      if (start0 === -1 && Number.isFinite(start)) {
+        const j = junctions.find((jj) => jj.frame === start);
+        if (j) inAdj = start - j.start;
+      }
+      if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= 0) {
         // FCP7 clipitem <marker> children are CLIP markers (frames relative
         // to the clip's own <in>) — routed to item markers like OTIO's (E81).
         const mks = it.marker ? (Array.isArray(it.marker) ? it.marker : [it.marker]) : [];
         const itemMarkers = mks
           .filter((mk) => Number.isFinite(Number(mk.in)))
           .map((mk) => ({ frame: Number(mk.in) - inF, name: mk.name != null ? String(mk.name) : undefined, note: mk.comment != null ? String(mk.comment) : undefined }));
-        events.push(evt({ index: idx++, track, source: name, srcIn: inF, srcOut: outF, recIn: start, recOut: end, speed, reverse, itemMarkers: itemMarkers.length ? itemMarkers : undefined, fps: seqRate }));
+        events.push(evt({ index: idx++, track, source: name, srcIn: Number.isFinite(inF) ? inF + inAdj : inF, srcOut: Number.isFinite(outF) ? outF + inAdj : outF, recIn: start, recOut: end, speed, reverse, itemMarkers: itemMarkers.length ? itemMarkers : undefined, fps: seqRate }));
       }
     }
   };
@@ -313,7 +369,24 @@ export function parseXMEMLEvents(xml, opts = {}) {
     vtracks.forEach((t, vi) => {
       const label = vi === 0 ? 'V' : `V${vi + 1}`;
       const before = events.length;
+      // Junctions of this track's transitionitems, for -1 edge resolution.
+      const tlist = t.transitionitem ? (Array.isArray(t.transitionitem) ? t.transitionitem : [t.transitionitem]) : [];
+      currentJunctions = tlist.map((tr) => {
+        const s0 = Number(tr.start), e0 = Number(tr.end);
+        if (!Number.isFinite(s0) || !Number.isFinite(e0)) return null;
+        const al = String(tr.alignment || 'center').toLowerCase();
+        const frame = al === 'start-black' || al === 'start' ? s0 : al === 'end-black' || al === 'end' ? e0 : Math.round((s0 + e0) / 2);
+        return { frame, start: s0, end: e0 };
+      }).filter(Boolean);
+      // Solid Color generatoritems are BLACK legs (what Resolve writes for a
+      // fade's black side); they walk as BL events so fades round-trip.
+      const gens = t.generatoritem ? (Array.isArray(t.generatoritem) ? t.generatoritem : [t.generatoritem]) : [];
+      for (const g of gens) {
+        if (!/solid color|black/i.test(String(g.name || ''))) continue;
+        walk([{ ...g, name: 'BL', filter: undefined, marker: undefined }], label);
+      }
       if (t.clipitem) walk(t.clipitem, label);
+      currentJunctions = [];
       // <transitionitem> siblings: attach each to the INCOMING clip event —
       // the one whose record-in falls inside the transition's span. Resolve's
       // OWN XMEML importer writes these as elements that render INERT on
@@ -326,7 +399,11 @@ export function parseXMEMLEvents(xml, opts = {}) {
         const s = Number(tr.start), e2 = Number(tr.end);
         if (!Number.isFinite(s) || !Number.isFinite(e2)) continue;
         const effectId = (tr.effect && (tr.effect.effectid || tr.effect.name)) || 'Cross Dissolve';
-        const incoming = events.slice(before).find((ev) => ev.track === label && ev.recIn > s - 1 && ev.recIn <= e2);
+        const isBLev = (ev) => /^(BL|BLACK)$/i.test(String(ev.source || '').trim());
+        const inSpan = (ev) => ev.track === label && ev.recIn > s - 1 && ev.recIn <= e2;
+        // Prefer the PICTURE as the incoming: a Solid Color generatoritem in
+        // the same span is the fade's black side, not the clip fading in.
+        const incoming = events.slice(before).find((ev) => inSpan(ev) && !isBLev(ev)) || events.slice(before).find(inSpan);
         // recStart carries the transitionitem's EXPLICIT record span start
         // (sequence-relative) so the bridge reproduces the editor's actual
         // alignment instead of assuming centered.

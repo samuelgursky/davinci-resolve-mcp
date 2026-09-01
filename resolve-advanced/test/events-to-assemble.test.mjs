@@ -922,6 +922,67 @@ test('OTIO FreezeFrame effects ingest as freezes, write back as FreezeFrame, and
   assert.equal(verifyRoundtrip(events, flat).mismatches[0].kind, 'retime');
 });
 
+// E105: QC through every export format. Resolve's own writers measured on a
+// faded/dissolved/retimed conform — FCP7 XML (-1 junction edges, exact
+// `speed` next to `variablespeed` 0, Solid Color generatoritems), CMX EDL
+// (reel AX + FROM/TO CLIP NAME comments, video-only), OTIO (control).
+test('parseXMEMLEvents reads Resolve-written -1 edges, exact speed, and Solid Color generators (E105)', () => {
+  const xml = [
+    "<?xml version='1.0'?><xmeml version='4'><sequence><rate><timebase>24</timebase></rate><media><video><track>",
+    '<generatoritem id="g0"><name>Solid Color</name><start>0</start><end>-1</end><in>0</in><out>12</out></generatoritem>',
+    '<transitionitem><start>0</start><end>24</end><alignment>center</alignment><effect><effectid>Cross Dissolve</effectid></effect></transitionitem>',
+    '<clipitem id="c0"><name>cut_src.mp4</name><start>-1</start><end>-1</end><in>24</in><out>84</out></clipitem>',
+    '<transitionitem><start>60</start><end>84</end><alignment>center</alignment><effect><effectid>Cross Dissolve</effectid></effect></transitionitem>',
+    '<clipitem id="c1"><name>white_src.mp4</name><start>-1</start><end>120</end><in>12</in><out>60</out></clipitem>',
+    '<clipitem id="c2"><name>cut_src.mp4</name><start>120</start><end>168</end><in>0</in><out>48</out>',
+    '<filter><effect><name>Time Remap</name><effectid>timeremap</effectid>',
+    '<parameter><name>speed</name><parameterid>speed</parameterid><value>50</value></parameter>',
+    '<parameter><name>reverse</name><parameterid>reverse</parameterid><value>FALSE</value></parameter>',
+    '<parameter><name>variablespeed</name><parameterid>variablespeed</parameterid><value>0</value></parameter>',
+    '</effect></filter></clipitem>',
+    '</track></video></media></sequence></xmeml>',
+  ].join('');
+  const ev = parseXMEMLEvents(xml, { fps: 24 });
+  const rows = ev.filter((e) => e.recOut > e.recIn).map((e) => [e.source, e.recIn, e.recOut, e.srcIn, e.speed]);
+  assert.deepEqual(rows, [
+    ['BL', 0, 12, 0, 100],            // generatoritem, end -1 → the first junction
+    ['cut_src.mp4', 12, 72, 36, 100], // both edges -1 → junction to junction; `in` advances by the overlap offset
+    ['white_src.mp4', 72, 120, 24, 100],
+    ['cut_src.mp4', 120, 168, 0, 50], // `speed` 50 survives the `variablespeed` 0 that follows it
+  ]);
+  const pic = ev.find((e) => e.source === 'cut_src.mp4' && e.recIn === 12);
+  assert.equal(pic.transition.recStart, 0, 'the fade-in attaches to the PICTURE, not the black generator');
+});
+
+test('parseEDL applies FROM/TO CLIP NAME comments to generic AX reels (E105)', () => {
+  const edl = [
+    'TITLE: e105', 'FCM: NON-DROP FRAME', '',
+    '001  BL       V     C        01:00:00:00 01:00:00:00 01:00:00:00 01:00:00:00',
+    '001  AX       V     D    024 00:00:01:00 00:00:03:12 01:00:00:00 01:00:02:12',
+    '* FROM CLIP NAME: Solid Color', '* TO CLIP NAME: cut_src.mp4', '',
+    '002  AX       V     C        00:00:03:12 00:00:03:12 01:00:02:12 01:00:02:12',
+    '002  AX       V     D    024 00:00:00:12 00:00:03:00 01:00:02:12 01:00:05:00',
+    '* FROM CLIP NAME: cut_src.mp4', '* TO CLIP NAME: white_src.mp4', '',
+    '003  TAPE9    V     C        00:00:00:00 00:00:01:12 01:00:05:00 01:00:06:12',
+    '* FROM CLIP NAME: keeps_reel.mov', '',
+  ].join('\n');
+  const ev = parseEDL(edl, { fps: 24 });
+  assert.deepEqual(ev.map((e) => e.source), ['BL', 'cut_src.mp4', 'cut_src.mp4', 'white_src.mp4', 'TAPE9']);
+  assert.equal(ev[4].clipName, 'keeps_reel.mov'); // a specific reel keeps its name, clipName rides along
+});
+
+test('verifyRoundtrip flags a video-only export as audioNotInExport instead of failing (E105)', () => {
+  const input = [
+    { track: 'V', source: 'A', recIn: 0, recOut: 48, srcIn: 0 },
+    { track: 'A', source: 'A', recIn: 0, recOut: 48, srcIn: 0 },
+  ];
+  const exported = [{ track: 'V', source: 'A.mov', recIn: 0, recOut: 48, srcIn: 0 }];
+  const r = verifyRoundtrip(input, exported);
+  assert.equal(r.pass, true, JSON.stringify(r.mismatches));
+  assert.equal(r.audioNotInExport, true);
+  assert.equal(r.audio.compared, false);
+});
+
 test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
   const fsM = await import('node:fs');
   const os = await import('node:os');

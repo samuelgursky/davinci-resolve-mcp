@@ -2765,6 +2765,36 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["drt.assemble_from_interchange black-leg authoring"],
     },
     {
+        "symbol": "Timeline.Export EXPORT_EDL (video-only, reel AX, clip-name comments)",
+        "object": "Timeline",
+        "signature": "(filePath, EXPORT_EDL, EXPORT_NONE) -> bool",
+        "reality": "Resolve's CMX EDL writer (measured on Studio 19.1.3.7, "
+                   "E105) emits VIDEO events only — audio legs never appear; "
+                   "names every file source by the generic reel AX and carries "
+                   "the real names in `* FROM CLIP NAME:` / `* TO CLIP NAME:` "
+                   "comments; writes black legs as reel BL; places dissolve "
+                   "junctions at the CMX start-at-cut position (the overlap "
+                   "start, not the centered junction the timeline holds); and "
+                   "WRITES BL fades that its own EDL importer then drops. The "
+                   "FCP7 XML writer, by contrast, carries audio, writes "
+                   "transition-adjacent clip edges as -1 (the junction), and "
+                   "emits `speed` followed by `variablespeed` 0 in the same "
+                   "timeremap effect.",
+        "recommended": "For round-trip QC prefer EXPORT_OTIO (carries audio, "
+                       "retimes as LinearTimeWarp/FreezeFrame, exact spans). "
+                       "When an EDL is the required deliverable, expect no "
+                       "audio (editorial.verify_roundtrip reports "
+                       "audioNotInExport) and resolve AX reels through the "
+                       "clip-name comments (parseEDL does). Use EXPORT_EDL — "
+                       "there is no EXPORT_CMX_3600 constant, and an unknown "
+                       "name reaches Export as a string that returns a bare "
+                       "False (timeline.export_timeline_checked now refuses "
+                       "it loudly).",
+        "tags": ["timeline", "export", "edl", "audio", "silent-failure"],
+        "submit": "missing",
+        "mitigation": ["editorial.verify_roundtrip audioNotInExport", "timeline.export_timeline_checked"],
+    },
+    {
         "symbol": "Project.SetRenderSettings ExportSubtitle/SubtitleFormat (inert on 19.x)",
         "object": "Project",
         "signature": "({'ExportSubtitle': bool, 'SubtitleFormat': str}) -> bool",

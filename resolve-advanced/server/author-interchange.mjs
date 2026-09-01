@@ -990,7 +990,14 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
   const aa = dedupeAud(norm(inputEvents, audsOf).filter((e) => !isBlackSeg(e)));
   const ba = dedupeAud(norm(exportedEvents, audsOf).filter((e) => !isBlackSeg(e)));
   let audio;
-  if (aa.length) {
+  let audioNotInExport = false;
+  if (aa.length && !ba.length) {
+    // The export carries NO audio at all while the input declares some: a
+    // capability gap (Resolve's EXPORT_EDL is video-only, measured E105),
+    // reported as audioNotInExport rather than failed — like markers.
+    audio = { input: aa.length, exported: 0, compared: false, note: 'export carries no audio events (format capability, e.g. EDL is video-only) — not compared' };
+    audioNotInExport = true;
+  } else if (aa.length) {
     audio = { input: aa.length, exported: ba.length, compared: true };
     comparePairs(aa, ba, junctionsFor(/^A\d*$/), 'audio');
   } else if (ba.length) {
@@ -1033,5 +1040,6 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     ...(blackSegments.input || blackSegments.exported ? { blackSegments } : {}),
     ...(fadeReshapedBoundaries.length ? { fadeReshapedBoundaries } : {}),
     ...(audio ? { audio } : {}),
+    ...(audioNotInExport ? { audioNotInExport } : {}),
   };
 }

@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.162.0"
+VERSION = "2.163.0"
 
 import base64
 import os
@@ -6927,6 +6927,26 @@ def _export_timeline_checked(tl, p: Dict[str, Any]):
     # (which can be None and silently degrade the EXPORT_* args to strings — the
     # same failure class as issue #70).
     spec = _timeline_export_spec(p, get_resolve())
+    # An export type that did not resolve to a Resolve constant reaches
+    # Timeline.Export as a STRING, which returns a bare False — reported as
+    # success:false with no reason (measured E105 with a made-up
+    # EXPORT_CMX_3600: the real constant is EXPORT_EDL). Refuse loudly with
+    # the vocabulary instead of letting a typo read as an export failure.
+    # Only when this build exposes the export vocabulary at all (a bare stub
+    # or a degraded connection resolves nothing, and the old passthrough
+    # stays the honest behavior there).
+    _probe_const, _ = _timeline_export_value("EXPORT_OTIO", get_resolve())
+    vocab_known = not isinstance(_probe_const, str)
+    for field in ("export_type", "export_subtype"):
+        val = spec.get(field)
+        if vocab_known and isinstance(val, str) and val.startswith("EXPORT_"):
+            return _err(
+                f"{field} {val!r} is not a Resolve export constant on this build. "
+                f"Known aliases: {', '.join(sorted(_TIMELINE_EXPORT_ALIASES))}; "
+                "constants: EXPORT_AAF, EXPORT_DRT, EXPORT_EDL, EXPORT_FCP_7_XML, "
+                "EXPORT_FCPXML_1_8/1_9/1_10, EXPORT_OTIO (subtypes EXPORT_NONE, "
+                "EXPORT_AAF_NEW, EXPORT_AAF_EXISTING, EXPORT_CDL, EXPORT_SDL, EXPORT_MISSING_CLIPS)."
+            )
     if p.get("dry_run"):
         return _ok(path=path, would_export=True, spec={k: v for k, v in spec.items() if k != "export_type"})
 
