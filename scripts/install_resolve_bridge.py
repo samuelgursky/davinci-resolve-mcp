@@ -24,9 +24,16 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-CONFIG_DIR = Path.home() / ".config/davinci-resolve-mcp"
-CONFIG_PATH = CONFIG_DIR / "bridge.json"
+DEFAULT_CONFIG_PATH = Path.home() / ".config/davinci-resolve-mcp/bridge.json"
+ENV_CONFIG_PATH = "DAVINCI_RESOLVE_BRIDGE_CONFIG"
 DEFAULT_PORT = 49632
+
+
+def config_path() -> Path:
+    """Bridge config written by this installer and read by the MCP client."""
+    override = os.environ.get(ENV_CONFIG_PATH)
+    return Path(override).expanduser() if override else DEFAULT_CONFIG_PATH
+
 
 _SCRIPTS_SUFFIX = "Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility"
 
@@ -448,10 +455,11 @@ def python_preflight() -> dict:
 
 
 def ensure_config(port: int, rotate: bool) -> dict:
+    path = config_path()
     existing: dict = {}
-    if CONFIG_PATH.exists():
+    if path.exists():
         try:
-            existing = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            existing = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             existing = {}
     token = existing.get("token")
@@ -469,12 +477,12 @@ def ensure_config(port: int, rotate: bool) -> dict:
         "allowed_media_roots": existing_media or [str(Path.home())],
         "allowed_output_roots": existing_output or [str(Path.home() / "Movies")],
     }
-    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    tmp = CONFIG_PATH.with_suffix(".tmp")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
     os.chmod(tmp, 0o600)
-    tmp.replace(CONFIG_PATH)
-    os.chmod(CONFIG_PATH, 0o600)
+    tmp.replace(path)
+    os.chmod(path, 0o600)
     return config
 
 
@@ -525,8 +533,9 @@ def install(*, probe_only: bool, port: int, rotate: bool) -> dict:
         )
     result["skipped"] = [path for path, _ in skipped]
     if not probe_only:
-        loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        result["config"] = {"path": str(CONFIG_PATH),
+        path = config_path()
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        result["config"] = {"path": str(path),
                             **{k: v for k, v in loaded.items() if k != "token"}}
     return result
 
@@ -558,9 +567,10 @@ def _install_to(target: Path, *, probe_only: bool, installed: list[str]) -> None
     # unreachable by construction (measured: "Operation not permitted").
     # The runtime dir is already inside the container, so the config goes
     # beside the modules. Same token, so the out-of-sandbox client still
-    # authenticates against ~/.config.
+    # authenticates against the selected config path.
     runtime_config = runtime / "bridge.json"
-    shutil.copy2(CONFIG_PATH, runtime_config)
+    path = config_path()
+    shutil.copy2(path, runtime_config)
     os.chmod(runtime_config, 0o600)
     installed.append(str(runtime_config))
     # The launcher IS the menu entry. Without it the modules sit in the
@@ -571,7 +581,7 @@ def _install_to(target: Path, *, probe_only: bool, installed: list[str]) -> None
         base64.urlsafe_b64encode(str(runtime).encode("utf-8")).decode("ascii"),
     ).replace(
         "@@CONFIG_PATH_B64@@",
-        base64.urlsafe_b64encode(str(CONFIG_PATH).encode("utf-8")).decode("ascii"),
+        base64.urlsafe_b64encode(str(path).encode("utf-8")).decode("ascii"),
     )
     launcher_path = target / "resolve_bridge.py"
     launcher_path.write_text(launcher, encoding="utf-8")
@@ -605,6 +615,9 @@ def main() -> int:
     print("  1. Restart DaVinci Resolve so it re-scans the Scripts folders.")
     print("  2. Open a saved project (the Scripts menu is empty in Project Manager).")
     print("  3. Workspace > Scripts > resolve_bridge_probe  — run it TWICE.")
+    # The probe runs INSIDE Resolve, which never sees the shell's
+    # DAVINCI_RESOLVE_BRIDGE_CONFIG — it always writes to the fixed default
+    # directory, so the guidance must not follow the override.
     print("  4. Read ~/.config/davinci-resolve-mcp/host-model-probe.json")
     return 0
 

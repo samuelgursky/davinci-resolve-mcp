@@ -600,6 +600,149 @@ class InstallerTargetTests(unittest.TestCase):
         import install_resolve_bridge
         self.installer = install_resolve_bridge
 
+    def test_config_path_defaults_to_the_client_default(self) -> None:
+        from unittest import mock
+
+        from src.utils import resolve_bridge_client
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(self.installer.config_path(), self.installer.DEFAULT_CONFIG_PATH)
+            self.assertEqual(self.installer.config_path(), resolve_bridge_client.config_path())
+
+    def test_config_path_override_matches_the_client_at_call_time(self) -> None:
+        import pathlib
+        import tempfile
+        from unittest import mock
+
+        from src.utils import resolve_bridge_client
+
+        first = pathlib.Path(tempfile.mkdtemp(prefix="bridge_config_a_")) / "first.json"
+        second = pathlib.Path(tempfile.mkdtemp(prefix="bridge_config_b_")) / "second.json"
+        for path in (first, second):
+            with self.subTest(path=path), mock.patch.dict(
+                os.environ, {self.installer.ENV_CONFIG_PATH: str(path)}, clear=True
+            ):
+                self.assertEqual(self.installer.config_path(), path)
+                self.assertEqual(self.installer.config_path(), resolve_bridge_client.config_path())
+
+    def test_config_path_override_expands_the_user_directory(self) -> None:
+        import pathlib
+        from unittest import mock
+
+        with mock.patch.dict(
+            os.environ,
+            {self.installer.ENV_CONFIG_PATH: "~/private/resolve-bridge.json"},
+            clear=True,
+        ):
+            self.assertEqual(
+                self.installer.config_path(),
+                pathlib.Path.home() / "private/resolve-bridge.json",
+            )
+
+    def test_existing_overridden_config_preserves_token_and_roots(self) -> None:
+        import json
+        import pathlib
+        import tempfile
+        from unittest import mock
+
+        config = pathlib.Path(tempfile.mkdtemp(prefix="bridge_existing_config_")) / "bridge.json"
+        token = "p" * 48
+        config.write_text(
+            json.dumps({
+                "token": token,
+                "allowed_media_roots": ["/existing/media"],
+                "allowed_output_roots": ["/existing/output"],
+            }),
+            encoding="utf-8",
+        )
+        with mock.patch.dict(
+            os.environ, {self.installer.ENV_CONFIG_PATH: str(config)}, clear=True
+        ):
+            result = self.installer.ensure_config(port=50124, rotate=False)
+
+        self.assertEqual(result["token"], token)
+        self.assertEqual(result["port"], 50124)
+        self.assertEqual(result["allowed_media_roots"], ["/existing/media"])
+        self.assertEqual(result["allowed_output_roots"], ["/existing/output"])
+
+    def test_invalid_existing_overridden_config_is_replaced_safely(self) -> None:
+        import json
+        import pathlib
+        import tempfile
+        from unittest import mock
+
+        config = pathlib.Path(tempfile.mkdtemp(prefix="bridge_invalid_config_")) / "bridge.json"
+        config.write_text("{not valid json", encoding="utf-8")
+        with mock.patch.dict(
+            os.environ, {self.installer.ENV_CONFIG_PATH: str(config)}, clear=True
+        ):
+            result = self.installer.ensure_config(port=50125, rotate=False)
+
+        self.assertEqual(result["port"], 50125)
+        self.assertGreaterEqual(len(result["token"]), 43)
+        self.assertEqual(json.loads(config.read_text(encoding="utf-8")), result)
+
+    def test_install_writes_embeds_and_reports_the_overridden_config(self) -> None:
+        import base64
+        import pathlib
+        import stat
+        import tempfile
+        from unittest import mock
+
+        root = pathlib.Path(tempfile.mkdtemp(prefix="bridge_custom_config_"))
+        config = root / "private config" / "bridge.json"
+        target = root / "Fusion/Scripts/Utility"
+        env = {self.installer.ENV_CONFIG_PATH: str(config)}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(self.installer, "script_targets", return_value=[target]), \
+                mock.patch.object(self.installer, "python_preflight", return_value={"ok": True}), \
+                mock.patch.object(self.installer, "stale_container_warning", return_value=None):
+            result = self.installer.install(probe_only=False, port=50123, rotate=False)
+
+        self.assertEqual(result["config"]["path"], str(config))
+        self.assertEqual(result["config"]["port"], 50123)
+        self.assertTrue(config.exists())
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(config.parent.stat().st_mode), 0o700)
+
+        runtime_config = root / "Fusion/.davinci_mcp_runtime/bridge.json"
+        self.assertEqual(runtime_config.read_bytes(), config.read_bytes())
+        launcher = (target / "resolve_bridge.py").read_text(encoding="utf-8")
+        encoded = base64.urlsafe_b64encode(str(config).encode("utf-8")).decode("ascii")
+        self.assertIn(encoded, launcher)
+
+    def test_main_prints_the_FIXED_probe_report_path_even_under_an_override(self) -> None:
+        # The probe runs INSIDE Resolve, which never inherits the shell's
+        # DAVINCI_RESOLVE_BRIDGE_CONFIG — it always writes host-model-probe.json
+        # to the fixed default directory. Guidance that followed the override
+        # would point the user at a file that will never exist there.
+        import contextlib
+        import io
+        import pathlib
+        import sys
+        import tempfile
+        from unittest import mock
+
+        config = pathlib.Path(tempfile.mkdtemp(prefix="bridge_main_config_")) / "bridge.json"
+        result = {
+            "installed": [],
+            "probe_only": True,
+            "python": {"resolve_will_list_python_scripts": True, "advice": None},
+            "warnings": [],
+            "skipped": [],
+        }
+        output = io.StringIO()
+        with mock.patch.dict(
+            os.environ, {self.installer.ENV_CONFIG_PATH: str(config)}, clear=True
+        ), mock.patch.object(sys, "argv", ["install_resolve_bridge.py", "--probe-only"]), \
+                mock.patch.object(self.installer, "install", return_value=result), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(self.installer.main(), 0)
+
+        self.assertNotIn(str(config.parent / "host-model-probe.json"), output.getvalue())
+        self.assertIn("~/.config/davinci-resolve-mcp/host-model-probe.json", output.getvalue())
+
     def test_the_sandbox_path_keeps_the_vendor_segment(self) -> None:
         # The decoy drops it; Resolve's documented path does not.
         self.assertIn("Blackmagic Design/DaVinci Resolve", self.installer._SCRIPTS_SUFFIX)

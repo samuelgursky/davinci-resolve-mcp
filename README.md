@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.145.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.145.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#server-modes)
@@ -51,6 +51,11 @@ over an authenticated loopback listener.
 python scripts/install_resolve_bridge.py
 # restart Resolve, open a project, then: Workspace > Scripts > resolve_bridge
 ```
+
+The installer and MCP client use `~/.config/davinci-resolve-mcp/bridge.json`
+by default. To keep the authenticated bridge config elsewhere, set
+`DAVINCI_RESOLVE_BRIDGE_CONFIG` while running the installer and in the MCP
+client environment; both sides will use that path.
 
 Once that listener is running it is used **automatically** whenever external
 scripting is unavailable — no environment variable required. Setting

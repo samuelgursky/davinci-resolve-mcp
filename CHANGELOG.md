@@ -2,6 +2,24 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.145.1 — bridge config override, honored end to end
+
+### Fixed
+
+- **The free-edition bridge installer now honors
+  `DAVINCI_RESOLVE_BRIDGE_CONFIG`** — adapted from
+  [PR #177](https://github.com/samuelgursky/davinci-resolve-mcp/pull/177) by
+  @altiss. The bridge client already resolved the override, but the installer
+  always wrote and embedded the fixed default path, so a client configured
+  with an override could look in one place while the in-app bridge was
+  installed with another — both sides "successfully" installed yet never
+  sharing a token. The installer resolves the effective path at call time
+  with the client's exact semantics (env wins, `~` expands, default
+  otherwise) across create, report, runtime copy, and launcher embed. One
+  correction on top of the PR: the step-4 probe guidance keeps pointing at
+  the FIXED default directory — the probe runs inside Resolve, which never
+  inherits the shell's environment, so it always writes there.
+
 ## What's New in v2.145.0 — whole projects, assembled offline
 
 ### Added
