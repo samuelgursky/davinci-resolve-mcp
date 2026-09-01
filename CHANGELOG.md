@@ -2,6 +2,24 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.186.0 — E133: Premiere nested sequences flatten into the reel
+
+### Fixed
+
+- **A nested sequence used as a clip was an unmapped reel.** In a real
+  Premiere 2025 reels project, 3,607 items reference another sequence
+  (`Clip.Source` → `VideoSequenceSource` / `AudioSequenceSource` →
+  `SequenceSource.Sequence`), and the parser emitted the nested sequence's
+  name as a source the bridge could not map. Those items now flatten: the
+  nested sequence walks with its own cursor, its cuts of the same track kind
+  translate through the clip's in-point window into the parent's record
+  span (source frames trimmed at each cut's play rate), each tagged
+  `fromCompound` — the OTIO Stack (E120) and AAF nested-composition (E125)
+  flatten for Premiere. Depth and cycle guards keep a self-referencing
+  sequence as a named `compound` hole. Measured on the reels project:
+  13,711 events flatten, none remain as sequence-named sources. The real
+  shape is pinned in the synthetic fixture.
+
 ## What's New in v2.185.0 — E132: real Premiere projects parse — 739 sequences where there were zero
 
 ### Fixed

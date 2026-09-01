@@ -176,6 +176,17 @@ function realClipSource(clipNode, byId) {
   const inPt = inner ? (childText(inner, 'InPoint') != null ? childText(inner, 'InPoint') : (outPt != null ? 0 : null)) : null;
   let name = null;
   const srcEntry = inner && byId.get(ref(inner, 'Source') || '');
+  // A NESTED SEQUENCE used as a clip (E133, measured: 3607 such items in one
+  // real turnover): the clip's Source is a Video/AudioSequenceSource whose
+  // SequenceSource.Sequence references another Sequence object.
+  if (srcEntry && /SequenceSource$/.test(srcEntry.tag)) {
+    const ss = asArray(srcEntry.node.SequenceSource)[0];
+    const nestedId = ss ? ref(ss, 'Sequence') : null;
+    const nested = nestedId ? byId.get(nestedId) : null;
+    if (nested && nested.tag === 'Sequence') {
+      return { inPt, outPt, name: nodeName(nested.node) || 'NESTED', nestedSequence: nested };
+    }
+  }
   const ms = srcEntry && asArray(srcEntry.node.MediaSource)[0];
   const media = ms && byId.get(ref(ms, 'Media') || '');
   if (media) {
@@ -213,6 +224,7 @@ function clipEvent(clipNode, byId, track, fps, index) {
     index,
     track,
     source: (real && real.name) || resolveSourceName(clipNode, byId),
+    ...(real && real.nestedSequence ? { __nested: real.nestedSequence } : {}),
     srcIn: reverse ? srcOut : srcIn,
     srcOut: reverse ? srcIn : srcOut,
     recIn,
@@ -224,10 +236,13 @@ function clipEvent(clipNode, byId, track, fps, index) {
   };
 }
 
-function walkSequence(seqEntry, byId) {
+function walkSequence(seqEntry, byId, depth = 0, seen = new Set()) {
   const fps = deriveFps(seqEntry.node);
   const events = [];
   let idx = 1;
+  const seqKey = String(seqEntry.node['@_ObjectUID'] ?? seqEntry.node['@_ObjectID'] ?? '');
+  const seenHere = new Set(seen);
+  if (seqKey) seenHere.add(seqKey);
   // Two sequence shapes (E132): the synthetic/legacy one lists tracks under
   // <VideoTracks>/<AudioTracks>; a real Premiere 2025 project lists
   // <TrackGroups> whose <Second> references a VideoTrackGroup /
@@ -256,7 +271,33 @@ function walkSequence(seqEntry, byId) {
         const cEntry = byId.get(refId(iref));
         if (!cEntry) continue;
         if (/ClipTrackItem$/.test(cEntry.tag)) {
-          clipEvents.push(clipEvent(cEntry.node, byId, trackKind, fps, idx++));
+          const ev = clipEvent(cEntry.node, byId, trackKind, fps, idx++);
+          const nested = ev.__nested;
+          delete ev.__nested;
+          const nestedKey = nested ? String(nested.node['@_ObjectUID'] ?? nested.node['@_ObjectID'] ?? '') : '';
+          if (nested && depth < 8 && !seenHere.has(nestedKey)) {
+            // FLATTEN the nested sequence into this record span (E133, the
+            // OTIO Stack / AAF nested-composition flatten for Premiere): walk
+            // it with its own cursor, keep this track kind's lanes, translate
+            // through the window [srcIn, srcIn + record length), tag fromCompound.
+            const inner = walkSequence(nested, byId, depth + 1, seenHere).filter((e) => e.track.charAt(0) === trackKind && e.recIn != null && e.recOut != null);
+            const winStart = ev.srcIn ?? 0;
+            const winLen = (ev.recOut ?? 0) - (ev.recIn ?? 0);
+            let first = true;
+            for (const e of inner) {
+              const a = e.recIn - winStart, b = e.recOut - winStart;
+              const a2 = Math.max(0, a), b2 = Math.min(winLen, b);
+              if (b2 <= a2) continue;
+              const k = ((e.speed ?? 100) / 100) * (e.reverse ? -1 : 1);
+              const flat = { ...e, index: idx++, recIn: ev.recIn + a2, recOut: ev.recIn + b2, srcIn: e.srcIn != null ? Math.round(e.srcIn + (a2 - a) * k) : e.srcIn, srcOut: e.srcOut != null ? Math.round(e.srcOut - (b - b2) * k) : e.srcOut, fromCompound: ev.source };
+              if (first && ev.transition && !flat.transition) flat.transition = ev.transition;
+              first = false;
+              clipEvents.push(flat);
+            }
+            continue;
+          }
+          if (nested) ev.compound = ev.source; // cycle/depth guard: keep it as a named compound hole
+          clipEvents.push(ev);
         } else if (/Transition/.test(cEntry.tag)) {
           const ti = itemTiming(cEntry.node);
           const dur = ticksToFrames(Number(ti.end) - Number(ti.start), fps);

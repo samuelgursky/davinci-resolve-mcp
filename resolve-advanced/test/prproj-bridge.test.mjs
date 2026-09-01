@@ -364,9 +364,24 @@ const REAL_SHAPE_XML = `<?xml version="1.0" encoding="UTF-8" ?>
     </TrackGroups>
     <Name>REAL_REEL</Name>
   </Sequence>
+  <Sequence ObjectUID="2b0665a8-e73d-4b91-82f2-d130a2cd9c32" ClassID="6a15d903-8739-11d5-af2d-9b7855ad8974" Version="12">
+    <Node Version="1"><Properties Version="1"/></Node>
+    <TrackGroups Version="1"><TrackGroup Version="1" Index="0"><First>228cda18-3625-4d2d-951e-348879e4ed93</First><Second ObjectRef="28150"/></TrackGroup></TrackGroups>
+    <Name>NESTED_SELECTS</Name>
+  </Sequence>
+  <VideoTrackGroup ObjectID="28150" ClassID="v" Version="1"><TrackGroup Version="1"><Tracks Version="1"><Track Index="0" ObjectURef="5f2d4adc-1632-4dec-afaf-183607bd6650"/></Tracks><FrameRate>10584000000</FrameRate></TrackGroup></VideoTrackGroup>
+  <VideoClipTrack ObjectUID="5f2d4adc-1632-4dec-afaf-183607bd6650" ClassID="vt" Version="1"><ClipTrack Version="1"><ClipItems Version="1"><TrackItems Version="1"><TrackItem Index="0" ObjectRef="50190"/><TrackItem Index="1" ObjectRef="50191"/></TrackItems></ClipItems></ClipTrack></VideoClipTrack>
+  <VideoClipTrackItem ObjectID="50190" ClassID="ci" Version="1"><ClipTrackItem Version="8"><TrackItem Version="4"><End>254016000000</End></TrackItem><SubClip ObjectRef="69280"/></ClipTrackItem></VideoClipTrackItem>
+  <VideoClipTrackItem ObjectID="50191" ClassID="ci" Version="1"><ClipTrackItem Version="8"><TrackItem Version="4"><Start>254016000000</Start><End>508032000000</End></TrackItem><SubClip ObjectRef="69270"/></ClipTrackItem></VideoClipTrackItem>
+  <SubClip ObjectID="69280" ClassID="sc" Version="6"><Clip ObjectRef="101140"/><MasterClip ObjectURef="897fc7cf-a22c-4759-a6e2-0adeea00c0d1"/><Name>Universal Counting Leader</Name></SubClip>
+  <VideoClip ObjectID="101140" ClassID="vc" Version="11"><Clip Version="18"><Source ObjectRef="5078"/><InPoint>508032000000</InPoint><OutPoint>762048000000</OutPoint></Clip></VideoClip>
   <VideoTrackGroup ObjectID="28140" ClassID="v" Version="1"><TrackGroup Version="1"><Tracks Version="1"><Track Index="0" ObjectURef="4f2d4adc-1632-4dec-afaf-183607bd663b"/></Tracks><FrameRate>10584000000</FrameRate></TrackGroup></VideoTrackGroup>
   <AudioTrackGroup ObjectID="28141" ClassID="a" Version="1"><TrackGroup Version="1"><Tracks Version="1"><Track Index="0" ObjectURef="aa2d4adc-1632-4dec-afaf-183607bd663b"/></Tracks><FrameRate>10584000000</FrameRate></TrackGroup></AudioTrackGroup>
-  <VideoClipTrack ObjectUID="4f2d4adc-1632-4dec-afaf-183607bd663b" ClassID="vt" Version="1"><ClipTrack Version="1"><ClipItems Version="1"><TrackItems Version="1"><TrackItem Index="0" ObjectRef="50187"/><TrackItem Index="1" ObjectRef="50188"/></TrackItems></ClipItems></ClipTrack></VideoClipTrack>
+  <VideoClipTrack ObjectUID="4f2d4adc-1632-4dec-afaf-183607bd663b" ClassID="vt" Version="1"><ClipTrack Version="1"><ClipItems Version="1"><TrackItems Version="1"><TrackItem Index="0" ObjectRef="50187"/><TrackItem Index="1" ObjectRef="50188"/><TrackItem Index="2" ObjectRef="50189"/></TrackItems></ClipItems></ClipTrack></VideoClipTrack>
+  <VideoClipTrackItem ObjectID="50189" ClassID="ci" Version="1"><ClipTrackItem Version="8"><TrackItem Version="4"><Start>2540160000000</Start><End>2921184000000</End></TrackItem><SubClip ObjectRef="69290"/></ClipTrackItem></VideoClipTrackItem>
+  <SubClip ObjectID="69290" ClassID="sc" Version="6"><Clip ObjectRef="101150"/><MasterClip ObjectURef="9b0363ba-2a3a-4206-ac09-20f6e5a1b399"/><Name>NESTED_SELECTS</Name></SubClip>
+  <VideoClip ObjectID="101150" ClassID="vc" Version="11"><Clip Version="18"><Source ObjectRef="5090"/><InPoint>127008000000</InPoint><OutPoint>508032000000</OutPoint></Clip></VideoClip>
+  <VideoSequenceSource ObjectID="5090" ClassID="ss" Version="3"><SequenceSource Version="4"><Content Version="10"/><Sequence ObjectURef="2b0665a8-e73d-4b91-82f2-d130a2cd9c32"/></SequenceSource><OriginalDuration>9420701976000000</OriginalDuration></VideoSequenceSource>
   <AudioClipTrack ObjectUID="aa2d4adc-1632-4dec-afaf-183607bd663b" ClassID="at" Version="1"><ClipTrack Version="1"><ClipItems Version="1"><TrackItems Version="1"><TrackItem Index="0" ObjectRef="50287"/></TrackItems></ClipItems></ClipTrack></AudioClipTrack>
   <VideoClipTrackItem ObjectID="50187" ClassID="ci" Version="1"><ClipTrackItem Version="8"><TrackItem Version="4"><End>2032128000000</End></TrackItem><SubClip ObjectRef="69268"/></ClipTrackItem></VideoClipTrackItem>
   <VideoClipTrackItem ObjectID="50188" ClassID="ci" Version="1"><ClipTrackItem Version="8"><TrackItem Version="4"><Start>2032128000000</Start><End>2540160000000</End></TrackItem><SubClip ObjectRef="69270"/></ClipTrackItem></VideoClipTrackItem>
@@ -387,13 +402,17 @@ fs.writeFileSync(PRPROJ_REAL, zlib.gzipSync(Buffer.from(REAL_SHAPE_XML, 'utf8'))
 
 test('parsePrproj walks the real Premiere 2025 shape: UID/URef graph, TrackGroups, ClipTrackItem chain, omitted zeros (E132)', () => {
   const seqs = listPrprojSequences(PRPROJ_REAL);
-  assert.deepEqual(seqs.map((s) => [s.name, s.eventCount]), [['REAL_REEL', 3]]);
+  assert.deepEqual(seqs.map((s) => [s.name, s.eventCount]).sort(), [['NESTED_SELECTS', 2], ['REAL_REEL', 5]]);
   const doc = parsePrprojDoc(PRPROJ_REAL);
-  const ev = doc.sequences[0].events;
-  assert.deepEqual(ev.map((e) => [e.track, e.source, e.srcIn, e.srcOut, e.recIn, e.recOut]), [
-    ['V', 'leader.mov', 0, 192, 0, 192],
-    ['V', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 192, 240],
-    ['A', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 192, 240],
+  const ev = doc.sequences.find((s) => s.name === 'REAL_REEL').events;
+  // The nested sequence (leader 0-24, then the Arrow clip 24-48 from src 217) is used from its
+  // frame 12 for 36 frames at record 240: leader frames 12-24 → 240-252, Arrow → 252-276 (E133).
+  assert.deepEqual(ev.map((e) => [e.track, e.source, e.srcIn, e.srcOut, e.recIn, e.recOut, e.fromCompound || null]), [
+    ['V', 'leader.mov', 0, 192, 0, 192, null],
+    ['V', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 192, 240, null],
+    ['V', 'leader.mov', 60, 72, 240, 252, 'NESTED_SELECTS'],
+    ['V', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 252, 276, 'NESTED_SELECTS'],
+    ['A', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 192, 240, null],
   ]);
-  assert.equal(doc.sequences[0].fps, 24);
+  assert.equal(doc.sequences.find((s) => s.name === 'REAL_REEL').fps, 24);
 });

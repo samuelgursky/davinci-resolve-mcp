@@ -2907,7 +2907,12 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "through the *TrackItem child; treat a missing Start/"
                        "InPoint beside a present End/OutPoint as 0. With that, "
                        "the turnover lists all 739 sequences and its reel walks "
-                       "335 events (it listed ZERO before).",
+                       "335 events (it listed ZERO before). A NESTED SEQUENCE "
+                       "used as a clip has Clip.Source → VideoSequenceSource / "
+                       "AudioSequenceSource → SequenceSource.Sequence ObjectURef "
+                       "→ the nested Sequence (E133: 3607 such items in the "
+                       "reels project); parse_interchange flattens them through "
+                       "the clip\'s InPoint window with fromCompound.",
         "tags": ["prproj", "premiere", "interchange", "silent-failure"],
         "submit": "missing",
         "mitigation": ["editorial.parse_interchange prproj", "editorial.list_sequences"],
