@@ -1634,3 +1634,28 @@ test('verifyRoundtrip adopts an inferred proxy→master rename, excuses a re-cen
   assert.equal(bk.pass, true);
   assert.deepEqual(bk.blackSegments, { input: 1, exported: 1 });
 });
+
+// ── E147: verify pairs by window — one lost clip is one 'missing', not a cascade ──
+test('verifyRoundtrip reports a clip the export lost as one missing and an export-only clip as one extra, pairing the rest by window (E147)', () => {
+  const ev = (track, source, srcIn, recIn, dur, extra = {}) => ({ track, source, srcIn, srcOut: srcIn + dur, recIn, recOut: recIn + dur, speed: 100, reverse: false, transition: null, fps: 24, ...extra });
+  const input = [ev('V', 'A.mov', 0, 0, 48), ev('V', 'B.mov', 100, 48, 48), ev('V', 'C.mov', 200, 96, 48), ev('V', 'D.mov', 300, 144, 48), ev('V', 'E.mov', 400, 192, 48)];
+  // the export lost C (a hole) and everything after it kept its place
+  const lostC = input.filter((e) => e.source !== 'C.mov');
+  const r = verifyRoundtrip(input, lostC, { exportedFormat: 'drt' });
+  assert.deepEqual(r.mismatches.map((m) => [m.kind, m.source || m.input]), [['count', 5], ['missing', 'c']], JSON.stringify(r.mismatches));
+  assert.deepEqual(r.mismatches[1].record, [96, 144]);
+  assert.equal(r.pairs, 4);
+  // an export-only clip is one extra
+  const plusX = [...input, ev('V', 'X.mov', 0, 240, 24)];
+  const x = verifyRoundtrip(input, plusX, { exportedFormat: 'drt' });
+  assert.deepEqual(x.mismatches.map((m) => [m.kind, m.source ?? m.input]), [['count', 5], ['extra', 'x']]);
+  // a different shot in the same window is a source mismatch found by window, and nothing after it cascades
+  const swapped = input.map((e) => (e.source === 'C.mov' ? { ...e, source: 'ZEBRA.mov' } : e));
+  const sw = verifyRoundtrip(input, swapped, { exportedFormat: 'drt' });
+  assert.deepEqual(sw.mismatches.map((m) => [m.kind, m.input, m.exported]), [['source', 'c', 'zebra']]);
+  assert.equal(sw.pairs, 4);
+  // null control: identical sides still pass with every cut paired
+  const same = verifyRoundtrip(input, input.map((e) => ({ ...e })), { exportedFormat: 'drt' });
+  assert.equal(same.pass, true);
+  assert.equal(same.pairs, 5);
+});

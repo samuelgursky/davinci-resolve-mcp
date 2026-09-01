@@ -2,6 +2,25 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.199.0 — E147: verify_roundtrip pairs cuts by window
+
+### Fixed
+
+- **`verify_roundtrip` pairs cuts by record window, not by index.** One clip
+  the export had lost used to shift every later cut by one and read as 48
+  track/source/record mismatches on a real reel. Cuts now pair the way the
+  changelist pairs them — same track and source, closest record position,
+  each consumed once — so a clip the export lost is one `missing` (with its
+  window), an export-only clip one `extra`, and a different shot in the same
+  window a `source` mismatch found by window. `count` stays informational.
+  On the real reel the bridge-timeline verify went from 57 mismatches to 19,
+  every one of them the conform's own: the lost clip and the tail it
+  shortened, the eye-matched re-conform onto other media, the reversed tail
+  leader.
+
+`pairEvents` is now exported from the editorial module for the verify to
+share.
+
 ## What's New in v2.198.0 — E146: verify_roundtrip consults the changelist's laws
 
 ### Added

@@ -9,7 +9,7 @@
  * fidelity; per-clip effects/color do NOT (the Premiere→Resolve semantic gap, flagged not faked).
  */
 import { drt } from './libs.mjs';
-import { diffChangelist } from './editorial.mjs';
+import { diffChangelist, pairEvents } from './editorial.mjs';
 
 const COLOR_MAP = {
   blue: 'Blue', cyan: 'Cyan', green: 'Green', yellow: 'Yellow', red: 'Red',
@@ -1019,9 +1019,28 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
       (j) => Math.abs(edgeIn - j.frame) <= j.d && Math.abs(edgeExp - edgeIn) <= j.d,
     );
     if (a.length !== b.length) mismatches.push({ kind: 'count', ...tt, input: a.length, exported: b.length });
-    const n = Math.min(a.length, b.length);
-    for (let i = 0; i < n; i += 1) {
-      const x = a[i], y = b[i];
+    // PAIRING BY WINDOW (E147): cuts pair the way the changelist pairs them —
+    // same track + source, closest record position, each consumed once — so
+    // one clip the export lost is ONE 'missing' (and an export-only clip one
+    // 'extra'), not a track/source/record cascade over every cut after it.
+    // A real reel with one dropped clip reported 48 such cascade mismatches.
+    // A cut whose window is held by a DIFFERENT source on the other side is
+    // still a 'source' mismatch (a swapped shot), found by window.
+    const P = pairEvents(a, b, recTol);
+    const byInput = new Map(P.pairs.map((pr) => [pr.oe, pr.ne]));
+    const takenNew = new Set(P.pairs.map((pr) => pr.ne));
+    const unmatchedNew = new Set(P.unmatchedNew);
+    let n = 0;
+    for (let i = 0; i < a.length; i += 1) {
+      const x = a[i];
+      let y = byInput.get(x);
+      if (!y) {
+        const swap = [...unmatchedNew].find((e) => e.track === x.track && Math.abs(e.recIn - x.recIn) <= recTol && Math.abs(e.recOut - x.recOut) <= recTol);
+        if (swap) { unmatchedNew.delete(swap); takenNew.add(swap); mismatches.push({ kind: 'source', ...tt, at: i, input: x.source, exported: swap.source, record: [x.recIn, x.recOut] }); continue; }
+        mismatches.push({ kind: 'missing', ...tt, at: i, source: x.source, track: x.track, record: [x.recIn, x.recOut] });
+        continue;
+      }
+      n += 1;
       if (x.track !== y.track) { mismatches.push({ kind: 'track', ...tt, at: i, input: x.track, exported: y.track }); continue; }
       if (x.source !== y.source) { mismatches.push({ kind: 'source', ...tt, at: i, input: x.source, exported: y.source }); continue; }
       const inBad = Math.abs(x.recIn - y.recIn) > recTol;
@@ -1063,6 +1082,7 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
         mismatches.push({ kind: 'source-frames', ...tt, at: i, source: x.source, expectedOffset: srcOffsets[x.source], gotOffset: off });
       }
     }
+    for (const e of unmatchedNew) mismatches.push({ kind: 'extra', ...tt, source: e.source, track: e.track, record: [e.recIn, e.recOut] });
     return n;
   };
 

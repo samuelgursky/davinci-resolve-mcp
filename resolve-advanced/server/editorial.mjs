@@ -821,7 +821,7 @@ export function listTransitions(events) {
  * black legs a transition references never enter the pairing: they are the
  * junction's business (listTransitions), not sources.
  */
-function pairEvents(oldEvents, newEvents, recTol = 1) {
+export function pairEvents(oldEvents, newEvents, recTol = 1) {
   const cutsOf = (events) => {
     const trs = listTransitions(events);
     const fadeBlack = new Set();
