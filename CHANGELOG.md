@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.159.0 — the EDL writer learns transitions
+
+### Fixed
+
+- **`convert_to_interchange`'s EDL target silently dropped every
+  transition** (the OTIO target carried them since day one). The writer now
+  emits the CMX pairs — a zero-length outgoing marker line plus the `D` line
+  with its duration — with the `BL` reel on the black side of fades, and a
+  zero-length fade-out carrier receives the fade's record extent per the
+  CMX convention. Round-trip proven: written EDLs parse back to fully
+  authored specs (dissolves, fade-in, fade-out; nothing dropped). Reel
+  names are basename-stripped before sanitizing, so path-style sources
+  produce clean reels.
+
 ## What's New in v2.158.0 — E100: the kitchen-sink certification
 
 ### Verified (one turnover, everything at once)

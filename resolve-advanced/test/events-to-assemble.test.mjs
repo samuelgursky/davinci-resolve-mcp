@@ -853,6 +853,26 @@ test('verifyRoundtrip matches path-style OTIO sources against basename re-export
   assert.equal(verifyRoundtrip(input, exported).pass, true);
 });
 
+test('eventsToEDL writes the CMX transition pairs — dissolves and fades survive the EDL target (E101)', () => {
+  // The OTIO writer carried transitions since day one; the EDL writer
+  // silently dropped every one. Now: zero-length outgoing marker + D line,
+  // with BL on the black side of fades — and the written EDL parses back to
+  // a fully-authored spec.
+  const events = [
+    { track: 'V', source: 'BL', recIn: 86400, recOut: 86400, srcIn: 0, srcOut: 0, fps: 24 },
+    { track: 'V', source: 'TAPE1', recIn: 86400, recOut: 86496, srcIn: 0, srcOut: 96, fps: 24, transition: { type: 'D', duration: 24 } },
+    { track: 'V', source: 'TAPE2', recIn: 86496, recOut: 86544, srcIn: 48, srcOut: 96, fps: 24, transition: { type: 'D', duration: 24 } },
+    { track: 'V', source: 'BL', recIn: 86544, recOut: 86592, srcIn: 0, srcOut: 0, fps: 24, transition: { type: 'D', duration: 24 } },
+  ];
+  const edl = eventsToEDL(events, { fps: 24 });
+  assert.match(edl, /002 {2}TAPE1 V {5}D {4}024/);
+  assert.match(edl, /006 {2}BL V {5}D {4}024/);
+  const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
+  assert.equal(spec.transitions.length, 3);
+  assert.equal(spec.elements.length, 2);
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
 test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
   const fsM = await import('node:fs');
   const os = await import('node:os');

@@ -705,19 +705,41 @@ export function eventsToAssembleSpec(events, opts = {}) {
 
 export function eventsToEDL(events, opts = {}) {
   const fps = opts.fps || events.find((e) => e.fps)?.fps || 24;
-  const vids = events.filter((e) => e.track !== 'A').sort((a, b) => (a.recIn ?? 0) - (b.recIn ?? 0));
+  const vids = events.filter((e) => e.track !== 'A').sort((a, b) => (a.recIn ?? 0) - (b.recIn ?? 0) || (a.recOut ?? 0) - (b.recOut ?? 0));
   const lines = [`TITLE: ${opts.name || 'CONFORMED'}`, 'FCM: NON-DROP FRAME'];
+  const reelOf = (e) =>
+    String(e.source || 'AX')
+      .split(/[\\/]/).pop()
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^A-Za-z0-9]/g, '')
+      .slice(0, 8)
+      .toUpperCase() || 'AX';
+  let num = 0;
   vids.forEach((e, i) => {
-    const num = pad(i + 1, 3);
-    const reel =
-      String(e.source || 'AX')
-        .replace(/\.[^.]+$/, '')
-        .replace(/[^A-Za-z0-9]/g, '')
-        .slice(0, 8)
-        .toUpperCase() || 'AX';
-    lines.push(
-      `${num}  ${reel} V     C        ${framesToTc(e.srcIn, fps)} ${framesToTc(e.srcOut, fps)} ${framesToTc(e.recIn, fps)} ${framesToTc(e.recOut, fps)}`,
-    );
+    const reel = reelOf(e);
+    // Transitions write the CMX pair (E101 — the OTIO writer carried them
+    // since day one, this writer silently dropped them): a zero-length cut
+    // of the OUTGOING at the junction, then the D line with the duration.
+    // Fades work identically with the BL reel on the black side.
+    if (e.transition && (e.transition.duration || 0) > 0) {
+      const prev = vids.find((o) => o !== e && (o.recOut ?? 0) === (e.recIn ?? 0) && (o.recIn ?? 0) < (o.recOut ?? 0));
+      const outReel = prev ? reelOf(prev) : 'BL';
+      const outSrc = prev ? framesToTc(prev.srcOut, fps) : framesToTc(0, fps);
+      lines.push(
+        `${pad(++num, 3)}  ${outReel} V     C        ${outSrc} ${outSrc} ${framesToTc(e.recIn, fps)} ${framesToTc(e.recIn, fps)}`,
+      );
+      // A zero-length BL carrier (OTIO/AAF fade-out shape) gets the fade's
+      // own record extent — the CMX fade-out convention.
+      const recOut = (e.recIn ?? 0) === (e.recOut ?? 0) ? (e.recIn ?? 0) + Math.round(e.transition.duration) : e.recOut;
+      lines.push(
+        `${pad(++num, 3)}  ${reel} V     D    ${String(Math.round(e.transition.duration)).padStart(3, '0')} ${framesToTc(e.srcIn, fps)} ${framesToTc(e.srcOut, fps)} ${framesToTc(e.recIn, fps)} ${framesToTc(recOut, fps)}`,
+      );
+    } else {
+      if ((e.recIn ?? 0) === (e.recOut ?? 0)) return; // zero-length markers are emitted by the transition pair itself
+      lines.push(
+        `${pad(++num, 3)}  ${reel} V     C        ${framesToTc(e.srcIn, fps)} ${framesToTc(e.srcOut, fps)} ${framesToTc(e.recIn, fps)} ${framesToTc(e.recOut, fps)}`,
+      );
+    }
     if ((e.speed ?? 100) !== 100 || e.reverse) {
       const play = (e.reverse ? -1 : 1) * (fps * ((e.speed ?? 100) / 100));
       lines.push(`M2   ${reel}       ${play.toFixed(1)}             ${framesToTc(e.srcIn, fps)}`);
