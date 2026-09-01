@@ -2,6 +2,28 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.188.0 — E135: Premiere tracks are lanes; nested blocks first-fit; an audio lane ceiling
+
+### Fixed
+
+- **Every Premiere track was labelled `V` or `A`.** Multi-track sequences
+  collapsed onto one lane: on a real Premiere 2025 reels project 687 of 741
+  sequences had cuts overlapping on the same lane (4,631 pairs), which the
+  bridge refuses. Tracks now number per kind in track order (`V`, `V2` … /
+  `A`, `A2` …) across track groups and the legacy lists, and clip events,
+  fade legs and transitions carry the lane.
+- **Nested sequences expand in a second pass, first-fit.** Two nested
+  sequences stacked on different parent lanes each bring their own inner
+  lanes, and a fixed lane offset collided on 7,615 pairs. A nested block now
+  expands after every parent lane is known and shifts up by the smallest
+  offset at which none of its cuts overlap what the parent or an earlier
+  block holds (`laneShift` records it). On the reels project the only
+  "overlaps" left are zero-length fade carriers — none real.
+- **An audio lane ceiling in the bridge.** Flattened nested sequences can
+  stack audio lanes to A40 (3,586 events above lane 16 on that project, in
+  30 sequences); Resolve authors A1–A16. Events above 16 now drop with a
+  reason in `audioLanesBeyondCeiling` instead of authoring blind.
+
 ## What's New in v2.187.0 — E134: real Premiere transitions attach, with their real type
 
 ### Fixed
