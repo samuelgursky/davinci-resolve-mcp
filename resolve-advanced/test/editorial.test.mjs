@@ -345,3 +345,75 @@ test('conform_manifest names a compound clipitem; turnover_changelist reports a 
   assert.equal(d2.counts.compound_collapsed, undefined);
   assert.ok((d2.counts.replaced || 0) + (d2.counts.gone || 0) + (d2.counts.new || 0) >= 2);
 });
+
+// ── E138: changelist SHAPE — a sparse patch reel is a subset, not N deletions ──
+const SHAPE_EDL_OLD = `TITLE: OLD
+FCM: NON-DROP FRAME
+001  A001     V     C        00:00:00:00 00:00:02:00 01:00:00:00 01:00:02:00
+002  B002     V     C        00:00:00:00 00:00:02:00 01:00:02:00 01:00:04:00
+003  B002     V     C        00:00:02:00 00:00:02:00 01:00:04:00 01:00:04:00
+004  C003     V     D    012 00:00:00:00 00:00:02:00 01:00:04:00 01:00:06:00
+005  A001     V     C        00:00:05:00 00:00:07:00 01:00:06:00 01:00:08:00
+006  D004     V     C        00:00:00:00 00:00:02:00 01:00:08:00 01:00:10:00
+`;
+const SHAPE_EDL_SUBSET = `TITLE: PATCH
+FCM: NON-DROP FRAME
+001  A001     V     C        00:00:00:00 00:00:02:00 01:00:00:00 01:00:02:00
+002  A001     V     C        00:00:05:00 00:00:07:00 01:00:06:00 01:00:08:00
+`;
+const SHAPE_EDL_SUBSET_TRIMMED = SHAPE_EDL_SUBSET.replace('00:00:05:00 00:00:07:00 01:00:06:00', '00:00:05:01 00:00:07:00 01:00:06:00');
+
+test('turnover_changelist names a sparse patch reel a subset — nothing edited, dropped dissolve is a consequence (E138)', () => {
+  const oldE = parseEDL(SHAPE_EDL_OLD), subE = parseEDL(SHAPE_EDL_SUBSET);
+  const d = diffChangelist(oldE, subE);
+  assert.equal(d.shape, 'subset', JSON.stringify(d.counts));
+  assert.equal(d.retained, 2);
+  assert.equal(d.oldCuts, 5);
+  assert.equal(d.newCuts, 2);
+  assert.equal(d.sparse, true);
+  assert.deepEqual(d.counts, { gone: 3, transition_dropped: 1 });
+  assert.deepEqual(d.retainedWindows.map((w) => [w.source, w.recIn, w.recOut]), [['A001', 86400, 86448], ['A001', 86544, 86592]]);
+  assert.match(d.note, /keeps 2 of 5 cuts unchanged/);
+  // gone changes now carry their record OUT so a dropped junction can be attributed to them
+  assert.ok(d.changes.filter((c) => c.kind === 'gone').every((c) => Number.isFinite(c.oldRecOut)));
+});
+
+test('turnover_changelist: the reverse direction is a superset; identical is identical (E138)', () => {
+  const oldE = parseEDL(SHAPE_EDL_OLD), subE = parseEDL(SHAPE_EDL_SUBSET);
+  const up = diffChangelist(subE, oldE);
+  assert.equal(up.shape, 'superset');
+  assert.equal(up.retained, 2);
+  assert.deepEqual(up.counts, { new: 3, transition_added: 1 });
+  assert.match(up.note, /old is 2 of the new cut's 5 cuts/);
+  const same = diffChangelist(oldE, parseEDL(SHAPE_EDL_OLD));
+  assert.equal(same.shape, 'identical');
+  assert.equal(same.retained, 5);
+  assert.equal(same.changedCount, 0);
+});
+
+test('turnover_changelist: one trimmed survivor makes a patch reel an edit, never a subset (E138 null control)', () => {
+  const d = diffChangelist(parseEDL(SHAPE_EDL_OLD), parseEDL(SHAPE_EDL_SUBSET_TRIMMED));
+  assert.equal(d.shape, 'edit');
+  assert.equal(d.counts.trimmed, 1);
+  assert.equal(d.retained, 1);
+  assert.equal(d.sparse, undefined);
+  assert.equal(d.retainedWindows, undefined);
+  // and a full re-cut with the same cut count stays an edit
+  const full = diffChangelist(parseEDL(SHAPE_EDL_OLD), parseEDL(SHAPE_EDL_OLD.replace('D004', 'E005')));
+  assert.equal(full.shape, 'edit');
+  assert.equal(full.counts.replaced, 1);
+});
+
+test('pairEvents is closest-first globally — a later new instance keeps the old instance at its own position (E138)', () => {
+  const X = (recIn) => ({ track: 'V', source: 'X.mov', srcIn: 100, srcOut: 148, recIn, recOut: recIn + 48, speed: 100 });
+  const patch = [X(240)];
+  const full = [X(0), X(240)];
+  const up = diffChangelist(patch, full);
+  assert.equal(up.shape, 'superset', JSON.stringify(up.changes));
+  assert.deepEqual(up.counts, { new: 1 });
+  assert.equal(up.changes[0].newRecIn, 0);
+  const down = diffChangelist(full, patch);
+  assert.equal(down.shape, 'subset');
+  assert.deepEqual(down.counts, { gone: 1 });
+  assert.equal(down.changes[0].oldRecIn, 0);
+});

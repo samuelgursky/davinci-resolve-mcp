@@ -712,21 +712,39 @@ function pairEvents(oldEvents, newEvents, recTol = 1) {
     return { cuts, carriers, transitions: trs };
   };
   const o = cutsOf(oldEvents), n = cutsOf(newEvents);
-  const pool = o.cuts.map((e) => ({ e, used: false }));
-  const pairs = [], unmatchedNew = [];
-  for (const ne of n.cuts) {
-    const cands = pool.filter((p) => !p.used && sig(p.e) === sig(ne));
-    if (!cands.length) { unmatchedNew.push(ne); continue; }
-    cands.sort((a, b) => Math.abs((a.e.recIn ?? 0) - (ne.recIn ?? 0)) - Math.abs((b.e.recIn ?? 0) - (ne.recIn ?? 0)));
-    cands[0].used = true;
-    pairs.push({ oe: cands[0].e, ne });
+  // Pairing is closest-first GLOBALLY (E138), not first-come in new order:
+  // walking new cuts in order let the first new instance of a source consume
+  // an old instance 6,000 frames away while the old instance at its own
+  // position went unpaired — a subset reel read back as moved + new. Every
+  // same-signature (old, new) pair sorts by record distance and is taken
+  // once; the result is symmetric under swapping old and new.
+  const pool = o.cuts.map((e) => ({ e, used: false, sig: sig(e) }));
+  const newSigs = n.cuts.map(sig);
+  const cands = [];
+  for (let ni = 0; ni < n.cuts.length; ni++) {
+    for (let oi = 0; oi < pool.length; oi++) {
+      if (pool[oi].sig !== newSigs[ni]) continue;
+      cands.push({ oi, ni, d: Math.abs((pool[oi].e.recIn ?? 0) - (n.cuts[ni].recIn ?? 0)) });
+    }
   }
+  cands.sort((a, b) => a.d - b.d || a.ni - b.ni || a.oi - b.oi);
+  const usedNew = new Set();
+  const taken = [];
+  for (const c of cands) {
+    if (pool[c.oi].used || usedNew.has(c.ni)) continue;
+    pool[c.oi].used = true; usedNew.add(c.ni);
+    taken.push(c);
+  }
+  taken.sort((a, b) => a.ni - b.ni);
+  const pairs = taken.map((c) => ({ oe: pool[c.oi].e, ne: n.cuts[c.ni] }));
+  const unmatchedNew = n.cuts.filter((_, i) => !usedNew.has(i));
   const unmatchedOld = pool.filter((p) => !p.used).map((p) => p.e);
   return { pairs, unmatchedOld, unmatchedNew, old: o, new: n, recTol };
 }
 
 /**
- * Diff two normalized event lists → per-event {kind: moved|retimed|trimmed|replaced|new|gone}
+ * Diff two normalized event lists → a SHAPE verdict (identical|subset|superset|edit, E138)
+ * plus per-event {kind: moved|retimed|trimmed|replaced|new|gone}
  * PLUS per-junction {kind: transition_added|transition_dropped|transition_changed}
  * (fade 'in'/'out' or null for a dissolve). Zero-length carrier lines and the
  * black legs that carry fades fold into the junction diff instead of reading
@@ -762,6 +780,7 @@ export function diffChangelist(oldEvents, newEvents, opts = {}) {
   }
   const P = pairEvents(oldEvents.filter((e) => !skipOld.has(e)), newEvents.filter((e) => !skipNew.has(e)), recTol);
 
+  const retained = [];
   for (const { oe, ne } of P.pairs) {
     const deltas = {};
     let kind = 'unchanged';
@@ -777,8 +796,9 @@ export function diffChangelist(oldEvents, newEvents, opts = {}) {
       deltas.src = { old: [oe.srcIn, oe.srcOut], new: [ne.srcIn, ne.srcOut] };
     }
     if (kind !== 'unchanged') changes.push({ kind, source: ne.source, track: ne.track, oldRecIn: oe.recIn, newRecIn: ne.recIn, deltas });
+    else retained.push(ne);
   }
-  for (const ne of P.unmatchedNew) changes.push({ kind: 'new', source: ne.source, track: ne.track, newRecIn: ne.recIn });
+  for (const ne of P.unmatchedNew) changes.push({ kind: 'new', source: ne.source, track: ne.track, newRecIn: ne.recIn, newRecOut: ne.recOut });
   // Unconsumed old events → gone (unless a 'new' at the same rec position → replaced).
   for (const oe of P.unmatchedOld) {
     const replacement = changes.find((c) => c.kind === 'new' && c.track === oe.track && Math.abs((c.newRecIn ?? 0) - (oe.recIn ?? 0)) <= recTol);
@@ -787,7 +807,7 @@ export function diffChangelist(oldEvents, newEvents, opts = {}) {
       replacement.oldSource = oe.source;
       replacement.oldRecIn = oe.recIn;
     } else {
-      changes.push({ kind: 'gone', source: oe.source, track: oe.track, oldRecIn: oe.recIn });
+      changes.push({ kind: 'gone', source: oe.source, track: oe.track, oldRecIn: oe.recIn, oldRecOut: oe.recOut });
     }
   }
 
@@ -825,10 +845,40 @@ export function diffChangelist(oldEvents, newEvents, opts = {}) {
   const counts = {};
   for (const c of changes) counts[c.kind] = (counts[c.kind] || 0) + 1;
   changes.sort((a, b) => (a.newRecIn ?? a.oldRecIn ?? 0) - (b.newRecIn ?? b.oldRecIn ?? 0));
+
+  // SHAPE (E138): a real Premiere auto-save of a locked reel kept 3 of its
+  // 335 cuts — byte-identical at their record positions — and deleted the
+  // rest (a patch/selects reel). Per-event kinds read that as 332 'gone';
+  // it is a sparse SUBSET of the same cut with nothing edited. The verdict
+  // names the relationship so a reader never mistakes a subset for a
+  // re-cut: identical | subset (new ⊂ old) | superset (old ⊂ new) | edit.
+  // A transition that vanished because both cuts it joined vanished (or
+  // appeared with the cuts it joins) is a consequence, not an edit.
+  const touches = (kind, junction, track) => changes.some((c) => c.kind === kind && c.track === track
+    && ((kind === 'gone' ? [c.oldRecIn, c.oldRecOut] : [c.newRecIn, c.newRecOut]).some((v) => Math.abs((v ?? -1e9) - junction) <= recTol)));
+  const consequential = (c) => (c.kind === 'transition_dropped' && touches('gone', c.oldRecIn, c.track))
+    || (c.kind === 'transition_added' && touches('new', c.newRecIn, c.track));
+  const edits = changes.filter((c) => c.kind !== 'gone' && c.kind !== 'new' && !consequential(c)).length;
+  const gone = counts.gone || 0, added = counts.new || 0;
+  const oldCuts = P.old.cuts.length + skipOld.size, newCuts = P.new.cuts.length + skipNew.size;
+  let shape = 'edit';
+  if (!changes.length) shape = 'identical';
+  else if (!edits && gone && !added && retained.length) shape = 'subset';
+  else if (!edits && added && !gone && retained.length) shape = 'superset';
+  const shapeInfo = { shape, retained: retained.length, oldCuts, newCuts };
+  if (shape === 'subset' || shape === 'superset') {
+    const of = shape === 'subset' ? oldCuts : newCuts;
+    shapeInfo.sparse = retained.length / Math.max(1, of) < 0.5;
+    shapeInfo.retainedWindows = retained.slice(0, 200).map((e) => ({ track: e.track, source: e.source, recIn: e.recIn, recOut: e.recOut }));
+    shapeInfo.note = shape === 'subset'
+      ? `new keeps ${retained.length} of ${oldCuts} cuts unchanged in place and nothing else — a patch/selects reel of the same cut, not ${gone} deletions`
+      : `old is ${retained.length} of the new cut's ${newCuts} cuts, unchanged in place — the rest is the new cut's additions, not ${added} edits to old`;
+  }
   return {
     changes, counts, changedCount: changes.length,
     transitions: { old: P.old.transitions.length, new: P.new.transitions.length },
     carriersFolded: { old: P.old.carriers.length, new: P.new.carriers.length },
+    ...shapeInfo,
     gate: 'review',
   };
 }

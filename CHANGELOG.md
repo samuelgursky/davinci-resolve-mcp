@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.190.0 — E138: the changelist names its shape; pairing is closest-first globally
+
+### Added
+
+- **`turnover_changelist` leads with a SHAPE verdict.** A real Premiere
+  auto-save of a locked reel kept 3 of its 335 cuts, byte-identical at their
+  record positions, and deleted the rest: a patch/selects reel of the same
+  cut. Per-event kinds read that as 332 `gone`. The result now names the
+  relationship first: `identical` | `subset` (new keeps some of old's cuts
+  unchanged in place and nothing else) | `superset` (the reverse) | `edit`,
+  with `retained`, `oldCuts`, `newCuts`, and for subset/superset `sparse`,
+  the `retainedWindows`, and a plain-language `note`. A transition that
+  vanished or appeared with the cuts it joins counts as a consequence, not an
+  edit. `gone`/`new` changes carry their record OUT so a dropped junction can
+  be attributed to them.
+
+### Fixed
+
+- **Event pairing was first-come, not closest-first.** Walking new cuts in
+  order let the first new instance of a source consume an old instance 6,000
+  frames away while the old instance at its own position went unpaired, so
+  the same two reels compared as `subset` one way and `moved + 332 new` the
+  other. Every same-signature (old, new) pair now sorts by record distance
+  and is taken once; the diff is symmetric under swapping old and new. On
+  the real reels: `subset 3 of 335` forward, `superset 3 of 335` back.
+  Sweep across every sequence the two auto-saves share: 739 compared, 738
+  `identical`, 1 `subset`, 0 asymmetric in either shape or counts.
+
 ## What's New in v2.189.0 — E136: Premiere markers belong to their sequence and read their real fields
 
 ### Fixed
