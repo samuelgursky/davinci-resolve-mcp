@@ -1028,6 +1028,22 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     // still a 'source' mismatch (a swapped shot), found by window.
     const P = pairEvents(a, b, recTol);
     const byInput = new Map(P.pairs.map((pr) => [pr.oe, pr.ne]));
+    // PER-SOURCE OFFSET = the source's DOMINANT offset (E151), not the first
+    // pair's: with the first pair's, two shifted cuts of fifty-five set the
+    // expectation and fifty-three unchanged cuts read as source-frames drift
+    // on a real reel. Fit the offset net of the record shift for every pair
+    // of a source, take the mode, and judge each cut against it.
+    const offsetOf = (x, y) => (y.srcIn - (y.recIn - x.recIn)) - x.srcIn;
+    const modeOf = new Map();
+    for (const { oe: x, ne: y } of P.pairs) {
+      if (x.track !== y.track || x.source !== y.source) continue;
+      const off = offsetOf(x, y);
+      if (!modeOf.has(x.source)) modeOf.set(x.source, new Map());
+      modeOf.get(x.source).set(off, (modeOf.get(x.source).get(off) || 0) + 1);
+    }
+    for (const [src, tally] of modeOf) {
+      if (srcOffsets[src] === undefined) srcOffsets[src] = [...tally].sort((p1, p2) => p2[1] - p1[1] || Math.abs(p1[0]) - Math.abs(p2[0]))[0][0];
+    }
     const takenNew = new Set(P.pairs.map((pr) => pr.ne));
     const unmatchedNew = new Set(P.unmatchedNew);
     let n = 0;
@@ -1076,7 +1092,7 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
       // record-aligned), so the per-source constant offset is fitted net of
       // the record shift — otherwise a source cut both plain and faded would
       // read as a source-frames drift.
-      const off = (y.srcIn - (y.recIn - x.recIn)) - x.srcIn;
+      const off = offsetOf(x, y);
       if (srcOffsets[x.source] === undefined) srcOffsets[x.source] = off;
       else if (Math.abs(off - srcOffsets[x.source]) > srcTol) {
         mismatches.push({ kind: 'source-frames', ...tt, at: i, source: x.source, expectedOffset: srcOffsets[x.source], gotOffset: off });

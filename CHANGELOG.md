@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.203.0 — E151: verify_roundtrip fits a source offset from the majority
+
+### Fixed
+
+- **`verify_roundtrip` fits a source's offset from the majority of its
+  cuts.** The per-source timecode offset was whatever the FIRST paired cut
+  said, so on a real reel two shifted cuts of fifty-five set the expectation
+  and fifty-three unchanged cuts read as `source-frames` drift. The offset is
+  now the source's dominant one across all its pairs (net of record shift),
+  and each cut is judged against that. On that reel: 137 → 76 mismatches,
+  the remainder the per-cut scatter of an eye-matched re-conform; the other
+  reels lose two false drifts each.
+
 ## What's New in v2.202.0 — E150: a rebase needs a real majority; retime rounding is the same window
 
 ### Fixed

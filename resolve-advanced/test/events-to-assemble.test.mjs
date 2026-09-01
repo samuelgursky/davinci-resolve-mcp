@@ -1659,3 +1659,19 @@ test('verifyRoundtrip reports a clip the export lost as one missing and an expor
   assert.equal(same.pass, true);
   assert.equal(same.pairs, 5);
 });
+
+// ── E151: the fitted per-source offset is the source's dominant one ──
+test('verifyRoundtrip fits a source offset from the majority of its cuts, so two shifted cuts read as drift and fifty unchanged do not (E151)', () => {
+  const ev = (track, source, srcIn, recIn, dur) => ({ track, source, srcIn, srcOut: srcIn + dur, recIn, recOut: recIn + dur, speed: 100, reverse: false, transition: null, fps: 24 });
+  const input = Array.from({ length: 52 }, (_, i) => ev('V', 'S.mov', 1000 + 100 * i, 100 * i, 50));
+  // the FIRST two cuts shifted by 47745, the other fifty unchanged
+  const exported = input.map((e, i) => (i < 2 ? { ...e, srcIn: e.srcIn + 47745, srcOut: e.srcOut + 47745 } : { ...e }));
+  const r = verifyRoundtrip(input, exported, { exportedFormat: 'drt' });
+  assert.equal(r.srcOffsets['s'], 0, 'the dominant offset is 0');
+  assert.deepEqual(r.mismatches.map((m) => [m.kind, m.at, m.gotOffset]), [['source-frames', 0, 47745], ['source-frames', 1, 47745]]);
+  // a real whole-source rebase still fits as one offset and passes
+  const rebased = input.map((e) => ({ ...e, srcIn: e.srcIn + 500, srcOut: e.srcOut + 500 }));
+  const ok = verifyRoundtrip(input, rebased, { exportedFormat: 'drt' });
+  assert.equal(ok.pass, true);
+  assert.equal(ok.srcOffsets['s'], 500);
+});
