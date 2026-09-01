@@ -53,6 +53,7 @@ window. `render.verify_output` covers the container-level checks.
 | Built-in generators | `elements: [{type:'generator', generatorName}]` | v2.110 |
 | Custom start timecode | `spec.startFrame` / `preserveStartTimecode` | v2.117 |
 | Timeline markers | `spec.markers` (16 colors, notes, durations, customData) | v2.118 |
+| Item markers (clip locators) | `cuts[].markers` (frames item-relative; video + audio items) | v2.143 |
 | Turnover markers | EDL `* LOC:` locators + OTIO markers → authored | v2.119 |
 | TC-bearing sources (AAF route) | native clip capture (`MediaStartTime`), channel-leg merge | v2.120–2.122 |
 | Subtitles | `spec.subtitles` / `spec.subtitlesSrt` (raw SRT) | v2.128 |

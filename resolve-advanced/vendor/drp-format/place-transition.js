@@ -75,10 +75,15 @@ const WIPE_FIELDS_BLOB = '00000002000000158012120000002c789c636660642016000000da
 // renders INERT — so authoring through this path beats the host importer.
 // Unknown PrettyTypes are refused, not probed: unvetted strings are exactly
 // the class that crashed the app elsewhere (interp!=0, dangling ids).
+// 'Fade To Color' is deliberately ABSENT: on the dissolve skeleton its
+// behavior is duration/direction-erratic (24f rendered a ~77 plateau, 48f a
+// single black frame then a hard cut — measured E68/E75; its real params
+// live in an EffectFiltersBA no importer path can harvest, the XMEML
+// importer being inert). Dip is the verified equivalent (fade to black and
+// back, clean symmetric valley at 24f AND 48f).
 const STYLE_PRETTY_TYPES = {
   dip: 'Dip To Color Dissolve',
   additive: 'Additive Dissolve',
-  'fade-to-color': 'Fade To Color',
   'smooth-cut': 'Smooth Cut',
   'non-additive': 'Non-Additive Dissolve',
 };

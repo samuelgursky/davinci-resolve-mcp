@@ -209,6 +209,51 @@ async function assembleTimeline(spec = {}) {
   const { buffer: baseBuffer, timelineName: tlName, startFrame } = base;
   let buffer = baseBuffer;
 
+  // ITEM-level markers (clip locators): cuts[].markers, frames ITEM-relative.
+  // They live in project.xml's LocableBlobSet as Sm2TiItemLockableBlob —
+  // same wire codec as timeline markers, BlobOwner = the CLIP's DbId
+  // (measured E78 via a live DB byte-hunt: the .drt EXPORTER drops these
+  // blobs entirely, but the IMPORTER accepts an authored one — frames,
+  // colors, notes, durations and customData all read back through the
+  // marker API). Placed right after cuts, while the parent container is
+  // still the only one (compounds haven't run).
+  {
+    const itemMarkerCuts = [];
+    (Array.isArray(media) ? media : media ? [media] : []).forEach((src) => {
+      (src.cuts || []).forEach((cut) => {
+        if (Array.isArray(cut.markers) && cut.markers.length) itemMarkerCuts.push(cut);
+      });
+    });
+    if (itemMarkerCuts.length) {
+      const { getTrackVec } = require('./seq-surgery');
+      const zipIM = await JSZip.loadAsync(buffer);
+      const seqName = Object.keys(zipIM.files).find((n) => !zipIM.files[n].dir && /SeqContainer\/.+\.xml$/.test(n));
+      const seqXml = await zipIM.file(seqName).async('string');
+      let pj = await zipIM.file('project.xml').async('string');
+      if (!/<LocableBlobSet>[\s\S]*?<\/LocableBlobSet>/.test(pj)) throw new Error('assembleTimeline: project.xml has no LocableBlobSet for item markers');
+      for (const cut of itemMarkerCuts) {
+        for (const m of cut.markers) {
+          if (!Number.isInteger(m.frame) || m.frame < 0 || m.frame >= cut.durationFrames) {
+            throw new RangeError(`assembleTimeline: item marker frame ${m.frame} outside the cut (frames are ITEM-relative, [0, ${cut.durationFrames}))`);
+          }
+        }
+        const kind = cut.audioOnly ? 'audio' : 'video';
+        const { tracks } = getTrackVec(seqXml, kind);
+        const trackXml = tracks[(cut.track ?? 1) - 1];
+        if (!trackXml) throw new Error(`assembleTimeline: item markers — track ${cut.track ?? 1} not found`);
+        const tag = cut.audioOnly ? 'Sm2TiAudioClip' : 'Sm2TiVideoClip';
+        const re = new RegExp(`<${tag} DbId="([^"]+)">(?:(?!<\\/${tag}>)[\\s\\S])*?<Start>${cut.startFrame}<\\/Start>`);
+        const hit = trackXml.match(re);
+        if (!hit) throw new Error(`assembleTimeline: item markers — no ${kind} clip starting at ${cut.startFrame} on track ${cut.track ?? 1}`);
+        const blob = encodeTimelineMarkersBlob(cut.markers);
+        const el = `<Element>\n     <Sm2TiItemLockableBlob DbId="${randomUUID()}">\n      <FieldsBlob>${blob.toString('hex')}</FieldsBlob>\n      <BlobOwner>${hit[1]}</BlobOwner>\n      <DbSavedTime>0</DbSavedTime>\n     </Sm2TiItemLockableBlob>\n    </Element>\n   `;
+        pj = pj.replace('</LocableBlobSet>', `${el}</LocableBlobSet>`);
+      }
+      zipIM.file('project.xml', pj);
+      buffer = await zipIM.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    }
+  }
+
   for (const [i, el] of elements.entries()) {
     if (!el || typeof el !== 'object') throw new TypeError(`assembleTimeline: elements[${i}] must be an object`);
     if (el.type === 'title') {

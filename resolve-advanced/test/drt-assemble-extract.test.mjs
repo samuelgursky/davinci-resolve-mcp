@@ -436,7 +436,7 @@ test('transition style types swap PrettyType on the working skeleton; unknowns r
     ] }, transitions: [{ track: 1, atFrame: 86448, durationFrames: 24, type }] } });
   for (const [type, pretty] of [
     ['dip', 'Dip To Color Dissolve'], ['additive', 'Additive Dissolve'],
-    ['fade-to-color', 'Fade To Color'], ['smooth-cut', 'Smooth Cut'],
+    ['smooth-cut', 'Smooth Cut'],
     ['non-additive', 'Non-Additive Dissolve'],
   ]) {
     const args = mk(type);
@@ -448,4 +448,45 @@ test('transition style types swap PrettyType on the working skeleton; unknowns r
     await fs.unlink(args.outputPath);
   }
   await assert.rejects(drtTool.handler({ action: 'assemble', args: mk('checkerboard') }), /type must be one of/);
+  // fade-to-color refuses too — erratic on the dissolve skeleton (E75); use dip
+  await assert.rejects(drtTool.handler({ action: 'assemble', args: mk('fade-to-color') }), /type must be one of/);
+});
+
+test('cuts[].markers author Sm2TiItemLockableBlobs owned by the placed clips (E78/E79)', async () => {
+  // Item markers live in project.xml's LocableBlobSet, same wire codec as
+  // timeline markers, BlobOwner = the clip DbId. The .drt EXPORTER drops
+  // these blobs (measured — a live DB byte-hunt found them only in
+  // Project.db), but the IMPORTER accepts an authored one: live-verified
+  // frames/colors/notes/durations/customData readback on video AND audio
+  // (A3) items through the tool layer.
+  const requireC5 = createRequire(import.meta.url);
+  const { decodeTimelineMarkersBlob } = requireC5('../vendor/drp-format/timeline-markers-blob.js');
+  const out = tmp('.drt');
+  await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    spec: { timelineName: 'IM', media: {
+      mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+      cuts: [{ startFrame: 86400, durationFrames: 48, srcIn: 24,
+        markers: [{ frame: 5, color: 'Red', name: 'T1', note: 'n1' }, { frame: 40, color: 'Lavender', name: 'T2', duration: 4, customData: 'cd' }] }],
+    } },
+  }});
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const pj = await zip.file('project.xml').async('string');
+  const blk = pj.match(/<Sm2TiItemLockableBlob[\s\S]*?<\/Sm2TiItemLockableBlob>/);
+  assert.ok(blk, 'item lockable blob present');
+  const owner = blk[0].match(/<BlobOwner>([0-9a-f-]+)<\/BlobOwner>/)[1];
+  const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+  const seq = await zip.file(seqName).async('string');
+  assert.ok(seq.includes(`<Sm2TiVideoClip DbId="${owner}"`), 'owner is the placed clip');
+  const fb = Buffer.from(blk[0].match(/<FieldsBlob>([0-9a-fA-F]*)<\/FieldsBlob>/)[1], 'hex');
+  assert.deepEqual(decodeTimelineMarkersBlob(fb).sort((a, b) => a.frame - b.frame), [
+    { frame: 5, color: 'Red', note: 'n1', duration: 1, name: 'T1', customData: '' },
+    { frame: 40, color: 'Lavender', note: '', duration: 4, name: 'T2', customData: 'cd' },
+  ]);
+  await fs.unlink(out);
+  await assert.rejects(drtTool.handler({ action: 'assemble', args: {
+    outputPath: tmp('.drt'),
+    spec: { media: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+      cuts: [{ startFrame: 86400, durationFrames: 48, markers: [{ frame: 48, name: 'X' }] }] } },
+  }}), /ITEM-relative/);
 });

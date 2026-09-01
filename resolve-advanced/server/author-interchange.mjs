@@ -323,7 +323,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
         atFrame: recIn, durationFrames: d, track: vTrack, pre,
         explicitSpan: e.transition.alignment != null || e.transition.inOffset != null || e.transition.recStart != null,
         index: e.index, type: e.transition.type, rawDuration: e.transition.duration,
-        source: e.source, srcIn: cut.srcIn, incomingCutRef: cut,
+        source: e.source, srcIn: cut.srcIn, incomingCutRef: cut, cutPoint: e.transition.cutPoint,
       });
     }
     placements.push({ start: recIn, end: recOut, index: e.index, source: e.source, srcIn: cut.srcIn, durationFrames, track: vTrack, cutRef: cut });
@@ -360,7 +360,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
         atFrame: recIn, durationFrames: d, track, pre,
         explicitSpan: e.transition.alignment != null || e.transition.inOffset != null,
         index: e.index, type: e.transition.type, rawDuration: e.transition.duration,
-        source: e.source, srcIn: cut.srcIn, incomingCutRef: cut,
+        source: e.source, srcIn: cut.srcIn, incomingCutRef: cut, cutPoint: e.transition.cutPoint,
       });
     }
     audioPlacements.push({ start: recIn, end: recOut, index: e.index, track, source: e.source, srcIn: cut.srcIn, durationFrames, cutRef: cut });
@@ -457,7 +457,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
     else if (/dip to color/i.test(raw)) kind = 'dip';
     else if (/non-additive/i.test(raw)) kind = 'non-additive';
     else if (/additive/i.test(raw)) kind = 'additive';
-    else if (/fade to color/i.test(raw)) kind = 'fade-to-color';
+    else if (/fade to color/i.test(raw)) kind = 'dip'; // fade-to-color is erratic on the skeleton (measured); dip is the verified fade-to-black-and-back
     else if (/smooth cut/i.test(raw)) kind = 'smooth-cut';
     // EDGE LAW (E73, measured): the clip boundary must sit STRICTLY INSIDE
     // the transition span — an edge-aligned span (Start == boundary) renders
@@ -468,7 +468,11 @@ export function eventsToAssembleSpec(events, opts = {}) {
     let atFrame = c.atFrame;
     const spanStartAbs = c.atFrame - pre;
     if (c.explicitSpan && (pre === 0 || pre === c.durationFrames)) {
-      const shift = (pre === 0 ? 1 : -1) * (c.durationFrames / 2);
+      // AAF CutPoint: the notional cut's offset within the overlap — shift
+      // the reshaped boundary there when given (clamped strictly inside the
+      // span, the edge law), else center.
+      const cp = Number.isInteger(c.cutPoint) ? Math.min(c.durationFrames - 1, Math.max(1, c.cutPoint)) : c.durationFrames / 2;
+      const shift = (pre === 0 ? 1 : -1) * cp;
       prev.cutRef.durationFrames += shift;
       c.incomingCutRef.startFrame += shift;
       c.incomingCutRef.srcIn += shift;
@@ -507,7 +511,11 @@ export function eventsToAssembleSpec(events, opts = {}) {
     let atFrame = c.atFrame;
     const spanStartAbs = c.atFrame - pre;
     if (c.explicitSpan && (pre === 0 || pre === c.durationFrames)) {
-      const shift = (pre === 0 ? 1 : -1) * (c.durationFrames / 2);
+      // AAF CutPoint: the notional cut's offset within the overlap — shift
+      // the reshaped boundary there when given (clamped strictly inside the
+      // span, the edge law), else center.
+      const cp = Number.isInteger(c.cutPoint) ? Math.min(c.durationFrames - 1, Math.max(1, c.cutPoint)) : c.durationFrames / 2;
+      const shift = (pre === 0 ? 1 : -1) * cp;
       prev.cutRef.durationFrames += shift;
       c.incomingCutRef.startFrame += shift;
       c.incomingCutRef.srcIn += shift;

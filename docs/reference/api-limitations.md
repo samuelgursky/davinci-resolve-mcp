@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 35 missing capabilities, 46 bugs / unreliable behaviors.
+**Totals:** 35 missing capabilities, 47 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -671,3 +671,11 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Video <transitionitem>s imported from an FCP7 XMEML land as real Sm2TiTransition elements that READ BACK through the item APIs but render INERT: the outgoing clip plays through the transition window and hard-cuts at its end. Measured on Studio 19.1.3.7 with both a plain Cross Dissolve and a Dip to Color Dissolve (midpoint frames byte-matched the outgoing clip; no blend, no dip). The same transition elements authored offline with a correct FieldsBlob render perfectly, and EDL-imported dissolves/wipes also render — the defect is specific to the XMEML import path's element construction.
 - **Workaround / current handling:** Do not trust an XMEML-imported timeline's transitions without a render probe at a junction midpoint. To conform an XMEML turnover with working transitions, route it through drt.assemble_from_interchange (format 'xml'), which authors render-verified dissolves, wipes, and the dissolve-family styles from the same <transitionitem> data.
 - **Tags:** timeline, import, xmeml, transition, readback, silent-failure
+
+### Timeline.Export EXPORT_DRT (drops timeline-item markers)
+
+- **Object:** `Timeline`
+- **Signature:** `(filePath, EXPORT_DRT) -> bool`
+- **Behavior:** Item-level markers (clip locators) are not serialized into the exported .drt at all. They live in the project database as Sm2TiItemLockableBlob rows (same wire codec as timeline markers, BlobOwner = the item's DbId — located by byte search in a live Project.db), and readback via TimelineItem.GetMarkers is fine, but the export omits the blobs even after SaveProject — measured on Studio 19.1.3.7. Asymmetrically, ImportTimelineFromFile ACCEPTS an authored Sm2TiItemLockableBlob and the markers read back perfectly.
+- **Workaround / current handling:** Do not rely on .drt archives to carry clip markers. To deliver item markers in a .drt, author them offline (drt.assemble cuts[].markers writes the accepted blob); to preserve markers from a live timeline, read them via the marker API and re-author.
+- **Tags:** timeline, export, drt, markers, silent-failure

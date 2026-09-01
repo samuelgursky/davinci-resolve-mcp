@@ -2,6 +2,33 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.143.0 — item markers, and two refinements
+
+### Added
+
+- **Item-level markers (clip locators) authored offline** — `cuts[].markers`
+  (frames item-relative), on video AND explicit-audio items. Found by a raw
+  byte-hunt in a live Project.db: item markers ride an
+  `Sm2TiItemLockableBlob` in `project.xml`'s LocableBlobSet — the same wire
+  codec as timeline markers with the clip's DbId as owner. The kicker, filed
+  as a new Resolve bug in api-limitations: **Resolve's own EXPORT_DRT drops
+  item-marker blobs entirely** (even after SaveProject), while
+  `ImportTimelineFromFile` accepts an authored one — this authoring path is
+  the only way a .drt carries clip markers. Live-verified readback on video
+  and A3 audio items through the tool layer.
+- **AAF `CutPoint` honored** — when an AAF transition names where the
+  notional cut sits within the overlap, the boundary shift lands there
+  (clamped strictly inside the span per the edge law) instead of centering.
+
+### Changed
+
+- **`fade-to-color` demoted from the transition style set** — on the
+  dissolve skeleton it is duration/direction-erratic (a 24f junction
+  rendered a ~77 plateau; a 48f one rendered a single black frame then a
+  hard cut), and its real parameter blob is unharvestable while the XMEML
+  importer stays inert. Turnover Fade-To-Colors now map to `dip`, which is
+  duration-stable (clean symmetric valley measured at both 24f and 48f).
+
 ## What's New in v2.142.1 — the AAF leg joins the span fix
 
 ### Fixed

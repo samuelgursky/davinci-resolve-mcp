@@ -2694,6 +2694,28 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
         "mitigation": ["drt.assemble_from_interchange"],
     },
+    {
+        "symbol": "Timeline.Export EXPORT_DRT (drops timeline-item markers)",
+        "object": "Timeline",
+        "signature": "(filePath, EXPORT_DRT) -> bool",
+        "reality": "Item-level markers (clip locators) are not serialized into "
+                   "the exported .drt at all. They live in the project database "
+                   "as Sm2TiItemLockableBlob rows (same wire codec as timeline "
+                   "markers, BlobOwner = the item's DbId — located by byte "
+                   "search in a live Project.db), and readback via "
+                   "TimelineItem.GetMarkers is fine, but the export omits the "
+                   "blobs even after SaveProject — measured on Studio 19.1.3.7. "
+                   "Asymmetrically, ImportTimelineFromFile ACCEPTS an authored "
+                   "Sm2TiItemLockableBlob and the markers read back perfectly.",
+        "recommended": "Do not rely on .drt archives to carry clip markers. To "
+                       "deliver item markers in a .drt, author them offline "
+                       "(drt.assemble cuts[].markers writes the accepted blob); "
+                       "to preserve markers from a live timeline, read them via "
+                       "the marker API and re-author.",
+        "tags": ["timeline", "export", "drt", "markers", "silent-failure"],
+        "submit": "bug",
+        "mitigation": ["drt.assemble cuts[].markers"],
+    },
 ]
 
 

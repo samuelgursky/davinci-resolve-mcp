@@ -1175,6 +1175,15 @@ def _walk_components(sequence, *, track, fps, rec, state, depth, transition=None
                 # exactly the AAF CutPoint default (centered in the overlap). The old
                 # centered-on-recIn placement put HALF the blend before the overlap began.
                 pending_transition = {"type": "dissolve", "duration": duration, "alignment": "start"}
+                # CutPoint (optional): where the notional cut sits WITHIN the
+                # overlap. The bridge shifts the reshaped clip boundary there
+                # instead of the centered default, preserving Avid's intent.
+                try:
+                    cut_point = comp["CutPoint"].value
+                    if cut_point is not None:
+                        pending_transition["cutPoint"] = int(cut_point)
+                except (KeyError, AttributeError, TypeError, ValueError):
+                    pass
                 # Rewind: the next component overlaps the previous one by `duration`.
                 # Clamped at this sequence's own start — a leading transition has no
                 # preceding material to overlap, and a negative record position would
