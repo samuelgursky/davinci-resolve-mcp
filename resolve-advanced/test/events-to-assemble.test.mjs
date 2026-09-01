@@ -704,3 +704,21 @@ test('buildRampTimemapKeyed: piecewise arithmetic, srcIn baking, and refusals (E
   assert.throws(() => buildRampTimemapKeyed({ segments: [{ durationFrames: 24, speed: 4 }, { durationFrames: 24, speed: 4 }], srcIn: 0, sourceFrames: 100, fps: 24, uniqueId: 'u' }), /consumes source frame/);
   assert.throws(() => buildRampTimemapKeyed({ segments: [{ durationFrames: 24, speed: 0 }, { durationFrames: 24, speed: 1 }], srcIn: 0, sourceFrames: 192, fps: 24, uniqueId: 'u' }), /speed must be > 0/);
 });
+
+test('XMEML transitionitems parse and map to render-verified styles (E66-E69)', () => {
+  const { parseXMEMLEvents } = requireCjs('../server/editorial.mjs');
+  const xml = `<?xml version="1.0"?><xmeml version="4"><sequence><name>S</name>
+   <rate><timebase>24</timebase></rate><media><video><track>
+   <clipitem><name>a.mp4</name><start>0</start><end>48</end><in>24</in><out>72</out></clipitem>
+   <transitionitem><start>36</start><end>60</end><alignment>center</alignment>
+    <effect><name>Dip to Color Dissolve</name><effectid>Dip to Color Dissolve</effectid></effect></transitionitem>
+   <clipitem><name>b.mp4</name><start>48</start><end>96</end><in>24</in><out>72</out></clipitem>
+   </track></video></media></sequence></xmeml>`;
+  const events = parseXMEMLEvents(xml, { fps: 24 });
+  const incoming = events.find((e) => e.recIn === 48);
+  assert.deepEqual(incoming.transition, { type: 'Dip to Color Dissolve', duration: 24 });
+  const map2 = { 'a.mp4': MAP.TAPE1, 'b.mp4': MAP.TAPE2 };
+  const { spec, report } = eventsToAssembleSpec(events, { sourceMap: map2 });
+  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24, type: 'dip' }]);
+  assert.equal(report.authoredTransitions[0].type, 'dip');
+});

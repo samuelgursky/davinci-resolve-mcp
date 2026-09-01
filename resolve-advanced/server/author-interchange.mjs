@@ -425,12 +425,20 @@ export function eventsToAssembleSpec(events, opts = {}) {
       });
       continue;
     }
-    // EDL W-codes author as a WIPE (Resolve's own EDL importer maps every
-    // W-code to its single soft-edge wipe style — W001/W002/W005 measured
-    // identical — so one style is host-importer parity; render-verified
-    // spatial split at the midpoint). Everything else is a dissolve.
-    const kind = /^W/i.test(String(c.type || '')) ? 'wipe' : 'dissolve';
-    transitions.push({ track: c.track, atFrame: c.atFrame, durationFrames: c.durationFrames, ...(kind === 'wipe' ? { type: 'wipe' } : {}) });
+    // Style mapping (all render-verified E61/E67/E68, midpoint-fingerprinted):
+    // EDL W-codes and XMEML wipe effectids → the single wipe style Resolve's
+    // own EDL importer maps every W-code to; XMEML dissolve-family effectids
+    // → their PrettyType styles; anything unrecognized → plain dissolve
+    // (never dropped — a blend at the right junction beats a hard cut).
+    const raw = String(c.type || '');
+    let kind = 'dissolve';
+    if (/^W\d*/i.test(raw) || /wipe/i.test(raw)) kind = 'wipe';
+    else if (/dip to color/i.test(raw)) kind = 'dip';
+    else if (/non-additive/i.test(raw)) kind = 'non-additive';
+    else if (/additive/i.test(raw)) kind = 'additive';
+    else if (/fade to color/i.test(raw)) kind = 'fade-to-color';
+    else if (/smooth cut/i.test(raw)) kind = 'smooth-cut';
+    transitions.push({ track: c.track, atFrame: c.atFrame, durationFrames: c.durationFrames, ...(kind === 'dissolve' ? {} : { type: kind }) });
   }
   // Audio cross-fades, same geometry rules (render-verified on 19.1.3.7 via
   // the harvested cross-fade template: the highpass RMS ramps, not steps).

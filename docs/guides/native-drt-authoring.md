@@ -43,6 +43,7 @@ window. `render.verify_output` covers the container-level checks.
 | Multi-track video (V2+ stacking) | `cuts[].track` (video-only above V1) | v2.112 |
 | Cross-dissolves | `transitions: [{track, atFrame, durationFrames}]` | v2.111 |
 | Wipes (EDL `W`-codes) | `transitions[].type: 'wipe'` (single soft-edge style — host-importer parity) | v2.138 |
+| Transition styles | `transitions[].type: 'dip' \| 'additive' \| 'fade-to-color' \| 'smooth-cut' \| 'non-additive'` (XMEML effectids route automatically) | v2.140 |
 | Audio cross-fades | `transitions[].trackType: 'audio'` | v2.116 |
 | Constant retimes, forward | `cuts[].speed` (e.g. `0.5`) | v2.113 |
 | Constant retimes, reverse | `cuts[].reverse` | v2.114 |
@@ -117,6 +118,18 @@ and zero-speed warps route to it through `assemble_from_interchange`.
 **Timeline origin.** Template timelines start at frame 86400
 (01:00:00:00 @ 24fps). Clips placed before the origin are silently dropped
 by Resolve on import — `startFrame` is timeline-absolute.
+
+**Transition styles live in PrettyType — and the host XMEML importer is
+inert.** Swapping `PrettyType` on the working dissolve skeleton renders the
+named style (midpoint fingerprints: dip bottoms at pure black 16, additive
+saturates at 233.8, fade-to-color plateaus dark at 77, smooth-cut blends at
+179.9, non-additive holds the brighter side). Within `Cross Dissolve`, the
+FieldsBlob style-id distinguishes dissolve from wipe. Resolve's OWN FCP7-XMEML
+importer writes video `<transitionitem>`s that read back but render INERT on
+19.1.3 (measured: both a plain Cross Dissolve and a Dip to Color played the
+outgoing clip through the window) — so routing an XMEML turnover through
+`assemble_from_interchange` produces transitions that render where the host
+importer's do not.
 
 **Dissolve geometry.** A transition is authored only when the predecessor
 ends exactly at the cut and both sides have handle media for the centered

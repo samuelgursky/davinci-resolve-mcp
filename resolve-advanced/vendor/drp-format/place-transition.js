@@ -66,10 +66,28 @@ const clipDuration = (c) => { const m = c.match(/<Duration>(\d+)<\/Duration>/); 
 // wipe style, so one style is full parity with the host importer.
 const WIPE_FIELDS_BLOB = '00000002000000158012120000002c789c636660642016000000da0005';
 
+// PrettyType is the STYLE SELECTOR (measured E67/E68): swapping it on the
+// working dissolve skeleton renders the named style, midpoint-fingerprinted
+// on 19.1.3.7 — dip bottoms at pure black (16), additive saturates bright
+// (233.8), fade-to-color holds a dark plateau (77), smooth-cut blends
+// (179.9), non-additive holds the brighter side (234 past mid). Meanwhile
+// Resolve's OWN XMEML importer writes these same elements in a form that
+// renders INERT — so authoring through this path beats the host importer.
+// Unknown PrettyTypes are refused, not probed: unvetted strings are exactly
+// the class that crashed the app elsewhere (interp!=0, dangling ids).
+const STYLE_PRETTY_TYPES = {
+  dip: 'Dip To Color Dissolve',
+  additive: 'Additive Dissolve',
+  'fade-to-color': 'Fade To Color',
+  'smooth-cut': 'Smooth Cut',
+  'non-additive': 'Non-Additive Dissolve',
+};
+const TRANSITION_TYPES = ['dissolve', 'wipe', ...Object.keys(STYLE_PRETTY_TYPES)];
+
 async function placeTransition(drpInput, opts = {}) {
   const { track, atFrame, durationFrames = 24, trackType = 'video', type = 'dissolve', timelineUuid } = opts;
-  if (type !== 'dissolve' && type !== 'wipe') throw new Error("placeTransition: type must be 'dissolve' or 'wipe'");
-  if (type === 'wipe' && trackType === 'audio') throw new Error('placeTransition: wipes are video-only (audio junctions cross-fade)');
+  if (!TRANSITION_TYPES.includes(type)) throw new Error(`placeTransition: type must be one of ${TRANSITION_TYPES.join(', ')}`);
+  if (type !== 'dissolve' && trackType === 'audio') throw new Error('placeTransition: styled transitions are video-only (audio junctions cross-fade)');
   if (!Number.isInteger(track) || track < 1) throw new TypeError('placeTransition: track must be a positive integer');
   if (!Number.isInteger(atFrame)) throw new TypeError('placeTransition: atFrame must be an integer');
   if (!Number.isInteger(durationFrames) || durationFrames < 2) throw new TypeError('placeTransition: durationFrames must be an integer >= 2');
@@ -93,6 +111,8 @@ async function placeTransition(drpInput, opts = {}) {
   trans = freshDbIds(trans);
   if (type === 'wipe') {
     trans = trans.replace(/<FieldsBlob>[0-9a-fA-F]*<\/FieldsBlob>/, `<FieldsBlob>${WIPE_FIELDS_BLOB}</FieldsBlob>`);
+  } else if (STYLE_PRETTY_TYPES[type]) {
+    trans = trans.replace(/<PrettyType>Cross Dissolve<\/PrettyType>/, `<PrettyType>${STYLE_PRETTY_TYPES[type]}</PrettyType>`);
   }
   const start = atFrame - Math.floor(durationFrames / 2); // centered (AlignmentType 2)
   trans = trans.replace(/<Start>\d+<\/Start>/, `<Start>${start}</Start>`);

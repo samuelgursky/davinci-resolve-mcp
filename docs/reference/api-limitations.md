@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 35 missing capabilities, 45 bugs / unreliable behaviors.
+**Totals:** 35 missing capabilities, 46 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -663,3 +663,11 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Deleting or closing a project while its render job is still running orphans the render and wedges the whole render pipeline: the output file stops growing and Resolve idles at 0% CPU, IsRenderingInProgress on the NEXT current project reports True indefinitely, StopRendering does not clear it, NEW render jobs sit at 0% forever (then StartRendering starts returning False), and Resolve.Quit() is refused because the app believes a render is running — even project creation can start returning None behind the quit-confirm dialog (reproduced live on Studio 19.1.3.7, 2026-08-29).
 - **Workaround / current handling:** Never close or delete a project while IsRenderingInProgress is True — StopRendering first, wait for False, then close. Once wedged, only a manual quit (confirming the dialog) or force-quit clears it; treat a True that persists at 0% CPU with a static output file as stuck rather than rendering. Poll GetRenderJobStatus for completion instead of IsRenderingInProgress, which this failure poisons.
 - **Tags:** render, silent-failure, unreliable-return
+
+### MediaPool.ImportTimelineFromFile (FCP7 XMEML video transitions render inert)
+
+- **Object:** `MediaPool`
+- **Signature:** `(filePath, {importOptions}) -> Timeline`
+- **Behavior:** Video <transitionitem>s imported from an FCP7 XMEML land as real Sm2TiTransition elements that READ BACK through the item APIs but render INERT: the outgoing clip plays through the transition window and hard-cuts at its end. Measured on Studio 19.1.3.7 with both a plain Cross Dissolve and a Dip to Color Dissolve (midpoint frames byte-matched the outgoing clip; no blend, no dip). The same transition elements authored offline with a correct FieldsBlob render perfectly, and EDL-imported dissolves/wipes also render — the defect is specific to the XMEML import path's element construction.
+- **Workaround / current handling:** Do not trust an XMEML-imported timeline's transitions without a render probe at a junction midpoint. To conform an XMEML turnover with working transitions, route it through drt.assemble_from_interchange (format 'xml'), which authors render-verified dissolves, wipes, and the dissolve-family styles from the same <transitionitem> data.
+- **Tags:** timeline, import, xmeml, transition, readback, silent-failure

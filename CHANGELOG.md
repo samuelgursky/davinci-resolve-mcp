@@ -2,6 +2,38 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.140.0 — the transition style registry
+
+### Added
+
+- **Five more transition styles authored offline** — `transitions[].type:
+  'dip' | 'additive' | 'fade-to-color' | 'smooth-cut' | 'non-additive'`
+  (joining `dissolve` and `wipe`). The registry cracked in one probe:
+  `PrettyType` is the style selector — swapped onto the render-verified
+  dissolve skeleton, every style renders, each with its own midpoint
+  fingerprint on 19.1.3.7 (dip bottoms at pure black 16, additive saturates
+  at 233.8, fade-to-color plateaus dark at 77, smooth-cut blends at 179.9,
+  non-additive holds the brighter side past the cut). Unknown styles refuse
+  (unvetted strings are the measured crasher class).
+- **XMEML `<transitionitem>` parsing** — dissolve-family effectids and wipe
+  names route to their styles automatically through
+  `assemble_from_interchange`; unrecognized effects fall back to a plain
+  dissolve rather than dropping (a blend at the right junction beats a hard
+  cut).
+
+### Measured and closed (new Resolve bug, filed in api-limitations)
+
+- **Resolve's own FCP7-XMEML importer writes video transitions that render
+  INERT** on 19.1.3: the transitionitem lands as a real element that reads
+  back through every API, but the outgoing clip plays through the window and
+  hard-cuts at its end — measured with both a plain Cross Dissolve and a Dip
+  to Color (E66, importSourceClips both ways). EDL-imported transitions
+  render fine; the defect is the XMEML path's element construction. Routing
+  the same XMEML through `assemble_from_interchange` authors transitions
+  that render (E69: the same dip turnover produced the exact 16.0 black
+  valley through our route). `docs/reference/api-limitations.md` carries the
+  new `bug` entry.
+
 ## What's New in v2.139.0 — speed ramps, and the easing crash law
 
 ### Added

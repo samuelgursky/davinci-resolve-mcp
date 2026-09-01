@@ -395,7 +395,7 @@ test('transitions[].type wipe swaps the harvested style blob; audio wipes refuse
     spec: { media: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
       cuts: [{ startFrame: 86400, durationFrames: 96 }] },
       transitions: [{ track: 1, atFrame: 86448, durationFrames: 24, type: 'wipe', trackType: 'audio' }] },
-  }}), /wipes are video-only/);
+  }}), /video-only/);
 });
 
 test('cuts[].ramp authors a multi-keyframe map with In=0; bad geometry refuses', async () => {
@@ -421,4 +421,31 @@ test('cuts[].ramp authors a multi-keyframe map with In=0; bad geometry refuses',
     spec: { media: { ...base, cuts: [{ startFrame: 86400, durationFrames: 48, ramp: [{ durationFrames: 24, speed: 1 }] }] } } } }), /sum to 24 frames but the cut is 48/);
   await assert.rejects(drtTool.handler({ action: 'assemble', args: { outputPath: tmp('.drt'),
     spec: { media: { ...base, cuts: [{ startFrame: 86400, durationFrames: 48, speed: 0.5, ramp: [{ durationFrames: 24, speed: 1 }, { durationFrames: 24, speed: 1 }] }] } } } }), /cannot combine/);
+});
+
+test('transition style types swap PrettyType on the working skeleton; unknowns refuse', async () => {
+  // E67/E68 midpoint fingerprints on 19.1.3.7: dip bottoms at black (16),
+  // additive saturates (233.8), fade-to-color plateaus dark (77), smooth-cut
+  // blends (179.9), non-additive holds the brighter side. PrettyType is the
+  // selector; everything else stays the render-verified dissolve blob set.
+  const base = { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } };
+  const mk = (type) => ({ outputPath: tmp('.drt'), targetAppVersion: '19.1.3',
+    spec: { media: { ...base, cuts: [
+      { startFrame: 86400, durationFrames: 48, srcIn: 24 },
+      { startFrame: 86448, durationFrames: 48, srcIn: 120 },
+    ] }, transitions: [{ track: 1, atFrame: 86448, durationFrames: 24, type }] } });
+  for (const [type, pretty] of [
+    ['dip', 'Dip To Color Dissolve'], ['additive', 'Additive Dissolve'],
+    ['fade-to-color', 'Fade To Color'], ['smooth-cut', 'Smooth Cut'],
+    ['non-additive', 'Non-Additive Dissolve'],
+  ]) {
+    const args = mk(type);
+    await drtTool.handler({ action: 'assemble', args });
+    const zip = await JSZip.loadAsync(await fs.readFile(args.outputPath));
+    const seqName = Object.keys(zip.files).find((n) => !zip.files[n].dir && /^SeqContainer\//.test(n));
+    const seq = await zip.file(seqName).async('string');
+    assert.match(seq, new RegExp(`<PrettyType>${pretty}</PrettyType>`), type);
+    await fs.unlink(args.outputPath);
+  }
+  await assert.rejects(drtTool.handler({ action: 'assemble', args: mk('checkerboard') }), /type must be one of/);
 });

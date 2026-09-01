@@ -240,7 +240,26 @@ export function parseXMEMLEvents(xml, opts = {}) {
   const media = seq && seq.media;
   if (media) {
     const vtracks = media.video && media.video.track ? (Array.isArray(media.video.track) ? media.video.track : [media.video.track]) : [];
-    vtracks.forEach((t, vi) => { if (t.clipitem) walk(t.clipitem, vi === 0 ? 'V' : `V${vi + 1}`); });
+    vtracks.forEach((t, vi) => {
+      const label = vi === 0 ? 'V' : `V${vi + 1}`;
+      const before = events.length;
+      if (t.clipitem) walk(t.clipitem, label);
+      // <transitionitem> siblings: attach each to the INCOMING clip event —
+      // the one whose record-in falls inside the transition's span. Resolve's
+      // OWN XMEML importer writes these as elements that render INERT on
+      // 19.1.3 (measured E66: dip AND plain cross dissolve both played the
+      // outgoing clip through the window, hard cut at the end), so routing
+      // the turnover through assemble_from_interchange authors transitions
+      // that actually render where the host importer's do not.
+      const titems = t.transitionitem ? (Array.isArray(t.transitionitem) ? t.transitionitem : [t.transitionitem]) : [];
+      for (const tr of titems) {
+        const s = Number(tr.start), e2 = Number(tr.end);
+        if (!Number.isFinite(s) || !Number.isFinite(e2)) continue;
+        const effectId = (tr.effect && (tr.effect.effectid || tr.effect.name)) || 'Cross Dissolve';
+        const incoming = events.slice(before).find((ev) => ev.track === label && ev.recIn > s - 1 && ev.recIn <= e2);
+        if (incoming) incoming.transition = { type: String(effectId), duration: e2 - s };
+      }
+    });
     const atracks = media.audio && media.audio.track ? (Array.isArray(media.audio.track) ? media.audio.track : [media.audio.track]) : [];
     for (const t of atracks) if (t.clipitem) walk(t.clipitem, 'A');
   }
