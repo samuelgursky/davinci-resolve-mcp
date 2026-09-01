@@ -67,6 +67,7 @@ const changelistSchema = z.object({
   old: eventArray.describe('Old (locked-cut) normalized events, OR provide oldFormat+oldContent'),
   new: eventArray.describe('New (turnover) normalized events'),
   recTolerance: z.number().optional(),
+  srcTolerance: z.number().optional().describe('Source-frame slack on RETIMED pairs only (default 1): a speed map evaluated and rounded lands a frame apart between apps (E150); 100% pairs compare exactly'),
   timingGuards: z.boolean().optional().describe('Also run the timing silent-lie guards (default true)'),
   sourceAliases: z.array(z.object({ from: z.string().optional(), to: z.string().optional(), pattern: z.string().optional(), replace: z.string().optional(), flags: z.string().optional() })).optional()
     .describe('Rename OLD sources before pairing (E141): {from,to} exact or {pattern,replace} regex — e.g. the offline "4K-2K" proxies vs the online "4K" masters. A systematic rename is also inferred automatically (inferAliases) and reported in sourceAliases.'),
@@ -150,7 +151,7 @@ export const editorialTool = {
     }
     if (action === 'turnover_changelist') {
       const p = changelistSchema.parse(args);
-      const result = diffChangelist(p.old, p.new, { recTolerance: p.recTolerance, sourceAliases: p.sourceAliases, inferAliases: p.inferAliases });
+      const result = diffChangelist(p.old, p.new, { recTolerance: p.recTolerance, srcTolerance: p.srcTolerance, sourceAliases: p.sourceAliases, inferAliases: p.inferAliases });
       // The guards read the old cut through the SAME aliases the changelist adopted (E148).
       if (p.timingGuards !== false) result.timing = timingGuards(p.old, p.new, { sourceAliases: result.sourceAliases });
       return result;

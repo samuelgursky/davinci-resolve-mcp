@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.202.0 — E150: a rebase needs a real majority; retime rounding is the same window
+
+### Fixed
+
+- **A timecode rebase needs a majority of ALL the source's cuts.** The rule
+  measured its majority over the cuts whose windows differed, so on a real
+  reel two shifted cuts out of fifty-four became that source's base and
+  turned fifty-two UNCHANGED cuts into false trims (a control with a free
+  floor). The majority is now over every paired cut of the source (at least
+  two, and more than half). On that reel: 187 → 237 of 335 cuts retained; the
+  reels where a rebase is real keep it.
+- **One source frame of rounding on a retimed pair is the same window.**
+  Premiere's exact 80% and Resolve's keyframe slope (0.79999, frame-quantized
+  seconds) land one frame apart (41923 vs 41922). On a pair where either side
+  is retimed a source edge within `srcTolerance` (default 1 frame) compares
+  equal; a 100% pair keeps the exact compare; two frames is still a trim.
+
 ## What's New in v2.201.0 — E149: a rename is inferred from overlapping windows
 
 ### Added

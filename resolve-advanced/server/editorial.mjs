@@ -1031,28 +1031,45 @@ function diffChangelistOnce(oldEvents, newEvents, opts = {}) {
   // camera TC) — not N trims. A shift witnessed on ≥2 cuts of a source is
   // that source's offset; the compare below reads old through it, and a cut
   // that still differs is a real trim on top of the rebase.
-  const shiftTally = new Map(), differing = new Map();
+  const shiftTally = new Map(), differing = new Map(), pairedCuts = new Map();
   for (const { oe, ne } of P.pairs) {
     if ([oe.srcIn, oe.srcOut, ne.srcIn, ne.srcOut].some((v) => v == null)) continue;
+    const key = String(ne.source ?? '');
+    pairedCuts.set(key, (pairedCuts.get(key) || 0) + 1);
     const dIn = ne.srcIn - oe.srcIn, dOut = ne.srcOut - oe.srcOut;
     if (dIn === 0 && dOut === 0) continue;
-    const key = String(ne.source ?? '');
     differing.set(key, (differing.get(key) || 0) + 1);
     if (dIn === 0 || dIn !== dOut) continue;
     if (!shiftTally.has(key)) shiftTally.set(key, new Map());
     shiftTally.get(key).set(dIn, (shiftTally.get(key).get(dIn) || 0) + 1);
   }
   // A rebase is the source's DOMINANT story: the same shift on ≥2 cuts AND
-  // on more than half of the cuts whose windows differ at all. A source whose
-  // cuts each shift by a different amount (an eye-matched re-conform onto
-  // other media — measured: two of seven cuts happened to share a shift) is
-  // trims, not a base change.
+  // on more than half of ALL the source's paired cuts (E150b) — not merely
+  // of the cuts whose windows differ: on a real reel two shifted cuts out of
+  // fifty-four were adopted as the base and turned fifty-two UNCHANGED cuts
+  // into false trims (a control with a free floor). A source whose cuts each
+  // shift by a different amount (an eye-matched re-conform onto other media
+  // — measured: two of seven cuts happened to share a shift) is trims, not
+  // a base change.
   const tcOffsets = new Map();
   for (const [source, tally] of shiftTally) {
     const [offset, cuts] = [...tally].sort((a, b) => b[1] - a[1])[0];
-    if (cuts >= 2 && cuts > (differing.get(source) || 0) / 2) tcOffsets.set(source, { source, offset, cuts, rebased: 0 });
+    if (cuts >= 2 && cuts > (pairedCuts.get(source) || 0) / 2) tcOffsets.set(source, { source, offset, cuts, rebased: 0 });
   }
 
+  // RETIME ROUNDING (E150): a retimed clip's source window is the speed map
+  // evaluated and rounded — Premiere's exact 80% and Resolve's keyframe
+  // slope (0.79999, frame-quantized seconds) land one frame apart on a real
+  // reel (41923 vs 41922). On a pair where either side is retimed a source
+  // edge within `srcTolerance` (default 1 frame) is the same window; a 100%
+  // pair keeps the exact compare.
+  const srcTol = opts.srcTolerance ?? 1;
+  const srcDiffers = (a, b, oe, ne) => {
+    if ((a ?? null) === (b ?? null)) return false;
+    if (a == null || b == null) return true;
+    const retimed = (oe.speed ?? 100) !== 100 || (ne.speed ?? 100) !== 100;
+    return retimed ? Math.abs(a - b) > srcTol : true;
+  };
   const retained = [];
   for (const { oe, ne } of P.pairs) {
     const deltas = {};
@@ -1067,7 +1084,7 @@ function diffChangelistOnce(oldEvents, newEvents, opts = {}) {
     } else if (Math.abs((oe.recIn ?? 0) - (ne.recIn ?? 0)) > recTol) {
       kind = 'moved';
       deltas.recIn = { old: oe.recIn, new: ne.recIn };
-    } else if ((oIn ?? null) !== (ne.srcIn ?? null) || (oOut ?? null) !== (ne.srcOut ?? null)) {
+    } else if (srcDiffers(oIn, ne.srcIn, oe, ne) || srcDiffers(oOut, ne.srcOut, oe, ne)) {
       kind = 'trimmed';
       deltas.src = { old: [oIn, oOut], new: [ne.srcIn, ne.srcOut], ...(off ? { tcOffset: off, oldBeforeRebase: [oe.srcIn, oe.srcOut] } : {}) };
     } else if (off && ((oe.srcIn ?? null) !== (ne.srcIn ?? null))) {

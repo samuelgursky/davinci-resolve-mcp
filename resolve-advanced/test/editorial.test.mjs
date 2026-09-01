@@ -558,3 +558,35 @@ test('turnover_changelist infers a rename from overlapping windows under clearly
   assert.ok(!r.sourceAliases.some((a) => a.byOverlap), JSON.stringify(r.sourceAliases));
   assert.ok(r.counts.gone >= 1 || r.counts.replaced >= 1, JSON.stringify(r.counts));
 });
+
+// ── E150: a one-frame source rounding on a RETIMED pair is the same window ──
+test('turnover_changelist tolerates one source frame on a retimed pair and none on a 100% pair (E150)', () => {
+  const r80 = (srcIn, srcOut) => ({ ...cut('V3', 'R.mov', srcIn, 100, 41), srcOut, speed: 80 });
+  const premiere = [r80(41923, 41949)];
+  const resolve = [r80(41922, 41948)]; // the 0.79999 slope, rounded
+  const d = diffChangelist(premiere, resolve);
+  assert.equal(d.shape, 'identical', JSON.stringify(d.changes));
+  // two frames is a trim even on a retimed pair
+  const two = diffChangelist(premiere, [r80(41921, 41947)]);
+  assert.deepEqual(two.counts, { trimmed: 1 });
+  // a 100% pair keeps the exact compare: one frame is a trim
+  const a = [cut('V', 'A.mov', 100, 0, 48)], b = [cut('V', 'A.mov', 101, 0, 48)];
+  b[0].srcOut = 149;
+  assert.deepEqual(diffChangelist(a, b).counts, { trimmed: 1 });
+  // and the slack is configurable
+  assert.deepEqual(diffChangelist(premiere, [r80(41921, 41947)], { srcTolerance: 2 }).counts, {});
+});
+
+test('turnover_changelist: two shifted cuts among fifty unchanged are trims, never the source base (E150b null control)', () => {
+  const many = Array.from({ length: 52 }, (_, i) => cut('V', 'S.mov', 1000 + 100 * i, 100 * i, 50));
+  const online = many.map((e, i) => (i < 2 ? { ...e, srcIn: e.srcIn + 47745, srcOut: e.srcOut + 47745 } : { ...e }));
+  const d = diffChangelist(many, online);
+  assert.deepEqual(d.sourceTcOffsets, [], 'a 2-of-52 shift is not a base change');
+  assert.deepEqual(d.counts, { trimmed: 2 });
+  assert.equal(d.retained, 50);
+  // and the E141 case still rebases: 2 shifted of 3 (the third shifted AND trimmed)
+  const three = [cut('V', 'X.mov', 100, 0, 48), cut('V', 'X.mov', 400, 48, 24), cut('V', 'X.mov', 900, 72, 30)];
+  const rebased = [cut('V', 'X.mov', 600, 0, 48), cut('V', 'X.mov', 900, 48, 24), { ...cut('V', 'X.mov', 1411, 72, 30), srcOut: 1441 }];
+  const t = diffChangelist(three, rebased);
+  assert.deepEqual(t.sourceTcOffsets, [{ source: 'X.mov', offset: 500, cuts: 2, rebased: 2 }]);
+});
