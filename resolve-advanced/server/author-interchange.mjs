@@ -307,14 +307,26 @@ export function eventsToAssembleSpec(events, opts = {}) {
       // be authored (abutting predecessor + handles both sides) is decided
       // after all placements are known.
       let d = Math.max(2, toTl(e.transition.duration || 0, e.fps) || 2);
-      d += d % 2; // placeTransition centers on the cut; keep it even
+      d += d % 2; // even duration keeps every alignment on whole frames
+      // Span geometry per format (E73): `pre` = frames of the span BEFORE
+      // the cut. EDL: 0 (CMX start-at-cut — matches what Resolve's own EDL
+      // importer authors, E61 harvest); OTIO: the explicit in_offset; XMEML:
+      // derived from the transitionitem's own record start; no info: centered.
+      let pre = Math.floor(d / 2);
+      if (e.transition.alignment === 'start') pre = 0;
+      else if (e.transition.inOffset != null) pre = Math.min(d, Math.max(0, toTl(e.transition.inOffset, e.fps)));
+      else if (e.transition.recStart != null) {
+        const spanStartAbs = ORIGIN + (toTl(e.transition.recStart, e.fps) - minRec);
+        pre = Math.min(d, Math.max(0, recIn - spanStartAbs));
+      }
       transitionCandidates.push({
-        atFrame: recIn, durationFrames: d, track: vTrack,
+        atFrame: recIn, durationFrames: d, track: vTrack, pre,
+        explicitSpan: e.transition.alignment != null || e.transition.inOffset != null || e.transition.recStart != null,
         index: e.index, type: e.transition.type, rawDuration: e.transition.duration,
-        source: e.source, srcIn: cut.srcIn,
+        source: e.source, srcIn: cut.srcIn, incomingCutRef: cut,
       });
     }
-    placements.push({ start: recIn, end: recOut, index: e.index, source: e.source, srcIn: cut.srcIn, durationFrames, track: vTrack });
+    placements.push({ start: recIn, end: recOut, index: e.index, source: e.source, srcIn: cut.srcIn, durationFrames, track: vTrack, cutRef: cut });
     if (!perSource.has(e.source)) perSource.set(e.source, []);
     perSource.get(e.source).push(cut);
   }
@@ -341,13 +353,17 @@ export function eventsToAssembleSpec(events, opts = {}) {
     if (e.transition) {
       let d = Math.max(2, toTl(e.transition.duration || 0, e.fps) || 2);
       d += d % 2;
+      let pre = Math.floor(d / 2);
+      if (e.transition.alignment === 'start') pre = 0;
+      else if (e.transition.inOffset != null) pre = Math.min(d, Math.max(0, toTl(e.transition.inOffset, e.fps)));
       audioTransCandidates.push({
-        atFrame: recIn, durationFrames: d, track,
+        atFrame: recIn, durationFrames: d, track, pre,
+        explicitSpan: e.transition.alignment != null || e.transition.inOffset != null,
         index: e.index, type: e.transition.type, rawDuration: e.transition.duration,
-        source: e.source, srcIn: cut.srcIn,
+        source: e.source, srcIn: cut.srcIn, incomingCutRef: cut,
       });
     }
-    audioPlacements.push({ start: recIn, end: recOut, index: e.index, track, source: e.source, srcIn: cut.srcIn, durationFrames });
+    audioPlacements.push({ start: recIn, end: recOut, index: e.index, track, source: e.source, srcIn: cut.srcIn, durationFrames, cutRef: cut });
     if (!perSource.has(e.source)) perSource.set(e.source, []);
     perSource.get(e.source).push(cut);
   }
@@ -412,16 +428,21 @@ export function eventsToAssembleSpec(events, opts = {}) {
       droppedTransitions.push({ index: c.index, type: c.type, duration: c.rawDuration, reason: 'no abutting predecessor at the cut' });
       continue;
     }
-    const half = c.durationFrames / 2;
-    const bHandle = c.srcIn >= half;
+    // Handle math follows the actual span: `pre` frames before the cut need
+    // incoming pre-roll (srcIn >= pre); `post` frames after need outgoing
+    // tail media. A start-at-cut EDL dissolve needs NO incoming handle and a
+    // FULL-duration outgoing tail.
+    const pre = c.pre ?? c.durationFrames / 2;
+    const post = c.durationFrames - pre;
+    const bHandle = c.srcIn >= pre;
     const aSpec = sourceMap[prev.source] && sourceMap[prev.source].spec;
     const aFrames = aSpec && Number(aSpec.frameCount);
-    const aHandle = Number.isFinite(aFrames) ? prev.srcIn + prev.durationFrames + half <= aFrames : false;
+    const aHandle = Number.isFinite(aFrames) ? prev.srcIn + prev.durationFrames + post <= aFrames : false;
     if (!bHandle || !aHandle) {
       droppedTransitions.push({
         index: c.index, type: c.type, duration: c.rawDuration,
-        reason: `insufficient handles for a centered ${c.durationFrames}f dissolve` +
-          `${bHandle ? '' : ' (incoming srcIn < half)'}${aHandle ? '' : ' (outgoing tail media < half)'}`,
+        reason: `insufficient handles for a ${c.durationFrames}f dissolve spanning [cut-${pre}, cut+${post})` +
+          `${bHandle ? '' : ` (incoming srcIn < ${pre})`}${aHandle ? '' : ` (outgoing tail media < ${post})`}`,
       });
       continue;
     }
@@ -438,7 +459,28 @@ export function eventsToAssembleSpec(events, opts = {}) {
     else if (/additive/i.test(raw)) kind = 'additive';
     else if (/fade to color/i.test(raw)) kind = 'fade-to-color';
     else if (/smooth cut/i.test(raw)) kind = 'smooth-cut';
-    transitions.push({ track: c.track, atFrame: c.atFrame, durationFrames: c.durationFrames, ...(kind === 'dissolve' ? {} : { type: kind }) });
+    // EDGE LAW (E73, measured): the clip boundary must sit STRICTLY INSIDE
+    // the transition span — an edge-aligned span (Start == boundary) renders
+    // INERT. Resolve's own EDL importer solves the CMX start-at-cut case by
+    // MOVING the cut half the duration and centering; reproduce exactly that:
+    // extend the outgoing clip, trim the incoming head (source stays
+    // aligned), and keep the RENDERED span [cut-pre, cut-pre+d) unchanged.
+    let atFrame = c.atFrame;
+    const spanStartAbs = c.atFrame - pre;
+    if (c.explicitSpan && (pre === 0 || pre === c.durationFrames)) {
+      const shift = (pre === 0 ? 1 : -1) * (c.durationFrames / 2);
+      prev.cutRef.durationFrames += shift;
+      c.incomingCutRef.startFrame += shift;
+      c.incomingCutRef.srcIn += shift;
+      c.incomingCutRef.durationFrames -= shift;
+      prev.end += shift;
+      atFrame += shift;
+    }
+    transitions.push({
+      track: c.track, atFrame, durationFrames: c.durationFrames,
+      ...(kind === 'dissolve' ? {} : { type: kind }),
+      ...(c.explicitSpan ? { startFrame: spanStartAbs } : {}),
+    });
   }
   // Audio cross-fades, same geometry rules (render-verified on 19.1.3.7 via
   // the harvested cross-fade template: the highpass RMS ramps, not steps).
@@ -448,20 +490,35 @@ export function eventsToAssembleSpec(events, opts = {}) {
       droppedTransitions.push({ index: c.index, type: c.type, duration: c.rawDuration, trackType: 'audio', reason: 'no abutting predecessor at the cut' });
       continue;
     }
-    const half = c.durationFrames / 2;
-    const bHandle = c.srcIn >= half;
+    const pre = c.pre ?? c.durationFrames / 2;
+    const post = c.durationFrames - pre;
+    const bHandle = c.srcIn >= pre;
     const aSpec = sourceMap[prev.source] && sourceMap[prev.source].spec;
     const aFrames = aSpec && Number(aSpec.frameCount);
-    const aHandle = Number.isFinite(aFrames) ? prev.srcIn + prev.durationFrames + half <= aFrames : false;
+    const aHandle = Number.isFinite(aFrames) ? prev.srcIn + prev.durationFrames + post <= aFrames : false;
     if (!bHandle || !aHandle) {
       droppedTransitions.push({
         index: c.index, type: c.type, duration: c.rawDuration, trackType: 'audio',
-        reason: `insufficient handles for a centered ${c.durationFrames}f cross-fade` +
-          `${bHandle ? '' : ' (incoming srcIn < half)'}${aHandle ? '' : ' (outgoing tail media < half)'}`,
+        reason: `insufficient handles for a ${c.durationFrames}f cross-fade spanning [cut-${pre}, cut+${post})` +
+          `${bHandle ? '' : ` (incoming srcIn < ${pre})`}${aHandle ? '' : ` (outgoing tail media < ${post})`}`,
       });
       continue;
     }
-    transitions.push({ track: c.track, atFrame: c.atFrame, durationFrames: c.durationFrames, trackType: 'audio' });
+    let atFrame = c.atFrame;
+    const spanStartAbs = c.atFrame - pre;
+    if (c.explicitSpan && (pre === 0 || pre === c.durationFrames)) {
+      const shift = (pre === 0 ? 1 : -1) * (c.durationFrames / 2);
+      prev.cutRef.durationFrames += shift;
+      c.incomingCutRef.startFrame += shift;
+      c.incomingCutRef.srcIn += shift;
+      c.incomingCutRef.durationFrames -= shift;
+      prev.end += shift;
+      atFrame += shift;
+    }
+    transitions.push({
+      track: c.track, atFrame, durationFrames: c.durationFrames, trackType: 'audio',
+      ...(c.explicitSpan ? { startFrame: spanStartAbs } : {}),
+    });
   }
 
   // Turnover markers (EDL * LOC: locators, OTIO Marker objects) → authored

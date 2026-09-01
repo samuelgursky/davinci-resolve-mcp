@@ -100,12 +100,16 @@ test('an EDL dissolve with handles both sides is authored as a transition', () =
     '',
   ].join('\n');
   const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
-  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24 }]);
+  // E73: EDL dissolves span START-AT-CUT (the CMX convention). The clip
+  // boundary must sit strictly inside the span (edge-aligned renders inert,
+  // measured), so the bridge moves the cut +dur/2 exactly as Resolve's own
+  // EDL importer does — atFrame is the SHIFTED boundary, startFrame the span.
+  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86460, durationFrames: 24, startFrame: 86448 }]);
   assert.deepEqual(report.authoredTransitions, spec.transitions);
   assert.equal(report.droppedTransitions.length, 0);
 });
 
-test('a dissolve with no handle on the incoming side drops with the reason', () => {
+test('a start-at-cut EDL dissolve needs NO incoming handle — zero srcIn authors (E73)', () => {
   const edl = [
     'TITLE: DIS',
     'FCM: NON-DROP FRAME',
@@ -114,10 +118,8 @@ test('a dissolve with no handle on the incoming side drops with the reason', () 
     '',
   ].join('\n');
   const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
-  assert.equal(spec.transitions, undefined);
-  assert.equal(report.authoredTransitions.length, 0);
-  assert.equal(report.droppedTransitions.length, 1);
-  assert.match(report.droppedTransitions[0].reason, /incoming srcIn < half/);
+  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86460, durationFrames: 24, startFrame: 86448 }]);
+  assert.equal(report.droppedTransitions.length, 0);
 });
 
 test('a dissolve whose outgoing tail runs off the media drops with the reason', () => {
@@ -131,7 +133,7 @@ test('a dissolve whose outgoing tail runs off the media drops with the reason', 
   ].join('\n');
   const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
   assert.equal(spec.transitions, undefined);
-  assert.match(report.droppedTransitions[0].reason, /outgoing tail media < half/);
+  assert.match(report.droppedTransitions[0].reason, /outgoing tail media < 24/);
 });
 
 test('a dissolve with a record gap before it drops as no-abutting-predecessor', () => {
@@ -323,7 +325,7 @@ test('an EDL audio dissolve with handles authors an audio cross-fade', () => {
     '',
   ].join('\n');
   const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
-  assert.deepEqual(report.authoredTransitions, [{ track: 1, atFrame: 86448, durationFrames: 24, trackType: 'audio' }]);
+  assert.deepEqual(report.authoredTransitions, [{ track: 1, atFrame: 86460, durationFrames: 24, trackType: 'audio', startFrame: 86448 }]);
   assert.equal(report.droppedTransitions.length, 0);
   assert.deepEqual(spec.transitions, report.authoredTransitions);
 });
@@ -670,10 +672,10 @@ test('EDL W-codes author as wipes; D stays a plain dissolve (E61/E62)', () => {
     '',
   ].join('\n');
   const w = eventsToAssembleSpec(parseEDL(wipeEdl, { fps: 24 }), { sourceMap: MAP });
-  assert.deepEqual(w.spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24, type: 'wipe' }]);
+  assert.deepEqual(w.spec.transitions, [{ track: 1, atFrame: 86460, durationFrames: 24, type: 'wipe', startFrame: 86448 }]);
   const disEdl = wipeEdl.replace('W001 024', 'D    024');
   const d = eventsToAssembleSpec(parseEDL(disEdl, { fps: 24 }), { sourceMap: MAP });
-  assert.deepEqual(d.spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24 }]);
+  assert.deepEqual(d.spec.transitions, [{ track: 1, atFrame: 86460, durationFrames: 24, startFrame: 86448 }]);
 });
 
 test('buildRampTimemapKeyed: piecewise arithmetic, srcIn baking, and refusals (E63/E64)', () => {
@@ -716,10 +718,10 @@ test('XMEML transitionitems parse and map to render-verified styles (E66-E69)', 
    </track></video></media></sequence></xmeml>`;
   const events = parseXMEMLEvents(xml, { fps: 24 });
   const incoming = events.find((e) => e.recIn === 48);
-  assert.deepEqual(incoming.transition, { type: 'Dip to Color Dissolve', duration: 24 });
+  assert.deepEqual(incoming.transition, { type: 'Dip to Color Dissolve', duration: 24, recStart: 36 });
   const map2 = { 'a.mp4': MAP.TAPE1, 'b.mp4': MAP.TAPE2 };
   const { spec, report } = eventsToAssembleSpec(events, { sourceMap: map2 });
-  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24, type: 'dip' }]);
+  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24, type: 'dip', startFrame: 86436 }]);
   assert.equal(report.authoredTransitions[0].type, 'dip');
 });
 
@@ -737,8 +739,9 @@ test('OTIO Transition children attach to the incoming clip and author (E70)', ()
   ] } };
   const events = parseOTIO(doc, { fps: 24 });
   const incoming = events.find((e) => e.recIn === 48);
-  assert.deepEqual(incoming.transition, { type: 'SMPTE_Dissolve', duration: 24 });
+  assert.deepEqual(incoming.transition, { type: 'SMPTE_Dissolve', duration: 24, inOffset: 12 });
   const { spec } = eventsToAssembleSpec(events, { sourceMap: MAP });
-  // SMPTE_Dissolve maps to the plain dissolve (no type field)
-  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24 }]);
+  // SMPTE_Dissolve maps to the plain dissolve; the explicit in/out offsets
+  // carry the span (12 before the cut).
+  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24, startFrame: 86436 }]);
 });

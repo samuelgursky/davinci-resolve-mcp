@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.142.0 — transition span fidelity, and the edge law
+
+### Changed (conform fidelity)
+
+- **Transition spans now follow the turnover's actual geometry** instead of
+  always centering: EDL dissolves/wipes span `[cut, cut+dur)` (the CMX
+  convention), OTIO transitions use their explicit in/out offsets, XMEML
+  transitionitems use their own record span, and spec-level
+  `transitions[].startFrame` overrides. Handle requirements follow the real
+  span — a start-at-cut EDL dissolve needs NO incoming handle and a
+  full-duration outgoing tail. Render-verified: the authored EDL dissolve
+  blends exactly `[cut, cut+24)` (pure outgoing through cut−1, linear blend,
+  midpoint 182), matching Resolve's own EDL importer frame-for-frame.
+
+### Measured (the edge law)
+
+- A transition's rendered span follows `<Start>`/`<Duration>`
+  (`AlignmentType` is cosmetic), **but the clip boundary must sit strictly
+  inside the span** — an edge-aligned span (Start == the boundary) renders
+  inert. That is why Resolve's own EDL importer moves the cut +dur/2 and
+  centers; the bridge now reproduces exactly that cut-reshaping. Off-center
+  spans render fine (an uneven `[cut−6, cut+18)` span blended linearly
+  across its full width).
+
 ## What's New in v2.141.0 — OTIO transitions, depth-4, and honest gaps
 
 ### Added

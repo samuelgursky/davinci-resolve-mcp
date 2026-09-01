@@ -233,6 +233,7 @@ async function assembleTimeline(spec = {}) {
       track: tr.track, atFrame: tr.atFrame, durationFrames: tr.durationFrames,
       trackType: tr.trackType || 'video',
       type: tr.type || 'dissolve',
+      spanStart: tr.startFrame,
     }));
   }
 

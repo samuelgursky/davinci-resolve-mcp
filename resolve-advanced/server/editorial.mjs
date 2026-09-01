@@ -118,7 +118,10 @@ export function parseEDL(text, opts = {}) {
         srcOut: tcToFrames(srcOut, fps),
         recIn: tcToFrames(recIn, fps),
         recOut: tcToFrames(recOut, fps),
-        transition: transition && transition !== 'C' ? { type: transition, duration: dur || 0 } : null,
+        // CMX convention: the dissolve/wipe span STARTS at the cut (occupies
+        // the first `dur` frames of the incoming event) — matching what
+        // Resolve's own EDL importer authors (E61 harvest: Start == the cut).
+        transition: transition && transition !== 'C' ? { type: transition, duration: dur || 0, alignment: 'start' } : null,
         fps,
       }),
     );
@@ -170,7 +173,9 @@ export function parseOTIO(otio, opts = {}) {
       if (schema.startsWith('Transition')) {
         const inOff = (child.in_offset && child.in_offset.value) || 0;
         const outOff = (child.out_offset && child.out_offset.value) || 0;
-        pendingTransition = { type: String(child.transition_type || 'SMPTE_Dissolve'), duration: inOff + outOff };
+        // in_offset = frames BEFORE the cut, out_offset = frames after; the
+        // bridge places the span [cut - inOffset, cut + outOffset).
+        pendingTransition = { type: String(child.transition_type || 'SMPTE_Dissolve'), duration: inOff + outOff, inOffset: inOff };
         continue;
       }
       if (schema.startsWith('Clip')) {
@@ -272,7 +277,10 @@ export function parseXMEMLEvents(xml, opts = {}) {
         if (!Number.isFinite(s) || !Number.isFinite(e2)) continue;
         const effectId = (tr.effect && (tr.effect.effectid || tr.effect.name)) || 'Cross Dissolve';
         const incoming = events.slice(before).find((ev) => ev.track === label && ev.recIn > s - 1 && ev.recIn <= e2);
-        if (incoming) incoming.transition = { type: String(effectId), duration: e2 - s };
+        // recStart carries the transitionitem's EXPLICIT record span start
+        // (sequence-relative) so the bridge reproduces the editor's actual
+        // alignment instead of assuming centered.
+        if (incoming) incoming.transition = { type: String(effectId), duration: e2 - s, recStart: s };
       }
     });
     const atracks = media.audio && media.audio.track ? (Array.isArray(media.audio.track) ? media.audio.track : [media.audio.track]) : [];

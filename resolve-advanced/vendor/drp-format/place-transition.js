@@ -85,7 +85,7 @@ const STYLE_PRETTY_TYPES = {
 const TRANSITION_TYPES = ['dissolve', 'wipe', ...Object.keys(STYLE_PRETTY_TYPES)];
 
 async function placeTransition(drpInput, opts = {}) {
-  const { track, atFrame, durationFrames = 24, trackType = 'video', type = 'dissolve', timelineUuid } = opts;
+  const { track, atFrame, durationFrames = 24, trackType = 'video', type = 'dissolve', spanStart, timelineUuid } = opts;
   if (!TRANSITION_TYPES.includes(type)) throw new Error(`placeTransition: type must be one of ${TRANSITION_TYPES.join(', ')}`);
   if (type !== 'dissolve' && trackType === 'audio') throw new Error('placeTransition: styled transitions are video-only (audio junctions cross-fade)');
   if (!Number.isInteger(track) || track < 1) throw new TypeError('placeTransition: track must be a positive integer');
@@ -114,7 +114,19 @@ async function placeTransition(drpInput, opts = {}) {
   } else if (STYLE_PRETTY_TYPES[type]) {
     trans = trans.replace(/<PrettyType>Cross Dissolve<\/PrettyType>/, `<PrettyType>${STYLE_PRETTY_TYPES[type]}</PrettyType>`);
   }
-  const start = atFrame - Math.floor(durationFrames / 2); // centered (AlignmentType 2)
+  // Span geometry follows <Start>/<Duration>, NOT AlignmentType (the E61
+  // harvest of Resolve's own EDL import carries AlignmentType 2 with the
+  // span STARTING at the cut — the CMX convention — while our default
+  // centers it). spanStart (absolute) overrides for format parity: EDL
+  // dissolves start at the cut, OTIO splits by in/out offsets, XMEML
+  // transitionitems carry their explicit record span.
+  if (spanStart !== undefined) {
+    if (!Number.isInteger(spanStart)) throw new TypeError('placeTransition: spanStart must be an integer frame');
+    if (spanStart > atFrame || spanStart + durationFrames < atFrame) {
+      throw new RangeError(`placeTransition: span [${spanStart}, ${spanStart + durationFrames}) does not cover the cut at ${atFrame}`);
+    }
+  }
+  const start = spanStart !== undefined ? spanStart : atFrame - Math.floor(durationFrames / 2);
   trans = trans.replace(/<Start>\d+<\/Start>/, `<Start>${start}</Start>`);
   trans = trans.replace(/<Duration>\d+<\/Duration>/, `<Duration>${durationFrames}</Duration>`);
   const transitionDbId = (trans.match(/<Sm2TiTransition DbId="([^"]+)"/) || [])[1] || null;

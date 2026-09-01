@@ -135,10 +135,20 @@ outgoing clip through the window) — so routing an XMEML turnover through
 `assemble_from_interchange` produces transitions that render where the host
 importer's do not.
 
-**Dissolve geometry.** A transition is authored only when the predecessor
-ends exactly at the cut and both sides have handle media for the centered
-span (incoming `srcIn ≥ dur/2`; outgoing `srcIn + dur + dur/2 ≤ frameCount`).
-Everything else stays in `droppedTransitions` with the reason.
+**Dissolve geometry — spans follow the turnover, and the edge law.** A
+transition's rendered span follows `<Start>`/`<Duration>`; `AlignmentType`
+is cosmetic. The clip boundary must sit STRICTLY INSIDE the span — an
+edge-aligned span (Start == the boundary) renders inert (measured), which is
+why Resolve's own EDL importer moves the cut +dur/2 and centers. The bridge
+reproduces per-format geometry exactly: EDL dissolves span [cut, cut+dur)
+with the boundary shifted +dur/2 (CMX convention, host-importer parity —
+render-verified: blend f48→f71 on a cut at 48); OTIO uses its explicit
+in/out offsets; XMEML uses the transitionitem's own record span; spec-level
+`transitions[].startFrame` overrides. Handles follow the actual span: the
+incoming needs `srcIn ≥` the pre-cut portion, the outgoing needs tail media
+for the post-cut portion. Off-center spans render (blend measured across an
+uneven [cut-6, cut+18) span); everything unauthorable stays in
+`droppedTransitions` with the reason.
 
 ## Verification checklist for a delivered .drt
 
