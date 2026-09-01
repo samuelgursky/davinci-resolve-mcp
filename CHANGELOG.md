@@ -2,6 +2,21 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.151.0 — fade parity: OTIO and XMEML fades author too
+
+### Added
+
+- **OTIO and XMEML fades route through the black machinery** shipped for EDL
+  BL legs in v2.150.0. OTIO: a Transition adjacent to a Gap (or the track
+  edge) is a fade — gap-then-Transition-then-Clip fades in, Transition-then-
+  Gap (or Transition as the last child) fades out. XMEML: an edge
+  transitionitem whose span has no outgoing clip fades in, no incoming clip
+  fades out. All synthesize BL pseudo-events; the bridge materializes a
+  zero-length black leg to cover its side of the span whenever the boundary
+  shift alone won't grow it (empty track renders black, so the growth is
+  render-neutral). Live OTIO render: fade-in luma ramps 18→123, the centered
+  fade-out 124→18 — identical geometry from all three parsers.
+
 ## What's New in v2.150.0 — fades conform: BL legs author, and Resolve's own EDL importer drops them
 
 ### Added

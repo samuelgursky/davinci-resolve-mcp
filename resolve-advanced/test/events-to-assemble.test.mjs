@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { eventsToAssembleSpec, eventsToEDL } from '../server/author-interchange.mjs';
-import { parseEDL } from '../server/editorial.mjs';
+import { parseEDL, parseOTIO, parseXMEMLEvents } from '../server/editorial.mjs';
 
 const MAP = {
   TAPE1: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
@@ -151,7 +151,6 @@ test('a dissolve with a record gap before it drops as no-abutting-predecessor', 
 
 // Multi-track video: parsers number video tracks (V, V2, …), cuts carry the
 // track, overlap is judged PER TRACK (V2 stacking over V1 is legitimate).
-import { parseOTIO } from '../server/editorial.mjs';
 
 const rt = (value, rate = 24) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate });
 const clip = (name, srcIn, dur) => ({
@@ -351,6 +350,59 @@ test('EDL BL fades author as generator elements + dissolves (E91)', () => {
     { track: 1, atFrame: 86508, durationFrames: 24, startFrame: 86496 },
   ]);
   assert.deepEqual(report.blackLegs, { authoredGenerators: 2, audioSilenceLegsSkipped: 0 });
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+test('OTIO gap-adjacent transitions are fades — synthetic BL legs route through the black machinery (E92)', () => {
+  const rt = (v, r = 24) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: r, value: v });
+  const tr = (s, d, r = 24) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s, r), duration: rt(d, r) });
+  const otio = {
+    OTIO_SCHEMA: 'Timeline.1',
+    tracks: { OTIO_SCHEMA: 'Stack.1', children: [
+      { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [
+        { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(0), out_offset: rt(24) },
+        { OTIO_SCHEMA: 'Clip.2', name: 'A', source_range: tr(0, 96), media_reference: { target_url: 'A' }, effects: [], markers: [] },
+        { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(12), out_offset: rt(12) },
+        { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 48) },
+      ] },
+    ] },
+  };
+  const events = parseOTIO(otio, { fps: 24 });
+  assert.deepEqual(events.filter((e) => e.source === 'BL').map((e) => [e.recIn, e.recOut]), [[0, 0], [96, 96]]);
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: { A: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 } } },
+  });
+  // Head fade: CMX-form zero BL grows via the shift; tail fade (centered):
+  // the zero BL MATERIALIZES forward to cover the post side of the span.
+  assert.deepEqual(spec.elements, [
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86400, durationFrames: 12 },
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86496, durationFrames: 12 },
+  ]);
+  assert.deepEqual(spec.transitions, [
+    { track: 1, atFrame: 86412, durationFrames: 24, startFrame: 86400 },
+    { track: 1, atFrame: 86496, durationFrames: 24, startFrame: 86484 },
+  ]);
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+test('XMEML fade transitionitems (no outgoing / no incoming clip) synthesize BL legs (E92)', () => {
+  const xml = [
+    "<?xml version='1.0'?>",
+    "<xmeml version='4'><sequence><rate><timebase>24</timebase></rate><media><video><track>",
+    '<clipitem><name>a.mp4</name><start>0</start><end>96</end><in>0</in><out>96</out></clipitem>',
+    "<transitionitem><start>0</start><end>24</end><effect><effectid>Cross Dissolve</effectid></effect></transitionitem>",
+    "<transitionitem><start>84</start><end>108</end><effect><effectid>Cross Dissolve</effectid></effect></transitionitem>",
+    '</track></video></media></sequence></xmeml>',
+  ].join('');
+  const events = parseXMEMLEvents(xml, { fps: 24 });
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: { 'a.mp4': { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 } } },
+  });
+  assert.deepEqual(spec.media[0].cuts, [{ startFrame: 86412, durationFrames: 84, srcIn: 12 }]);
+  assert.deepEqual(spec.elements, [
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86400, durationFrames: 12 },
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86496, durationFrames: 12 },
+  ]);
   assert.equal(report.droppedTransitions.length, 0);
 });
 

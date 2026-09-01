@@ -313,9 +313,14 @@ export function eventsToAssembleSpec(events, opts = {}) {
         d += d % 2;
         let pre = Math.floor(d / 2);
         if (e.transition.alignment === 'start') pre = 0;
+        else if (e.transition.inOffset != null) pre = Math.min(d, Math.max(0, toTl(e.transition.inOffset, e.fps)));
+        else if (e.transition.recStart != null) {
+          const spanStartAbs = ORIGIN + (toTl(e.transition.recStart, e.fps) - minRec);
+          pre = Math.min(d, Math.max(0, recIn - spanStartAbs));
+        }
         transitionCandidates.push({
           atFrame: recIn, durationFrames: d, track: vTrackEarly, pre,
-          explicitSpan: e.transition.alignment != null,
+          explicitSpan: e.transition.alignment != null || e.transition.inOffset != null || e.transition.recStart != null,
           index: e.index, type: e.transition.type, rawDuration: e.transition.duration,
           source: e.source, srcIn: Infinity, incomingCutRef: el, cutPoint: e.transition.cutPoint,
         });
@@ -508,6 +513,19 @@ export function eventsToAssembleSpec(events, opts = {}) {
     // FULL-duration outgoing tail.
     const pre = c.pre ?? c.durationFrames / 2;
     const post = c.durationFrames - pre;
+    // OTIO/XMEML fades (E92): a zero-length BL leg MATERIALIZES to cover its
+    // side of the span whenever the boundary shift alone won't grow it —
+    // empty track renders black, so growth beyond the picture is
+    // render-neutral, and placeTransition needs a physical item on each side
+    // of the junction. (The CMX pre===0 form grows through the shift below.)
+    if (isBL(prev.source) && prev.cutRef.durationFrames === 0 && pre > 0) {
+      prev.cutRef.startFrame -= pre;
+      prev.cutRef.durationFrames += pre;
+      prev.start -= pre;
+    }
+    if (isBL(c.source) && c.incomingCutRef.durationFrames === 0 && post > 0) {
+      c.incomingCutRef.durationFrames += post;
+    }
     // A BL side has infinite handles: a Solid Color generator extends freely
     // in both directions (srcIn is already Infinity on BL candidates).
     const bHandle = c.srcIn >= pre;

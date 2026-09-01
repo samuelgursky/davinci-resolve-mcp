@@ -162,13 +162,31 @@ export function parseOTIO(otio, opts = {}) {
     // field so the bridge can author it (type strings like SMPTE_Dissolve
     // map through the same style table as XMEML effectids).
     let pendingTransition = null;
+    // Track start counts as black: a Transition with a Gap (or nothing) on
+    // one side is a FADE. It routes through the same BL machinery as EDL BL
+    // dissolves (E91/E92): a synthetic zero-length BL event materializes the
+    // black side, and the bridge authors a real clip↔generator dissolve —
+    // empty track renders black anyway, so the growth is render-neutral.
+    let atBlack = true;
+    const lastRate = () => opts.fps || 24;
     for (const child of track.children || []) {
       const schema = child.OTIO_SCHEMA || '';
       const dur = (child.source_range && child.source_range.duration && child.source_range.duration.value) || 0;
       const rate = (child.source_range && child.source_range.duration && child.source_range.duration.rate) || opts.fps || 24;
       if (schema.startsWith('Gap')) {
+        if (pendingTransition) {
+          // Transition then Gap = fade-out into black: attach it to a
+          // synthetic BL leg at the junction (the bridge grows it forward).
+          events.push(evt({
+            index: idx++, track: kind, source: 'BL',
+            recIn: rec, recOut: rec, transition: pendingTransition, fps: lastRate(),
+          }));
+          pendingTransition = null;
+        } else {
+          pendingTransition = null; // a mid-timeline gap breaks a junction
+        }
         rec += dur;
-        pendingTransition = null; // a gap breaks the junction
+        atBlack = true;
         continue;
       }
       if (schema.startsWith('Transition')) {
@@ -180,6 +198,15 @@ export function parseOTIO(otio, opts = {}) {
         continue;
       }
       if (schema.startsWith('Clip')) {
+        if (pendingTransition && atBlack) {
+          // Gap (or track start) then Transition then Clip = fade-IN from
+          // black — the CMX zero-length-BL form, grown by the bridge.
+          events.push(evt({
+            index: idx++, track: kind, source: 'BL',
+            recIn: rec, recOut: rec, fps: rate,
+          }));
+        }
+        atBlack = false;
         const startVal = (child.source_range && child.source_range.start_time && child.source_range.start_time.value) || 0;
         // Retime via a LinearTimeWarp effect (time_scalar).
         let speed = 100,
@@ -219,6 +246,13 @@ export function parseOTIO(otio, opts = {}) {
         pendingTransition = null;
         rec += dur;
       }
+    }
+    if (pendingTransition) {
+      // Transition as the LAST child = fade-out to the end of the track.
+      events.push(evt({
+        index: idx++, track: kind, source: 'BL',
+        recIn: rec, recOut: rec, transition: pendingTransition, fps: lastRate(),
+      }));
     }
   }
   return events;
@@ -289,7 +323,28 @@ export function parseXMEMLEvents(xml, opts = {}) {
         // recStart carries the transitionitem's EXPLICIT record span start
         // (sequence-relative) so the bridge reproduces the editor's actual
         // alignment instead of assuming centered.
-        if (incoming) incoming.transition = { type: String(effectId), duration: e2 - s, recStart: s };
+        if (incoming) {
+          incoming.transition = { type: String(effectId), duration: e2 - s, recStart: s };
+          // No clip ENDS inside the span → nothing precedes: a fade-IN from
+          // black. Synthesize the zero-length BL leg (E91/E92) so the bridge
+          // authors a real black-to-picture dissolve instead of dropping it.
+          const outgoing = events.slice(before).find((ev) => ev.track === label && ev !== incoming && ev.recOut > s - 1 && ev.recOut <= e2);
+          if (!outgoing) {
+            events.push(evt({ index: idx++, track: label, source: 'BL', recIn: incoming.recIn, recOut: incoming.recIn, fps: seqRate }));
+          }
+        } else {
+          // No clip STARTS inside the span: a fade-OUT into black past the
+          // last clip. Attach the transition to a synthetic BL leg at the
+          // outgoing clip's end (the bridge grows it forward).
+          const outgoing = events.slice(before).find((ev) => ev.track === label && ev.recOut > s - 1 && ev.recOut <= e2);
+          if (outgoing) {
+            events.push(evt({
+              index: idx++, track: label, source: 'BL',
+              recIn: outgoing.recOut, recOut: outgoing.recOut,
+              transition: { type: String(effectId), duration: e2 - s, recStart: s }, fps: seqRate,
+            }));
+          }
+        }
       }
     });
     const atracks = media.audio && media.audio.track ? (Array.isArray(media.audio.track) ? media.audio.track : [media.audio.track]) : [];
