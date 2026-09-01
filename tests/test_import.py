@@ -2,6 +2,8 @@
 
 import ast
 import json
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -138,7 +140,47 @@ def test_npm_package_metadata():
     for stamped in ("install.py", "src/server.py", "src/granular/common.py"):
         assert package["version"] == _string_assignment(PROJECT_ROOT / stamped, "VERSION"), stamped
     assert package["bin"]["davinci-resolve-mcp"] == "./bin/davinci-resolve-mcp.mjs"
+    assert package["bin"]["davinci-resolve-advanced-mcp"] == "./bin/davinci-resolve-advanced-mcp.mjs"
     assert (PROJECT_ROOT / "bin" / "davinci-resolve-mcp.mjs").exists()
+    assert (PROJECT_ROOT / "bin" / "davinci-resolve-advanced-mcp.mjs").exists()
+
+
+def test_advanced_launcher_help_and_version_do_not_import_server_deps():
+    """Fresh source checkouts should expose bin metadata before npm install.
+
+    The advanced launcher used to import the stdio server before looking at
+    argv, so even `--help` failed with ERR_MODULE_NOT_FOUND when node_modules was
+    absent. Keep help/version dependency-light like the main launcher.
+    """
+    node = shutil.which("node")
+    if not node:
+        return
+    package = json.loads((PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))
+    launcher = PROJECT_ROOT / "bin" / "davinci-resolve-advanced-mcp.mjs"
+
+    help_result = subprocess.run(
+        [node, str(launcher), "--help"],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert help_result.returncode == 0, help_result.stderr
+    assert "davinci-resolve-advanced-mcp --version" in help_result.stdout
+    assert "ERR_MODULE_NOT_FOUND" not in help_result.stderr
+
+    version_result = subprocess.run(
+        [node, str(launcher), "--version"],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert version_result.returncode == 0, version_result.stderr
+    assert version_result.stdout.strip() == package["version"]
+    assert "ERR_MODULE_NOT_FOUND" not in version_result.stderr
 
 
 def test_package_lock_in_sync():

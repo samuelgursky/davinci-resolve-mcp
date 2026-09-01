@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.145.2 — launcher metadata before dependencies
+
+### Fixed
+
+- **`davinci-resolve-advanced-mcp --help`/`--version` now work in fresh
+  source checkouts** (before `npm install`) — adapted from
+  [PR #178](https://github.com/samuelgursky/davinci-resolve-mcp/pull/178) by
+  @Rohitkanithi: metadata flags are handled before the stdio server import
+  (and before the Node-floor refusal — help is harmless on any Node), where
+  previously even `--help` died with `ERR_MODULE_NOT_FOUND`.
+- **The installer banner's tool counts were stale** (32/329 vs the real
+  36/353) — fixed and wired into the `test_doc_tool_counts` drift guard so
+  the banner can never drift independently again.
+
 ## What's New in v2.145.1 — bridge config override, honored end to end
 
 ### Fixed

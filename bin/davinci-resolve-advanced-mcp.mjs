@@ -11,7 +11,35 @@
  */
 
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import fs from 'node:fs';
 import path from 'node:path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const packageRoot = path.resolve(__dirname, '..');
+const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+const version = packageJson.version || '0.0.0-dev';
+
+function usage() {
+  return `DaVinci Resolve Advanced MCP ${version}
+
+Usage:
+  davinci-resolve-advanced-mcp
+  davinci-resolve-advanced-mcp --version
+  davinci-resolve-advanced-mcp --help
+
+Starts the offline DaVinci Resolve advanced MCP server over stdio.
+`;
+}
+
+const command = process.argv[2];
+if (command === '--help' || command === '-h' || command === 'help') {
+  process.stdout.write(usage());
+  process.exit(0);
+}
+if (command === '--version' || command === '-v' || command === 'version') {
+  process.stdout.write(`${version}\n`);
+  process.exit(0);
+}
 
 // Node floor (package.json engines: >=20.9), enforced at STARTUP rather than
 // discovered per-feature: under an old Node the pure-JS tools limp along
@@ -34,7 +62,6 @@ if (major < 20 || (major === 20 && minor < 9)) {
   process.exit(1);
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serverEntry = path.resolve(__dirname, '..', 'resolve-advanced', 'server', 'index.mjs');
 
 const { startServer } = await import(pathToFileURL(serverEntry).href);
