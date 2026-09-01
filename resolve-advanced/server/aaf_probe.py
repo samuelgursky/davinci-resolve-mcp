@@ -1169,7 +1169,12 @@ def _walk_components(sequence, *, track, fps, rec, state, depth, transition=None
         try:
             if cls == "Transition":
                 duration = _length(comp)
-                pending_transition = {"type": "dissolve", "duration": duration}
+                # alignment 'start': after the rewind, the incoming clip's recIn IS the
+                # overlap start, so the transition span is [recIn, recIn+duration) — and
+                # the bridge's boundary-shift lands the notional cut at recIn+duration/2,
+                # exactly the AAF CutPoint default (centered in the overlap). The old
+                # centered-on-recIn placement put HALF the blend before the overlap began.
+                pending_transition = {"type": "dissolve", "duration": duration, "alignment": "start"}
                 # Rewind: the next component overlaps the previous one by `duration`.
                 # Clamped at this sequence's own start — a leading transition has no
                 # preceding material to overlap, and a negative record position would

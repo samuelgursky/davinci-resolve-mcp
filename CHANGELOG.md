@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.142.1 — the AAF leg joins the span fix
+
+### Fixed
+
+- **AAF dissolves were misaligned by half their duration**: the AAF walker
+  rewinds the incoming clip to the overlap START (the Edit Protocol
+  subtraction), so the parsed junction is the overlap's first frame — and the
+  old centered placement put half the blend before the overlap even began.
+  AAF transitions now carry `alignment: 'start'` through the same
+  render-proven span machinery as EDL (v2.142.0): span `[overlapStart,
+  overlapStart+dur)`, boundary shifted to the middle — which lands the
+  notional cut exactly at the AAF CutPoint default (centered in the overlap).
+
 ## What's New in v2.142.0 — transition span fidelity, and the edge law
 
 ### Changed (conform fidelity)

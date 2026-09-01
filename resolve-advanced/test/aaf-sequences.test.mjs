@@ -608,7 +608,7 @@ print(json.dumps({"events": state["events"], "walked": walked}))
   // The declared-length cross-check: 100 + 50 + 30 - 20.
   assert.equal(out.walked, 160, 'sequence length == sum(components) - sum(transitions)');
   // The clip AFTER the transition is still the one annotated with it.
-  assert.deepEqual(out.events[1].transition, { type: 'dissolve', duration: 20 });
+  assert.deepEqual(out.events[1].transition, { type: 'dissolve', duration: 20, alignment: 'start' });
   assert.equal(out.events[0].transition, null);
   assert.equal(out.events[2].transition, null);
 });
@@ -657,7 +657,7 @@ print(json.dumps({"events": state["events"], "walked": walked}))
     ],
   );
   assert.equal(out.walked, 60, 'the clamp does not let the rewind escape the sequence start');
-  assert.deepEqual(out.events[0].transition, { type: 'dissolve', duration: 25 });
+  assert.deepEqual(out.events[0].transition, { type: 'dissolve', duration: 25, alignment: 'start' });
 });
 
 test('aaf_probe: back-to-back clips are unaffected by the subtraction', { skip: PY ? false : 'python3 not available' }, () => {
