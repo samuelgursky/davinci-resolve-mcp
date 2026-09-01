@@ -624,7 +624,9 @@ export function parseInterchange(format, content, opts = {}) {
  * media <MediaFilePath>; <MediaTimemapBA> tag 0x02 = linear 100%, a keyed
  * Sm2TimeMap decodes to the speed (E140: constant 80% on a real reel's four
  * retimes = Premiere's 80; XMax 60000 + zero slope = freeze; negative = reverse;
- * an unreadable map stays speed null + retimeUnknown);
+ * an unreadable map stays speed null + retimeUnknown) and, on a retime, <In> is
+ * RECORD-domain — the event's srcIn is In × speed (E143), with the raw value
+ * kept as recordDomainIn;
  * Sm2TiTransition alignment 2 centres on the cut, 3 ends at it. Record
  * positions are sequence-relative (start frame subtracted), like every other
  * parser here; `startFrame` is returned beside the events.
@@ -661,16 +663,33 @@ export function drtEventsFromParsed(parsed, opts = {}) {
         // decoder could not read stays speed/srcOut null + retimeUnknown.
         const tm = c.timemap && typeof c.timemap === 'object' ? c.timemap : null;
         const kind = tm ? tm.kind : (c.timemap === 'curve' ? 'unknown' : 'linear');
-        let speed = 100, srcOut = srcIn + c.duration, unknown = false;
+        // E143: on a keyed retime Resolve's <In> is RECORD-domain — the map
+        // spans the whole source stretched by 1/speed and the clip windows
+        // into that (measured live on 19.1.3.7; the bridge writes In =
+        // srcIn/speed for exactly this reason). The source frame the clip
+        // starts on is In × speed. Reading In as a source frame was wrong by
+        // (1/speed − 1) × In: 10,537 frames on a real 80% clip at In 52682.
+        // Reverse: the map descends from the source tail, In measures from
+        // the END — source start = sourceFrames − In×speed − duration×speed.
+        let speed = 100, srcOut = srcIn + c.duration, unknown = false, srcStart = srcIn;
         if (kind === 'freeze') { speed = 0; srcOut = srcIn; }
-        else if (kind === 'constant' || kind === 'variable') { speed = Math.round(tm.speed * 10000) / 100; srcOut = srcIn + Math.round(c.duration * tm.speed); }
+        else if (kind === 'constant' || kind === 'variable') {
+          speed = Math.round(tm.speed * 10000) / 100;
+          const span = Math.round(c.duration * tm.speed);
+          if (tm.reverse && tm.sourceDurationSec != null) {
+            const sourceFrames = Math.round(tm.sourceDurationSec * fps) + 1;
+            srcStart = Math.max(0, sourceFrames - Math.round(srcIn * tm.speed) - span);
+          } else srcStart = Math.round(srcIn * tm.speed);
+          srcOut = srcStart + span;
+        }
         else if (kind === 'unknown') { speed = null; srcOut = null; unknown = true; }
         const ev = {
           index: index++, track: label, source: media ? base(media, c.name) : (c.name || 'BL'),
-          srcIn, srcOut, recIn: c.start - startFrame, recOut: c.start - startFrame + c.duration,
+          srcIn: srcStart, srcOut, recIn: c.start - startFrame, recOut: c.start - startFrame + c.duration,
           speed, reverse: Boolean(tm && tm.reverse), transition: null, fps,
         };
         if (media) ev.sourcePath = media;
+        if (srcStart !== srcIn) ev.recordDomainIn = srcIn;
         if (c.in == null) ev.srcInAbsent = true;
         if (unknown) ev.retimeUnknown = true;
         if (kind === 'variable') { ev.variableSpeed = true; ev.retimeSegments = tm.segments; }

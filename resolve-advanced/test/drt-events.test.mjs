@@ -104,7 +104,7 @@ test('drtEventsFromParsed walks one timeline into sequence-relative events with 
     ['V', 'Universal Counting Leader', 72, 264, 0, 192, 100],
     ['V', 'A.mov', 3159, 3323, 192, 356, 100],
     ['V', 'B.mov', 500, 600, 356, 456, 100],
-    ['V', 'C.mov', 10, 48, 456, 504, 80],
+    ['V', 'C.mov', 8, 46, 456, 504, 80],
     ['V', 'Black Video', 86400, 86400, 504, 552, 0],
     ['V', 'E.mov', 7, null, 552, 576, null],
     ['V2', 'D.mov', 0, 33, 92, 125, 100],
@@ -118,11 +118,15 @@ test('drtEventsFromParsed walks one timeline into sequence-relative events with 
   // the centred dissolve attaches to the INCOMING clip with its explicit span start
   assert.deepEqual(b.transition, { type: 'Cross Dissolve', duration: 46, recStart: 333, alignment: 'center' });
   assert.equal(r.events[1].transition, null);
-  // E140: the real 80% map decodes — 48 record frames × 0.8 = 38 source frames (srcOut 10 + 38)
+  // E140/E143: the real 80% map decodes — <In> 10 is RECORD-domain, so the clip starts on source
+  // frame round(10 × 0.8) = 8 and 48 record frames × 0.8 = 38 source frames end it at 46
   assert.equal(c.speed, 80);
-  assert.equal(c.srcOut, 48);
+  assert.equal(c.srcIn, 8);
+  assert.equal(c.srcOut, 46);
+  assert.equal(c.recordDomainIn, 10);
   assert.equal(c.reverse, false);
   assert.equal(c.retimeUnknown, undefined);
+  assert.equal(b.recordDomainIn, undefined, 'a 100% clip has no record-domain In');
   // the freeze is the zero-speed in==out event every other parser emits
   assert.equal(frozen.speed, 0);
   assert.equal(frozen.srcOut, frozen.srcIn);
@@ -156,4 +160,15 @@ test('drtEventsFromParsed picks by name or index and refuses a name it cannot fi
   assert.equal(drtEventsFromParsed(parsed, { timeline: 'REEL_TEST' }).events.length, 9);
   assert.equal(drtEventsFromParsed(parsed, { timeline: 0 }).events.length, 9);
   assert.throws(() => drtEventsFromParsed(parsed, { timeline: 'NOPE' }), /no timeline 'NOPE'/);
+});
+
+test('a retimed clip whose <In> was typed as a source frame reads as the earlier frame it really shows (E143)', async () => {
+  // The bridge writes In = srcIn/speed (52682 for source 42145 at 80%); a hand conform that wrote 42145
+  // straight into In shows source 33716. Same map, different In → different picture, and the reader says so.
+  const zipA = await buildDrt(); const parsedA = await parseDRT(zipA);
+  const cA = drtEventsFromParsed(parsedA).events.find((e) => e.source === 'C.mov');
+  assert.equal(cA.srcIn, Math.round(cA.recordDomainIn * 0.8));
+  const bridgeIn = Math.round(42145 / 0.8); // 52681
+  assert.equal(Math.round(bridgeIn * 0.8), 42145, 'the bridge convention round-trips the source frame');
+  assert.equal(Math.round(42145 * 0.8), 33716, 'the hand-typed value lands 8429 source frames early');
 });

@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.195.0 — E143: a retimed DRT clip's source-in is record-domain
+
+### Fixed
+
+- **A retimed DRT clip's source-in is record-domain.** On a keyed
+  `Sm2TimeMap` Resolve's `<In>` indexes the source stretched by 1/speed (the
+  DRP library measured this live and writes `In = srcIn / speed` for exactly
+  that reason), so the first source frame a retimed clip shows is `In × speed`,
+  not `In`. E140 read `In` as a source frame, wrong by `(1/speed − 1) × In`:
+  10,537 frames on a real 80% clip. The DRT event now carries `srcIn = In ×
+  speed` (reverse: measured from the source tail), `srcOut` following at that
+  speed, and the raw value as `recordDomainIn`.
+- **Which meant a wrong "match".** Against the Premiere pix-lock, the hand
+  conform's four 80% layers had read as unchanged because its `In` values
+  equalled Premiere's source frames numerically — the very mistake: typing a
+  source frame straight into `In` of an 80% clip shows a frame 20% of `In`
+  earlier. Read correctly: the bridge-authored timeline (`In` 52682) matches
+  Premiere frame for frame on all four layers, and the hand conform (`In`
+  42145) shows source 33715 — 8,430 frames early — which the changelist now
+  reports as four trims. The media volume was offline in this session, so the
+  render witness for those four layers is owed; the law itself stands on the
+  DRP library's live measurement.
+
+### Measured (filed in api-limitations)
+
+- The record-domain `<In>` law on retimed clips, with both real timelines as
+  witnesses.
+
 ## What's New in v2.194.0 — E142: a cut re-aligned inside a dissolve is the same picture
 
 ### Added
