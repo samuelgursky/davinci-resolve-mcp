@@ -23,6 +23,7 @@ module.exports = {
   // Canonical SeqContainer-entry matcher (both tool-authored SeqContainer<N>.xml and
   // real Resolve SeqContainer/<uuid>.xml). Shared so callers don't re-inline the regex.
   listSeqContainerEntries: drtParser.listSeqContainerEntries,
+loadPoolSequenceNames: drtParser.loadPoolSequenceNames,
 
   // Resolve version registry + retargeting (re-stamp to a target Resolve version).
   // The registry + re-stamp core are universal across DRT/DRP/DRX (same version stamp);

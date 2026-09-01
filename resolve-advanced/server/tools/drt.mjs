@@ -97,7 +97,8 @@ const injectIntoDrpSchema = z.object({
 const extractFromDrpSchema = z.object({
   drpPath: z.string().describe('Source .drp'),
   outputPath: z.string().describe('Path for the emitted .drt'),
-  timelineIndex: z.number().int().nonnegative().optional().describe('Which SeqContainer to extract (0-based, default 0)'),
+  timelineIndex: z.number().int().nonnegative().optional().describe('Which SeqContainer to extract (0-based). Omitted: the first container the pool kinds as a TIMELINE — SeqContainers list name-sorted by DbId, so index 0 is often a compound\'s inner container (measured, E128)'),
+  timelineName: z.string().optional().describe('Extract the container the pool names this (timeline or compound) — see list_sequences'),
 });
 
 // Verified Resolve app-version → on-disk <ProjectVersion> map (the import GATE).
@@ -153,7 +154,7 @@ function requirePathArg(args, key, action) {
 export const drtTool = {
   name: 'drt',
   description:
-    'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: assemble_from_interchange (EDL/OTIO/XML/AAF + sourceMap → IMPORTABLE RENDERING native .drt in one call; retimes AUTHOR — constant speed fwd/rev AND zero-speed freezes (EDL M2 000.0; render-proven frozen); cross-dissolves are AUTHORED when the cut abuts with handles both sides (render-verified on 19), else dropped with reason; fades AUTHOR across ALL FOUR formats (EDL BL legs, OTIO gap-adjacent Transitions, XMEML edge transitionitems, AAF filler-adjacent Transitions) and AAF overlap-consuming dissolves reconcile+author (CutPoint honored; before E93 they threw at the overlap gate) — BL legs become Solid Color generators and the fade a real clip-to-generator dissolve, luma-ramp render-verified, while Resolve\'s OWN EDL importer drops BL dissolves silently; ledger in `conform`), assemble (spec → IMPORTABLE native-schema .drt via template-spliced real structures; pass targetAppVersion e.g. \'19.1\' for pre-21 hosts), parse, list_sequences (enumerate the timelines inside a .drp/.drt → [{id,name,eventCount,index,kind,nestedIn}] to drive a "which sequence?" picker — names and kind (timeline|compound) come from the pool folder, since a SeqContainer carries no timeline name and its first <Name> is a CLIP\'s (measured, E127); a compound container is nestedIn every timeline that places it, and a media-less clip named after a compound is tagged `compound` in parse), author, validate, inject_into_drp, extract_from_drp (pull one SeqContainer out as a .drt — feed the .drt to the Python davinci-resolve MCP timeline.import_timeline_checked, or use timeline.import_from_drp to do both), downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
+    'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: assemble_from_interchange (EDL/OTIO/XML/AAF + sourceMap → IMPORTABLE RENDERING native .drt in one call; retimes AUTHOR — constant speed fwd/rev AND zero-speed freezes (EDL M2 000.0; render-proven frozen); cross-dissolves are AUTHORED when the cut abuts with handles both sides (render-verified on 19), else dropped with reason; fades AUTHOR across ALL FOUR formats (EDL BL legs, OTIO gap-adjacent Transitions, XMEML edge transitionitems, AAF filler-adjacent Transitions) and AAF overlap-consuming dissolves reconcile+author (CutPoint honored; before E93 they threw at the overlap gate) — BL legs become Solid Color generators and the fade a real clip-to-generator dissolve, luma-ramp render-verified, while Resolve\'s OWN EDL importer drops BL dissolves silently; ledger in `conform`), assemble (spec → IMPORTABLE native-schema .drt via template-spliced real structures; pass targetAppVersion e.g. \'19.1\' for pre-21 hosts), parse, list_sequences (enumerate the timelines inside a .drp/.drt → [{id,name,eventCount,index,kind,nestedIn}] to drive a "which sequence?" picker — names and kind (timeline|compound) come from the pool folder, since a SeqContainer carries no timeline name and its first <Name> is a CLIP\'s (measured, E127); a compound container is nestedIn every timeline that places it, and a media-less clip named after a compound is tagged `compound` in parse), author, validate, inject_into_drp, extract_from_drp (pull one SeqContainer out as a .drt — by timelineName, an explicit timelineIndex, or by default the first container the pool kinds as a TIMELINE (index 0 is name-sorted by DbId and was an inner compound on Resolve\'s own export, E128); a timeline keeps its compound containers recursively; feed the .drt to the Python davinci-resolve MCP timeline.import_timeline_checked, or use timeline.import_from_drp to do both), downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
   async handler({ action, args }) {
     if (action === 'parse') {
       const p = parseSchema.parse(requirePathArg(args, 'drtPath', 'parse'));
@@ -579,7 +580,32 @@ export const drtTool = {
       const p = extractFromDrpSchema.parse(args);
       const drpZip = await JSZip.loadAsync(await fs.readFile(p.drpPath));
       const seqEntries = drt().listSeqContainerEntries(drpZip);
-      const idx = p.timelineIndex ?? 0;
+      // Which container (E128): SeqContainers list name-sorted by DbId, so a
+      // bare index 0 picked whichever container's uuid sorted first — on
+      // Resolve's export of a compound timeline that was an INNER compound.
+      // Resolve by pool name/kind unless an index is given explicitly.
+      const poolNames = await drt().loadPoolSequenceNames(drpZip);
+      const containerInfo = [];
+      for (const entryName of seqEntries) {
+        const sx = await drpZip.file(entryName).async('string');
+        const sid = (sx.match(/<Sequence>([0-9a-f-]{36})<\/Sequence>/) || [])[1];
+        const pool = sid ? poolNames.get(sid) : null;
+        containerInfo.push({ entry: entryName, name: pool ? pool.name : null, kind: pool ? pool.kind : null });
+      }
+      let idx;
+      let pickedBy;
+      if (p.timelineName != null) {
+        idx = containerInfo.findIndex((c) => c.name === p.timelineName);
+        if (idx < 0) return { error: `no SeqContainer named ${JSON.stringify(p.timelineName)} — containers: ${containerInfo.map((c) => `${c.name ?? '?'}${c.kind ? ` (${c.kind})` : ''}`).join(', ')}` };
+        pickedBy = 'timelineName';
+      } else if (p.timelineIndex != null) {
+        idx = p.timelineIndex;
+        pickedBy = 'timelineIndex';
+      } else {
+        idx = containerInfo.findIndex((c) => c.kind === 'timeline');
+        pickedBy = idx >= 0 ? 'first timeline in the pool' : 'first container (pool carries no kinds)';
+        if (idx < 0) idx = 0;
+      }
       if (idx >= seqEntries.length) {
         return { error: `timelineIndex ${idx} out of range (${seqEntries.length} SeqContainers)` };
       }
@@ -674,6 +700,9 @@ export const drtTool = {
         outputPath: p.outputPath,
         bytes: outBuf.length,
         sourceSeqContainer: keepEntry,
+        pickedBy,
+        container: { name: containerInfo[idx].name, kind: containerInfo[idx].kind },
+        keptContainers: [...keepContainers].map((e) => ({ entry: e, name: (containerInfo.find((c) => c.entry === e) || {}).name ?? null })),
         droppedTimelines,
         note: 'The imported timeline is named after the FILE. Source must be a SAVED project export — ExportProject snapshots the saved DB state, so unsaved edits are absent.',
       };

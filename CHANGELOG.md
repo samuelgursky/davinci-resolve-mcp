@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.182.0 — E128: `extract_from_drp` defaults to the pool's timeline, not the first-sorted compound
+
+### Fixed
+
+- **The default extraction picked an inner compound.** `extract_from_drp`
+  used index 0 by default, and SeqContainers list name-sorted by DbId; on
+  Resolve's own export of a compound timeline (the E127 fixture) index 0 was
+  the inner compound E57_IN, so the default emitted a hollow inner container
+  instead of the timeline. The default is now the first container the pool
+  kinds as a timeline (index 0 only when the export carries no pool kinds);
+  `timelineName` picks a container by its pool name; an explicit
+  `timelineIndex` still means exactly that container. The result reports
+  `pickedBy`, the container's name and kind, and every container kept (a
+  timeline keeps its compounds recursively). Verified on the fixture: the
+  default yields E57_NESTED with E57_OUT and E57_IN kept; `timelineName`
+  E57_OUT yields E57_OUT + E57_IN; index 0 yields E57_IN alone.
+
 ## What's New in v2.181.0 — E127: DRT timelines get their real names, and compounds their kind
 
 ### Fixed

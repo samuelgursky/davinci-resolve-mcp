@@ -11,7 +11,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
 import { summarizeDrtTimelines } from '../server/sequences.mjs';
+import { drtTool } from '../server/tools/drt.mjs';
 
 const require = createRequire(import.meta.url);
 const { parseDRT } = require('../vendor/drt-format/drt-parser.js');
@@ -41,4 +44,27 @@ test('a tool-authored project without compounds keeps its names and carries no k
   const seqs = summarizeDrtTimelines(parsed);
   assert.deepEqual(seqs.map((s) => s.nestedIn), [[]]);
   assert.ok(parsed.timelines[0].videoTracks.every((t) => (t.clips || []).every((c) => c.compound === undefined)));
+});
+
+// E128: extract_from_drp used index 0 by default, and SeqContainers list
+// name-sorted by DbId — on Resolve's export of a compound timeline (E127
+// fixture) that was the INNER compound E57_IN, not the timeline. The default
+// is now the first container the pool kinds as a timeline; timelineName picks
+// by pool name; an explicit timelineIndex still means exactly that container.
+test('extract_from_drp defaults to the pool\'s timeline, not the first-sorted compound (E128)', async () => {
+  const fx = new URL('./fixtures/E127_resolve_nested_export.drt', import.meta.url).pathname;
+  const tmp = (n) => path.join(os.tmpdir(), `e128-${process.pid}-${n}.drt`);
+  const names = async (file) => (await parseDRT(file)).timelines.map((t) => t.name).sort();
+  const byDefault = await drtTool.handler({ action: 'extract_from_drp', args: { drpPath: fx, outputPath: tmp('default') } });
+  assert.equal(byDefault.pickedBy, 'first timeline in the pool');
+  assert.deepEqual(byDefault.container, { name: 'E57_NESTED', kind: 'timeline' });
+  assert.deepEqual(await names(tmp('default')), ['E57_IN', 'E57_NESTED', 'E57_OUT'], 'the timeline keeps its compounds (recursively)');
+  const byName = await drtTool.handler({ action: 'extract_from_drp', args: { drpPath: fx, outputPath: tmp('name'), timelineName: 'E57_OUT' } });
+  assert.equal(byName.pickedBy, 'timelineName');
+  assert.deepEqual(await names(tmp('name')), ['E57_IN', 'E57_OUT']);
+  const byIndex = await drtTool.handler({ action: 'extract_from_drp', args: { drpPath: fx, outputPath: tmp('idx'), timelineIndex: 0 } });
+  assert.equal(byIndex.pickedBy, 'timelineIndex');
+  assert.deepEqual(await names(tmp('idx')), ['E57_IN'], 'index 0 is the first-sorted container — an inner compound here');
+  const missing = await drtTool.handler({ action: 'extract_from_drp', args: { drpPath: fx, outputPath: tmp('x'), timelineName: 'NOPE' } });
+  assert.match(missing.error, /no SeqContainer named "NOPE"/);
 });

@@ -205,4 +205,4 @@ async function parseDRT(drtPathOrBuffer, options = {}) {
   };
 }
 
-module.exports = { parseDRT, listSeqContainerEntries };
+module.exports = { parseDRT, listSeqContainerEntries, loadPoolSequenceNames };
