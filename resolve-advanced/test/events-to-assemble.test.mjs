@@ -1487,3 +1487,46 @@ test('an XML compound clipitem drops with a reason instead of refusing the turno
   assert.deepEqual(mapped.report.unresolvedCompounds, []);
   assert.equal(spec.media.length, 1);
 });
+
+// E123: flattening keeps the JUNCTIONS — an inner dissolve inside a nested
+// Stack and a transition INTO the compound both author at their flattened
+// positions (offline-proven; the bridge places two dissolves, drops none).
+test('flattened stacks keep inner transitions and a transition into the compound (E123)', () => {
+  const rt = (v) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: 24, value: v });
+  const tr = (s, d) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s), duration: rt(d) });
+  const clip = (u, i, d) => ({ OTIO_SCHEMA: 'Clip.2', name: u, source_range: tr(i, d), media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: '/m/' + u }, effects: [], markers: [] });
+  const T = (i, o) => ({ OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(i), out_offset: rt(o) });
+  const stack = { OTIO_SCHEMA: 'Stack.1', name: 'CMP', source_range: tr(0, 96), children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('a.mp4', 24, 48), T(12, 12), clip('b.mp4', 24, 48)] }] };
+  const tl = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('c.mp4', 0, 24), T(12, 12), stack] }] } };
+  const ev = parseOTIO(tl, { fps: 24 });
+  assert.deepEqual(ev.map((e) => [e.source.split('/').pop(), e.recIn, e.recOut, e.transition && e.transition.duration, e.fromCompound || null]),
+    [['c.mp4', 0, 24, null, null], ['a.mp4', 24, 72, 24, 'CMP'], ['b.mp4', 72, 120, 24, 'CMP']]);
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const sm = Object.fromEntries(['a.mp4', 'b.mp4', 'c.mp4'].map((u) => ['/m/' + u, { mediaFilePath: '/m/' + u, spec: spec24 }]));
+  const { spec, report } = eventsToAssembleSpec(ev, { sourceMap: sm });
+  assert.deepEqual(spec.transitions.map((t) => [t.atFrame - 86400, t.durationFrames]), [[24, 24], [72, 24]]);
+  assert.deepEqual(report.droppedTransitions, []);
+  assert.deepEqual(report.flattenedCompounds, ['CMP']);
+});
+
+
+// E123: round-trip QC across the two writers' compound forms. The OTIO export
+// flattens (E120); the XML export collapses the compound to one clipitem (E121).
+// Verifying flattened input cuts against a collapsed export is not drift.
+test('verifyRoundtrip reports compoundsCollapsedInExport instead of count/source drift (E123)', () => {
+  const otio = JSON.parse(fs.readFileSync(new URL('./fixtures/E120_resolve_nested_export.otio', import.meta.url), 'utf8'));
+  const input = parseOTIO(otio, { fps: 24 });
+  const self = verifyRoundtrip(input, parseOTIO(otio, { fps: 24 }), { exportedFormat: 'otio' });
+  assert.equal(self.pass, true);
+  assert.equal(self.compoundsCollapsedInExport, undefined);
+  const xml = parseXMEMLEvents(fs.readFileSync(new URL('./fixtures/E120_resolve_nested_export.xml', import.meta.url), 'utf8'));
+  const r = verifyRoundtrip(input, xml, { exportedFormat: 'xml' });
+  assert.equal(r.pass, true, JSON.stringify(r.mismatches));
+  assert.deepEqual(r.compoundsCollapsedInExport, [{ name: 'E57_OUT', track: 'V1', record: [48, 96], innerCuts: 2 }]);
+  assert.equal(r.pairs, 1);
+  // Null control: a collapsed compound over cuts that did NOT come from it is real drift.
+  const stranger = input.map((e) => (e.fromCompound ? { ...e, fromCompound: 'OTHER' } : e));
+  const r2 = verifyRoundtrip(stranger, xml, { exportedFormat: 'xml' });
+  assert.equal(r2.pass, false);
+  assert.equal(r2.compoundsCollapsedInExport, undefined);
+});

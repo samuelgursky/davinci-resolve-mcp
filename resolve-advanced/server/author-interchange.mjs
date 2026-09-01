@@ -925,7 +925,7 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     if (!v.length) return [];
     const off = anchorOfSide(evts);
     return v
-      .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0, speed: e.speed ?? 100, reverse: Boolean(e.reverse), color: e.color && typeof e.color === 'object' ? { r: Number(e.color.r) || 0, g: Number(e.color.g) || 0, b: Number(e.color.b) || 0 } : null }))
+      .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0, speed: e.speed ?? 100, reverse: Boolean(e.reverse), color: e.color && typeof e.color === 'object' ? { r: Number(e.color.r) || 0, g: Number(e.color.g) || 0, b: Number(e.color.b) || 0 } : null, compound: e.compound || null, fromCompound: e.fromCompound || null }))
       .sort((a, b) => a.track.localeCompare(b.track) || a.recIn - b.recIn);
   };
   // FADES (E94): BL legs on the input side and the Solid Color generators a
@@ -1029,8 +1029,25 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
       }
     }
   }
-  const a = a0.filter((e) => !isBlackSeg(e));
-  const b = b0.filter((e) => !isBlackSeg(e));
+  // COMPOUNDS COLLAPSED BY THE EXPORT (E123): Resolve's FCP7 writer flattens
+  // a compound to one media-less clipitem (E121) while an OTIO turnover
+  // flattens the compound's inner cuts (E120). An exported compound whose
+  // span covers input cuts flattened FROM that same compound is not drift —
+  // the export simply cannot show the inside. Those cuts and the collapsed
+  // item leave the pairwise compare and the result names the compound.
+  const compoundsCollapsedInExport = [];
+  const collapsedIn = new Set();
+  const collapsedEx = new Set();
+  for (const ex of b0) {
+    if (!ex.compound) continue;
+    const inner = a0.filter((e) => e.fromCompound && canonSource(e.fromCompound) === canonSource(ex.compound) && e.track === ex.track && e.recIn < ex.recOut && e.recOut > ex.recIn);
+    if (!inner.length) continue;
+    compoundsCollapsedInExport.push({ name: ex.compound, track: ex.track, record: [ex.recIn, ex.recOut], innerCuts: inner.length });
+    for (const e of inner) collapsedIn.add(e);
+    collapsedEx.add(ex);
+  }
+  const a = a0.filter((e) => !isBlackSeg(e) && !collapsedIn.has(e));
+  const b = b0.filter((e) => !isBlackSeg(e) && !collapsedEx.has(e));
   const blackSegments = { input: a0.length - a.length, exported: b0.length - b.length };
   const n = comparePairs(a, b, junctionsFor(/^V\d*$/), 'video');
 
@@ -1101,6 +1118,7 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     pass: mismatches.length === 0, pairs: n, srcOffsets, mismatches, markers,
     ...(generatorColours.compared ? { generatorColours } : {}),
     ...(generatorColourNotInExport ? { generatorColourNotInExport } : {}),
+    ...(compoundsCollapsedInExport.length ? { compoundsCollapsedInExport } : {}),
     ...(markersNotInExport ? { markersNotInExport } : {}),
     ...(blackSegments.input || blackSegments.exported ? { blackSegments } : {}),
     ...(fadeReshapedBoundaries.length ? { fadeReshapedBoundaries } : {}),

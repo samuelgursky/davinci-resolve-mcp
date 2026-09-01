@@ -2,6 +2,25 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.177.0 — E123: round-trip QC is compound-aware; flattening keeps the junctions
+
+### Added
+
+- **`verify_roundtrip` understands the two writers' compound forms.**
+  Resolve's OTIO writer flattens a compound's inner cuts (E120) while its
+  FCP7 writer collapses the compound to one media-less clipitem (E121), so
+  verifying flattened input cuts against an XML re-export read as count and
+  source drift. An exported compound whose span covers input cuts flattened
+  FROM that same compound now leaves the pairwise compare and is reported
+  in `compoundsCollapsedInExport` (name, track, span, inner cut count). A
+  collapsed compound over cuts that did not come from it stays drift.
+
+### Verified
+
+- Flattening keeps the junctions: an inner dissolve inside a nested Stack
+  and a transition INTO the compound both author at their flattened
+  positions — the bridge places both and drops none.
+
 ## What's New in v2.176.0 — E122: frame QC never scores a compound clip as a false red
 
 ### Fixed
