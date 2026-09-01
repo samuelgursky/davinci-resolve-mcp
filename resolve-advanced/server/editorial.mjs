@@ -53,6 +53,7 @@ function evt(o) {
     ...(o.color !== undefined ? { color: o.color } : {}),
     ...(o.generatorName !== undefined ? { generatorName: o.generatorName } : {}),
     ...(o.fromCompound !== undefined ? { fromCompound: o.fromCompound } : {}),
+    ...(o.compound !== undefined ? { compound: o.compound } : {}),
     source: o.source || 'UNKNOWN',
     srcIn: o.srcIn ?? null,
     srcOut: o.srcOut ?? null,
@@ -458,7 +459,12 @@ export function parseXMEMLEvents(xml, opts = {}) {
         const itemMarkers = mks
           .filter((mk) => Number.isFinite(Number(mk.in)))
           .map((mk) => ({ frame: Number(mk.in) - inF, name: mk.name != null ? String(mk.name) : undefined, note: mk.comment != null ? String(mk.comment) : undefined }));
-        events.push(evt({ index: idx++, track, source: name, srcIn: Number.isFinite(inF) ? inF + inAdj : inF, srcOut: Number.isFinite(outF) ? outF + inAdj : outF, recIn: start, recOut: end, speed, reverse, itemMarkers: itemMarkers.length ? itemMarkers : undefined, color: it.__genColor || undefined, fps: seqRate }));
+        // Resolve's FCP7 writer flattens a COMPOUND CLIP to one clipitem whose
+        // <file> carries an explicitly EMPTY <pathurl> and no inner content
+        // (measured E120/E121). Tag it so the bridge can drop it with a
+        // reason instead of refusing the whole turnover as an unmapped reel.
+        const isCompound = !!(it.file && typeof it.file.pathurl === 'string' && it.file.pathurl.trim() === '' && !it.__genColor && name !== 'BL');
+        events.push(evt({ index: idx++, track, source: name, srcIn: Number.isFinite(inF) ? inF + inAdj : inF, srcOut: Number.isFinite(outF) ? outF + inAdj : outF, recIn: start, recOut: end, speed, reverse, itemMarkers: itemMarkers.length ? itemMarkers : undefined, color: it.__genColor || undefined, compound: isCompound ? name : undefined, fps: seqRate }));
       }
     }
   };

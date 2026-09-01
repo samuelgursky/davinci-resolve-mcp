@@ -2,6 +2,24 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.175.0 — E121: a flattened XML compound is a named hole, not a refusal
+
+### Fixed
+
+- **An XML turnover with a compound clip refused to conform.** Resolve's FCP7
+  writer flattens a compound to ONE clipitem whose `<file>` carries an
+  explicitly empty `<pathurl>` and no inner content (measured on 19.1.3.7);
+  read as a source reel, `assemble_from_interchange` refused the whole
+  turnover as an unmapped reel. The walker now tags such clipitems
+  `compound`, and the bridge drops them with a reason in
+  `unresolvedCompounds` (name, track, record span) while the rest of the cut
+  conforms — unless the sourceMap maps the compound's name to a flattened
+  media file, in which case it authors like any clip. The reason points at
+  the OTIO export, where compounds keep their inner content and flatten
+  (E120).
+- `timeline.get_items` help notes that `generator` also covers Fusion titles
+  (Text+ enumerates with no media and no properties, like a generator).
+
 ## What's New in v2.174.0 — E120: compound clips in Resolve's OTIO exports flatten instead of vanishing
 
 ### Fixed

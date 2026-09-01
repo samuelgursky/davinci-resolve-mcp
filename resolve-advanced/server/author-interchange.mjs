@@ -281,6 +281,21 @@ export function eventsToAssembleSpec(events, opts = {}) {
   // the fade dissolves around it, measured E91); audio BL legs are silence,
   // which an empty track already is.
   const isBL = (srcName) => /^(BL|BLACK)$/i.test(String(srcName || '').trim());
+  // FLATTENED COMPOUNDS (E121): an XML clipitem that is a compound carries no
+  // inner content, so nothing can be authored for it unless the sourceMap
+  // points its name at a flattened media file. Unmapped ones are DROPPED
+  // with a reason — a hole in the conform the ledger names — rather than
+  // refusing the whole turnover as an unmapped reel.
+  const unresolvedCompounds = [];
+  for (const list of [vids, auds]) {
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const e = list[i];
+      if (e.compound && !sourceMap[e.source]) {
+        unresolvedCompounds.push({ name: e.compound, track: e.track, recIn: e.recIn, recOut: e.recOut, reason: 'XML compound clipitem carries no inner content — re-export as OTIO (nested Stacks flatten) or map the compound name to a flattened media file in sourceMap' });
+        list.splice(i, 1);
+      }
+    }
+  }
   const unmapped = [...new Set([...vids, ...auds].map((e) => e.source).filter((srcName) => !isBL(srcName) && !sourceMap[srcName]))];
   if (unmapped.length) {
     throw new Error(
@@ -712,6 +727,7 @@ export function eventsToAssembleSpec(events, opts = {}) {
       // the ledger says which compounds became flat cuts.
       flattenedCompounds: [...new Set(events.filter((e) => e.fromCompound).map((e) => e.fromCompound))],
       flattenedCompoundEvents: events.filter((e) => e.fromCompound).length,
+      unresolvedCompounds,
       authoredAudioEvents: audioPlacements.length,
       audioRetimesSkipped,
       ...(elements.length || audioBlackLegsSkipped ? {

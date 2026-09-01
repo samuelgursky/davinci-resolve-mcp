@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.174.0"
+VERSION = "2.175.0"
 
 import base64
 import os
@@ -26250,7 +26250,7 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
     },
     "timeline": {
         "get_items": {
-            "summary": "List items on one track as a summary (name/id/start/end/duration/kind). Transitions ARE items — a video Cross Dissolve by name, an AUDIO cross-fade with an EMPTY name — and generators/subtitles look identical to them by media-pool item and properties (all None), so `kind` (clip | transition | generator | subtitle) is decided by geometry: a transition straddles a cut.",
+            "summary": "List items on one track as a summary (name/id/start/end/duration/kind). Transitions ARE items — a video Cross Dissolve by name, an AUDIO cross-fade with an EMPTY name — and generators/subtitles look identical to them by media-pool item and properties (all None), so `kind` (clip | transition | generator | subtitle) is decided by geometry: a transition straddles a cut; `generator` also covers Fusion titles (Text+), which enumerate the same way.",
             "params": "track_type (video|audio|subtitle), index|track_index (1-based)",
             "returns": "{items: [{name, id, start, end, duration, kind}]}",
             "example": 'timeline(action="get_items", params={"track_type": "video", "index": 1})',

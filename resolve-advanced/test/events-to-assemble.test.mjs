@@ -1463,3 +1463,27 @@ test('parseOTIO flattens nested Stacks (compound clips) into record time (E120)'
   const plain = parseOTIO({ OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('a.mp4', 0, 10)] }] } }, { fps: 24 });
   assert.deepEqual(plain.map((e) => [e.source.split('/').pop(), e.recIn, e.recOut, e.fromCompound]), [['a.mp4', 0, 10, undefined]]);
 });
+
+
+// E121: Resolve's FCP7 writer flattens a compound clip to ONE clipitem whose
+// <file> has an explicitly EMPTY <pathurl> and no inner content (fixture =
+// verbatim EXPORT_FCP_7_XML of the E57 nested timeline). Read as a source reel
+// it refused the whole turnover; now it is a named, dropped hole — unless the
+// sourceMap points the compound's name at a flattened media file.
+test('an XML compound clipitem drops with a reason instead of refusing the turnover (E121)', () => {
+  const xml = fs.readFileSync(new URL('./fixtures/E120_resolve_nested_export.xml', import.meta.url), 'utf8');
+  const ev = parseXMEMLEvents(xml);
+  const cmp = ev.find((e) => e.source === 'E57_OUT');
+  assert.equal(cmp.compound, 'E57_OUT');
+  assert.equal(ev.find((e) => e.source === 'cut_src.mp4').compound, undefined);
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const { spec, report } = eventsToAssembleSpec(ev, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 } } });
+  assert.equal(report.videoEvents, 1);
+  assert.deepEqual(report.unresolvedCompounds.map((c) => [c.name, c.track, c.recIn, c.recOut]), [['E57_OUT', 'V', 48, 96]]);
+  assert.match(report.unresolvedCompounds[0].reason, /OTIO/);
+  // Mapped to a flattened file, the compound authors like any clip.
+  const mapped = eventsToAssembleSpec(ev, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 }, E57_OUT: { mediaFilePath: '/m/e57_out_flat.mov', spec: spec24 } } });
+  assert.equal(mapped.report.videoEvents, 2);
+  assert.deepEqual(mapped.report.unresolvedCompounds, []);
+  assert.equal(spec.media.length, 1);
+});
