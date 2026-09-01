@@ -729,6 +729,29 @@ test('verifyRoundtrip is fade-aware: black legs merge out, reshaped edges excuse
   assert.equal(res3.mismatches[0].kind, 'record');
 });
 
+test('verifyRoundtrip is retime-aware: a lost or wrong-speed retime fails as drift (E95)', () => {
+  // Record/source geometry cannot catch a lost retime (the record extent is
+  // unchanged). Measured live: EXPORT_OTIO carries an authored Sm2TimeMap
+  // back as LinearTimeWarp 0.5, so speed/reverse compare pairwise.
+  const input = [
+    { track: 'V', source: 'A', recIn: 0, recOut: 48, srcIn: 0 },
+    { track: 'V', source: 'A', recIn: 48, recOut: 96, srcIn: 48, speed: 50 },
+  ];
+  const good = [
+    { track: 'V', source: 'A.mov', recIn: 0, recOut: 48, srcIn: 0, speed: 100 },
+    { track: 'V', source: 'A.mov', recIn: 48, recOut: 96, srcIn: 48, speed: 50 },
+  ];
+  assert.equal(verifyRoundtrip(input, good).pass, true);
+  const flattened = good.map((e) => ({ ...e, speed: 100 }));
+  const r1 = verifyRoundtrip(input, flattened);
+  assert.equal(r1.pass, false);
+  assert.equal(r1.mismatches[0].kind, 'retime');
+  const reversed = good.map((e, i) => (i === 1 ? { ...e, reverse: true } : e));
+  const r2 = verifyRoundtrip(input, reversed);
+  assert.equal(r2.pass, false);
+  assert.equal(r2.mismatches[0].kind, 'retime');
+});
+
 test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
   const fsM = await import('node:fs');
   const os = await import('node:os');

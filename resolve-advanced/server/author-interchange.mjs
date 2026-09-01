@@ -839,7 +839,7 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     if (!v.length) return [];
     const off = Math.min(...v.map((e) => e.recIn));
     return v
-      .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0 }))
+      .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0, speed: e.speed ?? 100, reverse: Boolean(e.reverse) }))
       .sort((a, b) => a.track.localeCompare(b.track) || a.recIn - b.recIn);
   };
   const a0 = norm(inputEvents);
@@ -884,6 +884,19 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
         mismatches.push({ kind: 'record', at: i, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
         continue;
       }
+    }
+    // RETIMES (E95): a conform that lost its retime is a wrong timeline that
+    // record/source geometry alone cannot catch (the record extent is
+    // unchanged; only the playback rate is). Resolve's EXPORT_OTIO carries
+    // an authored Sm2TimeMap back as LinearTimeWarp (measured live: 50%
+    // in → time_scalar 0.5 out), so a speed/reverse mismatch is real drift.
+    if (Math.abs((x.speed ?? 100) - (y.speed ?? 100)) > 0.5 || x.reverse !== y.reverse) {
+      mismatches.push({
+        kind: 'retime', at: i, source: x.source,
+        input: { speed: x.speed, reverse: x.reverse },
+        exported: { speed: y.speed, reverse: y.reverse },
+      });
+      continue;
     }
     // A fade-reshaped head trims record AND source together (source stays
     // record-aligned), so the per-source constant offset is fitted net of

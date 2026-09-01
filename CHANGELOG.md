@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.154.0 — the QC loop learns retimes
+
+### Added
+
+- **`editorial.verify_roundtrip` is retime-aware.** A conform that lost its
+  retime is a wrong timeline that record/source geometry alone cannot catch
+  — the record extent is unchanged, only the playback rate. Speed and
+  reverse now compare pairwise (`kind: 'retime'` on drift).
+
+### Measured (good news, for once)
+
+- **`EXPORT_OTIO` carries an authored `Sm2TimeMap` back as
+  `LinearTimeWarp`**: a 50% M2 retime conformed offline reads back out of
+  Resolve's OTIO export as `time_scalar: 0.5`. The retime loop closes
+  losslessly through OTIO — live loop verified both ways (pass on the true
+  export, `retime` drift on a speed-stripped one).
+
 ## What's New in v2.153.0 — the QC loop learns fades
 
 ### Added
