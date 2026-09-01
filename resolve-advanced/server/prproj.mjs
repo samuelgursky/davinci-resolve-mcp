@@ -8,7 +8,7 @@
  *
  * Time is in TICKS (254,016,000,000 per second — factors by every standard frame/sample rate).
  * We derive from tick geometry alone: cuts, source in/out, timeline position, SPEED/retime
- * (srcDur/recDur), REVERSE (in>out), transitions (VideoTransitionTrackItem span), and markers.
+ * (srcDur/recDur), REVERSE (in>out), transitions (VideoTransitionTrackItem span, recStart-explicit; edge spans synthesize BL fade legs), and markers.
  *
  * HONEST limits (skip-not-fake): the schema is proprietary and version-drifting (Project Version
  * 25→42+); editorial timing/structure decodes with high fidelity, but per-clip EFFECTS / Lumetri
@@ -179,10 +179,29 @@ function walkSequence(seqEntry, byId) {
           transitions.push({ recIn: ticksToFrames(childText(cEntry.node, 'Start'), fps), duration: dur || 0 });
         }
       }
-      // Attach each transition to the clip that begins at its record position (best-effort).
+      // Attach each transition to the INCOMING clip whose record-in falls
+      // inside its span — Premiere stores the explicit record span, so
+      // recStart carries it and the bridge reproduces the editor's actual
+      // alignment (the old exact-start match silently dropped every
+      // centered transition). A span with no outgoing clip is a fade-IN,
+      // one with no incoming a fade-OUT — both synthesize BL legs for the
+      // bridge's black machinery (E91-E96).
       for (const tr of transitions) {
-        const hit = clipEvents.find((e) => e.recIn === tr.recIn);
-        if (hit) hit.transition = { type: 'dissolve', duration: tr.duration };
+        const end = tr.recIn + tr.duration;
+        const trans = { type: 'dissolve', duration: tr.duration, recStart: tr.recIn };
+        const incoming = clipEvents.find((e) => e.recIn > tr.recIn - 1 && e.recIn <= end);
+        if (incoming) {
+          incoming.transition = trans;
+          const outgoing = clipEvents.find((e) => e !== incoming && e.recOut > tr.recIn - 1 && e.recOut <= end);
+          if (!outgoing) {
+            clipEvents.push({ index: idx++, track: trackKind, source: 'BL', srcIn: 0, srcOut: 0, recIn: incoming.recIn, recOut: incoming.recIn, speed: 100, reverse: false, transition: null, fps });
+          }
+        } else {
+          const outgoing = clipEvents.find((e) => e.recOut > tr.recIn - 1 && e.recOut <= end);
+          if (outgoing) {
+            clipEvents.push({ index: idx++, track: trackKind, source: 'BL', srcIn: 0, srcOut: 0, recIn: outgoing.recOut, recOut: outgoing.recOut, speed: 100, reverse: false, transition: trans, fps });
+          }
+        }
       }
       events.push(...clipEvents);
     }

@@ -113,6 +113,75 @@ test('parsePrproj: normalized events with derived speed + resolved media names',
   assert.ok(events.some((e) => e.track === 'A' && e.source === 'A001.mov'));
 });
 
+// Premiere transitions carry an explicit record span (Start/End ticks). The
+// old exact-start attach silently dropped every CENTERED transition; and
+// edge spans with a missing neighbor are fades, routed through the BL
+// machinery (E96).
+const PRPROJ_TRANS_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<PremiereData Version="3">
+  <Project ObjectID="1" ClassID="62ad66dd-0dcd-42da-a660-6d8fbde94876" Version="40">
+    <RootProjectItem ObjectRef="2"/>
+  </Project>
+  <Sequence ObjectID="10" ClassID="s" Version="40">
+    <Node Version="1"><Properties><Name>FADES</Name><FrameRate>24</FrameRate></Properties></Node>
+    <VideoTracks><Track ObjectRef="20"/></VideoTracks>
+  </Sequence>
+  <VideoTrack ObjectID="20" ClassID="v" Version="1">
+    <TrackItems>
+      <TrackItem ObjectRef="40"/><TrackItem ObjectRef="41"/>
+      <TrackItem ObjectRef="80"/><TrackItem ObjectRef="81"/><TrackItem ObjectRef="82"/>
+    </TrackItems>
+  </VideoTrack>
+  <VideoClipTrackItem ObjectID="40" ClassID="c" Version="1">
+    <Start>${f(0)}</Start><End>${f(96)}</End><InPoint>${f(24)}</InPoint><OutPoint>${f(120)}</OutPoint>
+    <ClipProjectItem ObjectRef="60"/>
+  </VideoClipTrackItem>
+  <VideoClipTrackItem ObjectID="41" ClassID="c" Version="1">
+    <Start>${f(96)}</Start><End>${f(168)}</End><InPoint>${f(24)}</InPoint><OutPoint>${f(96)}</OutPoint>
+    <ClipProjectItem ObjectRef="61"/>
+  </VideoClipTrackItem>
+  <VideoTransitionTrackItem ObjectID="80" ClassID="t" Version="1">
+    <Start>${f(0)}</Start><End>${f(24)}</End>
+  </VideoTransitionTrackItem>
+  <VideoTransitionTrackItem ObjectID="81" ClassID="t" Version="1">
+    <Start>${f(84)}</Start><End>${f(108)}</End>
+  </VideoTransitionTrackItem>
+  <VideoTransitionTrackItem ObjectID="82" ClassID="t" Version="1">
+    <Start>${f(156)}</Start><End>${f(180)}</End>
+  </VideoTransitionTrackItem>
+  <ClipProjectItem ObjectID="60" ClassID="p" Version="1">
+    <ActualMediaFilePath>/media/A001.mov</ActualMediaFilePath>
+  </ClipProjectItem>
+  <ClipProjectItem ObjectID="61" ClassID="p" Version="1">
+    <ActualMediaFilePath>/media/B002.mov</ActualMediaFilePath>
+  </ClipProjectItem>
+</PremiereData>`;
+
+const PRPROJ_TRANS = path.join(TMP, 'trans.prproj');
+fs.writeFileSync(PRPROJ_TRANS, zlib.gzipSync(Buffer.from(PRPROJ_TRANS_XML, 'utf8')));
+
+test('prproj transitions: centered spans attach with recStart; edge spans synthesize BL fades (E96)', async () => {
+  const events = parsePrproj(PRPROJ_TRANS);
+  const bls = events.filter((e) => e.source === 'BL');
+  assert.equal(bls.length, 2, JSON.stringify(events, null, 1));
+  // fade-in predecessor at the head, fade-out carrier at the tail
+  assert.deepEqual(bls.map((e) => [e.recIn, e.recOut, !!e.transition]), [[0, 0, false], [168, 168, true]]);
+  const b = events.find((e) => e.source === 'B002.mov');
+  assert.deepEqual(b.transition, { type: 'dissolve', duration: 24, recStart: 84 });
+  const { eventsToAssembleSpec } = await import('../server/author-interchange.mjs');
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: {
+      'A001.mov': { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
+      'B002.mov': { mediaFilePath: '/m/b.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
+    },
+  });
+  assert.equal(report.droppedTransitions.length, 0, JSON.stringify(report.droppedTransitions));
+  assert.equal(spec.transitions.length, 3); // fade-in + centered dissolve + fade-out
+  assert.equal(spec.elements.length, 2); // two BL generators
+  // the centered dissolve keeps its explicit span [84,108) with the junction untouched
+  assert.ok(spec.transitions.some((t) => t.startFrame === 86400 + 84 && t.atFrame === 86400 + 96));
+});
+
 test('parsePrprojDoc: exposes project version, media paths, markers', () => {
   const doc = parsePrprojDoc(PRPROJ);
   assert.equal(doc.projectVersion, 40);

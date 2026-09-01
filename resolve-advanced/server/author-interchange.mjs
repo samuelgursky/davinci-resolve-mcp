@@ -432,9 +432,13 @@ export function eventsToAssembleSpec(events, opts = {}) {
       let pre = Math.floor(d / 2);
       if (e.transition.alignment === 'start') pre = 0;
       else if (e.transition.inOffset != null) pre = Math.min(d, Math.max(0, toTl(e.transition.inOffset, e.fps)));
+      else if (e.transition.recStart != null) {
+        const spanStartAbs = ORIGIN + (toTl(e.transition.recStart, e.fps) - minRec);
+        pre = Math.min(d, Math.max(0, recIn - spanStartAbs));
+      }
       audioTransCandidates.push({
         atFrame: recIn, durationFrames: d, track, pre,
-        explicitSpan: e.transition.alignment != null || e.transition.inOffset != null,
+        explicitSpan: e.transition.alignment != null || e.transition.inOffset != null || e.transition.recStart != null,
         index: e.index, type: e.transition.type, rawDuration: e.transition.duration,
         source: e.source, srcIn: cut.srcIn, incomingCutRef: cut, cutPoint: e.transition.cutPoint,
       });

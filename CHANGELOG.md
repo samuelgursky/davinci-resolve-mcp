@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.155.0 — Premiere transitions land properly: centered spans and fades
+
+### Fixed
+
+- **Every centered Premiere transition was silently dropped**: the .prproj
+  reader attached transitions only to clips starting exactly at the span
+  start — the CMX start-at-cut shape — so a transition centered on its cut
+  (Premiere's default) matched nothing and vanished. The incoming clip is
+  now found anywhere inside the span, and `recStart` carries Premiere's
+  explicit record span to the bridge so the editor's actual alignment is
+  reproduced.
+
+### Added
+
+- **.prproj fades**: an edge span with a missing neighbor synthesizes BL
+  legs through the same black machinery as EDL/OTIO/XMEML/AAF — all five
+  ingest formats now author fades. Audio transition candidates honor
+  `recStart` too. The emitted spec shapes are the render-verified classes
+  from v2.150–152.
+
 ## What's New in v2.154.0 — the QC loop learns retimes
 
 ### Added
