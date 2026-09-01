@@ -1248,7 +1248,8 @@ def _walk_slot(segment, *, prefix, fps, state):
 
     A NestedScope slot is a multi-layer track: each layer gets its own numbered label
     (V1..Vn / A1..An) and restarts at record 0, because layers are parallel, not
-    sequential. A plain (single-layer) slot keeps the flat "V"/"A" label.
+    sequential. A plain (single-layer) slot keeps the label the caller numbered it
+    with (first of its kind bare "V"/"A", then "A2", "A3" … per slot order — E109).
     """
     if type(segment).__name__ == "NestedScope":
         for n, layer in enumerate(_nested_layers(segment), start=1):
@@ -1456,6 +1457,13 @@ def probe(path):
             # `idx` is monotonic across the WHOLE mob, every slot and every nested layer.
             state = {"idx": 1, "events": [], "unhandled": {}, "effectsWithoutEvents": {}}
             edit_fps = None
+            # FLAT slots number per media kind in slot order (A, A2, A3 … / V, V2 …):
+            # an Avid turnover carries dialog, music and effects as SEPARATE flat
+            # sound MobSlots, and labelling them all "A" stacked every bed onto one
+            # lane where the bridge refuses the overlap (measured, E109). The first
+            # slot of a kind keeps the bare letter (compat with every reader that
+            # matches /^A$/); NestedScope layers keep their own layer numbering.
+            kind_ordinal = {"A": 0, "V": 0}
             for slot in getattr(mob, "slots", []) or []:
                 seg = getattr(slot, "segment", None)
                 if seg is None:
@@ -1467,7 +1475,11 @@ def probe(path):
                 fps = _fps_from_edit_rate(getattr(slot, "edit_rate", None))
                 if edit_fps is None:
                     edit_fps = fps  # picks the timecode slot to trust — see above
-                _walk_slot(seg, prefix=_media_kind_to_track(slot), fps=fps, state=state)
+                letter = _media_kind_to_track(slot)
+                kind_ordinal[letter] += 1
+                is_nested = getattr(seg, "class_name", "") == "NestedScope" or type(seg).__name__ == "NestedScope"
+                label = letter if (kind_ordinal[letter] == 1 or is_nested) else f"{letter}{kind_ordinal[letter]}"
+                _walk_slot(seg, prefix=label, fps=fps, state=state)
             events = state["events"]
             sequences.append(
                 {

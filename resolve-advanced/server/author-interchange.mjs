@@ -254,15 +254,19 @@ export function eventsToAssembleSpec(events, opts = {}) {
   const isMarker = (t) => t === 'MARKER';
   const vids = events.filter((e) => !isAudio(e.track) && !isMarker(e.track) && e.recIn != null && e.recOut != null);
   // AAF exports one event per audio CHANNEL — a stereo/dual-mono clip arrives
-  // as identical A-track legs (measured on a Resolve 19 rich export: every
-  // audio event duplicated). Merge exact duplicates (same track/source/range)
-  // so they place once instead of refusing as a same-track overlap.
+  // as identical legs, one per channel slot (measured on a Resolve 19 rich
+  // export: every audio event duplicated). Merge exact duplicates (same
+  // source/range/srcIn) so they place once instead of refusing as a
+  // same-track overlap. The key deliberately ignores the LANE: since E109
+  // flat slots number A, A2, A3 …, so channel legs of one clip arrive on
+  // different lanes — still one clip, placed once — while a different bed on
+  // its own lane (dialog A, music A2) keeps its lane and never merges.
   const audsRaw = events.filter((e) => isAudio(e.track) && e.recIn != null && e.recOut != null);
   const seenAud = new Set();
   const auds = [];
   let audioChannelLegsMerged = 0;
   for (const e of audsRaw) {
-    const k = `${e.track}|${e.source}|${e.recIn}|${e.recOut}|${e.srcIn}`;
+    const k = `${e.source}|${e.recIn}|${e.recOut}|${e.srcIn}|${e.speed ?? 100}|${e.reverse ? 1 : 0}`;
     if (seenAud.has(k)) { audioChannelLegsMerged += 1; continue; }
     seenAud.add(k);
     auds.push(e);
@@ -976,12 +980,13 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
   // AUDIO (E97): compared only when the INPUT declares audio events — a
   // video-only turnover legitimately re-exports with audio (the A1
   // convenience mirror), which is reported informationally, never failed.
-  // AAF channel legs dedupe (same track/source/range arrives once per
-  // channel); BL/silence legs merge out like video black.
+  // AAF channel legs dedupe (the same source/range arrives once per channel
+  // slot — on numbered lanes since E109, so the key ignores the lane the way
+  // the bridge's placement merge does); BL/silence legs merge out like black.
   const dedupeAud = (list) => {
     const seen = new Set();
     return list.filter((e) => {
-      const k = `${e.track}|${e.source}|${e.recIn}|${e.recOut}|${e.srcIn}`;
+      const k = `${e.source}|${e.recIn}|${e.recOut}|${e.srcIn}`;
       if (seen.has(k)) return false;
       seen.add(k);
       return true;

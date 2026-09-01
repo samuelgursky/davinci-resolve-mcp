@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.167.0 — E109: flat AAF sound slots keep their lanes; AAF audio cross-fades render
+
+An Avid turnover carries dialog, music and effects as SEPARATE flat sound
+MobSlots. The AAF walker labelled every flat slot `A` (only `NestedScope`
+layers were numbered), so a dialog lane and a music bed collided on A1 and
+the bridge refused the whole turnover ("audio events overlap on audio track
+1 — one track cannot hold both"). The sound `Transition` between the dialog
+clips parsed fine; the lane collapse was the block.
+
+### Fixed
+
+- **Flat AAF slots number per media kind in slot order** (`A`, `A2`, `A3` …
+  / `V`, `V2` …). The first slot of a kind keeps the bare letter; `NestedScope`
+  layers keep their own layer numbering. Render-measured on 19.1.3.7: an AAF
+  with a dialog lane (−21 dBFS tone → 24f `MonoAudioDissolve` → −41 dBFS
+  tone) over a quiet music bed on its own slot conforms, imports, and renders
+  the cross-fade −26.0 → −29.3 → −32.5 → −37.5 → −41.6 dBFS across exactly its
+  window, with the second lane audibly present (−41.6 vs −47.1 for one lane).
+- **Channel legs still place once.** Resolve's own AAF export writes one slot
+  per audio channel with identical legs; the bridge's merge (and
+  `verify_roundtrip`'s dedupe) now key on source/range rather than the lane,
+  so channel legs of one clip merge while a different bed on its own lane
+  never does.
+
 ## What's New in v2.166.0 — E108: XMEML audio cross-fades conform and render
 
 The XMEML walker only looked at `<transitionitem>`s on VIDEO tracks, so an

@@ -1274,3 +1274,23 @@ test('parseXMEMLEvents attaches audio cross-fades and numbers audio tracks like 
   assert.ok(ev.filter((e) => e.track === 'V').every((e) => e.transition === null));
   assert.equal(aud.find((e) => e.track === 'A2').transition, null);
 });
+
+// E109: flat AAF sound slots now number A, A2, A3 … (aaf_probe). Channel legs
+// of ONE clip (Resolve's AAF export writes one slot per channel) still merge
+// to a single placement — the merge key ignores the lane — while a different
+// bed on its own lane keeps it instead of colliding on A1.
+test('audio channel legs merge across lanes; distinct beds keep their lanes (E109)', () => {
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const sm = { '/m/cut.mp4': { mediaFilePath: '/m/cut.mp4', spec: spec24 }, '/m/wht.mp4': { mediaFilePath: '/m/wht.mp4', spec: spec24 } };
+  const base = { srcIn: 0, srcOut: 96, recIn: 0, recOut: 96, speed: 100, reverse: false, transition: null, fps: 24 };
+  const V = { index: 1, track: 'V', source: '/m/cut.mp4', ...base };
+  const legs = eventsToAssembleSpec([V, { index: 2, track: 'A', source: '/m/cut.mp4', ...base }, { index: 3, track: 'A2', source: '/m/cut.mp4', ...base }], { sourceMap: sm });
+  assert.equal(legs.report.authoredAudioEvents, 1);
+  assert.equal(legs.report.audioChannelLegsMerged, 1);
+  const beds = eventsToAssembleSpec([V, { index: 2, track: 'A', source: '/m/cut.mp4', ...base }, { index: 3, track: 'A2', source: '/m/wht.mp4', ...base }], { sourceMap: sm });
+  assert.equal(beds.report.authoredAudioEvents, 2);
+  assert.equal(beds.report.audioChannelLegsMerged, 0);
+  assert.deepEqual(beds.spec.media.flatMap((m) => m.cuts.filter((c) => c.audioOnly).map((c) => c.track)).sort(), [1, 2]);
+  // Null control: the same two beds both labelled A (the pre-E109 collapse) still refuse loudly.
+  assert.throws(() => eventsToAssembleSpec([V, { index: 2, track: 'A', source: '/m/cut.mp4', ...base }, { index: 3, track: 'A', source: '/m/wht.mp4', ...base }], { sourceMap: sm }), /overlap on audio track 1/);
+});

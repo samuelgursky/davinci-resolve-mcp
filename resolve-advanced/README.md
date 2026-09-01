@@ -201,8 +201,11 @@ plausible-looking short event list. Three limits are deliberate:
 - **Effect-only layers produce no events.** A layer wrapping `ScopeReference` (subtitle burns, blends,
   mattes) applies to what shows through from below and references no media of its own. OTIO materializes
   such layers as tracks of gaps, so its track count can exceed the number of layers with media.
-- **Only `NestedScope` layers are numbered.** Non-nested slots keep the flat `V`/`A` label, which is what
-  `editorial.mjs`'s `/^A\d*$/` audio-follows-video heuristic reads (`A`, `A2`, … all count as audio).
+- **Flat slots number per media kind in slot order** (`A`, `A2`, `A3` … / `V`, `V2` …): an Avid
+  turnover carries dialog, music and effects as SEPARATE flat sound MobSlots, and labelling them all
+  `A` stacked every bed onto one lane where the bridge refuses the overlap (measured, E109). The first
+  slot of a kind keeps the bare letter; `NestedScope` layers keep their own layer numbering. This is
+  what `editorial.mjs`'s `/^A\d*$/` audio-follows-video heuristic reads (`A`, `A2`, … all count as audio).
 
 ## Provenance & license
 Vendored libraries are clean offline format-interop and deterministic compute code: no secrets, no
