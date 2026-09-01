@@ -388,7 +388,7 @@ test('EDL LOC locators author markers with mapped colors', () => {
   assert.equal(report.audioEventsSkipped, 0, 'locators are not miscounted as skipped audio');
 });
 
-test('OTIO clip markers land at their record position', () => {
+test('OTIO clip markers become ITEM markers on the cut (E80)', () => {
   const rtm = (value) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate: 24 });
   const otio = { OTIO_SCHEMA: 'Timeline.1', tracks: { children: [
     { OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [
@@ -400,8 +400,25 @@ test('OTIO clip markers land at their record position', () => {
     ] },
   ] } };
   const { spec } = eventsToAssembleSpec(parseOTIO(otio, { fps: 24 }), { sourceMap: MAP });
-  // clip srcIn 24 at record 0; marker at source 36 → record 12 → frame 86412
-  assert.deepEqual(spec.markers, [{ frame: 86412, color: 'Green', name: 'beat' }]);
+  // clip srcIn 24; marker at source 36 → ITEM-relative frame 12, authored as
+  // an Sm2TiItemLockableBlob on the cut (v2.143 item markers) rather than a
+  // timeline marker — track-level markers still go to spec.markers.
+  assert.equal(spec.markers, undefined);
+  assert.deepEqual(spec.media[0].cuts[0].markers, [{ frame: 12, color: 'Green', name: 'beat' }]);
+});
+
+test('XMEML clipitem <marker>s become ITEM markers too (E81)', () => {
+  const { parseXMEMLEvents } = requireCjs('../server/editorial.mjs');
+  const xml = `<?xml version="1.0"?><xmeml version="4"><sequence><name>S</name>
+   <rate><timebase>24</timebase></rate><media><video><track>
+   <clipitem><name>a.mp4</name><start>0</start><end>48</end><in>24</in><out>72</out>
+    <marker><name>vfx</name><comment>replace sky</comment><in>30</in><out>30</out></marker>
+   </clipitem>
+   </track></video></media></sequence></xmeml>`;
+  const events = parseXMEMLEvents(xml, { fps: 24 });
+  assert.deepEqual(events[0].itemMarkers, [{ frame: 6, name: 'vfx', note: 'replace sky' }]);
+  const { spec } = eventsToAssembleSpec(events, { sourceMap: { 'a.mp4': MAP.TAPE1 } });
+  assert.deepEqual(spec.media[0].cuts[0].markers, [{ frame: 6, color: 'Blue', name: 'vfx', note: 'replace sky' }]);
 });
 
 // AAF exports duplicate every audio clip per channel; identical A-track legs

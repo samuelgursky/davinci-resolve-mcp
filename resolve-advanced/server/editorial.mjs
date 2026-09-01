@@ -59,6 +59,7 @@ function evt(o) {
     speed: o.speed ?? 100,
     reverse: o.reverse ?? false,
     transition: o.transition || null,
+    ...(o.itemMarkers !== undefined ? { itemMarkers: o.itemMarkers } : {}),
     fps: o.fps ?? null,
   };
 }
@@ -190,13 +191,14 @@ export function parseOTIO(otio, opts = {}) {
           }
         }
         const src = (child.media_reference && (child.media_reference.target_url || child.media_reference.name)) || child.name || 'UNKNOWN';
+        // CLIP markers belong to the ITEM, not the sequence — carried as
+        // itemMarkers (frames CLIP-relative) so the bridge authors them as
+        // Sm2TiItemLockableBlobs (E80). Track-level markers above remain
+        // timeline markers.
+        const itemMarkers = [];
         for (const mk of child.markers || []) {
           const mrStart = (mk.marked_range && mk.marked_range.start_time && mk.marked_range.start_time.value) || 0;
-          events.push(evt({
-            index: idx++, track: 'MARKER', source: '',
-            recIn: rec + (mrStart - startVal), recOut: null,
-            name: mk.name || undefined, color: mk.color || undefined, fps: rate,
-          }));
+          itemMarkers.push({ frame: mrStart - startVal, name: mk.name || undefined, color: mk.color || undefined });
         }
         events.push(
           evt({
@@ -210,6 +212,7 @@ export function parseOTIO(otio, opts = {}) {
             speed: Math.abs(speed),
             reverse,
             transition: pendingTransition,
+            itemMarkers: itemMarkers.length ? itemMarkers : undefined,
             fps: rate,
           }),
         );
@@ -252,7 +255,13 @@ export function parseXMEMLEvents(xml, opts = {}) {
         }
       }
       if (Number.isFinite(start) && Number.isFinite(end)) {
-        events.push(evt({ index: idx++, track, source: name, srcIn: inF, srcOut: outF, recIn: start, recOut: end, speed, reverse, fps: seqRate }));
+        // FCP7 clipitem <marker> children are CLIP markers (frames relative
+        // to the clip's own <in>) — routed to item markers like OTIO's (E81).
+        const mks = it.marker ? (Array.isArray(it.marker) ? it.marker : [it.marker]) : [];
+        const itemMarkers = mks
+          .filter((mk) => Number.isFinite(Number(mk.in)))
+          .map((mk) => ({ frame: Number(mk.in) - inF, name: mk.name != null ? String(mk.name) : undefined, note: mk.comment != null ? String(mk.comment) : undefined }));
+        events.push(evt({ index: idx++, track, source: name, srcIn: inF, srcOut: outF, recIn: start, recOut: end, speed, reverse, itemMarkers: itemMarkers.length ? itemMarkers : undefined, fps: seqRate }));
       }
     }
   };

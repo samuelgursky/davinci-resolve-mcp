@@ -10,6 +10,14 @@
  */
 import { drt } from './libs.mjs';
 
+const COLOR_MAP = {
+  blue: 'Blue', cyan: 'Cyan', green: 'Green', yellow: 'Yellow', red: 'Red',
+  pink: 'Pink', purple: 'Purple', magenta: 'Fuchsia', fuchsia: 'Fuchsia',
+  rose: 'Rose', lavender: 'Lavender', sky: 'Sky', mint: 'Mint',
+  lemon: 'Lemon', sand: 'Sand', cocoa: 'Cocoa', cream: 'Cream',
+  orange: 'Sand', white: 'Cream', black: 'Cocoa',
+};
+
 const pad = (n, w = 2) => String(Math.max(0, Math.floor(n))).padStart(w, '0');
 
 /** frames → CMX timecode at fps (non-drop). */
@@ -284,6 +292,21 @@ export function eventsToAssembleSpec(events, opts = {}) {
     if (durationFrames <= 0) continue;
     const vTrack = trackNum(e.track);
     const cut = { startFrame: recIn, durationFrames, srcIn: toTl(e.srcIn ?? 0, e.fps), ...(vTrack > 1 ? { track: vTrack } : {}) };
+    // CLIP markers from the turnover (OTIO clip markers, XMEML clipitem
+    // <marker>s) become ITEM markers on the cut (frames clip-relative,
+    // nominal→timeline converted; anything landing outside the cut is
+    // dropped rather than refused — a marker on trimmed-away material).
+    if (Array.isArray(e.itemMarkers) && e.itemMarkers.length) {
+      const ims = e.itemMarkers
+        .map((m) => ({
+          frame: Math.round(toTl(m.frame ?? 0, e.fps)),
+          color: COLOR_MAP[String(m.color || '').toLowerCase()] || 'Blue',
+          ...(m.name ? { name: m.name } : {}),
+          ...(m.note ? { note: m.note } : {}),
+        }))
+        .filter((m) => m.frame >= 0 && m.frame < durationFrames);
+      if (ims.length) cut.markers = ims;
+    }
     if ((e.speed ?? 100) !== 100 || e.reverse) {
       const spd = Math.abs(e.speed ?? 100);
       if (!(spd > 0)) {
@@ -532,13 +555,6 @@ export function eventsToAssembleSpec(events, opts = {}) {
   // Turnover markers (EDL * LOC: locators, OTIO Marker objects) → authored
   // timeline markers. Interchange colors map to the measured Resolve names;
   // unknown colors fall back to Blue. Frames are timeline-absolute like cuts.
-  const COLOR_MAP = {
-    blue: 'Blue', cyan: 'Cyan', green: 'Green', yellow: 'Yellow', red: 'Red',
-    pink: 'Pink', purple: 'Purple', magenta: 'Fuchsia', fuchsia: 'Fuchsia',
-    rose: 'Rose', lavender: 'Lavender', sky: 'Sky', mint: 'Mint',
-    lemon: 'Lemon', sand: 'Sand', cocoa: 'Cocoa', cream: 'Cream',
-    orange: 'Sand', white: 'Cream', black: 'Cocoa',
-  };
   const markers = markerEvents
     .map((e) => ({
       frame: ORIGIN + (toTl(e.recIn, e.fps) - minRec),

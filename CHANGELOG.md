@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.144.0 — turnover clip markers ride the items
+
+### Added
+
+- **OTIO clip markers and FCP7-XMEML clipitem `<marker>`s route to ITEM
+  markers** on their cuts through `assemble_from_interchange` (frames
+  clip-relative, colors mapped, notes preserved; markers on trimmed-away
+  material drop rather than refuse). Track-level markers still author as
+  timeline markers. Built on v2.143's `Sm2TiItemLockableBlob` authoring —
+  the only .drt carrier for clip markers, since Resolve's own exporter
+  drops them.
+
 ## What's New in v2.143.0 — item markers, and two refinements
 
 ### Added
