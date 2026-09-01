@@ -1253,3 +1253,24 @@ test('parseXMEMLEvents places equal-length -1/-1 clips at successive junction pa
   assert.deepEqual(black.map((e) => [e.recIn, e.recOut]), [[0, 12], [204, 216]]);
   assert.ok(!E107_XML.includes('pproTicksIn'), 'the fixture must stay a verbatim Resolve export (no ticks)');
 });
+
+// E108: XMEML audio. Only the VIDEO walk looked at transitionitems, so an
+// audio cross-fade vanished at parse (OTIO carried its Transition all
+// along), and every audio track walked as 'A', collapsing multi-track
+// audio onto one lane where OTIO/AAF number A, A2, A3 …
+test('parseXMEMLEvents attaches audio cross-fades and numbers audio tracks like OTIO (E108)', () => {
+  const clip = (id, name, s, e, i, o) => `<clipitem id="${id}"><name>${name}</name><start>${s}</start><end>${e}</end><in>${i}</in><out>${o}</out><file id="f_${name}"><name>${name}</name><pathurl>file:///m/${name}</pathurl></file></clipitem>`;
+  const xml = `<?xml version="1.0"?><xmeml version="5"><sequence><name>S</name><rate><timebase>24</timebase></rate><media>
+<video><format><samplecharacteristics><width>640</width><height>360</height><rate><timebase>24</timebase></rate></samplecharacteristics></format>
+<track>${clip('v1', 'a.mp4', 0, 48, 0, 48)}${clip('v2', 'b.mp4', 48, 96, 0, 48)}</track></video>
+<audio><track>${clip('a1', 'a.mp4', 0, 48, 0, 48)}<transitionitem><start>36</start><end>60</end><alignment>center</alignment><effect><name>Cross Fade (+3dB)</name><effectid>Cross Fade (+3dB)</effectid><mediatype>audio</mediatype></effect></transitionitem>${clip('a2', 'b.mp4', 48, 96, 0, 48)}</track>
+<track>${clip('a3', 'm.wav', 0, 96, 0, 96)}</track></audio></media></sequence></xmeml>`;
+  const ev = parseXMEMLEvents(xml);
+  const aud = ev.filter((e) => /^A/.test(e.track));
+  assert.deepEqual(aud.map((e) => [e.track, e.source, e.recIn, e.recOut]), [['A', 'a.mp4', 0, 48], ['A', 'b.mp4', 48, 96], ['A2', 'm.wav', 0, 96]]);
+  const xf = aud.find((e) => e.source === 'b.mp4');
+  assert.deepEqual(xf.transition, { type: 'Cross Fade (+3dB)', duration: 24, recStart: 36 });
+  // Null control: video untouched, and no transition leaks onto the wrong lane.
+  assert.ok(ev.filter((e) => e.track === 'V').every((e) => e.transition === null));
+  assert.equal(aud.find((e) => e.track === 'A2').transition, null);
+});

@@ -98,7 +98,8 @@ Each dispatches on an `action`. Highlights:
 - **`media`** — media front-end / AE: `ingest_verify` (hash seal/verify/dupes-by-hash), `media_inventory`
   (fps/codec/colorspace/TC + card gaps), `sync` (TC picture↔sound + drift/MOS), `relink_manifest`,
   `rename_plan` (refuses camera originals) / `reel_normalize`, `turnover_package`, `project_hygiene`.
-- **`editorial`** — editorial integrity: `parse_interchange` (EDL/OTIO/XMEML natively, AAF via pyaaf2,
+- **`editorial`** — editorial integrity: `parse_interchange` (EDL/OTIO/XMEML natively — XMEML audio
+  cross-fades and numbered audio lanes included — AAF via pyaaf2,
   **.prproj via gunzip+XML** — pass the file PATH for the binary ones), `list_sequences` (one picker entry
   point across xml/edl/otio/drt/drp/aaf/prproj), `convert_to_interchange` (author OTIO/EDL/DRT that Resolve
   imports, from events or a parsed source — **the .prproj→Resolve conform bridge**, no Premiere needed;

@@ -2,6 +2,37 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.166.0 — E108: XMEML audio cross-fades conform and render
+
+The XMEML walker only looked at `<transitionitem>`s on VIDEO tracks, so an
+audio cross-fade vanished at parse and never reached the bridge that
+authors them (OTIO carried its audio Transition all along). Every audio
+track also walked as `A`, collapsing multi-track audio onto one lane where
+OTIO and AAF number `A`, `A2`, `A3` …
+
+### Fixed
+
+- **XMEML audio-track transitionitems attach** to the incoming audio event
+  exactly as video's do (one shared attach pass), and the bridge authors the
+  cross-fade. Render-measured on 19.1.3.7 against a control timeline: a 24f
+  `Cross Fade (+3dB)` from a −21 dBFS tone to a −41 dBFS tone ramps
+  −27.1 → −30.6 → −34.2 → −40.2 → −47.1 dBFS across the window in 0.25 s
+  RMS steps where the control steps hard at the cut.
+- **XMEML audio tracks number like OTIO/AAF** (`A`, `A2`, …), so the
+  bridge places each lane on its own audio track instead of stacking
+  everything on A1.
+- **`media_pool.capture_media_template` saves the current project before
+  switching to its scratch project.** `CreateProject` replaces the current
+  project, and an unsaved one is simply gone afterwards — the restore cannot
+  `LoadProject` a name that existed only in memory (measured: a freshly
+  created project with two imported timelines vanished, and Resolve fell
+  back to a transient "Untitled Project"). A failed save refuses the capture.
+
+### Measured (filed in api-limitations)
+
+- `ProjectManager.CreateProject` while an UNSAVED project is current
+  discards that project without error.
+
 ## What's New in v2.165.0 — E107: frame QC reads Resolve's own XML and samples clear of transitions
 
 The lineage store's `ingest_xml` was measured against a verbatim

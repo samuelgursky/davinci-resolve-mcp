@@ -370,6 +370,55 @@ export function parseXMEMLEvents(xml, opts = {}) {
       }
     }
   };
+  // Attach a track's <transitionitem> siblings to its walked events. Shared
+  // by VIDEO and AUDIO tracks (E108): audio cross-fades used to be dropped at
+  // parse because only the video walk looked at transitionitems, so an XMEML
+  // audio cross-fade never reached the bridge that authors them.
+  const attachTransitions = (t, label, before) => {
+  // <transitionitem> siblings: attach each to the INCOMING clip event —
+    // the one whose record-in falls inside the transition's span. Resolve's
+    // OWN XMEML importer writes these as elements that render INERT on
+    // 19.1.3 (measured E66: dip AND plain cross dissolve both played the
+    // outgoing clip through the window, hard cut at the end), so routing
+    // the turnover through assemble_from_interchange authors transitions
+    // that actually render where the host importer's do not.
+    const titems = t.transitionitem ? (Array.isArray(t.transitionitem) ? t.transitionitem : [t.transitionitem]) : [];
+    for (const tr of titems) {
+      const s = Number(tr.start), e2 = Number(tr.end);
+      if (!Number.isFinite(s) || !Number.isFinite(e2)) continue;
+      const effectId = (tr.effect && (tr.effect.effectid || tr.effect.name)) || 'Cross Dissolve';
+      const isBLev = (ev) => /^(BL|BLACK)$/i.test(String(ev.source || '').trim());
+      const inSpan = (ev) => ev.track === label && ev.recIn > s - 1 && ev.recIn <= e2;
+      // Prefer the PICTURE as the incoming: a Solid Color generatoritem in
+      // the same span is the fade's black side, not the clip fading in.
+      const incoming = events.slice(before).find((ev) => inSpan(ev) && !isBLev(ev)) || events.slice(before).find(inSpan);
+      // recStart carries the transitionitem's EXPLICIT record span start
+      // (sequence-relative) so the bridge reproduces the editor's actual
+      // alignment instead of assuming centered.
+      if (incoming) {
+        incoming.transition = { type: String(effectId), duration: e2 - s, recStart: s };
+        // No clip ENDS inside the span → nothing precedes: a fade-IN from
+        // black. Synthesize the zero-length BL leg (E91/E92) so the bridge
+        // authors a real black-to-picture dissolve instead of dropping it.
+        const outgoing = events.slice(before).find((ev) => ev.track === label && ev !== incoming && ev.recOut > s - 1 && ev.recOut <= e2);
+        if (!outgoing) {
+          events.push(evt({ index: idx++, track: label, source: 'BL', recIn: incoming.recIn, recOut: incoming.recIn, fps: seqRate }));
+        }
+      } else {
+        // No clip STARTS inside the span: a fade-OUT into black past the
+        // last clip. Attach the transition to a synthetic BL leg at the
+        // outgoing clip's end (the bridge grows it forward).
+        const outgoing = events.slice(before).find((ev) => ev.track === label && ev.recOut > s - 1 && ev.recOut <= e2);
+        if (outgoing) {
+          events.push(evt({
+            index: idx++, track: label, source: 'BL',
+            recIn: outgoing.recOut, recOut: outgoing.recOut,
+            transition: { type: String(effectId), duration: e2 - s, recStart: s }, fps: seqRate,
+          }));
+        }
+      }
+    }
+  };
   const seq = doc.xmeml && doc.xmeml.sequence;
   const media = seq && seq.media;
   if (media) {
@@ -396,52 +445,20 @@ export function parseXMEMLEvents(xml, opts = {}) {
       clipCursor = 0;
       if (t.clipitem) walk(t.clipitem, label);
       currentJunctions = [];
-      // <transitionitem> siblings: attach each to the INCOMING clip event —
-      // the one whose record-in falls inside the transition's span. Resolve's
-      // OWN XMEML importer writes these as elements that render INERT on
-      // 19.1.3 (measured E66: dip AND plain cross dissolve both played the
-      // outgoing clip through the window, hard cut at the end), so routing
-      // the turnover through assemble_from_interchange authors transitions
-      // that actually render where the host importer's do not.
-      const titems = t.transitionitem ? (Array.isArray(t.transitionitem) ? t.transitionitem : [t.transitionitem]) : [];
-      for (const tr of titems) {
-        const s = Number(tr.start), e2 = Number(tr.end);
-        if (!Number.isFinite(s) || !Number.isFinite(e2)) continue;
-        const effectId = (tr.effect && (tr.effect.effectid || tr.effect.name)) || 'Cross Dissolve';
-        const isBLev = (ev) => /^(BL|BLACK)$/i.test(String(ev.source || '').trim());
-        const inSpan = (ev) => ev.track === label && ev.recIn > s - 1 && ev.recIn <= e2;
-        // Prefer the PICTURE as the incoming: a Solid Color generatoritem in
-        // the same span is the fade's black side, not the clip fading in.
-        const incoming = events.slice(before).find((ev) => inSpan(ev) && !isBLev(ev)) || events.slice(before).find(inSpan);
-        // recStart carries the transitionitem's EXPLICIT record span start
-        // (sequence-relative) so the bridge reproduces the editor's actual
-        // alignment instead of assuming centered.
-        if (incoming) {
-          incoming.transition = { type: String(effectId), duration: e2 - s, recStart: s };
-          // No clip ENDS inside the span → nothing precedes: a fade-IN from
-          // black. Synthesize the zero-length BL leg (E91/E92) so the bridge
-          // authors a real black-to-picture dissolve instead of dropping it.
-          const outgoing = events.slice(before).find((ev) => ev.track === label && ev !== incoming && ev.recOut > s - 1 && ev.recOut <= e2);
-          if (!outgoing) {
-            events.push(evt({ index: idx++, track: label, source: 'BL', recIn: incoming.recIn, recOut: incoming.recIn, fps: seqRate }));
-          }
-        } else {
-          // No clip STARTS inside the span: a fade-OUT into black past the
-          // last clip. Attach the transition to a synthetic BL leg at the
-          // outgoing clip's end (the bridge grows it forward).
-          const outgoing = events.slice(before).find((ev) => ev.track === label && ev.recOut > s - 1 && ev.recOut <= e2);
-          if (outgoing) {
-            events.push(evt({
-              index: idx++, track: label, source: 'BL',
-              recIn: outgoing.recOut, recOut: outgoing.recOut,
-              transition: { type: String(effectId), duration: e2 - s, recStart: s }, fps: seqRate,
-            }));
-          }
-        }
-      }
+      attachTransitions(t, label, before);
     });
+    // Audio tracks number like OTIO/AAF (A, A2, A3 …) so multi-track audio
+    // keeps its lanes instead of collapsing onto A1 (E108), and their
+    // transitionitems attach the same way video's do.
     const atracks = media.audio && media.audio.track ? (Array.isArray(media.audio.track) ? media.audio.track : [media.audio.track]) : [];
-    for (const t of atracks) if (t.clipitem) walk(t.clipitem, 'A');
+    atracks.forEach((t, ai) => {
+      const label = ai === 0 ? 'A' : `A${ai + 1}`;
+      const before = events.length;
+      clipCursor = 0;
+      if (t.clipitem) walk(t.clipitem, label);
+      currentJunctions = [];
+      attachTransitions(t, label, before);
+    });
   }
   return events;
 }

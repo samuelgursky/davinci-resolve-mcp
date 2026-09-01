@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 37 missing capabilities, 50 bugs / unreliable behaviors.
+**Totals:** 38 missing capabilities, 50 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -308,6 +308,14 @@ equivalent, blocking full automation.
 - **Behavior:** Resolve's CMX EDL writer (measured on Studio 19.1.3.7, E105) emits VIDEO events only — audio legs never appear; names every file source by the generic reel AX and carries the real names in `* FROM CLIP NAME:` / `* TO CLIP NAME:` comments; writes black legs as reel BL; places dissolve junctions at the CMX start-at-cut position (the overlap start, not the centered junction the timeline holds); and WRITES BL fades that its own EDL importer then drops. The FCP7 XML writer, by contrast, carries audio, writes transition-adjacent clip edges as -1 (the junction), and emits `speed` followed by `variablespeed` 0 in the same timeremap effect.
 - **Workaround / current handling:** For round-trip QC prefer EXPORT_OTIO (carries audio, retimes as LinearTimeWarp/FreezeFrame, exact spans). When an EDL is the required deliverable, expect no audio (editorial.verify_roundtrip reports audioNotInExport) and resolve AX reels through the clip-name comments (parseEDL does). Use EXPORT_EDL — there is no EXPORT_CMX_3600 constant, and an unknown name reaches Export as a string that returns a bare False (timeline.export_timeline_checked now refuses it loudly).
 - **Tags:** timeline, export, edl, audio, silent-failure
+
+### ProjectManager.CreateProject (discards an unsaved current project)
+
+- **Object:** `ProjectManager`
+- **Signature:** `(projectName) -> Project`
+- **Behavior:** CreateProject replaces the CURRENT project with the new one. If the current project was never saved it is simply gone — no dialog headless, no error, and a later LoadProject of its name fails because the name existed only in memory (measured on Studio 19.1.3.7, E108: a project created via CreateProject with two imported timelines vanished when a media-template capture created its scratch project; the restore landed on a transient "Untitled Project" that is not in the project list either).
+- **Workaround / current handling:** SaveProject() before any CreateProject/LoadProject switch when the current project may be unsaved; the MCP's capture_media_template now does and refuses on a failed save.
+- **Tags:** project, lifecycle, silent-failure, headless
 
 ### Timeline.Export EXPORT_FCP_7_XML (no pproTicksIn, -1 edges under transitions)
 

@@ -2795,6 +2795,28 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["editorial.verify_roundtrip audioNotInExport", "timeline.export_timeline_checked"],
     },
     {
+        "symbol": "ProjectManager.CreateProject (discards an unsaved current project)",
+        "object": "ProjectManager",
+        "signature": "(projectName) -> Project",
+        "reality": "CreateProject replaces the CURRENT project with the new "
+                   "one. If the current project was never saved it is simply "
+                   "gone — no dialog headless, no error, and a later "
+                   "LoadProject of its name fails because the name existed "
+                   "only in memory (measured on Studio 19.1.3.7, E108: a "
+                   "project created via CreateProject with two imported "
+                   "timelines vanished when a media-template capture created "
+                   "its scratch project; the restore landed on a transient "
+                   "\"Untitled Project\" that is not in the project list "
+                   "either).",
+        "recommended": "SaveProject() before any CreateProject/LoadProject "
+                       "switch when the current project may be unsaved; the "
+                       "MCP's capture_media_template now does and refuses on a "
+                       "failed save.",
+        "tags": ["project", "lifecycle", "silent-failure", "headless"],
+        "submit": "missing",
+        "mitigation": ["media_pool.capture_media_template saves first", "project_manager.save"],
+    },
+    {
         "symbol": "Timeline.Export EXPORT_FCP_7_XML (no pproTicksIn, -1 edges under transitions)",
         "object": "Timeline",
         "signature": "(filePath, EXPORT_FCP_7_XML, EXPORT_NONE) -> bool",

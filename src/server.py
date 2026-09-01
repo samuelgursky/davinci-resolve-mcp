@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.165.0"
+VERSION = "2.166.0"
 
 import base64
 import os
@@ -13885,8 +13885,10 @@ def _capture_media_template(r, pm, p: Dict[str, Any]) -> Dict[str, Any]:
     <Element> + the timeline clips' <MediaRef> id. drt.assemble then
     TRANSPLANTS the cached element, which renders identically to native.
 
-    Switches the current project to a scratch project during capture and
-    switches back; requires the media file to exist locally.
+    Saves the current project, switches to a scratch project during capture
+    and switches back (an unsaved current project would otherwise be LOST —
+    CreateProject replaces it and the restore cannot load an unsaved name);
+    requires the media file to exist locally.
     """
     import hashlib
     import zipfile as _zipfile
@@ -13913,6 +13915,21 @@ def _capture_media_template(r, pm, p: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         previous = None
 
+    # CreateProject(scratch) replaces the CURRENT project, and a current
+    # project that was never saved is simply gone afterwards — the restore
+    # below cannot LoadProject a name that exists only in memory (measured
+    # 2026-09-01, E108: a freshly created project with two imported timelines
+    # vanished; Resolve fell back to a transient "Untitled Project"). Save it
+    # first so the switch-back lands on the caller's own project.
+    if previous:
+        try:
+            if not pm.SaveProject():
+                return _err(
+                    f"could not save the current project {previous!r} before the capture switches "
+                    "away from it — an unsaved project would be lost; save it (project_manager.save) and retry"
+                )
+        except Exception as exc:  # pragma: no cover - API surprise
+            return _err(f"SaveProject before capture raised: {exc}")
     scratch = f"_mcp_media_tpl_{int(time.time())}"
     proj = pm.CreateProject(scratch)
     if not proj:
@@ -19829,7 +19846,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       capture_media_template(media_path) -> {cache_path, media_ref}
         Captures the file's NATIVE Resolve media descriptors into
         ~/.config/davinci-resolve-mcp/media-templates/ via a disposable
-        project (switches projects during capture and switches back).
+        project (saves the current project, switches to a scratch project during capture and switches back — an unsaved current project would otherwise be lost).
         Offline drt.assemble then transplants them — the only measured way
         authored media actually RENDERS; synthesized descriptors import and
         read back fine but render black or 'Full resolution media not found'.
