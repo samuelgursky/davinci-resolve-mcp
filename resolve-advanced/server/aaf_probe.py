@@ -1089,6 +1089,7 @@ def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
         nested = _nested_named_composition(segment)
         if nested is not None and depth < _MAX_DEPTH:
             comp_mob, inner_segment = nested
+            state.setdefault("nestedRefs", set()).add(_usable_name(comp_mob))
             length = _length(segment)
             try:
                 start = int(getattr(segment, "start", 0) or 0)
@@ -1578,9 +1579,24 @@ def probe(path):
                     # A conform that silently loses 29 titles looks exactly like a
                     # conform that had none. Counted by operation name so it cannot.
                     "effectsWithoutEvents": dict(sorted(state.get("effectsWithoutEvents", {}).items())),
+                    # Compositions this sequence uses as clips (E126): the picker
+                    # should not offer a NESTED sequence as a turnover of its own.
+                    "nests": sorted(state.get("nestedRefs", set())),
+                    "nestedIn": [],
                     "events": events,
                 }
             )
+    # A composition used as a clip by another composition is NESTED in it — flag the
+    # child so a "which sequence?" picker can demote it (it still lists; its cuts also
+    # arrive flattened inside the parent, E125).
+    by_name = {}
+    for seq in sequences:
+        by_name.setdefault(seq["name"], []).append(seq)
+    for parent in sequences:
+        for child_name in parent.get("nests", []):
+            for child in by_name.get(child_name, []):
+                if child is not parent and parent["name"] not in child["nestedIn"]:
+                    child["nestedIn"].append(parent["name"])
     return sequences
 
 

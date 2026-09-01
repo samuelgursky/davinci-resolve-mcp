@@ -46,6 +46,15 @@ def _author(path, nested_start=0, nested_length=48):
         ts.segment.components.append(nested.create_source_clip(1, start=nested_start, length=nested_length))
 
 
+def _sequences(**kw):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "e125.aaf")
+        _author(path, **kw)
+        out = subprocess.run([sys.executable, PROBE, path], capture_output=True, text=True, check=True)
+    data = json.loads(out.stdout)
+    return data.get("sequences") if isinstance(data, dict) else data
+
+
 def _walk(**kw):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "e125.aaf")
@@ -73,6 +82,12 @@ class AafNestedCompositionTest(unittest.TestCase):
             ("SRCB", 22, 34, 48, 60, "NESTED_SEQ"),
             ("SRCC", 20, 32, 60, 72, "NESTED_SEQ"),
         ])
+
+    def test_the_nested_composition_is_flagged_for_the_picker(self):
+        seqs = {s["name"]: s for s in _sequences()}
+        self.assertEqual(seqs["NESTED_SEQ"]["nestedIn"], ["E125_TOP"])
+        self.assertEqual(seqs["E125_TOP"]["nestedIn"], [])
+        self.assertEqual(seqs["E125_TOP"]["nests"], ["NESTED_SEQ"])
 
 
 if __name__ == "__main__":

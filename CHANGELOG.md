@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.180.0 — E126: the sequence picker knows a nested composition from a turnover
+
+### Added
+
+- **`list_sequences` flags nested AAF compositions.** An Avid nested sequence
+  (a composition another composition uses as a clip) listed as a peer of the
+  timeline that uses it, so a "which sequence?" picker offered the inner
+  composition as a turnover of its own. Each AAF sequence now reports
+  `nests` (the compositions it flattens) and `nestedIn` (the sequences that
+  use it); nested compositions still list — their cuts also arrive flattened
+  inside the parent (E125) — but a picker can demote them.
+
 ## What's New in v2.179.0 — E125: an Avid nested sequence used as a clip flattens into the parent
 
 ### Fixed

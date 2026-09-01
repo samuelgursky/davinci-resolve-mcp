@@ -103,6 +103,9 @@ function sequenceSummary(s) {
     startFrame: s.startFrame ?? null,
     startTimecodeFps: s.startTimecodeFps ?? null,
     startTimecodeDrop: s.startTimecodeDrop ?? null,
+    // E126: a composition another composition uses as a clip is NESTED — a
+    // picker should not offer it as a turnover of its own.
+    nestedIn: Array.isArray(s.nestedIn) ? s.nestedIn : [],
   };
   if (s.unhandled && Object.keys(s.unhandled).length) out.unhandled = s.unhandled;
   return out;
