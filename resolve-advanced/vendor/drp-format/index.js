@@ -117,6 +117,8 @@ module.exports = {
 
   // Place a built-in generator (Solid Color, etc.) on a chosen video track.
   placeGenerator: require('./place-generator').placeGenerator,
+  solidColorEffectBlob: require('./place-generator').solidColorEffectBlob,
+  decodeSolidColorEffectBlob: require('./place-generator').decodeSolidColorEffectBlob,
 
   // Insert a cross-dissolve between two abutting clips (the one op the Resolve API can't do).
   placeTransition: require('./place-transition').placeTransition,

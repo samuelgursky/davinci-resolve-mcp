@@ -324,6 +324,9 @@ export function eventsToAssembleSpec(events, opts = {}) {
       // only authorable shape.
       if (durationFrames < 0) continue;
       const el = { type: 'generator', generatorName: 'Solid Color', track: vTrackEarly, startFrame: recIn, durationFrames, srcIn: 0 };
+      // A coloured leg (XMEML fillcolor — fade-to-white, a colour matte) keeps
+      // its colour: the generator's EffectFiltersBA is authored from it (E110).
+      if (e.color && typeof e.color === 'object') el.color = { r: e.color.r, g: e.color.g, b: e.color.b, ...(e.color.a != null ? { a: e.color.a } : {}) };
       blackLegs.push(el);
       if (e.transition) {
         let d = Math.max(2, toTl(e.transition.duration || 0, e.fps) || 2);

@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 38 missing capabilities, 50 bugs / unreliable behaviors.
+**Totals:** 39 missing capabilities, 50 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -308,6 +308,14 @@ equivalent, blocking full automation.
 - **Behavior:** Resolve's CMX EDL writer (measured on Studio 19.1.3.7, E105) emits VIDEO events only — audio legs never appear; names every file source by the generic reel AX and carries the real names in `* FROM CLIP NAME:` / `* TO CLIP NAME:` comments; writes black legs as reel BL; places dissolve junctions at the CMX start-at-cut position (the overlap start, not the centered junction the timeline holds); and WRITES BL fades that its own EDL importer then drops. The FCP7 XML writer, by contrast, carries audio, writes transition-adjacent clip edges as -1 (the junction), and emits `speed` followed by `variablespeed` 0 in the same timeremap effect.
 - **Workaround / current handling:** For round-trip QC prefer EXPORT_OTIO (carries audio, retimes as LinearTimeWarp/FreezeFrame, exact spans). When an EDL is the required deliverable, expect no audio (editorial.verify_roundtrip reports audioNotInExport) and resolve AX reels through the clip-name comments (parseEDL does). Use EXPORT_EDL — there is no EXPORT_CMX_3600 constant, and an unknown name reaches Export as a string that returns a bare False (timeline.export_timeline_checked now refuses it loudly).
 - **Tags:** timeline, export, edl, audio, silent-failure
+
+### ImportTimelineFromFile FCP7 XML generatoritem fillcolor (honoured; EXPORT_DRT blob layout)
+
+- **Object:** `MediaPool`
+- **Signature:** `(filePath.xml) -> Timeline`
+- **Behavior:** Resolve's FCP7 XML importer HONOURS a generatoritem's `fillcolor` parameter (measured on Studio 19.1.3.7, E110): a Premiere-shaped Color Matte (effectid Color, category Matte) and a Solid Color generatoritem, both with <red>/<green>/<blue>/<alpha> 0..255 values, imported as Solid Color items and rendered Y81 U90 V240 (red) and Y41 U240 V110 (blue) — exact BT.601 limited-range values for a 640x360 timeline. EXPORT_FCP_7_XML writes the fillcolor back (same 0..255 channels). EXPORT_DRT carries the colour as a 55-byte <EffectFiltersBA> on the Sm2TiGenerator: 8-byte header (version 2, length 47), a fixed 20-byte prefix, a flag byte, then big-endian uint16 A R G B (0xffff = full) plus a pad word, then a second, black colour record; only the ARGB words differed between the red and blue captures. The default generator has an EMPTY EffectFiltersBA.
+- **Workaround / current handling:** Author fade-to-white / colour mattes by placing a Solid Color generator with that blob (drp-format placeGenerator `color`, drt.assemble elements[].color) — or carry an XMEML generatoritem fillcolor through editorial.parse_interchange; the bridge authors the coloured leg.
+- **Tags:** xml, import, generator, colour, export, drt
 
 ### ProjectManager.CreateProject (discards an unsaved current project)
 

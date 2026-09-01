@@ -289,6 +289,24 @@ export function parseOTIO(otio, opts = {}) {
 }
 
 // ── XMEML (FCP7 XML) — light clipitem parse ────────────────────────────
+/**
+ * A generatoritem's `fillcolor` parameter → {r,g,b,a} in 0..1, or null when
+ * absent/black (the default Solid Color). FCP7 XML writes 0..255 channels
+ * (Premiere Color Matte and Resolve's own export alike).
+ */
+function xmemlFillColor(g) {
+  const params = g && g.effect && g.effect.parameter ? (Array.isArray(g.effect.parameter) ? g.effect.parameter : [g.effect.parameter]) : [];
+  for (const pm of params) {
+    const pid = String(pm.parameterid || pm.name || '').trim().toLowerCase();
+    if (pid !== 'fillcolor' || !pm.value || typeof pm.value !== 'object') continue;
+    const ch = (k) => { const v = Number(pm.value[k]); return Number.isFinite(v) ? Math.max(0, Math.min(255, v)) / 255 : 0; };
+    const c = { r: ch('red'), g: ch('green'), b: ch('blue'), a: pm.value.alpha != null ? ch('alpha') : 1 };
+    if (c.r === 0 && c.g === 0 && c.b === 0) return null; // black = the default leg
+    return c;
+  }
+  return null;
+}
+
 export function parseXMEMLEvents(xml, opts = {}) {
   const { XMLParser } = require('fast-xml-parser');
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
@@ -366,7 +384,7 @@ export function parseXMEMLEvents(xml, opts = {}) {
         const itemMarkers = mks
           .filter((mk) => Number.isFinite(Number(mk.in)))
           .map((mk) => ({ frame: Number(mk.in) - inF, name: mk.name != null ? String(mk.name) : undefined, note: mk.comment != null ? String(mk.comment) : undefined }));
-        events.push(evt({ index: idx++, track, source: name, srcIn: Number.isFinite(inF) ? inF + inAdj : inF, srcOut: Number.isFinite(outF) ? outF + inAdj : outF, recIn: start, recOut: end, speed, reverse, itemMarkers: itemMarkers.length ? itemMarkers : undefined, fps: seqRate }));
+        events.push(evt({ index: idx++, track, source: name, srcIn: Number.isFinite(inF) ? inF + inAdj : inF, srcOut: Number.isFinite(outF) ? outF + inAdj : outF, recIn: start, recOut: end, speed, reverse, itemMarkers: itemMarkers.length ? itemMarkers : undefined, color: it.__genColor || undefined, fps: seqRate }));
       }
     }
   };
@@ -435,12 +453,17 @@ export function parseXMEMLEvents(xml, opts = {}) {
         const frame = al === 'start-black' || al === 'start' ? s0 : al === 'end-black' || al === 'end' ? e0 : Math.round((s0 + e0) / 2);
         return { frame, start: s0, end: e0 };
       }).filter(Boolean);
-      // Solid Color generatoritems are BLACK legs (what Resolve writes for a
-      // fade's black side); they walk as BL events so fades round-trip.
+      // Solid Color / Color Matte generatoritems are GENERATOR legs: black by
+      // default (what Resolve writes for a fade's black side), or the
+      // `fillcolor` the item declares — Resolve's importer honours it and
+      // its writer emits it back (E110, render-measured). They walk as BL
+      // events carrying `color` so fades AND fade-to-colour round-trip.
       const gens = t.generatoritem ? (Array.isArray(t.generatoritem) ? t.generatoritem : [t.generatoritem]) : [];
       for (const g of gens) {
-        if (!/solid color|black/i.test(String(g.name || ''))) continue;
-        walk([{ ...g, name: 'BL', filter: undefined, marker: undefined }], label, false);
+        const gname = String(g.name || '');
+        const eid = String((g.effect && (g.effect.effectid || g.effect.name)) || '');
+        if (!(/solid color|black|colou?r matte/i.test(gname) || /^(solid color|color)$/i.test(eid))) continue;
+        walk([{ ...g, name: 'BL', filter: undefined, marker: undefined, __genColor: xmemlFillColor(g) }], label, false);
       }
       clipCursor = 0;
       if (t.clipitem) walk(t.clipitem, label);

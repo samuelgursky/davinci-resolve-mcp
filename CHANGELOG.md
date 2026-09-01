@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.168.0 — E110: Solid Color has a colour — fade-to-white and colour mattes author
+
+The one thing the black-leg machinery could not do was be anything but
+black: the Solid Color generator's colour lives in an `EffectFiltersBA` blob
+nobody had ground truth for, and Resolve 19 exposes the colour only in its
+UI. Resolve's own FCP7 XML importer turned out to be the capture route.
+
+### Added
+
+- **`drt.assemble` generator elements take `color`** (`{r,g,b[,a]}` as 0..1
+  floats or 0..255 ints): `placeGenerator` authors the 55-byte
+  `EffectFiltersBA` byte-for-byte as Resolve's writer emits it (header, fixed
+  prefix, flag, big-endian uint16 ARGB, pad, a second black record).
+  `solidColorEffectBlob` / `decodeSolidColorEffectBlob` are exported.
+- **XMEML generatoritem `fillcolor` carries through** `parse_interchange`
+  (Premiere Color Matte and Resolve's own export alike) as `color` on the BL
+  leg, and the bridge authors the coloured generator — so a turnover's
+  fade-to-white or colour matte conforms instead of turning black.
+
+### Measured (filed in api-limitations)
+
+- Resolve's FCP7 importer honours `fillcolor`: red and blue generators
+  rendered Y81 U90 V240 and Y41 U240 V110 (BT.601 limited-range exact) and
+  `EXPORT_FCP_7_XML` writes the colour back. Render-verified end to end from
+  an offline-authored `.drt`: a clip → white fade climbs 124 → 154 → 182 →
+  209 → 232 → 234 across its 24-frame window, the white plateau reads
+  234/128/128, and a custom (128, 64, 191) matte lands at Y100 U174 V147
+  against a BT.601 expectation of 99.8 / 174.3 / 147.0.
+
 ## What's New in v2.167.0 — E109: flat AAF sound slots keep their lanes; AAF audio cross-fades render
 
 An Avid turnover carries dialog, music and effects as SEPARATE flat sound

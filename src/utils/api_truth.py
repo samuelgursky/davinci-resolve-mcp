@@ -2795,6 +2795,36 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["editorial.verify_roundtrip audioNotInExport", "timeline.export_timeline_checked"],
     },
     {
+        "symbol": "ImportTimelineFromFile FCP7 XML generatoritem fillcolor (honoured; EXPORT_DRT blob layout)",
+        "object": "MediaPool",
+        "signature": "(filePath.xml) -> Timeline",
+        "reality": "Resolve's FCP7 XML importer HONOURS a generatoritem's "
+                   "`fillcolor` parameter (measured on Studio 19.1.3.7, E110): "
+                   "a Premiere-shaped Color Matte (effectid Color, category "
+                   "Matte) and a Solid Color generatoritem, both with "
+                   "<red>/<green>/<blue>/<alpha> 0..255 values, imported as "
+                   "Solid Color items and rendered Y81 U90 V240 (red) and "
+                   "Y41 U240 V110 (blue) — exact BT.601 limited-range values "
+                   "for a 640x360 timeline. EXPORT_FCP_7_XML writes the "
+                   "fillcolor back (same 0..255 channels). EXPORT_DRT carries "
+                   "the colour as a 55-byte <EffectFiltersBA> on the "
+                   "Sm2TiGenerator: 8-byte header (version 2, length 47), a "
+                   "fixed 20-byte prefix, a flag byte, then big-endian uint16 "
+                   "A R G B (0xffff = full) plus a pad word, then a second, "
+                   "black colour record; only the ARGB words differed between "
+                   "the red and blue captures. The default generator has an "
+                   "EMPTY EffectFiltersBA.",
+        "recommended": "Author fade-to-white / colour mattes by placing a "
+                       "Solid Color generator with that blob "
+                       "(drp-format placeGenerator `color`, drt.assemble "
+                       "elements[].color) — or carry an XMEML generatoritem "
+                       "fillcolor through editorial.parse_interchange; the "
+                       "bridge authors the coloured leg.",
+        "tags": ["xml", "import", "generator", "colour", "export", "drt"],
+        "submit": "missing",
+        "mitigation": ["drp-format placeGenerator color", "editorial.parse_interchange fillcolor", "drt.assemble_from_interchange"],
+    },
+    {
         "symbol": "ProjectManager.CreateProject (discards an unsaved current project)",
         "object": "ProjectManager",
         "signature": "(projectName) -> Project",

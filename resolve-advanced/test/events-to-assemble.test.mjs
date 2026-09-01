@@ -1294,3 +1294,24 @@ test('audio channel legs merge across lanes; distinct beds keep their lanes (E10
   // Null control: the same two beds both labelled A (the pre-E109 collapse) still refuse loudly.
   assert.throws(() => eventsToAssembleSpec([V, { index: 2, track: 'A', source: '/m/cut.mp4', ...base }, { index: 3, track: 'A', source: '/m/wht.mp4', ...base }], { sourceMap: sm }), /overlap on audio track 1/);
 });
+
+// E110: generator COLOUR. Resolve's FCP7 importer honours a generatoritem
+// fillcolor and its writer emits it back (fixture = verbatim EXPORT_FCP_7_XML
+// of red + blue generators, rendered Y81 U90 V240 / Y41 U240 V110); the walker
+// carries it on the BL leg and the bridge authors the coloured Solid Color.
+test('parseXMEMLEvents carries generatoritem fillcolor on BL legs and the bridge authors it (E110)', () => {
+  const xml = fs.readFileSync(new URL('./fixtures/E110_resolve_color_generators.xml', import.meta.url), 'utf8');
+  const ev = parseXMEMLEvents(xml);
+  const legs = ev.filter((e) => e.track === 'V' && e.source === 'BL');
+  assert.deepEqual(legs.map((e) => [e.recIn, e.recOut, e.color]), [[0, 48, { r: 1, g: 0, b: 0, a: 1 }], [48, 96, { r: 0, g: 0, b: 1, a: 1 }]]);
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const { spec } = eventsToAssembleSpec(ev, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 } } });
+  const gens = spec.elements.filter((el) => el.type === 'generator');
+  assert.deepEqual(gens.map((g) => [g.startFrame - 86400, g.durationFrames, g.color]), [[0, 48, { r: 1, g: 0, b: 0, a: 1 }], [48, 48, { r: 0, g: 0, b: 1, a: 1 }]]);
+  // Null control: a default (black) Solid Color leg carries no colour and authors none.
+  const black = xml.replace(/<red>255<\/red>/, '<red>0</red>').replace(/<blue>255<\/blue>/, '<blue>0</blue>');
+  const ev0 = parseXMEMLEvents(black);
+  assert.ok(ev0.filter((e) => e.source === 'BL').every((e) => e.color === undefined));
+  const { spec: spec0 } = eventsToAssembleSpec(ev0, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 } } });
+  assert.ok(spec0.elements.filter((el) => el.type === 'generator').every((g) => g.color === undefined));
+});
