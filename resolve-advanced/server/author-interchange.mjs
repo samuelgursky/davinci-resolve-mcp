@@ -838,16 +838,21 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
   // before the D event — a pairing placeholder, never a rendered clip, and
   // no export reproduces it.
   const vids = (evts) => evts.filter((e) => /^V\d*$/.test(String(e.track)) && e.recIn != null && e.recOut != null && e.recOut > e.recIn);
-  const norm = (evts) => {
+  const audsOf = (evts) => evts.filter((e) => /^A\d*$/.test(String(e.track)) && e.recIn != null && e.recOut != null && e.recOut > e.recIn);
+  const anchorOfSide = (evts) => {
     const v = vids(evts);
+    if (v.length) return Math.min(...v.map((e) => e.recIn));
+    const au = audsOf(evts);
+    return au.length ? Math.min(...au.map((e) => e.recIn)) : 0;
+  };
+  const norm = (evts, pick = vids) => {
+    const v = pick(evts);
     if (!v.length) return [];
-    const off = Math.min(...v.map((e) => e.recIn));
+    const off = anchorOfSide(evts);
     return v
       .map((e) => ({ track: canonTrack(e.track), source: mapSource(canonSource(e.source)), recIn: e.recIn - off, recOut: e.recOut - off, srcIn: e.srcIn ?? 0, speed: e.speed ?? 100, reverse: Boolean(e.reverse) }))
       .sort((a, b) => a.track.localeCompare(b.track) || a.recIn - b.recIn);
   };
-  const a0 = norm(inputEvents);
-  const b0 = norm(exportedEvents);
   // FADES (E94): BL legs on the input side and the Solid Color generators a
   // fade conform authors for them are the same thing — BLACK. Black segments
   // are synthesized filler whose extents follow from the picture boundaries,
@@ -857,60 +862,91 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
   // start-at-cut reshaping), so an edge within an input junction's fade
   // window is excused — and reported, not silently absorbed.
   const isBlackSeg = (e) => /^(bl|black|solid color)$/.test(e.source);
+  const inAnchor = anchorOfSide(inputEvents);
+  const junctionsFor = (trackRe) => inputEvents
+    .filter((e) => trackRe.test(String(e.track)) && e.recIn != null && e.transition && e.transition.duration > 0)
+    .map((e) => ({ frame: e.recIn - inAnchor, d: e.transition.duration }));
+  const fadeReshapedBoundaries = [];
+  const mismatches = [];
+  const srcOffsets = {};
+  const comparePairs = (a, b, junctions, trackType) => {
+    const tt = trackType === 'audio' ? { trackType: 'audio' } : {};
+    const inFadeWindow = (edgeIn, edgeExp) => junctions.some(
+      (j) => Math.abs(edgeIn - j.frame) <= j.d && Math.abs(edgeExp - edgeIn) <= j.d,
+    );
+    if (a.length !== b.length) mismatches.push({ kind: 'count', ...tt, input: a.length, exported: b.length });
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i += 1) {
+      const x = a[i], y = b[i];
+      if (x.track !== y.track) { mismatches.push({ kind: 'track', ...tt, at: i, input: x.track, exported: y.track }); continue; }
+      if (x.source !== y.source) { mismatches.push({ kind: 'source', ...tt, at: i, input: x.source, exported: y.source }); continue; }
+      const inBad = Math.abs(x.recIn - y.recIn) > recTol;
+      const outBad = Math.abs(x.recOut - y.recOut) > recTol;
+      if (inBad || outBad) {
+        const inExcused = !inBad || inFadeWindow(x.recIn, y.recIn);
+        const outExcused = !outBad || inFadeWindow(x.recOut, y.recOut);
+        if (inExcused && outExcused) {
+          fadeReshapedBoundaries.push({ at: i, ...tt, source: x.source, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
+        } else {
+          mismatches.push({ kind: 'record', ...tt, at: i, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
+          continue;
+        }
+      }
+      // RETIMES (E95): a conform that lost its retime is a wrong timeline
+      // that record/source geometry alone cannot catch (the record extent is
+      // unchanged; only the playback rate is). Resolve's EXPORT_OTIO carries
+      // an authored Sm2TimeMap back as LinearTimeWarp (measured live: 50%
+      // in → time_scalar 0.5 out), so a speed/reverse mismatch is real drift.
+      if (Math.abs((x.speed ?? 100) - (y.speed ?? 100)) > 0.5 || x.reverse !== y.reverse) {
+        mismatches.push({
+          kind: 'retime', ...tt, at: i, source: x.source,
+          input: { speed: x.speed, reverse: x.reverse },
+          exported: { speed: y.speed, reverse: y.reverse },
+        });
+        continue;
+      }
+      // A fade-reshaped head trims record AND source together (source stays
+      // record-aligned), so the per-source constant offset is fitted net of
+      // the record shift — otherwise a source cut both plain and faded would
+      // read as a source-frames drift.
+      const off = (y.srcIn - (y.recIn - x.recIn)) - x.srcIn;
+      if (srcOffsets[x.source] === undefined) srcOffsets[x.source] = off;
+      else if (Math.abs(off - srcOffsets[x.source]) > srcTol) {
+        mismatches.push({ kind: 'source-frames', ...tt, at: i, source: x.source, expectedOffset: srcOffsets[x.source], gotOffset: off });
+      }
+    }
+    return n;
+  };
+
+  const a0 = norm(inputEvents);
+  const b0 = norm(exportedEvents);
   const a = a0.filter((e) => !isBlackSeg(e));
   const b = b0.filter((e) => !isBlackSeg(e));
   const blackSegments = { input: a0.length - a.length, exported: b0.length - b.length };
-  const rawVids = vids(inputEvents);
-  const inOff = rawVids.length ? Math.min(...rawVids.map((e) => e.recIn)) : 0;
-  const junctions = inputEvents
-    .filter((e) => /^V\d*$/.test(String(e.track)) && e.recIn != null && e.transition && e.transition.duration > 0)
-    .map((e) => ({ frame: e.recIn - inOff, d: e.transition.duration }));
-  const inFadeWindow = (edgeIn, edgeExp) => junctions.some(
-    (j) => Math.abs(edgeIn - j.frame) <= j.d && Math.abs(edgeExp - edgeIn) <= j.d,
-  );
-  const fadeReshapedBoundaries = [];
-  const mismatches = [];
-  if (a.length !== b.length) mismatches.push({ kind: 'count', input: a.length, exported: b.length });
-  const srcOffsets = {};
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i += 1) {
-    const x = a[i], y = b[i];
-    if (x.track !== y.track) { mismatches.push({ kind: 'track', at: i, input: x.track, exported: y.track }); continue; }
-    if (x.source !== y.source) { mismatches.push({ kind: 'source', at: i, input: x.source, exported: y.source }); continue; }
-    const inBad = Math.abs(x.recIn - y.recIn) > recTol;
-    const outBad = Math.abs(x.recOut - y.recOut) > recTol;
-    if (inBad || outBad) {
-      const inExcused = !inBad || inFadeWindow(x.recIn, y.recIn);
-      const outExcused = !outBad || inFadeWindow(x.recOut, y.recOut);
-      if (inExcused && outExcused) {
-        fadeReshapedBoundaries.push({ at: i, source: x.source, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
-      } else {
-        mismatches.push({ kind: 'record', at: i, input: [x.recIn, x.recOut], exported: [y.recIn, y.recOut] });
-        continue;
-      }
-    }
-    // RETIMES (E95): a conform that lost its retime is a wrong timeline that
-    // record/source geometry alone cannot catch (the record extent is
-    // unchanged; only the playback rate is). Resolve's EXPORT_OTIO carries
-    // an authored Sm2TimeMap back as LinearTimeWarp (measured live: 50%
-    // in → time_scalar 0.5 out), so a speed/reverse mismatch is real drift.
-    if (Math.abs((x.speed ?? 100) - (y.speed ?? 100)) > 0.5 || x.reverse !== y.reverse) {
-      mismatches.push({
-        kind: 'retime', at: i, source: x.source,
-        input: { speed: x.speed, reverse: x.reverse },
-        exported: { speed: y.speed, reverse: y.reverse },
-      });
-      continue;
-    }
-    // A fade-reshaped head trims record AND source together (source stays
-    // record-aligned), so the per-source constant offset is fitted net of
-    // the record shift — otherwise a source cut both plain and faded would
-    // read as a source-frames drift.
-    const off = (y.srcIn - (y.recIn - x.recIn)) - x.srcIn;
-    if (srcOffsets[x.source] === undefined) srcOffsets[x.source] = off;
-    else if (Math.abs(off - srcOffsets[x.source]) > srcTol) {
-      mismatches.push({ kind: 'source-frames', at: i, source: x.source, expectedOffset: srcOffsets[x.source], gotOffset: off });
-    }
+  const n = comparePairs(a, b, junctionsFor(/^V\d*$/), 'video');
+
+  // AUDIO (E97): compared only when the INPUT declares audio events — a
+  // video-only turnover legitimately re-exports with audio (the A1
+  // convenience mirror), which is reported informationally, never failed.
+  // AAF channel legs dedupe (same track/source/range arrives once per
+  // channel); BL/silence legs merge out like video black.
+  const dedupeAud = (list) => {
+    const seen = new Set();
+    return list.filter((e) => {
+      const k = `${e.track}|${e.source}|${e.recIn}|${e.recOut}|${e.srcIn}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  };
+  const aa = dedupeAud(norm(inputEvents, audsOf).filter((e) => !isBlackSeg(e)));
+  const ba = dedupeAud(norm(exportedEvents, audsOf).filter((e) => !isBlackSeg(e)));
+  let audio;
+  if (aa.length) {
+    audio = { input: aa.length, exported: ba.length, compared: true };
+    comparePairs(aa, ba, junctionsFor(/^A\d*$/), 'audio');
+  } else if (ba.length) {
+    audio = { input: 0, exported: ba.length, compared: false, note: 'export-only audio (A1 convenience mirror) — not compared' };
   }
   // MARKERS (E88): compare track-'MARKER' pseudo-events, min-anchored to
   // each side's own VIDEO record origin like everything else. When the
@@ -948,5 +984,6 @@ export function verifyRoundtrip(inputEvents, exportedEvents, opts = {}) {
     ...(markersNotInExport ? { markersNotInExport } : {}),
     ...(blackSegments.input || blackSegments.exported ? { blackSegments } : {}),
     ...(fadeReshapedBoundaries.length ? { fadeReshapedBoundaries } : {}),
+    ...(audio ? { audio } : {}),
   };
 }

@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.156.0 — the QC loop learns audio; the verify surface is complete
+
+### Added
+
+- **`editorial.verify_roundtrip` is audio-aware.** Declared audio events
+  compare pairwise through the same machinery as video — record, source,
+  retime, and fade-window excusal — with audio mismatches tagged
+  `trackType: 'audio'`, AAF channel legs deduped, and BL/silence legs merged
+  out. A video-only turnover whose re-export carries audio (the A1
+  convenience mirror this bridge authors) reports `audio.compared: false`
+  informationally instead of failing. Live loop verified: an explicit A2 leg
+  round-trips through `EXPORT_OTIO` at exact geometry.
+- With markers (v2.147), fades (v2.153), retimes (v2.154), and now audio,
+  the round-trip QC surface covers every structure the conform bridge
+  authors.
+
 ## What's New in v2.155.0 — Premiere transitions land properly: centered spans and fades
 
 ### Fixed

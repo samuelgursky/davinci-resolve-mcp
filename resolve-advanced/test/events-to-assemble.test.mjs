@@ -752,6 +752,34 @@ test('verifyRoundtrip is retime-aware: a lost or wrong-speed retime fails as dri
   assert.equal(r2.mismatches[0].kind, 'retime');
 });
 
+test('verifyRoundtrip is audio-aware: declared audio compares, the A1 mirror stays informational (E97)', () => {
+  const input = [
+    { track: 'V', source: 'A', recIn: 0, recOut: 96, srcIn: 0 },
+    { track: 'A2', source: 'A', recIn: 24, recOut: 72, srcIn: 24 },
+  ];
+  const good = [
+    { track: 'V', source: 'A.mov', recIn: 0, recOut: 96, srcIn: 0 },
+    { track: 'A2', source: 'A.mov', recIn: 24, recOut: 72, srcIn: 24 },
+  ];
+  const r1 = verifyRoundtrip(input, good);
+  assert.equal(r1.pass, true, JSON.stringify(r1.mismatches));
+  assert.deepEqual(r1.audio, { input: 1, exported: 1, compared: true });
+  // audio leg slipped 6 frames → real drift, tagged audio
+  const drift = good.map((e) => (e.track === 'A2' ? { ...e, recIn: 30, recOut: 78, srcIn: 30 } : e));
+  const r2 = verifyRoundtrip(input, drift);
+  assert.equal(r2.pass, false);
+  assert.deepEqual(r2.mismatches[0], { kind: 'record', trackType: 'audio', at: 0, input: [24, 72], exported: [30, 78] });
+  // a video-only turnover re-exporting with mirrored audio is NOT a drift
+  const r3 = verifyRoundtrip([input[0]], good);
+  assert.equal(r3.pass, true);
+  assert.equal(r3.audio.compared, false);
+  // AAF channel legs dedupe: the same audio range once per channel is one leg
+  const dupIn = [input[0], input[1], { ...input[1] }];
+  const r4 = verifyRoundtrip(dupIn, good);
+  assert.equal(r4.pass, true, JSON.stringify(r4.mismatches));
+  assert.equal(r4.audio.input, 1);
+});
+
 test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
   const fsM = await import('node:fs');
   const os = await import('node:os');
