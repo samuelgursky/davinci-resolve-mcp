@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.182.0"
+VERSION = "2.183.0"
 
 import base64
 import os
@@ -7574,17 +7574,58 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
 _SEQ_CONTAINER_RE = re.compile(r"(^|/)SeqContainer(\d*\.xml|/[^/]+\.xml)$")
 
 
+def _drp_pool_sequence_names(zf) -> Dict[str, Dict[str, str]]:
+    """Map an embedded Sm2Sequence DbId → {name, kind} from every MpFolder*.xml.
+
+    A SeqContainer XML carries NO timeline name — its first <Name> is the first
+    CLIP's (measured on Resolve 19.1.3.7's EXPORT_DRT of a compound timeline,
+    E127/E129) — while the pool's Sm2MpTimelineClip (a timeline) and
+    Sm2MpCompoundClip (a compound) embed the Sm2Sequence whose DbId the
+    container's track-level <Sequence> names. That is where names and kinds live.
+    """
+    out: Dict[str, Dict[str, str]] = {}
+    for entry in zf.namelist():
+        if entry.endswith("/") or not re.search(r"(^|/)MpFolder[^/]*\.xml$", entry):
+            continue
+        try:
+            xml = zf.read(entry).decode("utf-8", "replace")
+        except Exception:
+            continue
+        for m in re.finditer(r'<(Sm2MpTimelineClip|Sm2MpCompoundClip) DbId="([^"]+)">([\s\S]*?)</\1>', xml):
+            body = m.group(3)
+            nm = re.search(r"<Name>([\s\S]*?)</Name>", body)
+            name = nm.group(1).strip() if nm else None
+            kind = "compound" if m.group(1) == "Sm2MpCompoundClip" else "timeline"
+            for sm in re.finditer(r'<Sm2Sequence DbId="([^"]+)">', body):
+                out.setdefault(sm.group(1), {"name": name, "kind": kind})
+    return out
+
+
 def _drp_seq_containers(zf) -> List[Dict[str, Any]]:
-    """List a .drp/.drt zip's SeqContainers as [{entry, name, index}] (0-based, sorted)."""
+    """List a .drp/.drt zip's SeqContainers as [{entry, name, kind, index}] (0-based, sorted).
+
+    `name` is the POOL's name for the sequence when the archive carries one
+    (the container's own first <Name> is a clip's — E129); `kind` is
+    'timeline' | 'compound' | None.
+    """
     entries = sorted(n for n in zf.namelist() if not n.endswith("/") and _SEQ_CONTAINER_RE.search(n))
+    pool = _drp_pool_sequence_names(zf)
     out = []
     for index, entry in enumerate(entries):
         try:
             xml = zf.read(entry).decode("utf-8", "replace")
         except Exception:
             xml = ""
+        sid = re.search(r"<Sequence>([0-9a-f-]{36})</Sequence>", xml)
+        info = pool.get(sid.group(1)) if sid else None
         m = re.search(r"<Name>([\s\S]*?)</Name>", xml)
-        out.append({"entry": entry, "name": (m.group(1).strip() if m else None), "index": index})
+        fallback = m.group(1).strip() if m else None
+        out.append({
+            "entry": entry,
+            "name": (info["name"] if info and info.get("name") else fallback),
+            "kind": (info["kind"] if info else None),
+            "index": index,
+        })
     return out
 
 
@@ -7608,11 +7649,49 @@ def _extract_seqcontainer_from_drp(drp_path: str, seq_entry: str, out_path: str)
         seq_entries = [n for n in names if _SEQ_CONTAINER_RE.search(n)]
         keep_xml = zf.read(seq_entry).decode("utf-8", "replace")
         keep_seq_ids = re.findall(r"<Sequence>([0-9a-f-]{36})</Sequence>", keep_xml)
+        # COMPOUND CLIPS (E130, the E45 law ported from drt.extract_from_drp): a
+        # compound is a pool Sm2MpCompoundClip with an EMBEDDED Sm2Sequence
+        # whose tracks live in their OWN SeqContainer — dropping that container
+        # ships a compound that imports and reads back but is hollow. Walk the
+        # kept container's MediaRefs → compound pool elements → embedded
+        # sequence ids → keep those containers too, recursively.
+        mp_texts = {}
+        for name in names:
+            if name.endswith("MpFolder.xml"):
+                mp_texts[name] = zf.read(name).decode("utf-8", "replace")
+        seq_xml_by_entry = {seq_entry: keep_xml}
+        keep_containers = {seq_entry}
+        seen_refs = set()
+        queue = [keep_xml]
+        while queue:
+            xml = queue.pop()
+            for ref in re.findall(r"<MediaRef>([0-9a-f-]{36})</MediaRef>", xml):
+                if ref in seen_refs:
+                    continue
+                for mp_xml in mp_texts.values():
+                    cm = re.search(r'<Sm2MpCompoundClip DbId="%s">[\s\S]*?</Sm2MpCompoundClip>' % re.escape(ref), mp_xml)
+                    if not cm:
+                        continue
+                    seen_refs.add(ref)
+                    im = re.search(r'<Sm2Sequence DbId="([0-9a-f-]{36})">', cm.group(0))
+                    if not im:
+                        continue
+                    inner = im.group(1)
+                    for entry_name in seq_entries:
+                        if entry_name in keep_containers:
+                            continue
+                        sx = seq_xml_by_entry.get(entry_name)
+                        if sx is None:
+                            sx = zf.read(entry_name).decode("utf-8", "replace")
+                            seq_xml_by_entry[entry_name] = sx
+                        if ("<Sequence>%s</Sequence>" % inner) in sx:
+                            keep_containers.add(entry_name)
+                            queue.append(sx)
         with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as out:
             for name in names:
                 if name == "Gallery.xml":
                     continue
-                if name in seq_entries and name != seq_entry:
+                if name in seq_entries and name not in keep_containers:
                     continue
                 data = zf.read(name)
                 if name.endswith("MpFolder.xml") and len(seq_entries) > 1:
@@ -7640,6 +7719,7 @@ def _extract_seqcontainer_from_drp(drp_path: str, seq_entry: str, out_path: str)
                         "source": "import_from_drp",
                         "sourceDrp": drp_path,
                         "sourceSeqContainer": seq_entry,
+                        "keptSeqContainers": sorted(keep_containers),
                         "exportedFrom": "davinci-resolve-mcp timeline.import_from_drp",
                     },
                     indent=2,
@@ -7681,7 +7761,7 @@ def _import_from_drp(proj, mp, p: Dict[str, Any]):
         want_indexes = [want_indexes]
 
     selected: List[Dict[str, Any]] = []
-    available = [{"name": c["name"], "index": c["index"]} for c in containers]
+    available = [{"name": c["name"], "kind": c.get("kind"), "index": c["index"]} for c in containers]
     if want_names:
         by_name = {}
         for c in containers:
@@ -7703,7 +7783,11 @@ def _import_from_drp(proj, mp, p: Dict[str, Any]):
                 return _err(f"timelineIndex {i} out of range (0..{len(containers) - 1})", category="invalid_input")
             selected.append(match)
     else:
-        selected = list(containers)
+        # ALL means every TIMELINE (E129): a compound's inner container is not a
+        # timeline of its own — extraction keeps it with the timeline that
+        # places it — so importing it separately lands a hollow duplicate.
+        timelines_only = [c for c in containers if c.get("kind") == "timeline"]
+        selected = timelines_only if timelines_only else list(containers)
 
     # Per-timeline options passthrough (importSourceClips etc.) minus selection
     # keys; background is a top-level option, so each sub-step import runs
@@ -24255,6 +24339,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         `sanitize.flagged` for human review, never silently applied. verify_threshold
         (default 0.90) sets the structural-match bar.
       import_from_drp(drpPath, timelineNames?|timelineIndexes?, import_source_clips?, dry_run?) -> {success, selected, imported, available, results, partial?}
+        timelineNames are the POOL's names (a SeqContainer's own first <Name>
+        is a clip's — measured E129); `available` rows carry kind
+        (timeline|compound). Omitted selection = every TIMELINE: a compound's
+        inner container is not a timeline of its own, it travels with the
+        timeline that places it (kept recursively in the extracted .drt, E130).
         CAVEAT (measured 19.1.3.7): Resolve refuses extracted containers even
         repacked with the source's project.xml — the sufficient import set
         beyond Resolve's own .drt exports is unmapped, so expect failures on

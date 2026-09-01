@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.183.0 — E129/E130: `import_from_drp` names from the pool, imports timelines, keeps compounds
+
+### Fixed
+
+- **`timeline.import_from_drp` named containers after their first clip.**
+  Resolve's own compound-timeline export listed as "cut_src.mp4" /
+  "white_src.mp4", "by name" could not find the real timeline, and the
+  default (all containers) imported the inner compound containers as
+  separate, hollow timelines. The lister now names each container from the
+  pool (`Sm2MpTimelineClip` / `Sm2MpCompoundClip` embed the `Sm2Sequence`
+  the container's `<Sequence>` names) and reports `kind`; the default
+  imports every TIMELINE; explicit names and indexes are unchanged (E129).
+- **The Python extractor dropped a timeline's compound containers.** A
+  compound is a pool `Sm2MpCompoundClip` whose embedded sequence lives in
+  its own container (the E45 law `drt.extract_from_drp` already honours), so
+  a timeline with compounds imported with hollow compounds. The extractor now
+  keeps them recursively (MediaRefs → compound pool elements → embedded
+  sequence ids → containers) and `metadata.json` lists `keptSeqContainers`.
+  Verified on the fixture: E57_NESTED keeps E57_OUT and E57_IN; E57_OUT keeps
+  E57_IN; the bundled template keeps its one container (E130). The
+  bundled template's sequence now lists as `MediaTemplate` on this route
+  too, where it used to read as its clip `sample.mp4`.
+
 ## What's New in v2.182.0 — E128: `extract_from_drp` defaults to the pool's timeline, not the first-sorted compound
 
 ### Fixed

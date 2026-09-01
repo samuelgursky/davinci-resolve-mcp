@@ -183,7 +183,7 @@ class DrpSeqContainerTests(unittest.TestCase):
         with zipfile.ZipFile(TEMPLATE_DRP, "r") as zf:
             containers = _drp_seq_containers(zf)
         self.assertGreaterEqual(len(containers), 1)
-        self.assertEqual(containers[0]["name"], "sample.mp4")
+        self.assertEqual(containers[0]["name"], "MediaTemplate")  # E129: the pool's timeline name, not the first clip's
         self.assertTrue(containers[0]["entry"].startswith("SeqContainer/"))
 
     def test_extract_produces_importable_drt(self):
@@ -265,7 +265,7 @@ class ImportFromDrpTests(unittest.TestCase):
         res = _import_from_drp(None, None, {"drpPath": TEMPLATE_DRP, "timelineNames": ["No Such TL"]})
         self.assertTrue(_is_error(res))
         self.assertIn("not found", _err_msg(res))
-        self.assertIn("sample.mp4", _remediation(res))
+        self.assertIn("MediaTemplate", _remediation(res))  # E129: the pool's timeline name, not the first clip's
 
     def test_dry_run_selects_all(self):
         res = _import_from_drp(None, None, {"drpPath": TEMPLATE_DRP, "dry_run": True})
@@ -279,12 +279,12 @@ class ImportFromDrpTests(unittest.TestCase):
     def test_full_extract_and_import_glue(self):
         proj = _FakeProject()
         mp = _FakeMediaPool(proj)
-        res = _import_from_drp(proj, mp, {"drpPath": TEMPLATE_DRP, "timelineNames": ["sample.mp4"]})
+        res = _import_from_drp(proj, mp, {"drpPath": TEMPLATE_DRP, "timelineNames": ["MediaTemplate"]})  # E129: the pool's timeline name, not the first clip's
         self.assertTrue(res.get("success"), res)
         self.assertEqual(res.get("selected"), 1)
         self.assertEqual(res.get("imported"), 1)
         row = res["results"][0]
-        self.assertEqual(row.get("requested"), "sample.mp4")
+        self.assertEqual(row.get("requested"), "MediaTemplate")  # E129: the pool's timeline name, not the first clip's
         self.assertTrue(row.get("success"))
         self.assertEqual(proj.GetTimelineCount(), 1)
 
