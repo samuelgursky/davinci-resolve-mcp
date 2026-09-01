@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 35 missing capabilities, 48 bugs / unreliable behaviors.
+**Totals:** 35 missing capabilities, 49 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -687,3 +687,11 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Timeline markers present and readable through the marker API do not appear in the exported .otio at all — the OTIO Marker schema exists and Resolve's importer reads it, but the exporter writes none (measured on Studio 19.1.3.7: two markers read back at frames 12/72; the export carried zero). Any marker-fidelity QC built on an OTIO re-export silently sees an unmarked timeline.
 - **Workaround / current handling:** Do not use EXPORT_OTIO to carry or verify markers. editorial.verify_roundtrip reports this case as `markersNotInExport` (honesty flag, not a failure); read markers through the marker API for fidelity checks, and author them offline via drt.assemble spec.markers when a .drt must carry them.
 - **Tags:** timeline, export, otio, markers, silent-failure
+
+### Project.SetRenderSettings ExportSubtitle/SubtitleFormat (inert on 19.x)
+
+- **Object:** `Project`
+- **Signature:** `({'ExportSubtitle': bool, 'SubtitleFormat': str}) -> bool`
+- **Behavior:** On Studio 19.1.3.7 the subtitle-delivery keys documented in the Resolve 21 API reference are accepted and fully inert: SetRenderSettings returns True for all three SubtitleFormat modes ('BurnIn', 'SeparateFile', 'EmbeddedCaptions'), and the renders carry no burned-in pixels (frame-extract verified), no sidecar subtitle file, and no embedded caption track (stream-probe verified) — with the subtitle cues readback-verified on the timeline and the subtitle track enabled. Quirk: ExportSubtitle alone returns False; the pair returns True. All three outputs are stream-identical to a no-subtitle render.
+- **Workaround / current handling:** Do not trust a True return for subtitle delivery on a pre-21 host — verify the output (extract a frame for burn-in, list the target directory for a sidecar, ffprobe streams for embedded captions). On 19.x subtitle export requires the UI render page. render.set_settings warns when these keys are set on a pre-21 host.
+- **Tags:** render, subtitle, burn-in, silent-failure, version-gated

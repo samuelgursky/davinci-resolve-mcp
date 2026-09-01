@@ -2,6 +2,25 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.149.0 — subtitle render truth: ExportSubtitle lies on 19.x
+
+### Measured (new Resolve bug, filed in api-limitations)
+
+- **`SetRenderSettings` subtitle keys are accepted-and-inert on 19.x**: with
+  authored subtitle cues readback-verified and the track enabled,
+  `ExportSubtitle: true` + every `SubtitleFormat` mode (`BurnIn`,
+  `SeparateFile`, `EmbeddedCaptions`) returns True — and the renders carry no
+  burned-in pixels, no sidecar file, and no caption stream. The keys are
+  documented in the Resolve 21 API reference. Quirk: `ExportSubtitle` alone
+  returns False; the pair returns True.
+
+### Added
+
+- **`render.set_settings` warns on pre-21 hosts** when the subtitle-delivery
+  keys are set, naming the measured inertness and the verification steps —
+  the accepted-then-ignored warning pattern that already covers
+  `AddFrameHandles` under `UseFullExtents`.
+
 ## What's New in v2.148.0 — the audio ceiling doubles: A1–A16
 
 ### Changed

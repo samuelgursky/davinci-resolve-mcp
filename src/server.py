@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.148.0"
+VERSION = "2.149.0"
 
 import base64
 import os
@@ -18730,7 +18730,7 @@ def _render_preset_pin(proj, preset_name: str):
     return {"preset": preset_name, "loaded": True}, None
 
 
-def _render_settings_warnings(settings: Dict[str, Any]):
+def _render_settings_warnings(settings: Dict[str, Any], version_major: Optional[int] = None):
     """Inter-key combinations Resolve accepts and then silently ignores.
 
     SetRenderSettings returns True for these, so nothing downstream would ever
@@ -18744,6 +18744,17 @@ def _render_settings_warnings(settings: Dict[str, Any]):
         warnings.append(
             "AddFrameHandles is ignored while UseFullExtents is true: Resolve renders the "
             "clip's full extents and the handle count silently does nothing. Drop one of the two."
+        )
+    if ("ExportSubtitle" in settings or "SubtitleFormat" in settings) and (
+        version_major is not None and version_major < 21
+    ):
+        warnings.append(
+            "ExportSubtitle/SubtitleFormat are INERT on this Resolve generation: measured on "
+            "Studio 19.1.3.7, SetRenderSettings returns True for all three SubtitleFormat modes "
+            "and the render carries no burn-in, no sidecar file, and no embedded caption track "
+            "(cues readback-verified, subtitle track enabled). The keys are documented in the "
+            "Resolve 21 API reference. Verify the output (frame extract / sidecar check) before "
+            "claiming caption delivery; on 19.x burn-in requires the UI render page."
         )
     return warnings
 
@@ -19283,6 +19294,12 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         "Same as project", or "None"). AddFrameHandles is ignored while
         UseFullExtents is true — the call still succeeds, so that pairing
         comes back in warnings rather than silently doing nothing.
+        ExportSubtitle (bool) + SubtitleFormat ("BurnIn" | "SeparateFile" |
+        "EmbeddedCaptions") are documented for Resolve 21 but measured INERT
+        on 19.x — SetRenderSettings returns True and the render carries no
+        burn-in, sidecar, or caption track — so setting them on a pre-21
+        host comes back in warnings; verify the output before claiming
+        caption delivery.
       list_presets() -> {presets}
       load_preset(name) -> {success}
       save_preset(name) -> {success}
@@ -19577,8 +19594,12 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         if ignored_settings:
             result["ignored_settings"] = ignored_settings
         # Accepted-then-ignored key combinations (21.0.4 AddFrameHandles under
-        # UseFullExtents) read as a clean success without this.
-        warnings = _render_settings_warnings(settings)
+        # UseFullExtents; 19.x ExportSubtitle) read as a clean success without this.
+        try:
+            _ver_major = int((get_resolve().GetVersion() or [0])[0])
+        except Exception:
+            _ver_major = None
+        warnings = _render_settings_warnings(settings, version_major=_ver_major)
         if warnings:
             result["warnings"] = warnings
         return result

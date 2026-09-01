@@ -2737,6 +2737,33 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
         "mitigation": ["editorial.verify_roundtrip markersNotInExport"],
     },
+    {
+        "symbol": "Project.SetRenderSettings ExportSubtitle/SubtitleFormat (inert on 19.x)",
+        "object": "Project",
+        "signature": "({'ExportSubtitle': bool, 'SubtitleFormat': str}) -> bool",
+        "reality": "On Studio 19.1.3.7 the subtitle-delivery keys documented "
+                   "in the Resolve 21 API reference are accepted and fully "
+                   "inert: SetRenderSettings returns True for all three "
+                   "SubtitleFormat modes ('BurnIn', 'SeparateFile', "
+                   "'EmbeddedCaptions'), and the renders carry no burned-in "
+                   "pixels (frame-extract verified), no sidecar subtitle "
+                   "file, and no embedded caption track (stream-probe "
+                   "verified) — with the subtitle cues readback-verified on "
+                   "the timeline and the subtitle track enabled. Quirk: "
+                   "ExportSubtitle alone returns False; the pair returns "
+                   "True. All three outputs are stream-identical to a "
+                   "no-subtitle render.",
+        "recommended": "Do not trust a True return for subtitle delivery on "
+                       "a pre-21 host — verify the output (extract a frame "
+                       "for burn-in, list the target directory for a "
+                       "sidecar, ffprobe streams for embedded captions). On "
+                       "19.x subtitle export requires the UI render page. "
+                       "render.set_settings warns when these keys are set on "
+                       "a pre-21 host.",
+        "tags": ["render", "subtitle", "burn-in", "silent-failure", "version-gated"],
+        "submit": "bug",
+        "mitigation": ["render.set_settings warnings"],
+    },
 ]
 
 
