@@ -933,8 +933,15 @@ function nameSimilarity(a, b) {
  * different shot dropped into the same window is neither.
  */
 function inferSourceAliases(P, recTol) {
-  const cands = new Map(); // from -> Map(to -> count)
+  const cands = new Map(); // from -> Map(to -> {count, overlapOnly})
   const usedNew = new Set();
+  const tally = (from, to, overlapOnly) => {
+    if (!cands.has(from)) cands.set(from, new Map());
+    const m = cands.get(from);
+    const cur = m.get(to) || { count: 0, overlapOnly: true };
+    m.set(to, { count: cur.count + 1, overlapOnly: cur.overlapOnly && overlapOnly });
+  };
+  // Tier 1: the SAME record window under two names.
   for (const oe of P.unmatchedOld) {
     const hit = P.unmatchedNew.find((ne) => !usedNew.has(ne) && ne.track === oe.track
       && Math.abs((ne.recIn ?? 0) - (oe.recIn ?? 0)) <= recTol && Math.abs((ne.recOut ?? 0) - (oe.recOut ?? 0)) <= recTol);
@@ -942,17 +949,34 @@ function inferSourceAliases(P, recTol) {
     usedNew.add(hit);
     const from = String(oe.source ?? ''), to = String(hit.source ?? '');
     if (from === to) continue;
-    if (!cands.has(from)) cands.set(from, new Map());
-    cands.get(from).set(to, (cands.get(from).get(to) || 0) + 1);
+    tally(from, to, false);
+  }
+  // Tier 2 (E149): an OVERLAPPING window under two clearly-the-same names.
+  // A source whose only cut sits inside a re-centred dissolve never shares an
+  // identical window with its renamed self, so tier 1 cannot see it and the
+  // cut reads as gone + new + a dropped and an added dissolve (3 such
+  // junctions on a real reel). Here the name carries the evidence the window
+  // cannot: the same track, overlapping windows, LCS similarity ≥ 0.8.
+  const claimedOld = new Set();
+  for (const oe of P.unmatchedOld) {
+    if (claimedOld.has(oe)) continue;
+    const from = String(oe.source ?? '');
+    const hit = P.unmatchedNew.find((ne) => !usedNew.has(ne) && ne.track === oe.track
+      && (ne.recIn ?? 0) < (oe.recOut ?? 0) && (oe.recIn ?? 0) < (ne.recOut ?? 0)
+      && String(ne.source ?? '') !== from && nameSimilarity(from, ne.source) >= 0.8);
+    if (!hit) continue;
+    usedNew.add(hit); claimedOld.add(oe);
+    tally(from, String(hit.source ?? ''), true);
   }
   const claimed = new Map(); // to -> from
   const out = [];
   for (const [from, tos] of cands) {
     if (tos.size !== 1) continue;
-    const [to, count] = [...tos][0];
+    const [to, { count, overlapOnly }] = [...tos][0];
     if (claimed.has(to) && claimed.get(to) !== from) continue;
     const similarity = Math.round(nameSimilarity(from, to) * 1000) / 1000;
-    if (count >= 2 || similarity >= 0.6) { claimed.set(to, from); out.push({ from, to, cuts: count, similarity, inferred: true }); }
+    const adopt = overlapOnly ? similarity >= 0.8 : (count >= 2 || similarity >= 0.6);
+    if (adopt) { claimed.set(to, from); out.push({ from, to, cuts: count, similarity, inferred: true, ...(overlapOnly ? { byOverlap: true } : {}) }); }
   }
   // A 'to' claimed by two different 'from's is ambiguous — drop both.
   const toCounts = new Map(); for (const a of out) toCounts.set(a.to, (toCounts.get(a.to) || 0) + 1);
@@ -971,7 +995,7 @@ export function diffChangelist(oldEvents, newEvents, opts = {}) {
     }
   }
   const { __P, ...out } = result;
-  out.sourceAliases = aliases.map((a) => (a.re ? { pattern: a.pattern, replace: a.replace, inferred: false } : { from: a.from, to: a.to, inferred: Boolean(a.inferred), ...(a.cuts != null ? { cuts: a.cuts, similarity: a.similarity } : {}) }));
+  out.sourceAliases = aliases.map((a) => (a.re ? { pattern: a.pattern, replace: a.replace, inferred: false } : { from: a.from, to: a.to, inferred: Boolean(a.inferred), ...(a.cuts != null ? { cuts: a.cuts, similarity: a.similarity } : {}), ...(a.byOverlap ? { byOverlap: true } : {}) }));
   return out;
 }
 

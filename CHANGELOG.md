@@ -2,6 +2,21 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.201.0 — E149: a rename is inferred from overlapping windows
+
+### Added
+
+- **A rename is inferred from overlapping windows when the only cut of a
+  source was re-centred.** Alias inference demanded an identical record
+  window under two names, so a source with a single cut sitting inside a
+  re-centred dissolve could never be aliased: it read as `gone` plus `new`
+  plus a dropped and an added dissolve — three such junctions on a real reel.
+  A second tier now adopts a rename from unpaired cuts on the same track
+  whose windows overlap under clearly-the-same names (LCS similarity ≥ 0.8),
+  reported with `byOverlap`. A different shot in an overlapping window stays
+  a replacement. On the reel: the three phantom drop/add pairs are gone, the
+  cuts pair, and one of the junctions folds outright.
+
 ## What's New in v2.200.0 — E148: the timing guards read through the changelist's aliases
 
 ### Fixed

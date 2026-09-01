@@ -540,3 +540,21 @@ test('timingGuards flags every dissolve dropped across a proxy→master rename u
   const real = timingGuards(offline, lost, { sourceAliases: d.sourceAliases });
   assert.equal(real.flags.filter((f) => f.kind === 'transition_dropped').length, 1);
 });
+
+// ── E149: a rename is inferred from overlapping windows when the only cut of a source was re-centred ──
+test('turnover_changelist infers a rename from overlapping windows under clearly-the-same names and then folds the re-centred junction (E149)', () => {
+  const dis = (type, recStart) => ({ type, duration: 24, recStart });
+  // A.mov has other identical-window cuts (tier 1); "Solo 4K-2K 0515.mov" has ONE cut, the incoming of a re-centred dissolve
+  const old = [cut('V', 'A 4K-2K.mov', 1000, 0, 100), cut('V', 'Solo 4K-2K 0515.mov', 5000, 100, 100, { transition: dis('Cross Dissolve (Legacy)', 88) }), cut('V', 'A 4K-2K.mov', 9000, 200, 100)];
+  const nu = [cut('V', 'A 4K.mov', 1000, 0, 111), { ...cut('V', 'Solo 4K 0515.mov', 5011, 111, 89, { transition: dis('Cross Dissolve', 88) }), srcOut: 5100 }, cut('V', 'A 4K.mov', 9000, 200, 100)];
+  const d = diffChangelist(old, nu);
+  assert.equal(d.shape, 'equivalent', JSON.stringify(d.changes));
+  assert.deepEqual(d.counts, { junction_realigned: 1 });
+  const solo = d.sourceAliases.find((a) => a.from === 'Solo 4K-2K 0515.mov');
+  assert.ok(solo && solo.byOverlap && solo.similarity >= 0.8, JSON.stringify(d.sourceAliases));
+  // null control: an overlapping window under a DIFFERENT name is a replacement, not an alias
+  const swapped = nu.map((e) => (e.source === 'Solo 4K 0515.mov' ? { ...e, source: 'ZEBRA pickup take 3.mov' } : e));
+  const r = diffChangelist(old, swapped);
+  assert.ok(!r.sourceAliases.some((a) => a.byOverlap), JSON.stringify(r.sourceAliases));
+  assert.ok(r.counts.gone >= 1 || r.counts.replaced >= 1, JSON.stringify(r.counts));
+});
