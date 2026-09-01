@@ -79,8 +79,17 @@ function decodeTimemapField(hex) {
   }
   if (!d || d.form !== 'retimed') return { form: 'retimed', kind: 'unknown', speed: null, reverse: false };
   const slope = d.segments && d.segments.length ? d.segments[0].speed : null;
-  const base = { form: 'retimed', recordDurationSec: d.recordDurationSec ?? null, sourceDurationSec: d.sourceDurationSec ?? null };
-  if (d.recordDurationSec === FREEZE_XMAX_SENTINEL && slope === 0) return { ...base, kind: 'freeze', speed: 0, reverse: false };
+  const points = [d.origin || { recordSec: 0, sourceSec: 0 }, ...(d.keyframes || [])];
+  const base = { form: 'retimed', recordDurationSec: d.recordDurationSec ?? null, sourceDurationSec: d.sourceDurationSec ?? null, keyframeForm: d.keyframeForm || null, points };
+  if (d.recordDurationSec === FREEZE_XMAX_SENTINEL && slope === 0) {
+    // A flat map over the 60000 sentinel is a FREEZE at the source second the
+    // map holds (Y) — with or without an <In> (E144, render-witnessed: the
+    // E66 harvest carries Y = 0 and In 24, and its render is static at the
+    // source's frame 0: inter-frame change 0.02 vs 0.42 in the source). The
+    // EDL M2 000.0 harvest holds Y = 1.0 with an empty <In>.
+    const y = points[0] ? points[0].sourceSec : 0;
+    return { ...base, kind: 'freeze', speed: 0, reverse: false, freezeSec: y };
+  }
   if (!Number.isFinite(slope) || slope === 0 || Math.abs(slope) > 100) return { ...base, kind: 'unknown', speed: null, reverse: false };
   return {
     ...base,

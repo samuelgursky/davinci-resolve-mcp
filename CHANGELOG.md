@@ -2,6 +2,38 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.196.0 — E144: Resolve's own retimes decode; a flat map is a freeze
+
+### Fixed
+
+- **Resolve's own retimes decode.** Every retime Resolve 19.1.3.7 makes
+  itself — an XMEML import, a UI speed change, an EDL `M2` freeze, a speed
+  ramp — writes `KeyframesBA` in the keyed-dict form (keyframes
+  `{interp,YOut,YIn,Y,XOut,XIn,X}` under keys `0`, `1`, …), which the DRP
+  time-map reader rejected ("unsupported wire type 7"), so E140 called them
+  unknown. The reader now decodes both forms; keyframe 0 at X=0 is the
+  origin and its Y the source second the map starts on (4.0 s on a real ramp
+  harvest). Verbatim harvest blobs: a 50% constant reads 50, a ramp reads
+  its two segments (0.5 then 2.0) with the right source window, both freezes
+  read the second they hold.
+- **A source window is the map, evaluated.** A DRT event's `srcIn`/`srcOut`
+  now come from evaluating the piecewise-linear map at `In` and `In +
+  duration` (origin included), which makes ramps, reverses and rebased maps
+  come out right without special cases.
+- **A flat map over the 60000 sentinel is a freeze even with a source-in.**
+  The E66 harvest (an XMEML import of a plain 100% clip) came back with a
+  flat map at Y=0 and `In` 24, and its render is static at the source's frame
+  0: inter-frame change 0.02 against 0.42 in the source. Resolve's XMEML
+  importer froze the clip silently; the event now says frozen at frame 0 and
+  keeps the ignored `In` as `recordDomainIn`. (The first draft of this fix
+  called that map a harmless identity because it fit the prose; the render
+  said otherwise.)
+
+### Measured (filed in api-limitations)
+
+- The keyed-dict keyframe form on Resolve-made retimes, and the freeze
+  law with a present `<In>`.
+
 ## What's New in v2.195.0 — E143: a retimed DRT clip's source-in is record-domain
 
 ### Fixed

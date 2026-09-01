@@ -672,15 +672,29 @@ export function drtEventsFromParsed(parsed, opts = {}) {
         // Reverse: the map descends from the source tail, In measures from
         // the END — source start = sourceFrames − In×speed − duration×speed.
         let speed = 100, srcOut = srcIn + c.duration, unknown = false, srcStart = srcIn;
-        if (kind === 'freeze') { speed = 0; srcOut = srcIn; }
+        if (kind === 'freeze') {
+          // A real freeze holds the source second in its flat map (E144); the
+          // clip's <In> is empty. Zero-speed in==out event on that frame.
+          speed = 0; srcStart = tm && tm.freezeSec != null ? Math.round(tm.freezeSec * fps) : srcIn; srcOut = srcStart;
+
+        }
         else if (kind === 'constant' || kind === 'variable') {
+          // E143/E144: <In> is RECORD-domain — evaluate the map (piecewise
+          // linear in seconds, origin included) at In and In + duration; the
+          // source window is the min/max of the two, which also makes a
+          // reversed map (descending line) come out the right way round.
           speed = Math.round(tm.speed * 10000) / 100;
-          const span = Math.round(c.duration * tm.speed);
-          if (tm.reverse && tm.sourceDurationSec != null) {
-            const sourceFrames = Math.round(tm.sourceDurationSec * fps) + 1;
-            srcStart = Math.max(0, sourceFrames - Math.round(srcIn * tm.speed) - span);
-          } else srcStart = Math.round(srcIn * tm.speed);
-          srcOut = srcStart + span;
+          const pts = tm.points && tm.points.length >= 2 ? tm.points : null;
+          const mapAt = (recFrames) => {
+            const x = recFrames / fps;
+            if (!pts) return x * tm.speed * (tm.reverse ? -1 : 1);
+            let i = 1; while (i < pts.length - 1 && x > pts[i].recordSec) i++;
+            const a = pts[i - 1], b = pts[i];
+            const slope = b.recordSec === a.recordSec ? 0 : (b.sourceSec - a.sourceSec) / (b.recordSec - a.recordSec);
+            return a.sourceSec + (x - a.recordSec) * slope;
+          };
+          const s0 = Math.round(mapAt(srcIn) * fps), s1 = Math.round(mapAt(srcIn + c.duration) * fps);
+          srcStart = Math.max(0, Math.min(s0, s1)); srcOut = Math.max(s0, s1);
         }
         else if (kind === 'unknown') { speed = null; srcOut = null; unknown = true; }
         const ev = {
@@ -689,7 +703,7 @@ export function drtEventsFromParsed(parsed, opts = {}) {
           speed, reverse: Boolean(tm && tm.reverse), transition: null, fps,
         };
         if (media) ev.sourcePath = media;
-        if (srcStart !== srcIn) ev.recordDomainIn = srcIn;
+        if (srcStart !== srcIn && c.in != null) ev.recordDomainIn = srcIn;
         if (c.in == null) ev.srcInAbsent = true;
         if (unknown) ev.retimeUnknown = true;
         if (kind === 'variable') { ev.variableSpeed = true; ev.retimeSegments = tm.segments; }
