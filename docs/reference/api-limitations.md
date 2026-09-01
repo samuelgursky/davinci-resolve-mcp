@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 40 missing capabilities, 50 bugs / unreliable behaviors.
+**Totals:** 41 missing capabilities, 50 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -300,6 +300,14 @@ equivalent, blocking full automation.
 - **Behavior:** There is no GetCDL, so applied CDL values cannot be read back; the bool is the only signal and it returns False with no reason (missing node, still/generator item, values silently rejected). NodeIndex is 1-based (README line 6) and must not exceed Graph.GetNumNodes() — note TimelineItem.GetNumNodes is deprecated; the count lives on item.GetNodeGraph().
 - **Workaround / current handling:** Read item.GetNodeGraph().GetNumNodes() before SetCDL and diagnose a False against the node count and clip type. Prove the applied look with a rendered frame (gallery_stills grab_and_export or Project.ExportCurrentFrameAsStill), not the return value.
 - **Tags:** color, cdl, readback, silent-failure
+
+### Timeline.Export EXPORT_DRT (clip, transition and pool-sequence field encodings)
+
+- **Object:** `Timeline`
+- **Signature:** `(filePath, EXPORT_DRT) -> bool`
+- **Behavior:** Measured on a Studio 19.1.3.7 export of a 229-clip reel (E139). A SeqContainer clip (Sm2TiVideoClip / Sm2TiAudioClip) carries its record window as <Start> and <Duration> (frames, absolute), its SOURCE in-point as <In> (frames) — written EMPTY (<In/>) on every audio clip and on generator tails — <MediaFilePath>, <MediaStartTime> (seconds), <MediaFrameRate> as a 16-hex blob = one little-endian IEEE double + 8 pad bytes (24.0 = 0000000000003840…), and <MediaTimemapBA>: tag byte 0x02 + one double (the media length in seconds) on a 100% clip, a keyed curve opening 00000001… on a retimed clip and on generators. An Sm2TiTransition sits in the same <Items> list as the clips with <Start>/<Duration> (its span), <PrettyType> (Cross Dissolve), <AlignmentType> and <Position>: type 2 centres the span on the cut, type 3 ends it at the cut (11/11 witnessed against the clip edges; the one-sided 8-frame fade-in is type 3 / Position 1). The container carries NO frame rate, start or resolution — they live in the pool folder's embedded Sm2Sequence: <FrameRate> (LE double blob), <MediaExtents> = two LE doubles, record start SECONDS then duration SECONDS (7192.0 → frame 172608 = 01:59:52:00 at 24), <Resolution> = two big-endian uint64, width then height.
+- **Workaround / current handling:** Read record timing from Start/Duration, source in from In (null when empty — do not fake 0 silently), fps and start from the pool sequence (frames = round(seconds × fps)); treat a curve timemap as a retime whose speed is not decoded here (speed null) rather than 100%. The parser exposes these and editorial.parse_interchange {format:'drt', content: PATH} walks one timeline into normalized events so two timeline versions diff through turnover_changelist (v19 vs v20 of a real reel: identical, 229 of 229 retained).
+- **Tags:** timeline, export, drt, interchange
 
 ### Timeline.Export EXPORT_EDL (video-only, reel AX, clip-name comments)
 

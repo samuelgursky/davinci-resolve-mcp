@@ -2730,6 +2730,47 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["drt.assemble cuts[].markers"],
     },
     {
+        "symbol": "Timeline.Export EXPORT_DRT (clip, transition and pool-sequence field encodings)",
+        "object": "Timeline",
+        "signature": "(filePath, EXPORT_DRT) -> bool",
+        "reality": "Measured on a Studio 19.1.3.7 export of a 229-clip reel "
+                   "(E139). A SeqContainer clip (Sm2TiVideoClip / "
+                   "Sm2TiAudioClip) carries its record window as <Start> and "
+                   "<Duration> (frames, absolute), its SOURCE in-point as <In> "
+                   "(frames) — written EMPTY (<In/>) on every audio clip and on "
+                   "generator tails — <MediaFilePath>, <MediaStartTime> "
+                   "(seconds), <MediaFrameRate> as a 16-hex blob = one "
+                   "little-endian IEEE double + 8 pad bytes (24.0 = "
+                   "0000000000003840…), and <MediaTimemapBA>: tag byte 0x02 + "
+                   "one double (the media length in seconds) on a 100% clip, a "
+                   "keyed curve opening 00000001… on a retimed clip and on "
+                   "generators. An Sm2TiTransition sits in the same <Items> "
+                   "list as the clips with <Start>/<Duration> (its span), "
+                   "<PrettyType> (Cross Dissolve), <AlignmentType> and "
+                   "<Position>: type 2 centres the span on the cut, type 3 ends "
+                   "it at the cut (11/11 witnessed against the clip edges; the "
+                   "one-sided 8-frame fade-in is type 3 / Position 1). The "
+                   "container carries NO frame rate, start or resolution — they "
+                   "live in the pool folder's embedded Sm2Sequence: <FrameRate> "
+                   "(LE double blob), <MediaExtents> = two LE doubles, record "
+                   "start SECONDS then duration SECONDS (7192.0 → frame 172608 "
+                   "= 01:59:52:00 at 24), <Resolution> = two big-endian uint64, "
+                   "width then height.",
+        "recommended": "Read record timing from Start/Duration, source in from "
+                       "In (null when empty — do not fake 0 silently), fps and "
+                       "start from the pool sequence (frames = round(seconds × "
+                       "fps)); treat a curve timemap as a retime whose speed is "
+                       "not decoded here (speed null) rather than 100%. The "
+                       "parser exposes these and editorial.parse_interchange "
+                       "{format:'drt', content: PATH} walks one timeline into "
+                       "normalized events so two timeline versions diff through "
+                       "turnover_changelist (v19 vs v20 of a real reel: "
+                       "identical, 229 of 229 retained).",
+        "tags": ["timeline", "export", "drt", "interchange"],
+        "submit": "missing",
+        "mitigation": ["editorial.parse_interchange drt", "drt.parse"],
+    },
+    {
         "symbol": "Timeline.Export EXPORT_OTIO (drops timeline markers)",
         "object": "Timeline",
         "signature": "(filePath, EXPORT_OTIO) -> bool",

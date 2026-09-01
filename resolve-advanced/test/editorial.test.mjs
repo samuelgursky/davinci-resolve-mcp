@@ -98,12 +98,14 @@ test('parseInterchange default message lists drt|drp among the known formats', (
   );
 });
 
-test('editorial.parse_interchange accepts drt/drp as a format and answers with the redirect, not a schema dump', async () => {
+test('editorial.parse_interchange accepts drt/drp as a format and names the PATH requirement for inline bytes, not a schema dump', async () => {
   for (const format of ['drt', 'drp']) {
     await assert.rejects(
       () => editorialTool.handler({ action: 'parse_interchange', args: { format, content: 'PK' } }),
       (err) => {
         assert.match(err.message, /parseDRT/, `${format}: got: ${err.message}`);
+        assert.match(err.message, /file PATH/, `${format}: must say to pass the PATH (E139) — got: ${err.message}`);
+        assert.doesNotMatch(err.message, /ENOENT/, `${format}: must not surface a raw ENOENT`);
         assert.doesNotMatch(err.message, /invalid_enum_value|Invalid enum/, `${format}: must not be a bare zod dump`);
         return true;
       },

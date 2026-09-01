@@ -2,6 +2,37 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.191.0 — E139: a .drt timeline walks into events; two Resolve versions diff
+
+### Added
+
+- **A `.drt`/`.drp` timeline walks into normalized events, so two Resolve
+  timeline VERSIONS diff.** `parse_interchange {format:'drt', content: PATH}`
+  (optional `timeline` = pool name or index) returns the same event shape as
+  every other format, with sequence-relative record positions plus the
+  timeline's `fps`, `startFrame` and `startTimecode` read from the pool
+  sequence. Measured on a real 19.1.3.7 export of a 229-clip reel: 230 events
+  on V–V4 and A–A2, 11 dissolves attached with their witnessed alignment, the
+  4 retimed clips flagged, and v19 vs v20 of that reel reads `identical, 229
+  of 229 retained` through `turnover_changelist`.
+- **The DRT parser reads the fields it used to skip.** Per clip: `in` (the
+  source in-point — EMPTY on a real export's audio clips, reported `null`, and
+  `srcInAbsent` on the event, never a silent 0), `mediaStartTime`,
+  `mediaFrameRate` (decoded from Resolve's little-endian double blob) and
+  `timemap` (`linear` vs a keyed `curve`; a curve is a retime this reader does
+  not decode, so the event carries `speed: null`, `srcOut: null` and
+  `retimeUnknown` instead of a faked 100%). Per track: `transitions`
+  (`Sm2TiTransition` span, type, `alignmentType` → `alignment`: 2 centres on
+  the cut, 3 ends at it, witnessed on all 11 real dissolves). Per timeline:
+  `frameRate`, `startFrame`, `startTimecode` and `resolution` now fill from the
+  pool `Sm2Sequence` (`FrameRate` LE double, `MediaExtents` seconds,
+  `Resolution` BE uint64 pair) when the container carries none — a real export
+  used to report them all `null`.
+
+### Measured (filed in api-limitations)
+
+- The EXPORT_DRT clip, transition and pool-sequence field encodings.
+
 ## What's New in v2.190.0 — E138: the changelist names its shape; pairing is closest-first globally
 
 ### Added

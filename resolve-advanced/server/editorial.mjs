@@ -606,11 +606,91 @@ export function parseInterchange(format, content, opts = {}) {
     case 'drt':
     case 'drp':
       throw new Error(
-        `parse_interchange: .${String(format).toLowerCase()} is a ZIP container — parse it via the path-based reader (drt.mjs \`parseDRT(path)\`), not the sync parseInterchange(). Entry points: editorial \`list_sequences({path})\` or drt \`parse({drtPath})\`.`,
+        `parse_interchange: .${String(format).toLowerCase()} is a ZIP container — parse it via the async path-based reader (editorial.mjs \`parseDrtEvents(path, {timeline})\` over drt-parser \`parseDRT(path)\`, E139), not the sync parseInterchange(). Entry points: editorial \`parse_interchange({format:'drt', content: PATH})\`, \`list_sequences({path})\` or drt \`parse({drtPath})\`.`,
       );
     default:
       throw new Error(`parse_interchange: unknown format '${format}' (edl|otio|xml|xmeml|fcp7|drt|drp|aaf|prproj)`);
   }
+}
+
+// ── DRT → normalized events (E139) ─────────────────────────────────────
+/**
+ * Normalized events for ONE timeline of a parsed .drt/.drp (drt-parser
+ * `parseDRT`), so two Resolve timeline versions diff through
+ * turnover_changelist and a DRT re-export verifies like any other format.
+ * Measured on a real 19.1.3.7 EXPORT_DRT: a clip's record window is
+ * <Start>/<Duration>, its source in-point <In> (EMPTY on audio clips and on
+ * generator tails — reported srcInAbsent, never faked to 0 silently), its
+ * media <MediaFilePath>; <MediaTimemapBA> tag 0x02 = linear 100%, a keyed
+ * curve = a retime this reader does not decode (speed null + retimeUnknown);
+ * Sm2TiTransition alignment 2 centres on the cut, 3 ends at it. Record
+ * positions are sequence-relative (start frame subtracted), like every other
+ * parser here; `startFrame` is returned beside the events.
+ * @param {object} parsed  parseDRT output
+ * @param {{timeline?: string|number}} [opts] pool name or index; default = first `timeline` kind
+ */
+export function drtEventsFromParsed(parsed, opts = {}) {
+  const tls = (parsed && parsed.timelines) || [];
+  if (!tls.length) throw new Error('drt events: the archive holds no SeqContainer');
+  let tl = null;
+  if (typeof opts.timeline === 'number') tl = tls[opts.timeline] || null;
+  else if (typeof opts.timeline === 'string' && opts.timeline) tl = tls.find((t) => t.name === opts.timeline) || null;
+  else tl = tls.find((t) => t.kind === 'timeline') || tls[0];
+  if (!tl) throw new Error(`drt events: no timeline '${opts.timeline}' in [${tls.map((t) => t.name).join(', ')}]`);
+  const fps = Number(tl.frameRate) || 24;
+  const startFrame = Number.isFinite(Number(tl.startFrame)) ? Number(tl.startFrame) : 0;
+  const events = [];
+  let index = 1;
+  const base = (pth, name) => (pth ? String(pth).split(/[\\/]/).pop() : name);
+  const walk = (tracks, prefix) => {
+    (tracks || []).forEach((t, i) => {
+      const label = i === 0 ? prefix : `${prefix}${i + 1}`;
+      const before = events.length;
+      const clips = [...(t.clips || [])].filter((c) => Number.isFinite(c.start) && Number.isFinite(c.duration)).sort((a, b) => a.start - b.start);
+      for (const c of clips) {
+        const srcIn = c.in != null ? c.in : 0;
+        const media = c.mediaFilePath || null;
+        const isGen = !media && !c.compound;
+        const ev = {
+          index: index++, track: label, source: media ? base(media, c.name) : (c.name || 'BL'),
+          // A keyed speed curve makes the source OUT unknowable here — null, never
+          // srcIn + duration as if it played at 100%.
+          srcIn, srcOut: c.timemap === 'curve' ? null : srcIn + c.duration, recIn: c.start - startFrame, recOut: c.start - startFrame + c.duration,
+          speed: c.timemap === 'curve' ? null : 100, reverse: false, transition: null, fps,
+        };
+        if (media) ev.sourcePath = media;
+        if (c.in == null) ev.srcInAbsent = true;
+        if (c.timemap === 'curve') ev.retimeUnknown = true;
+        if (c.compound) ev.compound = c.compound;
+        if (isGen) ev.generatorName = c.name || null;
+        events.push(ev);
+      }
+      for (const tr of t.transitions || []) {
+        if (!Number.isFinite(tr.start) || !Number.isFinite(tr.duration)) continue;
+        const s0 = tr.start - startFrame, e0 = s0 + tr.duration;
+        const lane = events.slice(before).filter((ev) => ev.track === label);
+        const incoming = lane.find((ev) => ev.recIn > s0 - 1 && ev.recIn <= e0);
+        const outgoing = lane.find((ev) => ev !== incoming && ev.recOut > s0 - 1 && ev.recOut <= e0);
+        const transition = { type: String(tr.type || 'Cross Dissolve'), duration: tr.duration, recStart: s0 };
+        if (tr.alignment) transition.alignment = tr.alignment;
+        if (incoming) {
+          incoming.transition = transition;
+          if (!outgoing) events.push({ index: index++, track: label, source: 'BL', srcIn: 0, srcOut: 0, recIn: incoming.recIn, recOut: incoming.recIn, speed: 100, reverse: false, transition: null, fps });
+        } else if (outgoing) {
+          events.push({ index: index++, track: label, source: 'BL', srcIn: 0, srcOut: 0, recIn: outgoing.recOut, recOut: outgoing.recOut, speed: 100, reverse: false, transition, fps });
+        }
+      }
+    });
+  };
+  walk(tl.videoTracks, 'V');
+  walk(tl.audioTracks, 'A');
+  return { events, timeline: tl.name, kind: tl.kind || null, fps, startFrame, startTimecode: tl.startTimecode || null };
+}
+
+/** Path-based DRT/DRP → events (async: ZIP). */
+export async function parseDrtEvents(filePath, opts = {}) {
+  const { parseDRT } = require('../vendor/drt-format/drt-parser.js');
+  return drtEventsFromParsed(await parseDRT(filePath), opts);
 }
 
 // ── turnover_changelist ────────────────────────────────────────────────

@@ -39,6 +39,60 @@ function extractInt(xml, tag) {
 
 const CLIP_TAGS = ['Sm2TiVideoClip', 'Sm2VideoClip', 'Sm2TiAudioClip', 'Sm2AudioClip'];
 
+// Resolve stores several scalars as 16-hex-char blobs (E139, measured on a
+// 19.1.3.7 EXPORT_DRT): <FrameRate> / <MediaFrameRate> = one little-endian
+// IEEE double + 8 pad bytes (24.0 = 0000000000003840…); <MediaExtents> = two
+// little-endian doubles, start SECONDS then duration SECONDS; <Resolution> =
+// two big-endian uint64, width then height.
+function leDouble(hex, offset = 0) {
+  const h = String(hex || '').replace(/[^0-9a-fA-F]/g, '');
+  if (h.length < offset + 16) return null;
+  const v = Buffer.from(h.slice(offset, offset + 16), 'hex').readDoubleLE(0);
+  return Number.isFinite(v) ? v : null;
+}
+function beUint64(hex, offset = 0) {
+  const h = String(hex || '').replace(/[^0-9a-fA-F]/g, '');
+  if (h.length < offset + 16) return null;
+  const v = Number(Buffer.from(h.slice(offset, offset + 16), 'hex').readBigUInt64BE(0));
+  return Number.isFinite(v) ? v : null;
+}
+// <MediaTimemapBA>: tag byte 0x02 + one double = a LINEAR (100%) clip whose
+// double is the media length in seconds; a blob opening 00000001… is a keyed
+// speed CURVE (retime) whose speed this parser does not decode — it is
+// reported as 'curve' so a consumer never fakes 100%.
+function timemapKind(hex) {
+  const h = String(hex || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  if (!h) return null;
+  if (h.startsWith('02') && h.length === 18) return 'linear';
+  if (h.startsWith('02')) return 'linear-multi';
+  if (h.startsWith('00000001')) return 'curve';
+  return 'unknown';
+}
+// Sm2TiTransition alignment (E139, witnessed against the cut points of 11
+// real dissolves): 2 = centred on the cut, 3 = ends at the cut (the
+// one-sided 8-frame fade-in on a real reel is type 3 / Position 1).
+const ALIGNMENT_BY_TYPE = { 1: 'start', 2: 'center', 3: 'end' };
+
+function extractTransitionsFromTrackXml(trackXml) {
+  const out = [];
+  const re = /<(Sm2TiTransition)\b[^>]*?DbId="([^"]+)"[^>]*>([\s\S]*?)<\/\1>/g;
+  let m;
+  while ((m = re.exec(trackXml)) !== null) {
+    const inner = m[3];
+    const alignmentType = extractInt(inner, 'AlignmentType');
+    out.push({
+      transitionId: m[2],
+      type: extractScalar(inner, 'PrettyType') || 'Cross Dissolve',
+      start: extractInt(inner, 'Start'),
+      duration: extractInt(inner, 'Duration'),
+      alignmentType,
+      alignment: alignmentType != null ? ALIGNMENT_BY_TYPE[alignmentType] || null : null,
+      position: extractInt(inner, 'Position'),
+    });
+  }
+  return out;
+}
+
 function extractClipsFromTrackXml(trackXml, trackType) {
   const clips = [];
   const tagAlt = CLIP_TAGS.filter((t) => t.toLowerCase().includes(trackType)).join('|');
@@ -56,6 +110,8 @@ function extractClipsFromTrackXml(trackXml, trackType) {
       const stripped = bodyMatch[1].replace(/[^0-9a-fA-F]/g, '');
       if (stripped.length > 0) bodyHex = stripped;
     }
+    const inRaw = extractScalar(inner, 'In');
+    const mst = extractScalar(inner, 'MediaStartTime');
     clips.push({
       clipId: m[3],
       name: extractScalar(inner, 'Name'),
@@ -63,6 +119,13 @@ function extractClipsFromTrackXml(trackXml, trackType) {
       duration,
       mediaFilePath,
       bodyHex,
+      // E139: the clip's SOURCE in-point in frames (<In>); a real export writes
+      // an EMPTY <In/> on audio clips and on generator tails — null, not 0.
+      in: inRaw === null || inRaw === '' ? null : (Number.isFinite(Number.parseInt(inRaw, 10)) ? Number.parseInt(inRaw, 10) : null),
+      mediaStartTime: mst === null || mst === '' ? null : (Number.isFinite(Number(mst)) ? Number(mst) : null),
+      mediaFrameRate: leDouble(extractScalar(inner, 'MediaFrameRate')),
+      timemap: timemapKind(extractScalar(inner, 'MediaTimemapBA')),
+      prettyType: extractScalar(inner, 'PrettyType') || null,
     });
   }
   return clips;
@@ -90,6 +153,7 @@ function extractTracks(seqXml, trackVecTag, trackTagBase, trackType) {
       trackId,
       trackType,
       clips: extractClipsFromTrackXml(trackInner, trackType),
+      transitions: extractTransitionsFromTrackXml(trackInner),
     });
   }
   return tracks;
@@ -114,14 +178,45 @@ async function loadPoolSequenceNames(zip) {
     while ((m = re.exec(xml)) !== null) {
       const body = m[3];
       const name = extractScalar(body, 'Name');
-      const seqRe = /<Sm2Sequence DbId="([^"]+)">/g;
+      const seqRe = /<Sm2Sequence DbId="([^"]+)">([\s\S]*?)<\/Sm2Sequence>/g;
       let sm;
       while ((sm = seqRe.exec(body)) !== null) {
-        if (!map.has(sm[1])) map.set(sm[1], { name, kind: m[1] === 'Sm2MpCompoundClip' ? 'compound' : 'timeline' });
+        if (map.has(sm[1])) continue;
+        // E139: the embedded Sm2Sequence is also where a real export keeps the
+        // timeline's frame rate, record extents and resolution — the
+        // SeqContainer carries none of them.
+        const sb = sm[2];
+        const ext = extractScalar(sb, 'MediaExtents');
+        const res = extractScalar(sb, 'Resolution');
+        map.set(sm[1], {
+          name,
+          kind: m[1] === 'Sm2MpCompoundClip' ? 'compound' : 'timeline',
+          frameRate: leDouble(extractScalar(sb, 'FrameRate')),
+          startSeconds: ext ? leDouble(ext, 0) : null,
+          durationSeconds: ext ? leDouble(ext, 16) : null,
+          width: res ? beUint64(res, 0) : null,
+          height: res ? beUint64(res, 16) : null,
+        });
       }
     }
   }
   return map;
+}
+
+// E139: a real export's record start lives ONLY in the pool sequence's
+// MediaExtents (seconds) — frames = round(seconds × fps); the timecode is
+// derived at that rate (non-drop; the export writes no drop flag here).
+function poolStartFrame(pool) {
+  if (!pool || pool.startSeconds == null || !pool.frameRate) return null;
+  return Math.round(pool.startSeconds * pool.frameRate);
+}
+function poolStartTimecode(pool) {
+  const f = poolStartFrame(pool);
+  if (f == null) return null;
+  const fps = Math.round(pool.frameRate);
+  const ff = f % fps, totalS = Math.floor(f / fps);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(Math.floor(totalS / 3600))}:${pad(Math.floor(totalS / 60) % 60)}:${pad(totalS % 60)}:${pad(ff)}`;
 }
 
 function parseSeqContainer(seqXml, sequenceName, poolNames = new Map()) {
@@ -134,13 +229,13 @@ function parseSeqContainer(seqXml, sequenceName, poolNames = new Map()) {
     name: (pool && pool.name) || extractScalar(seqXml, 'Name') || sequenceName,
     kind: pool ? pool.kind : null,
     sequence: sequenceName,
-    frameRate: extractScalar(seqXml, 'FrameRate'),
-    startTimecode: extractScalar(seqXml, 'StartTC'),
-    startFrame: extractInt(seqXml, 'StartFrame'),
+    frameRate: extractScalar(seqXml, 'FrameRate') ?? (pool && pool.frameRate != null ? pool.frameRate : null),
+    startTimecode: extractScalar(seqXml, 'StartTC') ?? poolStartTimecode(pool),
+    startFrame: extractInt(seqXml, 'StartFrame') ?? poolStartFrame(pool),
     resolution: (() => {
       const w = extractInt(seqXml, 'ResolutionWidth');
       const h = extractInt(seqXml, 'ResolutionHeight');
-      if (w === null || h === null) return null;
+      if (w === null || h === null) return pool && pool.width && pool.height ? `${pool.width}x${pool.height}` : null;
       return `${w}x${h}`;
     })(),
     videoTracks: extractTracks(seqXml, 'VideoTrackVec', 'Sm2TiVideoTrack', 'video').map((t) => ({
