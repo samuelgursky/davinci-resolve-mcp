@@ -44,7 +44,13 @@ function childText(node, tag) {
   return v;
 }
 
-const nodeName = (node) => childText(node?.Node?.Properties, 'Name');
+// A real Premiere 2025 object carries its name as a direct <Name> child
+// (E132); the legacy/synthetic shape keeps it under Node/Properties.
+const nodeName = (node) => {
+  const direct = childText(node, 'Name');
+  if (direct != null && String(direct).trim() !== '') return String(direct).trim();
+  return childText(node?.Node?.Properties, 'Name');
+};
 
 /** ticks → whole frames at fps. */
 function ticksToFrames(ticks, fps) {
@@ -69,11 +75,19 @@ function indexObjects(xml) {
   const doc = parser.parse(xml);
   const pd = doc.PremiereData;
   if (!pd) throw new Error('Not a .prproj: missing <PremiereData> root.');
+  // Two id spaces (E132, measured on a real Premiere 2025 turnover): objects
+  // are defined by numeric `ObjectID` (referenced by `ObjectRef`) OR by a
+  // uuid `ObjectUID` (referenced by `ObjectURef`) — sequences, project items,
+  // master clips, media and clip tracks are all UID-defined there, so a map
+  // keyed on ObjectID alone listed ZERO sequences. Key both; the spaces do
+  // not collide (integers vs uuids).
   const byId = new Map();
   for (const [tag, val] of Object.entries(pd)) {
     if (tag.startsWith('@_')) continue;
     for (const node of asArray(val)) {
-      if (node && typeof node === 'object' && node['@_ObjectID'] != null) byId.set(String(node['@_ObjectID']), { tag, node });
+      if (!node || typeof node !== 'object') continue;
+      if (node['@_ObjectID'] != null) byId.set(String(node['@_ObjectID']), { tag, node });
+      if (node['@_ObjectUID'] != null) byId.set(String(node['@_ObjectUID']), { tag, node });
     }
   }
   return { byId, projectVersion: firstProjectVersion(byId) };
@@ -86,9 +100,11 @@ function firstProjectVersion(byId) {
   return null;
 }
 
+/** The id a reference element names: numeric ObjectRef or uuid ObjectURef (E132). */
+const refId = (r) => (r ? String(r['@_ObjectRef'] ?? r['@_ObjectURef'] ?? '') : '');
 const ref = (node, tag) => {
   const r = asArray(node?.[tag])[0];
-  return r ? String(r['@_ObjectRef'] ?? '') : null;
+  return r ? refId(r) : null;
 };
 
 /** Best-effort source label for a clip item: media basename, else project-item name, else UNKNOWN. */
@@ -121,11 +137,65 @@ function findFirstText(node, tags, depth) {
   return null;
 }
 
+/**
+ * Record timing of a track item in either shape: Start/End directly on the
+ * item (synthetic/legacy) or under its <ClipTrackItem>/<TransitionTrackItem>
+ * <TrackItem> child (real Premiere 2025, E132).
+ */
+function itemTiming(node) {
+  // A ZERO is written as ABSENCE (measured E132: the counting leader at
+  // record 0 carries <End> and no <Start>), so a present End with no Start
+  // means Start 0 — never "unknown".
+  const norm = (t) => ({ start: t.start != null ? t.start : (t.end != null ? 0 : null), end: t.end });
+  const direct = { start: childText(node, 'Start'), end: childText(node, 'End') };
+  if (direct.end != null) return norm(direct);
+  for (const k of Object.keys(node || {})) {
+    if (!/TrackItem$/.test(k)) continue;
+    const inner = asArray(node[k])[0];
+    const ti = inner && asArray(inner.TrackItem)[0];
+    if (ti && childText(ti, 'End') != null) return norm({ start: childText(ti, 'Start'), end: childText(ti, 'End') });
+  }
+  return norm(direct);
+}
+
+/**
+ * Source timing + name of a real Premiere clip item: ClipTrackItem.SubClip →
+ * SubClip.Clip → VideoClip/AudioClip (InPoint/OutPoint, Source) →
+ * VideoMediaSource.MediaSource.Media → Media (file path). Null when the item
+ * is the synthetic shape (InPoint/OutPoint on the item itself).
+ */
+function realClipSource(clipNode, byId) {
+  const cti = asArray(clipNode.ClipTrackItem)[0];
+  if (!cti) return null;
+  const sub = byId.get(ref(cti, 'SubClip') || '');
+  if (!sub) return null;
+  const clip = byId.get(ref(sub.node, 'Clip') || '');
+  const inner = clip && (asArray(clip.node.Clip)[0] || clip.node);
+  const outPt = inner ? childText(inner, 'OutPoint') : null;
+  // Same omitted-zero law for the source in-point.
+  const inPt = inner ? (childText(inner, 'InPoint') != null ? childText(inner, 'InPoint') : (outPt != null ? 0 : null)) : null;
+  let name = null;
+  const srcEntry = inner && byId.get(ref(inner, 'Source') || '');
+  const ms = srcEntry && asArray(srcEntry.node.MediaSource)[0];
+  const media = ms && byId.get(ref(ms, 'Media') || '');
+  if (media) {
+    const path = findFirstText(media.node, ['ActualMediaFilePath', 'FilePath', 'RelativePath'], 6);
+    if (path) name = String(path).split(/[\\/]/).pop();
+  }
+  if (!name) {
+    const master = byId.get(ref(sub.node, 'MasterClip') || '');
+    name = (master && nodeName(master.node)) || nodeName(sub.node) || null;
+  }
+  return { inPt, outPt, name };
+}
+
 function clipEvent(clipNode, byId, track, fps, index) {
-  const start = childText(clipNode, 'Start');
-  const end = childText(clipNode, 'End');
-  const inPt = childText(clipNode, 'InPoint');
-  const outPt = childText(clipNode, 'OutPoint');
+  const timing = itemTiming(clipNode);
+  const real = realClipSource(clipNode, byId);
+  const start = timing.start;
+  const end = timing.end;
+  const inPt = real && real.inPt != null ? real.inPt : childText(clipNode, 'InPoint');
+  const outPt = real && real.outPt != null ? real.outPt : childText(clipNode, 'OutPoint');
   const recIn = ticksToFrames(start, fps);
   const recOut = ticksToFrames(end, fps);
   const srcIn = ticksToFrames(inPt, fps);
@@ -142,7 +212,7 @@ function clipEvent(clipNode, byId, track, fps, index) {
   return {
     index,
     track,
-    source: resolveSourceName(clipNode, byId),
+    source: (real && real.name) || resolveSourceName(clipNode, byId),
     srcIn: reverse ? srcOut : srcIn,
     srcOut: reverse ? srcIn : srcOut,
     recIn,
@@ -158,25 +228,39 @@ function walkSequence(seqEntry, byId) {
   const fps = deriveFps(seqEntry.node);
   const events = [];
   let idx = 1;
-  for (const [container, trackKind] of [
-    ['VideoTracks', 'V'],
-    ['AudioTracks', 'A'],
-  ]) {
-    const trackRefs = asArray(seqEntry.node[container]?.Track);
+  // Two sequence shapes (E132): the synthetic/legacy one lists tracks under
+  // <VideoTracks>/<AudioTracks>; a real Premiere 2025 project lists
+  // <TrackGroups> whose <Second> references a VideoTrackGroup /
+  // AudioTrackGroup carrying <TrackGroup><Tracks><Track ObjectURef>.
+  const trackLists = [];
+  for (const [container, trackKind] of [['VideoTracks', 'V'], ['AudioTracks', 'A']]) {
+    const refs = asArray(seqEntry.node[container]?.Track);
+    if (refs.length) trackLists.push({ trackKind, refs });
+  }
+  for (const tg of asArray(seqEntry.node.TrackGroups?.TrackGroup)) {
+    const grp = byId.get(refId(asArray(tg.Second)[0]));
+    if (!grp) continue;
+    const trackKind = /^Audio/.test(grp.tag) ? 'A' : /^Video/.test(grp.tag) ? 'V' : null;
+    if (!trackKind) continue;
+    const refs = asArray(grp.node.TrackGroup?.Tracks?.Track);
+    if (refs.length) trackLists.push({ trackKind, refs });
+  }
+  for (const { trackKind, refs: trackRefs } of trackLists) {
     for (const tref of trackRefs) {
-      const tEntry = byId.get(String(tref['@_ObjectRef'] ?? ''));
+      const tEntry = byId.get(refId(tref));
       if (!tEntry) continue;
-      const itemRefs = asArray(tEntry.node.TrackItems?.TrackItem);
+      const itemRefs = asArray(tEntry.node.TrackItems?.TrackItem).concat(asArray(tEntry.node.ClipTrack?.ClipItems?.TrackItems?.TrackItem), asArray(tEntry.node.ClipItems?.TrackItems?.TrackItem));
       const transitions = [];
       const clipEvents = [];
       for (const iref of itemRefs) {
-        const cEntry = byId.get(String(iref['@_ObjectRef'] ?? ''));
+        const cEntry = byId.get(refId(iref));
         if (!cEntry) continue;
         if (/ClipTrackItem$/.test(cEntry.tag)) {
           clipEvents.push(clipEvent(cEntry.node, byId, trackKind, fps, idx++));
         } else if (/Transition/.test(cEntry.tag)) {
-          const dur = ticksToFrames(Number(childText(cEntry.node, 'End')) - Number(childText(cEntry.node, 'Start')), fps);
-          transitions.push({ recIn: ticksToFrames(childText(cEntry.node, 'Start'), fps), duration: dur || 0 });
+          const ti = itemTiming(cEntry.node);
+          const dur = ticksToFrames(Number(ti.end) - Number(ti.start), fps);
+          transitions.push({ recIn: ticksToFrames(ti.start, fps), duration: dur || 0 });
         }
       }
       // Attach each transition to the INCOMING clip whose record-in falls
@@ -243,8 +327,8 @@ export function parsePrprojDoc(pathOrBuffer) {
     const fps = deriveFps(entry.node);
     const events = walkSequence(entry, byId);
     return {
-      id: String(entry.node['@_ObjectID']),
-      name: nodeName(entry.node) || `Sequence ${entry.node['@_ObjectID']}`,
+      id: String(entry.node['@_ObjectID'] ?? entry.node['@_ObjectUID']),
+      name: nodeName(entry.node) || `Sequence ${entry.node['@_ObjectID'] ?? entry.node['@_ObjectUID']}`,
       fps,
       eventCount: events.length,
       events,

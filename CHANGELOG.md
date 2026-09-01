@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.185.0 — E132: real Premiere projects parse — 739 sequences where there were zero
+
+### Fixed
+
+- **A real `.prproj` listed no sequences and walked no events.** Measured on
+  a real 130 MB Premiere 2025 colour turnover (project Version 45): objects
+  live in two id spaces — numeric `ObjectID`/`ObjectRef` and uuid
+  `ObjectUID`/`ObjectURef` — and every sequence, project item, master clip,
+  medium and clip track is uuid-defined; sequences list their tracks through
+  `TrackGroups` → track groups → `Tracks`; an item's record span sits under
+  `ClipTrackItem.TrackItem` and its source behind `SubClip` → `VideoClip`
+  (in/out points, source) → media source → `Media` (path); a zero is written
+  as absence; names are direct `<Name>` children. The parser keyed
+  `ObjectID` only, followed `ObjectRef` only, and knew only the synthetic
+  shape — 0 of 739 sequences listed. Both shapes now walk: the turnover
+  lists all 739 sequences by name and its reel walks 335 events with no
+  unknown source or position (the counting leader lands at frame 0). The
+  real shape is pinned as a synthetic fixture.
+
+### Measured (filed in api-limitations)
+
+- The Premiere 2025 `.prproj` object graph, both id spaces, the track-group
+  chain, the clip source chain, and the omitted-zero law.
+
 ## What's New in v2.184.0 — E131: a nested Stack's audio tracks flatten onto the parent audio lanes
 
 ### Verified

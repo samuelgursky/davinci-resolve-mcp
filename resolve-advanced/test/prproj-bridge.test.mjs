@@ -342,3 +342,58 @@ test('otio: an ASSUMED media timecode origin is reported, not hidden', async () 
   // Assuming 0 is still what gets emitted — the point is that you are TOLD.
   assert.equal(without.doc.tracks.children[0].children[0].source_range.start_time.value, 0);
 });
+
+// E132: a REAL Premiere 2025 project (measured on a 130 MB colour turnover,
+// project Version 45) defines sequences, project items, master clips, media
+// and clip tracks by uuid ObjectUID (referenced by ObjectURef), lists tracks
+// through TrackGroups → Video/AudioTrackGroup → TrackGroup.Tracks, and puts
+// an item's record span under ClipTrackItem.TrackItem with the source chain
+// SubClip → VideoClip (InPoint/OutPoint, Source) → VideoMediaSource → Media.
+// A zero is written as absence (the leader at record 0 has End and no Start).
+// The parser used to key ObjectID only and follow ObjectRef only: 0 of 739
+// sequences listed. Now 739 list and the reel walks 335 events.
+const REAL_SHAPE_XML = `<?xml version="1.0" encoding="UTF-8" ?>
+<PremiereData Version="3">
+  <Project ObjectRef="1"/>
+  <Project ObjectID="1" ClassID="62ad66dd-0dcd-42da-a660-6d8fbde94876" Version="45"><Node Version="1"/></Project>
+  <Sequence ObjectUID="06aa0210-b3c3-4858-9c56-48b6f029f8c1" ClassID="6a15d903-8739-11d5-af2d-9b7855ad8974" Version="12">
+    <Node Version="1"><Properties Version="1"/></Node>
+    <TrackGroups Version="1">
+      <TrackGroup Version="1" Index="0"><First>228cda18-3625-4d2d-951e-348879e4ed93</First><Second ObjectRef="28140"/></TrackGroup>
+      <TrackGroup Version="1" Index="1"><First>80b8e3d5-6dca-4195-aefb-cb5f407ab009</First><Second ObjectRef="28141"/></TrackGroup>
+    </TrackGroups>
+    <Name>REAL_REEL</Name>
+  </Sequence>
+  <VideoTrackGroup ObjectID="28140" ClassID="v" Version="1"><TrackGroup Version="1"><Tracks Version="1"><Track Index="0" ObjectURef="4f2d4adc-1632-4dec-afaf-183607bd663b"/></Tracks><FrameRate>10584000000</FrameRate></TrackGroup></VideoTrackGroup>
+  <AudioTrackGroup ObjectID="28141" ClassID="a" Version="1"><TrackGroup Version="1"><Tracks Version="1"><Track Index="0" ObjectURef="aa2d4adc-1632-4dec-afaf-183607bd663b"/></Tracks><FrameRate>10584000000</FrameRate></TrackGroup></AudioTrackGroup>
+  <VideoClipTrack ObjectUID="4f2d4adc-1632-4dec-afaf-183607bd663b" ClassID="vt" Version="1"><ClipTrack Version="1"><ClipItems Version="1"><TrackItems Version="1"><TrackItem Index="0" ObjectRef="50187"/><TrackItem Index="1" ObjectRef="50188"/></TrackItems></ClipItems></ClipTrack></VideoClipTrack>
+  <AudioClipTrack ObjectUID="aa2d4adc-1632-4dec-afaf-183607bd663b" ClassID="at" Version="1"><ClipTrack Version="1"><ClipItems Version="1"><TrackItems Version="1"><TrackItem Index="0" ObjectRef="50287"/></TrackItems></ClipItems></ClipTrack></AudioClipTrack>
+  <VideoClipTrackItem ObjectID="50187" ClassID="ci" Version="1"><ClipTrackItem Version="8"><TrackItem Version="4"><End>2032128000000</End></TrackItem><SubClip ObjectRef="69268"/></ClipTrackItem></VideoClipTrackItem>
+  <VideoClipTrackItem ObjectID="50188" ClassID="ci" Version="1"><ClipTrackItem Version="8"><TrackItem Version="4"><Start>2032128000000</Start><End>2540160000000</End></TrackItem><SubClip ObjectRef="69270"/></ClipTrackItem></VideoClipTrackItem>
+  <AudioClipTrackItem ObjectID="50287" ClassID="ci" Version="1"><ClipTrackItem Version="8"><TrackItem Version="4"><Start>2032128000000</Start><End>2540160000000</End></TrackItem><SubClip ObjectRef="69270"/></ClipTrackItem></AudioClipTrackItem>
+  <SubClip ObjectID="69268" ClassID="sc" Version="6"><Clip ObjectRef="101126"/><MasterClip ObjectURef="897fc7cf-a22c-4759-a6e2-0adeea00c0d1"/><Name>Universal Counting Leader</Name></SubClip>
+  <SubClip ObjectID="69270" ClassID="sc" Version="6"><Clip ObjectRef="101129"/><MasterClip ObjectURef="9b0363ba-2a3a-4206-ac09-20f6e5a1b360"/><Name>BLACK_02</Name></SubClip>
+  <VideoClip ObjectID="101126" ClassID="vc" Version="11"><Clip Version="18"><Source ObjectRef="5078"/><OutPoint>2032128000000</OutPoint></Clip></VideoClip>
+  <VideoClip ObjectID="101129" ClassID="vc" Version="11"><Clip Version="18"><Source ObjectRef="5079"/><InPoint>2296728000000</InPoint><OutPoint>2804760000000</OutPoint></Clip></VideoClip>
+  <VideoMediaSource ObjectID="5078" ClassID="ms" Version="1"><MediaSource Version="4"><Media ObjectURef="1bd72032-c2ce-49e8-833a-ecc000e12508"/></MediaSource></VideoMediaSource>
+  <VideoMediaSource ObjectID="5079" ClassID="ms" Version="1"><MediaSource Version="4"><Media ObjectURef="0bd72032-c2ce-49e8-833a-ecc000e12509"/></MediaSource></VideoMediaSource>
+  <Media ObjectUID="1bd72032-c2ce-49e8-833a-ecc000e12508" ClassID="m" Version="1"><FilePath>/Volumes/RAID/leader.mov</FilePath></Media>
+  <Media ObjectUID="0bd72032-c2ce-49e8-833a-ecc000e12509" ClassID="m" Version="1"><ActualMediaFilePath>/Volumes/RAID/Arrow S16mm 78E 4K 0821.mp4</ActualMediaFilePath></Media>
+  <MasterClip ObjectUID="897fc7cf-a22c-4759-a6e2-0adeea00c0d1" ClassID="mc" Version="1"><Name>Universal Counting Leader</Name></MasterClip>
+  <MasterClip ObjectUID="9b0363ba-2a3a-4206-ac09-20f6e5a1b360" ClassID="mc" Version="1"><Name>BLACK_02</Name></MasterClip>
+</PremiereData>`;
+const PRPROJ_REAL = path.join(os.tmpdir(), `prproj-real-shape-${process.pid}.prproj`);
+fs.writeFileSync(PRPROJ_REAL, zlib.gzipSync(Buffer.from(REAL_SHAPE_XML, 'utf8')));
+
+test('parsePrproj walks the real Premiere 2025 shape: UID/URef graph, TrackGroups, ClipTrackItem chain, omitted zeros (E132)', () => {
+  const seqs = listPrprojSequences(PRPROJ_REAL);
+  assert.deepEqual(seqs.map((s) => [s.name, s.eventCount]), [['REAL_REEL', 3]]);
+  const doc = parsePrprojDoc(PRPROJ_REAL);
+  const ev = doc.sequences[0].events;
+  assert.deepEqual(ev.map((e) => [e.track, e.source, e.srcIn, e.srcOut, e.recIn, e.recOut]), [
+    ['V', 'leader.mov', 0, 192, 0, 192],
+    ['V', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 192, 240],
+    ['A', 'Arrow S16mm 78E 4K 0821.mp4', 217, 265, 192, 240],
+  ]);
+  assert.equal(doc.sequences[0].fps, 24);
+});

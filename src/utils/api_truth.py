@@ -2878,6 +2878,41 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["drp-format placeGenerator color", "editorial.parse_interchange fillcolor", "drt.assemble_from_interchange"],
     },
     {
+        "symbol": "Premiere .prproj (2025, project Version 45) object graph — what a real file looks like",
+        "object": "editorial.parse_interchange / list_sequences (prproj)",
+        "signature": "(path.prproj) -> sequences/events",
+        "reality": "Measured on a real 130 MB colour turnover (E132): objects "
+                   "are defined in TWO id spaces — numeric ObjectID referenced "
+                   "by ObjectRef, and uuid ObjectUID referenced by ObjectURef — "
+                   "and Sequence, ClipProjectItem, MasterClip, Media, "
+                   "VideoClipTrack and AudioClipTrack are all UID-defined. A "
+                   "Sequence lists its tracks through <TrackGroups><TrackGroup>"
+                   "<Second ObjectRef> → VideoTrackGroup / AudioTrackGroup "
+                   "(a third DataTrackGroup is empty) → <TrackGroup><Tracks>"
+                   "<Track ObjectURef> → Video/AudioClipTrack → <ClipTrack>"
+                   "<ClipItems><TrackItems><TrackItem ObjectRef>. An item's "
+                   "record span sits under <ClipTrackItem><TrackItem> "
+                   "(Start/End ticks) and its source under ClipTrackItem.SubClip "
+                   "→ SubClip.Clip → VideoClip.Clip (InPoint/OutPoint, Source) → "
+                   "VideoMediaSource.MediaSource.Media (ObjectURef) → Media "
+                   "(FilePath / ActualMediaFilePath); SubClip.Name and "
+                   "MasterClip.Name are the fallbacks. A ZERO is written as "
+                   "ABSENCE (the counting leader at record 0 has End and no "
+                   "Start). Names are direct <Name> children. Legacy/synthetic "
+                   "files instead use ObjectID/ObjectRef throughout, "
+                   "<VideoTracks>/<AudioTracks> track lists, Start/End/InPoint/"
+                   "OutPoint on the item and Node/Properties names.",
+        "recommended": "Index both id spaces and follow both reference "
+                       "attributes; walk TrackGroups when present; read timing "
+                       "through the *TrackItem child; treat a missing Start/"
+                       "InPoint beside a present End/OutPoint as 0. With that, "
+                       "the turnover lists all 739 sequences and its reel walks "
+                       "335 events (it listed ZERO before).",
+        "tags": ["prproj", "premiere", "interchange", "silent-failure"],
+        "submit": "missing",
+        "mitigation": ["editorial.parse_interchange prproj", "editorial.list_sequences"],
+    },
+    {
         "symbol": "ProjectManager.CreateProject (discards an unsaved current project)",
         "object": "ProjectManager",
         "signature": "(projectName) -> Project",
