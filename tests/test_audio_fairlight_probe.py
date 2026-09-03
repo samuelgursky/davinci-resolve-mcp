@@ -211,6 +211,47 @@ class AudioFairlightProbeTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertFalse(timeline.subtitle_calls)
 
+    def test_volume_write_failure_carries_known_limitation(self):
+        # Resolve rejects the Volume write (returns False) — the caller should
+        # get the ledger entry and the bake / preset workaround, not a bare
+        # {"write": false}.
+        timeline = TimelineStub()
+        timeline.item.SetProperty = lambda key, value: key != "Volume"
+
+        result = _safe_set_audio_properties(
+            timeline, {"properties": {"Volume": -6}, "restore": False}
+        )
+
+        self.assertFalse(result["success"])
+        lim = result.get("known_limitation")
+        self.assertIsNotNone(lim)
+        self.assertEqual(lim["keys"], ["Volume"])
+        self.assertEqual(lim["reason"], "no_api_write_path")
+        self.assertTrue(lim["workarounds"])
+        self.assertIn("Fairlight audio levels", lim["ledger"]["symbol"])
+
+    def test_pan_write_flagged_even_when_setproperty_returns_true(self):
+        # 'Pan' is the video-transform key: SetProperty returns True while the
+        # audio pan is untouched. success is True, but the limitation must
+        # still be surfaced so the caller does not trust the no-op.
+        timeline = TimelineStub()
+        result = _safe_set_audio_properties(
+            timeline, {"properties": {"Pan": 0.5}, "restore": False}
+        )
+
+        self.assertTrue(result["success"])
+        self.assertIn("Pan", result["known_limitation"]["keys"])
+
+    def test_audio_sync_offset_write_is_not_flagged(self):
+        # AudioSyncOffset genuinely works — no false alarm.
+        timeline = TimelineStub()
+        result = _safe_set_audio_properties(
+            timeline, {"properties": {"AudioSyncOffset": 5}, "restore": False}
+        )
+
+        self.assertTrue(result["success"])
+        self.assertNotIn("known_limitation", result)
+
 
 if __name__ == "__main__":
     unittest.main()
