@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.203.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.204.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#server-modes)
@@ -159,6 +159,12 @@ Add it alongside the live server (both ship in one `npm install`):
 `install.py` prints both entries. The core is pure-JS/MIT with no required native modules; a few features
 need user-installed tools (ffmpeg for `audio`, `sharp`/`better-sqlite3` for some paths) — call the
 `capabilities` tool for live status and install hints.
+
+Unlike the Python server, this one has Node dependencies. `npx davinci-resolve-mcp setup` installs them
+into the managed install (`npm install --omit=dev --omit=optional` under `resolve-advanced/`) and only
+then registers the bin. If that install could not run — offline, or npm unavailable — setup registers
+an `npx` command for the advanced server instead, so the entry it writes always boots. To repair an
+existing install without re-running setup: `npx davinci-resolve-mcp sync`.
 
 ### Bradford Post Assistant — managed application (closed beta)
 

@@ -62,7 +62,55 @@ if (major < 20 || (major === 20 && minor < 9)) {
   process.exit(1);
 }
 
-const serverEntry = path.resolve(__dirname, '..', 'resolve-advanced', 'server', 'index.mjs');
+const advancedRoot = path.resolve(packageRoot, 'resolve-advanced');
+const serverEntry = path.join(advancedRoot, 'server', 'index.mjs');
+
+// Preflight, for the same reason as the Node floor above: a managed install
+// that never received resolve-advanced/ (or its deps) otherwise dies with a
+// bare ERR_MODULE_NOT_FOUND before the MCP handshake, and the client reports
+// only "subprocess closed stdout before responding" — a stack trace with no
+// fix in it. Issue #179. Say what is missing and how to repair it.
+function missingRuntimePieces() {
+  if (!fs.existsSync(serverEntry)) {
+    return { what: `the advanced server tree (${serverEntry} is missing)` };
+  }
+  let required = [];
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(advancedRoot, 'package.json'), 'utf8'));
+    required = Object.keys(manifest.dependencies || {});
+  } catch {
+    return { what: `resolve-advanced/package.json (cannot tell which deps are required)` };
+  }
+  const modulesDir = path.join(advancedRoot, 'node_modules');
+  const missing = required.filter(
+    (dep) => !fs.existsSync(path.join(modulesDir, ...dep.split('/'))),
+  );
+  // Deps may also be hoisted above the package (an npm/npx install puts them in
+  // a parent node_modules), so an empty local node_modules is not conclusive —
+  // only report deps the resolver genuinely cannot see.
+  const unresolvable = missing.filter((dep) => {
+    try {
+      import.meta.resolve(dep);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  return unresolvable.length ? { what: `dependencies: ${unresolvable.join(', ')}` } : null;
+}
+
+const gap = missingRuntimePieces();
+if (gap) {
+  process.stderr.write(
+    `[davinci-resolve-advanced-mcp] cannot start: ${gap.what}.\n` +
+    `This install is at ${packageRoot}.\n` +
+    `Fix: run \`npx davinci-resolve-mcp setup\` to repair the managed install ` +
+    `(it syncs resolve-advanced/ and installs its Node dependencies), or run the ` +
+    `server straight from the package with ` +
+    `\`npx -y --package davinci-resolve-mcp davinci-resolve-advanced-mcp\`.\n`,
+  );
+  process.exit(1);
+}
 
 const { startServer } = await import(pathToFileURL(serverEntry).href);
 await startServer();

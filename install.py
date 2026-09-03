@@ -37,7 +37,7 @@ from src.utils.update_check import (
 
 # ─── Version ──────────────────────────────────────────────────────────────────
 
-VERSION = "2.203.0"
+VERSION = "2.204.0"
 # Only hard floor: mcp[cli] requires Python 3.10+. There is no upper bound —
 # Resolve's scripting bridge loads into newer interpreters on recent builds
 # (Python 3.14 verified against Resolve Studio 20.3.2). Older Resolve builds
@@ -1180,13 +1180,82 @@ def build_advanced_entry(server_path, python_path=None):
     pyaaf2). We pin AAF_PROBE_PYTHON to the project venv's interpreter — the same
     venv install.py installs pyaaf2 into — so AAF preview works out of the box
     instead of depending on whatever `python3` happens to be on PATH.
+
+    The bin is only registered when this install can actually boot it. Pointing
+    a client config at a bin whose module tree is absent produced issue #179:
+    the process died with ERR_MODULE_NOT_FOUND before the MCP handshake and
+    every client reported the same uninformative "subprocess closed stdout
+    before responding". When the layout is incomplete we emit the npx form
+    instead, which resolves the module and its deps from the npm cache.
     """
     project_dir = Path(server_path).resolve().parents[1]  # .../src/server.py -> repo root
+    if not advanced_is_bootable(project_dir):
+        return build_advanced_npx_entry(python_path)
     advanced_bin = project_dir / "bin" / "davinci-resolve-advanced-mcp.mjs"
     entry = {"command": resolve_node_command(), "args": [str(advanced_bin)]}
     if python_path:
         entry["env"] = {"AAF_PROBE_PYTHON": str(python_path)}
     return entry
+
+
+def advanced_required_deps(project_dir):
+    """Runtime deps the advanced server needs, read from its own manifest.
+
+    resolve-advanced/package.json is the single source of truth — the same file
+    `npm install` in that directory acts on, and the same list the advanced bin
+    preflights against. Nothing here restates it.
+    """
+    manifest = Path(project_dir) / "resolve-advanced" / "package.json"
+    try:
+        with open(manifest, "r", encoding="utf-8") as fh:
+            return list(json.load(fh).get("dependencies", {}).keys())
+    except Exception:
+        return []
+
+
+def advanced_is_bootable(project_dir):
+    """True when resolve-advanced/ and its Node deps are both present here."""
+    project_dir = Path(project_dir)
+    if not (project_dir / "resolve-advanced" / "server" / "index.mjs").is_file():
+        return False
+    required = advanced_required_deps(project_dir)
+    if not required:
+        return False
+    # Deps live either in resolve-advanced/node_modules (what `npx
+    # davinci-resolve-mcp setup` provisions in a managed install) or hoisted to
+    # the package root (what a plain `npm install` of this package produces).
+    for dep in required:
+        local = project_dir / "resolve-advanced" / "node_modules" / dep
+        hoisted = project_dir / "node_modules" / dep
+        if not local.is_dir() and not hoisted.is_dir():
+            return False
+    return True
+
+
+def build_advanced_npx_entry(python_path=None):
+    """Fallback advanced entry that runs from the npm package, not this tree.
+
+    Slower to start (npx resolves the package first) but it always boots, which
+    a managed-install bin path does not guarantee.
+    """
+    entry = {
+        "command": "npx",
+        "args": ["-y", "--package", f"davinci-resolve-mcp@{package_version()}",
+                 "davinci-resolve-advanced-mcp"],
+    }
+    if python_path:
+        entry["env"] = {"AAF_PROBE_PYTHON": str(python_path)}
+    return entry
+
+
+def package_version(default="latest"):
+    """Version from package.json, for pinning the npx fallback."""
+    manifest = Path(__file__).resolve().parent / "package.json"
+    try:
+        with open(manifest, "r", encoding="utf-8") as fh:
+            return json.load(fh).get("version") or default
+    except Exception:
+        return default
 
 
 # Node floor for the advanced server (package.json engines). Below it the

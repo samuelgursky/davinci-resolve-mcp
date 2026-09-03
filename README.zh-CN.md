@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.203.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.204.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#服务器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.203.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v2.204.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -104,6 +104,8 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 ```
 
 `install.py` 会把两个配置条目都打印出来。核心是纯 JS/MIT，无必需的原生模块；少数功能需要用户自装工具（`audio` 需要 ffmpeg，部分路径需要 `sharp`/`better-sqlite3`）——调用 `capabilities` 工具可查看实时状态和安装提示。
+
+和 Python 服务器不同，这个服务器有 Node 依赖。`npx davinci-resolve-mcp setup` 会先把依赖装进托管安装目录（在 `resolve-advanced/` 下执行 `npm install --omit=dev --omit=optional`），装好之后才注册这个可执行文件。如果安装跑不起来（离线，或者没有 npm），setup 会改为给 advanced 服务器写一条 `npx` 命令，这样写出去的配置条目总是能启动。要修复一个已有的安装而不重跑 setup：`npx davinci-resolve-mcp sync`。
 
 ### Bradford Post Assistant——托管应用（封闭测试中）
 

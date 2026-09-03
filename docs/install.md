@@ -127,6 +127,7 @@ npx davinci-resolve-mcp setup --clients all   # Configure all clients
 npx davinci-resolve-mcp doctor                # Dry-run environment/config check
 npx davinci-resolve-mcp server                # Launch the managed MCP server
 npx davinci-resolve-mcp control-panel         # Launch the local control panel
+npx davinci-resolve-mcp sync                  # Refresh the managed install only
 
 python install.py                              # Interactive mode
 python install.py --clients all                # Configure all clients

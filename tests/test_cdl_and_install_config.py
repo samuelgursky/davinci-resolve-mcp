@@ -174,10 +174,30 @@ class InstallConfigTests(unittest.TestCase):
             r"C:\Users\sam\AppData\Local\Programs\Python\Python312",
         )
 
+    def _bootable_tree(self):
+        """An install layout the advanced server can actually boot from.
+
+        build_advanced_entry only registers the managed bin when
+        resolve-advanced/ and its Node deps are both present (issue #179);
+        without them it emits the npx fallback, and these tests would pass
+        while checking the wrong branch.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "src").mkdir()
+        (root / "src" / "server.py").write_text("", encoding="utf-8")
+        adv = root / "resolve-advanced"
+        (adv / "server").mkdir(parents=True)
+        (adv / "server" / "index.mjs").write_text("", encoding="utf-8")
+        (adv / "package.json").write_text('{"dependencies": {"zod": "^3.0.0"}}', encoding="utf-8")
+        (adv / "node_modules" / "zod").mkdir(parents=True)
+        return root / "src" / "server.py"
+
     def test_generate_manual_config_formats_include_env(self):
         standard, vscode_fmt, zed_fmt, opencode_fmt, codex_fmt = install.generate_manual_config(
             Path("/tmp/python"),
-            Path("/tmp/server.py"),
+            self._bootable_tree(),
             "/Resolve/Scripting",
             "/Resolve/fusionscript.so",
         )
@@ -217,7 +237,7 @@ class InstallConfigTests(unittest.TestCase):
 
     def test_advanced_entry_omits_env_without_python_path(self):
         # No interpreter known → no AAF_PROBE_PYTHON pin (falls back to `python3` on PATH).
-        entry = install.build_advanced_entry(Path("/tmp/server.py"))
+        entry = install.build_advanced_entry(self._bootable_tree())
         self.assertTrue(entry["command"] == "node" or entry["command"].endswith("/node"), entry["command"])
         self.assertNotIn("env", entry)
 

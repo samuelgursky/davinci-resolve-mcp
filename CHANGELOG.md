@@ -2,6 +2,52 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.204.0 — #179: the managed install can boot the advanced server
+
+### Fixed
+
+- **The managed install now contains the tree the advanced bin imports.**
+  `setup` registered `davinci-resolve-advanced` in every generated client
+  config, pointing at `<managed root>/bin/davinci-resolve-advanced-mcp.mjs` —
+  but the bootstrapper's sync list never copied `resolve-advanced/`, which
+  that bin imports. The process died with `ERR_MODULE_NOT_FOUND` before the
+  MCP handshake, and every client reported the same uninformative "subprocess
+  closed stdout before responding". `resolve-advanced/` is now synced, and a
+  regression test drives the real sync into a temp root rather than restating
+  the list, so dropping it again fails the suite. Reported in #179.
+- **Its Node dependencies are installed there too.** Syncing the tree alone
+  was only half the fix: the managed root has no `node_modules`, so
+  `@modelcontextprotocol/sdk`, `zod`, `jszip`, `fzstd` and `zstd-codec` still
+  failed to resolve. `setup` now runs `npm install --omit=dev --omit=optional`
+  under the managed `resolve-advanced/` before install.py writes any config.
+  Optional native deps (`better-sqlite3`, `sharp`, `pg`) stay optional — the
+  server already reports those gaps itself through `capabilities`, and a
+  failed native build must not take the whole setup down. Verified end to
+  end: a fresh managed install now completes the MCP handshake and registers
+  all 18 advanced tools.
+- **A config is only written for a layout that can boot.** When
+  `resolve-advanced/` or its deps are absent, `build_advanced_entry` now emits
+  an `npx -y --package davinci-resolve-mcp@<version>` command instead of a
+  managed bin path that cannot start. `resolve-advanced/package.json` is the
+  single source of truth for which deps have to be present — install.py and
+  the bin both read it rather than restating the list.
+- **An unbootable advanced server names its own fix.** The bin preflights its
+  server tree and dependencies and exits with what is missing and how to
+  repair it, instead of an `ERR_MODULE_NOT_FOUND` stack. The diagnostic goes
+  to stderr — stdout is the JSON-RPC channel, where it would corrupt the
+  handshake rather than explain it. `--version` and `--help` keep answering
+  from a broken install, since those are what a user reaches for when the
+  server will not start.
+
+### Added
+
+- **`davinci-resolve-mcp sync`** — refresh the managed install and provision
+  the advanced server's Node deps without running the full interactive setup.
+  `--no-deps` syncs files only. Re-syncing preserves the provisioned
+  `node_modules`; a dev checkout's own `node_modules` is never copied into a
+  managed install, since its optional native deps are built for the
+  developer's platform and ABI.
+
 ## What's New in v2.203.0 — E151: verify_roundtrip fits a source offset from the majority
 
 ### Fixed
