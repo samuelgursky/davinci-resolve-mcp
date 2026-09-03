@@ -4198,7 +4198,19 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     self.assertNotIn("transcription", missing)
 
     def _run_single_clip_batch_with_transcript(self, tmp, payload):
-        """Run a one-clip batch whose _transcribe returns `payload`."""
+        """Run a one-clip batch whose _transcribe returns `payload`.
+
+        These tests mock what `_transcribe` *returns*, but the job still has to
+        be created first, and create_batch_job refuses a job whose enabled
+        transcription has no backend behind it
+        (`missing_required_capabilities`). So a machine with no Whisper backend
+        cannot reach the behaviour under test — including, awkwardly, the case
+        named for an unavailable backend, which is about how a *result* is
+        counted rather than how the job is gated.
+        """
+        if not _media_analysis_module.detect_capabilities().get(
+                "transcription", {}).get("available"):
+            self.skipTest("no local transcription backend installed")
         source_dir = os.path.join(tmp, "source")
         os.makedirs(source_dir)
         source = os.path.join(source_dir, "job_transcript.mp4")
