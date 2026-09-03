@@ -291,6 +291,20 @@ class InstallerEnvTests(unittest.TestCase):
                 _, lib_path = install.find_resolve_paths()
         self.assertEqual(lib_path, override)
 
+def _resolve_is_installed() -> bool:
+    """True when this machine has a Resolve scripting library where install.py looks.
+
+    The failure-path tests below mock RESOLVE_PATHS to a dead install and run
+    everywhere; the success-path one deliberately does not, so it can only run
+    where a real one exists.
+    """
+    for paths in install.RESOLVE_PATHS.values():
+        for candidate in paths.get("lib", []):
+            if Path(candidate).exists():
+                return True
+    return False
+
+
 class SetupExitStatusTests(unittest.TestCase):
     """The summary line and the exit status have to agree with each other.
 
@@ -337,6 +351,10 @@ class SetupExitStatusTests(unittest.TestCase):
         self.assertIn("Environment incomplete", out)
         self.assertNotIn("Environment ready!", out)
 
+    @unittest.skipUnless(
+        _resolve_is_installed(),
+        "needs a real Resolve install — this asserts the HEALTHY branch, and "
+        "without Resolve on the machine there is no healthy branch to assert")
     def test_a_working_install_still_reports_ready_and_exits_zero(self) -> None:
         """The regression that matters in the other direction: an installer that
         called every machine broken would be worse than the bug it replaced."""

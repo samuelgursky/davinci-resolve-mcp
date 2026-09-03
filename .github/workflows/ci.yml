@@ -37,6 +37,20 @@ jobs:
           # reason, so a floor regression here would go quiet, not red.
           node-version: "22"
 
+      - name: Install ffmpeg
+        # A real dependency, not a test crutch: waveform silence detection,
+        # loudness measurement and sync-event detection all shell out to it.
+        # Most tests skip without it, but not all — and the ones that do skip
+        # are the ones worth actually running.
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install advanced-server Node dependencies
+        # The Python offline-fallback tier shells into resolve-advanced's
+        # vendored codecs, which require jszip and friends. Same install the
+        # managed setup performs, so CI exercises the layout users get.
+        run: npm install --omit=dev --omit=optional --no-audit --no-fund
+        working-directory: resolve-advanced
+
       - name: Install Python dependencies
         # requirements.txt plus what the suite itself imports. Kept explicit
         # rather than pulled from the venv install.py builds: this job must
